@@ -1,6 +1,7 @@
 import { Component, For, Show, createSignal, onCleanup, onMount } from "solid-js";
 import { Button, Checkbox } from "../ui";
 import * as Icons from "../icons";
+import { t } from "../../lib/i18n";
 
 export interface ConfirmRequest {
   title: string;
@@ -70,7 +71,7 @@ export const ConfirmDialog: Component<ConfirmDialogProps> = (props) => {
           </h2>
           <button
             class="w-7 h-7 flex items-center justify-center rounded text-text-muted hover:text-text hover:bg-surface/40"
-            aria-label="Cancelar"
+            aria-label={t("Cancelar")}
             onClick={props.onCancel}
           >
             <Icons.X size={14} />
@@ -97,7 +98,7 @@ export const ConfirmDialog: Component<ConfirmDialogProps> = (props) => {
         </Show>
         <div class="flex justify-end gap-2 px-4 pb-4">
           <Button size="sm" variant="ghost" onClick={props.onCancel}>
-            {props.cancelLabel ?? "Cancelar"}
+            {props.cancelLabel ?? t("Cancelar")}
           </Button>
           <Button
             data-confirm
@@ -105,7 +106,7 @@ export const ConfirmDialog: Component<ConfirmDialogProps> = (props) => {
             variant={props.danger ? "danger" : "primary"}
             onClick={confirm}
           >
-            {props.confirmLabel ?? "Continuar"}
+            {props.confirmLabel ?? t("Continuar")}
           </Button>
         </div>
       </div>

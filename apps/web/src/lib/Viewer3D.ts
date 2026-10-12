@@ -18,6 +18,7 @@ import { installDqSkinning, setDqSkinning } from "./dqSkinning";
 import { installAutoSmooth, setAutoSmooth } from "./autoSmooth";
 import { LightRig, configureRenderer, type LightSettings } from "./lightRig";
 import { buildGridLines } from "./gridLines";
+import { t as tr } from "./i18n.ts";
 
 installDqSkinning();
 installAutoSmooth();
@@ -1145,7 +1146,7 @@ export class Viewer3D {
     }
     const bone = this.selectedBoneIndex;
     if ((kind === "grab" || kind === "rotate") && (bone < 0 || !this.boneSpheres[bone])) {
-      this.flashHint("Selecciona una articulación (clic izquierdo cerca de ella)");
+      this.flashHint(tr("Selecciona una articulación (clic izquierdo cerca de ella)"));
       return false;
     }
     // IK automático: G arrastra la punta y la cadena la sigue
@@ -1167,19 +1168,19 @@ export class Viewer3D {
       }
     }
     if (kind === "rotate" && !this.canPose()) {
-      this.flashHint("Calcula los pesos para probar poses con R");
+      this.flashHint(tr("Calcula los pesos para probar poses con R"));
       return false;
     }
     if (rig && kind === "grab" && this.posableSelection().filter((j) => this.canTranslate(j)).length === 0) {
       this.flashHint(
         this.jointBones(bone).length === 0
-          ? "Esta articulación es una punta: no se desplaza"
-          : "El desplazamiento de este hueso está bloqueado"
+          ? tr("Esta articulación es una punta: no se desplaza")
+          : tr("El desplazamiento de este hueso está bloqueado")
       );
       return false;
     }
     if (rig && kind === "rotate" && this.posableSelection().every((j) => this.jointBones(j).length === 0)) {
-      this.flashHint("Esta articulación es una punta: no tiene nada que girar");
+      this.flashHint(tr("Esta articulación es una punta: no tiene nada que girar"));
       return false;
     }
     if ((kind === "radius" || kind === "strength") && !this.paintSettings) return false;
@@ -1222,21 +1223,27 @@ export class Viewer3D {
   private showModalHint(): void {
     const m = this.modal;
     if (!m) return;
-    const space = m.axisSpace === "local" ? (this.transformSpace === "parent" ? " del padre" : " local") : " global";
-    const axis = m.axis ? ` · eje ${m.axis.toUpperCase()}${space}` : "";
+    const ax = m.axis?.toUpperCase() ?? "";
+    const axis = !m.axis
+      ? ""
+      : m.axisSpace === "local"
+        ? this.transformSpace === "parent"
+          ? tr(" · eje {axis} del padre", { axis: ax })
+          : tr(" · eje {axis} local", { axis: ax })
+        : tr(" · eje {axis} global", { axis: ax });
     const numeric = m.numeric ? ` · ${m.numeric}${m.kind === "rotate" ? "°" : ""}` : "";
     const texts = {
       grab: m.ikChain
-        ? `Mover con IK automático (${m.ikChain.length - 1} articulaciones siguen) · X/Y/Z restringe al eje · teclea un valor`
-        : "Mover: arrastra el mouse · X/Y/Z restringe al eje (otra vez: global/local) · teclea un valor",
+        ? tr("Mover con IK automático ({n} articulaciones siguen) · X/Y/Z restringe al eje · teclea un valor", { n: m.ikChain.length - 1 })
+        : tr("Mover: arrastra el mouse · X/Y/Z restringe al eje (otra vez: global/local) · teclea un valor"),
 
       rotate: this.rig
-        ? "Rotar: gira el mouse alrededor de la articulación · X/Y/Z eje (otra vez: global/local) · Ctrl pasos de 5° (Shift 15°) · teclea grados"
-        : "Rotar (pose de prueba): gira el mouse alrededor de la articulación · X/Y/Z eje",
-      radius: "Radio del pincel: mueve el mouse a los lados",
-      strength: "Intensidad del pincel: mueve el mouse a los lados",
+        ? tr("Rotar: gira el mouse alrededor de la articulación · X/Y/Z eje (otra vez: global/local) · Ctrl pasos de 5° (Shift 15°) · teclea grados")
+        : tr("Rotar (pose de prueba): gira el mouse alrededor de la articulación · X/Y/Z eje"),
+      radius: tr("Radio del pincel: mueve el mouse a los lados"),
+      strength: tr("Intensidad del pincel: mueve el mouse a los lados"),
     };
-    this.callbacks.onHint?.(`${texts[m.kind]}${axis}${numeric} · clic o Enter confirma · clic derecho o Esc cancela`);
+    this.callbacks.onHint?.(tr("{texto}{axis}{numeric} · clic o Enter confirma · clic derecho o Esc cancela", { texto: texts[m.kind], axis, numeric }));
   }
 
   private onModalKey(e: KeyboardEvent): void {
@@ -2934,7 +2941,7 @@ export class Viewer3D {
       this.measureGroup.add(dot);
     }
     if (points.length < 2) {
-      this.callbacks.onMeasure?.("Medir: clic en el segundo punto");
+      this.callbacks.onMeasure?.(tr("Medir: clic en el segundo punto"));
       return;
     }
     const line = new THREE.Line(
@@ -2950,7 +2957,7 @@ export class Viewer3D {
     // Ejes como se muestran: Z es la altura (Y del visor)
     const d = points[1].clone().sub(points[0]);
     this.callbacks.onMeasure?.(
-      `Distancia ${format(d.length())} · X ${format(Math.abs(d.x))} · Y ${format(Math.abs(d.z))} · Z ${format(Math.abs(d.y))}`
+      tr("Distancia {d} · X {x} · Y {y} · Z {z}", { d: format(d.length()), x: format(Math.abs(d.x)), y: format(Math.abs(d.z)), z: format(Math.abs(d.y)) })
     );
   }
 
@@ -3037,7 +3044,7 @@ export class Viewer3D {
     const { step, major } = buildGridLines(this.grid, extent, toUnit);
 
     const format = (v: number) => `${Number(v.toPrecision(6)).toLocaleString()} ${unitLabel}`;
-    this.callbacks.onGridChanged?.(`Grilla: ${format(step)} · líneas mayores ${format(major)}`);
+    this.callbacks.onGridChanged?.(tr("Grilla: {step} · líneas mayores {major}", { step: format(step), major: format(major) }));
   }
 
   setActiveTool(tool: string): void {

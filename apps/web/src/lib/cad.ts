@@ -8,6 +8,7 @@
 // sólido ya en Y arriba y en las unidades de la escena.
 
 import { batch, createSignal } from "solid-js";
+import { t as tr, tx } from "./i18n.ts";
 import { invoke } from "@tauri-apps/api/core";
 import type { Snap } from "./sketchSnap";
 import type { Contour } from "./sketchText";
@@ -557,9 +558,9 @@ export type PrimitiveShape =
 export type BoltHead = "hex" | "socket" | "countersunk";
 
 export const BOLT_HEADS: { value: BoltHead; label: string }[] = [
-  { value: "socket", label: "Allen (ISO 4762)" },
-  { value: "hex", label: "Hexagonal (ISO 4017)" },
-  { value: "countersunk", label: "Avellanada (ISO 10642)" },
+  { value: "socket", get label() { return tr("Allen (ISO 4762)"); } },
+  { value: "hex", get label() { return tr("Hexagonal (ISO 4017)"); } },
+  { value: "countersunk", get label() { return tr("Avellanada (ISO 10642)"); } },
 ];
 
 /** Largos normales de tornillos (mm) */
@@ -970,11 +971,11 @@ export interface Connector {
 export type MateKind = "fastened" | "revolute" | "slider" | "cylindrical" | "planar";
 
 export const MATE_LABELS: Record<MateKind, string> = {
-  fastened: "Fija",
-  revolute: "Bisagra (gira)",
-  slider: "Deslizante",
-  cylindrical: "Cilíndrica (gira y desliza)",
-  planar: "Plana (apoyada)",
+  get fastened() { return tr("Fija"); },
+  get revolute() { return tr("Bisagra (gira)"); },
+  get slider() { return tr("Deslizante"); },
+  get cylindrical() { return tr("Cilíndrica (gira y desliza)"); },
+  get planar() { return tr("Plana (apoyada)"); },
 };
 
 export interface Mate {
@@ -1494,60 +1495,60 @@ export type ScanFeature =
 const clone = <T>(v: T): T => structuredClone(v);
 
 export const FEATURE_LABELS: Record<FeatureKind["type"], string> = {
-  sketch: "Sketch",
-  extrude: "Extrusión",
-  revolve: "Revolución",
-  primitive: "Primitiva",
-  fillet: "Redondeo",
-  chamfer: "Chaflán",
-  shell: "Vaciado",
-  draft: "Desmolde",
-  pattern: "Patrón",
-  mirror: "Simetría",
-  split: "Corte",
-  import: "Importado",
-  scan_body: "Cuerpo del escaneo",
-  boolean: "Booleana",
-  split_parts: "Separar piezas",
-  delete_parts: "Borrar pieza",
-  plane: "Plano",
-  axis: "Eje",
-  point: "Punto",
-  frame: "Sistema de coordenadas",
-  sweep: "Barrido",
-  loft: "Transición",
-  hole: "Agujero",
-  helix: "Hélice",
-  sketch3d: "Sketch 3D",
-  surface_sketch: "Sketch envuelto",
-  thicken: "Engrosar",
-  move_face: "Mover cara",
-  rib: "Nervio",
-  thread: "Rosca",
-  sheet_metal: "Chapa",
-  flange: "Pestaña",
-  surface_extrude: "Superficie extruida",
-  surface_revolve: "Superficie de revolución",
-  fill: "Relleno",
-  sew: "Coser",
-  split_by: "Partir",
-  replace_face: "Reemplazar cara",
-  face_to_scan: "Cara al escaneo",
-  scale: "Escala",
-  transform: "Mover cuerpo",
-  surface_planar: "Superficie plana",
-  delete_face: "Eliminar cara",
-  rotate_face: "Girar cara",
-  vertex_chamfer: "Chaflán de vértice",
-  full_round: "Redondeo completo",
-  face_blend: "Redondeo de cara",
-  surface_sweep: "Superficie por barrido",
-  surface_loft: "Superficie por transición",
-  surface_extend: "Extender superficie",
-  curve: "Curva",
-  wrap: "Grabado",
-  split_faces: "Línea de partición",
-  surface_offset: "Superficie desfasada",
+  get sketch() { return tr("Sketch"); },
+  get extrude() { return tr("Extrusión"); },
+  get revolve() { return tr("Revolución"); },
+  get primitive() { return tr("Primitiva"); },
+  get fillet() { return tr("Redondeo"); },
+  get chamfer() { return tr("Chaflán"); },
+  get shell() { return tr("Vaciado"); },
+  get draft() { return tr("Desmolde"); },
+  get pattern() { return tr("Patrón"); },
+  get mirror() { return tr("Simetría"); },
+  get split() { return tx("cad", "Corte"); },
+  get import() { return tr("Importado"); },
+  get scan_body() { return tr("Cuerpo del escaneo"); },
+  get boolean() { return tr("Booleana"); },
+  get split_parts() { return tr("Separar piezas"); },
+  get delete_parts() { return tr("Borrar pieza"); },
+  get plane() { return tr("Plano"); },
+  get axis() { return tr("Eje"); },
+  get point() { return tr("Punto"); },
+  get frame() { return tr("Sistema de coordenadas"); },
+  get sweep() { return tr("Barrido"); },
+  get loft() { return tr("Transición"); },
+  get hole() { return tr("Agujero"); },
+  get helix() { return tr("Hélice"); },
+  get sketch3d() { return tr("Sketch 3D"); },
+  get surface_sketch() { return tr("Sketch envuelto"); },
+  get thicken() { return tr("Engrosar"); },
+  get move_face() { return tr("Mover cara"); },
+  get rib() { return tr("Nervio"); },
+  get thread() { return tr("Rosca"); },
+  get sheet_metal() { return tr("Chapa"); },
+  get flange() { return tr("Pestaña"); },
+  get surface_extrude() { return tr("Superficie extruida"); },
+  get surface_revolve() { return tr("Superficie de revolución"); },
+  get fill() { return tr("Relleno"); },
+  get sew() { return tr("Coser"); },
+  get split_by() { return tr("Partir"); },
+  get replace_face() { return tr("Reemplazar cara"); },
+  get face_to_scan() { return tr("Cara al escaneo"); },
+  get scale() { return tr("Escala"); },
+  get transform() { return tr("Mover cuerpo"); },
+  get surface_planar() { return tr("Superficie plana"); },
+  get delete_face() { return tr("Eliminar cara"); },
+  get rotate_face() { return tr("Girar cara"); },
+  get vertex_chamfer() { return tr("Chaflán de vértice"); },
+  get full_round() { return tr("Redondeo completo"); },
+  get face_blend() { return tr("Redondeo de cara"); },
+  get surface_sweep() { return tr("Superficie por barrido"); },
+  get surface_loft() { return tr("Superficie por transición"); },
+  get surface_extend() { return tr("Extender superficie"); },
+  get curve() { return tr("Curva"); },
+  get wrap() { return tr("Grabado"); },
+  get split_faces() { return tr("Línea de partición"); },
+  get surface_offset() { return tr("Superficie desfasada"); },
 };
 
 /**
@@ -1617,10 +1618,11 @@ export const NUT_HEIGHT: Record<string, number> = { M2: 1.6, "M2.5": 2, M3: 2.4,
 /** "M6", "M8×1", "M6 izq.", "1/4-20 UNC" */
 export function threadName(s: ThreadSpec): string {
   const inch = INCH_HOLES.find((m) => Math.abs(m.nominal - s.nominal) < 1e-6 && Math.abs(m.pitch - s.pitch) < 1e-6);
-  if (inch) return `${inch.size}${s.left ? " izq." : ""}`;
+  if (inch) return (s.left ? tr("{name} izq.", { name: inch.size }) : inch.size);
   const coarse = METRIC_HOLES.find((m) => Math.abs(m.nominal - s.nominal) < 1e-6 && Math.abs(m.pitch - s.pitch) < 1e-9);
   const d = String(+s.nominal.toFixed(3)).replace(".", ",");
-  return `${coarse ? coarse.size : `M${d}×${String(s.pitch).replace(".", ",")}`}${s.left ? " izq." : ""}`;
+  const name = coarse ? coarse.size : `M${d}×${String(s.pitch).replace(".", ",")}`;
+  return s.left ? tr("{name} izq.", { name }) : name;
 }
 
 const v3 = {
@@ -1659,7 +1661,7 @@ export function threadCandidates(doc: CadDocument | null | undefined, threads: T
 export function threadLabel(doc: CadDocument | null | undefined, threads: ThreadAxis[], t: ThreadAxis): string {
   const f = doc?.features.find((x) => x.id === t.feature);
   const many = threads.filter((x) => x.feature === t.feature).length > 1;
-  return [f?.name ?? `#${t.feature}`, many ? `centro ${t.index + 1}` : "", threadName(t.spec)].filter(Boolean).join(" · ");
+  return [f?.name ?? `#${t.feature}`, many ? tr("centro {n}", { n: t.index + 1 }) : "", threadName(t.spec)].filter(Boolean).join(" · ");
 }
 
 /** La rosca de una cara elegida: la de la operación que la hizo (por sus orígenes) o la más cercana a su eje */
@@ -1679,7 +1681,7 @@ export function boltLengthFor(size: string, depth: number, withNut: boolean): nu
   return BOLT_LENGTHS.find((l) => l >= need - 1e-6) ?? Math.ceil(need);
 }
 
-export const OP_LABELS: Record<BodyOp, string> = { join: "Unir", cut: "Restar", intersect: "Intersecar", new: "Nueva pieza" };
+export const OP_LABELS: Record<BodyOp, string> = { get join() { return tr("Unir"); }, get cut() { return tr("Restar"); }, get intersect() { return tr("Intersecar"); }, get new() { return tr("Nueva pieza"); } };
 
 /** Planos base (Z arriba) */
 export const BASE_PLANES: Record<"xy" | "xz" | "yz", Plane> = {
@@ -1689,9 +1691,9 @@ export const BASE_PLANES: Record<"xy" | "xz" | "yz", Plane> = {
 };
 
 export const PLANE_LABELS: Record<"xy" | "xz" | "yz", string> = {
-  xy: "Planta (XY)",
-  xz: "Frente (XZ)",
-  yz: "Lateral (YZ)",
+  get xy() { return tr("Planta (XY)"); },
+  get xz() { return tr("Frente (XZ)"); },
+  get yz() { return tr("Lateral (YZ)"); },
 };
 
 /** Plano base desplazado a lo largo de su normal */
@@ -1727,14 +1729,14 @@ function nextFeatureId(doc: CadDocument): number {
 }
 
 const PRIMITIVE_LABELS: Record<PrimitiveShape["type"], string> = {
-  box: "Caja",
-  cylinder: "Cilindro",
-  cone: "Cono",
-  sphere: "Esfera",
-  torus: "Toro",
-  bolt: "Tornillo",
-  nut: "Tuerca",
-  washer: "Arandela",
+  get box() { return tr("Caja"); },
+  get cylinder() { return tr("Cilindro"); },
+  get cone() { return tr("Cono"); },
+  get sphere() { return tr("Esfera"); },
+  get torus() { return tr("Toro"); },
+  get bolt() { return tr("Tornillo"); },
+  get nut() { return tr("Tuerca"); },
+  get washer() { return tr("Arandela"); },
 };
 
 /** Operación que se edita con el editor de sketch (en un plano, o envuelto sobre una cara) */
@@ -1744,8 +1746,8 @@ export function editsAsSketch(kind: FeatureKind): kind is Extract<FeatureKind, {
 
 /** Nombre del tipo de operación (las primitivas, por su forma) */
 export function kindLabel(kind: FeatureKind): string {
-  if (kind.type === "scan_body" && kind.region) return "Parche del escaneo";
-  if (kind.type === "scan_body" && kind.thickness) return "Carcasa del escaneo";
+  if (kind.type === "scan_body" && kind.region) return tr("Parche del escaneo");
+  if (kind.type === "scan_body" && kind.thickness) return tr("Carcasa del escaneo");
   return kind.type === "primitive" ? PRIMITIVE_LABELS[kind.shape.type] : FEATURE_LABELS[kind.type];
 }
 
@@ -2049,9 +2051,9 @@ export function curvePolyline(g: Geometry, point: (id: number) => P2 | undefined
 /** Manijas en los extremos de una spline abierta (o las quita si ya tiene) */
 export function toggleSplineHandles(s: Sketch, id: number): string | undefined {
   const e = s.entities.find((x) => x.id === id);
-  if (e?.geometry.type !== "spline") return "Elegir una spline";
+  if (e?.geometry.type !== "spline") return tr("Elegir una spline");
   const g = e.geometry;
-  if (g.closed) return "Las manijas son para splines abiertas";
+  if (g.closed) return tr("Las manijas son para splines abiertas");
   if (g.start_handle !== undefined || g.end_handle !== undefined) {
     const hs = [g.start_handle, g.end_handle].filter((x): x is number => x !== undefined);
     delete g.start_handle;
@@ -2236,13 +2238,13 @@ function pointsOfEntities(s: Sketch, ids: number[]): number[] {
  */
 export function mirrorEntities(s: Sketch, ids: number[], axis: number): string | undefined {
   const ax = s.entities.find((e) => e.id === axis)?.geometry;
-  if (ax?.type !== "line") return "El eje de la simetría tiene que ser una línea";
+  if (ax?.type !== "line") return tr("El eje de la simetría tiene que ser una línea");
   const [A, B] = [pointOf(s, ax.start), pointOf(s, ax.end)];
   const d: P2 = [B[0] - A[0], B[1] - A[1]];
   const l2 = d[0] * d[0] + d[1] * d[1];
-  if (l2 === 0) return "El eje no tiene largo";
+  if (l2 === 0) return tr("El eje no tiene largo");
   const items = ids.filter((id) => id !== axis);
-  if (!items.length) return "Elegir también lo que se refleja";
+  if (!items.length) return tr("Elegir también lo que se refleja");
   const tol = 1e-9 * Math.max(1, Math.sqrt(l2));
   const made = new Map<number, number>();
   const map = (p: number): number => {
@@ -2304,7 +2306,7 @@ function keepShape(s: Sketch, pts: number[], lead: number, map: Map<number, numb
  */
 export function linearPattern(s: Sketch, ids: number[], count: number, offset: P2, rows = 1, offset2: P2 = [0, 0]): string | undefined {
   const pts = pointsOfEntities(s, ids);
-  if (!pts.length || count < 1 || rows < 1 || count * rows < 2) return "Elegir qué repetir y al menos 2 en total";
+  if (!pts.length || count < 1 || rows < 1 || count * rows < 2) return tr("Elegir qué repetir y al menos 2 en total");
   const grid = new Map<string, Map<number, number>>([["0,0", new Map(pts.map((p) => [p, p]))]]);
   const masters: [[number, number] | undefined, [number, number] | undefined] = [undefined, undefined];
   for (let j = 0; j < rows; j++)
@@ -2343,12 +2345,12 @@ export function linearPattern(s: Sketch, ids: number[], count: number, offset: P
 export function circularPattern(s: Sketch, ids: number[], count: number, center: number, span = 360, rotate = true): string | undefined {
   const pts = pointsOfEntities(s, ids);
   const lead = pts.find((p) => p !== center);
-  if (lead === undefined || count < 2) return "Elegir qué repetir y al menos 2 en total";
-  if (span === 0) return "El ángulo no puede ser 0";
+  if (lead === undefined || count < 2) return tr("Elegir qué repetir y al menos 2 en total");
+  if (span === 0) return tr("El ángulo no puede ser 0");
   const full = Math.abs(span) >= 360 - 1e-9;
   const step = ((full ? Math.sign(span) * 360 : span) / (full ? count : count - 1)) * (Math.PI / 180);
   const half = Math.abs(Math.abs(step) - Math.PI) < 1e-9;
-  if (!half && Math.abs(step) > Math.PI) return "Entre una copia y la siguiente tiene que haber menos de 180°";
+  if (!half && Math.abs(step) > Math.PI) return tr("Entre una copia y la siguiente tiene que haber menos de 180°");
   const C = pointOf(s, center);
   const rot = (P: P2, a: number): P2 => {
     const [x, y] = [P[0] - C[0], P[1] - C[1]];
@@ -2429,10 +2431,10 @@ function alongPolyline(poly: P2[], count: number, closed: boolean): { at: P2; di
  */
 export function curvePattern(s: Sketch, ids: number[], count: number, path: number, rotate = false): string | undefined {
   const g = s.entities.find((e) => e.id === path)?.geometry;
-  if (!g || g.type === "point") return "El camino tiene que ser una línea, arco, círculo, spline o elipse";
+  if (!g || g.type === "point") return tr("El camino tiene que ser una línea, arco, círculo, spline o elipse");
   const items = ids.filter((id) => id !== path);
   const pts = pointsOfEntities(s, items);
-  if (!pts.length || count < 2) return "Elegir el camino primero, después qué repetir, y al menos 2 en total";
+  if (!pts.length || count < 2) return tr("Elegir el camino primero, después qué repetir, y al menos 2 en total");
   const lead = pts[0];
   if (g.type === "circle" && rotate) return circularPattern(s, items, count, g.center);
   const move = (map: (P: P2) => P2) => (p: number) => map(pointOf(s, p));
@@ -2499,7 +2501,7 @@ export function curvePattern(s: Sketch, ids: number[], count: number, path: numb
   // Spline o elipse: sin restricción "sobre la curva", las copias guardan la forma y nada más
   const closed = g.type === "ellipse" || (g.type === "spline" && g.closed);
   const stops = alongPolyline(polylineOf(s, g), count, closed);
-  if (stops.length < 2) return "El camino no tiene largo";
+  if (stops.length < 2) return tr("El camino no tiene largo");
   const [S, d0] = [stops[0].at, stops[0].dir];
   for (const { at, dir } of stops.slice(1)) {
     const a = rotate ? dir - d0 : 0;
@@ -2523,7 +2525,7 @@ export function curvePattern(s: Sketch, ids: number[], count: number, path: numb
  */
 export function tablePattern(s: Sketch, ids: number[], offsets: P2[]): string | undefined {
   const pts = pointsOfEntities(s, ids);
-  if (!pts.length || !offsets.length) return "Elegir qué repetir y al menos una fila en la tabla";
+  if (!pts.length || !offsets.length) return tr("Elegir qué repetir y al menos una fila en la tabla");
   const lead = pts[0];
   for (const d of offsets) {
     const next = placeCopy(s, ids, pts, (p) => [pointOf(s, p)[0] + d[0], pointOf(s, p)[1] + d[1]]);
@@ -2562,8 +2564,8 @@ const FILL_MAX = 120;
  */
 export function fillPattern(s: Sketch, ids: number[], region: Region, spacing: number, hex: boolean, margin: number): string | undefined {
   const pts = pointsOfEntities(s, ids);
-  if (!pts.length) return "Elegir la región primero y después qué repetir";
-  if (!(spacing > 0)) return "La separación tiene que ser mayor que cero";
+  if (!pts.length) return tr("Elegir la región primero y después qué repetir");
+  if (!(spacing > 0)) return tr("La separación tiene que ser mayor que cero");
   const lead = pts[0];
   const L = pointOf(s, lead);
   // Contorno de lo que se repite, para ver si cada copia entra
@@ -2592,10 +2594,10 @@ export function fillPattern(s: Sketch, ids: number[], region: Region, spacing: n
     const [a0, a1] = [Math.floor((Math.min(...xs) - b * B[0]) / spacing) - 1, Math.ceil((Math.max(...xs) - b * B[0]) / spacing) + 1];
     for (let a = a0; a <= a1; a++) {
       if ((a || b) && fits([a * A[0] + b * B[0], a * A[1] + b * B[1]])) cells.set(`${a},${b}`, [a, b]);
-      if (cells.size > FILL_MAX) return `Saldrían más de ${FILL_MAX} copias: subir la separación, o usar el patrón de relleno de operaciones (Patrones → De relleno)`;
+      if (cells.size > FILL_MAX) return tr("Saldrían más de {max} copias: subir la separación, o usar el patrón de relleno de operaciones (Patrones → De relleno)", { max: FILL_MAX });
     }
   }
-  if (!cells.size) return "No entra ninguna copia en la región: bajar la separación o el margen";
+  if (!cells.size) return tr("No entra ninguna copia en la región: bajar la separación o el margen");
   // Paso de la grilla: líneas de construcción desde el original
   const pA = guidePoint(s, [L[0] + A[0], L[1] + A[1]]);
   const pB = guidePoint(s, [L[0] + B[0], L[1] + B[1]]);
@@ -2725,7 +2727,7 @@ export function filletCorner(s: Sketch, point: number, r: number, opts: CornerOp
   const keep = opts.keepCorner !== false;
   const trim = opts.trim !== false;
   const lines = linesAt(s, point);
-  if (lines.length !== 2) return "La esquina debe unir exactamente dos líneas";
+  if (lines.length !== 2) return tr("La esquina debe unir exactamente dos líneas");
   const pos = (id: number): P2 => {
     const p = s.points.find((q) => q.id === id)!;
     return [p.x, p.y];
@@ -2744,9 +2746,9 @@ export function filletCorner(s: Sketch, point: number, r: number, opts: CornerOp
   const v = unit([B[0] - P[0], B[1] - P[1]]);
   const cos = Math.max(-1, Math.min(1, u[0] * v[0] + u[1] * v[1]));
   const half = Math.acos(cos) / 2;
-  if (half < 1e-3 || Math.PI / 2 - half < 1e-3) return "Las líneas están alineadas";
+  if (half < 1e-3 || Math.PI / 2 - half < 1e-3) return tr("Las líneas están alineadas");
   const t = r / Math.tan(half);
-  if (t >= Math.hypot(A[0] - P[0], A[1] - P[1]) || t >= Math.hypot(B[0] - P[0], B[1] - P[1])) return "El radio no entra en esas líneas";
+  if (t >= Math.hypot(A[0] - P[0], A[1] - P[1]) || t >= Math.hypot(B[0] - P[0], B[1] - P[1])) return tr("El radio no entra en esas líneas");
   const bis = unit([u[0] + v[0], u[1] + v[1]]);
   const d = r / Math.sin(half);
   const T1: P2 = [P[0] + u[0] * t, P[1] + u[1] * t];
@@ -2833,7 +2835,7 @@ export function splitLineAt(s: Sketch, lineId: number, point: number): number | 
  */
 export function trimLine(s: Sketch, lineId: number, p: P2, limits: TrimLimits = []): string | undefined {
   const line = s.entities.find((e) => e.id === lineId);
-  if (!line || line.geometry.type !== "line") return "Solo se recortan líneas";
+  if (!line || line.geometry.type !== "line") return tr("Solo se recortan líneas");
   const g = line.geometry;
   const pos = (id: number): P2 => {
     const q = s.points.find((x) => x.id === id)!;
@@ -2993,7 +2995,7 @@ export function offsetEntities(s: Sketch, regions: Region[], ids: number[], d: n
       done.add(piece.entity);
     });
   }
-  return skipped ? "Algunas entidades no se pudieron desplazar (solo círculos y lazos cerrados de líneas)" : undefined;
+  return skipped ? tr("Algunas entidades no se pudieron desplazar (solo círculos y lazos cerrados de líneas)") : undefined;
 }
 
 // ─── Geometría de sketch: cruces, recortes, extensiones ───────────────────
@@ -3257,7 +3259,7 @@ export function trimCurve(s: Sketch, id: number, p: P2, limits: TrimLimits = [])
   const e = s.entities.find((x) => x.id === id);
   if (!e) return undefined;
   const o = circleOf(s, e.geometry);
-  if (!o) return "Solo círculos y arcos";
+  if (!o) return tr("Solo círculos y arcos");
   const g = e.geometry as { center: number };
   const a0 = o.a0 ?? 0;
   const sweep = o.sweep ?? 2 * Math.PI;
@@ -3271,7 +3273,7 @@ export function trimCurve(s: Sketch, id: number, p: P2, limits: TrimLimits = [])
   }
   const tc = relAngle(p, o.c, a0);
   if (e.geometry.type === "circle") {
-    if (cuts.length < 2) return "El círculo necesita al menos dos cruces para recortarlo";
+    if (cuts.length < 2) return tr("El círculo necesita al menos dos cruces para recortarlo");
     // Tramo quitado: entre el último cruce antes del clic y el primero después
     const after = cuts.find((x) => x.t > tc) ?? cuts[0];
     const before = [...cuts].reverse().find((x) => x.t < tc) ?? cuts[cuts.length - 1];
@@ -3321,7 +3323,7 @@ export function dropLoosePoints(s: Sketch) {
  */
 export function extendLine(s: Sketch, lineId: number, p: P2, limits: TrimLimits = []): string | undefined {
   const line = s.entities.find((e) => e.id === lineId);
-  if (!line || line.geometry.type !== "line") return "Solo se extienden líneas";
+  if (!line || line.geometry.type !== "line") return tr("Solo se extienden líneas");
   const g = line.geometry;
   const [A, B] = [pointOf(s, g.start), pointOf(s, g.end)];
   const atEnd = Math.hypot(p[0] - B[0], p[1] - B[1]) <= Math.hypot(p[0] - A[0], p[1] - A[1]);
@@ -3362,7 +3364,7 @@ export function extendLine(s: Sketch, lineId: number, p: P2, limits: TrimLimits 
     }
   }
   for (const t of limitsOnLine(from, d, limits)) consider(t, OUTSIDE);
-  if (!best) return "No hay nada en esa dirección hasta donde extender";
+  if (!best) return tr("No hay nada en esa dirección hasta donde extender");
   const target: P2 = [from[0] + best.t * d[0], from[1] + best.t * d[1]];
   // Punto nuevo para el extremo (si el viejo lo comparte otra entidad, queda allí)
   const np = addPoint(s, target);
@@ -3381,7 +3383,7 @@ export function extendLine(s: Sketch, lineId: number, p: P2, limits: TrimLimits 
  */
 export function extendArc(s: Sketch, arcId: number, p: P2, limits: TrimLimits = []): string | undefined {
   const e = s.entities.find((x) => x.id === arcId);
-  if (!e || e.geometry.type !== "arc") return "Solo se extienden líneas y arcos";
+  if (!e || e.geometry.type !== "arc") return tr("Solo se extienden líneas y arcos");
   const g = e.geometry;
   const o = circleOf(s, g)!;
   const [A, B] = [pointOf(s, g.start), pointOf(s, g.end)];
@@ -3394,7 +3396,7 @@ export function extendArc(s: Sketch, arcId: number, p: P2, limits: TrimLimits = 
     const t = travel(x.p);
     if (t > 1e-9 && t < free - 1e-9 && (!best || t < best.t)) best = { t, ...x };
   }
-  if (!best) return "No hay nada por ese lado del círculo hasta donde extender";
+  if (!best) return tr("No hay nada por ese lado del círculo hasta donde extender");
   const np = addPoint(s, best.p);
   if (atEnd) g.end = np;
   else g.start = np;
@@ -3416,7 +3418,7 @@ export function trimAt(s: Sketch, id: number, p: P2, limits: TrimLimits = []): s
   if (!e) return undefined;
   if (e.geometry.type === "line") return trimLine(s, id, p, limits);
   if (e.geometry.type === "circle" || e.geometry.type === "arc") return trimCurve(s, id, p, limits);
-  return "Las splines no se recortan";
+  return tr("Las splines no se recortan");
 }
 
 /** Campos numéricos de una restricción que no son ids */
@@ -3557,43 +3559,43 @@ export function constraintValue(c: SketchConstraint): number | undefined {
 export type AngleEnd = "start" | "end";
 
 export const CONSTRAINT_LABELS: Record<SketchConstraint["type"], string> = {
-  coincident: "Coincidente",
-  fixed: "Fijo",
-  horizontal: "Horizontal",
-  vertical: "Vertical",
-  horizontal_points: "Alineados horizontal",
-  vertical_points: "Alineados vertical",
-  parallel: "Paralelas",
-  collinear: "Colineales",
-  perpendicular: "Perpendiculares",
-  equal: "Iguales",
-  tangent: "Tangente",
-  concentric: "Concéntricos",
-  point_on_line: "Punto en línea",
-  point_on_circle: "Punto en círculo",
-  midpoint: "Punto medio",
-  symmetric: "Simétricos",
-  equal_offset: "Patrón lineal",
-  equal_rotation: "Patrón circular",
-  distance: "Distancia",
-  horizontal_distance: "Distancia horizontal",
-  vertical_distance: "Distancia vertical",
-  length: "Largo",
-  radius: "Radio",
-  diameter: "Diámetro",
-  angle: "Ángulo",
-  point_line_distance: "Distancia a la línea",
-  axis_diameter: "Diámetro respecto del eje",
-  arc_length: "Largo de arco",
-  curve_length: "Largo total",
-  circle_distance: "Distancia mín./máx.",
-  coradial: "Coradiales",
-  symmetric_entities: "Simétricas",
-  point_on_curve: "Punto en la curva",
-  intersection: "Punto en la intersección",
-  lock: "Bloqueada",
-  curvature: "Curvatura igual (G2)",
-  pierce: "Perforación",
+  get coincident() { return tr("Coincidente"); },
+  get fixed() { return tr("Fijo"); },
+  get horizontal() { return tr("Horizontal"); },
+  get vertical() { return tr("Vertical"); },
+  get horizontal_points() { return tr("Alineados horizontal"); },
+  get vertical_points() { return tr("Alineados vertical"); },
+  get parallel() { return tr("Paralelas"); },
+  get collinear() { return tr("Colineales"); },
+  get perpendicular() { return tr("Perpendiculares"); },
+  get equal() { return tr("Iguales"); },
+  get tangent() { return tr("Tangente"); },
+  get concentric() { return tr("Concéntricos"); },
+  get point_on_line() { return tr("Punto en línea"); },
+  get point_on_circle() { return tr("Punto en círculo"); },
+  get midpoint() { return tr("Punto medio"); },
+  get symmetric() { return tr("Simétricos"); },
+  get equal_offset() { return tr("Patrón lineal"); },
+  get equal_rotation() { return tr("Patrón circular"); },
+  get distance() { return tr("Distancia"); },
+  get horizontal_distance() { return tr("Distancia horizontal"); },
+  get vertical_distance() { return tr("Distancia vertical"); },
+  get length() { return tr("Largo"); },
+  get radius() { return tr("Radio"); },
+  get diameter() { return tr("Diámetro"); },
+  get angle() { return tr("Ángulo"); },
+  get point_line_distance() { return tr("Distancia a la línea"); },
+  get axis_diameter() { return tr("Diámetro respecto del eje"); },
+  get arc_length() { return tr("Largo de arco"); },
+  get curve_length() { return tr("Largo total"); },
+  get circle_distance() { return tr("Distancia mín./máx."); },
+  get coradial() { return tr("Coradiales"); },
+  get symmetric_entities() { return tr("Simétricas"); },
+  get point_on_curve() { return tr("Punto en la curva"); },
+  get intersection() { return tr("Punto en la intersección"); },
+  get lock() { return tr("Bloqueada"); },
+  get curvature() { return tr("Curvatura igual (G2)"); },
+  get pierce() { return tr("Perforación"); },
 };
 
 // ─── Store ────────────────────────────────────────────────────────────────
@@ -3731,7 +3733,7 @@ export function createCadStore() {
   /** Cambia el documento (deshacible) y recalcula; con un diálogo abierto, cambia el borrador */
   const commit = (mutate: (d: CadDocument) => void) => {
     if (viewing() !== undefined) {
-      setError("Estás viendo una versión guardada: vuelve al diseño o restáurala para editar");
+      setError(tr("Estás viendo una versión guardada: vuelve al diseño o restáurala para editar"));
       return lastSend;
     }
     setComparison(null);
@@ -3957,7 +3959,7 @@ export function createCadStore() {
         const copies = list.map((f) => {
           const c = clone(f);
           c.id = map.get(f.id)!;
-          c.name = `${f.name} (copia)`;
+          c.name = tr("{name} (copia)", { name: f.name });
           remapFeatureIds(c.kind, map);
           if (c.scope) remapFeatureIds(c.scope, map);
           return c;
@@ -4035,7 +4037,7 @@ export function createCadStore() {
     },
 
     /** Agrupa en una carpeta las operaciones de `a` a `b` (posiciones); `false` si pisa otra carpeta */
-    addFolder(a: number, b: number, name = "Carpeta"): boolean {
+    addFolder(a: number, b: number, name = tr("Carpeta")): boolean {
       if (draft()) void acceptDraft();
       const d = committed();
       if (!d || a < 0 || b >= d.features.length) return false;

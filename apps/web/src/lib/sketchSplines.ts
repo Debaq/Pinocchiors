@@ -5,6 +5,7 @@
 
 import { addEntity, addPoint, bsplineOf, constraintMentions, geometryPoints, removeEntity, splineParts, splinePolyline, splineTangents, type Geometry, type P2, type Sketch } from "./cad.ts";
 import { clampedUniform, closestParam, curvatureInfo, fitBSpline, hermiteToBSpline, insertKnot, makeBSpline, sample, type BSpline, type CurvatureInfo } from "./sketchCurves.ts";
+import { t as tr } from "./i18n.ts";
 
 const sub = (a: P2, b: P2): P2 => [a[0] - b[0], a[1] - b[1]];
 const add = (a: P2, b: P2): P2 => [a[0] + b[0], a[1] + b[1]];
@@ -61,7 +62,7 @@ export function insertSplinePoint(s: Sketch, id: number, p: P2): string | undefi
   const g = entity(s, id)?.geometry;
   if (g?.type === "spline") {
     const sp = splineParts(g, (q) => (has(s, q) ? pos(s, q) : undefined));
-    if (!sp) return "La spline tiene puntos que no están";
+    if (!sp) return tr("La spline tiene puntos que no están");
     const steps = 32;
     const pl = splinePolyline(sp.p, g.closed, sp.t0, sp.t1, steps, sp.dirs);
     // Tramo de la polilínea más cercano → tramo de la spline
@@ -82,9 +83,9 @@ export function insertSplinePoint(s: Sketch, id: number, p: P2): string | undefi
     return undefined;
   }
   if (g?.type === "bspline") {
-    if (g.closed) return "En una spline por polos cerrada todavía no se agregan polos";
+    if (g.closed) return tr("En una spline por polos cerrada todavía no se agregan polos");
     const curve = bsplineOf(g, (q) => (has(s, q) ? pos(s, q) : undefined));
-    if (!curve) return "La spline tiene polos que no están";
+    if (!curve) return tr("La spline tiene polos que no están");
     const u = closestParam(curve, p);
     const knots = g.knots?.length ? g.knots : clampedUniform(g.poles.length, curve.degree);
     const r = insertKnot({ poles: curve.poles, weights: g.weights, degree: curve.degree, knots }, u);
@@ -105,7 +106,7 @@ export function insertSplinePoint(s: Sketch, id: number, p: P2): string | undefi
     if (r.weights) g.weights = r.weights;
     return undefined;
   }
-  return "Clic sobre una spline";
+  return tr("Clic sobre una spline");
 }
 
 /** Quita un punto de una spline por puntos o un polo de una por polos (quedan al menos dos) */
@@ -113,8 +114,8 @@ export function removeSplinePoint(s: Sketch, id: number, point: number): string 
   const g = entity(s, id)?.geometry;
   if (g?.type === "spline") {
     const i = g.points.indexOf(point);
-    if (i < 0) return "Ese punto no es de la spline";
-    if (g.points.length <= (g.closed ? 3 : 2)) return "La spline se quedaría sin puntos";
+    if (i < 0) return tr("Ese punto no es de la spline");
+    if (g.points.length <= (g.closed ? 3 : 2)) return tr("La spline se quedaría sin puntos");
     g.points.splice(i, 1);
     if (g.handles) {
       g.handles = g.handles.filter(([k]) => k !== i).map(([k, h]) => [k > i ? k - 1 : k, h]);
@@ -122,14 +123,14 @@ export function removeSplinePoint(s: Sketch, id: number, point: number): string 
     }
   } else if (g?.type === "bspline") {
     const i = g.poles.indexOf(point);
-    if (i < 0) return "Ese punto no es un polo de la spline";
-    if (g.poles.length <= (g.closed ? 3 : 2)) return "La spline se quedaría sin polos";
+    if (i < 0) return tr("Ese punto no es un polo de la spline");
+    if (g.poles.length <= (g.closed ? 3 : 2)) return tr("La spline se quedaría sin polos");
     g.poles.splice(i, 1);
     if (g.weights?.length) g.weights.splice(i, 1);
     // Con un polo menos los nudos ya no cuadran: uniformes otra vez
     delete g.knots;
     g.degree = Math.min(g.degree, g.poles.length - 1);
-  } else return "Elegir una spline";
+  } else return tr("Elegir una spline");
   dropLoose(s, [point]);
   return undefined;
 }
@@ -146,9 +147,9 @@ function dropLoose(s: Sketch, pts: number[]) {
 /** Pone o saca la manija del punto `point` de una spline por puntos (en las puntas, las de salida y llegada) */
 export function toggleSplineHandle(s: Sketch, id: number, point: number): string | undefined {
   const g = entity(s, id)?.geometry;
-  if (g?.type !== "spline") return "Elegir un punto de una spline por puntos";
+  if (g?.type !== "spline") return tr("Elegir un punto de una spline por puntos");
   const i = g.points.indexOf(point);
-  if (i < 0) return "Ese punto no es de la spline";
+  if (i < 0) return tr("Ese punto no es de la spline");
   const end = !g.closed && (i === 0 || i === g.points.length - 1);
   const existing = end ? (i === 0 ? g.start_handle : g.end_handle) : g.handles?.find((h) => h[0] === i)?.[1];
   if (existing !== undefined) {
@@ -177,10 +178,10 @@ export function toggleSplineHandle(s: Sketch, id: number, point: number): string
  * alcance. Devuelve la entidad nueva o un mensaje.
  */
 export function fitSplineToPoints(s: Sketch, points: number[], tol: number): number | string {
-  if (points.length < 3) return "Elegir al menos tres puntos";
+  if (points.length < 3) return tr("Elegir al menos tres puntos");
   const pts = points.map((p) => pos(s, p));
   const fit = fitBSpline(pts, tol, 3);
-  if (!fit) return "No se pudo ajustar";
+  if (!fit) return tr("No se pudo ajustar");
   const poles = fit.poles.map((p, i) => (i === 0 ? points[0] : i === fit.poles.length - 1 ? points[points.length - 1] : addPoint(s, p)));
   return addEntity(s, { type: "bspline", poles, degree: Math.min(3, poles.length - 1) });
 }
@@ -192,7 +193,7 @@ export function fitSplineToPoints(s: Sketch, points: number[], tol: number): num
 export function simplifySpline(s: Sketch, id: number, tol: number): number | string {
   const g = entity(s, id)?.geometry;
   const before = curveOf(s, id);
-  if (!g || !before) return "Elegir una spline";
+  if (!g || !before) return tr("Elegir una spline");
   const ref = sample(before, 32);
   if (g.type === "spline") {
     let removed = 0;
@@ -214,7 +215,7 @@ export function simplifySpline(s: Sketch, id: number, tol: number): number | str
     return removed;
   }
   if (g.type === "bspline") {
-    if (g.closed || g.weights?.some((w) => w !== 1)) return "Solo las splines por polos abiertas y no racionales";
+    if (g.closed || g.weights?.some((w) => w !== 1)) return tr("Solo las splines por polos abiertas y no racionales");
     const fit = fitBSpline(ref, tol, g.degree);
     if (!fit || fit.poles.length >= g.poles.length) return 0;
     const removed = g.poles.length - fit.poles.length;
@@ -226,7 +227,7 @@ export function simplifySpline(s: Sketch, id: number, tol: number): number | str
     dropLoose(s, old);
     return removed;
   }
-  return "Elegir una spline";
+  return tr("Elegir una spline");
 }
 
 /** Polos de Bézier cúbica de una línea o un arco (el arco en tramos de hasta 90°) */
@@ -267,9 +268,9 @@ function bezierPieces(s: Sketch, g: Geometry): P2[][] | undefined {
  */
 export function convertToBSpline(s: Sketch, ids: number[]): number | string {
   const ents = ids.map((id) => entity(s, id)).filter((e) => e !== undefined);
-  if (!ents.length) return "Elegir líneas, arcos o splines";
+  if (!ents.length) return tr("Elegir líneas, arcos o splines");
   if (ents.some((e) => !["line", "arc", "spline"].includes(e.geometry.type) || (e.geometry.type === "spline" && e.geometry.closed && ents.length > 1)))
-    return "Solo líneas, arcos y splines por puntos (una cerrada va sola)";
+    return tr("Solo líneas, arcos y splines por puntos (una cerrada va sola)");
   // Una spline cerrada sola: exacta, como curva que vuelve a su comienzo
   const ends = (g: Geometry): [number, number] =>
     g.type === "line" ? [g.start, g.end] : g.type === "arc" ? [g.start, g.end] : g.type === "spline" ? [g.points[0], g.points[g.closed ? 0 : g.points.length - 1]] : [-1, -1];
@@ -288,7 +289,7 @@ export function convertToBSpline(s: Sketch, ids: number[]): number | string {
     at = reversed ? a : b;
     cur = [...left].find((e) => ends(e.geometry).includes(at))!;
   }
-  if (left.size) return "Las entidades no forman una sola cadena";
+  if (left.size) return tr("Las entidades no forman una sola cadena");
   // Polos: los de cada tramo en el sentido de la cadena; las uniones con su id
   const poles: { p: P2; id?: number }[] = [];
   const knots = [0, 0, 0, 0];

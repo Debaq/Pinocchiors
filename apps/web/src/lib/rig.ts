@@ -44,12 +44,13 @@ import { eulerCodec, type Codec, type RotationCodecs } from "./curves";
 import { analyzeBody, type Body, type ChainKind, type SkeletonBone } from "./presetAnimations";
 import { applyConstraints, isConstraintId, loadConstraints, type RigConstraint } from "./constraints";
 import { applySecondary, type SpringSettings } from "./secondary";
+import { t as tr } from "./i18n.ts";
 
 // ─── Tipos ──────────────────────────────────────────────────────────────────
 
 export type RotationMode = "quaternion" | "XYZ" | "XZY" | "YXZ" | "YZX" | "ZXY" | "ZYX";
 export const ROTATION_MODES: { value: RotationMode; label: string }[] = [
-  { value: "quaternion", label: "Cuaternión" },
+  { value: "quaternion", get label() { return tr("Cuaternión"); } },
   { value: "XYZ", label: "Euler XYZ" },
   { value: "XZY", label: "Euler XZY" },
   { value: "YXZ", label: "Euler YXZ" },
@@ -61,19 +62,19 @@ export const ROTATION_MODES: { value: RotationMode; label: string }[] = [
 /** Forma de dibujo de un hueso; sin forma propia, la de la barra del visor */
 export type BoneShape = "octahedral" | "stick" | "sphere" | "box";
 export const BONE_SHAPES: { value: BoneShape | "default"; label: string }[] = [
-  { value: "default", label: "Como la vista" },
-  { value: "octahedral", label: "Octaedro" },
-  { value: "stick", label: "Línea" },
-  { value: "sphere", label: "Esfera" },
-  { value: "box", label: "Caja" },
+  { value: "default", get label() { return tr("Como la vista"); } },
+  { value: "octahedral", get label() { return tr("Octaedro"); } },
+  { value: "stick", get label() { return tr("Línea"); } },
+  { value: "sphere", get label() { return tr("Esfera"); } },
+  { value: "box", get label() { return tr("Caja"); } },
 ];
 
 export type ControlShape = "cube" | "circle" | "arrow" | "sphere";
 export const CONTROL_SHAPES: { value: ControlShape; label: string }[] = [
-  { value: "circle", label: "Círculo" },
-  { value: "cube", label: "Cubo" },
-  { value: "sphere", label: "Esfera" },
-  { value: "arrow", label: "Flecha" },
+  { value: "circle", get label() { return tr("Círculo"); } },
+  { value: "cube", get label() { return tr("Cubo"); } },
+  { value: "sphere", get label() { return tr("Esfera"); } },
+  { value: "arrow", get label() { return tr("Flecha"); } },
 ];
 
 export interface BoneProps {
@@ -125,12 +126,12 @@ export interface RigControl {
 
 export type IkSolver = "twoBone" | "fabrik" | "ccd" | "spline" | "lookAt" | "root";
 export const IK_SOLVERS: { value: IkSolver; label: string }[] = [
-  { value: "twoBone", label: "Dos huesos + pole" },
+  { value: "twoBone", get label() { return tr("Dos huesos + pole"); } },
   { value: "fabrik", label: "FABRIK" },
   { value: "ccd", label: "CCD" },
-  { value: "spline", label: "Curva" },
-  { value: "lookAt", label: "Mirar a" },
-  { value: "root", label: "Centro de masa" },
+  { value: "spline", get label() { return tr("Curva"); } },
+  { value: "lookAt", get label() { return tr("Mirar a"); } },
+  { value: "root", get label() { return tr("Centro de masa"); } },
 ];
 
 /**
@@ -1043,21 +1044,21 @@ export function mirrorPairs(bones: SkeletonBone[], normal: Vec3, point: Vec3): (
 
 // ─── Grupos automáticos ─────────────────────────────────────────────────────
 
-const KIND_NAMES: Record<ChainKind, string> = {
-  leg: "Pata",
-  arm: "Brazo",
-  wing: "Ala",
-  tail: "Cola",
-  head: "Cabeza",
-  trunk: "Trompa",
-  ear: "Oreja",
-  antenna: "Antena",
-  pincer: "Pinza",
-  fin: "Aleta",
-  tentacle: "Tentáculo",
-  mouth: "Boca",
-  body: "Cuerpo",
-  other: "Otros",
+const KIND_NAMES: Record<ChainKind, () => string> = {
+  leg: () => tr("Pata"),
+  arm: () => tr("Brazo"),
+  wing: () => tr("Ala"),
+  tail: () => tr("Cola"),
+  head: () => tr("Cabeza"),
+  trunk: () => tr("Trompa"),
+  ear: () => tr("Oreja"),
+  antenna: () => tr("Antena"),
+  pincer: () => tr("Pinza"),
+  fin: () => tr("Aleta"),
+  tentacle: () => tr("Tentáculo"),
+  mouth: () => tr("Boca"),
+  body: () => tr("Cuerpo"),
+  other: () => tr("Otros"),
 };
 
 /** Tono (0–360) por tipo de cadena; la izquierda más clara que la derecha */
@@ -1092,7 +1093,7 @@ export function autoGroups(bones: SkeletonBone[], body: Body | null = analyzeBod
   const assignment = new Map<string, string>();
   if (!body) return { groups, assignment };
 
-  const spine: BoneGroup = { id: "auto-spine", name: "Columna", color: hsl(45, 0.7, 0.55), auto: true };
+  const spine: BoneGroup = { id: "auto-spine", name: tr("Columna"), color: hsl(45, 0.7, 0.55), auto: true };
   const spineJoints = [body.root, ...body.spine, ...body.neck];
   groups.push(spine);
   spineJoints.forEach((j) => assignment.set(bones[j].name, spine.id));
@@ -1104,10 +1105,10 @@ export function autoGroups(bones: SkeletonBone[], body: Body | null = analyzeBod
   const names = body.chains.map((c) => {
     // Dos patas con brazos: bípedo, son piernas
     const biped = legs.length === 2 && body.chains.some((x) => x.kind === "arm");
-    let name = c.kind === "leg" && biped ? "Pierna" : KIND_NAMES[c.kind];
-    if (c.kind === "leg" && mid !== null && legs.length === 4) name += c.along > mid ? " delantera" : " trasera";
-    if (c.side < 0) name += " izq.";
-    else if (c.side > 0) name += " der.";
+    let name = c.kind === "leg" && biped ? tr("Pierna") : KIND_NAMES[c.kind]();
+    if (c.kind === "leg" && mid !== null && legs.length === 4) name = c.along > mid ? tr("Pata delantera") : tr("Pata trasera");
+    if (c.side < 0) name = tr("{name} izq.", { name });
+    else if (c.side > 0) name = tr("{name} der.", { name });
     return name;
   });
   // Nombres repetidos (arañas, tentáculos): numerados

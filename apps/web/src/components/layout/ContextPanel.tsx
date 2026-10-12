@@ -23,6 +23,7 @@ import { RepairStep, type RepairStepProps } from "../steps/RepairStep";
 import { AnimateStep, type AnimateStepProps } from "../steps/AnimateStep";
 import { Print3DStep, type Print3DStepProps } from "../steps/Print3DStep";
 import { ScanStep, type ScanStepProps } from "../steps/ScanStep";
+import { fmtNumber, t } from "../../lib/i18n";
 
 export interface ContextPanelProps {
   activeStep: PipelineStepId;
@@ -140,7 +141,7 @@ export const ContextPanel: Component<ContextPanelProps> = (props) => {
   const free = () => Math.max(200, dockHeight() - 8 - 32 - 4);
   const outlinerHeight = () => Math.max(MIN_OUTLINER, Math.min(free() - 160, Math.round(free() * outlinerRatio())));
   const [storedTab, setTab] = createPersisted<string>("dock.tab", "section");
-  const tab = (): TabId => (FIXED_TABS.some((t) => t.id === storedTab()) ? (storedTab() as TabId) : "section");
+  const tab = (): TabId => (FIXED_TABS.some((x) => x.id === storedTab()) ? (storedTab() as TabId) : "section");
 
   // Al cambiar de sección (o de espacio), mostrar sus herramientas
   createEffect(on(() => props.activeStep, () => setTab("section"), { defer: true }));
@@ -152,7 +153,7 @@ export const ContextPanel: Component<ContextPanelProps> = (props) => {
   /** Secciones del espacio activo (al exportar, solo exportar) */
   const sections = () => workspaceOf(props.activeStep)?.sections ?? [props.activeStep];
   const tabTitle = () =>
-    tab() === "section" ? stepInfo(props.activeStep).label : FIXED_TABS.find((t) => t.id === tab())?.label;
+    tab() === "section" ? t(stepInfo(props.activeStep).label) : t(FIXED_TABS.find((x) => x.id === tab())!.label);
 
   const TabButton = (p: { label: string; active: boolean; onClick: () => void; children: JSX.Element }) => (
     <Tooltip content={p.label} placement="left">
@@ -204,7 +205,7 @@ export const ContextPanel: Component<ContextPanelProps> = (props) => {
       {/* ── Outliner ─────────────────────────────────────────────── */}
       <div class="shrink-0 flex flex-col">
         <AreaHeader
-          title="Outliner"
+          title={t("Outliner")}
           icon={<Icons.TreeStructure size={13} />}
           open={outlinerOpen()}
           onToggle={() => setOutlinerOpen(!outlinerOpen())}
@@ -214,8 +215,8 @@ export const ContextPanel: Component<ContextPanelProps> = (props) => {
             <Icons.MagnifyingGlass size={11} class="absolute left-1.5 top-1/2 -translate-y-1/2 text-text-dim pointer-events-none" />
             <input
               type="search"
-              aria-label="Buscar en el Outliner"
-              placeholder="Buscar"
+              aria-label={t("Buscar en el Outliner")}
+              placeholder={t("Buscar")}
               value={outlinerQuery()}
               class="w-full h-5 pl-5 pr-1 rounded bg-surface/40 border border-border text-[11px] text-text outline-none focus:border-accent placeholder:text-text-dim"
               onInput={(e) => {
@@ -231,11 +232,11 @@ export const ContextPanel: Component<ContextPanelProps> = (props) => {
               }}
             />
           </div>
-          <Tooltip content="Ocultar panel (N)" placement="left">
+          <Tooltip content={t("Ocultar panel (N)")} placement="left">
             <button
               class="w-5 h-5 flex items-center justify-center rounded text-text-muted hover:text-text hover:bg-surface/50"
               onClick={() => props.onHide?.()}
-              aria-label="Ocultar panel"
+              aria-label={t("Ocultar panel")}
             >
               <Icons.CaretRight size={12} />
             </button>
@@ -245,7 +246,7 @@ export const ContextPanel: Component<ContextPanelProps> = (props) => {
           <div class="overflow-y-auto px-1.5 py-1" style={{ height: `${outlinerHeight()}px` }}>
             <Show
               when={props.sceneTree}
-              fallback={<p class="px-2 py-1 text-xs text-text-dim">Sin escena: importa un modelo.</p>}
+              fallback={<p class="px-2 py-1 text-xs text-text-dim">{t("Sin escena: importa un modelo.")}</p>}
             >
               <SceneOutliner
                 tree={props.sceneTree!}
@@ -273,7 +274,7 @@ export const ContextPanel: Component<ContextPanelProps> = (props) => {
               const info = stepInfo(id);
               return (
                 <TabButton
-                  label={info.label}
+                  label={t(info.label)}
                   active={tab() === "section" && props.activeStep === id}
                   onClick={() => {
                     setTab("section");
@@ -288,9 +289,9 @@ export const ContextPanel: Component<ContextPanelProps> = (props) => {
           <div class="w-5 h-px my-1 bg-border" />
           {/* Fijas: en cualquier espacio */}
           <For each={FIXED_TABS}>
-            {(t) => (
-              <TabButton label={t.label} active={tab() === t.id} onClick={() => setTab(t.id)}>
-                <t.icon size={16} />
+            {(ft) => (
+              <TabButton label={t(ft.label)} active={tab() === ft.id} onClick={() => setTab(ft.id)}>
+                <ft.icon size={16} />
               </TabButton>
             )}
           </For>
@@ -402,9 +403,9 @@ const StepContent: Component<ContextPanelProps> = (props) => (
 const StatRow: Component<{ label: string; value?: string | number }> = (props) => (
   <Show when={props.value !== undefined && props.value !== ""}>
     <div class="flex justify-between gap-3 text-xs">
-      <span class="text-text-muted">{props.label}</span>
+      <span class="text-text-muted">{t(props.label)}</span>
       <span class="text-text font-mono truncate">
-        {typeof props.value === "number" ? props.value.toLocaleString() : props.value}
+        {typeof props.value === "number" ? fmtNumber(props.value) : props.value}
       </span>
     </div>
   </Show>
@@ -415,9 +416,9 @@ const HintList: Component<{ hints: ShortcutHint[] }> = (props) => (
     <For each={props.hints}>
       {(h) => (
         <div class="flex items-center justify-between gap-3 text-xs">
-          <span class="text-text-muted truncate">{h.description}</span>
+          <span class="text-text-muted truncate">{t(h.description)}</span>
           <kbd class="shrink-0 px-1.5 rounded bg-surface/60 border border-border font-mono text-[11px] text-text">
-            {h.keys}
+            {t(h.keys)}
           </kbd>
         </div>
       )}
@@ -427,10 +428,10 @@ const HintList: Component<{ hints: ShortcutHint[] }> = (props) => (
 
 const InfoTab: Component<{ stats?: SceneStats; shortcuts?: ShortcutHint[] }> = (props) => (
   <div>
-    <Panel id="info.stats" title="Estadísticas" icon={<Icons.Ruler size={14} />} defaultOpen>
+    <Panel id="info.stats" title={t("Estadísticas")} icon={<Icons.Ruler size={14} />} defaultOpen>
       <Show
         when={props.stats?.vertices}
-        fallback={<p class="text-xs text-text-dim">Sin modelo cargado.</p>}
+        fallback={<p class="text-xs text-text-dim">{t("Sin modelo cargado.")}</p>}
       >
         <div class="space-y-1">
           <StatRow label="Archivo" value={props.stats!.fileName} />
@@ -442,10 +443,10 @@ const InfoTab: Component<{ stats?: SceneStats; shortcuts?: ShortcutHint[] }> = (
         </div>
       </Show>
     </Panel>
-    <Panel id="info.keys" title="Atajos de teclado" icon={<Icons.Cursor size={14} />} defaultOpen>
+    <Panel id="info.keys" title={t("Atajos de teclado")} icon={<Icons.Cursor size={14} />} defaultOpen>
       <HintList hints={props.shortcuts ?? []} />
     </Panel>
-    <Panel id="info.mouse" title="Mouse en el visor" icon={<Icons.CubeFocus size={14} />} defaultOpen={false}>
+    <Panel id="info.mouse" title={t("Mouse en el visor")} icon={<Icons.CubeFocus size={14} />} defaultOpen={false}>
       <HintList hints={MOUSE_HINTS} />
     </Panel>
   </div>

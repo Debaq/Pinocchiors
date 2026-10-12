@@ -17,16 +17,17 @@
  */
 
 import * as THREE from "three";
+import { t as tr, tx } from "./i18n.ts";
 import type { AnimationClip, BoneTrack, Key, KeyInterpolation, Quat, ScalarChannel, Vec3 } from "./animation";
 
 export type HandleMode = "autoClamped" | "auto" | "vector" | "aligned" | "free";
 
 export const HANDLE_MODES: { value: HandleMode; label: string }[] = [
-  { value: "autoClamped", label: "Automática" },
-  { value: "auto", label: "Automática libre" },
-  { value: "vector", label: "Vector" },
-  { value: "aligned", label: "Alineada" },
-  { value: "free", label: "Libre" },
+  { value: "autoClamped", get label() { return tx("curva", "Automática"); } },
+  { value: "auto", get label() { return tr("Automática libre"); } },
+  { value: "vector", get label() { return tr("Vector"); } },
+  { value: "aligned", get label() { return tr("Alineada"); } },
+  { value: "free", get label() { return tr("Libre"); } },
 ];
 
 /** Manija: por canal, cuadros y valor desde la key */
@@ -192,11 +193,11 @@ export function bezierSegment<T>(keys: Key<T>[], i: number, frame: number, codec
 export type ChannelGroup = "rotation" | "translation" | ScalarChannel;
 
 export const GROUP_CHANNELS: Record<ChannelGroup, string[]> = {
-  rotation: ["Giro X", "Giro Y", "Giro Z"],
-  translation: ["Posición X", "Posición Y", "Posición Z"],
-  blend: ["Mezcla IK"],
-  pin: ["Fijado"],
-  roll: ["Balanceo"],
+  get rotation() { return [tr("Giro X"), tr("Giro Y"), tr("Giro Z")]; },
+  get translation() { return [tr("Posición X"), tr("Posición Y"), tr("Posición Z")]; },
+  get blend() { return [tr("Mezcla IK")]; },
+  get pin() { return [tr("Fijado")]; },
+  get roll() { return [tr("Balanceo")]; },
 };
 
 /** Keys y traductor de un grupo de canales de una pista */

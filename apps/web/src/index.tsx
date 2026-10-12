@@ -6,9 +6,11 @@ import { App } from "./App";
 import "./styles/app.css";
 import { applyTheme, storedTheme } from "./lib/theme";
 import { installWheelNumbers } from "./lib/wheelNumber";
+import { applyLocale, t } from "./lib/i18n";
 
 // Antes del primer cuadro, para no pasar por el tema oscuro al abrir en claro
 applyTheme(storedTheme());
+applyLocale();
 
 const root = document.getElementById("root");
 
@@ -33,13 +35,13 @@ render(
     <ErrorBoundary
       fallback={(error, reset) => (
         <div style={{ padding: "24px", "font-family": "sans-serif", color: "var(--color-text, #ddd)", background: "var(--color-bg, #1e1e1e)", height: "100vh" }}>
-          <h2 style={{ "font-size": "16px", margin: "0 0 8px" }}>La interfaz tuvo un error</h2>
+          <h2 style={{ "font-size": "16px", margin: "0 0 8px" }}>{t("La interfaz tuvo un error")}</h2>
           <pre style={{ "white-space": "pre-wrap", "font-size": "12px", opacity: 0.8 }}>{String(error?.stack ?? error)}</pre>
           <button style={{ "margin-top": "12px", padding: "6px 12px" }} onClick={reset}>
-            Reintentar
+            {t("Reintentar")}
           </button>{" "}
           <button style={{ "margin-top": "12px", padding: "6px 12px" }} onClick={() => location.reload()}>
-            Recargar la interfaz
+            {t("Recargar la interfaz")}
           </button>
         </div>
       )}

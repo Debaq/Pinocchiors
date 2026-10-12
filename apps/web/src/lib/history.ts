@@ -1,4 +1,5 @@
 import { batch, createSignal } from "solid-js";
+import { t } from "./i18n.ts";
 
 /**
  * Historial en árbol: deshacer y hacer otra cosa abre una rama nueva en vez
@@ -85,7 +86,7 @@ export function createHistoryStore(handlers: StepHandlers): HistoryStore {
 
   const handler = (step: Step) => {
     const h = handlers[step.kind];
-    if (!h) throw new Error(`Paso de historial desconocido: ${step.kind}`);
+    if (!h) throw new Error(t("Paso de historial desconocido: {kind}", { kind: step.kind }));
     return h as unknown as { apply: (d: unknown, first: boolean) => Promise<void> | void; revert: (d: unknown) => Promise<void> | void };
   };
 

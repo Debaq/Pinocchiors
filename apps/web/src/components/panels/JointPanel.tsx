@@ -3,6 +3,7 @@ import { clsx } from "clsx";
 import { Button, Checkbox, NumberInput, Panel } from "../ui";
 import * as Icons from "../icons";
 import { boundaryPoints, type DiskPoint, type JointLimits, type SwingShape } from "../../lib/jointLimits";
+import { t } from "../../lib/i18n";
 
 /** Un cuadro de la animación de la articulación activa */
 export interface TrajectorySample {
@@ -242,8 +243,8 @@ const BallEditor: Component<{
           }}
         </Show>
         <Index each={limits().twist ?? []}>
-          {(t, i) => {
-            const p = () => ringPoint(t());
+          {(tw, i) => {
+            const p = () => ringPoint(tw());
             return (
               <circle
                 cx={p()[0]}
@@ -262,7 +263,7 @@ const BallEditor: Component<{
                   })
                 }
               >
-                <title>{i === 0 ? "Twist mínimo" : "Twist máximo"}</title>
+                <title>{i === 0 ? t("Twist mínimo") : t("Twist máximo")}</title>
               </circle>
             );
           }}
@@ -299,7 +300,7 @@ const BallEditor: Component<{
                   );
                 }}
               >
-                <title>Key del cuadro {s.frame}: arrastrar para cambiarla</title>
+                <title>{t("Key del cuadro {n}: arrastrar para cambiarla", { n: s.frame })}</title>
               </circle>
             );
           }}
@@ -325,9 +326,9 @@ const BallEditor: Component<{
             );
             return (
               <>
-                {handle(() => [(e().cx ?? 0) + e().rx, e().cy ?? 0], (p, s) => ({ ...s, rx: Math.max(2, Math.abs(p[0] - (s.cx ?? 0))) }), "Ancho (hacia X)")}
-                {handle(() => [e().cx ?? 0, (e().cy ?? 0) + e().ry], (p, s) => ({ ...s, ry: Math.max(2, Math.abs(p[1] - (s.cy ?? 0))) }), "Alto (hacia Z)")}
-                {handle(() => [e().cx ?? 0, e().cy ?? 0], (p, s) => ({ ...s, cx: p[0], cy: p[1] }), "Centro del límite")}
+                {handle(() => [(e().cx ?? 0) + e().rx, e().cy ?? 0], (p, s) => ({ ...s, rx: Math.max(2, Math.abs(p[0] - (s.cx ?? 0))) }), t("Ancho (hacia X)"))}
+                {handle(() => [e().cx ?? 0, (e().cy ?? 0) + e().ry], (p, s) => ({ ...s, ry: Math.max(2, Math.abs(p[1] - (s.cy ?? 0))) }), t("Alto (hacia Z)"))}
+                {handle(() => [e().cx ?? 0, e().cy ?? 0], (p, s) => ({ ...s, cx: p[0], cy: p[1] }), t("Centro del límite"))}
               </>
             );
           })()}
@@ -357,7 +358,7 @@ const BallEditor: Component<{
                   if (points.length > 3) commit({ ...limits(), swing: { type: "polygon", points: points.filter((_, k) => k !== i) } });
                 }}
               >
-                <title>Arrastrar · clic derecho: quitar el punto</title>
+                <title>{t("Arrastrar · clic derecho: quitar el punto")}</title>
               </circle>
             )}
           </Index>
@@ -369,8 +370,8 @@ const BallEditor: Component<{
         </Show>
       </svg>
       <p class="text-[10px] text-text-dim text-center leading-snug">
-        Centro = reposo · distancia = cuánto se inclina · anillo = twist
-        {shape().type === "polygon" ? " · doble clic agrega un punto" : ""}
+        {t("Centro = reposo · distancia = cuánto se inclina · anillo = twist")}
+        {shape().type === "polygon" ? ` · ${t("doble clic agrega un punto")}` : ""}
       </p>
     </div>
   );
@@ -437,13 +438,13 @@ const HingeEditor: Component<{
             const p = () => point(limits()[which] ?? (which === "min" ? -90 : 90));
             return (
               <circle cx={p()[0]} cy={p()[1]} r="6" class="cursor-pointer" fill="var(--color-bg)" stroke="var(--color-accent)" stroke-width="2" onPointerDown={(e) => edit(e, which)}>
-                <title>{which === "min" ? "Mínimo" : "Máximo"}</title>
+                <title>{which === "min" ? t("Mínimo") : t("Máximo")}</title>
               </circle>
             );
           }}
         </For>
       </svg>
-      <p class="text-[10px] text-text-dim text-center">Punteado = reposo · naranja = ahora · marcas = cuadros del clip</p>
+      <p class="text-[10px] text-text-dim text-center">{t("Punteado = reposo · naranja = ahora · marcas = cuadros del clip")}</p>
     </div>
   );
 };
@@ -475,7 +476,7 @@ const MiniCurve: Component<{
   return (
     <div>
       <div class="flex justify-between text-[10px] text-text-muted">
-        <span>{props.label}</span>
+        <span>{t(props.label)}</span>
         <span class="font-mono">{props.values.length > 0 ? `${Math.round(Math.min(...props.values))}° … ${Math.round(Math.max(...props.values))}°` : ""}</span>
       </div>
       <svg ref={svg} viewBox={`0 0 ${CURVE_W} ${CURVE_H}`} class="w-full block rounded bg-bg-darker/60 select-none touch-none">
@@ -504,7 +505,7 @@ const MiniCurve: Component<{
                 );
               }}
             >
-              <title>Cuadro {f}: arrastrar arriba o abajo</title>
+              <title>{t("Cuadro {f}: arrastrar arriba o abajo", { f })}</title>
             </circle>
           )}
         </For>
@@ -756,16 +757,16 @@ export const JointPanel: Component<JointPanelProps> = (props) => {
   const [scale, setScale] = createSignal(100);
   const kind = () => props.limits?.kind ?? "none";
   const frames = () => props.trajectory.map((s) => s.frame);
-  const change = (limits: JointLimits, commit: boolean) => (commit ? props.onLimits("Límite de giro", limits) : props.onLimitsPreview(limits));
+  const change = (limits: JointLimits, commit: boolean) => (commit ? props.onLimits(t("Límite de giro"), limits) : props.onLimitsPreview(limits));
 
   return (
     <div class="space-y-3">
-    <Panel title="Límite de giro" icon={<Icons.Bone size={14} />} defaultOpen>
+    <Panel title={t("Límite de giro")} icon={<Icons.Bone size={14} />} defaultOpen>
       <div class="space-y-3">
-        <Show when={props.boneName} fallback={<p class="text-xs text-text-muted">Elige una articulación para ver y editar su rango de giro.</p>}>
+        <Show when={props.boneName} fallback={<p class="text-xs text-text-muted">{t("Elige una articulación para ver y editar su rango de giro.")}</p>}>
           <div class="flex items-center justify-between">
             <span class="text-xs font-mono text-accent truncate">{props.boneName}</span>
-            <Checkbox label="Aplicar límites" checked={!props.limitsOff} onChange={(v) => props.onLimitsOff(!v)} />
+            <Checkbox label={t("Aplicar límites")} checked={!props.limitsOff} onChange={(v) => props.onLimitsOff(!v)} />
           </div>
 
           {/* Tipo */}
@@ -779,7 +780,7 @@ export const JointPanel: Component<JointPanelProps> = (props) => {
                   )}
                   onClick={() => props.onKind(value)}
                 >
-                  {label}
+                  {t(label)}
                 </button>
               )}
             </For>
@@ -794,21 +795,21 @@ export const JointPanel: Component<JointPanelProps> = (props) => {
                   <Button
                     size="sm"
                     variant={l().swing?.type !== "polygon" ? "primary" : "default"}
-                    onClick={() => props.onLimits("Límite en elipse", { ...l(), swing: { type: "ellipse", rx: 45, ry: 45 } })}
+                    onClick={() => props.onLimits(t("Límite en elipse"), { ...l(), swing: { type: "ellipse", rx: 45, ry: 45 } })}
                   >
-                    Elipse
+                    {t("Elipse")}
                   </Button>
                   <Button
                     size="sm"
                     variant={l().swing?.type === "polygon" ? "primary" : "default"}
                     onClick={() =>
-                      props.onLimits("Límite libre", {
+                      props.onLimits(t("Límite libre"), {
                         ...l(),
                         swing: { type: "polygon", points: boundaryPoints(l().swing ?? { type: "ellipse", rx: 45, ry: 45 }, 10) },
                       })
                     }
                   >
-                    Polígono
+                    {t("Polígono")}
                   </Button>
                 </div>
               </>
@@ -819,8 +820,8 @@ export const JointPanel: Component<JointPanelProps> = (props) => {
               <>
                 <HingeEditor limits={l()} current={props.current?.hinge} trajectory={props.trajectory} onChange={change} />
                 <div class="grid grid-cols-2 gap-1">
-                  <NumberInput label="Mín" suffix="°" step={1} value={Math.round(l().min ?? -90)} onChange={(v) => props.onLimits("Límite de giro", { ...l(), min: Math.min(v, l().max ?? 180) })} />
-                  <NumberInput label="Máx" suffix="°" step={1} value={Math.round(l().max ?? 90)} onChange={(v) => props.onLimits("Límite de giro", { ...l(), max: Math.max(v, l().min ?? -180) })} />
+                  <NumberInput label={t("Mín")} suffix="°" step={1} value={Math.round(l().min ?? -90)} onChange={(v) => props.onLimits(t("Límite de giro"), { ...l(), min: Math.min(v, l().max ?? 180) })} />
+                  <NumberInput label={t("Máx")} suffix="°" step={1} value={Math.round(l().max ?? 90)} onChange={(v) => props.onLimits(t("Límite de giro"), { ...l(), max: Math.max(v, l().min ?? -180) })} />
                 </div>
               </>
             )}
@@ -830,21 +831,21 @@ export const JointPanel: Component<JointPanelProps> = (props) => {
               <div class="space-y-2">
                 <Show when={l().kind === "ball"}>
                   <div class="grid grid-cols-2 gap-1">
-                    <NumberInput label="Twist" suffix="°" step={1} value={Math.round(l().twist?.[0] ?? -30)} onChange={(v) => props.onLimits("Twist", { ...l(), twist: [Math.min(v, l().twist?.[1] ?? 180), l().twist?.[1] ?? 30] })} />
-                    <NumberInput label="a" suffix="°" step={1} value={Math.round(l().twist?.[1] ?? 30)} onChange={(v) => props.onLimits("Twist", { ...l(), twist: [l().twist?.[0] ?? -30, Math.max(v, l().twist?.[0] ?? -180)] })} />
+                    <NumberInput label="Twist" suffix="°" step={1} value={Math.round(l().twist?.[0] ?? -30)} onChange={(v) => props.onLimits(t("Twist"), { ...l(), twist: [Math.min(v, l().twist?.[1] ?? 180), l().twist?.[1] ?? 30] })} />
+                    <NumberInput label={t("a")} suffix="°" step={1} value={Math.round(l().twist?.[1] ?? 30)} onChange={(v) => props.onLimits(t("Twist"), { ...l(), twist: [l().twist?.[0] ?? -30, Math.max(v, l().twist?.[0] ?? -180)] })} />
                   </div>
                   <NumberInput
-                    label="Rigidez"
+                    label={t("Rigidez")}
                     suffix="%"
                     min={0}
                     max={90}
                     step={5}
                     value={Math.round((l().stiffness ?? 0) * 100)}
-                    onChange={(v) => props.onLimits("Rigidez del límite", { ...l(), stiffness: v > 0 ? v / 100 : undefined })}
+                    onChange={(v) => props.onLimits(t("Rigidez del límite"), { ...l(), stiffness: v > 0 ? v / 100 : undefined })}
                   />
                 </Show>
-                <Button size="sm" fullWidth onClick={props.onProbe} disabled={!props.posing} title="Recorre todo el rango en el visor para ver cómo deforma la piel">
-                  <Icons.Play size={12} /> Probar rango
+                <Button size="sm" fullWidth onClick={props.onProbe} disabled={!props.posing} title={t("Recorre todo el rango en el visor para ver cómo deforma la piel")}>
+                  <Icons.Play size={12} /> {t("Probar rango")}
                 </Button>
               </div>
             )}
@@ -856,15 +857,15 @@ export const JointPanel: Component<JointPanelProps> = (props) => {
 
           {/* Curvas por eje */}
           <Show when={props.boneName && props.trajectory.length > 1 && props.limits}>
-            <Panel title="En el tiempo" icon={<Icons.Clock size={14} />} defaultOpen>
+            <Panel title={t("En el tiempo")} icon={<Icons.Clock size={14} />} defaultOpen>
             {(() => {
               const l = props.limits!;
               return (
                 <div class="space-y-1.5">
-                  <span class="text-xs text-text-muted">En el tiempo (las keys se arrastran)</span>
+                  <span class="text-xs text-text-muted">{t("En el tiempo (las keys se arrastran)")}</span>
                   <Show when={l.kind === "hinge"}>
                     <MiniCurve
-                      label="Ángulo"
+                      label={t("Ángulo")}
                       values={props.trajectory.map((s) => s.hinge)}
                       frames={frames()}
                       keyFrames={props.keyFrames}
@@ -873,11 +874,11 @@ export const JointPanel: Component<JointPanelProps> = (props) => {
                     />
                   </Show>
                   <Show when={l.kind === "ball"}>
-                    <MiniCurve label="Inclinación hacia X" values={props.trajectory.map((s) => s.swing[0])} frames={frames()} keyFrames={props.keyFrames} onEdit={(f, v, commit) => {
+                    <MiniCurve label={t("Inclinación hacia X")} values={props.trajectory.map((s) => s.swing[0])} frames={frames()} keyFrames={props.keyFrames} onEdit={(f, v, commit) => {
                       const s = props.trajectory.find((t) => t.frame === f)!;
                       props.onKeyEdit(f, { swing: [v, s.swing[1]] }, commit);
                     }} />
-                    <MiniCurve label="Inclinación hacia Z" values={props.trajectory.map((s) => s.swing[1])} frames={frames()} keyFrames={props.keyFrames} onEdit={(f, v, commit) => {
+                    <MiniCurve label={t("Inclinación hacia Z")} values={props.trajectory.map((s) => s.swing[1])} frames={frames()} keyFrames={props.keyFrames} onEdit={(f, v, commit) => {
                       const s = props.trajectory.find((t) => t.frame === f)!;
                       props.onKeyEdit(f, { swing: [s.swing[0], v] }, commit);
                     }} />
@@ -890,41 +891,41 @@ export const JointPanel: Component<JointPanelProps> = (props) => {
           </Show>
 
         {/* Límites automáticos */}
-        <Panel title="Límites automáticos" icon={<Icons.MagicWand size={14} />} defaultOpen>
+        <Panel title={t("Límites automáticos")} icon={<Icons.MagicWand size={14} />} defaultOpen>
         <div class="space-y-1">
-          <span class="text-xs text-text-muted">Límites automáticos {props.hasSelection ? "(la selección)" : "(todo el esqueleto)"}</span>
+          <span class="text-xs text-text-muted">{t("Límites automáticos")} {props.hasSelection ? t("(la selección)") : t("(todo el esqueleto)")}</span>
           <div class="grid grid-cols-2 gap-1">
-            <Button size="sm" onClick={() => props.onAuto("anatomical")} title="Según el tipo de cadena: rodillas y codos bisagras, caderas y hombros rótulas…">
-              Anatómicos
+            <Button size="sm" onClick={() => props.onAuto("anatomical")} title={t("Según el tipo de cadena: rodillas y codos bisagras, caderas y hombros rótulas…")}>
+              {t("Anatómicos")}
             </Button>
-            <Button size="sm" onClick={() => props.onAuto("mesh")} disabled={!props.canMesh} title="Gira cada articulación hasta que la piel choca consigo misma">
-              Por la malla
+            <Button size="sm" onClick={() => props.onAuto("mesh")} disabled={!props.canMesh} title={t("Gira cada articulación hasta que la piel choca consigo misma")}>
+              {t("Por la malla")}
             </Button>
-            <Button size="sm" onClick={() => props.onAuto("observed")} title="El rango que usan las animaciones, con un margen">
-              Por la animación
+            <Button size="sm" onClick={() => props.onAuto("observed")} title={t("El rango que usan las animaciones, con un margen")}>
+              {t("Por la animación")}
             </Button>
             <Button size="sm" variant="ghost" onClick={() => props.onAuto("clear")}>
-              Quitar límites
+              {t("Quitar límites")}
             </Button>
           </div>
         </div>
         <Show when={props.disks.length === 1}>
-          <Button size="sm" fullWidth variant="ghost" onClick={() => props.onBatch("mirror")} title="Copia los límites al hueso del otro lado">
-            Copiar al lado espejo
+          <Button size="sm" fullWidth variant="ghost" onClick={() => props.onBatch("mirror")} title={t("Copia los límites al hueso del otro lado")}>
+            {t("Copiar al lado espejo")}
           </Button>
         </Show>
         </Panel>
 
         {/* Cadena o grupo */}
         <Show when={props.disks.length > 1}>
-          <Panel title={`Selección (${props.disks.length})`} icon={<Icons.TreeStructure size={14} />} defaultOpen>
+          <Panel title={t("Selección ({n})", { n: props.disks.length })} icon={<Icons.TreeStructure size={14} />} defaultOpen>
           <div class="space-y-2">
             <Show when={props.chain}>
               {(chain) => (
                 <>
                   <ChainProfile chain={chain()} onDrag={props.onChainDrag} />
                   <p class="text-[10px] text-text-dim leading-snug">
-                    Perfil en el plano de doblez: arrastra una articulación para posar · punteado = reposo · puntos = alcance de la punta
+                    {t("Perfil en el plano de doblez: arrastra una articulación para posar · punteado = reposo · puntos = alcance de la punta")}
                   </p>
                 </>
               )}
@@ -933,17 +934,17 @@ export const JointPanel: Component<JointPanelProps> = (props) => {
               <For each={props.disks}>{(d) => <SmallDisk disk={d} />}</For>
             </div>
             <div class="grid grid-cols-2 gap-1">
-              <Button size="sm" onClick={() => props.onBatch("copyActive")} title="Los límites de la activa en todas las elegidas">
-                Igual a la activa
+              <Button size="sm" onClick={() => props.onBatch("copyActive")} title={t("Los límites de la activa en todas las elegidas")}>
+                {t("Igual a la activa")}
               </Button>
-              <Button size="sm" onClick={() => props.onBatch("mirror")} title="Copia los límites al hueso del otro lado">
-                Al lado espejo
+              <Button size="sm" onClick={() => props.onBatch("mirror")} title={t("Copia los límites al hueso del otro lado")}>
+                {t("Al lado espejo")}
               </Button>
             </div>
             <div class="flex gap-1 items-end">
-              <NumberInput class="flex-1" label="Escalar rangos" suffix="%" min={10} max={300} step={5} value={scale()} onChange={setScale} />
+              <NumberInput class="flex-1" label={t("Escalar rangos")} suffix="%" min={10} max={300} step={5} value={scale()} onChange={setScale} />
               <Button size="sm" onClick={() => props.onBatch("scale", scale() / 100)}>
-                Aplicar
+                {t("Aplicar")}
               </Button>
             </div>
           </div>
@@ -952,7 +953,7 @@ export const JointPanel: Component<JointPanelProps> = (props) => {
 
         {/* Relaciones */}
         <Show when={props.boneName && (props.relations.nodes.length > 1 || props.shared.length > 0)}>
-          <Panel title="Relaciones" icon={<Icons.TreeStructure size={14} />} defaultOpen>
+          <Panel title={t("Relaciones")} icon={<Icons.TreeStructure size={14} />} defaultOpen>
           <Show when={props.relations.nodes.length > 1}>
           <div class="space-y-1">
             <RelationsGraph
@@ -963,13 +964,13 @@ export const JointPanel: Component<JointPanelProps> = (props) => {
               onConnect={props.onConnect}
             />
             <p class="text-[10px] text-text-dim leading-snug">
-              Gris: jerarquía · violeta: IK · verde: sigue a · arrastra un control hasta un hueso para que lo siga (afuera: suelto)
+              {t("Gris: jerarquía · violeta: IK · verde: sigue a · arrastra un control hasta un hueso para que lo siga (afuera: suelto)")}
             </p>
           </div>
           </Show>
         <Show when={props.shared.length > 0}>
           <div class="space-y-1">
-            <span class="text-xs text-text-muted">Comparte piel con</span>
+            <span class="text-xs text-text-muted">{t("Comparte piel con")}</span>
             <For each={props.shared}>
               {(s) => (
                 <div class="flex items-center gap-2 text-xs">

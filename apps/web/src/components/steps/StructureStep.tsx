@@ -2,6 +2,7 @@ import { Component, For, Show } from "solid-js";
 import { Panel } from "../ui";
 import * as Icons from "../icons";
 import type { TextureSelection, TextureSlot } from "../layout/TextureEditor";
+import { t } from "../../lib/i18n";
 
 // Tipos de `SceneStructure` (apps/desktop/src/structure.rs)
 
@@ -74,11 +75,11 @@ export interface StructureStepProps {
 
 /** Canales de un material con su índice de textura y su mapa en el visor */
 const materialChannels = (m: MaterialInfo): [string, number | null, TextureSlot][] => [
-  ["Color", m.base_color_texture, "base"],
-  ["Metal / rugosidad", m.metallic_roughness_texture, "metallicRoughness"],
-  ["Normal", m.normal_texture, "normal"],
-  ["Oclusión", m.occlusion_texture, "occlusion"],
-  ["Emisión", m.emissive_texture, "emissive"],
+  [t("Color"), m.base_color_texture, "base"],
+  [t("Metal / rugosidad"), m.metallic_roughness_texture, "metallicRoughness"],
+  [t("Normal"), m.normal_texture, "normal"],
+  [t("Oclusión"), m.occlusion_texture, "occlusion"],
+  [t("Emisión"), m.emissive_texture, "emissive"],
 ];
 
 /** Formatos que se leen con Z arriba (STL; se pasan a la escena con Y arriba) */
@@ -113,10 +114,10 @@ export const StructureStep: Component<StructureStepProps> = (props) => {
 
   return (
     <div class="space-y-4">
-      <h3 class="text-sm font-semibold text-text">Estructura del archivo</h3>
+      <h3 class="text-sm font-semibold text-text">{t("Estructura del archivo")}</h3>
       <Show
         when={s()}
-        fallback={<p class="text-xs text-text-muted">Importa un modelo para ver lo que trae el archivo.</p>}
+        fallback={<p class="text-xs text-text-muted">{t("Importa un modelo para ver lo que trae el archivo.")}</p>}
       >
         {(structure) => {
           const totals = () => {
@@ -125,47 +126,47 @@ export const StructureStep: Component<StructureStepProps> = (props) => {
               primitives: prims.length,
               vertices: prims.reduce((a, p) => a + p.vertices, 0),
               triangles: prims.reduce((a, p) => a + p.triangles, 0),
-              textureBytes: structure().textures.reduce((a, t) => a + t.bytes, 0),
+              textureBytes: structure().textures.reduce((a, tex) => a + tex.bytes, 0),
             };
           };
           return (
             <>
-              <Panel title="Resumen" icon={<Icons.Info size={14} />} defaultOpen>
+              <Panel title={t("Resumen")} icon={<Icons.Info size={14} />} defaultOpen>
                 <div class="space-y-1.5 pt-1">
-                  <Row label="Archivo" value={props.fileName ?? "--"} />
-                  <Row label="Formato" value={props.format ?? "--"} />
-                  <Row label="Unidades" value={`1 unidad = ${structure().meters_per_unit} m`} />
-                  <Row label="Eje arriba del archivo" value={Z_UP_FORMATS.includes(props.format ?? "") || !structure().y_up ? "Z" : "Y"} />
-                  <Row label="Nodos (en el outliner)" value={structure().nodes.length} />
-                  <Row label="Mallas / primitivas" value={`${structure().meshes.length} / ${totals().primitives}`} />
-                  <Row label="Vértices" value={totals().vertices.toLocaleString()} />
-                  <Row label="Triángulos" value={totals().triangles.toLocaleString()} />
-                  <Row label="Materiales" value={structure().materials.length} />
+                  <Row label={t("Archivo")} value={props.fileName ?? "--"} />
+                  <Row label={t("Formato")} value={props.format ?? "--"} />
+                  <Row label={t("Unidades")} value={t("1 unidad = {m} m", { m: structure().meters_per_unit })} />
+                  <Row label={t("Eje arriba del archivo")} value={Z_UP_FORMATS.includes(props.format ?? "") || !structure().y_up ? "Z" : "Y"} />
+                  <Row label={t("Nodos (en el outliner)")} value={structure().nodes.length} />
+                  <Row label={t("Mallas / primitivas")} value={`${structure().meshes.length} / ${totals().primitives}`} />
+                  <Row label={t("Vértices")} value={totals().vertices.toLocaleString()} />
+                  <Row label={t("Triángulos")} value={totals().triangles.toLocaleString()} />
+                  <Row label={t("Materiales")} value={structure().materials.length} />
                   <Row
-                    label="Texturas"
+                    label={t("Texturas")}
                     value={`${structure().textures.length} (${formatBytes(totals().textureBytes)})`}
                   />
-                  <Row label="Esqueletos" value={structure().skeletons.length} />
-                  <Row label="Animaciones" value={structure().animations.length} />
+                  <Row label={t("Esqueletos")} value={structure().skeletons.length} />
+                  <Row label={t("Animaciones")} value={structure().animations.length} />
                 </div>
               </Panel>
 
-              <Panel title={`Mallas (${structure().meshes.length})`} icon={<Icons.Cube size={14} />} defaultOpen={false}>
+              <Panel title={t("Mallas ({n})", { n: structure().meshes.length })} icon={<Icons.Cube size={14} />} defaultOpen={false}>
                 <div class="space-y-3 pt-1">
                   <For each={structure().meshes}>
                     {(mesh, i) => (
                       <div class="space-y-1">
-                        <div class="text-xs text-text font-medium">{mesh.name || `malla ${i()}`}</div>
+                        <div class="text-xs text-text font-medium">{mesh.name || t("malla {i}", { i: i() })}</div>
                         <For each={mesh.primitives}>
                           {(prim, j) => (
                             <div class="pl-2 border-l border-border space-y-1">
                               <Row
-                                label={`Primitiva ${j()}`}
+                                label={t("Primitiva {j}", { j: j() })}
                                 value={`${prim.vertices.toLocaleString()} v · ${prim.triangles.toLocaleString()} tri`}
                               />
                               <Row
-                                label="Material"
-                                value={prim.material === null ? "ninguno" : structure().materials[prim.material]?.name || `#${prim.material}`}
+                                label={t("Material")}
+                                value={prim.material === null ? t("ninguno") : structure().materials[prim.material]?.name || `#${prim.material}`}
                               />
                               <div class="flex flex-wrap gap-1">
                                 <For each={prim.attributes}>{(a) => <Chip text={a} />}</For>
@@ -180,7 +181,7 @@ export const StructureStep: Component<StructureStepProps> = (props) => {
               </Panel>
 
               <Show when={structure().materials.length > 0}>
-                <Panel title={`Materiales (${structure().materials.length})`} icon={<Icons.Sliders size={14} />} defaultOpen>
+                <Panel title={t("Materiales ({n})", { n: structure().materials.length })} icon={<Icons.Sliders size={14} />} defaultOpen>
                   <div class="space-y-3 pt-1">
                     <For each={structure().materials}>
                       {(m, i) => {
@@ -192,40 +193,40 @@ export const StructureStep: Component<StructureStepProps> = (props) => {
                                 class="w-4 h-4 rounded border border-border shrink-0"
                                 style={{ background: cssColor(m.base_color) }}
                               />
-                              <span class="text-xs text-text font-medium truncate">{m.name || `material ${i()}`}</span>
+                              <span class="text-xs text-text font-medium truncate">{m.name || t("material {i}", { i: i() })}</span>
                             </div>
                             <Row
                               label="Metal / rugosidad"
                               value={`${m.metallic.toFixed(2)} / ${m.roughness.toFixed(2)}`}
                             />
                             <Row
-                              label="Transparencia"
-                              value={m.alpha_mode === "mask" ? `recorte ${m.alpha_cutoff}` : m.alpha_mode === "blend" ? "mezcla" : "opaco"}
+                              label={t("Transparencia")}
+                              value={m.alpha_mode === "mask" ? t("recorte {c}", { c: m.alpha_cutoff }) : m.alpha_mode === "blend" ? t("mezcla") : t("opaco")}
                             />
                             <Show when={m.double_sided || m.unlit}>
                               <div class="flex gap-1">
                                 <Show when={m.double_sided}>
-                                  <Chip text="doble cara" />
+                                  <Chip text={t("doble cara")} />
                                 </Show>
                                 <Show when={m.unlit}>
-                                  <Chip text="sin iluminación" />
+                                  <Chip text={t("sin iluminación")} />
                                 </Show>
                               </div>
                             </Show>
                             <div class="grid grid-cols-3 gap-1.5">
-                              <For each={channels.filter(([, t]) => t !== null)}>
-                                {([label, t, slot]) => (
+                              <For each={channels.filter(([, tex]) => tex !== null)}>
+                                {([label, tex, slot]) => (
                                   <button
                                     class="space-y-0.5 text-left group"
-                                    title="Abrir en el editor de texturas"
+                                    title={t("Abrir en el editor de texturas")}
                                     onClick={() => props.onOpenTexture?.({ material: i(), slot })}
                                   >
                                     <Show
-                                      when={thumb(t)}
+                                      when={thumb(tex)}
                                       fallback={<div class="aspect-square rounded bg-bg-lighter" />}
                                     >
                                       <img
-                                        src={thumb(t)}
+                                        src={thumb(tex)}
                                         class="aspect-square w-full object-cover rounded border border-border group-hover:border-accent transition-colors"
                                       />
                                     </Show>
@@ -243,13 +244,13 @@ export const StructureStep: Component<StructureStepProps> = (props) => {
               </Show>
 
               <Show when={structure().textures.length > 0}>
-                <Panel title={`Texturas (${structure().textures.length})`} icon={<Icons.Checkerboard size={14} />} defaultOpen={false}>
+                <Panel title={t("Texturas ({n})", { n: structure().textures.length })} icon={<Icons.Checkerboard size={14} />} defaultOpen={false}>
                   <div class="space-y-2 pt-1">
                     <For each={structure().textures}>
-                      {(t, i) => (
+                      {(tex, i) => (
                         <button
                           class="flex gap-2 items-center w-full text-left rounded hover:bg-surface/40 transition-colors"
-                          title="Abrir en el editor de texturas"
+                          title={t("Abrir en el editor de texturas")}
                           onClick={() => {
                             // Primer material y mapa que usan esta textura
                             for (const [material, m] of structure().materials.entries()) {
@@ -262,9 +263,9 @@ export const StructureStep: Component<StructureStepProps> = (props) => {
                             <img src={thumb(i())} class="w-10 h-10 object-cover rounded border border-border shrink-0" />
                           </Show>
                           <div class="min-w-0 flex-1">
-                            <div class="text-xs text-text truncate">{t.name || `textura ${i()}`}</div>
+                            <div class="text-xs text-text truncate">{tex.name || t("textura {i}", { i: i() })}</div>
                             <div class="text-[10px] text-text-muted">
-                              {t.format} · {t.width}×{t.height} · {formatBytes(t.bytes)}
+                              {tex.format} · {tex.width}×{tex.height} · {formatBytes(tex.bytes)}
                             </div>
                           </div>
                         </button>
@@ -275,12 +276,12 @@ export const StructureStep: Component<StructureStepProps> = (props) => {
               </Show>
 
               <Show when={structure().skeletons.length > 0}>
-                <Panel title={`Esqueletos (${structure().skeletons.length})`} icon={<Icons.Bone size={14} />} defaultOpen={false}>
+                <Panel title={t("Esqueletos ({n})", { n: structure().skeletons.length })} icon={<Icons.Bone size={14} />} defaultOpen={false}>
                   <div class="space-y-2 pt-1">
                     <For each={structure().skeletons}>
                       {(sk, i) => (
                         <div class="space-y-1">
-                          <Row label={sk.name || `esqueleto ${i()}`} value={`${sk.joints.length} articulaciones`} />
+                          <Row label={sk.name || t("esqueleto {i}", { i: i() })} value={t("{n} articulaciones", { n: sk.joints.length })} />
                           <div class="flex flex-wrap gap-1">
                             <For each={sk.joints.slice(0, 40)}>{(j) => <Chip text={j} />}</For>
                             <Show when={sk.joints.length > 40}>
@@ -295,15 +296,15 @@ export const StructureStep: Component<StructureStepProps> = (props) => {
               </Show>
 
               <Show when={structure().animations.length > 0}>
-                <Panel title={`Animaciones (${structure().animations.length})`} icon={<Icons.Play size={14} />} defaultOpen={false}>
+                <Panel title={t("Animaciones ({n})", { n: structure().animations.length })} icon={<Icons.Play size={14} />} defaultOpen={false}>
                   <div class="space-y-2 pt-1">
                     <For each={structure().animations}>
                       {(a, i) => (
                         <div class="space-y-1">
-                          <Row label={a.name || `animación ${i()}`} value={`${a.duration.toFixed(2)} s`} />
+                          <Row label={a.name || t("animación {i}", { i: i() })} value={`${a.duration.toFixed(2)} s`} />
                           <div class="text-[10px] text-text-muted">
-                            {a.channels} canales en {a.nodes} nodos · T {a.translation} · R {a.rotation} · E {a.scale}
-                            {a.weights > 0 ? ` · morph ${a.weights}` : ""}
+                            {t("{c} canales en {n} nodos · T {tr} · R {r} · E {e}", { c: a.channels, n: a.nodes, tr: a.translation, r: a.rotation, e: a.scale })}
+                            {a.weights > 0 ? t(" · morph {w}", { w: a.weights }) : ""}
                           </div>
                         </div>
                       )}

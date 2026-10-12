@@ -6,6 +6,7 @@ import type { CadUi } from "../../lib/cadUi";
 import { dimText } from "../../lib/drawing";
 import { flatDxf, flatSvg } from "../../lib/flatPattern";
 import { Button, Select } from "../ui";
+import { t, tn } from "../../lib/i18n";
 
 /**
  * Desarrollo de la chapa sobre el visor: la pieza plana con las líneas de
@@ -45,10 +46,10 @@ export const FlatPatternView: Component<{ store: CadStore; ui: CadUi }> = (props
 
   const name = () => {
     const p = part();
-    if (p) return parts().find((x) => x.id.feature === p.feature && x.id.index === p.index)?.name ?? "Pieza";
+    if (p) return parts().find((x) => x.id.feature === p.feature && x.id.index === p.index)?.name ?? t("Pieza");
     // Automático: la pieza que nace de la última chapa (como el backend)
     const sheet = [...(props.store.committed()?.features ?? [])].reverse().find((f) => f.kind.type === "sheet_metal" && !f.suppressed);
-    return (parts().find((x) => x.id.feature === sheet?.id) ?? parts()[0])?.name ?? "Pieza";
+    return (parts().find((x) => x.id.feature === sheet?.id) ?? parts()[0])?.name ?? t("Pieza");
   };
   const svg = createMemo(() => (flat() ? flatSvg(flat()!, name()) : ""));
   const file = (ext: string) => `${name().replace(/[^\p{L}\p{N}_-]+/gu, "_") || "desarrollo"}_desarrollo.${ext}`;
@@ -63,20 +64,20 @@ export const FlatPatternView: Component<{ store: CadStore; ui: CadUi }> = (props
         ext === "pdf"
           ? await invoke<number>("cad_write_pdf", { path, svg: svg() })
           : await invoke<number>("cad_write_text", { path, content: ext === "dxf" ? flatDxf(fp) : svg() });
-      setMessage(`Exportado (${Math.round(bytes / 1024)} KB)`);
+      setMessage(t("Exportado ({kb} KB)", { kb: Math.round(bytes / 1024) }));
     } catch (e) {
       setMessage(String(e));
     }
   };
 
   return (
-    <div class="absolute inset-0 z-[6] flex flex-col bg-bg-darker" aria-label="Desarrollo">
+    <div class="absolute inset-0 z-[6] flex flex-col bg-bg-darker" aria-label={t("Desarrollo")}>
       <div class="flex flex-wrap items-center gap-2 border-b border-border bg-bg-lighter px-2 py-1.5">
-        <span class="text-xs font-semibold text-text">Desarrollo</span>
+        <span class="text-xs font-semibold text-text">{t("Desarrollo")}</span>
         <Show when={parts().length > 1}>
           <div class="w-44">
             <Select
-              options={[{ value: "auto", label: "La pieza de la chapa" }, ...parts().map((p, i) => ({ value: String(i), label: p.name }))]}
+              options={[{ value: "auto", label: t("La pieza de la chapa") }, ...parts().map((p, i) => ({ value: String(i), label: p.name }))]}
               value={partKey()}
               onChange={setPartKey}
             />
@@ -85,26 +86,31 @@ export const FlatPatternView: Component<{ store: CadStore; ui: CadUi }> = (props
         <Show when={flat()}>
           {(fp) => (
             <span data-flat-size class="text-xs text-text-muted">
-              {dimText(fp().max[0] - fp().min[0])} × {dimText(fp().max[1] - fp().min[1])} mm · {fp().bends.length} {fp().bends.length === 1 ? "doblez" : "dobleces"} ·
-              espesor {dimText(fp().thickness)} · K {dimText(fp().k_factor)}
+              {t("{w} × {h} mm · {bends} · espesor {th} · K {k}", {
+                w: dimText(fp().max[0] - fp().min[0]),
+                h: dimText(fp().max[1] - fp().min[1]),
+                bends: tn(fp().bends.length, "{n} doblez", "{n} dobleces"),
+                th: dimText(fp().thickness),
+                k: dimText(fp().k_factor),
+              })}
             </span>
           )}
         </Show>
         <div class="flex-1" />
         <Show when={busy()}>
-          <span class="text-[11px] text-text-dim">Desarrollando…</span>
+          <span class="text-[11px] text-text-dim">{t("Desarrollando…")}</span>
         </Show>
         <Button size="sm" variant="primary" disabled={!flat()} onClick={() => void write("dxf")}>
-          Exportar DXF
+          {t("Exportar DXF")}
         </Button>
         <Button size="sm" disabled={!flat()} onClick={() => void write("svg")}>
-          Exportar SVG
+          {t("Exportar SVG")}
         </Button>
         <Button size="sm" disabled={!flat()} onClick={() => void write("pdf")}>
-          Exportar PDF
+          {t("Exportar PDF")}
         </Button>
         <Button size="sm" variant="ghost" onClick={() => props.ui.setFlatOpen(false)}>
-          Cerrar
+          {t("Cerrar")}
         </Button>
       </div>
       <Show when={message()}>

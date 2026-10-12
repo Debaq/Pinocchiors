@@ -3,6 +3,7 @@ import { clsx } from "clsx";
 import { IconButton, Tooltip } from "../ui";
 import type { ToolDef, ToolId } from "../../lib/tools";
 import * as Icons from "../icons";
+import { t } from "../../lib/i18n";
 
 export interface ToolbarProps {
   /** Herramientas del contexto actual (cambian con la sección abierta) */
@@ -51,13 +52,14 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
           const ToolIcon = toolIcons[tool.id];
           const reason = () => props.disabledReason?.(tool.id);
           const tip = () => {
-            const name = tool.shortcut ? `${tool.label} (${tool.shortcut})` : tool.label;
+            const label = t(tool.label);
+            const name = tool.shortcut ? `${label} (${tool.shortcut})` : label;
             return reason() ? `${name}: ${reason()}` : name;
           };
           return (
             <Tooltip content={tip()} placement="right">
               <IconButton
-                aria-label={tool.label}
+                aria-label={t(tool.label)}
                 variant="ghost"
                 size="md"
                 active={props.activeTool === tool.id}
@@ -76,9 +78,9 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
         <div class="w-6 h-px bg-border my-1" />
 
         {/* Reset View */}
-        <Tooltip content="Ver todo (Inicio)" placement="right">
+        <Tooltip content={t("Ver todo (Inicio)")} placement="right">
           <IconButton
-            aria-label="Ver todo"
+            aria-label={t("Ver todo")}
             variant="ghost"
             size="md"
             onClick={props.onResetView}
@@ -92,9 +94,9 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
       <div class="flex-1" />
 
       {/* Undo / Redo */}
-      <Tooltip content="Deshacer (Ctrl+Z)" placement="right">
+      <Tooltip content={t("Deshacer (Ctrl+Z)")} placement="right">
         <IconButton
-          aria-label="Deshacer"
+          aria-label={t("Deshacer")}
           variant="ghost"
           size="md"
           disabled={!props.canUndo}
@@ -104,9 +106,9 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
         </IconButton>
       </Tooltip>
 
-      <Tooltip content="Rehacer (Ctrl+Shift+Z)" placement="right">
+      <Tooltip content={t("Rehacer (Ctrl+Shift+Z)")} placement="right">
         <IconButton
-          aria-label="Rehacer"
+          aria-label={t("Rehacer")}
           variant="ghost"
           size="md"
           disabled={!props.canRedo}

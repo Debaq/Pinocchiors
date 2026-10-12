@@ -4,6 +4,7 @@ import { Button, Panel, Select } from "../ui";
 import * as Icons from "../icons";
 import type { TransformSpace } from "../../lib/Viewer3D";
 import type { FactoryPoseId } from "../../lib/presetAnimations";
+import { t } from "../../lib/i18n";
 
 export type SelectCommand = "all" | "none" | "mirror" | "parent" | "children" | "group";
 export type PoseSource = { kind: "stored"; id: string } | { kind: "factory"; id: FactoryPoseId };
@@ -28,9 +29,9 @@ export interface PosePanelProps {
 }
 
 const SPACES = [
-  { value: "global", label: "Global" },
-  { value: "local", label: "Local" },
-  { value: "parent", label: "Del padre" },
+  { value: "global", get label() { return t("Global"); } },
+  { value: "local", get label() { return t("Local"); } },
+  { value: "parent", get label() { return t("Del padre"); } },
 ];
 
 /** Deslizador que avisa mientras se arrastra y al soltar */
@@ -50,7 +51,7 @@ export const LiveSlider: Component<{
   return (
     <label class={clsx("block space-y-1", props.disabled && "opacity-50")}>
       <div class="flex justify-between text-xs">
-        <span class="text-text-muted">{props.label}</span>
+        <span class="text-text-muted">{t(props.label)}</span>
         <span class="font-mono text-text">{props.format(value())}</span>
       </div>
       <input
@@ -80,35 +81,35 @@ export const LiveSlider: Component<{
 export const PosePanel: Component<PosePanelProps> = (props) => {
   return (
     <div class="space-y-3">
-      <Panel title="Pose" icon={<Icons.PersonArmsSpread size={14} />} defaultOpen>
+      <Panel title={t("Pose")} icon={<Icons.PersonArmsSpread size={14} />} defaultOpen>
         <div class="space-y-3">
           {/* Selección */}
           <div class="space-y-1">
-            <span class="text-xs text-text-muted">Seleccionar</span>
+            <span class="text-xs text-text-muted">{t("Seleccionar")}</span>
             <div class="grid grid-cols-3 gap-1">
-              <Button size="sm" onClick={() => props.onSelect("all")} title="Todas las articulaciones visibles (A)">
-                Todo
+              <Button size="sm" onClick={() => props.onSelect("all")} title={t("Todas las articulaciones visibles (A)")}>
+                {t("Todo")}
               </Button>
-              <Button size="sm" onClick={() => props.onSelect("none")} title="Ninguna (Alt+A)">
-                Nada
+              <Button size="sm" onClick={() => props.onSelect("none")} title={t("Ninguna (Alt+A)")}>
+                {t("Nada")}
               </Button>
-              <Button size="sm" onClick={() => props.onSelect("mirror")} disabled={!props.hasSelection} title="Las del otro lado (Ctrl+Shift+M)">
-                Espejo
+              <Button size="sm" onClick={() => props.onSelect("mirror")} disabled={!props.hasSelection} title={t("Las del otro lado (Ctrl+Shift+M)")}>
+                {t("Espejo")}
               </Button>
-              <Button size="sm" onClick={() => props.onSelect("parent")} disabled={!props.hasSelection} title="El padre ([; Shift suma)">
-                Padre
+              <Button size="sm" onClick={() => props.onSelect("parent")} disabled={!props.hasSelection} title={t("El padre ([; Shift suma)")}>
+                {t("Padre")}
               </Button>
-              <Button size="sm" onClick={() => props.onSelect("children")} disabled={!props.hasSelection} title="Los hijos (]; Shift: todos los descendientes)">
-                Hijos
+              <Button size="sm" onClick={() => props.onSelect("children")} disabled={!props.hasSelection} title={t("Los hijos (]; Shift: todos los descendientes)")}>
+                {t("Hijos")}
               </Button>
-              <Button size="sm" onClick={() => props.onSelect("group")} disabled={!props.hasSelection} title="Todo su grupo (Shift+G)">
-                Grupo
+              <Button size="sm" onClick={() => props.onSelect("group")} disabled={!props.hasSelection} title={t("Todo su grupo (Shift+G)")}>
+                {t("Grupo")}
               </Button>
             </div>
           </div>
 
           <Select
-            label="Ejes del gizmo"
+            label={t("Ejes del gizmo")}
             options={SPACES}
             value={props.space}
             onChange={(v) => props.onSpace(v as TransformSpace)}
@@ -118,53 +119,53 @@ export const PosePanel: Component<PosePanelProps> = (props) => {
             {/* Reiniciar */}
             <div class="space-y-1">
               <span class="text-xs text-text-muted">
-                Volver al reposo {props.hasSelection ? "(la selección)" : "(todo el esqueleto)"}
+                {t("Volver al reposo")} {props.hasSelection ? t("(la selección)") : t("(todo el esqueleto)")}
               </span>
               <div class="grid grid-cols-3 gap-1">
                 <Button size="sm" onClick={() => props.onReset("rotation")} title="Alt+R">
-                  Giro
+                  {t("Giro")}
                 </Button>
                 <Button size="sm" onClick={() => props.onReset("translation")} title="Alt+G">
-                  Posición
+                  {t("Posición")}
                 </Button>
                 <Button size="sm" onClick={() => props.onReset("all")}>
-                  Todo
+                  {t("Todo")}
                 </Button>
               </div>
             </div>
 
             {/* Espejo */}
             <div class="space-y-1">
-              <span class="text-xs text-text-muted">Espejo</span>
+              <span class="text-xs text-text-muted">{t("Espejo")}</span>
               <div class="grid grid-cols-3 gap-1">
-                <Button size="sm" onClick={() => props.onMirror("leftToRight")} title="Copia el lado izquierdo sobre el derecho">
-                  Izq → der
+                <Button size="sm" onClick={() => props.onMirror("leftToRight")} title={t("Copia el lado izquierdo sobre el derecho")}>
+                  {t("Izq → der")}
                 </Button>
-                <Button size="sm" onClick={() => props.onMirror("rightToLeft")} title="Copia el lado derecho sobre el izquierdo">
-                  Der → izq
+                <Button size="sm" onClick={() => props.onMirror("rightToLeft")} title={t("Copia el lado derecho sobre el izquierdo")}>
+                  {t("Der → izq")}
                 </Button>
-                <Button size="sm" onClick={() => props.onMirror("flip")} title="Cada lado toma la pose del otro">
-                  Voltear
+                <Button size="sm" onClick={() => props.onMirror("flip")} title={t("Cada lado toma la pose del otro")}>
+                  {t("Voltear")}
                 </Button>
               </div>
             </div>
 
             {/* Portapapeles */}
             <div class="grid grid-cols-3 gap-1">
-              <Button size="sm" onClick={props.onCopy} title="Copia la pose de la selección, o de todo (Ctrl+C)">
-                Copiar
+              <Button size="sm" onClick={props.onCopy} title={t("Copia la pose de la selección, o de todo (Ctrl+C)")}>
+                {t("Copiar")}
               </Button>
               <Button size="sm" onClick={() => props.onPaste(false)} disabled={!props.canPaste} title="Ctrl+V">
-                Pegar
+                {t("Pegar")}
               </Button>
-              <Button size="sm" onClick={() => props.onPaste(true)} disabled={!props.canPaste} title="Pegar del otro lado (Ctrl+Shift+V)">
-                Espejado
+              <Button size="sm" onClick={() => props.onPaste(true)} disabled={!props.canPaste} title={t("Pegar del otro lado (Ctrl+Shift+V)")}>
+                {t("Espejado")}
               </Button>
             </div>
 
             {/* Intermedias */}
             <LiveSlider
-              label="Intermedia (key anterior → siguiente)"
+              label={t("Intermedia (key anterior → siguiente)")}
               min={0}
               max={100}
               initial={50}
@@ -174,7 +175,7 @@ export const PosePanel: Component<PosePanelProps> = (props) => {
               onCommit={(v) => props.onBreakdown(v / 100, true)}
             />
             <LiveSlider
-              label="Relajar ← → empujar"
+              label={t("Relajar ← → empujar")}
               min={0}
               max={200}
               initial={100}
@@ -190,8 +191,7 @@ export const PosePanel: Component<PosePanelProps> = (props) => {
       <Panel title="Ragdoll" icon={<Icons.Person size={14} />}>
         <div class="space-y-2">
           <p class="text-xs text-text-muted leading-relaxed">
-            El cuerpo cae como un muñeco desde la pose del cuadro actual, con el impulso que traía la animación. Queda en
-            una animación nueva; los límites de giro recortan lo imposible.
+            {t("El cuerpo cae como un muñeco desde la pose del cuadro actual, con el impulso que traía la animación. Queda en una animación nueva; los límites de giro recortan lo imposible.")}
           </p>
           <div class="grid grid-cols-3 gap-1">
             <For each={[1, 2, 3]}>

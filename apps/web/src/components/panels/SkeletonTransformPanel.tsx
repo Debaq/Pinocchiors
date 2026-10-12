@@ -2,6 +2,7 @@ import { Component, For, Show } from "solid-js";
 import { AXES, VIEW_AXES } from "../../lib/axes";
 import { Panel, Slider, NumberInput, Button } from "../ui";
 import * as Icons from "../icons";
+import { t } from "../../lib/i18n";
 
 export interface SkeletonTransform {
   scale: number;
@@ -35,11 +36,11 @@ export const SkeletonTransformPanel: Component<SkeletonTransformPanelProps> = (p
   };
 
   return (
-    <Panel title="Transformar" icon={<Icons.ArrowsClockwise size={14} />} defaultOpen>
+    <Panel title={t("Transformar")} icon={<Icons.ArrowsClockwise size={14} />} defaultOpen>
       <div class="space-y-3">
         {/* Scale */}
         <Slider
-          label="Escala"
+          label={t("Escala")}
           value={props.transform.scale}
           onChange={(v) => update({ scale: v })}
           min={0.1}
@@ -51,7 +52,7 @@ export const SkeletonTransformPanel: Component<SkeletonTransformPanelProps> = (p
 
         {/* Posición y giro en los ejes que se muestran (Z arriba) */}
         <div class="space-y-1.5">
-          <span class="text-xs text-text-muted">Posición</span>
+          <span class="text-xs text-text-muted">{t("Posición")}</span>
           <div class="flex gap-2">
             <For each={AXES}>
               {(axis) => (
@@ -68,7 +69,7 @@ export const SkeletonTransformPanel: Component<SkeletonTransformPanelProps> = (p
         </div>
 
         <div class="space-y-1.5">
-          <span class="text-xs text-text-muted">Rotación (grados)</span>
+          <span class="text-xs text-text-muted">{t("Rotación (grados)")}</span>
           <div class="flex gap-2">
             <For each={AXES}>
               {(axis) => (
@@ -97,7 +98,7 @@ export const SkeletonTransformPanel: Component<SkeletonTransformPanelProps> = (p
             >
               <span class="flex items-center gap-1.5">
                 <Icons.MagicWand size={14} />
-                Auto-fit
+                {t("Auto-fit")}
               </span>
             </Button>
           </Show>
@@ -107,7 +108,7 @@ export const SkeletonTransformPanel: Component<SkeletonTransformPanelProps> = (p
             variant="ghost"
             fullWidth={!props.onAutoFit}
           >
-            Volver al preset
+            {t("Volver al preset")}
           </Button>
         </div>
       </div>

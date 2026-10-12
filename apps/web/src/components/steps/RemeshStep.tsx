@@ -6,6 +6,7 @@ import { SmoothPanel, type SmoothPanelProps } from "../panels/SmoothPanel";
 import { IsotropicPanel, type IsotropicPanelProps } from "../panels/IsotropicPanel";
 import { VoxelPanel, type VoxelPanelProps } from "../panels/VoxelPanel";
 import { QuadsPanel, type QuadsPanelProps } from "../panels/QuadsPanel";
+import { locale, t } from "../../lib/i18n";
 
 /** Formas de ordenar la malla (ver libs/quadriflow/PLAN_REMALLAR.md) */
 export type RemeshMode = "retopology" | "simplify" | "isotropic" | "voxel" | "quads" | "smooth";
@@ -75,7 +76,7 @@ export const facesOf = (c: { vertices: number; triangles: number; quads?: number
     vertices: c.vertices,
     faces: quads + loose,
     faceLabel: "caras",
-    detail: `${quads.toLocaleString("es")} quads y ${loose.toLocaleString("es")} triángulos`,
+    detail: t("{q} quads y {l} triángulos", { q: num(quads), l: num(loose) }),
   };
 };
 
@@ -94,12 +95,12 @@ export interface RemeshStats {
   deviation: RemeshDeviation;
 }
 
-const num = (v: number) => v.toLocaleString("es");
-const short = (v: number) => v.toLocaleString("es", { maximumSignificantDigits: 2 });
+const num = (v: number) => v.toLocaleString(locale());
+const short = (v: number) => v.toLocaleString(locale(), { maximumSignificantDigits: 2 });
 /** Milímetros con pocas cifras (o micras si es menos de 0,1 mm) */
-const mm = (v: number) => (v < 0.001 ? "menos de 1 µm" : v < 0.1 ? `${short(v * 1000)} µm` : `${short(v)} mm`);
+const mm = (v: number) => (v < 0.001 ? t("menos de 1 µm") : v < 0.1 ? `${short(v * 1000)} µm` : `${short(v)} mm`);
 /** Porcentaje sin cifras de más */
-const percent = (v: number) => (v < 0.001 ? "menos de 0,001" : short(v));
+const percent = (v: number) => (v < 0.001 ? t("menos de 0,001") : short(v));
 
 /** Antes → después de un remallado, con la desviación al original */
 export const RemeshSummary: Component<{
@@ -117,13 +118,13 @@ export const RemeshSummary: Component<{
         <p class="text-text-dim">{props.title}</p>
       </Show>
       <div class="grid grid-cols-[auto_1fr_auto_1fr] gap-x-2 gap-y-0.5 items-baseline">
-        <span class="text-text-dim">Antes</span>
+        <span class="text-text-dim">{t("Antes")}</span>
         <span class="text-text">
-          {num(props.before.faces)} {props.before.faceLabel}
+          {num(props.before.faces)} {t(props.before.faceLabel)}
         </span>
         <span class="text-text-dim">→</span>
         <span data-remesh-after class="text-text">
-          {num(props.after.faces)} {props.after.faceLabel}
+          {num(props.after.faces)} {t(props.after.faceLabel)}
           <span class="text-text-dim">{pct(props.before.faces, props.after.faces)}</span>
         </span>
         <Show when={props.before.detail || props.after.detail}>
@@ -133,22 +134,20 @@ export const RemeshSummary: Component<{
           <span data-remesh-detail class="text-text-muted">{props.after.detail}</span>
         </Show>
         <span />
-        <span class="text-text-muted">{num(props.before.vertices)} vértices</span>
+        <span class="text-text-muted">{num(props.before.vertices)} {t("vértices")}</span>
         <span />
-        <span class="text-text-muted">{num(props.after.vertices)} vértices</span>
+        <span class="text-text-muted">{num(props.after.vertices)} {t("vértices")}</span>
       </div>
       <Show when={props.deviation}>
         {(d) => (
           <p data-remesh-deviation class="text-text-muted">
-            Se aleja del original hasta <span class="text-text">{mm(d().max_mm)}</span> ({percent(d().max_percent)} % del tamaño); en
-            promedio {mm(d().mean_mm)}
+            {t("Se aleja del original hasta")} <span class="text-text">{mm(d().max_mm)}</span> {t("({p} % del tamaño); en promedio {m}", { p: percent(d().max_percent), m: mm(d().mean_mm) })}
           </p>
         )}
       </Show>
       <Show when={!props.deviation && props.deviationPercent != null}>
         <p class="text-text-muted">
-          Se aleja del original hasta un <span class="text-text">{props.deviationPercent!.toLocaleString("es", { maximumFractionDigits: 2 })} %</span> del
-          tamaño
+          {t("Se aleja del original hasta un")} <span class="text-text">{props.deviationPercent!.toLocaleString(locale(), { maximumFractionDigits: 2 })} %</span> {t("del tamaño")}
         </p>
       </Show>
     </div>
@@ -182,26 +181,26 @@ export const RemeshStep: Component<RemeshStepProps> = (props) => {
   return (
     <div class="space-y-4">
       <div>
-        <h3 class="text-sm font-semibold text-text">Remallar</h3>
-        <p class="text-xs text-text-muted leading-relaxed">Ordenar la malla según para qué se va a usar.</p>
+        <h3 class="text-sm font-semibold text-text">{t("Remallar")}</h3>
+        <p class="text-xs text-text-muted leading-relaxed">{t("Ordenar la malla según para qué se va a usar.")}</p>
       </div>
-      <div role="radiogroup" aria-label="Modo de remallado" class="grid grid-cols-2 gap-1">
+      <div role="radiogroup" aria-label={t("Modo de remallado")} class="grid grid-cols-2 gap-1">
         <For each={REMESH_MODES}>
           {(m) => (
             <button
               role="radio"
               aria-checked={props.mode === m.id}
               data-mode={m.id}
-              title={m.use}
+              title={t(m.use)}
               class={clsx(
                 "flex items-center justify-between gap-1 rounded border px-2 py-1 text-left text-xs transition-colors",
                 props.mode === m.id ? "border-accent bg-accent/10 text-text" : "border-border text-text-muted hover:text-text hover:bg-surface/50",
               )}
               onClick={() => props.onModeChange(m.id)}
             >
-              <span class="truncate">{m.label}</span>
+              <span class="truncate">{t(m.label)}</span>
               <Show when={!m.ready}>
-                <span class="shrink-0 text-[9px] rounded bg-surface px-1 text-text-dim">pronto</span>
+                <span class="shrink-0 text-[9px] rounded bg-surface px-1 text-text-dim">{t("pronto")}</span>
               </Show>
             </button>
           )}
@@ -209,11 +208,11 @@ export const RemeshStep: Component<RemeshStepProps> = (props) => {
       </div>
       <div class="border-t border-border pt-3 space-y-3">
         <p class="text-xs text-text-muted leading-relaxed">
-          {current().what} <span class="text-text-dim">{current().use}</span>
+          {t(current().what)} <span class="text-text-dim">{t(current().use)}</span>
         </p>
         <Show when={!current().ready}>
           <p data-remesh-pending class="text-xs text-text-dim leading-relaxed">
-            Este modo todavía no está: llega en las próximas etapas. Mientras, la retopología y la reparación siguen disponibles.
+            {t("Este modo todavía no está: llega en las próximas etapas. Mientras, la retopología y la reparación siguen disponibles.")}
           </p>
         </Show>
         <Show when={current().id === "simplify"}>
@@ -234,7 +233,7 @@ export const RemeshStep: Component<RemeshStepProps> = (props) => {
         <Show when={stats()}>
           {(s) => (
             <RemeshSummary
-              title={s().kind === "preview" ? "Vista previa (el modelo no cambió)" : "Aplicado"}
+              title={s().kind === "preview" ? t("Vista previa (el modelo no cambió)") : t("Aplicado")}
               before={facesOf(s().stats.before)}
               after={facesOf(s().stats.after)}
               deviation={s().stats.deviation}

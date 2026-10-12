@@ -1,6 +1,7 @@
 import { Component, For, Show } from "solid-js";
 import { Button, Checkbox, Select, Slider } from "../ui";
 import * as Icons from "../icons";
+import { t } from "../../lib/i18n";
 
 export type ExportFormat = "step" | "glb" | "gltf" | "obj" | "stl" | "3mf" | "ply" | "usdz" | "bvh" | "json";
 
@@ -82,7 +83,7 @@ const FORMATS: FormatEntry[] = [
 ];
 
 const TEXTURE_SIZES = [
-  { value: "0", label: "Sin límite" },
+  { value: "0", get label() { return t("Sin límite"); } },
   { value: "4096", label: "4096 px" },
   { value: "2048", label: "2048 px" },
   { value: "1024", label: "1024 px" },
@@ -90,10 +91,10 @@ const TEXTURE_SIZES = [
 ];
 
 const PRESET_OPTIONS = [
-  { value: "none", label: "Sin optimizar", description: "Tal cual, máxima fidelidad" },
-  { value: "balanced", label: "Web equilibrado", description: "Draco + texturas 2048 px, sin perder forma" },
-  { value: "light", label: "Web ligero", description: "Para móviles: mitad de triángulos, texturas 1024 px" },
-  { value: "custom", label: "Personalizado" },
+  { value: "none", get label() { return t("Sin optimizar"); }, get description() { return t("Tal cual, máxima fidelidad"); } },
+  { value: "balanced", get label() { return t("Web equilibrado"); }, get description() { return t("Draco + texturas 2048 px, sin perder forma"); } },
+  { value: "light", get label() { return t("Web ligero"); }, get description() { return t("Para móviles: mitad de triángulos, texturas 1024 px"); } },
+  { value: "custom", get label() { return t("Personalizado"); } },
 ];
 
 /** Formatos que pasan por el exportador glTF (Draco, reducción, texturas) */
@@ -158,11 +159,11 @@ export const ExportStep: Component<ExportStepProps> = (props) => {
 
   return (
     <div class="space-y-5">
-      <h3 class="text-sm font-semibold text-text">{props.design ? "Exportar diseño" : props.skeletonOnly ? "Exportar esqueleto" : "Exportar Modelo"}</h3>
+      <h3 class="text-sm font-semibold text-text">{props.design ? t("Exportar diseño") : props.skeletonOnly ? t("Exportar esqueleto") : t("Exportar Modelo")}</h3>
 
       {/* Formato */}
       <div class="space-y-2">
-        <span class="text-xs font-medium text-text-muted">Formato</span>
+        <span class="text-xs font-medium text-text-muted">{t("Formato")}</span>
         <div class="grid grid-cols-4 gap-1.5">
           <For each={FORMATS}>
             {(f) => (
@@ -176,27 +177,26 @@ export const ExportStep: Component<ExportStepProps> = (props) => {
                     : "bg-surface/30 border-border text-text-muted hover:text-text"
                 }`}
               >
-                {f.name}
+                {t(f.name)}
               </button>
             )}
           </For>
         </div>
-        <p class="text-[10px] text-text-dim leading-relaxed">{current().hint}</p>
+        <p class="text-[10px] text-text-dim leading-relaxed">{t(current().hint)}</p>
       </div>
 
       <Show when={props.design}>
         <div class="space-y-3 p-3 rounded-md bg-surface/30 border border-border">
           <Show when={(props.designParts?.length ?? 0) > 1 || props.designParts?.some((p) => p.key === "assembly")}>
             <Select
-              label="Qué exportar"
-              options={[{ value: "all", label: "Todo el diseño" }, ...(props.designParts ?? []).map((p) => ({ value: p.key, label: p.name }))]}
+              label={t("Qué exportar")}
+              options={[{ value: "all", label: t("Todo el diseño") }, ...(props.designParts ?? []).map((p) => ({ value: p.key, label: p.name }))]}
               value={props.designPart ?? "all"}
               onChange={(v) => props.onDesignPartChange?.(v === "all" ? undefined : v)}
             />
           </Show>
           <p class="text-[10px] text-text-dim leading-relaxed">
-            Se exporta el sólido de Diseñar en milímetros. STEP lo guarda exacto (caras y aristas reales), con cada pieza
-            con su nombre y color; 3MF lleva un objeto por pieza; los demás formatos, una malla fina.
+            {t("Se exporta el sólido de Diseñar en milímetros. STEP lo guarda exacto (caras y aristas reales), con cada pieza con su nombre y color; 3MF lleva un objeto por pieza; los demás formatos, una malla fina.")}
           </p>
         </div>
       </Show>
@@ -205,20 +205,18 @@ export const ExportStep: Component<ExportStepProps> = (props) => {
       <Show when={model() && props.skeletonOnly && opts().format !== "bvh"}>
         <div class="space-y-3 p-3 rounded-md bg-surface/30 border border-border">
           <Checkbox
-            label="Figura visible de los huesos"
+            label={t("Figura visible de los huesos")}
             checked={props.boneShapes}
             onChange={props.onBoneShapesChange}
           />
           <p class="text-[10px] text-text-dim leading-relaxed">
-            Sin modelo se exportan el esqueleto y todas sus animaciones. La figura agrega un octaedro por hueso para
-            verlo en visores que no dibujan esqueletos; para usarlo en otro programa conviene sin figura.
+            {t("Sin modelo se exportan el esqueleto y todas sus animaciones. La figura agrega un octaedro por hueso para verlo en visores que no dibujan esqueletos; para usarlo en otro programa conviene sin figura.")}
           </p>
         </div>
       </Show>
       <Show when={opts().format === "bvh"}>
         <p class="text-[10px] text-text-dim leading-relaxed p-3 rounded-md bg-surface/30 border border-border">
-          BVH guarda una sola animación: se exporta la activa, en su rango de cuadros. Sin animaciones queda la pose de
-          reposo.
+          {t("BVH guarda una sola animación: se exporta la activa, en su rango de cuadros. Sin animaciones queda la pose de reposo.")}
         </p>
       </Show>
 
@@ -226,29 +224,28 @@ export const ExportStep: Component<ExportStepProps> = (props) => {
       <Show when={model() && !props.skeletonOnly && opts().format !== "json" && opts().format !== "bvh"}>
         <div class="space-y-3 p-3 rounded-md bg-surface/30 border border-border">
           <Checkbox
-            label="Incluir esqueleto y pesos"
+            label={t("Incluir esqueleto y pesos")}
             checked={props.includeRig && props.autorigComplete && keepsRig()}
             disabled={!props.autorigComplete || !keepsRig()}
             onChange={props.onIncludeRigChange}
           />
           <Checkbox
-            label="Usar malla retopologizada"
+            label={t("Usar malla retopologizada")}
             checked={props.useRetopology && props.hasQuadMesh}
             disabled={!props.hasQuadMesh}
             onChange={props.onUseRetopologyChange}
           />
           <Checkbox
-            label="Compactar el mapa UV"
+            label={t("Compactar el mapa UV")}
             checked={props.compactUv === true}
             onChange={props.onCompactUvChange}
           />
           <p class="text-[10px] text-text-dim leading-relaxed">
-            Reacomoda las islas lo más juntas posible y vuelve a hornear las texturas (lo pintado
-            incluido): se pinta sobre el mapa legible y se exporta el que aprovecha la textura.
+            {t("Reacomoda las islas lo más juntas posible y vuelve a hornear las texturas (lo pintado incluido): se pinta sobre el mapa legible y se exporta el que aprovecha la textura.")}
           </p>
           <p class="text-[10px] text-text-dim leading-relaxed">
-            {props.autorigComplete ? "" : "Ejecuta el autorig para exportar el rig. "}
-            {props.hasQuadMesh ? "" : "Ejecuta la retopología para exportar la malla de quads."}
+            {props.autorigComplete ? "" : t("Ejecuta el autorig para exportar el rig.") + " "}
+            {props.hasQuadMesh ? "" : t("Ejecuta la retopología para exportar la malla de quads.")}
           </p>
         </div>
       </Show>
@@ -257,21 +254,21 @@ export const ExportStep: Component<ExportStepProps> = (props) => {
       <Show when={model() && isGltf(opts().format) && !props.skeletonOnly}>
         <div class="space-y-3 p-3 rounded-md bg-surface/30 border border-border">
           <Select
-            label="Optimización web"
+            label={t("Optimización web")}
             options={PRESET_OPTIONS}
             value={opts().preset}
             onChange={applyPreset}
           />
 
           <Checkbox
-            label="Comprimir geometría (Draco)"
+            label={t("Comprimir geometría (Draco)")}
             checked={opts().draco}
             onChange={(v) => tweak({ draco: v })}
           />
           <Show when={opts().draco}>
             <div class="pl-6 space-y-3">
               <Slider
-                label="Nivel de compresión"
+                label={t("Nivel de compresión")}
                 min={0}
                 max={10}
                 step={1}
@@ -280,52 +277,50 @@ export const ExportStep: Component<ExportStepProps> = (props) => {
                 showValue
               />
               <Checkbox
-                label="Alta precisión (16 bits)"
+                label={t("Alta precisión (16 bits)")}
                 checked={opts().highPrecision}
                 onChange={(v) => tweak({ highPrecision: v })}
               />
               <p class="text-[10px] text-text-dim leading-relaxed">
-                Draco reduce la geometría ~10 veces. Con 14 bits pueden verse manchas donde hay superficies muy
-                juntas; el visor necesita el decodificador Draco (three.js, Babylon y model-viewer lo traen).
+                {t("Draco reduce la geometría ~10 veces. Con 14 bits pueden verse manchas donde hay superficies muy juntas; el visor necesita el decodificador Draco (three.js, Babylon y model-viewer lo traen).")}
               </p>
             </div>
           </Show>
 
           <Slider
-            label="Triángulos a conservar"
+            label={t("Triángulos a conservar")}
             min={10}
             max={100}
             step={5}
             value={opts().simplifyPercent}
             onChange={(v) => tweak({ simplifyPercent: v })}
             showValue
-            formatValue={(v) => (v >= 100 ? "Todos" : `${v}%`)}
+            formatValue={(v) => (v >= 100 ? t("Todos") : `${v}%`)}
           />
 
           <Select
-            label="Tamaño máximo de texturas"
+            label={t("Tamaño máximo de texturas")}
             options={TEXTURE_SIZES}
             value={String(opts().maxTextureSize)}
             onChange={(v) => tweak({ maxTextureSize: Number(v) })}
           />
           <Slider
-            label="Calidad JPEG de texturas"
+            label={t("Calidad JPEG de texturas")}
             min={0}
             max={100}
             step={5}
             value={opts().textureQuality}
             onChange={(v) => tweak({ textureQuality: v })}
             showValue
-            formatValue={(v) => (v === 0 ? "Original" : `${v}`)}
+            formatValue={(v) => (v === 0 ? t("Original") : `${v}`)}
           />
           <Checkbox
-            label="Limpiar geometría y materiales sin uso"
+            label={t("Limpiar geometría y materiales sin uso")}
             checked={opts().cleanGeometry}
             onChange={(v) => tweak({ cleanGeometry: v })}
           />
           <p class="text-[10px] text-text-dim leading-relaxed">
-            Las texturas con transparencia quedan en PNG. Las texturas suelen pesar más que la geometría: bajar
-            su tamaño es lo que más reduce el archivo.
+            {t("Las texturas con transparencia quedan en PNG. Las texturas suelen pesar más que la geometría: bajar su tamaño es lo que más reduce el archivo.")}
           </p>
         </div>
       </Show>
@@ -337,14 +332,14 @@ export const ExportStep: Component<ExportStepProps> = (props) => {
         fullWidth
         icon={<Icons.Export size={16} />}
       >
-        Exportar {current().name}
+        {t("Exportar {f}", { f: current().name })}
       </Button>
 
       <Show when={props.lastExport}>
         {(last) => (
           <div class="p-3 rounded-md bg-surface/30 border border-border space-y-1">
             <div class="flex justify-between text-xs">
-              <span class="text-text-muted">Última exportación</span>
+              <span class="text-text-muted">{t("Última exportación")}</span>
               <span class="font-medium text-text">{formatBytes(last().bytes)}</span>
             </div>
             <For each={last().files}>

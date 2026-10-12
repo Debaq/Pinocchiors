@@ -7,6 +7,7 @@
  */
 
 import wasmLoaderPath from "@mediapipe/tasks-vision/vision_wasm_internal.js?url";
+import { t as tr } from "./i18n.ts";
 import wasmBinaryPath from "@mediapipe/tasks-vision/vision_wasm_internal.wasm?url";
 import type { CaptureFrame } from "./capture";
 
@@ -30,7 +31,7 @@ const once = (target: EventTarget, event: string) =>
     };
     const fail = () => {
       target.removeEventListener(event, ok);
-      reject(new Error("No se pudo leer el video (formato no soportado por el visor)"));
+      reject(new Error(tr("No se pudo leer el video (formato no soportado por el visor)")));
     };
     target.addEventListener(event, ok, { once: true });
     target.addEventListener("error", fail, { once: true });
@@ -72,10 +73,10 @@ export interface LiveCapture {
 /** `onFrame` recibe cada cuadro detectado con su tiempo en segundos (para seguir al actor en vivo) */
 export async function startLive(model?: Uint8Array, onFrame?: (frame: CaptureFrame | null, time: number) => void): Promise<LiveCapture> {
   if (!navigator.mediaDevices?.getUserMedia) {
-    throw new Error("Este visor no da acceso a la cámara (en Linux, WebKitGTK puede tenerlo desactivado): graba un video y usa el archivo");
+    throw new Error(tr("Este visor no da acceso a la cámara (en Linux, WebKitGTK puede tenerlo desactivado): graba un video y usa el archivo"));
   }
   const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 }, audio: false }).catch((e) => {
-    throw new Error(`No se pudo abrir la cámara: ${e instanceof Error ? e.message : e}`);
+    throw new Error(tr("No se pudo abrir la cámara: {error}", { error: e instanceof Error ? e.message : String(e) }));
   });
   const landmarker = await createLandmarker(model).catch((e) => {
     stream.getTracks().forEach((t) => t.stop());
@@ -133,7 +134,7 @@ export async function detectVideo(file: File, options: DetectOptions): Promise<(
     const total = Math.max(1, Math.floor(video.duration * fps));
     const frames: (CaptureFrame | null)[] = [];
     for (let i = 0; i < total; i++) {
-      if (options.signal?.aborted) throw new DOMException("Captura cancelada", "AbortError");
+      if (options.signal?.aborted) throw new DOMException(tr("Captura cancelada"), "AbortError");
       video.currentTime = Math.min(video.duration, i / fps);
       await once(video, "seeked");
       frames.push(toFrame(landmarker.detectForVideo(video, Math.round((i * 1000) / fps)) as unknown as Result));

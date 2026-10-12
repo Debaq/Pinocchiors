@@ -16,6 +16,7 @@ import {
 } from "../../lib/rig";
 import type { Vec3 } from "../../lib/animation";
 import { SPRING_PRESETS } from "../../lib/secondary";
+import { t } from "../../lib/i18n";
 
 export type RollMode = "auto" | "view" | "normal" | "mirror";
 
@@ -58,6 +59,13 @@ const inputClass =
 
 const AXES = ["X", "Y", "Z"] as const;
 
+/** Opciones de lib/ con la etiqueta en español: se traduce al mostrarla */
+const translated = <V extends string>(list: { value: V; label: string }[]) =>
+  list.map((o) => ({ value: o.value, get label() { return t(o.label); } }));
+const ROTATION_OPTIONS = translated(ROTATION_MODES);
+const SHAPE_OPTIONS = translated(BONE_SHAPES);
+const CONTROL_OPTIONS = translated(CONTROL_SHAPES);
+
 /**
  * Propiedades del rig: el hueso activo (y los demás elegidos), sus grupos,
  * los controles y la pose de reposo
@@ -70,10 +78,10 @@ export const RigPanel: Component<RigPanelProps> = (props) => {
   const [renaming, setRenaming] = createSignal<string | null>(null);
 
   const groupOptions = () => [
-    { value: "", label: "Sin grupo" },
+    { value: "", label: t("Sin grupo") },
     ...props.settings.groups.map((g) => ({ value: g.id, label: g.name })),
   ];
-  const plural = () => (selectedNames().length > 1 ? ` (${selectedNames().length} huesos)` : "");
+  const plural = () => (selectedNames().length > 1 ? ` (${t("{n} huesos", { n: selectedNames().length })})` : "");
 
   const setControl = (description: string, change: Partial<RigControl>) => {
     const c = control();
@@ -93,7 +101,7 @@ export const RigPanel: Component<RigPanelProps> = (props) => {
   const isolate = (id: string) => {
     const others = props.settings.groups.filter((g) => g.id !== id);
     const alreadyIsolated = others.every((g) => g.hidden) && !props.settings.groups.find((g) => g.id === id)?.hidden;
-    props.onChange(alreadyIsolated ? "Mostrar todos los grupos" : "Aislar grupo", {
+    props.onChange(alreadyIsolated ? t("Mostrar todos los grupos") : t("Aislar grupo"), {
       ...props.settings,
       groups: props.settings.groups.map((g) => ({ ...g, hidden: alreadyIsolated ? false : g.id !== id })),
     });
@@ -108,16 +116,16 @@ export const RigPanel: Component<RigPanelProps> = (props) => {
         else bones[name] = rest;
       }
     }
-    props.onChange("Borrar grupo", { ...props.settings, bones, groups: props.settings.groups.filter((g) => g.id !== id) });
+    props.onChange(t("Borrar grupo"), { ...props.settings, bones, groups: props.settings.groups.filter((g) => g.id !== id) });
   };
 
   return (
     <div class="space-y-3">
       {/* Hueso activo */}
-      <Panel title={`Hueso${plural()}`} icon={<Icons.Bone size={14} />} defaultOpen>
+      <Panel title={`${t("Hueso")}${plural()}`} icon={<Icons.Bone size={14} />} defaultOpen>
         <Show
           when={active()}
-          fallback={<p class="text-xs text-text-muted">Elige una articulación en el visor o en la línea de tiempo.</p>}
+          fallback={<p class="text-xs text-text-muted">{t("Elige una articulación en el visor o en la línea de tiempo.")}</p>}
         >
           {(p) => (
             <div class="space-y-3">
@@ -127,7 +135,7 @@ export const RigPanel: Component<RigPanelProps> = (props) => {
               <Show when={props.posing && props.rotation}>
                 <div class="space-y-1">
                   <span class="text-xs text-text-muted">
-                    Giro en grados ({p().rotationMode === "quaternion" ? "Euler XYZ" : `Euler ${p().rotationMode}`}, ejes locales)
+                    {t("Giro en grados ({mode}, ejes locales)", { mode: p().rotationMode === "quaternion" ? "Euler XYZ" : `Euler ${p().rotationMode}` })}
                   </span>
                   <div class="grid grid-cols-3 gap-1">
                     <For each={AXES}>
@@ -150,7 +158,7 @@ export const RigPanel: Component<RigPanelProps> = (props) => {
               </Show>
               <Show when={props.posing && props.translation}>
                 <div class="space-y-1">
-                  <span class="text-xs text-text-muted">Desplazamiento (marco del padre)</span>
+                  <span class="text-xs text-text-muted">{t("Desplazamiento (marco del padre)")}</span>
                   <div class="grid grid-cols-3 gap-1">
                     <For each={AXES}>
                       {(axis, i) => (
@@ -172,35 +180,35 @@ export const RigPanel: Component<RigPanelProps> = (props) => {
               </Show>
 
               <Select
-                label="Grupo"
+                label={t("Grupo")}
                 options={groupOptions()}
                 value={p().group ?? ""}
-                onChange={(v) => props.onBoneProps("Grupo del hueso", { group: v || undefined })}
+                onChange={(v) => props.onBoneProps(t("Grupo del hueso"), { group: v || undefined })}
               />
 
               <div class="flex items-center gap-2">
-                <span class="text-xs text-text-muted w-12">Color</span>
+                <span class="text-xs text-text-muted w-12">{t("Color")}</span>
                 <input
                   type="color"
                   class="h-6 w-10 rounded border border-border bg-transparent cursor-pointer"
                   value={p().color ?? "#ffb86c"}
-                  onChange={(e) => props.onBoneProps("Color del hueso", { color: e.currentTarget.value })}
+                  onChange={(e) => props.onBoneProps(t("Color del hueso"), { color: e.currentTarget.value })}
                 />
                 <Show when={p().color}>
-                  <Button size="sm" variant="ghost" onClick={() => props.onBoneProps("Color del hueso", { color: undefined })}>
-                    Del grupo
+                  <Button size="sm" variant="ghost" onClick={() => props.onBoneProps(t("Color del hueso"), { color: undefined })}>
+                    {t("Del grupo")}
                   </Button>
                 </Show>
               </div>
 
               <div class="grid grid-cols-2 gap-1">
-                <Checkbox label="Visible" checked={!p().hidden} onChange={(v) => props.onBoneProps(v ? "Mostrar hueso" : "Ocultar hueso", { hidden: v ? undefined : true })} />
-                <Checkbox label="Bloqueado" checked={p().locked} onChange={(v) => props.onBoneProps(v ? "Bloquear hueso" : "Desbloquear hueso", { locked: v || undefined })} />
-                <Checkbox label="Deforma" checked={p().deform} onChange={(v) => props.onBoneProps(v ? "El hueso deforma" : "El hueso no deforma", { deform: v ? undefined : false })} />
+                <Checkbox label={t("Visible")} checked={!p().hidden} onChange={(v) => props.onBoneProps(v ? t("Mostrar hueso") : t("Ocultar hueso"), { hidden: v ? undefined : true })} />
+                <Checkbox label={t("Bloqueado")} checked={p().locked} onChange={(v) => props.onBoneProps(v ? t("Bloquear hueso") : t("Desbloquear hueso"), { locked: v || undefined })} />
+                <Checkbox label={t("Deforma")} checked={p().deform} onChange={(v) => props.onBoneProps(v ? t("El hueso deforma") : t("El hueso no deforma"), { deform: v ? undefined : false })} />
                 <Checkbox
-                  label="Fijo en su lugar"
+                  label={t("Fijo en su lugar")}
                   checked={p().lockTranslation}
-                  onChange={(v) => props.onBoneProps(v ? "Bloquear desplazamiento" : "Permitir desplazamiento", { lockTranslation: v || undefined })}
+                  onChange={(v) => props.onBoneProps(v ? t("Bloquear desplazamiento") : t("Permitir desplazamiento"), { lockTranslation: v || undefined })}
                 />
               </div>
 
@@ -209,17 +217,17 @@ export const RigPanel: Component<RigPanelProps> = (props) => {
                 <div class="flex items-center gap-1">
                   <div class="flex-1">
                     <Select
-                      label="Movimiento secundario"
+                      label={t("Movimiento secundario")}
                       options={[
-                        { value: "", label: "Sin resorte (sigue sus keys)" },
-                        ...SPRING_PRESETS.map((x) => ({ value: x.id, label: x.label })),
-                        ...(p().spring && !SPRING_PRESETS.some((x) => JSON.stringify(x.settings) === JSON.stringify(p().spring)) ? [{ value: "custom", label: "Personalizado" }] : []),
+                        { value: "", label: t("Sin resorte (sigue sus keys)") },
+                        ...SPRING_PRESETS.map((x) => ({ value: x.id, label: t(x.label) })),
+                        ...(p().spring && !SPRING_PRESETS.some((x) => JSON.stringify(x.settings) === JSON.stringify(p().spring)) ? [{ value: "custom", label: t("Personalizado") }] : []),
                       ]}
                       value={p().spring ? (SPRING_PRESETS.find((x) => JSON.stringify(x.settings) === JSON.stringify(p().spring))?.id ?? "custom") : ""}
                       onChange={(v) => {
                         if (v === "custom") return;
                         const preset = SPRING_PRESETS.find((x) => x.id === v);
-                        props.onBoneProps(preset ? `Resorte: ${preset.label}` : "Quitar resorte", { spring: preset ? { ...preset.settings } : undefined });
+                        props.onBoneProps(preset ? t("Resorte: {name}", { name: t(preset.label) }) : t("Quitar resorte"), { spring: preset ? { ...preset.settings } : undefined });
                       }}
                     />
                   </div>
@@ -228,56 +236,56 @@ export const RigPanel: Component<RigPanelProps> = (props) => {
                   {(spring) => (
                     <div class="grid grid-cols-3 gap-1">
                       <NumberInput
-                        label="Rigidez"
+                        label={t("Rigidez")}
                         suffix="%"
                         min={0}
                         max={100}
                         value={Math.round(spring().stiffness * 100)}
-                        onChange={(v) => props.onBoneProps("Rigidez del resorte", { spring: { ...spring(), stiffness: Math.max(0, Math.min(1, v / 100)) } })}
+                        onChange={(v) => props.onBoneProps(t("Rigidez del resorte"), { spring: { ...spring(), stiffness: Math.max(0, Math.min(1, v / 100)) } })}
                       />
                       <NumberInput
-                        label="Freno"
+                        label={t("Freno")}
                         suffix="%"
                         min={0}
                         max={100}
                         value={Math.round(spring().damping * 100)}
-                        onChange={(v) => props.onBoneProps("Freno del resorte", { spring: { ...spring(), damping: Math.max(0, Math.min(1, v / 100)) } })}
+                        onChange={(v) => props.onBoneProps(t("Freno del resorte"), { spring: { ...spring(), damping: Math.max(0, Math.min(1, v / 100)) } })}
                       />
                       <NumberInput
-                        label="Gravedad"
+                        label={t("Gravedad")}
                         suffix="%"
                         min={0}
                         max={100}
                         value={Math.round(spring().gravity * 100)}
-                        onChange={(v) => props.onBoneProps("Gravedad del resorte", { spring: { ...spring(), gravity: Math.max(0, Math.min(1, v / 100)) } })}
+                        onChange={(v) => props.onBoneProps(t("Gravedad del resorte"), { spring: { ...spring(), gravity: Math.max(0, Math.min(1, v / 100)) } })}
                       />
                       <Checkbox
                         class="col-span-3"
-                        label="No atraviesa el cuerpo"
+                        label={t("No atraviesa el cuerpo")}
                         checked={spring().collide !== false}
-                        onChange={(v) => props.onBoneProps("Choque del resorte", { spring: { ...spring(), collide: v ? undefined : false } })}
+                        onChange={(v) => props.onBoneProps(t("Choque del resorte"), { spring: { ...spring(), collide: v ? undefined : false } })}
                       />
                     </div>
                   )}
                 </Show>
-                <Button size="sm" variant="ghost" fullWidth onClick={props.onAutoSprings} title="Orejas, colas, antenas, trompas y tentáculos que no tengan IK">
-                  Resortes automáticos
+                <Button size="sm" variant="ghost" fullWidth onClick={props.onAutoSprings} title={t("Orejas, colas, antenas, trompas y tentáculos que no tengan IK")}>
+                  {t("Resortes automáticos")}
                 </Button>
               </div>
 
               <Checkbox
-                label="Piel con cuaterniones duales (no se estrangula al girar)"
+                label={t("Piel con cuaterniones duales (no se estrangula al girar)")}
                 checked={!!props.settings.dualQuaternion}
-                onChange={(v) => props.onChange(v ? "Cuaterniones duales" : "Piel lineal", { ...props.settings, dualQuaternion: v || undefined })}
+                onChange={(v) => props.onChange(v ? t("Cuaterniones duales") : t("Piel lineal"), { ...props.settings, dualQuaternion: v || undefined })}
               />
               <Show when={props.settings.dualQuaternion}>
                 <p class="text-[11px] text-text-dim leading-relaxed">
-                  Solo en el visor: glTF no guarda este tipo de piel, así que lo exportado se ve con piel lineal en otras herramientas.
+                  {t("Solo en el visor: glTF no guarda este tipo de piel, así que lo exportado se ve con piel lineal en otras herramientas.")}
                 </p>
               </Show>
 
               <div class="space-y-1">
-                <span class="text-xs text-text-muted">Ejes de giro bloqueados</span>
+                <span class="text-xs text-text-muted">{t("Ejes de giro bloqueados")}</span>
                 <div class="flex gap-1">
                   <For each={AXES}>
                     {(axis, i) => (
@@ -286,11 +294,11 @@ export const RigPanel: Component<RigPanelProps> = (props) => {
                           "flex-1 h-7 rounded border text-xs font-mono flex items-center justify-center gap-1",
                           p().lockRotation[i()] ? "bg-accent/20 border-accent text-accent" : "border-border text-text-muted hover:text-text"
                         )}
-                        title={p().lockRotation[i()] ? `No gira en ${axis}` : `Gira en ${axis}`}
+                        title={p().lockRotation[i()] ? t("No gira en {axis}", { axis }) : t("Gira en {axis}", { axis })}
                         onClick={() => {
                           const next = [...p().lockRotation] as [boolean, boolean, boolean];
                           next[i()] = !next[i()];
-                          props.onBoneProps("Ejes de giro", { lockRotation: next.some(Boolean) ? next : undefined });
+                          props.onBoneProps(t("Ejes de giro"), { lockRotation: next.some(Boolean) ? next : undefined });
                         }}
                       >
                         <Show when={p().lockRotation[i()]}>
@@ -304,39 +312,39 @@ export const RigPanel: Component<RigPanelProps> = (props) => {
               </div>
 
               <Select
-                label="Rotación"
-                options={ROTATION_MODES}
+                label={t("Rotación")}
+                options={ROTATION_OPTIONS}
                 value={p().rotationMode}
-                onChange={(v) => props.onBoneProps("Modo de rotación", { rotationMode: v === "quaternion" ? undefined : (v as RotationMode) })}
+                onChange={(v) => props.onBoneProps(t("Modo de rotación"), { rotationMode: v === "quaternion" ? undefined : (v as RotationMode) })}
               />
               <Select
-                label="Forma"
-                options={BONE_SHAPES}
+                label={t("Forma")}
+                options={SHAPE_OPTIONS}
                 value={p().shape ?? "default"}
-                onChange={(v) => props.onBoneProps("Forma del hueso", { shape: v === "default" ? undefined : (v as BoneShape) })}
+                onChange={(v) => props.onBoneProps(t("Forma del hueso"), { shape: v === "default" ? undefined : (v as BoneShape) })}
               />
 
               {/* Roll: giro de los ejes alrededor del hueso */}
               <div class="space-y-1">
                 <NumberInput
-                  label="Roll"
+                  label={t("Roll")}
                   suffix="°"
                   step={5}
                   value={Math.round((p().roll * 180) / Math.PI * 100) / 100}
-                  onChange={(v) => props.onBoneProps("Roll", { roll: v === 0 ? undefined : (v * Math.PI) / 180 })}
+                  onChange={(v) => props.onBoneProps(t("Roll"), { roll: v === 0 ? undefined : (v * Math.PI) / 180 })}
                 />
                 <div class="grid grid-cols-2 gap-1">
-                  <Button size="sm" onClick={() => props.onRoll("auto")} title="Ejes calculados del esqueleto (roll 0)">
-                    Automático
+                  <Button size="sm" onClick={() => props.onRoll("auto")} title={t("Ejes calculados del esqueleto (roll 0)")}>
+                    {t("Automático")}
                   </Button>
-                  <Button size="sm" onClick={() => props.onRoll("view")} title="El eje Z apunta hacia la cámara">
-                    A la vista
+                  <Button size="sm" onClick={() => props.onRoll("view")} title={t("El eje Z apunta hacia la cámara")}>
+                    {t("A la vista")}
                   </Button>
-                  <Button size="sm" onClick={() => props.onRoll("normal")} disabled={!props.hasMesh} title="El eje Z sigue la superficie más cercana">
-                    A la normal
+                  <Button size="sm" onClick={() => props.onRoll("normal")} disabled={!props.hasMesh} title={t("El eje Z sigue la superficie más cercana")}>
+                    {t("A la normal")}
                   </Button>
-                  <Button size="sm" onClick={() => props.onRoll("mirror")} disabled={!props.hasMirror} title="El reflejo del hueso del otro lado">
-                    Como el espejo
+                  <Button size="sm" onClick={() => props.onRoll("mirror")} disabled={!props.hasMirror} title={t("El reflejo del hueso del otro lado")}>
+                    {t("Como el espejo")}
                   </Button>
                 </div>
               </div>
@@ -347,36 +355,36 @@ export const RigPanel: Component<RigPanelProps> = (props) => {
 
       {/* Grupos */}
       <Panel
-        title="Grupos"
+        title={t("Grupos")}
         icon={<Icons.TreeStructure size={14} />}
         defaultOpen
         headerActions={
           <div class="flex gap-1">
-            <Button size="sm" variant="ghost" onClick={props.onAutoGroups} title="Rehace los grupos desde el cuerpo (patas, brazos, cola…)">
-              Automáticos
+            <Button size="sm" variant="ghost" onClick={props.onAutoGroups} title={t("Rehace los grupos desde el cuerpo (patas, brazos, cola…)")}>
+              {t("Automáticos")}
             </Button>
-            <Button size="sm" variant="ghost" onClick={props.onNewGroup} disabled={props.selection.length === 0} title="Grupo nuevo con los huesos elegidos">
+            <Button size="sm" variant="ghost" onClick={props.onNewGroup} disabled={props.selection.length === 0} title={t("Grupo nuevo con los huesos elegidos")}>
               <Icons.Plus size={12} />
             </Button>
           </div>
         }
       >
         <div class="rounded border border-border divide-y divide-border/60 max-h-64 overflow-y-auto">
-          <For each={props.settings.groups} fallback={<p class="px-2 py-2 text-xs text-text-dim">Sin grupos.</p>}>
+          <For each={props.settings.groups} fallback={<p class="px-2 py-2 text-xs text-text-dim">{t("Sin grupos.")}</p>}>
             {(group) => (
               <div class="flex items-center gap-1.5 px-2 py-1 text-xs">
                 <input
                   type="color"
                   class="h-4 w-4 shrink-0 rounded-sm border-0 bg-transparent cursor-pointer p-0"
                   value={group.color}
-                  onChange={(e) => setGroup(group.id, { color: e.currentTarget.value }, "Color del grupo")}
+                  onChange={(e) => setGroup(group.id, { color: e.currentTarget.value }, t("Color del grupo"))}
                 />
                 <Show
                   when={renaming() === group.id}
                   fallback={
                     <button
                       class={clsx("flex-1 min-w-0 text-left truncate", group.hidden ? "text-text-dim" : "text-text-muted hover:text-text")}
-                      title="Clic: elegir sus huesos · doble clic: renombrar"
+                      title={t("Clic: elegir sus huesos · doble clic: renombrar")}
                       onClick={() => props.onSelectGroup(group.id)}
                       onDblClick={() => setRenaming(group.id)}
                     >
@@ -396,23 +404,23 @@ export const RigPanel: Component<RigPanelProps> = (props) => {
                     onBlur={(e) => {
                       const name = e.currentTarget.value.trim();
                       setRenaming(null);
-                      if (name && name !== group.name) setGroup(group.id, { name, auto: undefined }, "Renombrar grupo");
+                      if (name && name !== group.name) setGroup(group.id, { name, auto: undefined }, t("Renombrar grupo"));
                     }}
                   />
                 </Show>
                 <button
                   class="text-text-muted hover:text-text"
-                  title={group.hidden ? "Mostrar" : "Ocultar"}
-                  onClick={() => setGroup(group.id, { hidden: !group.hidden || undefined }, group.hidden ? "Mostrar grupo" : "Ocultar grupo")}
+                  title={group.hidden ? t("Mostrar") : t("Ocultar")}
+                  onClick={() => setGroup(group.id, { hidden: !group.hidden || undefined }, group.hidden ? t("Mostrar grupo") : t("Ocultar grupo"))}
                 >
                   <Show when={group.hidden} fallback={<Icons.Eye size={13} />}>
                     <Icons.EyeSlash size={13} />
                   </Show>
                 </button>
-                <button class="text-text-muted hover:text-text" title="Aislar (ocultar los demás)" onClick={() => isolate(group.id)}>
+                <button class="text-text-muted hover:text-text" title={t("Aislar (ocultar los demás)")} onClick={() => isolate(group.id)}>
                   <Icons.CubeFocus size={13} />
                 </button>
-                <button class="text-text-muted hover:text-red" title="Borrar grupo (los huesos quedan)" onClick={() => deleteGroup(group.id)}>
+                <button class="text-text-muted hover:text-red" title={t("Borrar grupo (los huesos quedan)")} onClick={() => deleteGroup(group.id)}>
                   <Icons.Trash size={13} />
                 </button>
               </div>
@@ -423,21 +431,21 @@ export const RigPanel: Component<RigPanelProps> = (props) => {
 
       {/* Controles */}
       <Panel
-        title="Controles"
+        title={t("Controles")}
         icon={<Icons.ArrowsOutCardinal size={14} />}
         defaultOpen={props.settings.controls.length > 0}
         headerActions={
-          <Button size="sm" variant="ghost" onClick={props.onAddControl} title="Control nuevo en la articulación activa (o en el centro)">
+          <Button size="sm" variant="ghost" onClick={props.onAddControl} title={t("Control nuevo en la articulación activa (o en el centro)")}>
             <Icons.Plus size={12} />
           </Button>
         }
       >
         <div class="space-y-2">
           <p class="text-xs text-text-dim leading-relaxed">
-            Objetos que no deforman la malla, con keys propias. Mueven las cadenas de IK y sirven de objetivo a las restricciones.
+            {t("Objetos que no deforman la malla, con keys propias. Mueven las cadenas de IK y sirven de objetivo a las restricciones.")}
           </p>
           <div class="rounded border border-border divide-y divide-border/60">
-            <For each={props.settings.controls} fallback={<p class="px-2 py-2 text-xs text-text-dim">Sin controles.</p>}>
+            <For each={props.settings.controls} fallback={<p class="px-2 py-2 text-xs text-text-dim">{t("Sin controles.")}</p>}>
               {(c) => (
                 <button
                   class={clsx(
@@ -447,7 +455,7 @@ export const RigPanel: Component<RigPanelProps> = (props) => {
                   onClick={() => props.onSelectControl(c.id)}
                 >
                   <span class="truncate">{c.name}</span>
-                  <span class="text-text-dim">{c.parent ?? "suelto"}</span>
+                  <span class="text-text-dim">{c.parent ?? t("suelto")}</span>
                 </button>
               )}
             </For>
@@ -459,47 +467,47 @@ export const RigPanel: Component<RigPanelProps> = (props) => {
                   class={inputClass}
                   value={c().name}
                   onKeyDown={(e) => e.stopPropagation()}
-                  onChange={(e) => setControl("Renombrar control", { name: e.currentTarget.value.trim() || c().name })}
+                  onChange={(e) => setControl(t("Renombrar control"), { name: e.currentTarget.value.trim() || c().name })}
                 />
                 <Select
-                  label="Forma"
-                  options={CONTROL_SHAPES}
+                  label={t("Forma")}
+                  options={CONTROL_OPTIONS}
                   value={c().shape}
-                  onChange={(v) => setControl("Forma del control", { shape: v as ControlShape })}
+                  onChange={(v) => setControl(t("Forma del control"), { shape: v as ControlShape })}
                 />
                 <Select
-                  label="Sigue a"
-                  options={[{ value: "", label: "Nada (suelto)" }, ...props.boneNames.map((n) => ({ value: n, label: n }))]}
+                  label={t("Sigue a")}
+                  options={[{ value: "", label: t("Nada (suelto)") }, ...props.boneNames.map((n) => ({ value: n, label: n }))]}
                   value={c().parent ?? ""}
-                  onChange={(v) => setControl("Padre del control", { parent: v || null })}
+                  onChange={(v) => setControl(t("Padre del control"), { parent: v || null })}
                 />
                 <NumberInput
-                  label="Tamaño"
+                  label={t("Tamaño")}
                   step={0.01}
                   min={0.0001}
                   value={Math.round(c().size * 1e4) / 1e4}
-                  onChange={(v) => v > 0 && setControl("Tamaño del control", { size: v })}
+                  onChange={(v) => v > 0 && setControl(t("Tamaño del control"), { size: v })}
                 />
                 <div class="flex items-center gap-2">
-                  <span class="text-xs text-text-muted w-12">Color</span>
+                  <span class="text-xs text-text-muted w-12">{t("Color")}</span>
                   <input
                     type="color"
                     class="h-6 w-10 rounded border border-border bg-transparent cursor-pointer"
                     value={c().color ?? "#8be9fd"}
-                    onChange={(e) => setControl("Color del control", { color: e.currentTarget.value })}
+                    onChange={(e) => setControl(t("Color del control"), { color: e.currentTarget.value })}
                   />
                   <div class="flex-1" />
                   <Button
                     size="sm"
                     variant="danger"
                     onClick={() =>
-                      props.onChange("Borrar control", {
+                      props.onChange(t("Borrar control"), {
                         ...props.settings,
                         controls: props.settings.controls.filter((x) => x.id !== c().id),
                       })
                     }
                   >
-                    Borrar
+                    {t("Borrar")}
                   </Button>
                 </div>
               </div>
@@ -509,18 +517,17 @@ export const RigPanel: Component<RigPanelProps> = (props) => {
       </Panel>
 
       {/* Reposo */}
-      <Panel title="Pose de reposo" icon={<Icons.Person size={14} />} defaultOpen={false}>
+      <Panel title={t("Pose de reposo")} icon={<Icons.Person size={14} />} defaultOpen={false}>
         <div class="space-y-2">
           <p class="text-xs text-text-dim leading-relaxed">
-            El reposo es la pose sin giros, aparte del cuadro 0. Aplicar la pose como reposo mueve las articulaciones
-            adonde las deja la pose y vuelve a ligar la piel con los mismos pesos.
+            {t("El reposo es la pose sin giros, aparte del cuadro 0. Aplicar la pose como reposo mueve las articulaciones adonde las deja la pose y vuelve a ligar la piel con los mismos pesos.")}
           </p>
           <div class="grid grid-cols-2 gap-1">
             <Button size="sm" onClick={props.onClearPose} disabled={!props.posing}>
-              Volver a reposo
+              {t("Volver a reposo")}
             </Button>
             <Button size="sm" onClick={props.onApplyRest} disabled={!props.posing}>
-              Aplicar como reposo
+              {t("Aplicar como reposo")}
             </Button>
           </div>
         </div>

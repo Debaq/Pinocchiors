@@ -9,6 +9,7 @@
  */
 
 import * as THREE from "three";
+import { t as tr } from "./i18n.ts";
 import type { Quat, Vec3 } from "./animation";
 import type { SourceMotion } from "./retarget";
 
@@ -33,17 +34,17 @@ export function parseBvh(text: string): BvhFile {
   const tokens = text.split(/\s+/).filter(Boolean);
   let i = 0;
   const next = () => {
-    if (i >= tokens.length) throw new Error("BVH incompleto");
+    if (i >= tokens.length) throw new Error(tr("BVH incompleto"));
     return tokens[i++];
   };
   const expect = (word: string) => {
     const t = next();
-    if (t.toUpperCase() !== word) throw new Error(`BVH: se esperaba ${word} y hay ${t}`);
+    if (t.toUpperCase() !== word) throw new Error(tr("BVH: se esperaba {word} y hay {found}", { word, found: t }));
   };
   const number = () => {
     const t = next();
     const v = Number(t);
-    if (!Number.isFinite(v)) throw new Error(`BVH: número inválido "${t}"`);
+    if (!Number.isFinite(v)) throw new Error(tr('BVH: número inválido "{value}"', { value: t }));
     return v;
   };
 
@@ -68,7 +69,7 @@ export function parseBvh(text: string): BvhFile {
       else if (upper === "END") {
         expect("SITE");
         readJoint(index, true);
-      } else throw new Error(`BVH: palabra inesperada "${t}"`);
+      } else throw new Error(tr('BVH: palabra inesperada "{word}"', { word: t }));
     }
   };
   expect("ROOT");
@@ -92,7 +93,7 @@ export function parseBvh(text: string): BvhFile {
     for (let k = 0; k < channelCount; k++) values.push(number());
     frames.push(values);
   }
-  if (frames.length === 0) throw new Error("El BVH no tiene cuadros");
+  if (frames.length === 0) throw new Error(tr("El BVH no tiene cuadros"));
   return { joints, fps: frameTime > 0 ? Math.round(1 / frameTime) : 30, frames };
 }
 

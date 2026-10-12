@@ -3,6 +3,7 @@ import { clsx } from "clsx";
 import * as Icons from "../icons";
 import type { AnimationClip } from "../../lib/animation";
 import { layerLength, layerTrim, type AnimationLayer, type Mixer } from "../../lib/layers";
+import { t, tx } from "../../lib/i18n";
 
 export interface MixerEditorProps {
   mixer: Mixer;
@@ -64,7 +65,7 @@ export const MixerEditor: Component<MixerEditorProps> = (props) => {
   return (
     <div class="flex flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
       <div class="shrink-0 border-r border-border" style={{ width: `${props.namesWidth}px` }}>
-        <For each={ordered()} fallback={<p class="px-2 py-2 text-xs text-text-dim">Sin capas: agrega animaciones para mezclarlas.</p>}>
+        <For each={ordered()} fallback={<p class="px-2 py-2 text-xs text-text-dim">{t("Sin capas: agrega animaciones para mezclarlas.")}</p>}>
           {(layer) => {
             const index = () => props.mixer.layers.indexOf(layer);
             return (
@@ -78,7 +79,7 @@ export const MixerEditor: Component<MixerEditorProps> = (props) => {
               >
                 <button
                   class="shrink-0 text-text-muted hover:text-text"
-                  title={layer.muted ? "Activar" : "Silenciar"}
+                  title={layer.muted ? tx("silencio", "Activar") : t("Silenciar")}
                   onClick={(e) => {
                     e.stopPropagation();
                     setLayer(layer.id, { muted: !layer.muted || undefined }, layer.muted ? "Activar capa" : "Silenciar capa");
@@ -91,7 +92,7 @@ export const MixerEditor: Component<MixerEditorProps> = (props) => {
                 <span class={clsx("flex-1 truncate", layer.muted && "line-through opacity-60")}>{clipOf(layer)?.name ?? "?"}</span>
                 <button
                   class="shrink-0 px-1 rounded border border-border text-[9px] font-mono"
-                  title={layer.mode === "add" ? "Se suma a lo de abajo (clic: reemplazar)" : "Reemplaza lo de abajo (clic: sumar)"}
+                  title={layer.mode === "add" ? t("Se suma a lo de abajo (clic: reemplazar)") : t("Reemplaza lo de abajo (clic: sumar)")}
                   onClick={(e) => {
                     e.stopPropagation();
                     setLayer(layer.id, { mode: layer.mode === "add" ? "replace" : "add" }, "Modo de la capa");
@@ -100,12 +101,12 @@ export const MixerEditor: Component<MixerEditorProps> = (props) => {
                   {layer.mode === "add" ? "+" : "="}
                 </button>
                 <div class="flex flex-col shrink-0">
-                  <button class="leading-none text-[9px] hover:text-text" title="Subir" onClick={(e) => (e.stopPropagation(), move(index(), 1))}>▲</button>
-                  <button class="leading-none text-[9px] hover:text-text" title="Bajar" onClick={(e) => (e.stopPropagation(), move(index(), -1))}>▼</button>
+                  <button class="leading-none text-[9px] hover:text-text" title={t("Subir")} onClick={(e) => (e.stopPropagation(), move(index(), 1))}>▲</button>
+                  <button class="leading-none text-[9px] hover:text-text" title={t("Bajar")} onClick={(e) => (e.stopPropagation(), move(index(), -1))}>▼</button>
                 </div>
                 <button
                   class="shrink-0 text-text-muted hover:text-red"
-                  title="Quitar la capa"
+                  title={t("Quitar la capa")}
                   onClick={(e) => {
                     e.stopPropagation();
                     props.onChange("Quitar capa", { ...props.mixer, layers: props.mixer.layers.filter((l) => l.id !== layer.id) }, true);
@@ -141,7 +142,7 @@ export const MixerEditor: Component<MixerEditorProps> = (props) => {
                           layer.muted && "opacity-40"
                         )}
                         style={{ left: `${left()}px`, width: `${Math.max(4, w())}px` }}
-                        title={`${c().name} · desde el cuadro ${layer.start} · ${length()} cuadros · peso ${Math.round(layer.weight * 100)} %`}
+                        title={t("{name} · desde el cuadro {start} · {length} cuadros · peso {weight} %", { name: c().name, start: layer.start, length: length(), weight: Math.round(layer.weight * 100) })}
                         onPointerDown={(e) => {
                           const start = layer.start;
                           drag(e, (df) => ({ start: start + df }), "Mover capa", layer.id);
@@ -169,7 +170,7 @@ export const MixerEditor: Component<MixerEditorProps> = (props) => {
                         {/* Borde derecho: repetir */}
                         <div
                           class="absolute inset-y-0 right-0 w-1.5 cursor-ew-resize bg-accent/40 hover:bg-accent"
-                          title="Arrastrar para repetir"
+                          title={t("Arrastrar para repetir")}
                           onPointerDown={(e) => {
                             const repeat = layer.repeat;
                             drag(e, (df) => ({ repeat: Math.max(1, Math.round((repeat * span() + df) / span())) }), "Repetir capa", layer.id);

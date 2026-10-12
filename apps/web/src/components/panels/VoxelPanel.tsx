@@ -2,6 +2,7 @@ import { Component, Show } from "solid-js";
 import { Checkbox, Slider } from "../ui";
 import { RemeshActions, type RemeshActionsProps } from "./RemeshActions";
 import { formatMm, type RemeshInfo } from "./IsotropicPanel";
+import { fmtNumber, t, tn } from "../../lib/i18n";
 
 /** Opciones de Vóxeles (Remallar) */
 export interface VoxelConfig {
@@ -48,7 +49,7 @@ export interface VoxelPanelProps extends RemeshActionsProps {
   grid?: VoxelGridInfo;
 }
 
-const short = (v: number) => v.toLocaleString("es", { maximumSignificantDigits: 2 });
+const short = (v: number) => fmtNumber(v, { maximumSignificantDigits: 2 });
 
 export const VoxelPanel: Component<VoxelPanelProps> = (props) => {
   const update = (change: Partial<VoxelConfig>) => props.onChange({ ...props.config, ...change });
@@ -57,22 +58,22 @@ export const VoxelPanel: Component<VoxelPanelProps> = (props) => {
     <div data-voxel class="space-y-4">
       <div class="space-y-1">
         <Slider
-          label="Detalle"
+          label={t("Detalle")}
           value={props.config.resolution}
           onChange={(resolution) => update({ resolution })}
           min={48}
           max={640}
           step={8}
-          formatValue={(v) => `${v} en el lado largo`}
-          title="Vóxeles en el lado más largo del modelo; los rasgos más chicos que un vóxel se pierden"
+          formatValue={(v) => t("{v} en el lado largo", { v })}
+          title={t("Vóxeles en el lado más largo del modelo; los rasgos más chicos que un vóxel se pierden")}
         />
         <Show when={props.grid}>
           {(g) => (
             <p data-voxel-grid class="text-xs text-text-muted">
-              Vóxel de <span class="text-text">{formatMm(g().voxel_mm)}</span> · grilla {g().dims.join(" × ")} · ≈{" "}
-              {short(g().triangles)} triángulos antes de emparejar ·{" "}
+              {t("Vóxel de")} <span class="text-text">{formatMm(g().voxel_mm)}</span> ·{" "}
+              {t("grilla {dims} · ≈ {n} triángulos antes de emparejar", { dims: g().dims.join(" × "), n: short(g().triangles) })} ·{" "}
               <span class={isHeavyGrid(g()) ? "text-warning" : undefined}>
-                {g().memory_mb >= 1000 ? `${short(g().memory_mb / 1000)} GB` : `${Math.ceil(g().memory_mb)} MB`} de memoria
+                {t("{mem} de memoria", { mem: g().memory_mb >= 1000 ? `${short(g().memory_mb / 1000)} GB` : `${Math.ceil(g().memory_mb)} MB` })}
               </span>
             </p>
           )}
@@ -80,26 +81,23 @@ export const VoxelPanel: Component<VoxelPanelProps> = (props) => {
       </div>
 
       <Slider
-        label="Suavizar después"
+        label={t("Suavizar después")}
         value={props.config.smoothIterations}
         onChange={(smoothIterations) => update({ smoothIterations })}
         min={0}
         max={10}
         step={1}
-        formatValue={(v) => (v === 0 ? "no" : `${v} ${v === 1 ? "pasada" : "pasadas"}`)}
+        formatValue={(v) => (v === 0 ? t("no") : tn(v, "{n} pasada", "{n} pasadas"))}
       />
       <div class="space-y-1">
-        <Checkbox label="Triángulos parejos después" checked={props.config.even} onChange={(even) => update({ even })} />
+        <Checkbox label={t("Triángulos parejos después")} checked={props.config.even} onChange={(even) => update({ even })} />
         <p class="text-xs text-text-muted leading-relaxed">
-          La grilla deja muchos triángulos de tamaños dispares; emparejarlos los reduce a una cuarta parte o menos (tarda un
-          poco más).
+          {t("La grilla deja muchos triángulos de tamaños dispares; emparejarlos los reduce a una cuarta parte o menos (tarda un poco más).")}
         </p>
       </div>
 
       <p class="text-xs text-text-dim leading-relaxed">
-        Cierra los agujeros, une las piezas que se cruzan y quita las caras internas: el resultado siempre es cerrado, listo
-        para imprimir. Las aristas vivas quedan redondeadas a la escala del vóxel. Es una malla nueva, sin UV: al aplicar se
-        elige si trasladar la textura (horneada) y los pesos.
+        {t("Cierra los agujeros, une las piezas que se cruzan y quita las caras internas: el resultado siempre es cerrado, listo para imprimir. Las aristas vivas quedan redondeadas a la escala del vóxel. Es una malla nueva, sin UV: al aplicar se elige si trasladar la textura (horneada) y los pesos.")}
       </p>
 
       <RemeshActions {...props} />

@@ -4,6 +4,7 @@ import { Button, Checkbox, NumberInput, Panel, Select } from "../ui";
 import * as Icons from "../icons";
 import { IK_SOLVERS, type IkChain, type IkSolver, type RigControl } from "../../lib/rig";
 import type { ScalarChannel } from "../../lib/animation";
+import { t } from "../../lib/i18n";
 
 export interface IkPanelProps {
   chains: IkChain[];
@@ -29,8 +30,10 @@ export interface IkPanelProps {
   onMatch: (to: "fk" | "ik") => void;
 }
 
+const solverOptions = IK_SOLVERS.map((x) => ({ value: x.value, get label() { return t(x.label); } }));
+
 const optionsOf = (controls: RigControl[]) => [
-  { value: "", label: "Ninguno" },
+  { value: "", label: t("Ninguno") },
   ...controls.map((c) => ({ value: c.id, label: c.name })),
 ];
 
@@ -49,8 +52,8 @@ export const IkPanel: Component<IkPanelProps> = (props) => {
       icon={<Icons.MagicWand size={14} />}
       defaultOpen
       headerActions={
-        <Button size="sm" variant="ghost" onClick={props.onAutoRig} title="Crea (o rehace) cadenas y controles desde el cuerpo: patas, brazos, cola, cabeza y centro de masa">
-          Rig automático
+        <Button size="sm" variant="ghost" onClick={props.onAutoRig} title={t("Crea (o rehace) cadenas y controles desde el cuerpo: patas, brazos, cola, cabeza y centro de masa")}>
+          {t("Rig automático")}
         </Button>
       }
     >
@@ -58,14 +61,14 @@ export const IkPanel: Component<IkPanelProps> = (props) => {
         {/* IK automático al arrastrar */}
         <div class="space-y-1">
           <Checkbox
-            label="IK automático al arrastrar (G)"
+            label={t("IK automático al arrastrar (G)")}
             checked={props.autoIk.enabled}
             onChange={(enabled) => props.onAutoIk({ ...props.autoIk, enabled })}
           />
           <Show when={props.autoIk.enabled}>
             <Checkbox
               class="pl-5"
-              label="Hasta la raíz (si no, hasta la primera ramificación)"
+              label={t("Hasta la raíz (si no, hasta la primera ramificación)")}
               checked={props.autoIk.toRoot}
               onChange={(toRoot) => props.onAutoIk({ ...props.autoIk, toRoot })}
             />
@@ -74,7 +77,7 @@ export const IkPanel: Component<IkPanelProps> = (props) => {
 
         {/* Cadenas */}
         <div class="rounded border border-border divide-y divide-border/60 max-h-56 overflow-y-auto">
-          <For each={props.chains} fallback={<p class="px-2 py-2 text-xs text-text-dim">Sin cadenas. Usa el rig automático o crea una con la selección.</p>}>
+          <For each={props.chains} fallback={<p class="px-2 py-2 text-xs text-text-dim">{t("Sin cadenas. Usa el rig automático o crea una con la selección.")}</p>}>
             {(c) => (
               <button
                 class={clsx(
@@ -84,17 +87,17 @@ export const IkPanel: Component<IkPanelProps> = (props) => {
                 onClick={() => props.onSelectChain(c.id)}
               >
                 <span class="truncate">{c.name}</span>
-                <span class="text-text-dim shrink-0">{IK_SOLVERS.find((s) => s.value === c.solver)?.label}</span>
+                <span class="text-text-dim shrink-0">{t(IK_SOLVERS.find((s) => s.value === c.solver)?.label ?? "")}</span>
               </button>
             )}
           </For>
         </div>
         <div class="flex gap-1">
           <div class="flex-1">
-            <Select options={IK_SOLVERS} value={newSolver()} onChange={(v) => setNewSolver(v as IkSolver)} />
+            <Select options={solverOptions} value={newSolver()} onChange={(v) => setNewSolver(v as IkSolver)} />
           </div>
-          <Button size="sm" onClick={() => props.onNewChain(newSolver())} disabled={!props.hasSelection} title="Cadena nueva con la selección (o de la activa hacia arriba)">
-            <Icons.Plus size={12} /> Cadena
+          <Button size="sm" onClick={() => props.onNewChain(newSolver())} disabled={!props.hasSelection} title={t("Cadena nueva con la selección (o de la activa hacia arriba)")}>
+            <Icons.Plus size={12} /> {t("Cadena")}
           </Button>
         </div>
 
@@ -106,47 +109,47 @@ export const IkPanel: Component<IkPanelProps> = (props) => {
                 class="w-full px-2 py-1 rounded bg-surface/40 border border-border text-xs text-text outline-none focus:border-accent"
                 value={c().name}
                 onKeyDown={(e) => e.stopPropagation()}
-                onChange={(e) => set("Renombrar cadena", { name: e.currentTarget.value.trim() || c().name })}
+                onChange={(e) => set(t("Renombrar cadena"), { name: e.currentTarget.value.trim() || c().name })}
               />
               <p class="text-[11px] font-mono text-text-dim leading-relaxed break-words">{c().joints.join(" → ")}</p>
-              <Select label="Tipo" options={IK_SOLVERS} value={c().solver} onChange={(v) => set("Tipo de IK", { solver: v as IkSolver })} />
+              <Select label={t("Tipo")} options={solverOptions} value={c().solver} onChange={(v) => set(t("Tipo de IK"), { solver: v as IkSolver })} />
 
               <Show when={c().solver !== "spline"}>
-                <Select label="Objetivo" options={optionsOf(props.controls)} value={c().target ?? ""} onChange={(v) => set("Objetivo del IK", { target: v || undefined })} />
+                <Select label={t("Objetivo")} options={optionsOf(props.controls)} value={c().target ?? ""} onChange={(v) => set(t("Objetivo del IK"), { target: v || undefined })} />
               </Show>
               <Show when={c().solver === "twoBone"}>
-                <Select label="Pole" options={optionsOf(props.controls)} value={c().pole ?? ""} onChange={(v) => set("Pole del IK", { pole: v || undefined })} />
+                <Select label="Pole" options={optionsOf(props.controls)} value={c().pole ?? ""} onChange={(v) => set(t("Pole del IK"), { pole: v || undefined })} />
               </Show>
               <Show when={c().solver === "spline"}>
-                <p class="text-xs text-text-muted">Curva: {(c().curve ?? []).map((id) => props.controls.find((x) => x.id === id)?.name ?? "?").join(", ") || "sin controles"}</p>
+                <p class="text-xs text-text-muted">{t("Curva: {controles}", { controles: (c().curve ?? []).map((id) => props.controls.find((x) => x.id === id)?.name ?? "?").join(", ") || t("sin controles") })}</p>
               </Show>
 
               <div class="grid grid-cols-2 gap-1">
                 <Show when={c().solver === "twoBone" || c().solver === "spline"}>
-                  <Checkbox label={c().solver === "spline" ? "Ajustar al largo" : "Estirar"} checked={!!c().stretch} onChange={(v) => set("Estirar", { stretch: v || undefined })} />
+                  <Checkbox label={c().solver === "spline" ? t("Ajustar al largo") : t("Estirar")} checked={!!c().stretch} onChange={(v) => set(t("Estirar"), { stretch: v || undefined })} />
                 </Show>
                 <Show when={c().solver === "twoBone" || c().solver === "fabrik" || c().solver === "ccd"}>
-                  <Checkbox label="Suelo" checked={!!c().ground} onChange={(v) => set("Suelo", { ground: v || undefined })} />
-                  <Checkbox label="Gira con el objetivo" checked={!!c().alignEffector} onChange={(v) => set("Giro del efector", { alignEffector: v || undefined })} />
+                  <Checkbox label={t("Suelo")} checked={!!c().ground} onChange={(v) => set(t("Suelo"), { ground: v || undefined })} />
+                  <Checkbox label={t("Gira con el objetivo")} checked={!!c().alignEffector} onChange={(v) => set(t("Giro del efector"), { alignEffector: v || undefined })} />
                 </Show>
                 <Show when={c().solver === "twoBone"}>
-                  <Checkbox label="Pie invertido" checked={!!c().footRoll} onChange={(v) => set("Pie invertido", { footRoll: v || undefined })} />
+                  <Checkbox label={t("Pie invertido")} checked={!!c().footRoll} onChange={(v) => set(t("Pie invertido"), { footRoll: v || undefined })} />
                 </Show>
-                <Checkbox label="Activa" checked={!c().disabled} onChange={(v) => set(v ? "Activar cadena" : "Desactivar cadena", { disabled: v ? undefined : true })} />
+                <Checkbox label={t("Activa")} checked={!c().disabled} onChange={(v) => set(v ? t("Activar cadena") : t("Desactivar cadena"), { disabled: v ? undefined : true })} />
               </div>
               <Show when={c().solver === "twoBone"}>
                 <NumberInput
-                  label="Suavizado"
+                  label={t("Suavizado")}
                   suffix="%"
                   min={0}
                   max={50}
                   step={1}
                   value={Math.round((c().softness ?? 0) * 100)}
-                  onChange={(v) => set("Suavizado del IK", { softness: v > 0 ? v / 100 : undefined })}
+                  onChange={(v) => set(t("Suavizado del IK"), { softness: v > 0 ? v / 100 : undefined })}
                 />
               </Show>
               <Show when={c().solver === "fabrik" || c().solver === "ccd"}>
-                <NumberInput label="Iteraciones" min={1} max={100} step={1} value={c().iterations ?? 12} onChange={(v) => set("Iteraciones del IK", { iterations: Math.round(v) })} />
+                <NumberInput label={t("Iteraciones")} min={1} max={100} step={1} value={c().iterations ?? 12} onChange={(v) => set(t("Iteraciones del IK"), { iterations: Math.round(v) })} />
               </Show>
 
               {/* Canales animables */}
@@ -155,9 +158,9 @@ export const IkPanel: Component<IkPanelProps> = (props) => {
                   <div class="flex justify-between text-xs">
                     <span
                       class="text-text-muted"
-                      title="Sin key de mezcla, la cadena sigue las keys FK de sus articulaciones mientras la animación no mueva sus controles"
+                      title={t("Sin key de mezcla, la cadena sigue las keys FK de sus articulaciones mientras la animación no mueva sus controles")}
                     >
-                      Mezcla FK ↔ IK {props.keyed.blend ? "◆" : c().blend === undefined ? "(auto)" : ""}
+                      {t("Mezcla FK ↔ IK")} {props.keyed.blend ? "◆" : c().blend === undefined ? t("(auto)") : ""}
                     </span>
                     <span class="font-mono text-text">{Math.round(props.blend * 100)} %</span>
                   </div>
@@ -174,7 +177,7 @@ export const IkPanel: Component<IkPanelProps> = (props) => {
                 <Show when={c().solver === "twoBone" && c().footRoll}>
                   <label class="block space-y-1">
                     <div class="flex justify-between text-xs">
-                      <span class="text-text-muted">Balanceo del pie {props.keyed.roll ? "◆" : ""}</span>
+                      <span class="text-text-muted">{t("Balanceo del pie")} {props.keyed.roll ? "◆" : ""}</span>
                       <span class="font-mono text-text">{Math.round(props.roll)}°</span>
                     </div>
                     <input
@@ -194,22 +197,22 @@ export const IkPanel: Component<IkPanelProps> = (props) => {
                     fullWidth
                     variant={props.pinned ? "primary" : "default"}
                     onClick={() => props.onScalar("pin", props.pinned ? 0 : 1, true)}
-                    title="Desde este cuadro el efector queda quieto en el mundo (key escalonada)"
+                    title={t("Desde este cuadro el efector queda quieto en el mundo (key escalonada)")}
                   >
-                    <Icons.Lock size={12} /> {props.pinned ? "Fijado desde aquí: soltar" : "Fijar desde este cuadro"}
+                    <Icons.Lock size={12} /> {props.pinned ? t("Fijado desde aquí: soltar") : t("Fijar desde este cuadro")}
                   </Button>
                 </Show>
                 <div class="grid grid-cols-2 gap-1">
-                  <Button size="sm" onClick={() => props.onMatch("fk")} title="Keys de FK con la pose actual y mezcla en FK, sin salto">
+                  <Button size="sm" onClick={() => props.onMatch("fk")} title={t("Keys de FK con la pose actual y mezcla en FK, sin salto")}>
                     IK → FK
                   </Button>
-                  <Button size="sm" onClick={() => props.onMatch("ik")} title="Los controles van adonde está la pose FK y la mezcla pasa a IK, sin salto">
+                  <Button size="sm" onClick={() => props.onMatch("ik")} title={t("Los controles van adonde está la pose FK y la mezcla pasa a IK, sin salto")}>
                     FK → IK
                   </Button>
                 </div>
               </Show>
               <Button size="sm" variant="danger" fullWidth onClick={() => props.onDeleteChain(c().id)}>
-                Borrar cadena
+                {t("Borrar cadena")}
               </Button>
             </div>
           )}

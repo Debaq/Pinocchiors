@@ -38,9 +38,11 @@ import { FeatureEditor, pickSummary } from "../steps/DesignStep";
 import type { DesignActions } from "../../lib/designActions";
 import * as Icons from "../icons";
 import * as SketchIcons from "../icons/sketch";
+// `t` se usa como nombre de variable en muchos lugares de este archivo: se importa como `tr`
+import { fmtNumber, t as tr } from "../../lib/i18n";
 
 /** mm³ o cm³ según el tamaño */
-const formatVolume = (v: number) => (v >= 1000 ? `${(v / 1000).toLocaleString("es", { maximumFractionDigits: 2 })} cm³` : `${v.toLocaleString("es", { maximumFractionDigits: 1 })} mm³`);
+const formatVolume = (v: number) => (v >= 1000 ? `${fmtNumber(v / 1000, { maximumFractionDigits: 2 })} cm³` : `${fmtNumber(v, { maximumFractionDigits: 1 })} mm³`);
 
 export interface CadViewProps {
   store: CadStore;
@@ -198,7 +200,7 @@ const DIM_PREFIX: Partial<Record<SketchConstraint["type"], (c: SketchConstraint)
   axis_diameter: () => "Ø ",
   arc_length: () => "⌒ ",
   curve_length: () => "Σ ",
-  circle_distance: (c) => (c.type === "circle_distance" && c.max ? "máx " : "mín "),
+  circle_distance: (c) => (c.type === "circle_distance" && c.max ? tr("máx ") : tr("mín ")),
 };
 
 // Fuente del texto: la incluida (Liberation Sans, OFL) o la que se elija
@@ -492,7 +494,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       ui.setSelection([t.anchor]);
       ui.setMessage(undefined);
     } catch (err) {
-      ui.setMessage(`No se pudo leer la fuente: ${err}`);
+      ui.setMessage(tr("No se pudo leer la fuente: {err}", { err: String(err) }));
     }
   };
   const [textValue, setTextValue] = createSignal("Texto");
@@ -652,7 +654,7 @@ export const CadView: Component<CadViewProps> = (props) => {
         mergeDuplicate(sk, keep, drop);
       }
     });
-    ui.setMessage(pairs.length === 1 ? "Juntadas en una" : `Juntados ${pairs.length} pares en uno`);
+    ui.setMessage(pairs.length === 1 ? tr("Juntadas en una") : tr("Juntados {n} pares en uno", { n: pairs.length }));
   };
   createEffect(() => {
     if (!clarify()) return;
@@ -1549,7 +1551,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       // Lo que queda debajo, para recorrerlo con Tab
       const under = hitAll(s.sketch, raw, viewer.pixelSizeMm() * 8).map((x) => (x.point ?? x.entity)!);
       cycle = under.length > 1 ? { ids: under, i: 0 } : undefined;
-      if (cycle) ui.setMessage(`Hay ${under.length} encimadas: Tab pasa a la siguiente`);
+      if (cycle) ui.setMessage(tr("Hay {n} encimadas: Tab pasa a la siguiente", { n: under.length }));
       if (!add) ui.setSelectedConstraints([]);
       // Un texto se elige entero (por su ancla, que lo arrastra): una letra o
       // dentro de su caja. Doble clic: cambiar lo que dice
@@ -1581,7 +1583,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       if (e.shiftKey && (e.ctrlKey || e.metaKey) && (h.point ?? h.entity) !== undefined) {
         const id = (h.point ?? h.entity)!;
         const n = ui.freeDrag(id);
-        ui.setMessage(n ? `Arrastre libre: se ${n === 1 ? "soltó 1 restricción" : `soltaron ${n} restricciones`}` : "Arrastre libre (no tenía restricciones)");
+        ui.setMessage(n ? (n === 1 ? tr("Arrastre libre: se soltó 1 restricción") : tr("Arrastre libre: se soltaron {n} restricciones", { n })) : tr("Arrastre libre (no tenía restricciones)"));
         ui.setSelection([id]);
         if (h.point !== undefined) dragging = h.point;
         else entityDrag = { id, start: raw, from: structuredClone(ui.session()!.sketch), moved: false };
@@ -1636,7 +1638,7 @@ export const CadView: Component<CadViewProps> = (props) => {
           : pick?.kind === "face"
             ? store.projectFace(pick.face, plane)
             : undefined;
-      if (!linked) return ui.setMessage("Clic sobre una arista o una cara del sólido");
+      if (!linked) return ui.setMessage(tr("Clic sobre una arista o una cara del sólido"));
       linked
         .then((pes) => ui.setMessage(ui.addLinked(pes, (i) => ({ edge: pes[i].ref }), pes.length === 1 ? "de la arista" : "del contorno de la cara")))
         .catch((err) => ui.setMessage(String(err)));
@@ -1650,7 +1652,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       const dir = leavingDirection(s.sketch, ch.lastEntity!, ch.last);
       const startPos = s.sketch.points.find((q) => q.id === ch.last);
       const arc = dir && startPos && tangentArc([startPos.x, startPos.y], dir, hit.p);
-      if (!arc) return ui.setMessage("En línea recta no hay arco: mover el punto hacia un costado");
+      if (!arc) return ui.setMessage(tr("En línea recta no hay arco: mover el punto hacia un costado"));
       ui.setMessage(undefined);
       ui.change((sk) => {
         const end = placeSnap(sk, hit);
@@ -1806,7 +1808,7 @@ export const CadView: Component<CadViewProps> = (props) => {
     }
     if (t === "text") {
       const text = textValue().trim();
-      if (!text) return ui.setMessage("Escribir el texto en la barra del sketch");
+      if (!text) return ui.setMessage(tr("Escribir el texto en la barra del sketch"));
       const at = hit.p;
       const path = textCurve();
       const style = {
@@ -1821,7 +1823,7 @@ export const CadView: Component<CadViewProps> = (props) => {
           ui.change((sk) => addText(sk, contours, at, { text, size: textSize(), font: fontName(), ...(Object.keys(style).length ? { style } : {}) }));
           ui.setMessage(undefined);
         })
-        .catch((err) => ui.setMessage(`No se pudo leer la fuente: ${err}`));
+        .catch((err) => ui.setMessage(tr("No se pudo leer la fuente: {err}", { err: String(err) })));
       return;
     }
     if (t === "spline") {
@@ -1853,7 +1855,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       if (an.length < 2) return setAnchor([...an, hit]);
       const [A, B] = an;
       setAnchor([]);
-      if (Math.abs((B.p[0] - A.p[0]) * (hit.p[1] - B.p[1]) - (B.p[1] - A.p[1]) * (hit.p[0] - B.p[0])) < 1e-9) return ui.setMessage("Las tres esquinas están en línea");
+      if (Math.abs((B.p[0] - A.p[0]) * (hit.p[1] - B.p[1]) - (B.p[1] - A.p[1]) * (hit.p[0] - B.p[0])) < 1e-9) return ui.setMessage(tr("Las tres esquinas están en línea"));
       ui.change((sk) => {
         const [a, b, c] = [placeSnap(sk, A), placeSnap(sk, B), placeSnap(sk, hit)];
         addParallelogram(sk, a, b, c);
@@ -1863,7 +1865,7 @@ export const CadView: Component<CadViewProps> = (props) => {
     if (t === "ellipse_arc") {
       const an = anchor();
       if (an.length < 4) {
-        if (an.length === 2 && !ellipseMinor(an[0].p, an[1].p, hit.p)) return ui.setMessage("La elipse necesita ancho: mover el punto hacia un costado del eje");
+        if (an.length === 2 && !ellipseMinor(an[0].p, an[1].p, hit.p)) return ui.setMessage(tr("La elipse necesita ancho: mover el punto hacia un costado del eje"));
         return setAnchor([...an, hit]);
       }
       const [C, M, W, S] = an;
@@ -1900,7 +1902,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       const [S, M, E] = an;
       setAnchor([]);
       const arc = arcThrough(S.p, E.p, M.p);
-      if (!arc) return ui.setMessage("Los tres puntos están en línea: mover el del medio hacia un costado");
+      if (!arc) return ui.setMessage(tr("Los tres puntos están en línea: mover el del medio hacia un costado"));
       const w = Math.abs(dist(arc.c, hit.p) - arc.r);
       let msg: string | undefined;
       ui.change((sk) => {
@@ -1919,7 +1921,7 @@ export const CadView: Component<CadViewProps> = (props) => {
     if (t === "spline_point") {
       const raw = viewer.planePoint(e.clientX, e.clientY, s.plane) ?? hit.p;
       const target = hitTest(s.sketch, raw, viewer.pixelSizeMm() * 8, false).entity;
-      let msg: string | undefined = "Clic sobre una spline";
+      let msg: string | undefined = tr("Clic sobre una spline");
       if (target !== undefined) ui.change((sk) => void (msg = insertSplinePoint(sk, target, raw)));
       ui.setMessage(msg);
       return;
@@ -1929,7 +1931,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       if (an.length < 2) return setAnchor([...an, hit]);
       const [C, M] = an;
       const n = ellipseMinor(C.p, M.p, hit.p);
-      if (!n) return ui.setMessage("La elipse necesita ancho: mover el punto hacia un costado del eje");
+      if (!n) return ui.setMessage(tr("La elipse necesita ancho: mover el punto hacia un costado del eje"));
       ui.setMessage(undefined);
       ui.change((sk) => {
         const center = placeSnap(sk, C);
@@ -1947,7 +1949,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       if (an.length < 2) return setAnchor([...an, hit]);
       const [A, B] = an;
       const arc = arcThrough(A.p, B.p, hit.p);
-      if (!arc) return ui.setMessage("Los tres puntos están en línea: mover el tercero hacia un costado");
+      if (!arc) return ui.setMessage(tr("Los tres puntos están en línea: mover el tercero hacia un costado"));
       ui.setMessage(undefined);
       ui.change((sk) => {
         const a = placeSnap(sk, A);
@@ -1974,7 +1976,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       const hits = [...an, hit];
       const cc =
         t === "circle2" ? { c: [(hits[0].p[0] + hit.p[0]) / 2, (hits[0].p[1] + hit.p[1]) / 2] as P2, r: dist(hits[0].p, hit.p) / 2 } : circumcircle(hits[0].p, hits[1].p, hit.p);
-      if (!cc || cc.r < 1e-9) return ui.setMessage(t === "circle2" ? "Los dos puntos coinciden" : "Los tres puntos están en línea: mover el tercero hacia un costado");
+      if (!cc || cc.r < 1e-9) return ui.setMessage(t === "circle2" ? tr("Los dos puntos coinciden") : tr("Los tres puntos están en línea: mover el tercero hacia un costado"));
       ui.setMessage(undefined);
       ui.change((sk) => {
         const center = ui.addPoint(sk, cc.c);
@@ -1997,17 +1999,17 @@ export const CadView: Component<CadViewProps> = (props) => {
       const raw = viewer.planePoint(e.clientX, e.clientY, s.plane) ?? hit.p;
       const target = hitTest(s.sketch, raw, viewer.pixelSizeMm() * 8, false).entity;
       const g = target !== undefined ? s.sketch.entities.find((x) => x.id === target)?.geometry : undefined;
-      if (target === undefined || !g || !["line", "circle", "arc"].includes(g.type)) return ui.setMessage("Clic sobre una línea, círculo o arco");
+      if (target === undefined || !g || !["line", "circle", "arc"].includes(g.type)) return ui.setMessage(tr("Clic sobre una línea, círculo o arco"));
       const picks = [...tanPicks().filter((x) => x.entity !== target), { entity: target, p: raw }];
       if (picks.length < 3) {
         setTanPicks(picks);
-        return ui.setMessage(`Elegidas ${picks.length} de 3`);
+        return ui.setMessage(tr("Elegidas {n} de 3", { n: picks.length }));
       }
       // Arranque: el círculo por los puntos de cada una más cercanos a los clics (cerca de donde toca)
       const q = picks.map((x) => nearestOnEntity(s.sketch, x.entity, x.p)!);
       const cc = circumcircle(q[0], q[1], q[2]);
       setTanPicks([]);
-      if (!cc) return ui.setMessage("No se puede arrancar con esos clics: hacer clic cerca de donde el círculo toca cada una");
+      if (!cc) return ui.setMessage(tr("No se puede arrancar con esos clics: hacer clic cerca de donde el círculo toca cada una"));
       ui.setMessage(undefined);
       ui.change((sk) => {
         const center = ui.addPoint(sk, cc.c);
@@ -2021,7 +2023,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       if (an.length < 2) return setAnchor([...an, hit]);
       const [A, B] = an;
       const r = rectFrom3(A.p, B.p, hit.p);
-      if (!r) return ui.setMessage("El tercer punto da el ancho: moverlo hacia un costado del primer lado");
+      if (!r) return ui.setMessage(tr("El tercer punto da el ancho: moverlo hacia un costado del primer lado"));
       ui.setMessage(undefined);
       ui.change((sk) => {
         const pa = placeSnap(sk, A);
@@ -2099,7 +2101,7 @@ export const CadView: Component<CadViewProps> = (props) => {
     if (t === "split") {
       const raw = viewer.planePoint(e.clientX, e.clientY, s.plane) ?? hit.p;
       const target = hitTest(s.sketch, raw, viewer.pixelSizeMm() * 8, false).entity;
-      if (target === undefined) return ui.setMessage("Clic sobre la línea, arco o círculo que se parte");
+      if (target === undefined) return ui.setMessage(tr("Clic sobre la línea, arco o círculo que se parte"));
       let msg: string | undefined;
       // En un anclaje (un cruce, el punto medio) se parte justo ahí
       ui.change((sk) => {
@@ -2131,13 +2133,13 @@ export const CadView: Component<CadViewProps> = (props) => {
       if (!cal.a || cal.b) ui.setCalibration({ image: cal.image, a: hit.p });
       else {
         ui.setCalibration({ ...cal, b: hit.p });
-        ui.setMessage("Escribir en el panel cuánto mide eso de verdad");
+        ui.setMessage(tr("Escribir en el panel cuánto mide eso de verdad"));
         ui.setTool("select");
       }
       return;
     }
     if (TRANSFORMS.includes(t)) {
-      if (!ui.selection().length) return ui.setMessage("Elegir primero (con «Elegir») lo que se transforma");
+      if (!ui.selection().length) return ui.setMessage(tr("Elegir primero (con «Elegir») lo que se transforma"));
       const pts = anchor().map((a) => a.p);
       const xf = transformOf(t, pts, hit.p);
       if (!xf || pts.length < (t === "move" || t === "copy" ? 1 : 2)) {
@@ -2154,11 +2156,11 @@ export const CadView: Component<CadViewProps> = (props) => {
       const from = offsetFrom();
       if (!from) {
         const target = hitTest(s.sketch, raw, viewer.pixelSizeMm() * 8, false).entity;
-        if (target === undefined) return ui.setMessage("Clic en la curva (se toma toda su cadena)");
+        if (target === undefined) return ui.setMessage(tr("Clic en la curva (se toma toda su cadena)"));
         const chainIds = connectedChain(s.sketch, target);
         setOffsetFrom(chainIds);
         ui.setSelection(chainIds);
-        ui.setMessage("Llevar el cursor al lado y a la distancia, y clic (o escribir la distancia)");
+        ui.setMessage(tr("Llevar el cursor al lado y a la distancia, y clic (o escribir la distancia)"));
         return;
       }
       const d = offsetAt(from, raw);
@@ -2174,7 +2176,17 @@ export const CadView: Component<CadViewProps> = (props) => {
       const next = now.includes(target) ? now.filter((x) => x !== target) : [...now, target];
       ui.setSelection(next);
       const n = trimBounds().length;
-      ui.setMessage(n ? `${n === 1 ? "Solo lo elegido corta" : `Solo las ${n} elegidas cortan`}: clic en lo que se ${t === "trim" ? "recorta" : "extiende"} (Esc suelta los límites)` : "Corta todo lo que cruza");
+      ui.setMessage(
+        n
+          ? t === "trim"
+            ? n === 1
+              ? tr("Solo lo elegido corta: clic en lo que se recorta (Esc suelta los límites)")
+              : tr("Solo las {n} elegidas cortan: clic en lo que se recorta (Esc suelta los límites)", { n })
+            : n === 1
+              ? tr("Solo lo elegido corta: clic en lo que se extiende (Esc suelta los límites)")
+              : tr("Solo las {n} elegidas cortan: clic en lo que se extiende (Esc suelta los límites)", { n })
+          : tr("Corta todo lo que cruza")
+      );
       return;
     }
     if (t === "extend") {
@@ -2190,12 +2202,12 @@ export const CadView: Component<CadViewProps> = (props) => {
       const from = tangentFrom();
       if (!from) {
         // Primer clic: un extremo de una línea o un arco
-        if (hit.id === undefined) return ui.setMessage("Empezar en el extremo de una línea o de un arco");
+        if (hit.id === undefined) return ui.setMessage(tr("Empezar en el extremo de una línea o de un arco"));
         const owner = s.sketch.entities.find(
           (en) => (en.geometry.type === "line" || en.geometry.type === "arc") && [en.geometry.start, en.geometry.end].includes(hit.id!),
         );
         const dir = owner && leavingDirection(s.sketch, owner.id, hit.id);
-        if (!owner || !dir) return ui.setMessage("Empezar en el extremo de una línea o de un arco");
+        if (!owner || !dir) return ui.setMessage(tr("Empezar en el extremo de una línea o de un arco"));
         ui.setMessage(undefined);
         setTangentFrom({ point: hit.id, dir, entity: owner.id });
         return;
@@ -2203,7 +2215,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       const startPos = s.sketch.points.find((q) => q.id === from.point);
       if (!startPos) return setTangentFrom(undefined);
       const arc = tangentArc([startPos.x, startPos.y], from.dir, hit.p);
-      if (!arc) return ui.setMessage("En línea recta no hay arco: mover el punto hacia un costado");
+      if (!arc) return ui.setMessage(tr("En línea recta no hay arco: mover el punto hacia un costado"));
       let next: { point: number; dir: P2; entity: number } | undefined;
       ui.change((sk) => {
         const end = placeSnap(sk, hit);
@@ -2519,7 +2531,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       } else if (mode.kind === "scan") {
         const hit = viewer.pick(e.clientX, e.clientY, { scan: true });
         if (hit?.kind !== "scan") return;
-        ui.setMessage("Buscando la zona...");
+        ui.setMessage(tr("Buscando la zona..."));
         const result = await store.scanPick(mode.shape, hit.triangle);
         ui.setScanHighlight(result.faces);
         ui.setMessage(undefined);
@@ -2551,7 +2563,7 @@ export const CadView: Component<CadViewProps> = (props) => {
         const hit = viewer.pick(e.clientX, e.clientY, { faces: true });
         if (hit?.kind !== "face") return;
         const info = await invoke<{ surface: string; point: P3 }>("cad_face_info", { face: hit.face });
-        if (info.surface !== "plane") return ui.setMessage("Esa cara no es plana: elegir una cara plana");
+        if (info.surface !== "plane") return ui.setMessage(tr("Esa cara no es plana: elegir una cara plana"));
         // Cerca del centro de la cara (en pantalla), al centro
         const at = viewer.fromView(hit.point);
         const [cx, cy] = viewer.screenOf(info.point);
@@ -2577,7 +2589,7 @@ export const CadView: Component<CadViewProps> = (props) => {
           mode.done({ type: "reference", feature: hit.feature });
         } else if (hit?.kind === "face") {
           const info = await invoke<{ surface: string }>("cad_face_info", { face: hit.face });
-          if (info.surface !== "plane") return ui.setMessage("Esa cara no es plana: elegir una cara plana o un plano base");
+          if (info.surface !== "plane") return ui.setMessage(tr("Esa cara no es plana: elegir una cara plana o un plano base"));
           const face = await store.faceRef(hit.face);
           ui.setPick({ kind: "none" });
           mode.done({ type: "face", face });
@@ -2647,7 +2659,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       const d = p ? offsetAt(from, p) : undefined;
       if (d !== undefined) {
         ui.previewOf(() => ui.change((sk) => void offsetChain(sk, from, d)));
-        ui.setMessage(`Equidistante a ${+Math.abs(d).toFixed(4)} mm: clic (o escribir la distancia)`);
+        ui.setMessage(tr("Equidistante a {d} mm: clic (o escribir la distancia)", { d: +Math.abs(d).toFixed(4) }));
       }
     }
     // Al girar o arrastrar no hay preselección
@@ -2807,10 +2819,10 @@ export const CadView: Component<CadViewProps> = (props) => {
         return x >= l && x <= r && y >= t && y <= b;
       })
       .map((q) => q.id);
-    if (!found.length) return ui.setMessage("La caja no tomó ningún punto: arrastrarla sobre las puntas que se corren");
+    if (!found.length) return ui.setMessage(tr("La caja no tomó ningún punto: arrastrarla sobre las puntas que se corren"));
     setStretchPts(found);
     ui.setSelection(found);
-    ui.setMessage(`${found.length} ${found.length === 1 ? "punto tomado" : "puntos tomados"}: clic en el punto base y después en el destino`);
+    ui.setMessage(found.length === 1 ? tr("1 punto tomado: clic en el punto base y después en el destino") : tr("{n} puntos tomados: clic en el punto base y después en el destino", { n: found.length }));
   };
   /** Recortar: un clic quita el tramo bajo el cursor; un trazo, todo lo que cruza */
   const finishTrim = () => {
@@ -2828,7 +2840,7 @@ export const CadView: Component<CadViewProps> = (props) => {
     } else
       ui.change((sk) => {
         const r = trimByStroke(sk, stroke, sheetLimits(), trimBounds());
-        msg = r.message ?? (r.trimmed ? undefined : "El trazo no cruzó nada que recortar");
+        msg = r.message ?? (r.trimmed ? undefined : tr("El trazo no cruzó nada que recortar"));
       });
     ui.setMessage(msg);
   };
@@ -2887,7 +2899,7 @@ export const CadView: Component<CadViewProps> = (props) => {
     else if (chain() || anchor().length) resetTool();
     else if ((ui.tool() === "trim" || ui.tool() === "extend") && trimBounds().length) {
       ui.setSelection([]);
-      ui.setMessage("Corta todo lo que cruza");
+      ui.setMessage(tr("Corta todo lo que cruza"));
     } else ui.setTool("select");
   };
   /**
@@ -2917,7 +2929,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       const r = offsetChain(sk, ids, d);
       if (typeof r === "string") msg = r;
     });
-    ui.setMessage(msg ?? `Equidistante a ${+Math.abs(d).toFixed(4)} mm`);
+    ui.setMessage(msg ?? tr("Equidistante a {d} mm", { d: +Math.abs(d).toFixed(4) }));
     setOffsetFrom(undefined);
     ui.setSelection([]);
   };
@@ -2926,7 +2938,7 @@ export const CadView: Component<CadViewProps> = (props) => {
     const t = ui.tool();
     const at = pointerPx();
     if (!ui.session() || !at) return undefined;
-    if (t === "offset" && offsetFrom()) return { tool: t, hint: "distancia (el lado, el del cursor)", x: at[0], y: at[1] };
+    if (t === "offset" && offsetFrom()) return { tool: t, hint: tr("distancia (el lado, el del cursor)"), x: at[0], y: at[1] };
     if ((t === "move" || t === "copy" || t === "rotate" || t === "scale") && anchor().length >= 1) return { tool: t, hint: TYPED_HINT[t], x: at[0], y: at[1] };
     return undefined;
   });
@@ -2936,7 +2948,7 @@ export const CadView: Component<CadViewProps> = (props) => {
     if (t === "offset") {
       const from = offsetFrom();
       const v = parseFloat(text.trim().replace(",", "."));
-      if (!from || !(v > 0)) return ui.setMessage("La distancia tiene que ser un número mayor que 0");
+      if (!from || !(v > 0)) return ui.setMessage(tr("La distancia tiene que ser un número mayor que 0"));
       const d = offsetAt(from, c ?? [0, 0], v);
       if (d !== undefined) commitOffset(from, d);
       return;
@@ -2999,7 +3011,7 @@ export const CadView: Component<CadViewProps> = (props) => {
   /** Mirar de frente una cara plana */
   const normalToFace = async (face: number) => {
     const info = await invoke<{ surface: string; normal: P3 }>("cad_face_info", { face });
-    if (info.surface !== "plane") return ui.setMessage("Esa cara no es plana");
+    if (info.surface !== "plane") return ui.setMessage(tr("Esa cara no es plana"));
     viewer?.lookFrom(info.normal);
   };
 
@@ -3019,7 +3031,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       const f = byId(id)!;
       const sketch = editsAsSketch(f.kind);
       return {
-        label: `${sketch ? "Editar sketch" : "Editar"} «${f.name}»`,
+        label: sketch ? tr("Editar sketch «{name}»", { name: f.name }) : tr("Editar «{name}»", { name: f.name }),
         onSelect: () => (sketch ? void store.settled().then(() => ui.editSketch(id)) : store.select(id)),
       };
     });
@@ -3054,15 +3066,15 @@ export const CadView: Component<CadViewProps> = (props) => {
         x,
         y,
         items: [
-          { header: n > 1 ? `${n} caras` : "Cara" },
+          { header: n > 1 ? tr("{n} caras", { n }) : tr("Cara") },
           ...edit,
           ...(edit.length ? [sep] : []),
-          ...(plane && n === 1 ? [{ label: "Sketch en la cara", shortcut: "Mayús+S", onSelect: use(run("sketch")) }] : []),
-          { label: n > 1 ? "Vaciar con estas caras abiertas" : "Vaciar con la cara abierta", onSelect: use(run("shell")) },
-          { label: "Desmoldar", onSelect: use(run("draft")) },
+          ...(plane && n === 1 ? [{ label: tr("Sketch en la cara"), shortcut: tr("Mayús+S"), onSelect: use(run("sketch")) }] : []),
+          { label: n > 1 ? tr("Vaciar con estas caras abiertas") : tr("Vaciar con la cara abierta"), onSelect: use(run("shell")) },
+          { label: tr("Desmoldar"), onSelect: use(run("draft")) },
           sep,
-          ...(plane ? [{ label: "Mirar de frente", onSelect: () => void normalToFace(hit.face) }] : []),
-          { label: "Acercar", shortcut: "F", onSelect: () => viewer?.frameSelection(inSel ? picked.map((p) => (p as { face: number }).face) : [hit.face], []) },
+          ...(plane ? [{ label: tr("Mirar de frente"), onSelect: () => void normalToFace(hit.face) }] : []),
+          { label: tr("Acercar"), shortcut: "F", onSelect: () => viewer?.frameSelection(inSel ? picked.map((p) => (p as { face: number }).face) : [hit.face], []) },
         ],
       });
     } else if (hit?.kind === "edge") {
@@ -3079,12 +3091,12 @@ export const CadView: Component<CadViewProps> = (props) => {
         x,
         y,
         items: [
-          { header: n > 1 ? `${n} aristas` : "Arista" },
-          { label: "Redondear", onSelect: use(run("fillet")) },
-          { label: "Chaflán", onSelect: use(run("chamfer")) },
+          { header: n > 1 ? tr("{n} aristas", { n }) : tr("Arista") },
+          { label: tr("Redondear"), onSelect: use(run("fillet")) },
+          { label: tr("Chaflán"), onSelect: use(run("chamfer")) },
           ...(edit.length ? [sep, ...edit] : []),
           sep,
-          { label: "Acercar", shortcut: "F", onSelect: () => viewer?.frameSelection([], inSel ? picked.map((p) => (p as { edge: number }).edge) : [hit.edge]) },
+          { label: tr("Acercar"), shortcut: "F", onSelect: () => viewer?.frameSelection([], inSel ? picked.map((p) => (p as { edge: number }).edge) : [hit.edge]) },
         ],
       });
     } else {
@@ -3093,13 +3105,13 @@ export const CadView: Component<CadViewProps> = (props) => {
         x,
         y,
         items: [
-          { header: "Vista" },
-          { label: "Encuadrar todo", shortcut: "Inicio", onSelect: () => viewer?.frameAll() },
+          { header: tr("Vista") },
+          { label: tr("Encuadrar todo"), shortcut: tr("Inicio"), onSelect: () => viewer?.frameAll() },
           sep,
-          view("Frente", [0, -1, 0], "1"),
-          view("Derecha", [1, 0, 0], "3"),
-          view("Arriba", [0, 0, 1], "7"),
-          view("Isométrica", [1, -1, 1], "Mayús+7"),
+          view(tr("Frente"), [0, -1, 0], "1"),
+          view(tr("Derecha"), [1, 0, 0], "3"),
+          view(tr("Arriba"), [0, 0, 1], "7"),
+          view(tr("Isométrica"), [1, -1, 1], tr("Mayús+7")),
         ],
       });
     }
@@ -3154,7 +3166,7 @@ export const CadView: Component<CadViewProps> = (props) => {
         // Lo siguiente de lo encimado bajo el último clic
         cycle.i = (cycle.i + 1) % cycle.ids.length;
         ui.setSelection([cycle.ids[cycle.i]]);
-        ui.setMessage(`${cycle.i + 1} de ${cycle.ids.length} encimadas (Tab: la siguiente)`);
+        ui.setMessage(tr("{i} de {n} encimadas (Tab: la siguiente)", { i: cycle.i + 1, n: cycle.ids.length }));
       } else if (e.key === "Enter") {
         // Lo que está a medias primero (la spline, la polilínea, la restricción que espera); si no hay nada, el sketch
         if (ui.tool() === "spline" && anchor().length >= 2) finishSpline(false);
@@ -3171,10 +3183,10 @@ export const CadView: Component<CadViewProps> = (props) => {
       }
       else if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && key === "v") {
         // Pegar: lo copiado sigue al cursor hasta el clic
-        if (!ui.clipboard()) return ui.setMessage("No hay nada copiado (Ctrl+C con algo elegido)");
+        if (!ui.clipboard()) return ui.setMessage(tr("No hay nada copiado (Ctrl+C con algo elegido)"));
         ui.setTool("paste");
         resetTool();
-        ui.setMessage("Clic donde va lo pegado (Esc cancela)");
+        ui.setMessage(tr("Clic donde va lo pegado (Esc cancela)"));
       }
       else if (!e.ctrlKey && !e.metaKey && !e.altKey) {
         // Q: construcción sí/no en lo elegido, o el modo construcción sin nada elegido (como Onshape)
@@ -3188,7 +3200,7 @@ export const CadView: Component<CadViewProps> = (props) => {
         if (key === "a" && ui.tool() === "line" && chain()?.lastEntity !== undefined) {
           const on = !chainArc();
           setChainArc(on);
-          ui.setMessage(on ? "Próximo tramo: arco tangente (A vuelve a línea)" : undefined);
+          ui.setMessage(on ? tr("Próximo tramo: arco tangente (A vuelve a línea)") : undefined);
           e.preventDefault();
           e.stopPropagation();
           return;
@@ -3586,15 +3598,15 @@ export const CadView: Component<CadViewProps> = (props) => {
       x,
       y,
       items: [
-        { header: CONSTRAINT_LABELS[c.type] },
-        { label: d.locked ? "Desbloquear" : "Bloquear", onSelect: () => ui.setDimOpts(d.index, { locked: !d.locked }) },
-        ...(d.offset ? [{ label: "Devolver el texto a su lugar", onSelect: () => ui.setDimOpts(d.index, { offset: undefined }) }] : []),
+        { header: tr(CONSTRAINT_LABELS[c.type]) },
+        { label: d.locked ? tr("Desbloquear") : tr("Bloquear"), onSelect: () => ui.setDimOpts(d.index, { locked: !d.locked }) },
+        ...(d.offset ? [{ label: tr("Devolver el texto a su lugar"), onSelect: () => ui.setDimOpts(d.index, { offset: undefined }) }] : []),
         ...(flippable
           ? [
-              { label: "Girar al otro lado", onSelect: () => flipAngle(d.index) },
-              { label: "Cambiar referencia", onSelect: () => swapAngleReference(d.index) },
+              { label: tr("Girar al otro lado"), onSelect: () => flipAngle(d.index) },
+              { label: tr("Cambiar referencia"), onSelect: () => swapAngleReference(d.index) },
               {
-                label: c.supplementary ? "Ángulo (no suplementario)" : "Ángulo suplementario",
+                label: c.supplementary ? tr("Ángulo (no suplementario)") : tr("Ángulo suplementario"),
                 onSelect: () =>
                   ui.change((sk) => {
                     const k = sk.constraints[d.index];
@@ -3609,7 +3621,7 @@ export const CadView: Component<CadViewProps> = (props) => {
             ]
           : []),
         sep,
-        { label: "Quitar", onSelect: () => ui.removeConstraint(d.index) },
+        { label: tr("Quitar"), onSelect: () => ui.removeConstraint(d.index) },
       ],
     });
   };
@@ -3623,10 +3635,10 @@ export const CadView: Component<CadViewProps> = (props) => {
     const r = ui.session()?.report;
     if (!r) return "";
     const names = {
-      well_constrained: "Totalmente definido",
-      under_constrained: `Faltan ${r.dof} restricciones`,
-      over_constrained: "Restricciones en conflicto",
-      failed: "No se pudo resolver",
+      well_constrained: tr("Totalmente definido"),
+      under_constrained: r.dof === 1 ? tr("Falta 1 restricción") : tr("Faltan {n} restricciones", { n: r.dof }),
+      over_constrained: tr("Restricciones en conflicto"),
+      failed: tr("No se pudo resolver"),
     };
     return names[r.status];
   };
@@ -3663,8 +3675,8 @@ export const CadView: Component<CadViewProps> = (props) => {
             }}
             type="text"
             data-typed-field={f().tool}
-            aria-label="Valor escrito"
-            placeholder={f().hint}
+            aria-label={tr("Valor escrito")}
+            placeholder={tr(f().hint)}
             class="absolute z-20 w-40 px-1.5 py-0.5 rounded text-xs font-mono bg-bg-lighter/95 border border-accent text-text outline-none"
             style={{ left: `${f().x + 16}px`, top: `${f().y + 16}px` }}
             onKeyDown={(e) => {
@@ -3685,7 +3697,7 @@ export const CadView: Component<CadViewProps> = (props) => {
             class="absolute pointer-events-none px-1 rounded text-[11px] bg-bg-lighter/90 border border-border text-cyan"
             style={{ left: `${v().x + 14}px`, top: `${v().y + 14}px` }}
           >
-            {SNAP_GLYPHS[v().kind].glyph} {SNAP_GLYPHS[v().kind].label}
+            {SNAP_GLYPHS[v().kind].glyph} {tr(SNAP_GLYPHS[v().kind].label)}
           </span>
         )}
       </Show>
@@ -3705,7 +3717,7 @@ export const CadView: Component<CadViewProps> = (props) => {
               ui.tool() !== "select" && "pointer-events-none",
             )}
             style={{ left: `${g().x}px`, top: `${g().y}px` }}
-            title={CONSTRAINT_LABELS[ui.session()?.sketch.constraints[g().index]?.type ?? "coincident"]}
+            title={tr(CONSTRAINT_LABELS[ui.session()?.sketch.constraints[g().index]?.type ?? "coincident"])}
             onPointerDown={(e) => e.stopPropagation()}
             onMouseEnter={() => {
               const c = ui.session()?.sketch.constraints[g().index];
@@ -3768,9 +3780,9 @@ export const CadView: Component<CadViewProps> = (props) => {
                 style={{ left: `${clarify()!.x + 12}px`, top: `${clarify()!.y + 12}px` }}
                 data-clarify
                 role="menu"
-                aria-label="¿Cuál?"
+                aria-label={tr("¿Cuál?")}
               >
-                <p class="px-1.5 py-1 font-medium text-text-muted border-b border-border/60 mb-0.5">¿Cuál? Hay {candidates().length} encimadas</p>
+                <p class="px-1.5 py-1 font-medium text-text-muted border-b border-border/60 mb-0.5">{tr("¿Cuál? Hay {n} encimadas", { n: candidates().length })}</p>
                 <Show when={clarifyTwins().length}>
                   <button
                     class="flex items-center gap-1.5 w-full text-left px-1.5 py-1 mb-0.5 rounded text-warning hover:bg-surface/60"
@@ -3781,7 +3793,7 @@ export const CadView: Component<CadViewProps> = (props) => {
                     }}
                   >
                     <Icons.Warning size={12} />
-                    {clarifyTwins().length === 1 ? "Son iguales: juntarlas en una" : "Hay iguales: juntarlas"}
+                    {clarifyTwins().length === 1 ? tr("Son iguales: juntarlas en una") : tr("Hay iguales: juntarlas")}
                   </button>
                 </Show>
                 <For each={candidates()}>
@@ -3800,7 +3812,7 @@ export const CadView: Component<CadViewProps> = (props) => {
                         <Show when={c.detail}>
                           <span class="block text-text-muted">{c.detail}</span>
                         </Show>
-                        <span class="block text-text-dim">{c.constraints.length ? c.constraints.join(" · ") : "Sin restricciones"}</span>
+                        <span class="block text-text-dim">{c.constraints.length ? c.constraints.join(" · ") : tr("Sin restricciones")}</span>
                       </span>
                     </button>
                   )}
@@ -3818,16 +3830,16 @@ export const CadView: Component<CadViewProps> = (props) => {
           const names = (ids: number[]) => ids.map((id) => (s ? describeEntity(s.sketch, id).name : `${id}`)).join(", ");
           return (
             <ConfirmDialog
-              title="Quedó repetida"
-              message={`${names(pairs.map((p) => p[1]))} quedó exactamente encima de ${names(pairs.map((p) => p[0]))}.\n\n¿Unirlas en una? La que ya estaba se queda y recibe las restricciones de la nueva. Si no, quedan las dos.`}
-              confirmLabel="Unirlas"
-              cancelLabel="Dejar las dos"
+              title={tr("Quedó repetida")}
+              message={tr("{a} quedó exactamente encima de {b}.\n\n¿Unirlas en una? La que ya estaba se queda y recibe las restricciones de la nueva. Si no, quedan las dos.", { a: names(pairs.map((p) => p[1])), b: names(pairs.map((p) => p[0])) })}
+              confirmLabel={tr("Unirlas")}
+              cancelLabel={tr("Dejar las dos")}
               onConfirm={() => {
                 setDupAsk(undefined);
                 // Lo que la herramienta tenía a medias puede usar puntos de la nueva
                 resetTool(true);
                 ui.change((sk) => pairs.forEach(([keep, drop]) => mergeDuplicate(sk, keep, drop)));
-                ui.setMessage(pairs.length === 1 ? "Unidas en una" : `Unidos ${pairs.length} pares`);
+                ui.setMessage(pairs.length === 1 ? tr("Unidas en una") : tr("Unidos {n} pares", { n: pairs.length }));
               }}
               onCancel={() => setDupAsk(undefined)}
             />
@@ -3859,7 +3871,7 @@ export const CadView: Component<CadViewProps> = (props) => {
                     flipAngle(d.index);
                   }}
                 >
-                  <title>Girar al otro lado</title>
+                  <title>{tr("Girar al otro lado")}</title>
                   <circle cx={d.arrow!.x} cy={d.arrow!.y} r="9" fill="transparent" />
                   <polygon points={d.arrow!.points} class={d.conflict ? "fill-red" : "fill-text-muted hover:fill-accent"} />
                 </g>
@@ -3878,7 +3890,7 @@ export const CadView: Component<CadViewProps> = (props) => {
         {(v) => (
           <input
             ref={(el) => queueMicrotask(() => (el.focus(), el.select()))}
-            aria-label="Cambiar el texto"
+            aria-label={tr("Cambiar el texto")}
             data-text-edit
             class="absolute z-10 px-1.5 py-0.5 rounded bg-bg-lighter border border-accent text-sm text-text outline-none shadow"
             style={{ left: `${v().x}px`, top: `${v().y}px`, "min-width": `${Math.max(80, v().w)}px` }}
@@ -3930,7 +3942,7 @@ export const CadView: Component<CadViewProps> = (props) => {
                 onClick={() => {
                   if (dimDragged) return void (dimDragged = false);
                   // Una cota de referencia no se escribe: mide; una bloqueada, tampoco
-                  if (d().locked) ui.setMessage("Cota bloqueada: clic derecho para desbloquearla");
+                  if (d().locked) ui.setMessage(tr("Cota bloqueada: clic derecho para desbloquearla"));
                   else if (!d().reference) setEditingDim(d().index);
                 }}
               >
@@ -4005,8 +4017,8 @@ export const CadView: Component<CadViewProps> = (props) => {
             <button
               class="absolute -translate-y-1/2 w-5 h-5 flex items-center justify-center rounded border border-border bg-bg-lighter text-text-muted hover:text-error hover:border-error"
               style={{ left: `${d().x + 42}px`, top: `${d().y}px` }}
-              aria-label="Quitar la cota"
-              title="Quitar la cota"
+              aria-label={tr("Quitar la cota")}
+              title={tr("Quitar la cota")}
               data-dim-remove
               onPointerDown={(e) => {
                 e.preventDefault();
@@ -4045,9 +4057,9 @@ export const CadView: Component<CadViewProps> = (props) => {
                       </Show>
                       <div ref={row} class="relative">
                         <SideButton
-                          label={shown().short}
+                          label={tr(shown().short)}
                           shortcut={shown().key}
-                          tip={shown().label !== shown().short ? shown().label : undefined}
+                          tip={shown().label !== shown().short ? tr(shown().label) : undefined}
                           icon={shown().icon}
                           active={variants.some((t) => t.id === ui.tool())}
                           onClick={() => {
@@ -4060,11 +4072,11 @@ export const CadView: Component<CadViewProps> = (props) => {
                           <div class="absolute right-0 bottom-0" data-toolbar-menu={FAMILY_MENU[slot.family!]} data-items={JSON.stringify(variants.map((t) => t.short))}>
                             <button
                               class="flex items-end justify-end w-3 h-3 text-text-dim hover:text-text"
-                              title={FAMILY_MENU[slot.family!]}
+                              title={tr(FAMILY_MENU[slot.family!])}
                               onClick={() => setOpenFamily(openFamily() === slot.family ? undefined : slot.family)}
                             >
                               <Icons.CaretRight size={8} />
-                              <span class="sr-only">{FAMILY_MENU[slot.family!]}</span>
+                              <span class="sr-only">{tr(FAMILY_MENU[slot.family!])}</span>
                             </button>
                           </div>
                           <Show when={openFamily() === slot.family}>
@@ -4080,7 +4092,7 @@ export const CadView: Component<CadViewProps> = (props) => {
                                       "w-full flex items-center gap-2 px-2 py-1 text-xs text-left",
                                       ui.tool() === t.id ? "text-accent" : "text-text-muted hover:text-text hover:bg-surface",
                                     )}
-                                    title={t.label}
+                                    title={tr(t.label)}
                                     onClick={() => {
                                       ui.setTool(t.id);
                                       resetTool();
@@ -4088,7 +4100,7 @@ export const CadView: Component<CadViewProps> = (props) => {
                                     }}
                                   >
                                     <t.icon size={16} />
-                                    {t.short}
+                                    {tr(t.short)}
                                     <Show when={t.key}>
                                       <span class="ml-auto pl-3 text-text-dim">{t.key}</span>
                                     </Show>
@@ -4105,9 +4117,9 @@ export const CadView: Component<CadViewProps> = (props) => {
               </For>
               <SideSep />
               <SideButton
-                label="Construcción"
+                label={tr("Construcción")}
                 shortcut="Q"
-                tip="con algo elegido lo pasa a construcción o de vuelta; sin nada elegido, lo que se dibuja sale de construcción (no cuenta para las regiones)"
+                tip={tr("con algo elegido lo pasa a construcción o de vuelta; sin nada elegido, lo que se dibuja sale de construcción (no cuenta para las regiones)")}
                 icon={SketchIcons.Construction}
                 active={ui.constructionMode()}
                 onClick={() => ui.construction()}
@@ -4125,14 +4137,14 @@ export const CadView: Component<CadViewProps> = (props) => {
             <>
             <DesignToolbar store={store} ui={ui} actions={props.actions} />
             <div class="flex items-center gap-1 rounded-md border border-border bg-bg-lighter/90 px-1.5 py-1 pointer-events-auto">
-              <IconButton aria-label="Encuadrar todo" size="sm" onClick={() => viewer?.frameAll()}>
+              <IconButton aria-label={tr("Encuadrar todo")} size="sm" onClick={() => viewer?.frameAll()}>
                 <Icons.FrameCorners size={14} />
               </IconButton>
               <div class="w-px h-5 bg-border mx-0.5" />
-              <div role="radiogroup" aria-label="Qué elegir" class="flex items-center gap-0.5">
+              <div role="radiogroup" aria-label={tr("Qué elegir")} class="flex items-center gap-0.5">
                 <For each={FILTERS}>
                   {(f) => (
-                    <Tooltip content={f.tip}>
+                    <Tooltip content={tr(f.tip)}>
                       <button
                         role="radio"
                         aria-checked={ui.pickFilter() === f.id}
@@ -4142,16 +4154,16 @@ export const CadView: Component<CadViewProps> = (props) => {
                         )}
                         onClick={() => ui.setPickFilter(f.id)}
                       >
-                        {f.label}
+                        {tr(f.label)}
                       </button>
                     </Tooltip>
                   )}
                 </For>
               </div>
               <div class="w-px h-5 bg-border mx-0.5" />
-              <Tooltip content={ui.section() ? "Sacar la vista de corte" : "Vista de corte (no cambia el modelo)"}>
+              <Tooltip content={ui.section() ? tr("Sacar la vista de corte") : tr("Vista de corte (no cambia el modelo)")}>
                 <IconButton
-                  aria-label="Vista de corte"
+                  aria-label={tr("Vista de corte")}
                   size="sm"
                   active={!!ui.section()}
                   onClick={() => ui.setSection(ui.section() ? null : { plane: "xz", at: 0.5, flip: false })}
@@ -4165,7 +4177,7 @@ export const CadView: Component<CadViewProps> = (props) => {
                     <For each={["xy", "xz", "yz"] as const}>
                       {(p) => (
                         <button
-                          aria-label={`Corte por ${p.toUpperCase()}`}
+                          aria-label={tr("Corte por {p}", { p: p.toUpperCase() })}
                           class={clsx("px-1.5 py-0.5 rounded text-[11px]", s().plane === p ? "bg-accent text-bg" : "text-text-muted hover:text-text hover:bg-surface")}
                           onClick={() => ui.setSection({ ...s(), plane: p })}
                         >
@@ -4173,11 +4185,11 @@ export const CadView: Component<CadViewProps> = (props) => {
                         </button>
                       )}
                     </For>
-                    <div class="w-24" aria-label="Posición del corte">
+                    <div class="w-24" aria-label={tr("Posición del corte")}>
                       <Slider value={s().at} min={0} max={1} step={0.01} onChange={(v) => ui.setSection({ ...s(), at: v })} />
                     </div>
-                    <Tooltip content="Ver el otro lado">
-                      <IconButton aria-label="Invertir el corte" size="sm" onClick={() => ui.setSection({ ...s(), flip: !s().flip })}>
+                    <Tooltip content={tr("Ver el otro lado")}>
+                      <IconButton aria-label={tr("Invertir el corte")} size="sm" onClick={() => ui.setSection({ ...s(), flip: !s().flip })}>
                         <Icons.ArrowsLeftRight size={14} />
                       </IconButton>
                     </Tooltip>
@@ -4185,14 +4197,14 @@ export const CadView: Component<CadViewProps> = (props) => {
                 )}
               </Show>
               <div class="w-px h-5 bg-border mx-0.5" />
-              <Tooltip content={ui.showPlanes() ? "Ocultar los planos base" : "Mostrar los planos base"}>
-                <IconButton aria-label="Planos base" size="sm" active={ui.showPlanes()} onClick={() => ui.setShowPlanes(!ui.showPlanes())}>
+              <Tooltip content={ui.showPlanes() ? tr("Ocultar los planos base") : tr("Mostrar los planos base")}>
+                <IconButton aria-label={tr("Planos base")} size="sm" active={ui.showPlanes()} onClick={() => ui.setShowPlanes(!ui.showPlanes())}>
                   <Icons.Square size={14} />
                 </IconButton>
               </Tooltip>
               <Show when={props.scanMesh}>
-                <Tooltip content={scanVisible() ? "Ocultar el modelo de referencia" : "Mostrar el modelo de referencia"}>
-                  <IconButton aria-label="Modelo de referencia" size="sm" active={scanVisible()} onClick={() => setScanVisible(!scanVisible())}>
+                <Tooltip content={scanVisible() ? tr("Ocultar el modelo de referencia") : tr("Mostrar el modelo de referencia")}>
+                  <IconButton aria-label={tr("Modelo de referencia")} size="sm" active={scanVisible()} onClick={() => setScanVisible(!scanVisible())}>
                     <Icons.Scan size={14} />
                   </IconButton>
                 </Tooltip>
@@ -4212,7 +4224,7 @@ export const CadView: Component<CadViewProps> = (props) => {
                   >
                     <div
                       class="h-3 shrink-0 cursor-move rounded-t-md flex items-center justify-center hover:bg-surface/60"
-                      title="Arrastrar para mover"
+                      title={tr("Arrastrar para mover")}
                       onPointerDown={startDialogDrag}
                     >
                       <div class="w-8 h-0.5 rounded bg-border" />
@@ -4241,12 +4253,12 @@ export const CadView: Component<CadViewProps> = (props) => {
                 <input
                   type="text"
                   value={textValue()}
-                  aria-label="Texto"
+                  aria-label={tr("Texto")}
                   class="w-32 px-1.5 py-0.5 rounded bg-surface/40 border border-border text-xs text-text outline-none focus:border-accent"
                   onInput={(e) => setTextValue(e.currentTarget.value)}
                 />
                 <label class="flex items-center gap-1 text-xs text-text-muted">
-                  Tamaño
+                  {tr("Tamaño")}
                   <input
                     type="number"
                     min="0.1"
@@ -4257,28 +4269,28 @@ export const CadView: Component<CadViewProps> = (props) => {
                   />
                   mm
                 </label>
-                <div class="flex items-center gap-0.5" role="group" aria-label="Estilo del texto">
+                <div class="flex items-center gap-0.5" role="group" aria-label={tr("Estilo del texto")}>
                   <button
                     aria-pressed={textBold()}
-                    title="Negrita (con la fuente incluida)"
+                    title={tr("Negrita (con la fuente incluida)")}
                     class={clsx("px-1.5 py-0.5 rounded text-xs font-bold", textBold() ? "bg-accent text-bg" : "text-text-muted hover:bg-surface")}
                     onClick={() => setTextBold(!textBold())}
                   >
-                    N
+                    {tr("N")}
                   </button>
                   <button
                     aria-pressed={textItalic()}
-                    title="Cursiva (con la fuente incluida)"
+                    title={tr("Cursiva (con la fuente incluida)")}
                     class={clsx("px-1.5 py-0.5 rounded text-xs italic", textItalic() ? "bg-accent text-bg" : "text-text-muted hover:bg-surface")}
                     onClick={() => setTextItalic(!textItalic())}
                   >
-                    K
+                    {tr("K")}
                   </button>
-                  <For each={[["left", "Izq."], ["center", "Centro"], ["right", "Der."]] as const}>
+                  <For each={[["left", tr("Izq.")], ["center", tr("Centro")], ["right", tr("Der.")]] as const}>
                     {([k, label]) => (
                       <button
                         aria-pressed={textAlign() === k}
-                        title="Alineación respecto del clic"
+                        title={tr("Alineación respecto del clic")}
                         class={clsx("px-1.5 py-0.5 rounded text-[11px]", textAlign() === k ? "bg-accent text-bg" : "text-text-muted hover:bg-surface")}
                         onClick={() => setTextAlign(k)}
                       >
@@ -4287,10 +4299,10 @@ export const CadView: Component<CadViewProps> = (props) => {
                     )}
                   </For>
                 </div>
-                <span class="text-[11px] text-text-dim whitespace-nowrap" title="Con una curva elegida antes de elegir Texto, las letras la siguen desde el punto más cercano al clic">
-                  {textCurve() !== undefined ? "Sobre la curva elegida" : "En línea recta"}
+                <span class="text-[11px] text-text-dim whitespace-nowrap" title={tr("Con una curva elegida antes de elegir Texto, las letras la siguen desde el punto más cercano al clic")}>
+                  {textCurve() !== undefined ? tr("Sobre la curva elegida") : tr("En línea recta")}
                 </span>
-                <label class="px-2 py-1 rounded text-xs text-text-muted hover:text-text hover:bg-surface cursor-pointer whitespace-nowrap" title="Fuente .ttf u .otf">
+                <label class="px-2 py-1 rounded text-xs text-text-muted hover:text-text hover:bg-surface cursor-pointer whitespace-nowrap" title={tr("Fuente .ttf u .otf")}>
                   {fontName()}…
                   <input
                     type="file"
@@ -4303,7 +4315,7 @@ export const CadView: Component<CadViewProps> = (props) => {
                         textFont = { name: file.name.replace(/\.[^.]+$/, ""), font: parseFont(await file.arrayBuffer()) };
                         setFontName(textFont.name);
                       } catch (err) {
-                        ui.setMessage(`No se pudo leer la fuente: ${err}`);
+                        ui.setMessage(tr("No se pudo leer la fuente: {err}", { err: String(err) }));
                       }
                     }}
                   />
@@ -4320,33 +4332,33 @@ export const CadView: Component<CadViewProps> = (props) => {
                       <input
                         type="text"
                         value={text()}
-                        aria-label="Texto elegido"
+                        aria-label={tr("Texto elegido")}
                         class="w-32 px-1.5 py-0.5 rounded bg-surface/40 border border-border text-xs text-text outline-none focus:border-accent"
                         onInput={(e) => setText(e.currentTarget.value)}
                         onKeyDown={(e) => e.key === "Enter" && void rewriteText(id, text(), size())}
                       />
                       <label class="flex items-center gap-1 text-xs text-text-muted">
-                        Tamaño
+                        {tr("Tamaño")}
                         <input
                           type="number"
                           min="0.1"
                           step="1"
                           value={size()}
-                          aria-label="Tamaño del texto elegido"
+                          aria-label={tr("Tamaño del texto elegido")}
                           class="w-14 px-1 py-0.5 rounded bg-surface/40 border border-border text-xs text-text font-mono outline-none focus:border-accent"
                           onChange={(e) => setSize(Math.max(0.1, parseFloat(e.currentTarget.value) || 10))}
                         />
                         mm
                       </label>
                       <Button size="sm" onClick={() => void rewriteText(id, text(), size())}>
-                        Rehacer texto
+                        {tr("Rehacer texto")}
                       </Button>
                     </>
                   );
                 }}
               </For>
               <Show when={ui.tool() === "conic"}>
-                <label class="flex items-center gap-1 text-xs text-text-muted" title="0,5 = parábola; menos, arco de elipse; más, hipérbola">
+                <label class="flex items-center gap-1 text-xs text-text-muted" title={tr("0,5 = parábola; menos, arco de elipse; más, hipérbola")}>
                   rho
                   <input
                     type="number"
@@ -4354,21 +4366,21 @@ export const CadView: Component<CadViewProps> = (props) => {
                     max="0.99"
                     step="0.05"
                     value={conicRho()}
-                    aria-label="Factor rho"
+                    aria-label={tr("Factor rho")}
                     class="w-14 px-1 py-0.5 rounded bg-surface/40 border border-border text-xs text-text font-mono outline-none focus:border-accent"
                     onChange={(e) => setConicRho(Math.min(0.99, Math.max(0.01, parseFloat(e.currentTarget.value) || 0.5)))}
                   />
                 </label>
               </Show>
               <Show when={ui.tool() === "bspline"}>
-                <label class="flex items-center gap-1 text-xs text-text-muted" title="Grado de la curva: 2 cuadrática, 3 cúbica…">
-                  Grado
+                <label class="flex items-center gap-1 text-xs text-text-muted" title={tr("Grado de la curva: 2 cuadrática, 3 cúbica…")}>
+                  {tr("Grado")}
                   <input
                     type="number"
                     min="1"
                     max="7"
                     value={bsplineDegree()}
-                    aria-label="Grado"
+                    aria-label={tr("Grado")}
                     class="w-12 px-1 py-0.5 rounded bg-surface/40 border border-border text-xs text-text font-mono outline-none focus:border-accent"
                     onChange={(e) => setBsplineDegree(Math.max(1, Math.min(7, parseInt(e.currentTarget.value) || 3)))}
                   />
@@ -4376,7 +4388,7 @@ export const CadView: Component<CadViewProps> = (props) => {
               </Show>
               <Show when={ui.tool() === "polygon"}>
                 <label class="flex items-center gap-1 text-xs text-text-muted">
-                  Lados
+                  {tr("Lados")}
                   <input
                     type="number"
                     min="3"
@@ -4388,22 +4400,22 @@ export const CadView: Component<CadViewProps> = (props) => {
                 </label>
                 <button
                   class="px-2 py-0.5 rounded text-xs text-text-muted hover:text-text hover:bg-surface border border-border"
-                  title="Inscrito: el clic es un vértice. Circunscrito: el clic es el medio de un lado (el círculo toca los lados)"
+                  title={tr("Inscrito: el clic es un vértice. Circunscrito: el clic es el medio de un lado (el círculo toca los lados)")}
                   onClick={() => setPolygonCircumscribed(!polygonCircumscribed())}
                 >
-                  {polygonCircumscribed() ? "Circunscrito" : "Inscrito"}
+                  {polygonCircumscribed() ? tr("Circunscrito") : tr("Inscrito")}
                 </button>
               </Show>
               <Show when={ui.tool() === "text" || selectedText() || ui.tool() === "conic" || ui.tool() === "bspline" || ui.tool() === "polygon"}>
                 <div class="w-px h-5 bg-border mx-1" />
               </Show>
-              <Tooltip content="Deshacer en el sketch (Ctrl+Z)">
-                <IconButton aria-label="Deshacer en el sketch" size="sm" disabled={!ui.sketchHistory().undo} onClick={() => ui.undoSketch()}>
+              <Tooltip content={tr("Deshacer en el sketch (Ctrl+Z)")}>
+                <IconButton aria-label={tr("Deshacer en el sketch")} size="sm" disabled={!ui.sketchHistory().undo} onClick={() => ui.undoSketch()}>
                   <Icons.ArrowCounterClockwise size={15} />
                 </IconButton>
               </Tooltip>
-              <Tooltip content="Rehacer en el sketch (Ctrl+Shift+Z)">
-                <IconButton aria-label="Rehacer en el sketch" size="sm" disabled={!ui.sketchHistory().redo} onClick={() => ui.redoSketch()}>
+              <Tooltip content={tr("Rehacer en el sketch (Ctrl+Shift+Z)")}>
+                <IconButton aria-label={tr("Rehacer en el sketch")} size="sm" disabled={!ui.sketchHistory().redo} onClick={() => ui.redoSketch()}>
                   <Icons.ArrowClockwise size={15} />
                 </IconButton>
               </Tooltip>
@@ -4412,9 +4424,9 @@ export const CadView: Component<CadViewProps> = (props) => {
               <div class="relative" data-sketch-issues>
                 <button
                   class="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded hover:bg-surface/60"
-                  aria-label="Avisos del sketch"
+                  aria-label={tr("Avisos del sketch")}
                   aria-expanded={issuesOpen()}
-                  title={`${statusText() || "Avisos del sketch"} (clic: el detalle)`}
+                  title={tr("{estado} (clic: el detalle)", { estado: statusText() || tr("Avisos del sketch") })}
                   onClick={() => setIssuesOpen(!issuesOpen())}
                 >
                   <Show when={issues().length} fallback={<Icons.Check size={14} class="text-success" />}>
@@ -4440,7 +4452,7 @@ export const CadView: Component<CadViewProps> = (props) => {
                     >
                       {statusText()}
                     </p>
-                    <Show when={issues().length} fallback={<p class="px-1.5 py-1 text-success">Sin avisos</p>}>
+                    <Show when={issues().length} fallback={<p class="px-1.5 py-1 text-success">{tr("Sin avisos")}</p>}>
                       <For each={issues()}>
                         {(it) => (
                           <button
@@ -4459,7 +4471,7 @@ export const CadView: Component<CadViewProps> = (props) => {
                             <span class={clsx("mt-px shrink-0", ISSUE_COLOR[it.kind])}>
                               {it.kind === "error" ? <Icons.X size={12} /> : it.kind === "warning" ? <Icons.Warning size={12} /> : <Icons.Info size={12} />}
                             </span>
-                            <span class="text-text">{it.text}</span>
+                            <span class="text-text">{tr(it.text)}</span>
                           </button>
                         )}
                       </For>
@@ -4469,14 +4481,14 @@ export const CadView: Component<CadViewProps> = (props) => {
               </div>
               <div class="w-px h-5 bg-border mx-1" />
               {/* Restricciones y cota: con lo elegido se ponen al apretar; sin nada elegido el botón queda activo y se ponen al elegir (hasta Esc) */}
-              <div class="flex items-center gap-0.5" role="toolbar" aria-label="Restricciones">
+              <div class="flex items-center gap-0.5" role="toolbar" aria-label={tr("Restricciones")}>
                 <For each={CONSTRAINT_TOOLS}>
                   {(t) => {
                     const fits = () => !!ui.session() && ui.selection().length > 0 && !!pickSuggestion(ui.session()!.sketch, ui.selection(), t, ui.session()!.report?.free_points);
                     return (
-                      <Tooltip content={`${t.label}: ${t.tip}`}>
+                      <Tooltip content={`${tr(t.label)}: ${tr(t.tip)}`}>
                         <button
-                          aria-label={t.label}
+                          aria-label={tr(t.label)}
                           data-constraint-tool={t.key}
                           class={clsx(
                             "min-w-6 h-6 px-1 rounded text-[12px] font-semibold leading-none",
@@ -4490,7 +4502,11 @@ export const CadView: Component<CadViewProps> = (props) => {
                             setPendingCon(pendingCon()?.key === t.key ? undefined : tool);
                             ui.setSelection([]);
                             ui.setTool("select");
-                            ui.setMessage(pendingCon() ? `${tool.label}: elegir ${t.tip.charAt(0).toLowerCase()}${t.tip.slice(1)} (Esc termina)` : undefined);
+                            ui.setMessage(
+                              pendingCon()
+                                ? tr("{label}: elegir {tip} (Esc termina)", { label: tr(tool.label), tip: tr(t.tip).charAt(0).toLowerCase() + tr(t.tip).slice(1) })
+                                : undefined,
+                            );
                           }}
                         >
                           {t.glyph}
@@ -4501,13 +4517,13 @@ export const CadView: Component<CadViewProps> = (props) => {
                 </For>
               </div>
               <div class="w-px h-5 bg-border mx-1" />
-              <For each={[["dims", "Cotas"], ["constraints", "Restric."], ["construction", "Constr."], ["points", "Puntos"], ["freedom", "Libres"], ["crossings", "Cruces"]] as const}>
+              <For each={[["dims", tr("Cotas")], ["constraints", tr("Restric.")], ["construction", tr("Constr.")], ["points", tr("Puntos")], ["freedom", tr("Libres")], ["crossings", tr("Cruces")]] as const}>
                 {([k, label]) => (
                   <button
-                    aria-label={`Mostrar ${label.toLowerCase()}`}
+                    aria-label={tr("Mostrar {x}", { x: label.toLowerCase() })}
                     aria-pressed={ui.sketchShow()[k]}
                     class={clsx("px-1.5 py-0.5 rounded text-[11px]", ui.sketchShow()[k] ? "text-text hover:bg-surface" : "text-text-dim line-through hover:bg-surface")}
-                    title={ui.sketchShow()[k] ? `Ocultar ${label.toLowerCase()}` : `Mostrar ${label.toLowerCase()}`}
+                    title={ui.sketchShow()[k] ? tr("Ocultar {x}", { x: label.toLowerCase() }) : tr("Mostrar {x}", { x: label.toLowerCase() })}
                     onClick={() => ui.toggleShow(k)}
                   >
                     {label}
@@ -4515,38 +4531,38 @@ export const CadView: Component<CadViewProps> = (props) => {
                 )}
               </For>
               <select
-                aria-label="Filtro de selección"
-                title="Qué se puede elegir con el mouse (también al recortar, extender o partir)"
+                aria-label={tr("Filtro de selección")}
+                title={tr("Qué se puede elegir con el mouse (también al recortar, extender o partir)")}
                 class="bg-transparent text-[11px] text-text-muted rounded px-0.5 hover:bg-surface outline-none"
                 value={ui.sketchFilter()}
                 onChange={(e) => ui.setSketchFilter(e.currentTarget.value as SketchFilter)}
               >
-                <For each={SKETCH_FILTERS}>{(f) => <option value={f.value} title={f.tip}>{f.value === "all" ? "Elegir: todo" : `Solo ${f.label.toLowerCase()}`}</option>}</For>
+                <For each={SKETCH_FILTERS}>{(f) => <option value={f.value} title={tr(f.tip)}>{f.value === "all" ? tr("Elegir: todo") : tr("Solo {x}", { x: tr(f.label).toLowerCase() })}</option>}</For>
               </select>
               <div class="w-px h-5 bg-border mx-1" />
               <button
-                aria-label="Inferencias"
+                aria-label={tr("Inferencias")}
                 aria-pressed={ui.assist().infer}
                 class={clsx("px-1.5 py-0.5 rounded text-[11px]", ui.assist().infer ? "text-text hover:bg-surface" : "text-text-dim line-through hover:bg-surface")}
-                title={ui.assist().infer ? "Apagar anclajes e inferencias (Mayús los apaga para un clic)" : "Prender anclajes e inferencias"}
+                title={ui.assist().infer ? tr("Apagar anclajes e inferencias (Mayús los apaga para un clic)") : tr("Prender anclajes e inferencias")}
                 onClick={() => ui.setAssist({ infer: !ui.assist().infer })}
               >
-                Inferir
+                {tr("Inferir")}
               </button>
               <button
-                aria-label="Rejilla del sketch"
+                aria-label={tr("Rejilla del sketch")}
                 aria-pressed={ui.assist().grid}
                 class={clsx("px-1.5 py-0.5 rounded text-[11px]", ui.assist().grid ? "text-text hover:bg-surface" : "text-text-dim line-through hover:bg-surface")}
-                title="Rejilla del sketch (paso y anclaje en el panel)"
+                title={tr("Rejilla del sketch (paso y anclaje en el panel)")}
                 onClick={() => ui.setAssist({ grid: !ui.assist().grid })}
               >
-                Rejilla
+                {tr("Rejilla")}
               </button>
               <input
-                aria-label="Coordenadas del próximo punto"
+                aria-label={tr("Coordenadas del próximo punto")}
                 class="w-28 px-1.5 py-0.5 rounded bg-surface border border-border text-[11px] font-mono"
-                placeholder="x, y · @dx, dy · @d<á"
-                title="Próximo punto escrito: x, y (absoluto) · @dx, dy (desde el último) · @d<ángulo (polar). Enter lo pone."
+                placeholder={tr("x, y · @dx, dy · @d<á")}
+                title={tr("Próximo punto escrito: x, y (absoluto) · @dx, dy (desde el último) · @d<ángulo (polar). Enter lo pone.")}
                 onKeyDown={(e) => {
                   e.stopPropagation();
                   if (e.key !== "Enter") return;
@@ -4555,8 +4571,8 @@ export const CadView: Component<CadViewProps> = (props) => {
                   if (!msg) e.currentTarget.value = "";
                 }}
               />
-              <div role="radiogroup" aria-label="Qué dicen las cotas" class="flex items-center gap-0.5 ml-0.5">
-                <For each={[["value", "Valor", "Las cotas muestran su valor"], ["name", "Nombre", "Las cotas muestran su nombre (d1, d2… o el parámetro)"], ["expr", "Fórmula", "Las cotas con fórmula la muestran junto al valor"]] as const}>
+              <div role="radiogroup" aria-label={tr("Qué dicen las cotas")} class="flex items-center gap-0.5 ml-0.5">
+                <For each={[["value", tr("Valor"), tr("Las cotas muestran su valor")], ["name", tr("Nombre"), tr("Las cotas muestran su nombre (d1, d2… o el parámetro)")], ["expr", tr("Fórmula"), tr("Las cotas con fórmula la muestran junto al valor")]] as const}>
                   {([k, label, tip]) => (
                     <button
                       role="radio"
@@ -4576,10 +4592,10 @@ export const CadView: Component<CadViewProps> = (props) => {
                 fallback={
                   <>
                     <Button size="sm" variant="primary" onClick={() => void ui.finishSketch()}>
-                      {ui.session()?.sheet ? "Volver al plano" : "Terminar sketch"}
+                      {ui.session()?.sheet ? tr("Volver al plano") : tr("Terminar sketch")}
                     </Button>
                     <Button size="sm" variant="ghost" onClick={() => ui.cancelSketch()}>
-                      Descartar
+                      {tr("Descartar")}
                     </Button>
                   </>
                 }
@@ -4587,13 +4603,13 @@ export const CadView: Component<CadViewProps> = (props) => {
                 {(be) => (
                   <>
                     <span class="text-xs text-accent px-1" data-block-edit={be().block}>
-                      Bloque «{be().name}»
+                      {tr("Bloque «{name}»", { name: be().name })}
                     </span>
-                    <Button size="sm" variant="primary" title="Guarda el bloque: todas sus copias cambian" onClick={() => ui.setMessage(ui.finishBlock())}>
-                      Terminar bloque
+                    <Button size="sm" variant="primary" title={tr("Guarda el bloque: todas sus copias cambian")} onClick={() => ui.setMessage(ui.finishBlock())}>
+                      {tr("Terminar bloque")}
                     </Button>
                     <Button size="sm" variant="ghost" onClick={() => ui.cancelBlock()}>
-                      Descartar bloque
+                      {tr("Descartar bloque")}
                     </Button>
                   </>
                 )}
@@ -4608,12 +4624,12 @@ export const CadView: Component<CadViewProps> = (props) => {
         {(i) => (
           <div data-extra-dim class="absolute top-24 left-1/2 -translate-x-1/2 flex items-center gap-2 rounded-md border border-error/60 bg-bg-lighter/95 px-3 py-1.5 text-xs text-text">
             <Icons.Warning size={14} class="text-error" />
-            Esta cota sobre-define el sketch
+            {tr("Esta cota sobre-define el sketch")}
             <Button size="sm" variant="primary" onClick={() => ui.toggleReference(i())}>
-              Dejarla de referencia
+              {tr("Dejarla de referencia")}
             </Button>
             <Button size="sm" variant="ghost" onClick={() => ui.removeConstraint(i())}>
-              Quitarla
+              {tr("Quitarla")}
             </Button>
           </div>
         )}
@@ -4622,7 +4638,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       {/* Herramienta activa (y la restricción que espera), abajo a la izquierda */}
       <Show when={ui.session()}>
         <div data-active-tool class="pointer-events-none absolute bottom-3 left-3 rounded bg-bg-lighter/90 border border-border px-2 py-0.5 text-[11px] text-text-muted shadow">
-          {pendingCon() ? `${pendingCon()!.label}: elegir lo que restringe` : (TOOLS.find((t) => t.id === ui.tool())?.short ?? "Elegir")}
+          {pendingCon() ? tr("{label}: elegir lo que restringe", { label: tr(pendingCon()!.label) }) : tr(TOOLS.find((t) => t.id === ui.tool())?.short ?? "Elegir")}
         </div>
       </Show>
 
@@ -4632,15 +4648,15 @@ export const CadView: Component<CadViewProps> = (props) => {
         {(list) => (
           <div data-conflicts class="absolute top-24 left-1/2 -translate-x-1/2 max-w-[60%] flex flex-wrap items-center gap-1.5 rounded-md border border-error/60 bg-bg-lighter/95 px-3 py-1.5 text-xs text-text">
             <Icons.Warning size={14} class="text-error" />
-            {list().length === 1 ? "Una restricción en conflicto:" : `${list().length} restricciones en conflicto:`}
+            {list().length === 1 ? tr("Una restricción en conflicto:") : tr("{n} restricciones en conflicto:", { n: list().length })}
             <For each={list()}>
               {(i) => {
                 const c = () => ui.session()?.sketch.constraints[i];
                 return (
                   <Show when={c()}>
                     <span class="flex items-center gap-1 rounded border border-error/40 px-1.5 py-0.5" onPointerEnter={() => ui.setHoverIds(constraintIds(c()!))} onPointerLeave={() => ui.setHoverIds([])}>
-                      {CONSTRAINT_LABELS[c()!.type] ?? c()!.type}
-                      <button class="text-text-muted hover:text-error" aria-label="Quitar esta restricción" title="Quitarla" onClick={() => ui.removeConstraint(i)}>
+                      {tr(CONSTRAINT_LABELS[c()!.type] ?? c()!.type)}
+                      <button class="text-text-muted hover:text-error" aria-label={tr("Quitar esta restricción")} title={tr("Quitarla")} onClick={() => ui.removeConstraint(i)}>
                         ×
                       </button>
                     </span>
@@ -4649,7 +4665,7 @@ export const CadView: Component<CadViewProps> = (props) => {
               }}
             </For>
             <Button size="sm" variant="ghost" onClick={() => ui.change((sk) => (sk.constraints = sk.constraints.filter((_, k) => !list().includes(k))))}>
-              Quitar todas
+              {tr("Quitar todas")}
             </Button>
           </div>
         )}
@@ -4690,12 +4706,12 @@ export const CadView: Component<CadViewProps> = (props) => {
           {(v) => (
             <div data-viewing class="flex items-center gap-3 rounded-md border border-warning/60 bg-bg-lighter/95 px-3 py-1.5 text-xs text-text pointer-events-auto">
               <Icons.Eye size={14} class="text-warning" />
-              Viendo «{v().name}» (solo lectura)
+              {tr("Viendo «{name}» (solo lectura)", { name: v().name })}
               <button class="text-accent hover:underline" onClick={() => void store.restoreVersion(store.viewing()!)}>
-                Restaurar
+                {tr("Restaurar")}
               </button>
               <button class="text-text-muted hover:text-text" onClick={() => void store.viewVersion(undefined)}>
-                Volver al diseño
+                {tr("Volver al diseño")}
               </button>
             </div>
           )}
@@ -4704,11 +4720,11 @@ export const CadView: Component<CadViewProps> = (props) => {
         <Show when={store.comparison()}>
           {(c) => (
             <div data-comparison class="flex items-center gap-3 rounded-md border border-border bg-bg-lighter/95 px-3 py-1.5 text-xs text-text pointer-events-auto">
-              <span>Desde «{store.committed()?.versions?.[c().version]?.name}»:</span>
+              <span>{tr("Desde «{name}»:", { name: store.committed()?.versions?.[c().version]?.name ?? "" })}</span>
               <span class="text-green">+{formatVolume(c().added)}</span>
               <span class="text-red">−{formatVolume(c().removed)}</span>
               <button class="text-text-muted hover:text-text" onClick={() => void store.compareVersion(undefined)}>
-                Quitar
+                {tr("Quitar")}
               </button>
             </div>
           )}
@@ -4717,29 +4733,29 @@ export const CadView: Component<CadViewProps> = (props) => {
         <Show when={promptText()}>
           <div class="flex items-center gap-3 rounded-md border border-accent/60 bg-bg-lighter/95 px-3 py-1.5 text-xs text-text pointer-events-auto">
             <Icons.Cursor size={14} class="text-accent" />
-            {promptText()}
+            {tr(promptText()!)}
             <button class="text-text-muted hover:text-text" onClick={() => ui.cancelPick()}>
-              Cancelar (Esc)
+              {tr("Cancelar (Esc)")}
             </button>
           </div>
         </Show>
         <Show when={store.busy()}>
-          <span class="text-xs text-text-muted bg-bg-lighter/90 rounded px-2 py-0.5">Recalculando...</span>
+          <span class="text-xs text-text-muted bg-bg-lighter/90 rounded px-2 py-0.5">{tr("Recalculando...")}</span>
         </Show>
         <Show when={ui.message()}>
-          <span class="text-xs text-text bg-bg-lighter/90 rounded px-2 py-0.5">{ui.message()}</span>
+          <span class="text-xs text-text bg-bg-lighter/90 rounded px-2 py-0.5">{tr(ui.message()!)}</span>
         </Show>
         <Show when={store.error()}>
-          <span class="text-xs text-error bg-bg-lighter/90 rounded px-2 py-0.5">{store.error()}</span>
+          <span class="text-xs text-error bg-bg-lighter/90 rounded px-2 py-0.5">{tr(store.error()!)}</span>
         </Show>
         <Show when={props.actions.notice()}>
-          <span class="text-xs text-warning bg-bg-lighter/90 rounded px-2 py-0.5">{props.actions.notice()}</span>
+          <span class="text-xs text-warning bg-bg-lighter/90 rounded px-2 py-0.5">{tr(props.actions.notice()!)}</span>
         </Show>
         <Show when={!ui.session() && ui.picks().length > 0}>
           <span class="flex items-center gap-2 text-xs text-text bg-bg-lighter/90 rounded px-2 py-0.5 pointer-events-auto">
-            Elegido: {pickSummary(ui.picks())}
+            {tr("Elegido: {resumen}", { resumen: pickSummary(ui.picks()) })}
             <button class="text-text-muted hover:text-text" onClick={() => ui.clearPicks()}>
-              Limpiar (Esc)
+              {tr("Limpiar (Esc)")}
             </button>
           </span>
         </Show>
@@ -4816,7 +4832,7 @@ const MeasurePanel: Component<{ m: Measurement }> = (props) => {
     const out: [string, string][] = [];
     if (m.items.length === 1) {
       const it = m.items[0];
-      out.push(["", KIND_NAMES[it.kind] ?? (it.kind.startsWith("b") ? "Superficie libre" : it.kind)]);
+      out.push(["", tr(KIND_NAMES[it.kind] ?? (it.kind.startsWith("b") ? "Superficie libre" : it.kind))]);
       if (it.area != null) out.push(["Área", `${it.area.toFixed(3).replace(/\.?0+$/, "")} mm²`]);
       if (it.length != null) out.push(["Largo", mm(it.length)]);
       if (it.radius != null) out.push(["Radio", mm(it.radius)], ["Diámetro", mm(2 * it.radius)]);
@@ -4834,13 +4850,13 @@ const MeasurePanel: Component<{ m: Measurement }> = (props) => {
   };
   return (
     <div
-      aria-label="Medidas"
+      aria-label={tr("Medidas")}
       class="absolute bottom-2 right-2 min-w-44 rounded-md border border-border bg-bg-lighter/95 px-2.5 py-1.5 text-xs shadow"
     >
       <For each={rows()}>
         {([k, v]) => (
           <div class="flex justify-between gap-4">
-            <span class="text-text-muted">{k}</span>
+            <span class="text-text-muted">{tr(k)}</span>
             <span class={clsx(k ? "font-mono text-text" : "text-text")} data-measure={k}>
               {v}
             </span>

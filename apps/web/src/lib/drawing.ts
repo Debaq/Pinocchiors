@@ -5,6 +5,7 @@
 // hoja con Y hacia arriba desde la esquina de abajo a la izquierda.
 
 import type { Sketch } from "./cad.ts";
+import { t as tr } from "./i18n.ts";
 import { polylineOf } from "./sketchCheck.ts";
 
 export type P2 = [number, number];
@@ -25,16 +26,24 @@ export interface DrawingLine {
 export type ViewName = "front" | "top" | "bottom" | "left" | "right" | "back" | "iso";
 
 export const VIEW_LABELS: Record<ViewName, string> = {
-  front: "Frente",
-  top: "Superior (planta)",
-  bottom: "Inferior",
-  left: "Lateral izquierda",
-  right: "Lateral derecha",
-  back: "Posterior",
-  iso: "Isométrica",
+  get front() { return tr("Frente"); },
+  get top() { return tr("Superior (planta)"); },
+  get bottom() { return tr("Inferior"); },
+  get left() { return tr("Lateral izquierda"); },
+  get right() { return tr("Lateral derecha"); },
+  get back() { return tr("Posterior"); },
+  get iso() { return tr("Isométrica"); },
 };
 /** Nombre corto para el rótulo bajo la vista */
-const VIEW_TITLES: Record<ViewName, string> = { front: "Frente", top: "Superior", bottom: "Inferior", left: "Lateral izquierda", right: "Lateral derecha", back: "Posterior", iso: "Isométrica" };
+const VIEW_TITLES: Record<ViewName, string> = {
+  get front() { return tr("Frente"); },
+  get top() { return tr("Superior"); },
+  get bottom() { return tr("Inferior"); },
+  get left() { return tr("Lateral izquierda"); },
+  get right() { return tr("Lateral derecha"); },
+  get back() { return tr("Posterior"); },
+  get iso() { return tr("Isométrica"); },
+};
 
 /**
  * Desde dónde se mira cada vista (hacia quien mira) y la derecha de la hoja;
@@ -446,10 +455,10 @@ export function placementProblems(placed: Placed[], sheet: SheetSize, labels: Re
   const title = [sheet.width - MARGIN - TITLE_W, sheet.height - MARGIN - TITLE_H, sheet.width - MARGIN, sheet.height - MARGIN];
   for (const { v, b } of boxes) {
     if (!v.moved) continue;
-    if (b[0] < MARGIN || b[1] < MARGIN || b[2] > sheet.width - MARGIN || b[3] > sheet.height - MARGIN) out.push(`${name(v)} se sale de la hoja`);
-    else if (hit(b, title)) out.push(`${name(v)} pisa el cajetín`);
+    if (b[0] < MARGIN || b[1] < MARGIN || b[2] > sheet.width - MARGIN || b[3] > sheet.height - MARGIN) out.push(tr("{name} se sale de la hoja", { name: name(v) }));
+    else if (hit(b, title)) out.push(tr("{name} pisa el cajetín", { name: name(v) }));
     const other = boxes.find((o) => o.v !== v && hit(b, o.b));
-    if (other) out.push(`${name(v)} pisa ${name(other.v)}`);
+    if (other) out.push(tr("{name} pisa {other}", { name: name(v), other: name(other.v) }));
   }
   return out;
 }
@@ -1221,7 +1230,7 @@ export function sheetSvg(
     const below = front.y - b.min[1] * front.scale + (opts.dimensions ? 14 : 6);
     // Con escala propia, la escala va en el mismo rótulo
     const k = front.label ? ` (${scaleLabel(front.scale)})` : "";
-    out.push(`<text data-section-label="" x="${n(cx)}" y="${n(below)}" font-size="4" text-anchor="middle" fill="#000">Corte ${esc(opts.section.label)}-${esc(opts.section.label)}${k}</text>`);
+    out.push(`<text data-section-label="" x="${n(cx)}" y="${n(below)}" font-size="4" text-anchor="middle" fill="#000">${esc(tr("Corte {label}-{label}{scale}", { label: opts.section.label, scale: k }))}</text>`);
   }
   // Rótulo bajo las vistas con escala propia
   for (const [v, at] of viewLabels(placed, opts.dimensions, !!opts.section)) {
@@ -1248,13 +1257,13 @@ export function sheetSvg(
     `<text x="${n(x + 1.5)}" y="${n(y + 3)}" font-size="2" fill="#555">${esc(label)}</text>` +
     `<text x="${n(x + 1.5)}" y="${n(y + h - 2)}" font-size="${size}" fill="#000">${esc(value)}</text>`;
   out.push(`<g data-title-block="">`);
-  out.push(cell(x0, y0, TITLE_W, 12, "Título", info.title, 5));
-  out.push(cell(x0, y0 + 12, 50, 8, "Autor", info.author ?? ""));
-  out.push(cell(x0 + 50, y0 + 12, 50, 8, "Material", info.material ?? ""));
-  out.push(cell(x0 + 100, y0 + 12, 30, 8, "Hoja", info.sheet));
-  out.push(cell(x0, y0 + 20, 50, 8, "Fecha", info.date));
-  out.push(cell(x0 + 50, y0 + 20, 30, 8, "Escala", info.scale));
-  out.push(cell(x0 + 80, y0 + 20, 50, 8, "Proyección", info.projection === "first" ? "Primer diedro (ISO E)" : "Tercer diedro (ISO A)", 2.8));
+  out.push(cell(x0, y0, TITLE_W, 12, tr("Título"), info.title, 5));
+  out.push(cell(x0, y0 + 12, 50, 8, tr("Autor"), info.author ?? ""));
+  out.push(cell(x0 + 50, y0 + 12, 50, 8, tr("Material"), info.material ?? ""));
+  out.push(cell(x0 + 100, y0 + 12, 30, 8, tr("Hoja"), info.sheet));
+  out.push(cell(x0, y0 + 20, 50, 8, tr("Fecha"), info.date));
+  out.push(cell(x0 + 50, y0 + 20, 30, 8, tr("Escala"), info.scale));
+  out.push(cell(x0 + 80, y0 + 20, 50, 8, tr("Proyección"), info.projection === "first" ? tr("Primer diedro (ISO E)") : tr("Tercer diedro (ISO A)"), 2.8));
   out.push("</g>");
   out.push("</svg>");
   return out.join("\n");
@@ -1467,7 +1476,7 @@ export function sheetDxf(
         pair(20, cy - r - 6);
         pair(30, 0);
         pair(40, 3.5);
-        pair(1, `Detalle ${d.label} (${scaleLabel(v.scale)})`);
+        pair(1, tr("Detalle {label} ({scale})", { label: d.label, scale: scaleLabel(v.scale) }));
       }
     // Rayado de las caras cortadas (como líneas: cada programa de CAD lo lee) y las marcas de los cortes
     if (!opts.view) {

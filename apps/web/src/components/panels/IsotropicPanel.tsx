@@ -1,6 +1,7 @@
 import { Component, Show } from "solid-js";
 import { Button, Checkbox, NumberInput, Slider } from "../ui";
 import { RemeshActions, type RemeshActionsProps } from "./RemeshActions";
+import { fmtNumber, t } from "../../lib/i18n";
 
 /** La malla del modelo, para proponer parámetros (del backend, en mm) */
 export interface RemeshInfo {
@@ -61,7 +62,7 @@ export const isotropicParams = (c: IsotropicConfig) => ({
 });
 
 /** Milímetros con pocas cifras */
-export const formatMm = (v: number) => `${v.toLocaleString("es", { maximumSignificantDigits: 3 })} mm`;
+export const formatMm = (v: number) => `${fmtNumber(v, { maximumSignificantDigits: 3 })} mm`;
 
 export interface IsotropicPanelProps extends RemeshActionsProps {
   config: IsotropicConfig;
@@ -83,19 +84,17 @@ export const IsotropicPanel: Component<IsotropicPanelProps> = (props) => {
       <Show when={broken()}>
         <div data-isotropic-broken class="rounded-md border border-warning/40 bg-warning/10 p-2 text-xs text-text-muted space-y-2">
           <p>
-            La malla tiene aristas con más de dos caras o caras dadas vuelta (piezas unidas sin fundir, por ejemplo). Isótropo
-            necesita una superficie limpia: repararla antes o rehacerla con Vóxeles, que también puede dejar los triángulos
-            parejos.
+            {t("La malla tiene aristas con más de dos caras o caras dadas vuelta (piezas unidas sin fundir, por ejemplo). Isótropo necesita una superficie limpia: repararla antes o rehacerla con Vóxeles, que también puede dejar los triángulos parejos.")}
           </p>
           <Button size="sm" variant="default" onClick={() => props.onUseVoxels()}>
-            Usar Vóxeles
+            {t("Usar Vóxeles")}
           </Button>
         </div>
       </Show>
 
       <div class="space-y-1">
         <div class="flex items-center justify-between gap-2">
-          <span class="text-xs text-text-muted">Lado de los triángulos</span>
+          <span class="text-xs text-text-muted">{t("Lado de los triángulos")}</span>
           <div class="flex items-center gap-1">
             <NumberInput
               class="w-24"
@@ -105,18 +104,18 @@ export const IsotropicPanel: Component<IsotropicPanelProps> = (props) => {
               step={Number((edge() / 10).toPrecision(1))}
               suffix="mm"
             />
-            <Button size="sm" variant={props.config.edgeMm == null ? "default" : "ghost"} onClick={() => update({ edgeMm: null })} title="El largo medio de las aristas de ahora, como mucho 1/50 del tamaño">
-              Auto
+            <Button size="sm" variant={props.config.edgeMm == null ? "default" : "ghost"} onClick={() => update({ edgeMm: null })} title={t("El largo medio de las aristas de ahora, como mucho 1/50 del tamaño")}>
+              {t("Auto")}
             </Button>
           </div>
         </div>
         <Show when={props.info}>
           {(info) => (
             <p class="text-xs text-text-muted">
-              ≈ <span data-isotropic-estimate class={tooDense() ? "text-error" : "text-text"}>{estimate().toLocaleString("es")}</span> triángulos
-              (ahora {info().triangles.toLocaleString("es")}; arista media {formatMm(info().mean_edge_mm)})
+              ≈ <span data-isotropic-estimate class={tooDense() ? "text-error" : "text-text"}>{fmtNumber(estimate())}</span> {t("triángulos")}{" "}
+              {t("(ahora {n}; arista media {edge})", { n: fmtNumber(info().triangles), edge: formatMm(info().mean_edge_mm) })}
               <Show when={tooDense()}>
-                <span class="text-error"> — demasiados, usar un lado mayor</span>
+                <span class="text-error"> — {t("demasiados, usar un lado mayor")}</span>
               </Show>
             </p>
           )}
@@ -124,42 +123,41 @@ export const IsotropicPanel: Component<IsotropicPanelProps> = (props) => {
       </div>
 
       <div class="space-y-2">
-        <Checkbox label="Conservar las aristas vivas" checked={props.config.keepSharp} onChange={(keepSharp) => update({ keepSharp })} />
+        <Checkbox label={t("Conservar las aristas vivas")} checked={props.config.keepSharp} onChange={(keepSharp) => update({ keepSharp })} />
         <Show when={props.config.keepSharp}>
           <Slider
-            label="Desde"
+            label={t("Desde")}
             value={props.config.sharpAngle}
             onChange={(sharpAngle) => update({ sharpAngle })}
             min={10}
             max={120}
             step={5}
-            formatValue={(v) => `${v}° entre caras`}
+            formatValue={(v) => t("{v}° entre caras", { v })}
           />
         </Show>
       </div>
       <Slider
-        label="Pasadas"
+        label={t("Pasadas")}
         value={props.config.iterations}
         onChange={(iterations) => update({ iterations })}
         min={1}
         max={15}
         step={1}
-        title="Partir, colapsar, voltear y relajar; más pasadas, triángulos más parejos"
+        title={t("Partir, colapsar, voltear y relajar; más pasadas, triángulos más parejos")}
       />
       <div class="space-y-1">
         <Checkbox
-          label="Más fino en las partes delgadas"
+          label={t("Más fino en las partes delgadas")}
           checked={props.config.thinFeatures}
           onChange={(thinFeatures) => update({ thinFeatures })}
         />
         <p class="text-xs text-text-muted leading-relaxed">
-          Paredes, puntas y ranuras más angostas que un triángulo reciben triángulos más chicos, con la misma cantidad total.
+          {t("Paredes, puntas y ranuras más angostas que un triángulo reciben triángulos más chicos, con la misma cantidad total.")}
         </p>
       </div>
 
       <p class="text-xs text-text-dim leading-relaxed">
-        Es una malla nueva, sin UV: al aplicar se elige si trasladar la textura (se hornea sobre un mapa nuevo) y los pesos.
-        En mallas grandes tarda: unos 20 s cada medio millón de triángulos.
+        {t("Es una malla nueva, sin UV: al aplicar se elige si trasladar la textura (se hornea sobre un mapa nuevo) y los pesos. En mallas grandes tarda: unos 20 s cada medio millón de triángulos.")}
       </p>
 
       <RemeshActions {...props} canExecute={props.canExecute && !broken() && !tooDense()} />

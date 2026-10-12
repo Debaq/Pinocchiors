@@ -1,6 +1,7 @@
 import { Component, Show } from "solid-js";
 import { Checkbox, Slider } from "../ui";
 import { RemeshActions, type RemeshActionsProps } from "./RemeshActions";
+import { t } from "../../lib/i18n";
 
 /** Opciones de Suavizar (Remallar) */
 export interface SmoothConfig {
@@ -48,59 +49,57 @@ export const SmoothPanel: Component<SmoothPanelProps> = (props) => {
   return (
     <div data-smooth class="space-y-4">
       <Slider
-        label="Pasadas"
+        label={t("Pasadas")}
         value={props.config.iterations}
         onChange={(iterations) => update({ iterations })}
         min={1}
         max={100}
         step={1}
-        title="Más pasadas quitan ruido más grueso"
+        title={t("Más pasadas quitan ruido más grueso")}
       />
       <Slider
-        label="Intensidad"
+        label={t("Intensidad")}
         value={props.config.strength}
         onChange={(strength) => update({ strength })}
         min={5}
         max={100}
         step={5}
         formatValue={(v) => `${v} %`}
-        title="Cuánto se acerca cada vértice al promedio de sus vecinos en cada pasada"
+        title={t("Cuánto se acerca cada vértice al promedio de sus vecinos en cada pasada")}
       />
 
       <div class="space-y-2">
-        <Checkbox label="Respetar las aristas vivas" checked={props.config.keepSharp} onChange={(keepSharp) => update({ keepSharp })} />
+        <Checkbox label={t("Respetar las aristas vivas")} checked={props.config.keepSharp} onChange={(keepSharp) => update({ keepSharp })} />
         <Show when={props.config.keepSharp}>
           <Slider
-            label="Desde"
+            label={t("Desde")}
             value={props.config.sharpAngle}
             onChange={(sharpAngle) => update({ sharpAngle })}
             min={10}
             max={120}
             step={5}
-            formatValue={(v) => `${v}° entre caras`}
+            formatValue={(v) => t("{v}° entre caras", { v })}
           />
           <p class="text-xs text-text-muted leading-relaxed">
-            Las aristas vivas se suavizan solo a lo largo y sus esquinas quedan quietas. En un escaneo con mucho ruido, un
-            ángulo bajo marca el ruido como arista.
+            {t("Las aristas vivas se suavizan solo a lo largo y sus esquinas quedan quietas. En un escaneo con mucho ruido, un ángulo bajo marca el ruido como arista.")}
           </p>
         </Show>
       </div>
 
-      <Checkbox label="No mover los bordes abiertos" checked={props.config.fixBorders} onChange={(fixBorders) => update({ fixBorders })} />
+      <Checkbox label={t("No mover los bordes abiertos")} checked={props.config.fixBorders} onChange={(fixBorders) => update({ fixBorders })} />
       <div class="space-y-1">
         <Checkbox
-          label="Sin deslizar por la superficie"
+          label={t("Sin deslizar por la superficie")}
           checked={props.config.normalOnly}
           onChange={(normalOnly) => update({ normalOnly })}
         />
         <p class="text-xs text-text-muted leading-relaxed">
-          Los vértices solo se mueven hacia afuera o hacia adentro: quita el ruido sin que la textura se corra. Apagado,
-          además empareja el tamaño de los triángulos.
+          {t("Los vértices solo se mueven hacia afuera o hacia adentro: quita el ruido sin que la textura se corra. Apagado, además empareja el tamaño de los triángulos.")}
         </p>
       </div>
 
       <p class="text-xs text-text-dim leading-relaxed">
-        No encoge el modelo. Los triángulos, las UV y los pesos no cambian; las normales se rehacen.
+        {t("No encoge el modelo. Los triángulos, las UV y los pesos no cambian; las normales se rehacen.")}
       </p>
 
       <RemeshActions {...props} />

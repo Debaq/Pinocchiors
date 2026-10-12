@@ -1,6 +1,7 @@
 import { Component, Show } from "solid-js";
 import { RetopologyPanel, type RetopologyConfig, type QuadQuality } from "../panels/RetopologyPanel";
 import { Checkbox } from "../ui";
+import { t } from "../../lib/i18n";
 
 export interface RetopologyStepProps {
   config: RetopologyConfig;
@@ -21,8 +22,7 @@ export const RetopologyStep: Component<RetopologyStepProps> = (props) => {
   return (
     <div class="space-y-5">
       <p class="text-xs text-text-muted leading-relaxed">
-        Las mallas rotas se reparan solas; la simetría deja un loop de aristas en la línea
-        media, útil para el rig.
+        {t("Las mallas rotas se reparan solas; la simetría deja un loop de aristas en la línea media, útil para el rig.")}
       </p>
       <RetopologyPanel
         config={props.config}
@@ -38,15 +38,13 @@ export const RetopologyStep: Component<RetopologyStepProps> = (props) => {
       <Show when={props.hasResult}>
         <div class="space-y-2">
           <Checkbox
-            label="Usar esta malla en las etapas siguientes"
+            label={t("Usar esta malla en las etapas siguientes")}
             checked={props.useForNextSteps}
             onChange={props.onUseForNextStepsChange}
             disabled={props.isProcessing}
           />
           <p class="text-xs text-text-muted leading-relaxed">
-            El esqueleto, los pesos, el pincel y la pose de prueba trabajan sobre la malla que se
-            exporta. Desmarcado, usan la malla original (los pesos se trasladan al exportar).
-            Al cambiarlo, los pesos pasan a la otra malla.
+            {t("El esqueleto, los pesos, el pincel y la pose de prueba trabajan sobre la malla que se exporta. Desmarcado, usan la malla original (los pesos se trasladan al exportar). Al cambiarlo, los pesos pasan a la otra malla.")}
           </p>
         </div>
       </Show>

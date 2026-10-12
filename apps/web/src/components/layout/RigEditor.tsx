@@ -2,6 +2,7 @@ import { Component, For, Match, Switch, type JSX } from "solid-js";
 import { clsx } from "clsx";
 import { IconButton } from "../ui";
 import * as Icons from "../icons";
+import { t } from "../../lib/i18n";
 
 export type RigEditorTab = "library" | "joint" | "pose" | "ik" | "rig";
 
@@ -29,21 +30,21 @@ export const RigEditor: Component<RigEditorProps> = (props) => (
   <section class="flex flex-col h-full min-w-0 bg-bg-darker">
     <header class="flex items-center gap-1 h-9 px-2 shrink-0 border-b border-border">
       <For each={TABS}>
-        {(t) => (
+        {(tab) => (
           <button
-            title={t.title}
+            title={t(tab.title)}
             class={clsx(
               "px-2.5 h-7 rounded text-xs transition-colors",
-              props.tab === t.id ? "bg-accent/20 text-accent" : "text-text-muted hover:bg-surface/50 hover:text-text"
+              props.tab === tab.id ? "bg-accent/20 text-accent" : "text-text-muted hover:bg-surface/50 hover:text-text"
             )}
-            onClick={() => props.onTab(t.id)}
+            onClick={() => props.onTab(tab.id)}
           >
-            {t.label}
+            {t(tab.label)}
           </button>
         )}
       </For>
       <div class="flex-1" />
-      <IconButton size="sm" variant="ghost" aria-label="Cerrar el editor" title="Cerrar (Ctrl+E)" onClick={props.onClose}>
+      <IconButton size="sm" variant="ghost" aria-label={t("Cerrar el editor")} title={t("Cerrar (Ctrl+E)")} onClick={props.onClose}>
         <Icons.X size={14} />
       </IconButton>
     </header>

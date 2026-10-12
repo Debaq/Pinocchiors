@@ -1,6 +1,7 @@
 import { createSignal } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import type { CloudSelectTool, PointCloudData, Viewer3D } from "./Viewer3D";
+import { t, fmtNumber } from "./i18n.ts";
 
 /** Una toma: un escaneo o una nube abierta (`TakeInfo`) */
 export interface TakeInfo {
@@ -122,7 +123,7 @@ export function createScanCloud(viewer: () => Viewer3D | undefined, onMessage: (
     try {
       return await task();
     } catch (e) {
-      onMessage(`${what}: ${e}`);
+      onMessage(`${t(what)}: ${e}`);
     } finally {
       setBusy(undefined);
     }
@@ -146,19 +147,19 @@ export function createScanCloud(viewer: () => Viewer3D | undefined, onMessage: (
   const take = () =>
     run("Tomar la nube", async () => {
       await adopt(await invoke<CloudInfo>("scan_cloud_take"), true);
-      onMessage(`${info()!.source}: ${info()!.points.toLocaleString()} puntos`);
+      onMessage(t("{source}: {n} puntos", { source: info()!.source, n: fmtNumber(info()!.points) }));
     });
 
   const importPly = (path: string) =>
     run("Abrir la nube", async () => {
       await adopt(await invoke<CloudInfo>("scan_cloud_import", { path }), true);
-      onMessage(`${info()!.source} abierta: ${info()!.points.toLocaleString()} puntos`);
+      onMessage(t("{source} abierta: {n} puntos", { source: info()!.source, n: fmtNumber(info()!.points) }));
     });
 
   const exportPly = (path: string) =>
     run("Guardar la nube", async () => {
       await invoke("scan_cloud_export", { path });
-      onMessage(`Nube guardada en ${path}`);
+      onMessage(t("Nube guardada en {path}", { path }));
     });
 
   /** Aplica una edición; con `selectOnly` solo marca en el visor lo que quitaría */
@@ -168,12 +169,12 @@ export function createScanCloud(viewer: () => Viewer3D | undefined, onMessage: (
       const note = result.note ? ` (${result.note})` : "";
       if (selectOnly) {
         viewer()?.setCloudSelection(result.selected ?? []);
-        onMessage(`${label}: ${result.removed.toLocaleString()} puntos seleccionados${note}`);
+        onMessage(t("{label}: {n} puntos seleccionados{note}", { label: t(label), n: fmtNumber(result.removed), note }));
         return;
       }
       await adopt(result.info);
-      const what = op.kind === "downsample" || op.kind === "smooth" ? `quedan ${result.info.points.toLocaleString()} puntos` : `${result.removed.toLocaleString()} puntos quitados`;
-      onMessage(`${label}: ${what}${note}`);
+      const what = op.kind === "downsample" || op.kind === "smooth" ? t("quedan {n} puntos", { n: fmtNumber(result.info.points) }) : t("{n} puntos quitados", { n: fmtNumber(result.removed) });
+      onMessage(`${t(label)}: ${what}${note}`);
     });
 
   const selection = () => Array.from(viewer()?.getCloudSelection() ?? []);
@@ -204,12 +205,12 @@ export function createScanCloud(viewer: () => Viewer3D | undefined, onMessage: (
       await adopt(result.info, first);
       const name = result.info.source;
       if (result.note) {
-        onMessage(`${name}: ${result.added.toLocaleString()} puntos. ${result.note}`);
+        onMessage(t("{name}: {n} puntos. {note}", { name, n: fmtNumber(result.added), note: result.note }));
       } else if (result.overlap !== null) {
-        const warn = result.overlap < 0.15 ? ". Poco solape: revisa que haya caído en su lugar" : "";
-        onMessage(`${name}: ${result.added.toLocaleString()} puntos · calza ${Math.round(result.overlap * 100)} % (error ${result.rmse.toFixed(2)} mm)${warn}`);
+        const warn = result.overlap < 0.15 ? t(". Poco solape: revisa que haya caído en su lugar") : "";
+        onMessage(t("{name}: {n} puntos · calza {fit} % (error {err} mm){warn}", { name, n: fmtNumber(result.added), fit: Math.round(result.overlap * 100), err: result.rmse.toFixed(2), warn }));
       } else {
-        onMessage(`${name}: ${result.added.toLocaleString()} puntos`);
+        onMessage(t("{name}: {n} puntos", { name, n: fmtNumber(result.added) }));
       }
       return true;
     });
@@ -227,8 +228,8 @@ export function createScanCloud(viewer: () => Viewer3D | undefined, onMessage: (
       const result = await invoke<AlignResult>("scan_cloud_take_align", { align });
       await adopt(result.info);
       const overlap = result.overlap ?? 0;
-      const warn = overlap < 0.15 ? ". Poco solape: revisa que haya caído en su lugar (se deshace con Ctrl+Z)" : "";
-      onMessage(`${result.info.source} alineada: calza ${Math.round(overlap * 100)} % (error ${result.rmse.toFixed(2)} mm)${warn}`);
+      const warn = overlap < 0.15 ? t(". Poco solape: revisa que haya caído en su lugar (se deshace con Ctrl+Z)") : "";
+      onMessage(t("{source} alineada: calza {fit} % (error {err} mm){warn}", { source: result.info.source, fit: Math.round(overlap * 100), err: result.rmse.toFixed(2), warn }));
     });
 
   /** Fusiona las tomas a la vista en una toma nueva */
@@ -238,17 +239,17 @@ export function createScanCloud(viewer: () => Viewer3D | undefined, onMessage: (
       await adopt(result.info, true);
       const worst =
         result.worst_overlap !== null && result.worst
-          ? ` · el peor encaje: ${result.worst} (${Math.round(result.worst_overlap * 100)} %)`
+          ? t(" · el peor encaje: {worst} ({pct} %)", { worst: result.worst, pct: Math.round(result.worst_overlap * 100) })
           : "";
-      const warn = result.worst_overlap !== null && result.worst_overlap < 0.15 ? ". Poco solape: revisa esa toma" : "";
-      onMessage(`${result.fused} tomas fusionadas: ${result.info.points.toLocaleString()} puntos${worst}${warn}. Las originales quedan ocultas en la lista`);
+      const warn = result.worst_overlap !== null && result.worst_overlap < 0.15 ? t(". Poco solape: revisa esa toma") : "";
+      onMessage(t("{fused} tomas fusionadas: {n} puntos{worst}{warn}. Las originales quedan ocultas en la lista", { fused: result.fused, n: fmtNumber(result.info.points), worst, warn }));
     });
 
   /** Fija la referencia: la nube actual, un PLY o ninguna */
   const setReference = (action: "current" | "ply" | "clear", path?: string) =>
     run("Referencia", async () => {
       await adopt(await invoke<CloudInfo>("scan_cloud_reference", { action, path: path ?? null }));
-      if (action !== "clear") onMessage(`Referencia fijada: ${info()!.reference!.name}`);
+      if (action !== "clear") onMessage(t("Referencia fijada: {name}", { name: info()!.reference!.name }));
     });
 
   /** Mueve la nube para que calce sobre la referencia */
@@ -256,7 +257,7 @@ export function createScanCloud(viewer: () => Viewer3D | undefined, onMessage: (
     run("Alinear a la referencia", async () => {
       const result = await invoke<AlignResult>("scan_cloud_align_reference", { align });
       await adopt(result.info);
-      onMessage(`Alineada a la referencia: calza ${Math.round((result.overlap ?? 0) * 100)} % (error ${result.rmse.toFixed(2)} mm)`);
+      onMessage(t("Alineada a la referencia: calza {fit} % (error {err} mm)", { fit: Math.round((result.overlap ?? 0) * 100), err: result.rmse.toFixed(2) }));
     });
 
   /** Compara con la referencia y pinta el mapa; `show = false` lo apaga */

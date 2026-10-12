@@ -12,6 +12,7 @@ import {
   type KeyRef,
   type RotationCodecs,
 } from "../../lib/curves";
+import { t } from "../../lib/i18n";
 
 /** Un canal que se dibuja: de qué pista y grupo, cuál componente */
 export interface CurveChannelRow {
@@ -309,7 +310,7 @@ export const CurveEditor: Component<CurveEditorProps> = (props) => {
     <div class="flex flex-1 min-h-0">
       {/* Canales */}
       <div class="shrink-0 border-r border-border overflow-y-auto" style={{ width: `${props.namesWidth}px` }}>
-        <For each={owners()} fallback={<p class="px-2 py-2 text-xs text-text-dim">Elige articulaciones con keys (o ninguna, para ver todas).</p>}>
+        <For each={owners()} fallback={<p class="px-2 py-2 text-xs text-text-dim">{t("Elige articulaciones con keys (o ninguna, para ver todas).")}</p>}>
           {(o) => (
             <div>
               <div class="px-2 text-[11px] font-semibold text-text truncate" style={{ height: `${ROW}px`, "line-height": `${ROW}px` }}>
@@ -320,7 +321,7 @@ export const CurveEditor: Component<CurveEditorProps> = (props) => {
                   <button
                     class={clsx("w-full flex items-center gap-1.5 pl-4 pr-2 text-[11px] text-left", hidden().has(r.id) ? "text-text-dim" : "text-text-muted hover:text-text")}
                     style={{ height: `${ROW}px` }}
-                    title="Clic: mostrar u ocultar · doble clic: solo este"
+                    title={t("Clic: mostrar u ocultar · doble clic: solo este")}
                     onClick={() => {
                       const next = new Set(hidden());
                       if (next.has(r.id)) next.delete(r.id);
@@ -330,7 +331,7 @@ export const CurveEditor: Component<CurveEditorProps> = (props) => {
                     onDblClick={() => setHidden(new Set(props.rows.filter((x) => x.id !== r.id).map((x) => x.id)))}
                   >
                     <span class="w-2 h-2 rounded-sm shrink-0" style={{ background: hidden().has(r.id) ? "transparent" : r.color, border: `1px solid ${r.color}` }} />
-                    <span class="truncate">{r.label}</span>
+                    <span class="truncate">{t(r.label)}</span>
                   </button>
                 )}
               </For>
@@ -378,7 +379,7 @@ export const CurveEditor: Component<CurveEditorProps> = (props) => {
                                     class="cursor-pointer"
                                     onPointerDown={(e) => dragHandle(e, c, k.frame, side)}
                                   >
-                                    <title>Manija (Alt: libre)</title>
+                                    <title>{t("Manija (Alt: libre)")}</title>
                                   </circle>
                                 </>
                               );
@@ -396,7 +397,7 @@ export const CurveEditor: Component<CurveEditorProps> = (props) => {
                           class="cursor-move"
                           onPointerDown={(e) => dragKeys(e, c, k.frame)}
                         >
-                          <title>{`${c.row.label} · cuadro ${k.frame} · ${Number(k.value.toFixed(3))}`}</title>
+                          <title>{t("{label} · cuadro {frame} · {value}", { label: t(c.row.label), frame: k.frame, value: Number(k.value.toFixed(3)) })}</title>
                         </rect>
                       </>
                     );

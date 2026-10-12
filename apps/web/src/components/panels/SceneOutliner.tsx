@@ -5,6 +5,7 @@ import { matchesOutliner, outlinerQuery } from "../../lib/outlinerFilter";
 import * as Icons from "../icons";
 import * as SketchIcons from "../icons/sketch";
 import * as DesignIcons from "../icons/design";
+import { t } from "../../lib/i18n";
 
 export interface SceneOutlinerProps {
   tree: SceneNode;
@@ -154,11 +155,11 @@ const OutlinerNode: Component<{
                 ? "px-1 bg-red/20 text-red text-[10px] font-medium"
                 : "w-4 opacity-0 group-hover:opacity-100 text-text-muted hover:text-red"
             )}
-            title={confirming() ? "Clic de nuevo para borrar (no se puede deshacer)" : `Borrar ${props.node.label}`}
+            title={confirming() ? t("Clic de nuevo para borrar (no se puede deshacer)") : t("Borrar {name}", { name: props.node.label })}
             onClick={onDelete}
           >
             <Icons.Trash size={12} />
-            <Show when={confirming()}>¿Borrar?</Show>
+            <Show when={confirming()}>{t("¿Borrar?")}</Show>
           </button>
         </Show>
 
@@ -232,7 +233,7 @@ export const SceneOutliner: Component<SceneOutlinerProps> = (props) => {
   return (
     <div class="space-y-0.5" data-outliner>
       <Show when={outlinerQuery().trim() && roots().length === 0}>
-        <p class="px-2 py-1 text-xs text-text-dim">Nada coincide con «{outlinerQuery().trim()}»</p>
+        <p class="px-2 py-1 text-xs text-text-dim">{t("Nada coincide con «{q}»", { q: outlinerQuery().trim() })}</p>
       </Show>
       <For each={roots()}>
         {(node) => (

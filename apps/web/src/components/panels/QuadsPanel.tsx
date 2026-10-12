@@ -1,6 +1,7 @@
 import { Component } from "solid-js";
 import { Checkbox, Slider } from "../ui";
 import { RemeshActions, type RemeshActionsProps } from "./RemeshActions";
+import { t } from "../../lib/i18n";
 
 /** Opciones de Triángulos a quads (Remallar) */
 export interface QuadsConfig {
@@ -32,41 +33,38 @@ export const QuadsPanel: Component<QuadsPanelProps> = (props) => {
   return (
     <div data-quads class="space-y-4">
       <Slider
-        label="Ángulo entre caras"
+        label={t("Ángulo entre caras")}
         value={props.config.faceAngle}
         onChange={(faceAngle) => update({ faceAngle })}
         min={0}
         max={90}
         step={5}
-        formatValue={(v) => `hasta ${v}°`}
-        title="Dos triángulos que se doblan más que esto no se juntan (arista viva)"
+        formatValue={(v) => t("hasta {v}°", { v })}
+        title={t("Dos triángulos que se doblan más que esto no se juntan (arista viva)")}
       />
       <Slider
-        label="Forma"
+        label={t("Forma")}
         value={props.config.shapeAngle}
         onChange={(shapeAngle) => update({ shapeAngle })}
         min={0}
         max={90}
         step={5}
-        formatValue={(v) => `esquinas a ±${v}° de 90°`}
-        title="Cuánto puede alejarse el quad de un rectángulo"
+        formatValue={(v) => t("esquinas a ±{v}° de 90°", { v })}
+        title={t("Cuánto puede alejarse el quad de un rectángulo")}
       />
       <p class="text-xs text-text-muted leading-relaxed">
-        Se juntan primero los pares que forman los quads más rectos y planos. No se cruzan las costuras de UV ni las aristas
-        con normales partidas; los triángulos que quedan sin pareja siguen siendo triángulos.
+        {t("Se juntan primero los pares que forman los quads más rectos y planos. No se cruzan las costuras de UV ni las aristas con normales partidas; los triángulos que quedan sin pareja siguen siendo triángulos.")}
       </p>
 
       <div class="space-y-1">
-        <Checkbox label="Todo quads" checked={props.config.allQuads} onChange={(allQuads) => update({ allQuads })} />
+        <Checkbox label={t("Todo quads")} checked={props.config.allQuads} onChange={(allQuads) => update({ allQuads })} />
         <p class="text-xs text-text-muted leading-relaxed">
-          Además subdivide un paso sin cambiar la forma: cada quad da cuatro y cada triángulo suelto tres. Cuatro veces más
-          caras, pero ninguna de tres lados.
+          {t("Además subdivide un paso sin cambiar la forma: cada quad da cuatro y cada triángulo suelto tres. Cuatro veces más caras, pero ninguna de tres lados.")}
         </p>
       </div>
 
       <p class="text-xs text-text-dim leading-relaxed">
-        Los vértices no se mueven: UV, textura y pesos se conservan. Los quads se exportan como tales en OBJ y USD; GLB, STL y
-        los demás formatos los triangulan.
+        {t("Los vértices no se mueven: UV, textura y pesos se conservan. Los quads se exportan como tales en OBJ y USD; GLB, STL y los demás formatos los triangulan.")}
       </p>
 
       <RemeshActions {...props} />

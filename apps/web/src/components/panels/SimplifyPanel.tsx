@@ -1,6 +1,7 @@
 import { Component, Show } from "solid-js";
 import { Checkbox, Slider } from "../ui";
 import { RemeshActions, type RemeshActionsProps } from "./RemeshActions";
+import { fmtNumber, t } from "../../lib/i18n";
 
 /** Opciones de Simplificar (Remallar) */
 export interface SimplifyConfig {
@@ -52,69 +53,67 @@ export const SimplifyPanel: Component<SimplifyPanelProps> = (props) => {
     <div data-simplify class="space-y-4">
       <div class="space-y-1">
         <Slider
-          label="Quedan"
+          label={t("Quedan")}
           value={props.config.percent}
           onChange={(percent) => update({ percent })}
           min={0.5}
           max={100}
           step={0.5}
-          formatValue={(v) => `${v.toLocaleString("es")} %`}
-          title="Doble clic en el valor para escribirlo"
+          formatValue={(v) => `${fmtNumber(v)} %`}
+          title={t("Doble clic en el valor para escribirlo")}
         />
         <p class="text-xs text-text-muted">
-          ≈ <span data-simplify-target class="text-text">{target().toLocaleString("es")}</span> de{" "}
-          {props.triangles.toLocaleString("es")} triángulos
+          ≈ <span data-simplify-target class="text-text">{fmtNumber(target())}</span> {t("de {n} triángulos", { n: fmtNumber(props.triangles) })}
           <Show when={props.config.limitError}>
-            <span class="text-text-dim"> (o menos si se aleja demasiado)</span>
+            <span class="text-text-dim"> {t("(o menos si se aleja demasiado)")}</span>
           </Show>
         </p>
       </div>
 
       <div class="space-y-2">
         <Checkbox
-          label="Limitar cuánto se aleja de la forma"
+          label={t("Limitar cuánto se aleja de la forma")}
           checked={props.config.limitError}
           onChange={(limitError) => update({ limitError })}
         />
         <Show when={props.config.limitError}>
           <Slider
-            label="Desviación máxima"
+            label={t("Desviación máxima")}
             value={props.config.maxErrorPercent}
             onChange={(maxErrorPercent) => update({ maxErrorPercent })}
             min={0.05}
             max={5}
             step={0.05}
-            formatValue={(v) => `${v.toLocaleString("es")} % del tamaño`}
+            formatValue={(v) => t("{v} % del tamaño", { v: fmtNumber(v) })}
           />
         </Show>
       </div>
 
       <Checkbox
-        label="Conservar los bordes abiertos"
+        label={t("Conservar los bordes abiertos")}
         checked={props.config.lockBorders}
         onChange={(lockBorders) => update({ lockBorders })}
         disabled={props.config.aggressive}
       />
       <Checkbox
-        label="Conservar las costuras de UV y materiales"
+        label={t("Conservar las costuras de UV y materiales")}
         checked={props.config.keepSeams}
         onChange={(keepSeams) => update({ keepSeams })}
         disabled={props.config.aggressive}
       />
       <div class="space-y-1">
         <Checkbox
-          label="Agresivo"
+          label={t("Agresivo")}
           checked={props.config.aggressive}
           onChange={(aggressive) => update({ aggressive })}
         />
         <p class="text-xs text-text-muted leading-relaxed">
-          Llega a la cantidad pedida aunque junte partes cercanas o cierre agujeros chicos. Para
-          reducir muchísimo cuando la forma exacta no importa (vistas lejanas, colisiones).
+          {t("Llega a la cantidad pedida aunque junte partes cercanas o cierre agujeros chicos. Para reducir muchísimo cuando la forma exacta no importa (vistas lejanas, colisiones).")}
         </p>
       </div>
 
       <p class="text-xs text-text-dim leading-relaxed">
-        Las UV, la textura y los pesos se conservan: cada vértice que queda es uno del original.
+        {t("Las UV, la textura y los pesos se conservan: cada vértice que queda es uno del original.")}
       </p>
 
       <RemeshActions {...props} />

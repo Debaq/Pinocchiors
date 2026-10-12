@@ -2,6 +2,7 @@ import { Component, For, Show, untrack, type JSX } from "solid-js";
 import { clsx } from "clsx";
 import { IconButton } from "../ui";
 import * as Icons from "../icons";
+import { t, tn } from "../../lib/i18n";
 
 export type SkeletonEditorTab = "templates" | "create" | "fit" | "weights" | "controls";
 
@@ -59,34 +60,34 @@ export interface SkeletonEditorProps {
  * pestaña se reparten en columnas según el ancho que se le dé.
  */
 export const SkeletonEditor: Component<SkeletonEditorProps> = (props) => {
-  const current = () => SKELETON_TABS.find((t) => t.id === props.tab) ?? SKELETON_TABS[0];
+  const current = () => SKELETON_TABS.find((x) => x.id === props.tab) ?? SKELETON_TABS[0];
   return (
     <section class="flex flex-col h-full min-w-0 bg-bg-darker">
       <header class="flex items-center gap-1 h-9 px-2 shrink-0 border-b border-border">
         <For each={SKELETON_TABS}>
-          {(t) => (
+          {(tab) => (
             <button
-              title={t.title}
+              title={t(tab.title)}
               class={clsx(
                 "px-2.5 h-7 rounded text-xs transition-colors whitespace-nowrap",
-                props.tab === t.id ? "bg-accent/20 text-accent" : "text-text-muted hover:bg-surface/50 hover:text-text"
+                props.tab === tab.id ? "bg-accent/20 text-accent" : "text-text-muted hover:bg-surface/50 hover:text-text"
               )}
-              onClick={() => props.onTab(t.id)}
+              onClick={() => props.onTab(tab.id)}
             >
-              {t.label}
+              {t(tab.label)}
             </button>
           )}
         </For>
         <div class="flex-1" />
         <Show when={props.bones}>
-          <span class="text-[11px] font-mono text-text-muted whitespace-nowrap px-1">{props.bones} huesos</span>
+          <span class="text-[11px] font-mono text-text-muted whitespace-nowrap px-1">{tn(props.bones!, "{n} hueso", "{n} huesos")}</span>
         </Show>
-        <IconButton size="sm" variant="ghost" aria-label="Cerrar el editor" title="Cerrar (Ctrl+E)" onClick={props.onClose}>
+        <IconButton size="sm" variant="ghost" aria-label={t("Cerrar el editor")} title={t("Cerrar (Ctrl+E)")} onClick={props.onClose}>
           <Icons.X size={14} />
         </IconButton>
       </header>
       <div class="flex-1 min-h-0 overflow-y-auto px-3 py-2">
-        <p class="text-xs text-text-muted leading-relaxed mb-2 max-w-3xl">{current().intro}</p>
+        <p class="text-xs text-text-muted leading-relaxed mb-2 max-w-3xl">{t(current().intro)}</p>
         {/* Las tarjetas de cada pestaña fluyen en columnas de ~320 px sin
             partirse; la galería de plantillas usa todo el ancho */}
         <div

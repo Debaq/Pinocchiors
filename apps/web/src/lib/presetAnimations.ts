@@ -21,6 +21,7 @@
 
 import { createClip, type AnimationClip, type BoneTrack, type Quat, type Vec3 } from "./animation";
 import { Fk, solveTwoBone } from "./ik";
+import { t as tr } from "./i18n.ts";
 
 export interface SkeletonBone {
   name: string;
@@ -333,42 +334,42 @@ export function analyzeBody(bones: SkeletonBone[]): Body | null {
 // ─── Qué animaciones admite cada cuerpo ─────────────────────────────────────
 
 const ANIMATIONS: Record<PresetAnimationId, Omit<PresetAnimation, "id">> = {
-  idle: { name: "Reposo", description: "Respira y mira alrededor; mueve cola, orejas y apéndices" },
-  walk: { name: "Caminar", description: "Ciclo de paso en el lugar, con los pies en el suelo" },
-  run: { name: "Correr", description: "Zancada larga con los brazos doblados" },
-  trot: { name: "Trotar", description: "Patas en diagonal, más rápido que al paso" },
-  wave: { name: "Saludar", description: "Levanta un brazo y saluda" },
-  fly: { name: "Aletear", description: "Batido de alas con las patas recogidas" },
-  swim: { name: "Nadar", description: "Ondulación del cuerpo y la cola, o pulsos de los tentáculos" },
-  slither: { name: "Reptar", description: "Onda que recorre el cuerpo de la cabeza a la cola" },
-  gallop: { name: "Galopar", description: "Las patas traseras empujan y las delanteras caen una tras otra; la espalda se flexiona" },
-  jump: { name: "Saltar", description: "Se agacha, salta en el lugar y amortigua al caer" },
-  clap: { name: "Aplaudir", description: "Brazos adelante, las manos se juntan cuatro veces" },
-  punch: { name: "Golpear", description: "Guardia y golpes rectos alternando los brazos" },
-  kick: { name: "Patada", description: "Recoge la rodilla, patea adelante y vuelve a apoyar" },
-  dance: { name: "Bailar", description: "Rebota con las rodillas, mece el tronco y sube los brazos al ritmo" },
-  nod: { name: "Asentir", description: "Dice que sí con la cabeza" },
-  shakeHead: { name: "Negar", description: "Dice que no con la cabeza" },
-  eat: { name: "Comer", description: "Baja la cabeza al suelo, mastica o picotea y la vuelve a subir" },
-  shake: { name: "Sacudirse", description: "Sacude el cuerpo como un perro mojado, de la cabeza a la cola" },
-  wag: { name: "Mover la cola", description: "La cola se mueve rápido de lado a lado" },
-  glide: { name: "Planear", description: "Alas extendidas, inclinándose al virar" },
-  swimFast: { name: "Nadar rápido", description: "Ondulación más amplia y el doble de rápida" },
-  strike: { name: "Atacar", description: "Levanta la cabeza, se enrosca hacia atrás y se lanza adelante" },
-  pinch: { name: "Atacar con pinzas", description: "Levanta las pinzas y las cierra de golpe; la cola pica si la tiene" },
-  threat: { name: "Amenazar", description: "Se alza sobre las patas traseras y agita las delanteras" },
-  tentacleCrawl: { name: "Arrastrarse", description: "Los tentáculos se enroscan y estiran por turnos" },
-  pace: { name: "Paso de portante", description: "Las dos patas del mismo lado avanzan juntas y el cuerpo se mece (camélidos, jirafa)" },
-  bite: { name: "Morder", description: "Los colmillos o mandíbulas se abren y se cierran; la cabeza acompaña" },
-  sideWalk: { name: "Caminar de lado", description: "Paso de cangrejo: las patas empujan y tiran hacia el costado" },
-  brachiate: { name: "Braquiar", description: "Avanza colgado de los brazos, una mano y después la otra, con el cuerpo como péndulo" },
-  tailHang: { name: "Colgarse de la cola", description: "Cabeza abajo, colgado de la cola prensil; se mece y estira los brazos" },
-  hop: { name: "Salto de rana", description: "Se agacha, estira las patas traseras de golpe, vuela y cae sobre las delanteras" },
-  sting: { name: "Curvar el abdomen", description: "El abdomen se curva por debajo del cuerpo dos veces: la avispa que pica, la libélula que pone huevos" },
-  pushUps: { name: "Flexiones", description: "Despliegue de lagartija: estira las patas delanteras y sube y baja la cabeza" },
+  idle: { get name() { return tr("Reposo"); }, get description() { return tr("Respira y mira alrededor; mueve cola, orejas y apéndices"); } },
+  walk: { get name() { return tr("Caminar"); }, get description() { return tr("Ciclo de paso en el lugar, con los pies en el suelo"); } },
+  run: { get name() { return tr("Correr"); }, get description() { return tr("Zancada larga con los brazos doblados"); } },
+  trot: { get name() { return tr("Trotar"); }, get description() { return tr("Patas en diagonal, más rápido que al paso"); } },
+  wave: { get name() { return tr("Saludar"); }, get description() { return tr("Levanta un brazo y saluda"); } },
+  fly: { get name() { return tr("Aletear"); }, get description() { return tr("Batido de alas con las patas recogidas"); } },
+  swim: { get name() { return tr("Nadar"); }, get description() { return tr("Ondulación del cuerpo y la cola, o pulsos de los tentáculos"); } },
+  slither: { get name() { return tr("Reptar"); }, get description() { return tr("Onda que recorre el cuerpo de la cabeza a la cola"); } },
+  gallop: { get name() { return tr("Galopar"); }, get description() { return tr("Las patas traseras empujan y las delanteras caen una tras otra; la espalda se flexiona"); } },
+  jump: { get name() { return tr("Saltar"); }, get description() { return tr("Se agacha, salta en el lugar y amortigua al caer"); } },
+  clap: { get name() { return tr("Aplaudir"); }, get description() { return tr("Brazos adelante, las manos se juntan cuatro veces"); } },
+  punch: { get name() { return tr("Golpear"); }, get description() { return tr("Guardia y golpes rectos alternando los brazos"); } },
+  kick: { get name() { return tr("Patada"); }, get description() { return tr("Recoge la rodilla, patea adelante y vuelve a apoyar"); } },
+  dance: { get name() { return tr("Bailar"); }, get description() { return tr("Rebota con las rodillas, mece el tronco y sube los brazos al ritmo"); } },
+  nod: { get name() { return tr("Asentir"); }, get description() { return tr("Dice que sí con la cabeza"); } },
+  shakeHead: { get name() { return tr("Negar"); }, get description() { return tr("Dice que no con la cabeza"); } },
+  eat: { get name() { return tr("Comer"); }, get description() { return tr("Baja la cabeza al suelo, mastica o picotea y la vuelve a subir"); } },
+  shake: { get name() { return tr("Sacudirse"); }, get description() { return tr("Sacude el cuerpo como un perro mojado, de la cabeza a la cola"); } },
+  wag: { get name() { return tr("Mover la cola"); }, get description() { return tr("La cola se mueve rápido de lado a lado"); } },
+  glide: { get name() { return tr("Planear"); }, get description() { return tr("Alas extendidas, inclinándose al virar"); } },
+  swimFast: { get name() { return tr("Nadar rápido"); }, get description() { return tr("Ondulación más amplia y el doble de rápida"); } },
+  strike: { get name() { return tr("Atacar"); }, get description() { return tr("Levanta la cabeza, se enrosca hacia atrás y se lanza adelante"); } },
+  pinch: { get name() { return tr("Atacar con pinzas"); }, get description() { return tr("Levanta las pinzas y las cierra de golpe; la cola pica si la tiene"); } },
+  threat: { get name() { return tr("Amenazar"); }, get description() { return tr("Se alza sobre las patas traseras y agita las delanteras"); } },
+  tentacleCrawl: { get name() { return tr("Arrastrarse"); }, get description() { return tr("Los tentáculos se enroscan y estiran por turnos"); } },
+  pace: { get name() { return tr("Paso de portante"); }, get description() { return tr("Las dos patas del mismo lado avanzan juntas y el cuerpo se mece (camélidos, jirafa)"); } },
+  bite: { get name() { return tr("Morder"); }, get description() { return tr("Los colmillos o mandíbulas se abren y se cierran; la cabeza acompaña"); } },
+  sideWalk: { get name() { return tr("Caminar de lado"); }, get description() { return tr("Paso de cangrejo: las patas empujan y tiran hacia el costado"); } },
+  brachiate: { get name() { return tr("Braquiar"); }, get description() { return tr("Avanza colgado de los brazos, una mano y después la otra, con el cuerpo como péndulo"); } },
+  tailHang: { get name() { return tr("Colgarse de la cola"); }, get description() { return tr("Cabeza abajo, colgado de la cola prensil; se mece y estira los brazos"); } },
+  hop: { get name() { return tr("Salto de rana"); }, get description() { return tr("Se agacha, estira las patas traseras de golpe, vuela y cae sobre las delanteras"); } },
+  sting: { get name() { return tr("Curvar el abdomen"); }, get description() { return tr("El abdomen se curva por debajo del cuerpo dos veces: la avispa que pica, la libélula que pone huevos"); } },
+  pushUps: { get name() { return tr("Flexiones"); }, get description() { return tr("Despliegue de lagartija: estira las patas delanteras y sube y baja la cabeza"); } },
   lieDown: {
-    name: "Echarse",
-    description: "Se arrodilla sobre las patas delanteras, dobla las traseras, descansa y se levanta empezando por atrás",
+    get name() { return tr("Echarse"); },
+    get description() { return tr("Se arrodilla sobre las patas delanteras, dobla las traseras, descansa y se levanta empezando por atrás"); },
   },
 };
 
@@ -481,7 +482,7 @@ export function availableAnimations(body: Body): PresetAnimation[] {
   if (longArms(body)) ids.push("brachiate");
   if (arms >= 2 && upright.length >= 2 && wagging(body).some((c) => c.rotating.length >= 6)) ids.push("tailHang");
   if (foldedHindLegs(body).length >= 2) ids.push("hop");
-  return ids.map((id) => ({ id, ...ANIMATIONS[id] }));
+  return ids.map((id) => ({ id, get name() { return ANIMATIONS[id].name; }, get description() { return ANIMATIONS[id].description; } }));
 }
 
 // ─── Pose y horneado ────────────────────────────────────────────────────────
@@ -1809,16 +1810,16 @@ export interface FactoryPose {
 }
 
 const POSES: Record<FactoryPoseId, Omit<FactoryPose, "id">> = {
-  crouch: { name: "Agachado", description: "Rodillas dobladas, los pies en el suelo" },
-  sit: { name: "Sentado", description: "Bípedo en una silla; cuadrúpedo sobre las patas traseras" },
-  armsDown: { name: "Brazos abajo", description: "Los brazos cuelgan junto al cuerpo" },
-  armsUp: { name: "Brazos arriba", description: "Los brazos apuntan al cielo" },
-  wingsFolded: { name: "Alas plegadas", description: "Alas recogidas contra el cuerpo" },
-  wingsOpen: { name: "Alas abiertas", description: "Alas extendidas y un poco levantadas" },
-  headDown: { name: "Cabeza gacha", description: "Cuello y cabeza hacia abajo" },
-  tailCurl: { name: "Cola enroscada", description: "La cola se enrolla hacia arriba" },
-  fist: { name: "Mano cerrada", description: "Los dedos se doblan hacia la palma" },
-  handOpen: { name: "Mano abierta", description: "Los dedos rectos, como en reposo" },
+  crouch: { get name() { return tr("Agachado"); }, get description() { return tr("Rodillas dobladas, los pies en el suelo"); } },
+  sit: { get name() { return tr("Sentado"); }, get description() { return tr("Bípedo en una silla; cuadrúpedo sobre las patas traseras"); } },
+  armsDown: { get name() { return tr("Brazos abajo"); }, get description() { return tr("Los brazos cuelgan junto al cuerpo"); } },
+  armsUp: { get name() { return tr("Brazos arriba"); }, get description() { return tr("Los brazos apuntan al cielo"); } },
+  wingsFolded: { get name() { return tr("Alas plegadas"); }, get description() { return tr("Alas recogidas contra el cuerpo"); } },
+  wingsOpen: { get name() { return tr("Alas abiertas"); }, get description() { return tr("Alas extendidas y un poco levantadas"); } },
+  headDown: { get name() { return tr("Cabeza gacha"); }, get description() { return tr("Cuello y cabeza hacia abajo"); } },
+  tailCurl: { get name() { return tr("Cola enroscada"); }, get description() { return tr("La cola se enrolla hacia arriba"); } },
+  fist: { get name() { return tr("Mano cerrada"); }, get description() { return tr("Los dedos se doblan hacia la palma"); } },
+  handOpen: { get name() { return tr("Mano abierta"); }, get description() { return tr("Los dedos rectos, como en reposo"); } },
 };
 
 const FINGER = /finger|thumb|index|middle|ring|pinky|digit|dedo|pulgar|meñique/i;
@@ -1838,7 +1839,7 @@ export function availablePoses(body: Body): FactoryPose[] {
   if (headJoints(body).length > 0) ids.push("headDown");
   if (chainsOf(body, "tail").length > 0) ids.push("tailCurl");
   if (fingerChains(body).length > 0) ids.push("fist", "handOpen");
-  return ids.map((id) => ({ id, ...POSES[id] }));
+  return ids.map((id) => ({ id, get name() { return POSES[id].name; }, get description() { return POSES[id].description; } }));
 }
 
 /** Ángulo entre dos direcciones unitarias */

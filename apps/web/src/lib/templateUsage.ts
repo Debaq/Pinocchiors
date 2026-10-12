@@ -4,6 +4,7 @@
  */
 
 import { createPersisted } from "./ui-state";
+import { t } from "./i18n.ts";
 
 const [usage, setUsage] = createPersisted<Record<string, number>>("templates.usage", {});
 const [recent, setRecent] = createPersisted<string[]>("templates.recent", []);
@@ -98,12 +99,12 @@ export function matches(query: string, item: { name: string; description: string
 
 /** Grupos de la lista, en orden */
 export const CATEGORIES: { id: string; label: string }[] = [
-  { id: "primates", label: "Humanos y primates" },
-  { id: "mammals", label: "Mamíferos" },
-  { id: "birds", label: "Aves" },
-  { id: "reptiles", label: "Reptiles, anfibios y dinosaurios" },
-  { id: "aquatic", label: "Peces y animales marinos" },
-  { id: "invertebrates", label: "Insectos, arañas y crustáceos" },
-  { id: "fantasy", label: "Criaturas fantásticas" },
-  { id: "other", label: "Otros" },
+  { id: "primates", get label() { return t("Humanos y primates"); } },
+  { id: "mammals", get label() { return t("Mamíferos"); } },
+  { id: "birds", get label() { return t("Aves"); } },
+  { id: "reptiles", get label() { return t("Reptiles, anfibios y dinosaurios"); } },
+  { id: "aquatic", get label() { return t("Peces y animales marinos"); } },
+  { id: "invertebrates", get label() { return t("Insectos, arañas y crustáceos"); } },
+  { id: "fantasy", get label() { return t("Criaturas fantásticas"); } },
+  { id: "other", get label() { return t("Otros"); } },
 ];

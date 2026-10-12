@@ -3,6 +3,7 @@
 // generales, y el DXF 1:1 para cortar (capas CONTORNO y DOBLEZ).
 
 import { dimText, dimensionSvg, type Dimension } from "./drawing.ts";
+import { t } from "./i18n.ts";
 
 type P2 = [number, number];
 
@@ -57,7 +58,7 @@ export function flatSvg(fp: FlatPatternData, title = ""): string {
     { a: at([fp.min[0], fp.min[1]]), b: at([fp.min[0], fp.max[1]]), offset: [-8, 0], value: h },
   ];
   for (const d of dims) out.push(dimensionSvg(d));
-  const info = `${title ? title + " · " : ""}Desarrollo 1:1 · espesor ${dimText(fp.thickness)} mm · K ${dimText(fp.k_factor)}`;
+  const info = `${title ? title + " · " : ""}${t("Desarrollo 1:1 · espesor {e} mm · K {k}", { e: dimText(fp.thickness), k: dimText(fp.k_factor) })}`;
   out.push(`<text x="${n(MARGIN)}" y="${n(H - 4)}" font-size="3.5" fill="#000">${esc(info)}</text>`);
   out.push(`</svg>`);
   return out.join("\n");

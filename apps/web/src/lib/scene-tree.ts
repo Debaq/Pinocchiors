@@ -1,6 +1,7 @@
 import type { JSX } from "solid-js";
 import type { SkeletonData } from "./Viewer3D";
 import type { SceneStructure } from "../components/steps/StructureStep";
+import { t } from "./i18n.ts";
 
 export interface SceneNode {
   id: string;
@@ -102,19 +103,19 @@ function fileNodes(structure: SceneStructure, hidden: Set<number>, selected?: nu
     const node = structure.nodes[index];
     const geometry = hasGeometry(structure, index);
     const parts = [
-      node.mesh !== null ? `malla ${structure.meshes[node.mesh]?.name || node.mesh}` : undefined,
-      node.skin !== null ? `skin ${structure.skeletons[node.skin]?.name || node.skin}` : undefined,
+      node.mesh !== null ? t("malla {name}", { name: structure.meshes[node.mesh]?.name || node.mesh }) : undefined,
+      node.skin !== null ? t("skin {name}", { name: structure.skeletons[node.skin]?.name || node.skin }) : undefined,
     ].filter(Boolean);
     return {
       id: `node-${index}`,
       type: node.mesh !== null ? "mesh" : node.skin !== null ? "skeleton" : "node",
-      label: node.name || `nodo ${index}`,
+      label: node.name || t("nodo {n}", { n: index }),
       visible: !hidden.has(index),
       expanded: false,
       selected: selected === index,
       readonly: !geometry,
       deletable: geometry,
-      hint: parts.length > 0 ? parts.join(" · ") : "nodo vacío",
+      hint: parts.length > 0 ? parts.join(" · ") : t("nodo vacío"),
       children: node.children.map(build),
     };
   };
@@ -137,7 +138,7 @@ export function buildSceneTree(state: SceneTreeState): SceneNode {
   const root: SceneNode = {
     id: "scene",
     type: "scene",
-    label: "Escena",
+    label: t("Escena"),
     visible: true,
     expanded: true,
     selected: false,
@@ -164,7 +165,7 @@ export function buildSceneTree(state: SceneTreeState): SceneNode {
     model.push({
       id: "mesh",
       type: "mesh",
-      label: "Malla",
+      label: t("Malla"),
       visible: state.showMesh,
       expanded: false,
       selected: false,
@@ -198,7 +199,7 @@ export function buildSceneTree(state: SceneTreeState): SceneNode {
     model.push({
       id: "skeleton",
       type: "skeleton",
-      label: "Esqueleto",
+      label: t("Esqueleto"),
       visible: state.showSkeleton,
       deletable: true,
       expanded: false,
@@ -219,7 +220,7 @@ export function buildSceneTree(state: SceneTreeState): SceneNode {
     model.push({
       id: "weights",
       type: "weights",
-      label: "Heatmap Pesos",
+      label: t("Heatmap Pesos"),
       visible: state.showWeights,
       deletable: true,
       expanded: false,
@@ -238,9 +239,9 @@ export function buildSceneTree(state: SceneTreeState): SceneNode {
       })
     : model;
 
-  root.children.push(group("group-planes", "Planos", planes));
-  if (state.cad) root.children.push({ ...group("group-features", "Operaciones", []), content: state.cad.featureTree, count: state.cad.featureCount });
-  if (objects.length) root.children.push(group("group-objects", "Objetos", objects));
-  if (state.drawings) root.children.push({ ...group("group-drawings", "Planos 2D", state.drawings), addHint: "Plano nuevo" });
+  root.children.push(group("group-planes", t("Planos"), planes));
+  if (state.cad) root.children.push({ ...group("group-features", t("Operaciones"), []), content: state.cad.featureTree, count: state.cad.featureCount });
+  if (objects.length) root.children.push(group("group-objects", t("Objetos"), objects));
+  if (state.drawings) root.children.push({ ...group("group-drawings", t("Planos 2D"), state.drawings), addHint: t("Plano nuevo") });
   return root;
 }

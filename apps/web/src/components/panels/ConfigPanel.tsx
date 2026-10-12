@@ -1,6 +1,7 @@
 import { Component } from "solid-js";
 import { Panel, Select, Slider, SelectOption } from "../ui";
 import * as Icons from "../icons";
+import { t } from "../../lib/i18n";
 
 export interface AutorigConfig {
   quality: "fast" | "default" | "high";
@@ -14,9 +15,9 @@ export interface ConfigPanelProps {
 }
 
 const qualityOptions: SelectOption[] = [
-  { value: "fast", label: "Rápida", description: "Menor precisión, más velocidad" },
-  { value: "default", label: "Normal", description: "Balance entre calidad y velocidad" },
-  { value: "high", label: "Alta", description: "Máxima precisión, más lento" },
+  { value: "fast", get label() { return t("Rápida"); }, get description() { return t("Menor precisión, más velocidad"); } },
+  { value: "default", get label() { return t("Normal"); }, get description() { return t("Balance entre calidad y velocidad"); } },
+  { value: "high", get label() { return t("Alta"); }, get description() { return t("Máxima precisión, más lento"); } },
 ];
 
 export const ConfigPanel: Component<ConfigPanelProps> = (props) => {
@@ -25,11 +26,11 @@ export const ConfigPanel: Component<ConfigPanelProps> = (props) => {
   };
 
   return (
-    <Panel title="Configuración" icon={<Icons.Sliders size={14} />} defaultOpen>
+    <Panel title={t("Configuración")} icon={<Icons.Sliders size={14} />} defaultOpen>
       <div class="space-y-4">
         {/* Quality */}
         <Select
-          label="Calidad"
+          label={t("Calidad")}
           options={qualityOptions}
           value={props.config.quality}
           onChange={(value) => updateConfig({ quality: value as AutorigConfig["quality"] })}
@@ -37,7 +38,7 @@ export const ConfigPanel: Component<ConfigPanelProps> = (props) => {
 
         {/* Diffusion Weight */}
         <Slider
-          label="Peso de difusión"
+          label={t("Peso de difusión")}
           value={props.config.diffusionWeight}
           onChange={(value) => updateConfig({ diffusionWeight: value })}
           min={0.1}
@@ -48,7 +49,7 @@ export const ConfigPanel: Component<ConfigPanelProps> = (props) => {
 
         {/* Max Influences */}
         <Slider
-          label="Máx. influencias"
+          label={t("Máx. influencias")}
           value={props.config.maxInfluences}
           onChange={(value) => updateConfig({ maxInfluences: Math.round(value) })}
           min={1}

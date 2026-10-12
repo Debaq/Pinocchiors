@@ -1,6 +1,7 @@
 import { Select as KobalteSelect } from "@kobalte/core/select";
 import { Show, createMemo } from "solid-js";
 import { clsx } from "clsx";
+import { t } from "../../lib/i18n";
 
 export interface SelectOption {
   value: string;
@@ -35,7 +36,7 @@ export const Select = (props: SelectProps) => {
       optionDisabled="disabled"
       value={selected()}
       onChange={(option) => option && option.value !== props.value && props.onChange?.(option.value)}
-      placeholder={props.placeholder ?? "Seleccionar..."}
+      placeholder={props.placeholder ?? t("Seleccionar...")}
       disabled={props.disabled}
       itemComponent={(itemProps) => (
         <KobalteSelect.Item

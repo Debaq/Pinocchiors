@@ -2,6 +2,7 @@ import { Component, Show, For } from "solid-js";
 import { clsx } from "clsx";
 import { Button, Checkbox, NumberInput } from "../ui";
 import * as Icons from "../icons";
+import { fmtNumber, t } from "../../lib/i18n";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -95,7 +96,7 @@ export interface RepairPanelProps {
 // COMPONENT
 // ═══════════════════════════════════════════════════════════════════════════
 
-const formatNumber = (n: number) => n.toLocaleString("es-CL", { maximumSignificantDigits: 4 });
+const formatNumber = (n: number) => fmtNumber(n, { maximumSignificantDigits: 4 });
 
 export const RepairPanel: Component<RepairPanelProps> = (props) => {
   const d = () => props.diagnostics;
@@ -104,21 +105,21 @@ export const RepairPanel: Component<RepairPanelProps> = (props) => {
     const diag = d();
     if (!diag) return [];
     return [
-      { label: "Agujeros", value: diag.boundary_loops, bad: diag.boundary_loops > 0 },
-      { label: "Duplicados", value: diag.duplicate_vertices, bad: diag.duplicate_vertices > 0 },
-      { label: "Degeneradas", value: diag.degenerate_faces, bad: diag.degenerate_faces > 0 },
-      { label: "Caras repetidas", value: diag.duplicate_faces, bad: diag.duplicate_faces > 0 },
-      { label: "Aristas non-manifold", value: diag.non_manifold_edges, bad: diag.non_manifold_edges > 0 },
-      { label: "Vértices non-manifold", value: diag.non_manifold_vertices, bad: diag.non_manifold_vertices > 0 },
-      { label: "Normales volteadas", value: diag.inconsistent_edges, bad: diag.inconsistent_edges > 0 },
-      { label: "Inválidas", value: diag.invalid_faces, bad: diag.invalid_faces > 0 },
-      { label: "Intersecciones", value: diag.self_intersections, bad: diag.self_intersections > 0 },
-      { label: "Piezas", value: diag.connected_components, bad: false },
+      { label: t("Agujeros"), value: diag.boundary_loops, bad: diag.boundary_loops > 0 },
+      { label: t("Duplicados"), value: diag.duplicate_vertices, bad: diag.duplicate_vertices > 0 },
+      { label: t("Degeneradas"), value: diag.degenerate_faces, bad: diag.degenerate_faces > 0 },
+      { label: t("Caras repetidas"), value: diag.duplicate_faces, bad: diag.duplicate_faces > 0 },
+      { label: t("Aristas non-manifold"), value: diag.non_manifold_edges, bad: diag.non_manifold_edges > 0 },
+      { label: t("Vértices non-manifold"), value: diag.non_manifold_vertices, bad: diag.non_manifold_vertices > 0 },
+      { label: t("Normales volteadas"), value: diag.inconsistent_edges, bad: diag.inconsistent_edges > 0 },
+      { label: t("Inválidas"), value: diag.invalid_faces, bad: diag.invalid_faces > 0 },
+      { label: t("Intersecciones"), value: diag.self_intersections, bad: diag.self_intersections > 0 },
+      { label: t("Piezas"), value: diag.connected_components, bad: false },
     ];
   };
 
   const yesNo = (value: boolean) => (
-    <span class={value ? "text-green" : "text-red"}>{value ? "Sí" : "No"}</span>
+    <span class={value ? "text-green" : "text-red"}>{value ? t("Sí") : t("No")}</span>
   );
 
   const set = (patch: Partial<RepairOptions>) =>
@@ -128,15 +129,15 @@ export const RepairPanel: Component<RepairPanelProps> = (props) => {
     const r = props.repairResult;
     if (!r) return [];
     return [
-      [r.vertices_merged, "vértices duplicados soldados"],
-      [r.degenerate_fixed, "caras degeneradas corregidas"],
-      [r.duplicate_faces_removed, "caras repetidas eliminadas"],
-      [r.invalid_faces_removed, "caras inválidas eliminadas"],
-      [r.non_manifold_fixed, "vértices separados (non-manifold)"],
-      [r.faces_flipped, "caras reorientadas"],
-      [r.components_removed, "piezas sueltas eliminadas"],
-      [r.intersections_cut, "cruces cortados"],
-      [r.inner_patches_removed, "superficies internas eliminadas"],
+      [r.vertices_merged, "{n} vértices duplicados soldados"],
+      [r.degenerate_fixed, "{n} caras degeneradas corregidas"],
+      [r.duplicate_faces_removed, "{n} caras repetidas eliminadas"],
+      [r.invalid_faces_removed, "{n} caras inválidas eliminadas"],
+      [r.non_manifold_fixed, "{n} vértices separados (non-manifold)"],
+      [r.faces_flipped, "{n} caras reorientadas"],
+      [r.components_removed, "{n} piezas sueltas eliminadas"],
+      [r.intersections_cut, "{n} cruces cortados"],
+      [r.inner_patches_removed, "{n} superficies internas eliminadas"],
     ].filter(([n]) => (n as number) > 0) as [number, string][];
   };
 
@@ -144,14 +145,14 @@ export const RepairPanel: Component<RepairPanelProps> = (props) => {
     <div class="space-y-4">
       {/* Análisis */}
       <div class="space-y-3">
-        <h4 class="text-xs font-semibold uppercase tracking-wider text-text-muted">Análisis</h4>
+        <h4 class="text-xs font-semibold uppercase tracking-wider text-text-muted">{t("Análisis")}</h4>
 
         <Checkbox
           checked={props.analysisConfig.checkSelfIntersections}
           onChange={(v) =>
             props.onAnalysisConfigChange?.({ ...props.analysisConfig, checkSelfIntersections: v })
           }
-          label="Comprobar auto-intersecciones (lento)"
+          label={t("Comprobar auto-intersecciones (lento)")}
         />
 
         <Button
@@ -163,7 +164,7 @@ export const RepairPanel: Component<RepairPanelProps> = (props) => {
           size="sm"
           icon={<Icons.MagicWand size={14} />}
         >
-          Analizar malla
+          {t("Analizar malla")}
         </Button>
       </div>
 
@@ -184,10 +185,10 @@ export const RepairPanel: Component<RepairPanelProps> = (props) => {
               <Icons.Check size={14} />
             </Show>
             {d()!.is_healthy
-              ? "Malla saludable"
+              ? t("Malla saludable")
               : d()!.needs_repair
-                ? "Requiere reparación"
-                : "Sin defectos reparables"}
+                ? t("Requiere reparación")
+                : t("Sin defectos reparables")}
           </div>
 
           <div class="grid grid-cols-2 gap-1.5">
@@ -210,42 +211,41 @@ export const RepairPanel: Component<RepairPanelProps> = (props) => {
 
           <div class="space-y-1 px-1">
             <div class="flex justify-between text-xs">
-              <span class="text-text-muted">Cerrada (estanca)</span>
+              <span class="text-text-muted">{t("Cerrada (estanca)")}</span>
               {yesNo(d()!.is_closed)}
             </div>
             <div class="flex justify-between text-xs">
-              <span class="text-text-muted">Manifold</span>
+              <span class="text-text-muted">{t("Manifold")}</span>
               {yesNo(d()!.is_manifold)}
             </div>
             <div class="flex justify-between text-xs">
-              <span class="text-text-muted">Normales consistentes</span>
+              <span class="text-text-muted">{t("Normales consistentes")}</span>
               {yesNo(d()!.normals_consistent)}
             </div>
             <Show when={d()!.normals_outward !== null}>
               <div class="flex justify-between text-xs">
-                <span class="text-text-muted">Normales hacia afuera</span>
+                <span class="text-text-muted">{t("Normales hacia afuera")}</span>
                 {yesNo(d()!.normals_outward!)}
               </div>
             </Show>
             <Show when={d()!.is_closed}>
               <div class="flex justify-between text-xs">
-                <span class="text-text-muted">Volumen</span>
+                <span class="text-text-muted">{t("Volumen")}</span>
                 <span class="font-mono text-text-muted">{formatNumber(d()!.volume)}</span>
               </div>
             </Show>
             <Show when={d()!.needle_faces + d()!.cap_faces > 0}>
               <div
                 class="flex justify-between text-xs"
-                title="Triángulos muy alargados. No son un defecto: la retopología los mejora."
+                title={t("Triángulos muy alargados. No son un defecto: la retopología los mejora.")}
               >
-                <span class="text-text-muted">Triángulos alargados (calidad)</span>
+                <span class="text-text-muted">{t("Triángulos alargados (calidad)")}</span>
                 <span class="font-mono text-text-muted">{d()!.needle_faces + d()!.cap_faces}</span>
               </div>
             </Show>
             <Show when={d()!.self_intersections > 0}>
               <p class="text-xs text-text-muted leading-relaxed pt-1">
-                Para corregir las auto-intersecciones, activa «Unir cuerpos solapados». La mayoría
-                de los laminadores las toleran.
+                {t("Para corregir las auto-intersecciones, activa «Unir cuerpos solapados». La mayoría de los laminadores las toleran.")}
               </p>
             </Show>
           </div>
@@ -255,49 +255,49 @@ export const RepairPanel: Component<RepairPanelProps> = (props) => {
       {/* Opciones de reparación */}
       <Show when={d()?.needs_repair}>
         <div class="space-y-3 pt-2 border-t border-border/50">
-          <h4 class="text-xs font-semibold uppercase tracking-wider text-text-muted">Reparación</h4>
+          <h4 class="text-xs font-semibold uppercase tracking-wider text-text-muted">{t("Reparación")}</h4>
 
           <div class="space-y-2">
             <Checkbox
               checked={props.repairOptions.mergeDuplicates}
               onChange={(v) => set({ mergeDuplicates: v })}
-              label="Soldar costuras y duplicados"
+              label={t("Soldar costuras y duplicados")}
             />
             <Checkbox
               checked={props.repairOptions.removeDegenerates}
               onChange={(v) => set({ removeDegenerates: v })}
-              label="Corregir caras degeneradas y repetidas"
+              label={t("Corregir caras degeneradas y repetidas")}
             />
             <Checkbox
               checked={props.repairOptions.fixNonManifold}
               onChange={(v) => set({ fixNonManifold: v })}
-              label="Separar geometría non-manifold"
+              label={t("Separar geometría non-manifold")}
             />
             <Checkbox
               checked={props.repairOptions.fixNormals}
               onChange={(v) => set({ fixNormals: v })}
-              label="Unificar orientación de normales"
+              label={t("Unificar orientación de normales")}
             />
             <Checkbox
               checked={props.repairOptions.orientOutward}
               onChange={(v) => set({ orientOutward: v })}
-              label="Normales hacia afuera"
+              label={t("Normales hacia afuera")}
             />
             <Checkbox
               checked={props.repairOptions.removeSmallComponents}
               onChange={(v) => set({ removeSmallComponents: v })}
-              label="Eliminar piezas sueltas diminutas"
+              label={t("Eliminar piezas sueltas diminutas")}
             />
             <Checkbox
               checked={props.repairOptions.fillHoles}
               onChange={(v) => set({ fillHoles: v })}
-              label="Rellenar agujeros"
+              label={t("Rellenar agujeros")}
             />
-            <div title="Corta la malla donde se atraviesa a sí misma y borra la superficie que queda dentro de otro cuerpo. También borra las piezas internas puestas a propósito (por ejemplo, ojos dentro de una cabeza).">
+            <div title={t("Corta la malla donde se atraviesa a sí misma y borra la superficie que queda dentro de otro cuerpo. También borra las piezas internas puestas a propósito (por ejemplo, ojos dentro de una cabeza).")}>
               <Checkbox
                 checked={props.repairOptions.resolveIntersections}
                 onChange={(v) => set({ resolveIntersections: v })}
-                label="Unir cuerpos solapados"
+                label={t("Unir cuerpos solapados")}
               />
             </div>
           </div>
@@ -307,15 +307,15 @@ export const RepairPanel: Component<RepairPanelProps> = (props) => {
               <Checkbox
                 checked={props.repairOptions.refineFill}
                 onChange={(v) => set({ refineFill: v })}
-                label="Relleno suave (sigue la curvatura)"
+                label={t("Relleno suave (sigue la curvatura)")}
               />
               <NumberInput
-                label="Tamaño máx. de agujero"
+                label={t("Tamaño máx. de agujero")}
                 value={props.repairOptions.maxHoleEdges}
                 onChange={(v) => set({ maxHoleEdges: Math.max(0, Math.round(v)) })}
                 min={0}
                 step={50}
-                suffix={props.repairOptions.maxHoleEdges === 0 ? "sin límite" : "aristas"}
+                suffix={props.repairOptions.maxHoleEdges === 0 ? t("sin límite") : t("aristas")}
               />
             </div>
           </Show>
@@ -329,7 +329,7 @@ export const RepairPanel: Component<RepairPanelProps> = (props) => {
             size="sm"
             icon={<Icons.Wrench size={14} />}
           >
-            Reparar
+            {t("Reparar")}
           </Button>
         </div>
       </Show>
@@ -337,39 +337,37 @@ export const RepairPanel: Component<RepairPanelProps> = (props) => {
       {/* Resultado de reparación */}
       <Show when={props.repairResult}>
         <div class="space-y-2 p-3 rounded-md bg-green/5 border border-green/20">
-          <p class="text-xs font-semibold text-green">Reparación completada</p>
+          <p class="text-xs font-semibold text-green">{t("Reparación completada")}</p>
           <div class="space-y-1">
             <For each={resultLines()}>
               {([n, text]) => (
                 <p class="text-xs text-text-muted">
-                  {n} {text}
+                  {t(text, { n })}
                 </p>
               )}
             </For>
             <Show when={props.repairResult!.holes_filled > 0}>
               <p class="text-xs text-text-muted">
-                {props.repairResult!.holes_filled} agujeros rellenados (+{props.repairResult!.faces_added} caras)
+                {t("{n} agujeros rellenados (+{faces} caras)", { n: props.repairResult!.holes_filled, faces: props.repairResult!.faces_added })}
               </p>
             </Show>
             <Show when={props.repairResult!.holes_skipped > 0}>
               <p class="text-xs text-yellow">
-                {props.repairResult!.holes_skipped} bordes sin rellenar (láminas abiertas, rendijas o
-                agujeros sobre el tamaño máximo)
+                {t("{n} bordes sin rellenar (láminas abiertas, rendijas o agujeros sobre el tamaño máximo)", { n: props.repairResult!.holes_skipped })}
               </p>
             </Show>
             <Show when={props.repairResult!.intersections_reverted}>
               <p class="text-xs text-yellow">
-                No se unieron los cuerpos: la malla tiene superficies abiertas y el resultado quedaba
-                con más bordes. Rellena los agujeros primero.
+                {t("No se unieron los cuerpos: la malla tiene superficies abiertas y el resultado quedaba con más bordes. Rellena los agujeros primero.")}
               </p>
             </Show>
             <Show when={props.repairResult!.intersections_skipped > 0}>
               <p class="text-xs text-yellow">
-                {props.repairResult!.intersections_skipped} cruces degenerados sin cortar
+                {t("{n} cruces degenerados sin cortar", { n: props.repairResult!.intersections_skipped })}
               </p>
             </Show>
             <Show when={resultLines().length === 0 && props.repairResult!.holes_filled === 0}>
-              <p class="text-xs text-text-muted">No hubo nada que cambiar.</p>
+              <p class="text-xs text-text-muted">{t("No hubo nada que cambiar.")}</p>
             </Show>
           </div>
         </div>
@@ -382,7 +380,7 @@ export const RepairPanel: Component<RepairPanelProps> = (props) => {
             size="sm"
             icon={<Icons.ArrowCounterClockwise size={14} />}
           >
-            Deshacer reparación
+            {t("Deshacer reparación")}
           </Button>
         </Show>
       </Show>

@@ -1,5 +1,6 @@
 import { For, Match, Show, Switch, createSignal, onCleanup, onMount } from "solid-js";
 import { clsx } from "clsx";
+import { t } from "../../lib/i18n";
 
 export type MenuEntry =
   | {
@@ -105,7 +106,7 @@ export const ContextMenu = (props: ContextMenuProps) => {
                     }}
                   >
                     <span class="w-3 text-accent text-xs">{e.checked ? "✓" : ""}</span>
-                    <span class="flex-1">{armed() ? "Clic de nuevo para confirmar" : e.label}</span>
+                    <span class="flex-1">{armed() ? t("Clic de nuevo para confirmar") : e.label}</span>
                     <Show when={e.shortcut}>
                       <span class="text-[10px] font-mono text-text-muted">{e.shortcut}</span>
                     </Show>

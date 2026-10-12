@@ -4,6 +4,7 @@ import { Checkbox, Select, Slider, Tooltip, type SelectOption } from "../ui";
 import type { ViewSettings } from "../panels/ViewPanel";
 import type { BoneDisplay } from "../../lib/Viewer3D";
 import * as Icons from "../icons";
+import { t } from "../../lib/i18n";
 
 export interface ViewportHeaderProps {
   settings: ViewSettings;
@@ -105,7 +106,7 @@ export const ViewportHeader: Component<ViewportHeaderProps> = (props) => {
   const set = (change: Partial<ViewSettings>) => props.onChange(change);
 
   const boneOptions = createMemo((): SelectOption[] => [
-    { value: "-1", label: "Todos los huesos" },
+    { value: "-1", label: t("Todos los huesos") },
     ...props.boneNames.map((name, i) => ({ value: String(i), label: name })),
   ]);
 
@@ -121,12 +122,12 @@ export const ViewportHeader: Component<ViewportHeaderProps> = (props) => {
       <Show when={props.preview}>
         {(preview) => (
           <>
-            <span class="text-text-muted">Vista previa</span>
+            <span class="text-text-muted">{t("Vista previa")}</span>
             <div data-preview-view class="flex rounded border border-border overflow-hidden">
               <For each={PREVIEW_VIEWS}>
                 {(v) => (
                   <button data-view={v.id} class={segmented(preview().view === v.id)} onClick={() => preview().onChange(v.id)}>
-                    {v.label}
+                    {t(v.label)}
                   </button>
                 )}
               </For>
@@ -136,7 +137,7 @@ export const ViewportHeader: Component<ViewportHeaderProps> = (props) => {
       </Show>
       {/* Esqueleto: forma de los huesos y qué pesos se ven */}
       <Show when={props.hasSkeleton}>
-        <span class="text-text-muted">Huesos</span>
+        <span class="text-text-muted">{t("Huesos")}</span>
         <div class="flex rounded border border-border overflow-hidden">
           <For each={BONE_DISPLAYS}>
             {(d) => (
@@ -144,12 +145,12 @@ export const ViewportHeader: Component<ViewportHeaderProps> = (props) => {
                 class={segmented((props.settings.boneDisplay ?? "octahedral") === d.id)}
                 onClick={() => set({ boneDisplay: d.id, showSkeleton: true })}
               >
-                {d.label}
+                {t(d.label)}
               </button>
             )}
           </For>
         </div>
-        <Tooltip content="Colorear la malla según cuánto la mueve cada hueso" placement="bottom">
+        <Tooltip content={t("Colorear la malla según cuánto la mueve cada hueso")} placement="bottom">
           <button
             class={clsx(
               "h-6 px-2 flex items-center gap-1 rounded border",
@@ -160,7 +161,7 @@ export const ViewportHeader: Component<ViewportHeaderProps> = (props) => {
             onClick={() => set({ showWeights: !props.settings.showWeights })}
           >
             <Icons.PaintBrush size={12} />
-            {props.hasWeights ? "Pesos" : "Influencia"}
+            {props.hasWeights ? t("Pesos") : t("Influencia")}
           </button>
         </Tooltip>
         <Show when={props.settings.showWeights}>
@@ -171,40 +172,40 @@ export const ViewportHeader: Component<ViewportHeaderProps> = (props) => {
             onChange={(value) => props.onSelectBone(parseInt(value))}
           />
           <Show when={!props.hasWeights}>
-            <span class="text-text-muted truncate" title="Sin pesos calculados: cada zona se asigna al hueso más cercano">
-              estimada por cercanía
+            <span class="text-text-muted truncate" title={t("Sin pesos calculados: cada zona se asigna al hueso más cercano")}>
+              {t("estimada por cercanía")}
             </span>
           </Show>
         </Show>
       </Show>
 
       <div class="ml-auto flex items-center gap-1">
-        <Dropdown label="Superposiciones" icon={<Icons.Overlays size={14} />}>
-          <div class="text-[10px] uppercase tracking-wide text-text-muted">Superposiciones</div>
-          <Checkbox label="Grilla" checked={props.showGrid} onChange={() => props.onToggleGrid()} />
+        <Dropdown label={t("Superposiciones")} icon={<Icons.Overlays size={14} />}>
+          <div class="text-[10px] uppercase tracking-wide text-text-muted">{t("Superposiciones")}</div>
+          <Checkbox label={t("Grilla")} checked={props.showGrid} onChange={() => props.onToggleGrid()} />
           <Checkbox
-            label="Alambre"
+            label={t("Alambre")}
             checked={props.settings.showWireframe}
             onChange={(checked) => set({ showWireframe: checked })}
           />
           <Show when={props.hasSkeleton}>
             <Checkbox
-              label="Esqueleto"
+              label={t("Esqueleto")}
               checked={props.settings.showSkeleton}
               onChange={(checked) => set({ showSkeleton: checked })}
             />
             <Checkbox
-              label={props.hasWeights ? "Pesos" : "Influencia estimada"}
+              label={props.hasWeights ? t("Pesos") : t("Influencia estimada")}
               checked={props.settings.showWeights}
               onChange={(checked) => set({ showWeights: checked })}
             />
           </Show>
         </Dropdown>
 
-        <Tooltip content="Rayos X: modelo translúcido (Alt+Z)" placement="bottom">
+        <Tooltip content={t("Rayos X: modelo translúcido (Alt+Z)")} placement="bottom">
           <button
             class={clsx("h-6 w-7 flex items-center justify-center rounded", segmented(props.settings.xray === true))}
-            aria-label="Rayos X"
+            aria-label={t("Rayos X")}
             aria-pressed={props.settings.xray === true}
             onClick={() => set({ xray: !props.settings.xray })}
           >
@@ -215,10 +216,10 @@ export const ViewportHeader: Component<ViewportHeaderProps> = (props) => {
         <div class="flex rounded border border-border overflow-hidden">
           <For each={SHADINGS}>
             {(s) => (
-              <Tooltip content={s.label} placement="bottom">
+              <Tooltip content={t(s.label)} placement="bottom">
                 <button
                   class={clsx(segmented(shadingOf(props.settings) === s.id), "w-7")}
-                  aria-label={s.label}
+                  aria-label={t(s.label)}
                   onClick={() => set(s.change)}
                 >
                   <s.icon size={14} />
@@ -228,11 +229,11 @@ export const ViewportHeader: Component<ViewportHeaderProps> = (props) => {
           </For>
         </div>
 
-        <Dropdown label="Opciones de sombreado" icon={<></>}>
-          <div class="text-[10px] uppercase tracking-wide text-text-muted">Rayos X</div>
-          <Checkbox label="Modelo translúcido" checked={props.settings.xray === true} onChange={(checked) => set({ xray: checked })} />
+        <Dropdown label={t("Opciones de sombreado")} icon={<></>}>
+          <div class="text-[10px] uppercase tracking-wide text-text-muted">{t("Rayos X")}</div>
+          <Checkbox label={t("Modelo translúcido")} checked={props.settings.xray === true} onChange={(checked) => set({ xray: checked })} />
           <Slider
-            label="Opacidad"
+            label={t("Opacidad")}
             min={0.05}
             max={1}
             step={0.05}

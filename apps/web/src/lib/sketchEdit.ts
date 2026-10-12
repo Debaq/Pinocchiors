@@ -23,6 +23,7 @@ import {
 import { checkSketch, overlapping, polylineOf } from "./sketchCheck.ts";
 import { splitEntityAt } from "./sketchTransform.ts";
 import { trimAny } from "./sketchTrim.ts";
+import { t as tr } from "./i18n.ts";
 
 const sub = (a: P2, b: P2): P2 => [a[0] - b[0], a[1] - b[1]];
 const add = (a: P2, b: P2): P2 => [a[0] + b[0], a[1] + b[1]];
@@ -198,18 +199,18 @@ export function trimByStroke(s: Sketch, stroke: P2[], limits: TrimLimits = [], b
 export function joinEntities(s: Sketch, a: number, b: number): string | undefined {
   const ea = s.entities.find((e) => e.id === a);
   const eb = s.entities.find((e) => e.id === b);
-  if (!ea || !eb || a === b) return "Elegir dos líneas o dos arcos";
+  if (!ea || !eb || a === b) return tr("Elegir dos líneas o dos arcos");
   const tol = span(s) * 1e-7;
   const ga = ea.geometry;
   const gb = eb.geometry;
   if (ga.type === "line" && gb.type === "line") {
     const common = [ga.start, ga.end].find((p) => p === gb.start || p === gb.end);
-    if (common === undefined) return "Las líneas tienen que compartir un extremo";
+    if (common === undefined) return tr("Las líneas tienen que compartir un extremo");
     const farA = ga.start === common ? ga.end : ga.start;
     const farB = gb.start === common ? gb.end : gb.start;
     const [A, C, B] = [pos(s, farA), pos(s, common), pos(s, farB)];
     const dir = unit(sub(B, A));
-    if (Math.abs(cross(dir, sub(C, A))) > tol || dot(sub(C, A), dir) <= 0 || dot(sub(B, C), dir) <= 0) return "Las líneas tienen que estar alineadas y seguidas";
+    if (Math.abs(cross(dir, sub(C, A))) > tol || dot(sub(C, A), dir) <= 0 || dot(sub(B, C), dir) <= 0) return tr("Las líneas tienen que estar alineadas y seguidas");
     // La unida conserva el sentido de la primera
     if (ga.start === common) ga.start = farB;
     else ga.end = farB;
@@ -224,7 +225,7 @@ export function joinEntities(s: Sketch, a: number, b: number): string | undefine
     const [ca, cb] = [pos(s, ga.center), pos(s, gb.center)];
     const ra = dist(pos(s, ga.start), ca);
     const rb = dist(pos(s, gb.start), cb);
-    if (dist(ca, cb) > tol || Math.abs(ra - rb) > tol) return "Los arcos tienen que ser del mismo círculo";
+    if (dist(ca, cb) > tol || Math.abs(ra - rb) > tol) return tr("Los arcos tienen que ser del mismo círculo");
     let common: number;
     if (ga.end === gb.start) {
       common = ga.end;
@@ -232,7 +233,7 @@ export function joinEntities(s: Sketch, a: number, b: number): string | undefine
     } else if (gb.end === ga.start) {
       common = ga.start;
       ga.start = gb.start;
-    } else return "Los arcos tienen que seguirse (el fin de uno es el comienzo del otro)";
+    } else return tr("Los arcos tienen que seguirse (el fin de uno es el comienzo del otro)");
     if (gb.center !== ga.center) mergePoint(s, gb.center, ga.center);
     s.constraints = s.constraints.filter((k) => !(k.type === "arc_length" && (k.arc === a || k.arc === b)));
     replaceEntity(s, b, a);
@@ -245,7 +246,7 @@ export function joinEntities(s: Sketch, a: number, b: number): string | undefine
     keepMiddle(s, common, a, "circle");
     return undefined;
   }
-  return "Se unen dos líneas o dos arcos";
+  return tr("Se unen dos líneas o dos arcos");
 }
 
 /**
@@ -307,8 +308,8 @@ export type CornerChamferSecond = { distance: number } | { angle: number };
  */
 export function chamferCorner(s: Sketch, point: number, d1: number, second: CornerChamferSecond = { distance: d1 }, keepCorner = true): string | undefined {
   const lines = linesAt(s, point);
-  if (lines.length !== 2) return "La esquina debe unir exactamente dos líneas";
-  if (!(d1 > 0)) return "La distancia tiene que ser positiva";
+  if (lines.length !== 2) return tr("La esquina debe unir exactamente dos líneas");
+  if (!(d1 > 0)) return tr("La distancia tiene que ser positiva");
   const P = pos(s, point);
   const other = (e: SketchEntity) => {
     const g = e.geometry as { start: number; end: number };
@@ -318,18 +319,18 @@ export function chamferCorner(s: Sketch, point: number, d1: number, second: Corn
   const u = unit(sub(A, P));
   const v = unit(sub(B, P));
   const corner = Math.acos(Math.max(-1, Math.min(1, dot(u, v))));
-  if (corner < 1e-3 || Math.PI - corner < 1e-3) return "Las líneas están alineadas";
+  if (corner < 1e-3 || Math.PI - corner < 1e-3) return tr("Las líneas están alineadas");
   let d2: number;
   if ("distance" in second) d2 = second.distance;
   else {
     // Ley de los senos en el triángulo esquina-T1-T2
     const a = (second.angle * Math.PI) / 180;
     const opposite = Math.PI - corner - a;
-    if (!(a > 0) || opposite <= 1e-6) return "Con ese ángulo el chaflán no corta la segunda línea";
+    if (!(a > 0) || opposite <= 1e-6) return tr("Con ese ángulo el chaflán no corta la segunda línea");
     d2 = (d1 * Math.sin(a)) / Math.sin(opposite);
   }
-  if (!(d2 > 0)) return "La distancia tiene que ser positiva";
-  if (d1 >= dist(A, P) || d2 >= dist(B, P)) return "El chaflán no entra en esas líneas";
+  if (!(d2 > 0)) return tr("La distancia tiene que ser positiva");
+  if (d1 >= dist(A, P) || d2 >= dist(B, P)) return tr("El chaflán no entra en esas líneas");
   const t1 = addPoint(s, add(P, mul(u, d1)));
   const t2 = addPoint(s, add(P, mul(v, d2)));
   for (const [line, tp] of [[lines[0], t1], [lines[1], t2]] as const) {
@@ -373,8 +374,8 @@ interface Piece {
  */
 export function orderChain(s: Sketch, ids: number[]): { pieces: Piece[]; closed: boolean } | string {
   const ents = ids.map((id) => s.entities.find((e) => e.id === id)).filter((e): e is SketchEntity => !!e);
-  if (!ents.length) return "Elegir líneas o arcos";
-  if (ents.some((e) => e.geometry.type !== "line" && e.geometry.type !== "arc")) return "La cadena es de líneas y arcos";
+  if (!ents.length) return tr("Elegir líneas o arcos");
+  if (ents.some((e) => e.geometry.type !== "line" && e.geometry.type !== "arc")) return tr("La cadena es de líneas y arcos");
   const tol = span(s) * 1e-9;
   const ends = (e: SketchEntity, rev: boolean): [P2, P2] => {
     const g = e.geometry as { start: number; end: number };
@@ -403,7 +404,7 @@ export function orderChain(s: Sketch, ids: number[]): { pieces: Piece[]; closed:
       else pieces.unshift(found);
     }
   }
-  if (left.size) return "Lo elegido no forma una sola cadena";
+  if (left.size) return tr("Lo elegido no forma una sola cadena");
   const head = ends(byId.get(pieces[0].entity)!, pieces[0].reversed)[0];
   const tail = ends(byId.get(pieces[pieces.length - 1].entity)!, pieces[pieces.length - 1].reversed)[1];
   return { pieces, closed: pieces.length > 1 && dist(head, tail) <= tol };
@@ -426,7 +427,7 @@ function offsetPiece(s: Sketch, piece: Piece, d: number): OffsetPiece | string {
   // Antihorario, la izquierda es hacia el centro
   const ccw = !piece.reversed;
   const r2 = ccw ? r - d : r + d;
-  if (r2 <= 1e-9 * span(s)) return "La distancia es mayor que el radio de un arco";
+  if (r2 <= 1e-9 * span(s)) return tr("La distancia es mayor que el radio de un arco");
   const [a, b] = ccw ? [pos(s, arc.start), pos(s, arc.end)] : [pos(s, arc.end), pos(s, arc.start)];
   const on = (p: P2) => add(c, mul(unit(sub(p, c)), r2));
   return { kind: "arc", c, center: arc.center, r: r2, a: on(a), b: on(b), ccw, from: e.id };
@@ -518,7 +519,7 @@ export type OffsetCaps = "open" | "round" | "line";
 export function offsetChain(s: Sketch, ids: number[], d: number, opts: { both?: boolean; caps?: OffsetCaps } = {}): { entities: number[] } | string {
   const order = orderChain(s, ids);
   if (typeof order === "string") return order;
-  if (!(Math.abs(d) > 0)) return "La distancia no puede ser cero";
+  if (!(Math.abs(d) > 0)) return tr("La distancia no puede ser cero");
   const { pieces, closed } = order;
   const tol = span(s) * 1e-9;
   const vertexIds = pieces.map((pc) => {
@@ -901,8 +902,8 @@ export function closeContour(s: Sketch): number[] {
  */
 export function splitEqual(s: Sketch, id: number, n: number): string | undefined {
   const e = s.entities.find((x) => x.id === id);
-  if (!e) return "No hay nada elegido para partir";
-  if (!(n >= 2) || !Number.isInteger(n)) return "Partir en dos partes o más";
+  if (!e) return tr("No hay nada elegido para partir");
+  if (!(n >= 2) || !Number.isInteger(n)) return tr("Partir en dos partes o más");
   const g = e.geometry;
   let at: (k: number) => P2;
   if (g.type === "line") {
@@ -915,7 +916,7 @@ export function splitEqual(s: Sketch, id: number, n: number): string | undefined
     let sweep = Math.atan2(b[1] - c[1], b[0] - c[0]) - a0;
     while (sweep <= 1e-12) sweep += 2 * Math.PI;
     at = (k) => [c[0] + r * Math.cos(a0 + (sweep * k) / n), c[1] + r * Math.sin(a0 + (sweep * k) / n)];
-  } else return "Se parten en partes iguales líneas y arcos";
+  } else return tr("Se parten en partes iguales líneas y arcos");
   const before = new Set(s.entities.map((x) => x.id));
   // Desde la punta hacia atrás: la original se queda con la primera parte
   for (let k = n - 1; k >= 1; k--) {

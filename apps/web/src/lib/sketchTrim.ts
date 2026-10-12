@@ -24,6 +24,7 @@ import {
 } from "./cad.ts";
 import { polylineOf } from "./sketchCheck.ts";
 import { breaks, closestParam, domain, ellipseParam, evalAt, hermiteToBSpline, insertKnot, makeBSpline, sample } from "./sketchCurves.ts";
+import { t as tr } from "./i18n.ts";
 
 const sub = (a: P2, b: P2): P2 => [a[0] - b[0], a[1] - b[1]];
 const cross = (a: P2, b: P2) => a[0] * b[1] - a[1] * b[0];
@@ -105,10 +106,10 @@ const isCut = (x: End): x is Cut => "hit" in x;
  */
 export function trimFreeCurve(s: Sketch, id: number, p: P2, limits: TrimLimits = []): string | undefined {
   const e = s.entities.find((x) => x.id === id);
-  if (!e || !isFreeCurve(e.geometry)) return "Solo splines y elipses";
+  if (!e || !isFreeCurve(e.geometry)) return tr("Solo splines y elipses");
   const g = e.geometry;
   const pl = polylineOf(s, g);
-  if (pl.length < 2) return "No se pudo leer la curva";
+  if (pl.length < 2) return tr("No se pudo leer la curva");
   const closed = g.type === "ellipse" || ((g.type === "spline" || g.type === "bspline") && !!g.closed);
   const last = pl.length - 1;
   // En una abierta, lo que toca sus puntas no corta (son sus uniones)
@@ -123,7 +124,7 @@ export function trimFreeCurve(s: Sketch, id: number, p: P2, limits: TrimLimits =
   // Los tramos que quedan, como pares de puntas en el sentido de la curva
   const pieces: [End, End][] = [];
   if (closed) {
-    if (cuts.length < 2) return "Una curva cerrada necesita al menos dos cruces para recortarla";
+    if (cuts.length < 2) return tr("Una curva cerrada necesita al menos dos cruces para recortarla");
     before ??= cuts[cuts.length - 1];
     after ??= cuts[0];
     pieces.push([after, before]);
@@ -282,10 +283,10 @@ export function extendFreeCurve(s: Sketch, id: number, p: P2, limits: TrimLimits
   const e = s.entities.find((x) => x.id === id);
   if (!e) return undefined;
   const g = e.geometry;
-  if (g.type === "bspline") return "Una spline por polos no se extiende: pasarla antes a puntos de paso";
+  if (g.type === "bspline") return tr("Una spline por polos no se extiende: pasarla antes a puntos de paso");
   if (g.type === "ellipse_arc") return extendEllipseArc(s, g, p, limits, id);
-  if (g.type !== "spline") return "Solo líneas, arcos, splines y arcos de elipse";
-  if (g.closed) return "Una spline cerrada no tiene puntas";
+  if (g.type !== "spline") return tr("Solo líneas, arcos, splines y arcos de elipse");
+  if (g.closed) return tr("Una spline cerrada no tiene puntas");
   const pl = polylineOf(s, g);
   const [A, B] = [pl[0], pl[pl.length - 1]];
   const atEnd = Math.hypot(p[0] - B[0], p[1] - B[1]) <= Math.hypot(p[0] - A[0], p[1] - A[1]);
@@ -297,7 +298,7 @@ export function extendFreeCurve(s: Sketch, id: number, p: P2, limits: TrimLimits
   const far = 1e6;
   const ray: P2[] = [from, [from[0] + d[0] * far, from[1] + d[1] * far]];
   const hits = crossings(s, id, ray, limits).filter((c) => c.u * far > 1e-6);
-  if (!hits.length) return "No hay nada en esa dirección hasta donde extender";
+  if (!hits.length) return tr("No hay nada en esa dirección hasta donde extender");
   const hit = hits[0];
   const np = addPoint(s, hit.p);
   if (atEnd) {
@@ -331,7 +332,7 @@ function extendEllipseArc(s: Sketch, g: Extract<Geometry, { type: "ellipse_arc" 
     const t = atEnd ? norm(ang(x.p) - ang(B)) : norm(ang(A) - ang(x.p));
     if (t > 1e-6 && t < TAU - sweep - 1e-6 && (!best || t < best.t)) best = { t, cut: x };
   }
-  if (!best) return "No hay nada por ese lado de la elipse hasta donde extender";
+  if (!best) return tr("No hay nada por ese lado de la elipse hasta donde extender");
   const np = addPoint(s, best.cut.p);
   if (atEnd) g.end = np;
   else g.start = np;
@@ -348,10 +349,10 @@ function extendEllipseArc(s: Sketch, g: Extract<Geometry, { type: "ellipse_arc" 
  */
 export function bsplineToThrough(s: Sketch, id: number): string | undefined {
   const e = s.entities.find((x) => x.id === id);
-  if (e?.geometry.type !== "bspline") return "Elegir una spline por polos";
+  if (e?.geometry.type !== "bspline") return tr("Elegir una spline por polos");
   const g = e.geometry;
   const curve = bsplineOf(g, (q) => pos(s, q));
-  if (!curve) return "No se pudo leer la spline";
+  if (!curve) return tr("No se pudo leer la spline");
   const closed = !!g.closed;
   const [u0, u1] = domain(curve);
   // Parámetros de los puntos (una cerrada no repite el final)

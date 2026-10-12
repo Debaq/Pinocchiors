@@ -4,6 +4,7 @@ import { Button, Checkbox, NumberInput, Panel, Select } from "../ui";
 import * as Icons from "../icons";
 import { createPersisted } from "../../lib/ui-state";
 import type { Vec3 } from "../../lib/axes";
+import { t, tx } from "../../lib/i18n";
 
 export type TuneDirection = "forward" | "back" | "up" | "down" | "left" | "right";
 export type TuneRotation = "pitch" | "spread" | "turn";
@@ -33,7 +34,7 @@ export interface JointTunePanelProps {
 }
 
 const STEPS = [
-  { value: "0.005", label: "0,5 %" },
+  { value: "0.005", get label() { return t("0,5 %"); } },
   { value: "0.01", label: "1 %" },
   { value: "0.02", label: "2 %" },
   { value: "0.05", label: "5 %" },
@@ -49,7 +50,7 @@ const ANGLES = [
 const Nudge: Component<{ label: string; title: string; onClick: () => void; disabled?: boolean }> = (props) => (
   <button
     type="button"
-    title={props.title}
+    title={t(props.title)}
     disabled={props.disabled}
     class={clsx(
       "h-7 px-2 rounded border border-border text-[11px] text-text",
@@ -57,7 +58,7 @@ const Nudge: Component<{ label: string; title: string; onClick: () => void; disa
     )}
     onClick={props.onClick}
   >
-    {props.label}
+    {t(props.label)}
   </button>
 );
 
@@ -71,7 +72,7 @@ const Pair: Component<{
   disabled?: boolean;
 }> = (props) => (
   <div class="flex items-center gap-2">
-    <span class="flex-1 text-xs text-text-muted">{props.label}</span>
+    <span class="flex-1 text-xs text-text-muted">{t(props.label)}</span>
     <Nudge label={props.minus[0]} title={props.minus[1]} onClick={props.onMinus} disabled={props.disabled} />
     <Nudge label={props.plus[0]} title={props.plus[1]} onClick={props.onPlus} disabled={props.disabled} />
   </div>
@@ -92,14 +93,14 @@ export const JointTunePanel: Component<JointTunePanelProps> = (props) => {
 
   return (
     <div>
-      <Panel title="Ajuste fino" id="skeleton.tune" icon={<Icons.Bone size={14} />} defaultOpen>
+      <Panel title={t("Ajuste fino")} id="skeleton.tune" icon={<Icons.Bone size={14} />} defaultOpen>
         <div class="space-y-3 pb-3">
           <Select
-            label="Articulación"
+            label={t("Articulación")}
             options={props.boneNames.map((name, i) => ({ value: String(i), label: name }))}
             value={props.selected >= 0 ? String(props.selected) : undefined}
             onChange={(v) => props.onSelect(Number(v))}
-            placeholder="Haz clic en una articulación del visor"
+            placeholder={t("Haz clic en una articulación del visor")}
           />
           <Show when={props.position}>
             {(p) => (
@@ -123,17 +124,17 @@ export const JointTunePanel: Component<JointTunePanelProps> = (props) => {
             )}
           </Show>
           <Checkbox
-            label="Mover también lo que cuelga de ella"
+            label={t("Mover también lo que cuelga de ella")}
             checked={withChildren()}
             onChange={setWithChildren}
           />
-          <Checkbox label="Espejo: el otro lado igual" checked={props.symmetric} onChange={props.onSymmetricChange} />
+          <Checkbox label={t("Espejo: el otro lado igual")} checked={props.symmetric} onChange={props.onSymmetricChange} />
         </div>
       </Panel>
 
-      <Panel title="Mover" id="skeleton.tune.move" icon={<Icons.ArrowsOutCardinal size={14} />} defaultOpen>
+      <Panel title={t("Mover")} id="skeleton.tune.move" icon={<Icons.ArrowsOutCardinal size={14} />} defaultOpen>
         <div class="space-y-2 pb-3">
-          <Select label="Paso (del tamaño del esqueleto)" options={STEPS} value={step()} onChange={setStep} />
+          <Select label={t("Paso (del tamaño del esqueleto)")} options={STEPS} value={step()} onChange={setStep} />
           <Pair
             label="Adelante / atrás"
             minus={["Atrás", "Hacia la espalda del personaje"]}
@@ -145,7 +146,7 @@ export const JointTunePanel: Component<JointTunePanelProps> = (props) => {
           <Pair
             label="Arriba / abajo"
             minus={["Abajo", "Hacia el suelo"]}
-            plus={["Arriba", "Hacia arriba"]}
+            plus={[tx("dirección", "Arriba"), "Hacia arriba"]}
             onMinus={() => move("down")}
             onPlus={() => move("up")}
             disabled={off()}
@@ -169,13 +170,12 @@ export const JointTunePanel: Component<JointTunePanelProps> = (props) => {
         </div>
       </Panel>
 
-      <Panel title="Girar el miembro" id="skeleton.tune.rotate" icon={<Icons.ArrowsClockwise size={14} />} defaultOpen>
+      <Panel title={t("Girar el miembro")} id="skeleton.tune.rotate" icon={<Icons.ArrowsClockwise size={14} />} defaultOpen>
         <div class="space-y-2 pb-3">
           <p class="text-xs text-text-muted leading-relaxed">
-            Gira todo lo que cuelga de la articulación alrededor de ella, como un bloque: una pierna entera desde la
-            cadera, una mano desde la muñeca.
+            {t("Gira todo lo que cuelga de la articulación alrededor de ella, como un bloque: una pierna entera desde la cadera, una mano desde la muñeca.")}
           </p>
-          <Select label="Ángulo" options={ANGLES} value={angle()} onChange={setAngle} />
+          <Select label={t("Ángulo")} options={ANGLES} value={angle()} onChange={setAngle} />
           <Pair
             label="Adelante / atrás"
             minus={["Atrás", "La punta va hacia la espalda"]}
@@ -203,19 +203,18 @@ export const JointTunePanel: Component<JointTunePanelProps> = (props) => {
         </div>
       </Panel>
 
-      <Panel title="Simetría y centro" id="skeleton.tune.side" icon={<Icons.Bone size={14} />} defaultOpen>
+      <Panel title={t("Simetría y centro")} id="skeleton.tune.side" icon={<Icons.Bone size={14} />} defaultOpen>
         <div class="space-y-2 pb-3">
           <Button size="sm" fullWidth disabled={off() || !props.sided} onClick={props.onCopySide}>
-            Copiar este lado al otro
+            {t("Copiar este lado al otro")}
           </Button>
           <Show when={props.onCenter}>
             <Button size="sm" fullWidth disabled={off()} onClick={() => props.onCenter?.()}>
-              Centrar en el miembro
+              {t("Centrar en el miembro")}
             </Button>
           </Show>
           <p class="text-xs text-text-muted leading-relaxed">
-            Corrige una mitad y copia: el otro lado queda en el reflejo. Centrar lleva la articulación al medio del
-            volumen de la malla.
+            {t("Corrige una mitad y copia: el otro lado queda en el reflejo. Centrar lleva la articulación al medio del volumen de la malla.")}
           </p>
         </div>
       </Panel>

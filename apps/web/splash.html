@@ -31,10 +31,31 @@
     <!-- logo -->
     <main>
       <div class="name">Pinocchio</div>
-      <div class="tagline">Escanear, reparar, animar<br />y fabricar modelos 3D</div>
-      <div class="loading">Cargando…</div>
+      <div class="tagline" data-es="Escanear, reparar, animar<br />y fabricar modelos 3D" data-en="Scan, repair, animate<br />and fabricate 3D models">Escanear, reparar, animar<br />y fabricar modelos 3D</div>
+      <div class="loading" data-es="Cargando…" data-en="Loading…">Cargando…</div>
       <div class="bar"></div>
     </main>
     <div class="version">%VITE_APP_VERSION%</div>
+    <!-- Mismo idioma que la app (lib/i18n.ts): la elección guardada o, si es
+         "Según el sistema", el del sistema; sin soporte, inglés. Comparte
+         localStorage con la ventana principal -->
+    <script>
+      (function () {
+        var saved = null;
+        try { saved = JSON.parse(localStorage.getItem("pinocchio.ui.settings.language")); } catch (e) {}
+        var lang = saved === "es" || saved === "en" ? saved : null;
+        if (!lang) {
+          lang = "en";
+          var list = navigator.languages && navigator.languages.length ? navigator.languages : [navigator.language];
+          for (var i = 0; i < list.length; i++) {
+            var base = String(list[i] || "").toLowerCase().split("-")[0];
+            if (base === "es" || base === "en") { lang = base; break; }
+          }
+        }
+        document.documentElement.lang = lang;
+        var els = document.querySelectorAll("[data-" + lang + "]");
+        for (var j = 0; j < els.length; j++) els[j].innerHTML = els[j].getAttribute("data-" + lang);
+      })();
+    </script>
   </body>
 </html>

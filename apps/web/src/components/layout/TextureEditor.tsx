@@ -6,6 +6,7 @@ import * as Icons from "../icons";
 import type { MeshData, SceneMaterial } from "../../lib/Viewer3D";
 import { UvView, uvEdges, type ImageChannel, type UvEdgeMode } from "../../lib/UvView";
 import { createPersisted } from "../../lib/ui-state";
+import { t } from "../../lib/i18n";
 
 /** Mapas de un material PBR (claves de `SceneMaterial.maps`) */
 export type TextureSlot = keyof SceneMaterial["maps"];
@@ -49,7 +50,7 @@ const Segmented: Component<{
     <For each={props.options}>
       {(o) => (
         <button
-          title={o.title}
+          title={t(o.title)}
           class={clsx(
             "px-2 h-7 text-xs transition-colors",
             props.mono && "font-mono",
@@ -57,7 +58,7 @@ const Segmented: Component<{
           )}
           onClick={() => props.onChange(o.value)}
         >
-          {o.label}
+          {t(o.label)}
         </button>
       )}
     </For>
@@ -113,24 +114,24 @@ export const TextureEditor: Component<TextureEditorProps> = (props) => {
   const [cursor, setCursor] = createSignal<[number, number] | null>(null);
   const [exportMenu, setExportMenu] = createSignal<{ x: number; y: number } | null>(null);
   const exportItems = (): MenuEntry[] => [
-    { header: "Con capas (textura + malla UV)" },
+    { header: t("Con capas (textura + malla UV)") },
     { label: "GIMP (.xcf)", onSelect: () => props.onExport?.("xcf") },
     { label: "Photoshop, Krita, Photopea (.psd)", onSelect: () => props.onExport?.("psd") },
     { separator: true },
-    { label: "Solo la imagen (.png)", onSelect: () => props.onExport?.("png"), disabled: !image() },
-    { label: "Solo la malla UV (.png transparente)", onSelect: () => props.onExport?.("layout") },
+    { label: t("Solo la imagen (.png)"), onSelect: () => props.onExport?.("png"), disabled: !image() },
+    { label: t("Solo la malla UV (.png transparente)"), onSelect: () => props.onExport?.("layout") },
   ];
 
   const material = () => props.materials[props.selection.material];
   const image = () => material()?.maps[props.selection.slot];
 
   const materialOptions = createMemo(() =>
-    props.materials.map((m, i) => ({ value: String(i), label: m.name || `Material ${i + 1}` }))
+    props.materials.map((m, i) => ({ value: String(i), label: m.name || t("Material {n}", { n: i + 1 }) }))
   );
   /** Mapas que tiene el material elegido */
   const slotOptions = createMemo(() => {
     const maps = material()?.maps ?? {};
-    return TEXTURE_SLOTS.filter((s) => maps[s.slot]).map((s) => ({ value: s.slot, label: s.label }));
+    return TEXTURE_SLOTS.filter((s) => maps[s.slot]).map((s) => ({ value: s.slot, label: t(s.label) }));
   });
 
   // Aristas UV de las caras del material elegido
@@ -187,8 +188,8 @@ export const TextureEditor: Component<TextureEditorProps> = (props) => {
           <div class="w-32">
             <Select
               options={[
-                { value: "original", label: "Original" },
-                { value: "quad", label: "Retopología" },
+                { value: "original", label: t("Original") },
+                { value: "quad", label: t("Retopología") },
               ]}
               value={props.target}
               onChange={(v) => props.onTargetChange?.(v as "original" | "quad")}
@@ -227,8 +228,8 @@ export const TextureEditor: Component<TextureEditorProps> = (props) => {
             step="0.05"
             value={wireOpacity()}
             onInput={(e) => setWireOpacity(Number(e.currentTarget.value))}
-            title="Opacidad de la malla"
-            aria-label="Opacidad de la malla"
+            title={t("Opacidad de la malla")}
+            aria-label={t("Opacidad de la malla")}
             class="w-20 accent-accent"
           />
         </Show>
@@ -237,10 +238,10 @@ export const TextureEditor: Component<TextureEditorProps> = (props) => {
           <Button
             size="sm"
             variant="primary"
-            title="Abre la textura con la malla en capas; al guardar en GIMP se recarga sola"
+            title={t("Abre la textura con la malla en capas; al guardar en GIMP se recarga sola")}
             onClick={() => props.onEditExternally?.()}
           >
-            Editar en GIMP
+            {t("Editar en GIMP")}
           </Button>
         </Show>
         <Show when={props.onExport}>
@@ -251,18 +252,18 @@ export const TextureEditor: Component<TextureEditorProps> = (props) => {
               setExportMenu({ x: rect.left, y: rect.bottom + 4 });
             }}
           >
-            Exportar
+            {t("Exportar")}
           </Button>
         </Show>
         <Show when={props.onImport}>
-          <Button size="sm" title="Reemplaza la textura por un archivo XCF, PSD o imagen" onClick={() => props.onImport?.()}>
-            Importar
+          <Button size="sm" title={t("Reemplaza la textura por un archivo XCF, PSD o imagen")} onClick={() => props.onImport?.()}>
+            {t("Importar")}
           </Button>
         </Show>
-        <IconButton variant="ghost" size="sm" title="Ver todo (doble clic)" aria-label="Ver todo" onClick={() => view?.fit()}>
+        <IconButton variant="ghost" size="sm" title={t("Ver todo (doble clic)")} aria-label={t("Ver todo")} onClick={() => view?.fit()}>
           <Icons.FrameCorners size={14} />
         </IconButton>
-        <IconButton variant="ghost" size="sm" title="Cerrar el editor de texturas" aria-label="Cerrar" onClick={() => props.onClose()}>
+        <IconButton variant="ghost" size="sm" title={t("Cerrar el editor de texturas")} aria-label={t("Cerrar")} onClick={() => props.onClose()}>
           <Icons.X size={14} />
         </IconButton>
       </div>
@@ -272,12 +273,12 @@ export const TextureEditor: Component<TextureEditorProps> = (props) => {
         <div class="absolute inset-0 pointer-events-none">
           <Show when={!props.mesh?.uvs}>
             <div class="absolute top-3 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-md bg-bg-darker/90 text-warning text-xs">
-              La malla no tiene UV
+              {t("La malla no tiene UV")}
             </div>
           </Show>
           <Show when={props.mesh?.uvs && !image()}>
             <div class="absolute top-3 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-md bg-bg-darker/90 text-text-muted text-xs">
-              {slotOptions().length > 0 ? "Sin imagen en este mapa" : "Este material no tiene texturas"}
+              {slotOptions().length > 0 ? t("Sin imagen en este mapa") : t("Este material no tiene texturas")}
             </div>
           </Show>
           <Show when={props.external}>
@@ -285,17 +286,18 @@ export const TextureEditor: Component<TextureEditorProps> = (props) => {
               <div class="absolute bottom-3 right-3 flex items-center gap-2 px-2.5 py-1.5 rounded-md bg-bg-darker/90 border border-accent/60 text-xs text-text pointer-events-auto">
                 <span class="w-2 h-2 rounded-full bg-success animate-pulse" />
                 <span>
-                  Editando afuera: se recarga al guardar
-                  {ext().lastUpdate ? ` · última ${ext().lastUpdate}` : ""}
+                  {ext().lastUpdate
+                    ? t("Editando afuera: se recarga al guardar · última {time}", { time: ext().lastUpdate! })
+                    : t("Editando afuera: se recarga al guardar")}
                 </span>
-                <IconButton variant="ghost" size="sm" aria-label="Dejar de seguir" title="Dejar de seguir el archivo" onClick={() => props.onStopExternal?.()}>
+                <IconButton variant="ghost" size="sm" aria-label={t("Dejar de seguir")} title={t("Dejar de seguir el archivo")} onClick={() => props.onStopExternal?.()}>
                   <Icons.X size={12} />
                 </IconButton>
               </div>
             )}
           </Show>
           <div class="absolute bottom-3 left-3 flex gap-3 px-2.5 py-1.5 rounded-md bg-bg-darker/90 border border-border/50 text-xs text-text-muted font-mono">
-            <Show when={image()} fallback={<span>sin imagen</span>}>
+            <Show when={image()} fallback={<span>{t("sin imagen")}</span>}>
               <span class="text-text">
                 {image()!.width} × {image()!.height}
               </span>

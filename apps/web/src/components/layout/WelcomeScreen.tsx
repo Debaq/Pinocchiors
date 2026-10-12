@@ -7,6 +7,7 @@ import splashScan from "../../assets/splash/scan.svg";
 import splashAnimate from "../../assets/splash/animate.svg";
 import splashDesign from "../../assets/splash/design.svg";
 import splashFabricate from "../../assets/splash/fabricate.svg";
+import { locale, t } from "../../lib/i18n";
 
 /** Una lámina por forma de empezar (scripts/logo.py), en el orden de las
  * opciones; al final el logo, que se ve sin el mouse sobre ninguna */
@@ -52,33 +53,33 @@ export const WelcomeScreen: Component<WelcomeScreenProps> = (props) => {
   const formats = () => (props.formats?.length ? props.formats.map((f) => f.toUpperCase()).join(", ") : "GLB, GLTF, OBJ, STL");
   const choices = (): Choice[] => [
     {
-      title: "Abrir / importar",
-      detail: `Proyecto .pinocchio o modelo ${formats()}`,
+      title: t("Abrir / importar"),
+      detail: t("Proyecto .pinocchio o modelo {formats}", { formats: formats() }),
       icon: <Icons.FolderOpen size={20} />,
       action: props.onOpen,
       primary: true,
     },
     {
-      title: "Escanear",
-      detail: "Revopoint o plato giratorio, y nubes de puntos",
+      title: t("Escanear"),
+      detail: t("Revopoint o plato giratorio, y nubes de puntos"),
       icon: <Icons.Scan size={20} />,
       action: props.onScan,
     },
     {
-      title: "Animar",
-      detail: "Esqueleto, pesos, poses y animación, con o sin modelo",
+      title: t("Animar"),
+      detail: t("Esqueleto, pesos, poses y animación, con o sin modelo"),
       icon: <Icons.PersonArmsSpread size={20} />,
       action: props.onAnimate,
     },
     {
-      title: "Diseñar",
-      detail: "Piezas paramétricas desde un boceto",
+      title: t("Diseñar"),
+      detail: t("Piezas paramétricas desde un boceto"),
       icon: <Icons.Ruler size={20} />,
       action: props.onDesign,
     },
     {
-      title: "Fabricar",
-      detail: "Importar un modelo para imprimirlo en piezas",
+      title: t("Fabricar"),
+      detail: t("Importar un modelo para imprimirlo en piezas"),
       icon: <Icons.Printer size={20} />,
       action: props.onFabricate,
     },
@@ -112,14 +113,14 @@ export const WelcomeScreen: Component<WelcomeScreenProps> = (props) => {
           </div>
           <div class="text-center mt-3">
             <div class="text-2xl font-bold tracking-tight text-splash-text">Pinocchio</div>
-            <div class="text-[11px] text-splash-muted">Escanear, reparar, animar y fabricar modelos 3D</div>
+            <div class="text-[11px] text-splash-muted">{t("Escanear, reparar, animar y fabricar modelos 3D")}</div>
           </div>
         </div>
 
         <div class="flex-1 min-w-0 flex flex-col gap-4 p-6">
           <div class="space-y-0.5">
-            <h2 class="text-base font-semibold text-text">¿Por dónde empezamos?</h2>
-            <p class="text-xs text-text-muted">También puedes arrastrar un modelo 3D sobre el visor</p>
+            <h2 class="text-base font-semibold text-text">{t("¿Por dónde empezamos?")}</h2>
+            <p class="text-xs text-text-muted">{t("También puedes arrastrar un modelo 3D sobre el visor")}</p>
           </div>
 
           <div class="flex flex-col gap-1.5" onMouseLeave={() => setHovered(undefined)}>
@@ -162,8 +163,8 @@ export const WelcomeScreen: Component<WelcomeScreenProps> = (props) => {
                 onClick={() => props.onRecover?.()}
               >
                 <Icons.ArrowCounterClockwise size={13} />
-                Recuperar la sesión{r().source_name ? ` de ${r().source_name}` : ""} ·{" "}
-                {new Date(r().saved_at * 1000).toLocaleString([], { dateStyle: "short", timeStyle: "short" })}
+                {r().source_name ? t("Recuperar la sesión de {name}", { name: r().source_name! }) : t("Recuperar la sesión")} ·{" "}
+                {new Date(r().saved_at * 1000).toLocaleString(locale(), { dateStyle: "short", timeStyle: "short" })}
               </button>
             )}
           </Show>

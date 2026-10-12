@@ -1,6 +1,7 @@
 import { Component, For, Show, createEffect, createSignal } from "solid-js";
 import { Button, Panel } from "../ui";
 import * as Icons from "../icons";
+import { t } from "../../lib/i18n";
 
 export interface CustomSkeletonInfo {
   id: string;
@@ -30,13 +31,12 @@ export const SkeletonEditPanel: Component<SkeletonEditPanelProps> = (props) => {
   createEffect(() => setName(props.selectedName ?? ""));
 
   return (
-    <Panel title="Estructura" icon={<Icons.TreeStructure size={14} />}>
+    <Panel title={t("Estructura")} icon={<Icons.TreeStructure size={14} />}>
       <div class="space-y-3">
         <p class="text-xs text-text-muted leading-relaxed">
-          Agrega o borra huesos donde la plantilla no alcanza (una cola más larga, un cuerno). Cambiar la estructura
-          descarta los pesos; las animaciones siguen por nombre.
+          {t("Agrega o borra huesos donde la plantilla no alcanza (una cola más larga, un cuerno). Cambiar la estructura descarta los pesos; las animaciones siguen por nombre.")}
         </p>
-        <Show when={props.selectedName} fallback={<p class="text-xs text-text-dim">Elige una articulación en el visor.</p>}>
+        <Show when={props.selectedName} fallback={<p class="text-xs text-text-dim">{t("Elige una articulación en el visor.")}</p>}>
           <div class="flex gap-1">
             <input
               class="flex-1 min-w-0 px-2 py-1 rounded bg-surface/40 border border-border text-xs font-mono text-text outline-none focus:border-accent"
@@ -52,34 +52,34 @@ export const SkeletonEditPanel: Component<SkeletonEditPanelProps> = (props) => {
               disabled={props.disabled || !name().trim() || name().trim() === props.selectedName}
               onClick={() => props.onRename(name().trim())}
             >
-              Renombrar
+              {t("Renombrar")}
             </Button>
           </div>
           <div class="grid grid-cols-2 gap-1">
-            <Button size="sm" disabled={props.disabled} onClick={props.onAddChild} title="Hueso nuevo que cuelga de la articulación elegida">
-              <Icons.Plus size={12} /> Hueso hijo
+            <Button size="sm" disabled={props.disabled} onClick={props.onAddChild} title={t("Hueso nuevo que cuelga de la articulación elegida")}>
+              <Icons.Plus size={12} /> {t("Hueso hijo")}
             </Button>
-            <Button size="sm" variant="danger" disabled={props.disabled} onClick={props.onDelete} title="Sus hijos pasan a colgar de su padre">
-              <Icons.Trash size={12} /> Borrar
+            <Button size="sm" variant="danger" disabled={props.disabled} onClick={props.onDelete} title={t("Sus hijos pasan a colgar de su padre")}>
+              <Icons.Trash size={12} /> {t("Borrar")}
             </Button>
           </div>
         </Show>
 
         <div class="grid grid-cols-2 gap-1">
           <Button size="sm" disabled={props.disabled} onClick={props.onExportJson}>
-            <Icons.Export size={12} /> Exportar JSON
+            <Icons.Export size={12} /> {t("Exportar JSON")}
           </Button>
           <Button size="sm" disabled={props.disabled} onClick={props.onImportJson}>
-            <Icons.Download size={12} /> Importar JSON
+            <Icons.Download size={12} /> {t("Importar JSON")}
           </Button>
         </div>
 
         <div class="space-y-1 pt-1 border-t border-border/60">
-          <span class="text-xs text-text-muted">Mis esqueletos</span>
+          <span class="text-xs text-text-muted">{t("Mis esqueletos")}</span>
           <div class="flex gap-1">
             <input
               class="flex-1 min-w-0 px-2 py-1 rounded bg-surface/40 border border-border text-xs text-text outline-none focus:border-accent"
-              placeholder="Nombre"
+              placeholder={t("Nombre")}
               value={saveName()}
               onInput={(e) => setSaveName(e.currentTarget.value)}
               onKeyDown={(e) => e.stopPropagation()}
@@ -91,20 +91,20 @@ export const SkeletonEditPanel: Component<SkeletonEditPanelProps> = (props) => {
                 props.onSaveCustom(saveName().trim());
                 setSaveName("");
               }}
-              title="Guarda este esqueleto como plantilla propia (para otros modelos)"
+              title={t("Guarda este esqueleto como plantilla propia (para otros modelos)")}
             >
-              <Icons.FloppyDisk size={12} /> Guardar
+              <Icons.FloppyDisk size={12} /> {t("Guardar")}
             </Button>
           </div>
           <div class="rounded border border-border divide-y divide-border/60 max-h-40 overflow-y-auto">
-            <For each={props.custom} fallback={<p class="px-2 py-2 text-xs text-text-dim">Sin esqueletos guardados.</p>}>
+            <For each={props.custom} fallback={<p class="px-2 py-2 text-xs text-text-dim">{t("Sin esqueletos guardados.")}</p>}>
               {(s) => (
                 <div class="flex items-center gap-2 px-2 py-1 text-xs">
                   <button class="flex-1 min-w-0 text-left truncate text-text-muted hover:text-text" disabled={props.disabled} onClick={() => props.onApplyCustom(s.id)}>
                     {s.name}
                   </button>
                   <span class="text-text-dim font-mono">{s.bones}</span>
-                  <button class="text-text-dim hover:text-red" aria-label={`Borrar ${s.name}`} onClick={() => props.onDeleteCustom(s.id)}>
+                  <button class="text-text-dim hover:text-red" aria-label={t("Borrar {name}", { name: s.name })} onClick={() => props.onDeleteCustom(s.id)}>
                     <Icons.X size={12} />
                   </button>
                 </div>

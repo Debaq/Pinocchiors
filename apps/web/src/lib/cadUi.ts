@@ -3,6 +3,7 @@
 // sketch en edición.
 
 import { detachSelection, freeFromConstraints } from "./sketchFree";
+import { t as tr } from "./i18n.ts";
 import type { SketchFilter } from "./sketchPick";
 import { batch, createEffect, createSignal, on } from "solid-js";
 import { blockSketch, layerState, saveBlock } from "./sketchBlocks";
@@ -53,6 +54,25 @@ import {
   type PartId, type ScanOutline } from "./cad";
 
 /** Operaciones que el panel de Diseñar ofrece al menú del visor (usan lo elegido) */
+/** Aviso de curvas ligadas al modelo; "what" es de dónde vienen (frase completa por origen, no se arma por partes) */
+function linkedMessage(n: number, what: string): string {
+  const one = n === 1;
+  switch (what) {
+    case "de la intersección":
+      return one ? tr("1 curva de la intersección, ligada al modelo (si cambia, se mueve con él)") : tr("{n} curvas de la intersección, ligadas al modelo (si cambia, se mueven con él)", { n });
+    case "de la silueta":
+      return one ? tr("1 curva de la silueta, ligada al modelo (si cambia, se mueve con él)") : tr("{n} curvas de la silueta, ligadas al modelo (si cambia, se mueven con él)", { n });
+    case "del otro sketch":
+      return one ? tr("1 curva del otro sketch, ligada al modelo (si cambia, se mueve con él)") : tr("{n} curvas del otro sketch, ligadas al modelo (si cambia, se mueven con él)", { n });
+    case "de la arista":
+      return one ? tr("1 curva de la arista, ligada al modelo (si cambia, se mueve con él)") : tr("{n} curvas de la arista, ligadas al modelo (si cambia, se mueven con él)", { n });
+    case "del contorno de la cara":
+      return one ? tr("1 curva del contorno de la cara, ligada al modelo (si cambia, se mueve con él)") : tr("{n} curvas del contorno de la cara, ligadas al modelo (si cambia, se mueven con él)", { n });
+    default:
+      return one ? tr("1 curva ligada al modelo (si cambia, se mueve con él)") : tr("{n} curvas ligadas al modelo (si cambia, se mueven con él)", { n });
+  }
+}
+
 export type CadAction = "sketch" | "fillet" | "chamfer" | "shell" | "draft";
 
 /** Vista de corte: plano base, posición (0..1 a lo largo del sólido) y lado que se ve */
@@ -608,7 +628,7 @@ export function createCadUi(store: CadStore) {
       const f = store.doc()?.features.find((x) => x.id === feature);
       const view = store.sketchView(feature);
       if (!f || !editsAsSketch(f.kind) || !view) {
-        setMessage("El sketch todavía no tiene plano (recalcular primero)");
+        setMessage(tr("El sketch todavía no tiene plano (recalcular primero)"));
         return false;
       }
       ui.cancelPick();
@@ -735,9 +755,9 @@ export function createCadUi(store: CadStore) {
     copySelection(): string {
       const s = session();
       const clip = s && extractClip(s.sketch, selection());
-      if (!clip) return "Elegir primero lo que se copia";
+      if (!clip) return tr("Elegir primero lo que se copia");
       setClipboard(clip);
-      return `Copiado (${clip.entities.length} ${clip.entities.length === 1 ? "entidad" : "entidades"}): Ctrl+V para pegar`;
+      return tr(clip.entities.length === 1 ? "Copiado ({n} entidad): Ctrl+V para pegar" : "Copiado ({n} entidades): Ctrl+V para pegar", { n: clip.entities.length });
     },
     /** Pega lo copiado con su centro en `at`; lo pegado queda elegido */
     paste(at: P2) {
@@ -767,7 +787,7 @@ export function createCadUi(store: CadStore) {
         if (!opts.copy && detachOnMove()) freed = detachSelection(sk, sel);
         if (opts.copy) {
           const clip = extractClip(sk, sel);
-          if (!clip) msg = "Elegir primero lo que se copia";
+          if (!clip) msg = tr("Elegir primero lo que se copia");
           else {
             // Varias copias: cada una con la transformación una vez más (f, f∘f, …)
             made = [];
@@ -781,7 +801,7 @@ export function createCadUi(store: CadStore) {
         } else msg = transformSelection(sk, sel, f, opts.scale ?? 1);
       });
       if (made && !dry) setSelection(made);
-      if (!msg && freed && freed.points + freed.constraints) msg = `Se soltó de lo demás: ${freed.points} uniones y ${freed.constraints} restricciones`;
+      if (!msg && freed && freed.points + freed.constraints) msg = tr("Se soltó de lo demás: {points} uniones y {constraints} restricciones", { points: freed.points, constraints: freed.constraints });
       return msg;
     },
     /** Arrastre libre: quita lo que sujeta el punto o la entidad (un paso de deshacer) */
@@ -1069,7 +1089,7 @@ export function createCadUi(store: CadStore) {
       const s = session();
       const d = store.doc();
       const index = d?.features.findIndex((f) => f.id === s?.feature) ?? -1;
-      if (!s || !d || index < 0) return "No hay sketch abierto";
+      if (!s || !d || index < 0) return tr("No hay sketch abierto");
       try {
         const curves = await store.projectModel(d, index, s.plane, what);
         return ui.addLinked(curves, () => ({ source: { type: what } }), what === "section" ? "de la intersección" : "de la silueta");
@@ -1081,10 +1101,10 @@ export function createCadUi(store: CadStore) {
     /** Trae todas las entidades de un sketch anterior, ligadas a las suyas */
     async useSketch(feature: number): Promise<string> {
       const s = session();
-      if (!s) return "No hay sketch abierto";
+      if (!s) return tr("No hay sketch abierto");
       try {
         const curves = await store.projectSketch(feature, s.plane);
-        if (curves.length === 0) return "Ese sketch está vacío";
+        if (curves.length === 0) return tr("Ese sketch está vacío");
         return ui.addLinked(curves, (i) => ({ source: { type: "sketch", feature, entity: curves[i].entity } }), "del otro sketch");
       } catch (e) {
         return String(e);
@@ -1093,12 +1113,12 @@ export function createCadUi(store: CadStore) {
 
     /** Agrega curvas ligadas al sketch (si la sesión sigue abierta) y las deja elegidas */
     addLinked(curves: Projected[], link: (i: number) => Omit<SketchUse, "entity">, what: string): string {
-      if (!session()) return "El sketch se cerró";
+      if (!session()) return tr("El sketch se cerró");
       let ids: number[] = [];
       ui.change((sk) => (ids = addProjected(sk, curves, link)));
       setSelection(ids);
       const n = ids.length;
-      return `${n === 1 ? "1 curva" : `${n} curvas`} ${what}, ligada${n === 1 ? "" : "s"} al modelo (si cambia, se mueve${n === 1 ? "" : "n"} con él)`;
+      return linkedMessage(n, what);
     },
 
     /**
@@ -1108,23 +1128,23 @@ export function createCadUi(store: CadStore) {
     useViewLine(q: P2, tol: number): string {
       const s = session();
       const sheet = s?.sheet;
-      if (!sheet) return "No hay hoja abierta";
+      if (!sheet) return tr("No hay hoja abierta");
       const hit = nearestViewLine(sheet.views, sheet.height, q, tol, sheet.hiddenLines);
-      if (!hit) return "Clic sobre una línea de una vista";
+      if (!hit) return tr("Clic sobre una línea de una vista");
       let ids: number[] = [];
       ui.change((sk) => (ids = addProjected(sk, [projectViewLine(hit.view, hit.line, sheet.height)], () => ({}))));
       for (const entity of ids) sheet.links.push({ entity, view: hit.view.name, at: hit.at });
       setSelection(ids);
-      return "Línea de la vista ligada: si cambia el modelo, se mueve con él";
+      return tr("Línea de la vista ligada: si cambia el modelo, se mueve con él");
     },
 
     /** Lo elegido deja de seguir al modelo: queda donde está, editable */
     breakLinks(): string {
       const s = session();
       const ids = selection().filter((id) => s?.sketch.uses?.some((u) => u.entity === id));
-      if (ids.length === 0) return "Nada de lo elegido está ligado al modelo";
+      if (ids.length === 0) return tr("Nada de lo elegido está ligado al modelo");
       ui.change((sk) => breakLinks(sk, ids));
-      return ids.length === 1 ? "Ya no sigue al modelo" : `${ids.length} curvas ya no siguen al modelo`;
+      return ids.length === 1 ? tr("Ya no sigue al modelo") : tr("{n} curvas ya no siguen al modelo", { n: ids.length });
     },
 
     /** Guarda el sketch en el documento y sale */

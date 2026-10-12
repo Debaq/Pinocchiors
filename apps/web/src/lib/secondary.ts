@@ -19,6 +19,7 @@ import type { AnimationClip, Pose } from "./animation";
 import { clonePose } from "./animation";
 import { Fk, rotationBetween } from "./ik";
 import type { RigContext } from "./rig";
+import { t as tr } from "./i18n.ts";
 
 export interface SpringSettings {
   /** 0–1: de blando (cuelga y se atrasa) a duro (casi sigue la animación) */
@@ -32,9 +33,9 @@ export interface SpringSettings {
 }
 
 export const SPRING_PRESETS: { id: string; label: string; settings: SpringSettings }[] = [
-  { id: "jiggle", label: "Resorte (rebota)", settings: { stiffness: 0.55, damping: 0.25, gravity: 0.1 } },
-  { id: "follow", label: "Seguimiento (se atrasa)", settings: { stiffness: 0.3, damping: 0.7, gravity: 0 } },
-  { id: "heavy", label: "Pesado (cuelga)", settings: { stiffness: 0.2, damping: 0.5, gravity: 0.6 } },
+  { id: "jiggle", get label() { return tr("Resorte (rebota)"); }, settings: { stiffness: 0.55, damping: 0.25, gravity: 0.1 } },
+  { id: "follow", get label() { return tr("Seguimiento (se atrasa)"); }, settings: { stiffness: 0.3, damping: 0.7, gravity: 0 } },
+  { id: "heavy", get label() { return tr("Pesado (cuelga)"); }, settings: { stiffness: 0.2, damping: 0.5, gravity: 0.6 } },
 ];
 
 interface Particle {

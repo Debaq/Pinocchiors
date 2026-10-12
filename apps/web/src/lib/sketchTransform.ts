@@ -3,6 +3,7 @@
 // Funciones puras sobre `Sketch`: se prueban con node (e2e/sketchTransform.test.mjs).
 
 import { addEntity, addPoint, type AngleEnd, constraintIds, geometryPoints, mapConstraintIds, mapGeometry, splitLineAt, type Geometry, type P2, type Sketch, type SketchConstraint, type SketchEntity, type SketchText } from "./cad.ts";
+import { t as tr } from "./i18n.ts";
 
 /** Lleva un punto del plano del sketch a otro lugar */
 export type Xform = (p: P2) => P2;
@@ -567,7 +568,7 @@ function sketchTol(s: Sketch): number {
 export function transformSelection(s: Sketch, ids: number[], f: Xform, scale = 1, all = false): string | undefined {
   // `all`: el sketch entero, también lo ligado y lo bloqueado (girar el dibujo con su plano)
   const pts = all ? s.points.filter((p) => p.id !== s.origin).map((p) => p.id) : selectionPoints(s, ids);
-  if (!pts.length) return "Elegir primero lo que se transforma (lo ligado al sólido y lo bloqueado no se mueven)";
+  if (!pts.length) return tr("Elegir primero lo que se transforma (lo ligado al sólido y lo bloqueado no se mueven)");
   const moved = new Set(pts);
   for (const p of s.points)
     if (moved.has(p.id)) {
@@ -694,14 +695,14 @@ export function insertClip(s: Sketch, clip: SketchClip, f: Xform): number[] {
  */
 export function splitEntityAt(s: Sketch, entity: number, p: P2): number | string {
   const e = s.entities.find((x) => x.id === entity);
-  if (!e) return "No hay nada ahí para partir";
+  if (!e) return tr("No hay nada ahí para partir");
   const g = e.geometry;
   const minLen = 1e-6 * Math.max(1, len(p));
   if (g.type === "line") {
     const [a, b] = [pos(s, g.start)!, pos(s, g.end)!];
     const d = sub(b, a);
     const t = dot(sub(p, a), d) / dot(d, d);
-    if (!(t > 1e-6 && t < 1 - 1e-6)) return "Partir en un punto entre los extremos";
+    if (!(t > 1e-6 && t < 1 - 1e-6)) return tr("Partir en un punto entre los extremos");
     const q = addPoint(s, [a[0] + t * d[0], a[1] + t * d[1]]);
     splitLineAt(s, entity, q);
     return q;
@@ -710,7 +711,7 @@ export function splitEntityAt(s: Sketch, entity: number, p: P2): number | string
     const c = pos(s, g.center)!;
     const r = g.type === "circle" ? g.radius : len(sub(pos(s, g.start)!, c));
     const v = sub(p, c);
-    if (len(v) < minLen) return "Partir en un punto de la curva";
+    if (len(v) < minLen) return tr("Partir en un punto de la curva");
     const at = (ang: number): P2 => [c[0] + r * Math.cos(ang), c[1] + r * Math.sin(ang)];
     const ang = Math.atan2(v[1], v[0]);
     if (g.type === "arc") {
@@ -719,7 +720,7 @@ export function splitEntityAt(s: Sketch, entity: number, p: P2): number | string
       const ccw = (x: number) => ((x % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
       const sweep = ccw(a1 - a0) || 2 * Math.PI;
       const t = ccw(ang - a0);
-      if (!(t > 1e-6 && t < sweep - 1e-6)) return "Partir en un punto entre los extremos del arco";
+      if (!(t > 1e-6 && t < sweep - 1e-6)) return tr("Partir en un punto entre los extremos del arco");
       const q = addPoint(s, at(ang));
       const end = g.end;
       g.end = q;
@@ -744,7 +745,7 @@ export function splitEntityAt(s: Sketch, entity: number, p: P2): number | string
     if (e.construction) s.entities.find((x) => x.id === rest)!.construction = true;
     return q1;
   }
-  return "Solo se parten líneas, arcos y círculos";
+  return tr("Solo se parten líneas, arcos y círculos");
 }
 
 // ─── Reflejo para invertir la normal ──────────────────────────────────────

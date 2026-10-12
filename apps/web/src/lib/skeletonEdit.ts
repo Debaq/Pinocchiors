@@ -9,6 +9,7 @@
  */
 
 import type { Vec3 } from "./animation";
+import { t } from "./i18n.ts";
 
 export interface EditBone {
   name: string;
@@ -103,16 +104,16 @@ export function skeletonToJson(name: string, bones: EditBone[]): string {
 /** Lee un esqueleto JSON; lanza un error legible si está mal formado */
 export function skeletonFromJson(text: string): { name: string; bones: EditBone[] } {
   const raw = JSON.parse(text) as Partial<SkeletonJson>;
-  if (!raw || !Array.isArray(raw.bones) || raw.bones.length === 0) throw new Error("no tiene huesos");
+  if (!raw || !Array.isArray(raw.bones) || raw.bones.length === 0) throw new Error(t("no tiene huesos"));
   const index = new Map(raw.bones.map((b, i) => [b?.name, i]));
   const bones = raw.bones.map((b): EditBone => {
     if (!b || typeof b.name !== "string" || !Array.isArray(b.position) || b.position.length !== 3 || !b.position.every(Number.isFinite)) {
-      throw new Error(`hueso mal formado: ${JSON.stringify(b)?.slice(0, 60)}`);
+      throw new Error(t("hueso mal formado: {hueso}", { hueso: JSON.stringify(b)?.slice(0, 60) ?? "" }));
     }
     let parent: number | null = null;
     if (b.parent !== undefined && b.parent !== null) {
       const p = index.get(b.parent);
-      if (p === undefined) throw new Error(`el padre «${b.parent}» de «${b.name}» no existe`);
+      if (p === undefined) throw new Error(t("el padre «{padre}» de «{hueso}» no existe", { padre: b.parent, hueso: b.name }));
       parent = p;
     }
     return { name: b.name, position: [b.position[0], b.position[1], b.position[2]], parent };

@@ -2,6 +2,7 @@ import { Component, For, Show, createEffect, createMemo } from "solid-js";
 import { clsx } from "clsx";
 import type { HistoryNode } from "../../lib/history";
 import * as Icons from "../icons";
+import { t, tn } from "../../lib/i18n";
 
 export interface HistoryPanelProps {
   nodes: readonly HistoryNode[];
@@ -62,9 +63,9 @@ export const HistoryPanel: Component<HistoryPanelProps> = (props) => {
   return (
     <div class="space-y-2">
       <p class="text-xs text-text-muted leading-relaxed">
-        Clic en un paso para volver a él. Si deshaces y haces otra cosa se abre una rama y lo anterior queda
-        acá. Los hitos (<Icons.Lock size={10} class="inline -mt-0.5" />) todavía no se pueden deshacer.
-        <Show when={branches() > 0}> {branches()} {branches() === 1 ? "bifurcación" : "bifurcaciones"}.</Show>
+        {t("Clic en un paso para volver a él. Si deshaces y haces otra cosa se abre una rama y lo anterior queda acá. Los hitos")}{" "}
+        (<Icons.Lock size={10} class="inline -mt-0.5" />) {t("todavía no se pueden deshacer.")}
+        <Show when={branches() > 0}> {tn(branches(), "{n} bifurcación", "{n} bifurcaciones")}.</Show>
       </p>
       <div ref={listRef} class="rounded-md border border-border py-1 max-h-[60vh] overflow-y-auto">
         <For each={rows()}>
@@ -82,7 +83,7 @@ export const HistoryPanel: Component<HistoryPanelProps> = (props) => {
                   reachable() && row.kind !== "current" ? "hover:bg-surface/40" : "cursor-default"
                 )}
                 style={{ "padding-left": `${8 + row.depth * 12}px` }}
-                title={reachable() ? undefined : "Hay un hito en el medio: no se puede volver hasta acá"}
+                title={reachable() ? undefined : t("Hay un hito en el medio: no se puede volver hasta acá")}
                 onClick={() => row.kind !== "current" && reachable() && props.onGoTo(row.node.id)}
               >
                 <Show when={row.depth > 0}>
@@ -101,7 +102,7 @@ export const HistoryPanel: Component<HistoryPanelProps> = (props) => {
                 >
                   <Icons.Lock size={10} class="shrink-0" />
                 </Show>
-                <span class="flex-1 truncate">{row.node.description}</span>
+                <span class="flex-1 truncate">{t(row.node.description)}</span>
                 <span class="text-[10px] font-mono text-text-muted shrink-0">{time(row.node.time)}</span>
               </button>
             );

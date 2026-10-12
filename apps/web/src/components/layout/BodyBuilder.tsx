@@ -14,6 +14,7 @@ import {
   SHAPE_ICONS,
 } from "./bodyIcons";
 import type { BodyPlan, BodyShape } from "../../lib/bodyPlan";
+import { t } from "../../lib/i18n";
 
 type CountField =
   | "neck"
@@ -98,7 +99,7 @@ const GRID = "grid gap-2 grid-cols-[repeat(auto-fill,minmax(84px,1fr))]";
 
 /** Sección plegable (recuerda si quedó abierta) */
 const Section: Component<{ title: string; children: JSX.Element }> = (props) => (
-  <Panel title={props.title} id={`body.${props.title}`} dense>
+  <Panel title={t(props.title)} id={`body.${props.title}`} dense>
     <div class="space-y-3 pb-3">{props.children}</div>
   </Panel>
 );
@@ -123,14 +124,14 @@ const Tile: Component<{
     <button
       type="button"
       class="w-full flex flex-col items-center gap-1 px-1 pt-2 pb-1.5"
-      title={props.hint}
+      title={t(props.hint)}
       aria-pressed={props.active}
       onClick={() => props.onClick()}
     >
       <span class="[&>svg]:w-14 [&>svg]:h-14">
         <props.icon />
       </span>
-      <span class="w-full text-[11px] leading-tight text-center break-words">{props.label}</span>
+      <span class="w-full text-[11px] leading-tight text-center break-words">{t(props.label)}</span>
     </button>
     {props.children}
   </div>
@@ -141,11 +142,11 @@ const Stepper: Component<{ value: number; min: number; max: number; onChange: (n
   const button = "w-4 h-5 rounded flex items-center justify-center hover:bg-surface/60 disabled:opacity-30";
   return (
     <div class="flex items-center gap-0.5 pb-1 text-[11px] font-mono text-text">
-      <button type="button" class={button} disabled={props.disabled || props.value <= props.min} onClick={() => props.onChange(props.value - 1)} title="Menos segmentos">
+      <button type="button" class={button} disabled={props.disabled || props.value <= props.min} onClick={() => props.onChange(props.value - 1)} title={t("Menos segmentos")}>
         −
       </button>
       <span class="w-4 text-center">{props.value}</span>
-      <button type="button" class={button} disabled={props.disabled || props.value >= props.max} onClick={() => props.onChange(props.value + 1)} title="Más segmentos">
+      <button type="button" class={button} disabled={props.disabled || props.value >= props.max} onClick={() => props.onChange(props.value + 1)} title={t("Más segmentos")}>
         +
       </button>
     </div>
@@ -155,7 +156,7 @@ const Stepper: Component<{ value: number; min: number; max: number; onChange: (n
 /** Fila con nombre y − n + (cantidades que no se apagan) */
 const CountRow: Component<{ label: string; value: number; min: number; max: number; onChange: (n: number) => void; disabled?: boolean }> = (props) => (
   <div class="flex items-center justify-between gap-2 text-xs text-text">
-    <span>{props.label}</span>
+    <span>{t(props.label)}</span>
     <div class="rounded-md border border-border px-1 pt-1">
       <Stepper value={props.value} min={props.min} max={props.max} onChange={props.onChange} disabled={props.disabled} />
     </div>
@@ -216,7 +217,7 @@ export const BodyBuilder: Component<BodyBuilderProps> = (props) => {
   const percent = (v: number) => `${Math.round(v * 100)} %`;
   const Ratio: Component<{ field: "leg_length" | "arm_length" | "tail_length" | "body_width"; label: string; max: number }> = (p) => (
     <Slider
-      label={p.label}
+      label={t(p.label)}
       value={plan()?.[p.field] ?? 1}
       onChange={(v) => update({ [p.field]: Math.round(v * 100) / 100 } as Partial<BodyPlan>)}
       min={0.5}
@@ -332,7 +333,7 @@ export const BodyBuilder: Component<BodyBuilderProps> = (props) => {
                     <Tile
                       icon={LIMB_ICONS[quad() ? "quadruped" : "biped"][bit]}
                       label={label()}
-                      hint={`${label()}: apágala si al modelo le falta (queda el ${bit <= 2 ? "hombro" : "cadera"} para el muñón)`}
+                      hint={t("{label}: apágala si al modelo le falta (queda el {part} para el muñón)", { label: t(label()), part: t(bit <= 2 ? "hombro" : "cadera") })}
                       active={((plan()?.missing ?? 0) & bit) === 0}
                       disabled={props.disabled}
                       onClick={() => update({ missing: (plan()?.missing ?? 0) ^ bit })}

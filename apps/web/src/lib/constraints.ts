@@ -12,6 +12,7 @@
  */
 
 import * as THREE from "three";
+import { t as tr } from "./i18n.ts";
 import { clonePose, sampleScalar, slerp, type AnimationClip, type Pose, type Quat, type Vec3 } from "./animation";
 import { Fk, rotationBetween } from "./ik";
 import type { JointFrame, RigContext, RigControl } from "./rig";
@@ -19,14 +20,14 @@ import type { JointFrame, RigContext, RigControl } from "./rig";
 export type ConstraintType = "copyRotation" | "copyLocation" | "childOf" | "track" | "stretch" | "map" | "driver" | "distribute";
 
 export const CONSTRAINT_TYPES: { value: ConstraintType; label: string; hint: string }[] = [
-  { value: "copyRotation", label: "Copiar giro", hint: "Gira como otro hueso o control (por eje, del mundo o en sus propios ejes)" },
-  { value: "copyLocation", label: "Copiar posición", hint: "La articulación va a donde está otro hueso o control" },
-  { value: "childOf", label: "Hijo de", hint: "Sigue a otro hueso o control como si colgara de él (agarrar, apoyar)" },
-  { value: "track", label: "Seguir", hint: "El hueso apunta siempre hacia el objetivo" },
-  { value: "stretch", label: "Estirar hacia", hint: "Apunta al objetivo y se alarga hasta tocarlo (tendones, músculos)" },
-  { value: "map", label: "Mapeo de giro", hint: "El giro de otro hueso en un eje da el giro de este en otro eje" },
-  { value: "driver", label: "Driver", hint: "Un valor de 0 a 1 dobla varias articulaciones a la vez (cerrar la mano)" },
-  { value: "distribute", label: "Reparto de giro", hint: "El giro de la articulación se reparte entre ella y las siguientes (columna)" },
+  { value: "copyRotation", get label() { return tr("Copiar giro"); }, get hint() { return tr("Gira como otro hueso o control (por eje, del mundo o en sus propios ejes)"); } },
+  { value: "copyLocation", get label() { return tr("Copiar posición"); }, get hint() { return tr("La articulación va a donde está otro hueso o control"); } },
+  { value: "childOf", get label() { return tr("Hijo de"); }, get hint() { return tr("Sigue a otro hueso o control como si colgara de él (agarrar, apoyar)"); } },
+  { value: "track", get label() { return tr("Seguir"); }, get hint() { return tr("El hueso apunta siempre hacia el objetivo"); } },
+  { value: "stretch", get label() { return tr("Estirar hacia"); }, get hint() { return tr("Apunta al objetivo y se alarga hasta tocarlo (tendones, músculos)"); } },
+  { value: "map", get label() { return tr("Mapeo de giro"); }, get hint() { return tr("El giro de otro hueso en un eje da el giro de este en otro eje"); } },
+  { value: "driver", get label() { return tr("Driver"); }, get hint() { return tr("Un valor de 0 a 1 dobla varias articulaciones a la vez (cerrar la mano)"); } },
+  { value: "distribute", get label() { return tr("Reparto de giro"); }, get hint() { return tr("El giro de la articulación se reparte entre ella y las siguientes (columna)"); } },
 ];
 
 export interface RigConstraint {

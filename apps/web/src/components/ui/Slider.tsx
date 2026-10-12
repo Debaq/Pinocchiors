@@ -1,6 +1,7 @@
 import { Slider as KobalteSlider } from "@kobalte/core/slider";
 import { Show, createSignal } from "solid-js";
 import { clsx } from "clsx";
+import { t } from "../../lib/i18n";
 
 export interface SliderProps {
   value?: number;
@@ -49,7 +50,7 @@ export const Slider = (props: SliderProps) => {
               "text-xs font-mono text-text-muted rounded-sm px-1 -mx-1",
               !props.disabled && "cursor-text hover:bg-surface/30"
             )}
-            title={props.disabled ? undefined : "Doble clic para escribir el valor"}
+            title={props.disabled ? undefined : t("Doble clic para escribir el valor")}
             onDblClick={() => !props.disabled && setEditing(true)}
           />
         }

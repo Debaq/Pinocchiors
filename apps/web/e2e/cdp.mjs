@@ -37,6 +37,10 @@ export async function launch(url, { width = 1400, height = 900 } = {}) {
   await send("Runtime.enable");
   await send("Page.enable");
   await send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });
+  // Los e2e buscan textos en español: sin esto el idioma sigue al del Chromium (en-US)
+  await send("Page.addScriptToEvaluateOnNewDocument", {
+    source: `try { if (localStorage.getItem("pinocchio.ui.settings.language") === null) localStorage.setItem("pinocchio.ui.settings.language", '"es"'); } catch {}`,
+  });
   await send("Page.navigate", { url });
   await sleep(3000);
   // Vite puede recargar la página al reoptimizar dependencias: esperar a que

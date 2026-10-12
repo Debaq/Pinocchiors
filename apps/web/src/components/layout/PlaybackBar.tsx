@@ -3,6 +3,7 @@ import { clsx } from "clsx";
 import { IconButton } from "../ui";
 import * as Icons from "../icons";
 import { startDrag } from "../../lib/ui-state";
+import { t } from "../../lib/i18n";
 
 /** Un clip dentro de la secuencia, en segundos desde el inicio */
 export interface PlaybackSegment {
@@ -49,8 +50,8 @@ export const PlaybackBar: Component<PlaybackBarProps> = (props) => {
       <IconButton
         variant="ghost"
         size="sm"
-        aria-label={props.playing ? "Pausa" : "Reproducir"}
-        title={props.playing ? "Pausa (Espacio)" : "Reproducir (Espacio)"}
+        aria-label={props.playing ? t("Pausa") : t("Reproducir")}
+        title={props.playing ? t("Pausa (Espacio)") : t("Reproducir (Espacio)")}
         onClick={() => props.onTogglePlay()}
       >
         <Show when={props.playing} fallback={<Icons.Play size={14} />}>
@@ -60,8 +61,8 @@ export const PlaybackBar: Component<PlaybackBarProps> = (props) => {
       <IconButton
         variant="ghost"
         size="sm"
-        aria-label="Detener"
-        title="Detener y volver a la pose de reposo"
+        aria-label={t("Detener")}
+        title={t("Detener y volver a la pose de reposo")}
         disabled={props.time === null}
         onClick={() => props.onStop()}
       >
@@ -71,8 +72,8 @@ export const PlaybackBar: Component<PlaybackBarProps> = (props) => {
         variant="ghost"
         size="sm"
         active={props.loop}
-        aria-label="Repetir"
-        title={props.loop ? "Repetir: al terminar vuelve a empezar" : "Repetir: apagado"}
+        aria-label={t("Repetir")}
+        title={props.loop ? t("Repetir: al terminar vuelve a empezar") : t("Repetir: apagado")}
         onClick={() => props.onLoop(!props.loop)}
       >
         <Icons.ArrowsClockwise size={14} />

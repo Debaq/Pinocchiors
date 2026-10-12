@@ -86,6 +86,7 @@ import {
 import { dataUrlBytes, shadeView, type DrawingMesh } from "../../lib/drawingShade";
 import { themeColor } from "../../lib/theme";
 import { Button, Select } from "../ui";
+import { t } from "../../lib/i18n";
 
 type Tool = DrawingTool;
 
@@ -263,7 +264,7 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
       ...(s.customViews ?? []).filter((c) => !c.hidden && v[customViewName(c.id)]).map((c) => ({ name: customViewName(c.id), title: c.name, lines: v[customViewName(c.id)]!, scale: s.viewScales?.[customViewName(c.id)] })),
       ...(s.sections ?? [])
         .filter((c) => !c.hidden && v[sectionViewName(c.label)])
-        .map((c) => ({ name: sectionViewName(c.label), title: `Corte ${c.label}-${c.label}`, lines: v[sectionViewName(c.label)]!, scale: s.viewScales?.[sectionViewName(c.label)], align: sectionAlign(s, c) })),
+        .map((c) => ({ name: sectionViewName(c.label), title: t("Corte {l}-{l}", { l: c.label }), lines: v[sectionViewName(c.label)]!, scale: s.viewScales?.[sectionViewName(c.label)], align: sectionAlign(s, c) })),
     ];
     // Las vistas nuevas y las de los cortes, en el lugar libre (o donde se dejaron). Con la
     // escala automática, la mayor con la que también ellas entran en la hoja
@@ -386,7 +387,7 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
       const l = linked();
       ui.setDrawingOpen(false);
       ui.editSheet(l?.sketch ?? s.sketch, { drawing: s.id, width: sh.width, height: sh.height, backdrop, views: r.placed, hiddenLines: s.hiddenLines, links: [...(l?.links ?? [])] });
-      if (l?.lost) ui.setMessage(`${l.lost === 1 ? "Una curva ligada perdió" : `${l.lost} curvas ligadas perdieron`} su línea de la vista: quedó donde estaba`);
+      if (l?.lost) ui.setMessage(l.lost === 1 ? t("Una curva ligada perdió su línea de la vista: quedó donde estaba") : t("{n} curvas ligadas perdieron su línea de la vista: quedó donde estaba", { n: l.lost }));
     } catch (e) {
       setMessage(String(e));
     }
@@ -397,7 +398,7 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
     if (!path) return;
     try {
       const bytes = await run(path);
-      setMessage(`Exportado (${Math.round(bytes / 1024)} KB)`);
+      setMessage(t("Exportado ({kb} KB)", { kb: Math.round(bytes / 1024) }));
     } catch (e) {
       setMessage(String(e));
     }
@@ -439,22 +440,22 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
 
   /** Sin herramienta: lo que está bajo el clic (el elemento del SVG o la vista que lo contiene) */
   const elementAt = (e: MouseEvent): DrawingElement | undefined => {
-    const t = e.target as Element;
-    const dim = t.closest("[data-user-dim]") as HTMLElement | null;
+    const tg = e.target as Element;
+    const dim = tg.closest("[data-user-dim]") as HTMLElement | null;
     if (dim?.dataset.userDim) return { kind: "dim", index: Number(dim.dataset.userDim) };
-    const det = t.closest("[data-detail], [data-detail-mark]") as HTMLElement | null;
+    const det = tg.closest("[data-detail], [data-detail-mark]") as HTMLElement | null;
     if (det) return { kind: "detail", label: det.dataset.detail ?? det.dataset.detailMark! };
-    const cutLine = t.closest("[data-cut-line]") as HTMLElement | null;
+    const cutLine = tg.closest("[data-cut-line]") as HTMLElement | null;
     if (cutLine?.dataset.cutLine) return { kind: "cut", label: cutLine.dataset.cutLine };
-    const br = t.closest("[data-break-line]") as HTMLElement | null;
+    const br = tg.closest("[data-break-line]") as HTMLElement | null;
     if (br?.dataset.breakLine) return { kind: "break", view: br.dataset.breakLine, index: Number(br.dataset.breakIndex ?? 0) };
-    const hatched = (t.closest("[data-hatch]") as HTMLElement | null)?.dataset.hatch;
+    const hatched = (tg.closest("[data-hatch]") as HTMLElement | null)?.dataset.hatch;
     if (hatched?.startsWith("corte-")) return { kind: "cut", label: hatched.slice(6) };
-    if (t.closest("[data-hatch], [data-section-line], [data-section-label]")) return { kind: "section" };
-    if (t.closest("[data-layer]")) return { kind: "sketch" };
-    if (t.closest("[data-overall-dim]")) return { kind: "overall" };
-    if (t.closest("[data-title-block]")) return { kind: "sheet" };
-    const view = (t.closest("[data-view]") as HTMLElement | null)?.dataset.view;
+    if (tg.closest("[data-hatch], [data-section-line], [data-section-label]")) return { kind: "section" };
+    if (tg.closest("[data-layer]")) return { kind: "sketch" };
+    if (tg.closest("[data-overall-dim]")) return { kind: "overall" };
+    if (tg.closest("[data-title-block]")) return { kind: "sheet" };
+    const view = (tg.closest("[data-view]") as HTMLElement | null)?.dataset.view;
     if (view?.startsWith("detalle-")) return { kind: "detail", label: view.slice(8) };
     if (view) return asElement(view);
     // Las líneas son finas: un clic dentro de la caja de una vista la elige
@@ -481,7 +482,7 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
    */
   const onSheetClick = (e: MouseEvent) => {
     const r = result();
-    const t = tool();
+    const tk = tool();
     const s = d();
     if (!r || !s) return;
     // Fue el final de un arrastre
@@ -489,20 +490,20 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
       dragged = false;
       return;
     }
-    if (!t) return ui.setDrawingSel(elementAt(e));
+    if (!tk) return ui.setDrawingSel(elementAt(e));
     const pt = sheetPoint(e);
     if (!pt) return;
     // Corte o rotura: puntos sobre una vista (la del primer clic); doble clic o Enter termina
-    if (t === "section" || t === "break") {
+    if (tk === "section" || tk === "break") {
       const cur = cutPts();
       const v = cur ? r.placed.find((p) => p.name === cur.view && !p.detail) : r.placed.find((p) => !p.detail && !isPictorial(p.name) && !p.name.startsWith("corte-") && insideBox(p, pt, 6));
-      if (!v) return setMessage(t === "section" ? "Clic sobre una vista (o al lado): ahí empieza la línea de corte" : "Clic sobre una vista: el contorno de la rotura");
+      if (!v) return setMessage(tk === "section" ? t("Clic sobre una vista (o al lado): ahí empieza la línea de corte") : t("Clic sobre una vista: el contorno de la rotura"));
       const p: P2 = [(pt.x - v.x) / v.scale, (v.y - pt.y) / v.scale];
       const pts = cur?.pts ?? [];
       const last = pts[pts.length - 1];
       if (last && Math.hypot(p[0] - last[0], p[1] - last[1]) * v.scale < 0.8) return;
       setCutPts({ view: v.name, pts: [...pts, p] });
-      setMessage(t === "section" ? "Más clics para escalonarla; doble clic o Enter termina" : "Más puntos del contorno; doble clic o Enter lo cierra");
+      setMessage(tk === "section" ? t("Más clics para escalonarla; doble clic o Enter termina") : t("Más puntos del contorno; doble clic o Enter lo cierra"));
       return;
     }
     // Primero los detalles (están encima, ampliados)
@@ -511,8 +512,8 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
       if (isPictorial(v.name)) continue;
       const p: P2 = [(pt.x - v.x) / v.scale, (v.y - pt.y) / v.scale];
       if (v.detail && Math.hypot(p[0] - v.detail.center[0], p[1] - v.detail.center[1]) > v.detail.radius) continue;
-      if (t === "detail") {
-        if (v.detail) return setMessage("El detalle se marca sobre una vista");
+      if (tk === "detail") {
+        if (v.detail) return setMessage(t("El detalle se marca sobre una vista"));
         const b = bounds(v.lines);
         if (p[0] < b.min[0] || p[0] > b.max[0] || p[1] < b.min[1] || p[1] > b.max[1]) continue;
         // Radio inicial: un octavo de la vista; letras desde la B (la A es del corte)
@@ -527,19 +528,19 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
       }
       const line = lineNear(v, p, 3 / v.scale);
       if (!line) continue;
-      if (t === "dim") {
+      if (tk === "dim") {
         const kind = asCircle(line) ? "diameter" : asSegment(line) ? "length" : asArc(line) ? "radius" : undefined;
-        if (!kind) return setMessage("Esa línea no es recta, ni un círculo, ni un arco");
+        if (!kind) return setMessage(t("Esa línea no es recta, ni un círculo, ni un arco"));
         upd((x) => (x.dims = [...x.dims, { view: v.name, kind, refs: [p] }]));
         return;
       }
-      if (!asSegment(line)) return setMessage(t === "angle" ? "Elegir rectas para el ángulo" : "Elegir rectas para la distancia");
+      if (!asSegment(line)) return setMessage(tk === "angle" ? t("Elegir rectas para el ángulo") : t("Elegir rectas para la distancia"));
       if (!firstLine || firstLine.view !== v.name) {
         firstLine = { view: v.name, ref: p };
-        return setMessage(t === "angle" ? "Ahora la otra recta del ángulo" : "Ahora la recta paralela");
+        return setMessage(tk === "angle" ? t("Ahora la otra recta del ángulo") : t("Ahora la recta paralela"));
       }
       const first = firstLine;
-      upd((x) => (x.dims = [...x.dims, { view: v.name, kind: t === "angle" ? "angle" : "distance", refs: [first.ref, p] }]));
+      upd((x) => (x.dims = [...x.dims, { view: v.name, kind: tk === "angle" ? "angle" : "distance", refs: [first.ref, p] }]));
       firstLine = null;
       setMessage(undefined);
       return;
@@ -639,12 +640,12 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
   /** Guarda la imagen sombreada de una vista como PNG */
   const savePng = async (name: string) => {
     const im = images()[name];
-    if (!im) return setMessage("La vista no está sombreada");
+    if (!im) return setMessage(t("La vista no está sombreada"));
     const path = await save({ filters: [{ name: "PNG", extensions: ["png"] }], defaultPath: `${fileBase()}_${name}.png` });
     if (!path) return;
     try {
       const bytes = await invoke<number>("cad_write_bytes", { path, bytes: dataUrlBytes(im.href) });
-      setMessage(`Imagen guardada (${Math.round(bytes / 1024)} KB)`);
+      setMessage(t("Imagen guardada ({kb} KB)", { kb: Math.round(bytes / 1024) }));
     } catch (e) {
       setMessage(String(e));
     }
@@ -694,12 +695,12 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
    */
   const finishCut = () => {
     const cur = cutPts();
-    const t = tool();
+    const tk = tool();
     setCutPts(undefined);
     setMessage(undefined);
     if (!cur) return;
-    if (t === "section") {
-      if (cur.pts.length < 2) return setMessage("El corte necesita dos puntos o más");
+    if (tk === "section") {
+      if (cur.pts.length < 2) return setMessage(t("El corte necesita dos puntos o más"));
       let label = "";
       void Promise.resolve(
         upd2((x) => {
@@ -708,8 +709,8 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
         }),
       ).then(() => label && ui.setDrawingSel({ kind: "cut", label }));
       setTool("");
-    } else if (t === "break") {
-      if (cur.pts.length < 3) return setMessage("La rotura necesita un contorno de tres puntos o más");
+    } else if (tk === "break") {
+      if (cur.pts.length < 3) return setMessage(t("La rotura necesita un contorno de tres puntos o más"));
       const s = d();
       const dir = s && viewDirOf(s, cur.view);
       const bx = box();
@@ -832,42 +833,41 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
   });
 
   return (
-    <div class="absolute inset-0 z-[6] flex flex-col bg-bg-darker" aria-label="Plano 2D">
+    <div class="absolute inset-0 z-[6] flex flex-col bg-bg-darker" aria-label={t("Plano 2D")}>
       <div class="flex flex-wrap items-center gap-2 border-b border-border bg-bg-lighter px-2 py-1.5">
         <span class="text-xs font-semibold text-text" data-drawing-name>
-          {d()?.name ?? "Plano"}
+          {d()?.name ?? t("Plano 2D")}
         </span>
         <button
           class="px-1.5 py-0.5 rounded text-[11px] text-text hover:bg-surface border border-border"
           data-sheet-scale
-          title={d()?.scale ? "Escala fija de la hoja (se cambia en Hoja)" : "Automática: la mayor normalizada con la que todo entra; con más vistas baja. Para que no cambie, fijarla en Hoja"}
+          title={d()?.scale ? t("Escala fija de la hoja (se cambia en Hoja)") : t("Automática: la mayor normalizada con la que todo entra; con más vistas baja. Para que no cambie, fijarla en Hoja")}
           onClick={() => ui.setDrawingSel({ kind: "sheet" })}
         >
-          Escala {result() ? scaleLabel(result()!.scale) : "…"}
-          {d()?.scale ? "" : " (auto)"}
+          {d()?.scale ? t("Escala {s}", { s: result() ? scaleLabel(result()!.scale) : "…" }) : t("Escala {s} (auto)", { s: result() ? scaleLabel(result()!.scale) : "…" })}
         </button>
         <div class="flex-1" />
         <Show when={busy()}>
-          <span class="text-[11px] text-text-dim">Proyectando…</span>
+          <span class="text-[11px] text-text-dim">{t("Proyectando…")}</span>
         </Show>
         <Button size="sm" variant="primary" disabled={!svg()} onClick={() => void exportPdf()}>
-          Exportar PDF
+          {t("Exportar PDF")}
         </Button>
         <Button size="sm" disabled={!svg()} onClick={() => void exportSvg()}>
-          Exportar SVG
+          {t("Exportar SVG")}
         </Button>
         <div class="w-36">
           <Select
             options={[
-              { value: "sheet", label: "DXF: hoja entera" },
-              ...VIEW_NAMES.filter((v) => v !== "iso").map((v) => ({ value: v, label: `DXF: ${VIEW_LABELS[v].toLowerCase()} 1:1` })),
+              { value: "sheet", label: t("DXF: hoja entera") },
+              ...VIEW_NAMES.filter((v) => v !== "iso").map((v) => ({ value: v, label: t("DXF: {v} 1:1", { v: VIEW_LABELS[v].toLowerCase() }) })),
             ]}
             value={dxfWhat()}
             onChange={(v) => setDxfWhat(v as "sheet" | ViewName)}
           />
         </div>
         <Button size="sm" disabled={!svg()} onClick={() => void exportDxf()}>
-          Exportar DXF
+          {t("Exportar DXF")}
         </Button>
         <Button size="sm" variant="ghost" onClick={() => props.ui.setDrawingOpen(false)}>
           Cerrar
@@ -1059,19 +1059,19 @@ const ElementWindow: Component<{
   const num = (v: string) => Number(v.trim().replace(",", "."));
   /** Rayado: ángulo, separación y cruzado */
   const hatchControls = (h: HatchStyle, set: (h: HatchStyle) => void) => (
-    <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-text-muted" aria-label="Rayado">
-      <span>Rayado</span>
+    <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-text-muted" aria-label={t("Rayado")}>
+      <span>{t("Rayado")}</span>
       <input
-        aria-label="Ángulo del rayado"
+        aria-label={t("Ángulo del rayado")}
         type="number"
         step="15"
         class="w-12 px-1 py-0.5 rounded bg-surface/40 border border-border text-xs text-text outline-none focus:border-accent"
         value={h.angle}
         onChange={(e) => isFinite(num(e.currentTarget.value)) && set({ ...h, angle: num(e.currentTarget.value) })}
       />
-      <span>° cada</span>
+      <span>{t("° cada")}</span>
       <input
-        aria-label="Separación del rayado"
+        aria-label={t("Separación del rayado")}
         type="number"
         min="0.5"
         step="0.5"
@@ -1080,33 +1080,33 @@ const ElementWindow: Component<{
         onChange={(e) => num(e.currentTarget.value) > 0 && set({ ...h, spacing: num(e.currentTarget.value) })}
       />
       <span>mm</span>
-      {check("Cruzado", !!h.cross, (on) => set({ ...h, cross: on }))}
+      {check(t("Cruzado"), !!h.cross, (on) => set({ ...h, cross: on }))}
     </div>
   );
-  const scaleOptions = (auto: number) => [{ value: "auto", label: `Auto (${scaleLabel(auto)})` }, ...SCALES.map((s) => ({ value: String(s), label: scaleLabel(s) }))];
+  const scaleOptions = (auto: number) => [{ value: "auto", label: t("Auto ({s})", { s: scaleLabel(auto) }) }, ...SCALES.map((s) => ({ value: String(s), label: scaleLabel(s) }))];
 
   return (
     <div
       class="absolute z-10 w-64 rounded-lg border border-border bg-bg-lighter shadow-xl"
       style={{ right: `${pos()[0]}px`, top: `${pos()[1]}px` }}
-      aria-label="Propiedades del plano"
+      aria-label={t("Propiedades del plano")}
       data-drawing-props={el().kind}
       onClick={(e) => e.stopPropagation()}
     >
       <div class="flex items-center gap-2 border-b border-border px-2 py-1.5 cursor-move select-none" onPointerDown={startDrag}>
         <span class="flex-1 truncate text-xs font-semibold text-text">{elementLabel(props.sheet, el())}</span>
-        <button class="text-text-muted hover:text-text text-sm leading-none" aria-label="Cerrar propiedades" onClick={() => props.close()}>
+        <button class="text-text-muted hover:text-text text-sm leading-none" aria-label={t("Cerrar propiedades")} onClick={() => props.close()}>
           ×
         </button>
       </div>
       <div class="space-y-2 p-2">
-        <Show when={el().kind !== "sheet"}>{check("Visible en la hoja", elementVisible(props.sheet, el()), () => props.update((s) => toggleElement(s, el())))}</Show>
+        <Show when={el().kind !== "sheet"}>{check(t("Visible en la hoja"), elementVisible(props.sheet, el()), () => props.update((s) => toggleElement(s, el())))}</Show>
         <Switch>
           <Match when={el().kind === "sheet"}>
             {row(
-              "Nombre",
+              t("Nombre"),
               <input
-                aria-label="Nombre del plano"
+                aria-label={t("Nombre del plano")}
                 class={input}
                 value={props.sheet.name}
                 onChange={(e) => {
@@ -1116,18 +1116,18 @@ const ElementWindow: Component<{
               />,
             )}
             {row(
-              "Hoja",
+              t("Hoja"),
               <div class="w-28">
                 <Select options={SHEETS.map((s) => ({ value: s.name, label: s.name }))} value={props.sheet.sheet} onChange={(v) => props.update((s) => (s.sheet = v))} />
               </div>,
             )}
             {row(
-              "Proyección",
+              t("Proyección"),
               <div class="w-28">
                 <Select
                   options={[
-                    { value: "first", label: "1.er diedro (ISO)" },
-                    { value: "third", label: "3.er diedro (ANSI)" },
+                    { value: "first", label: t("1.er diedro (ISO)") },
+                    { value: "third", label: t("3.er diedro (ANSI)") },
                   ]}
                   value={props.sheet.projection}
                   onChange={(v) => props.update((s) => (s.projection = v as Projection))}
@@ -1135,19 +1135,19 @@ const ElementWindow: Component<{
               </div>,
             )}
             {row(
-              "Escala",
+              t("Escala"),
               <div class="w-28">
                 <Select options={scaleOptions(props.scale)} value={props.sheet.scale ? String(props.sheet.scale) : "auto"} onChange={(v) => props.update((s) => (s.scale = v === "auto" ? null : Number(v)))} />
               </div>,
             )}
             <div class="flex flex-wrap gap-x-3">
-              {check("Ocultas", props.sheet.hiddenLines, (v) => props.update((s) => (s.hiddenLines = v)))}
-              {check("Tangentes", props.sheet.smooth, (v) => props.update((s) => (s.smooth = v)))}
+              {check(t("Ocultas"), props.sheet.hiddenLines, (v) => props.update((s) => (s.hiddenLines = v)))}
+              {check(t("Tangentes"), props.sheet.smooth, (v) => props.update((s) => (s.smooth = v)))}
             </div>
-            {check("Rayado según el material", props.sheet.hatchByMaterial !== false, (on) => props.update((s) => (s.hatchByMaterial = on)))}
+            {check(t("Rayado según el material"), props.sheet.hatchByMaterial !== false, (on) => props.update((s) => (s.hatchByMaterial = on)))}
             <Show when={props.sheet.hatchByMaterial === false}>{hatchControls(props.sheet.hatch ?? DEFAULT_HATCH, (h) => props.update((s) => (s.hatch = h)))}</Show>
-            {row("Título", <input aria-label="Título del plano" class={input} value={props.sheet.title} onChange={(e) => props.update((s) => (s.title = e.currentTarget.value))} />)}
-            {row("Autor", <input aria-label="Autor" placeholder="Autor" class={input} value={props.sheet.author} onChange={(e) => props.update((s) => (s.author = e.currentTarget.value))} />)}
+            {row(t("Título"), <input aria-label={t("Título del plano")} class={input} value={props.sheet.title} onChange={(e) => props.update((s) => (s.title = e.currentTarget.value))} />)}
+            {row(t("Autor"), <input aria-label={t("Autor")} placeholder={t("Autor")} class={input} value={props.sheet.author} onChange={(e) => props.update((s) => (s.author = e.currentTarget.value))} />)}
           </Match>
           <Match
             when={(() => {
@@ -1172,10 +1172,10 @@ const ElementWindow: Component<{
                     return (
                       <>
                         <p class="text-[11px] text-text-dim">
-                          {(def()?.points.length ?? 0) > 2 ? "Escalonado" : "Recto"}, sobre {(VIEW_LABELS as Record<string, string>)[def()?.view ?? ""] ?? def()?.view}. Se mira en el sentido de las flechas.
+                          {t("{k}, sobre {v}. Se mira en el sentido de las flechas.", { k: (def()?.points.length ?? 0) > 2 ? t("Escalonado") : t("Recto"), v: (VIEW_LABELS as Record<string, string>)[def()?.view ?? ""] ?? def()?.view ?? "" })}
                         </p>
                         <Button size="sm" variant="ghost" fullWidth onClick={() => edit((c) => (c.flip = !c.flip))}>
-                          Invertir el sentido
+                          {t("Invertir el sentido")}
                         </Button>
                         {hatchControls(def()?.hatch ?? props.sheet.hatch ?? DEFAULT_HATCH, (h) => edit((c) => (c.hatch = h)))}
                       </>
@@ -1183,25 +1183,25 @@ const ElementWindow: Component<{
                   }}
                 </Show>
                 <Show when={el().kind === "view" && !isPictorial(view())}>
-                  <div class="flex items-center justify-between text-[11px] text-text-muted" aria-label="Medio corte">
-                    <span>Medio corte</span>
+                  <div class="flex items-center justify-between text-[11px] text-text-muted" aria-label={t("Medio corte")}>
+                    <span>{t("Medio corte")}</span>
                     <span class="flex gap-0.5">
                       {(["", "right", "left"] as const).map((side) => (
                         <button
                           class={clsx("px-1.5 py-0.5 rounded border border-border", (props.sheet.halves?.[view()] ?? "") === side ? "bg-accent text-bg" : "hover:bg-surface")}
                           onClick={() => props.update((s) => (s.halves = { ...(s.halves ?? {}), [view()]: side || undefined }))}
                         >
-                          {side === "" ? "No" : side === "right" ? "Derecha" : "Izquierda"}
+                          {side === "" ? t("No") : side === "right" ? t("Derecha") : t("Izquierda")}
                         </button>
                       ))}
                     </span>
                   </div>
                 </Show>
                 <Show when={isPictorial(view())}>
-                  <div class="space-y-1 text-[11px] text-text-muted" aria-label="Cortar la vista 3D">
-                    <span>Cortar</span>
+                  <div class="space-y-1 text-[11px] text-text-muted" aria-label={t("Cortar la vista 3D")}>
+                    <span>{t("Cortar")}</span>
                     <div class="flex flex-wrap gap-0.5">
-                      {[["", "Entera"], ["quarter", "Un cuarto"], ...(props.sheet.sections ?? []).map((c) => [c.label, `Corte ${c.label}-${c.label}`])].map(([v, label]) => (
+                      {[["", t("Entera")], ["quarter", t("Un cuarto")], ...(props.sheet.sections ?? []).map((c) => [c.label, t("Corte {l}-{l}", { l: c.label })])].map(([v, label]) => (
                         <button
                           class={clsx("px-1.5 py-0.5 rounded border border-border", (props.sheet.cutBy?.[view()] ?? "") === v ? "bg-accent text-bg" : "hover:bg-surface")}
                           onClick={() => props.update((s) => (s.cutBy = { ...(s.cutBy ?? {}), [view()]: v || undefined }))}
@@ -1213,22 +1213,22 @@ const ElementWindow: Component<{
                   </div>
                 </Show>
                 <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
-                  {check("Sombreada", !!props.sheet.shaded?.[view()], (on) => props.update((s) => (s.shaded = { ...(s.shaded ?? {}), [view()]: on ? { lines: true } : undefined })))}
+                  {check(t("Sombreada"), !!props.sheet.shaded?.[view()], (on) => props.update((s) => (s.shaded = { ...(s.shaded ?? {}), [view()]: on ? { lines: true } : undefined })))}
                   <Show when={props.sheet.shaded?.[view()]}>
-                    {check("Con líneas", props.sheet.shaded?.[view()]?.lines !== false, (on) => props.update((s) => (s.shaded = { ...(s.shaded ?? {}), [view()]: { lines: on } })))}
+                    {check(t("Con líneas"), props.sheet.shaded?.[view()]?.lines !== false, (on) => props.update((s) => (s.shaded = { ...(s.shaded ?? {}), [view()]: { lines: on } })))}
                   </Show>
                 </div>
                 <Show when={props.hasImage(view())}>
                   <Button size="sm" variant="ghost" fullWidth onClick={() => props.savePng(view())}>
-                    Guardar imagen PNG
+                    {t("Guardar imagen PNG")}
                   </Button>
                 </Show>
                 <Show when={el().kind === "custom" && (el() as { id: number }).id}>
                   {(id) =>
                     row(
-                      "Nombre",
+                      t("Nombre"),
                       <input
-                        aria-label="Nombre de la vista"
+                        aria-label={t("Nombre de la vista")}
                         class={input}
                         value={props.sheet.customViews?.find((c) => c.id === id())?.name ?? ""}
                         onChange={(e) => {
@@ -1249,41 +1249,41 @@ const ElementWindow: Component<{
                       </button>
                     );
                     return (
-                      <div class="space-y-1" aria-label="Girar la vista">
+                      <div class="space-y-1" aria-label={t("Girar la vista")}>
                         <div class="flex items-center justify-between text-[11px] text-text-muted">
-                          <span>Girar</span>
+                          <span>{t("Girar")}</span>
                           <span class="flex gap-0.5">
-                            {turn("←", "La pieza gira 90° a la izquierda", -90, 0, 0)}
-                            {turn("→", "La pieza gira 90° a la derecha", 90, 0, 0)}
-                            {turn("↑", "Se inclina 90° hacia atrás", 0, -90, 0)}
-                            {turn("↓", "Se inclina 90° hacia quien mira", 0, 90, 0)}
-                            {turn("⟲", "Gira 90° en el plano de la hoja", 0, 0, 90)}
+                            {turn("←", t("La pieza gira 90° a la izquierda"), -90, 0, 0)}
+                            {turn("→", t("La pieza gira 90° a la derecha"), 90, 0, 0)}
+                            {turn("↑", t("Se inclina 90° hacia atrás"), 0, -90, 0)}
+                            {turn("↓", t("Se inclina 90° hacia quien mira"), 0, 90, 0)}
+                            {turn("⟲", t("Gira 90° en el plano de la hoja"), 0, 0, 90)}
                           </span>
                         </div>
                         <div class="flex gap-1">
-                          <Button size="sm" variant="ghost" title="Como la mira ahora la cámara del visor de Diseñar" onClick={() => { const c = props.cameraDir(); if (c) setDir(c); }}>
-                            Tomar la del visor
+                          <Button size="sm" variant="ghost" title={t("Como la mira ahora la cámara del visor de Diseñar")} onClick={() => { const c = props.cameraDir(); if (c) setDir(c); }}>
+                            {t("Tomar la del visor")}
                           </Button>
-                          <Button size="sm" variant="ghost" title="Isométrica de siempre" onClick={() => setDir(viewSpec("iso"))}>
-                            Isométrica
+                          <Button size="sm" variant="ghost" title={t("Isométrica de siempre")} onClick={() => setDir(viewSpec("iso"))}>
+                            {t("Isométrica")}
                           </Button>
                         </div>
-                        <p class="text-[11px] text-text-dim">En la hoja: Ctrl+arrastrar la gira.</p>
+                        <p class="text-[11px] text-text-dim">{t("En la hoja: Ctrl+arrastrar la gira.")}</p>
                       </div>
                     );
                   })()}
                 </Show>
                 {row(
-                  "Escala",
+                  t("Escala"),
                   <div class="w-28">
                     <Select
-                      options={[{ value: "sheet", label: `Hoja (${scaleLabel(props.scale)})` }, ...SCALES.map((s) => ({ value: String(s), label: scaleLabel(s) }))]}
+                      options={[{ value: "sheet", label: t("Hoja ({s})", { s: scaleLabel(props.scale) }) }, ...SCALES.map((s) => ({ value: String(s), label: scaleLabel(s) }))]}
                       value={props.sheet.viewScales?.[view()] ? String(props.sheet.viewScales[view()]) : "sheet"}
                       onChange={(v) => props.update((s) => (s.viewScales = { ...(s.viewScales ?? {}), [view()]: v === "sheet" ? null : Number(v) }))}
                     />
                   </div>,
                 )}
-                <p class="text-[11px] text-text-dim">Con otra escala que la de la hoja, la vista lleva su rótulo debajo.</p>
+                <p class="text-[11px] text-text-dim">{t("Con otra escala que la de la hoja, la vista lleva su rótulo debajo.")}</p>
                 <Show when={props.placed}>
                   {(v) => {
                     // Centro de la vista en mm de hoja desde la esquina de abajo a la izquierda
@@ -1298,7 +1298,7 @@ const ElementWindow: Component<{
                     };
                     const coord = (axis: 0 | 1) => (
                       <input
-                        aria-label={`Posición ${axis === 0 ? "X" : "Y"} de la vista`}
+                        aria-label={t("Posición {a} de la vista", { a: axis === 0 ? "X" : "Y" })}
                         type="number"
                         step="1"
                         class="w-16 px-1 py-0.5 rounded bg-surface/40 border border-border text-xs text-text outline-none focus:border-accent"
@@ -1312,13 +1312,13 @@ const ElementWindow: Component<{
                     return (
                       <>
                         <label class="flex items-center justify-between gap-2 text-[11px] text-text-muted">
-                          <span>Centro (mm)</span>
+                          <span>{t("Centro (mm)")}</span>
                           <span class="flex gap-1">
                             {coord(0)}
                             {coord(1)}
                           </span>
                         </label>
-                        <p class="text-[11px] text-text-dim">Se arrastra en la hoja (alineada con el frente; Mayús o Alt, libre).</p>
+                        <p class="text-[11px] text-text-dim">{t("Se arrastra en la hoja (alineada con el frente; Mayús o Alt, libre).")}</p>
                         <Show when={props.sheet.viewAt?.[view()]}>
                           <Button
                             size="sm"
@@ -1332,7 +1332,7 @@ const ElementWindow: Component<{
                               })
                             }
                           >
-                            Volver a su lugar
+                            {t("Volver a su lugar")}
                           </Button>
                         </Show>
                       </>
@@ -1343,16 +1343,16 @@ const ElementWindow: Component<{
             )}
           </Match>
           <Match when={el().kind === "overall"}>
-            <p class="text-[11px] text-text-dim">Ancho y alto de cada vista.</p>
+            <p class="text-[11px] text-text-dim">{t("Ancho y alto de cada vista.")}</p>
           </Match>
           <Match when={el().kind === "section"}>
             {row(
-              "En Y (mm)",
+              t("En Y (mm)"),
               <input
-                aria-label="Posición del corte"
+                aria-label={t("Posición del corte")}
                 type="number"
                 step="1"
-                placeholder="medio"
+                placeholder={t("medio")}
                 class={input}
                 value={props.sheet.section?.y ?? ""}
                 onChange={(e) => {
@@ -1361,15 +1361,15 @@ const ElementWindow: Component<{
                 }}
               />,
             )}
-            <p class="text-[11px] text-text-dim">Paralelo al frente; vacío: por el medio del sólido.</p>
+            <p class="text-[11px] text-text-dim">{t("Paralelo al frente; vacío: por el medio del sólido.")}</p>
           </Match>
           <Match when={detail()}>
             {(det) => (
               <>
                 {row(
-                  "Radio (mm)",
+                  t("Radio (mm)"),
                   <input
-                    aria-label={`Radio del detalle ${det().label}`}
+                    aria-label={t("Radio del detalle {l}", { l: det().label })}
                     type="number"
                     min="0.5"
                     step="0.5"
@@ -1382,7 +1382,7 @@ const ElementWindow: Component<{
                   />,
                 )}
                 {row(
-                  "Escala",
+                  t("Escala"),
                   <div class="w-28">
                     <Select
                       options={scaleOptions(detailScale(props.scale))}
@@ -1396,20 +1396,20 @@ const ElementWindow: Component<{
           </Match>
           <Match when={el().kind === "dim"}>
             <p class="text-[11px] text-text-muted">
-              Mide{" "}
+              {t("Mide")}{" "}
               <span class="font-mono text-text" data-dim-value>
                 {props.dimValue((el() as { index: number }).index) ?? "—"}
               </span>
             </p>
-            <p class="text-[11px] text-text-dim">Sigue al modelo: si cambia el diseño, se vuelve a medir.</p>
+            <p class="text-[11px] text-text-dim">{t("Sigue al modelo: si cambia el diseño, se vuelve a medir.")}</p>
           </Match>
           <Match when={el().kind === "break" && (el() as { view: string; index: number })}>
             {(br) => (
               <>
                 {row(
-                  "Hondo (mm)",
+                  t("Hondo (mm)"),
                   <input
-                    aria-label="Profundidad de la rotura"
+                    aria-label={t("Profundidad de la rotura")}
                     type="number"
                     min="0.1"
                     step="0.5"
@@ -1426,13 +1426,13 @@ const ElementWindow: Component<{
                     }}
                   />,
                 )}
-                <p class="text-[11px] text-text-dim">Cuánto entra el corte local desde lo más cercano a quien mira.</p>
+                <p class="text-[11px] text-text-dim">{t("Cuánto entra el corte local desde lo más cercano a quien mira.")}</p>
               </>
             )}
           </Match>
           <Match when={el().kind === "sketch"}>
             <Button size="sm" fullWidth onClick={() => props.editDrawing()}>
-              Editar el dibujo
+              {t("Editar el dibujo")}
             </Button>
           </Match>
         </Switch>
@@ -1447,7 +1447,7 @@ const ElementWindow: Component<{
               props.close();
             }}
           >
-            Quitar
+            {t("Quitar")}
           </Button>
         </Show>
       </div>
@@ -1478,7 +1478,7 @@ async function rasterSheet(svg: string, width: number, height: number): Promise<
     const ctx = canvas.getContext("2d")!;
     ctx.drawImage(img, 0, 0, w, h);
     const blob = await new Promise<Blob | null>((ok) => canvas.toBlob(ok, "image/png"));
-    if (!blob) throw new Error("No se pudo preparar la hoja para dibujar");
+    if (!blob) throw new Error(t("No se pudo preparar la hoja para dibujar"));
     return URL.createObjectURL(blob);
   } finally {
     URL.revokeObjectURL(url);

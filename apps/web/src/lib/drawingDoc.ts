@@ -7,6 +7,7 @@
 // resto en la interfaz: se lee como «Plano 1» y se reescribe al primer cambio.
 
 import type { CadDocument, Sketch } from "./cad.ts";
+import { t as tr } from "./i18n.ts";
 import { VIEW_LABELS, scaleLabel, viewSpec, type ViewDir, type Detail, type Projection, type UserDim, type ViewName } from "./drawing.ts";
 import type { SceneNode } from "./scene-tree.ts";
 import type { SheetLink, SheetOwner } from "./sheetRefs.ts";
@@ -80,10 +81,16 @@ export { VIEW_LABELS };
 
 /** Las que no se ven al empezar: frente, superior, una lateral (la que va a la derecha del frente) e isométrica a la vista */
 export const defaultHiddenViews = (projection: Projection): ViewName[] => ["bottom", projection === "first" ? "right" : "left", "back"];
-const DIM_LABELS: Record<UserDim["kind"], string> = { length: "Largo", diameter: "Diámetro", radius: "Radio", distance: "Distancia", angle: "Ángulo" };
+const DIM_LABELS: Record<UserDim["kind"], string> = {
+  get length() { return tr("Largo"); },
+  get diameter() { return tr("Diámetro"); },
+  get radius() { return tr("Radio"); },
+  get distance() { return tr("Distancia"); },
+  get angle() { return tr("Ángulo"); },
+};
 
-export function newSheet(id: number, name = `Plano ${id}`): DrawingSheet {
-  return { id, name, sheet: "A4", projection: "first", scale: null, hiddenLines: true, smooth: false, overall: true, hiddenViews: defaultHiddenViews("first"), sixViews: true, section: null, title: "Diseño", author: "", dims: [], details: [], sketch: null };
+export function newSheet(id: number, name = tr("Plano {id}", { id })): DrawingSheet {
+  return { id, name, sheet: "A4", projection: "first", scale: null, hiddenLines: true, smooth: false, overall: true, hiddenViews: defaultHiddenViews("first"), sixViews: true, section: null, title: tr("Diseño"), author: "", dims: [], details: [], sketch: null };
 }
 
 /**
@@ -230,7 +237,7 @@ export const customViewName = (id: number) => `vista-${id}`;
 /** Agrega una vista nueva mirando como la isométrica; devuelve su id */
 export function addCustomView(s: DrawingSheet): number {
   const id = Math.max(0, ...(s.customViews ?? []).map((v) => v.id)) + 1;
-  s.customViews = [...(s.customViews ?? []), { id, name: `Vista ${id}` }];
+  s.customViews = [...(s.customViews ?? []), { id, name: tr("Vista {id}", { id }) }];
   s.viewDirs = { ...(s.viewDirs ?? {}), [customViewName(id)]: viewSpec("iso") };
   return id;
 }
@@ -343,39 +350,39 @@ export function removeElement(s: DrawingSheet, el: DrawingElement) {
 export function elementLabel(s: DrawingSheet, el: DrawingElement): string {
   switch (el.kind) {
     case "sheet":
-      return "Hoja y cajetín";
+      return tr("Hoja y cajetín");
     case "view": {
       const k = s.viewScales?.[el.view];
       return k ? `${VIEW_LABELS[el.view]} (${scaleLabel(k)})` : VIEW_LABELS[el.view];
     }
     case "overall":
-      return "Cotas generales";
+      return tr("Cotas generales");
     case "section":
-      return "Corte A-A";
+      return tr("Corte A-A");
     case "detail":
-      return `Detalle ${el.label}`;
+      return tr("Detalle {label}", { label: el.label });
     case "dim": {
       const d = s.dims[el.index];
-      if (!d) return "Cota";
-      const view = (VIEW_LABELS as Record<string, string>)[d.view] ?? d.view.replace(/^detalle-/, "Detalle ");
+      if (!d) return tr("Cota");
+      const view = (VIEW_LABELS as Record<string, string>)[d.view] ?? d.view.replace(/^detalle-/, tr("Detalle") + " ");
       return `${DIM_LABELS[d.kind]} · ${view}`;
     }
     case "sketch": {
       const n = s.sketch?.entities.length ?? 0;
-      return `Dibujo (${n} ${n === 1 ? "curva" : "curvas"})`;
+      return tr(n === 1 ? "Dibujo ({n} curva)" : "Dibujo ({n} curvas)", { n });
     }
     case "custom": {
       const v = s.customViews?.find((x) => x.id === el.id);
       const k = s.viewScales?.[customViewName(el.id)];
-      return `${v?.name ?? "Vista"}${k ? ` (${scaleLabel(k)})` : ""}`;
+      return `${v?.name ?? tr("Vista")}${k ? ` (${scaleLabel(k)})` : ""}`;
     }
     case "cut": {
       const k = s.viewScales?.[sectionViewName(el.label)];
       const c = s.sections?.find((x) => x.label === el.label);
-      return `Corte ${el.label}-${el.label}${c && c.points.length > 2 ? " (escalonado)" : ""}${k ? ` (${scaleLabel(k)})` : ""}`;
+      return tr("Corte {label}-{label}", { label: el.label }) + (c && c.points.length > 2 ? tr(" (escalonado)") : "") + (k ? ` (${scaleLabel(k)})` : "");
     }
     case "break":
-      return `Rotura ${el.index + 1} · ${(VIEW_LABELS as Record<string, string>)[el.view] ?? el.view}`;
+      return tr("Rotura {n} · {view}", { n: el.index + 1, view: (VIEW_LABELS as Record<string, string>)[el.view] ?? el.view });
   }
 }
 
@@ -422,7 +429,7 @@ export function drawingTree(sheets: DrawingSheet[], open: number | undefined, se
     deletable: true,
     expanded: s.id === open,
     selected: s.id === open && !selected,
-    hint: `${s.sheet} · ${s.title || "sin título"}`,
+    hint: `${s.sheet} · ${s.title || tr("sin título")}`,
     children: sheetElements(s).map((el) => ({
       id: elementNodeId(s.id, el),
       type: ELEMENT_TYPE[el.kind],

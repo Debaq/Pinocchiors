@@ -5,6 +5,8 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { IconButton, Tooltip } from "../ui";
 import * as Icons from "../icons";
 import { ContextMenu, type MenuEntry } from "../ui/ContextMenu";
+import { t } from "../../lib/i18n";
+import appIcon from "../../../../desktop/icons/icon-small.svg";
 
 export interface HeaderProps {
   fps?: number;
@@ -69,17 +71,8 @@ export const Header: Component<HeaderProps> = (props) => {
     >
       {/* Left - Logo & Title */}
       <div class="flex items-center gap-3 no-drag">
-        {/* Logo */}
-        <div
-          class={clsx(
-            "w-7 h-7 rounded-md",
-            "bg-gradient-to-br from-purple to-pink",
-            "flex items-center justify-center",
-            "text-bg font-bold text-sm"
-          )}
-        >
-          P
-        </div>
+        {/* Logo: el ícono de la app (versión plana para tamaños chicos) */}
+        <img src={appIcon} alt="" class="w-7 h-7 rounded-md select-none" draggable={false} />
 
         {/* Title */}
         <h1 class="text-sm font-semibold text-text">
@@ -100,7 +93,7 @@ export const Header: Component<HeaderProps> = (props) => {
               setFileMenu({ x: rect.left, y: rect.bottom + 4, items: props.fileMenu!() });
             }}
           >
-            Archivo
+            {t("Archivo")}
           </button>
         </Show>
         <Show when={fileMenu()}>
@@ -124,7 +117,7 @@ export const Header: Component<HeaderProps> = (props) => {
                 disabled={!props.hasModel && !ws.withoutModel}
                 onClick={() => props.onWorkspace?.(ws.id)}
               >
-                {ws.label}
+                {t(ws.label)}
               </button>
             )}
           </For>
@@ -138,8 +131,8 @@ export const Header: Component<HeaderProps> = (props) => {
             <Icons.Cube size={13} class="text-text-muted shrink-0" />
             <span class="text-xs text-text-muted font-mono truncate">{props.fileName}</span>
             <Show when={props.unsaved}>
-              <Tooltip content="Cambios sin guardar">
-                <span class="w-1.5 h-1.5 rounded-full bg-warning shrink-0" aria-label="Cambios sin guardar" />
+              <Tooltip content={t("Cambios sin guardar")}>
+                <span class="w-1.5 h-1.5 rounded-full bg-warning shrink-0" aria-label={t("Cambios sin guardar")} />
               </Tooltip>
             </Show>
           </div>
@@ -158,7 +151,7 @@ export const Header: Component<HeaderProps> = (props) => {
             onClick={() => props.onExport?.()}
           >
             <Icons.Export size={13} />
-            Exportar
+            {t("Exportar")}
           </button>
         </Show>
 
@@ -170,8 +163,8 @@ export const Header: Component<HeaderProps> = (props) => {
         </Show>
 
         {/* Settings */}
-        <Tooltip content="Configuración">
-          <IconButton variant="ghost" size="sm" aria-label="Configuracion" onClick={() => props.onOpenSettings?.()}>
+        <Tooltip content={t("Configuración")}>
+          <IconButton variant="ghost" size="sm" aria-label={t("Configuración")} onClick={() => props.onOpenSettings?.()}>
             <Icons.Gear size={18} />
           </IconButton>
         </Tooltip>
@@ -179,22 +172,22 @@ export const Header: Component<HeaderProps> = (props) => {
         {/* Window Controls */}
         <div class="w-px h-4 bg-border" />
 
-        <Tooltip content="Minimizar">
+        <Tooltip content={t("Minimizar")}>
           <IconButton
             variant="ghost"
             size="sm"
-            aria-label="Minimizar"
+            aria-label={t("Minimizar")}
             onClick={handleMinimize}
           >
             <Icons.Minus size={16} />
           </IconButton>
         </Tooltip>
 
-        <Tooltip content={isMaximized() ? "Restaurar" : "Maximizar"}>
+        <Tooltip content={isMaximized() ? t("Restaurar") : t("Maximizar")}>
           <IconButton
             variant="ghost"
             size="sm"
-            aria-label={isMaximized() ? "Restaurar" : "Maximizar"}
+            aria-label={isMaximized() ? t("Restaurar") : t("Maximizar")}
             onClick={handleToggleMaximize}
           >
             <Show when={isMaximized()} fallback={<Icons.Square size={14} />}>
@@ -203,11 +196,11 @@ export const Header: Component<HeaderProps> = (props) => {
           </IconButton>
         </Tooltip>
 
-        <Tooltip content="Cerrar">
+        <Tooltip content={t("Cerrar")}>
           <IconButton
             variant="ghost"
             size="sm"
-            aria-label="Cerrar"
+            aria-label={t("Cerrar")}
             class="window-close-btn"
             onClick={handleClose}
           >

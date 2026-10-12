@@ -15,6 +15,7 @@ import { HANDLE_MODES, type HandleMode, type Marker, type RotationCodecs } from 
 import type { Mixer } from "../../lib/layers";
 import { CurveEditor, type CurveChannelRow } from "./CurveEditor";
 import { MixerEditor } from "./MixerEditor";
+import { t } from "../../lib/i18n";
 
 export interface TimelineRow {
   /** Articulación (−1 en los controles) */
@@ -120,9 +121,9 @@ export interface TimelineProps {
 }
 
 const INTERPOLATIONS = [
-  { value: "bezier", label: "Bézier" },
-  { value: "linear", label: "Lineal" },
-  { value: "step", label: "Constante" },
+  { value: "bezier", get label() { return t("Bézier"); } },
+  { value: "linear", get label() { return t("Lineal"); } },
+  { value: "step", get label() { return t("Constante"); } },
 ];
 
 const MODES: { value: TimelineMode; label: string; title: string }[] = [
@@ -341,51 +342,51 @@ export const Timeline: Component<TimelineProps> = (props) => {
 
       {/* Transporte, rango y vista */}
       <header class="flex items-center gap-2 px-2 h-9 shrink-0 border-b border-border text-xs">
-        <IconButton size="sm" variant="ghost" aria-label="Al inicio" onClick={() => props.onFrame(view()[0])}>
+        <IconButton size="sm" variant="ghost" aria-label={t("Al inicio")} onClick={() => props.onFrame(view()[0])}>
           <Icons.SkipBack size={14} />
         </IconButton>
-        <Tooltip content="Reproducir / pausar (Espacio)">
-          <IconButton size="sm" variant={props.playing ? "primary" : "ghost"} aria-label="Reproducir" onClick={props.onTogglePlay}>
+        <Tooltip content={t("Reproducir / pausar (Espacio)")}>
+          <IconButton size="sm" variant={props.playing ? "primary" : "ghost"} aria-label={t("Reproducir")} onClick={props.onTogglePlay}>
             <Show when={props.playing} fallback={<Icons.Play size={14} />}>
               <Icons.Pause size={14} />
             </Show>
           </IconButton>
         </Tooltip>
-        <IconButton size="sm" variant="ghost" aria-label="Al final" onClick={() => props.onFrame(view()[1])}>
+        <IconButton size="sm" variant="ghost" aria-label={t("Al final")} onClick={() => props.onFrame(view()[1])}>
           <Icons.SkipForward size={14} />
         </IconButton>
         <NumberInput class="w-20" label="▸" value={Math.round(props.frame)} step={1} onChange={(v) => props.onFrame(Math.round(v))} />
         <Show when={props.mode !== "mixer"}>
-          <NumberInput class="w-24" label="De" value={props.clip.start} step={1} onChange={(v) => props.onRangeChange({ start: Math.round(v) })} />
-          <NumberInput class="w-24" label="A" value={props.clip.end} step={1} onChange={(v) => props.onRangeChange({ end: Math.round(v) })} />
+          <NumberInput class="w-24" label={t("De")} value={props.clip.start} step={1} onChange={(v) => props.onRangeChange({ start: Math.round(v) })} />
+          <NumberInput class="w-24" label={t("A")} value={props.clip.end} step={1} onChange={(v) => props.onRangeChange({ end: Math.round(v) })} />
         </Show>
         <NumberInput class="w-20" suffix="fps" value={props.clip.fps} min={1} max={120} step={1} onChange={(v) => v > 0 && props.onRangeChange({ fps: v })} />
         <div class="flex rounded-md border border-border overflow-hidden ml-2">
           <For each={MODES}>
             {(m) => (
               <button
-                title={m.title}
+                title={t(m.title)}
                 class={clsx("px-2.5 h-7 text-xs", props.mode === m.value ? "bg-accent/20 text-accent" : "text-text-muted hover:bg-surface/50 hover:text-text")}
                 onClick={() => props.onMode(m.value)}
               >
-                {m.label}
+                {t(m.label)}
               </button>
             )}
           </For>
         </div>
         <div class="flex-1" />
-        <Tooltip content="Auto-key: girar o mover una articulación crea la key">
-          <IconButton size="sm" variant={props.autoKey ? "primary" : "ghost"} aria-label="Auto-key" onClick={() => props.onAutoKey(!props.autoKey)}>
+        <Tooltip content={t("Auto-key: girar o mover una articulación crea la key")}>
+          <IconButton size="sm" variant={props.autoKey ? "primary" : "ghost"} aria-label={t("Auto-key")} onClick={() => props.onAutoKey(!props.autoKey)}>
             <span class={clsx("w-2.5 h-2.5 rounded-full", props.autoKey ? "bg-red" : "border border-text-muted")} />
           </IconButton>
         </Tooltip>
-        <Tooltip content="Insertar key (I)">
-          <IconButton size="sm" variant="ghost" aria-label="Insertar key" onClick={props.onInsertKey}>
+        <Tooltip content={t("Insertar key (I)")}>
+          <IconButton size="sm" variant="ghost" aria-label={t("Insertar key")} onClick={props.onInsertKey}>
             <span class="w-2.5 h-2.5 rotate-45 bg-text-muted" />
           </IconButton>
         </Tooltip>
-        <Tooltip content="Borrar keys seleccionadas (X / Supr)">
-          <IconButton size="sm" variant="ghost" aria-label="Borrar keys" disabled={props.selection.size === 0 && props.curves.selection.size === 0} onClick={props.onDeleteKeys}>
+        <Tooltip content={t("Borrar keys seleccionadas (X / Supr)")}>
+          <IconButton size="sm" variant="ghost" aria-label={t("Borrar keys")} disabled={props.selection.size === 0 && props.curves.selection.size === 0} onClick={props.onDeleteKeys}>
             <Icons.X size={14} />
           </IconButton>
         </Tooltip>
@@ -397,67 +398,67 @@ export const Timeline: Component<TimelineProps> = (props) => {
           <div class="w-28 shrink-0">
             <Select options={INTERPOLATIONS} value={props.interpolation} onChange={(v) => props.onInterpolation(v as KeyInterpolation)} />
           </div>
-          <ToolButton title="Arranca suave: la key sale plana (Bézier)" onClick={() => props.onTool({ op: "ease", value: "in" })}>Acelerar</ToolButton>
-          <ToolButton title="Llega suave: la key entra plana (Bézier)" onClick={() => props.onTool({ op: "ease", value: "out" })}>Frenar</ToolButton>
-          <ToolButton title="Suave al salir y al llegar" onClick={() => props.onTool({ op: "ease", value: "both" })}>Ambos</ToolButton>
-          <ToolButton title="Sin aceleración ni freno" onClick={() => props.onTool({ op: "ease", value: "none" })}>Sin</ToolButton>
+          <ToolButton title={t("Arranca suave: la key sale plana (Bézier)")} onClick={() => props.onTool({ op: "ease", value: "in" })}>{t("Acelerar")}</ToolButton>
+          <ToolButton title={t("Llega suave: la key entra plana (Bézier)")} onClick={() => props.onTool({ op: "ease", value: "out" })}>{t("Frenar")}</ToolButton>
+          <ToolButton title={t("Suave al salir y al llegar")} onClick={() => props.onTool({ op: "ease", value: "both" })}>{t("Ambos")}</ToolButton>
+          <ToolButton title={t("Sin aceleración ni freno")} onClick={() => props.onTool({ op: "ease", value: "none" })}>{t("Sin")}</ToolButton>
           <span class="w-px h-4 bg-border mx-1" />
         </Show>
         <Show when={props.mode === "keys"}>
           <NumberInput class="w-20 shrink-0" label="×" step={0.1} min={0.01} value={scaleFactor()} onChange={setScaleFactor} />
-          <ToolButton title="Escala las keys elegidas alrededor del cursor" onClick={() => props.onTool({ op: "scale", factor: scaleFactor() })}>Escalar</ToolButton>
+          <ToolButton title={t("Escala las keys elegidas alrededor del cursor")} onClick={() => props.onTool({ op: "scale", factor: scaleFactor() })}>{t("Escalar")}</ToolButton>
           <NumberInput class="w-20 shrink-0" label="×" step={0.1} min={0.01} value={retimeFactor()} onChange={setRetimeFactor} />
-          <ToolButton title="El tramo de las keys elegidas dura ese factor; lo de después se corre" onClick={() => props.onTool({ op: "retime", factor: retimeFactor() })}>Retiempo</ToolButton>
-          <ToolButton title="El último cuadro igual al primero, con las tangentes continuas" onClick={() => props.onTool({ op: "closeCycle" })}>Cerrar ciclo</ToolButton>
+          <ToolButton title={t("El tramo de las keys elegidas dura ese factor; lo de después se corre")} onClick={() => props.onTool({ op: "retime", factor: retimeFactor() })}>{t("Retiempo")}</ToolButton>
+          <ToolButton title={t("El último cuadro igual al primero, con las tangentes continuas")} onClick={() => props.onTool({ op: "closeCycle" })}>{t("Cerrar ciclo")}</ToolButton>
           <span class="w-px h-4 bg-border mx-1" />
-          <ToolButton title="Marcador con nombre en el cuadro actual" onClick={() => props.onTool({ op: "marker" })}>+ Marcador</ToolButton>
-          <ToolButton title="Mostrar solo las articulaciones elegidas" active={props.onlySelection} onClick={() => props.onOnlySelection(!props.onlySelection)}>Solo elegidas</ToolButton>
+          <ToolButton title={t("Marcador con nombre en el cuadro actual")} onClick={() => props.onTool({ op: "marker" })}>{t("+ Marcador")}</ToolButton>
+          <ToolButton title={t("Mostrar solo las articulaciones elegidas")} active={props.onlySelection} onClick={() => props.onOnlySelection(!props.onlySelection)}>{t("Solo elegidas")}</ToolButton>
         </Show>
         <Show when={props.mode === "curves"}>
-          <ActionSelect placeholder="Manijas…" options={HANDLE_MODES} onPick={(v) => props.onTool({ op: "handles", value: v as HandleMode })} />
-          <ToolButton title="Ver cada canal entre −1 y 1" active={normalize()} onClick={() => setNormalize(!normalize())}>Normalizar</ToolButton>
-          <ToolButton title="Encuadrar lo elegido (o todo)" onClick={() => setFitRequest(fitRequest() + 1)}>Encuadrar</ToolButton>
+          <ActionSelect placeholder={t("Manijas…")} options={HANDLE_MODES} onPick={(v) => props.onTool({ op: "handles", value: v as HandleMode })} />
+          <ToolButton title={t("Ver cada canal entre −1 y 1")} active={normalize()} onClick={() => setNormalize(!normalize())}>{t("Normalizar")}</ToolButton>
+          <ToolButton title={t("Encuadrar lo elegido (o todo)")} onClick={() => setFitRequest(fitRequest() + 1)}>{t("Encuadrar")}</ToolButton>
           <span class="w-px h-4 bg-border mx-1" />
-          <ToolButton title="Quita saltos de ±180° (giros continuos)" onClick={() => props.onTool({ op: "eulerFilter" })}>Filtro Euler</ToolButton>
-          <ToolButton title="Acerca las keys elegidas al promedio con sus vecinas" onClick={() => props.onTool({ op: "smooth" })}>Suavizar</ToolButton>
+          <ToolButton title={t("Quita saltos de ±180° (giros continuos)")} onClick={() => props.onTool({ op: "eulerFilter" })}>{t("Filtro Euler")}</ToolButton>
+          <ToolButton title={t("Acerca las keys elegidas al promedio con sus vecinas")} onClick={() => props.onTool({ op: "smooth" })}>{t("Suavizar")}</ToolButton>
           <NumberInput class="w-20 shrink-0" label="±" step={0.5} value={noise()} onChange={setNoise} />
-          <ToolButton title="Ruido en las keys elegidas (grados o unidades)" onClick={() => props.onTool({ op: "noise", amount: noise() })}>Ruido</ToolButton>
-          <NumberInput class="w-20 shrink-0" label="tol" step={0.1} value={tolerance()} onChange={setTolerance} />
-          <ToolButton title="Quita keys que no cambian la curva más que la tolerancia" onClick={() => props.onTool({ op: "reduce", tolerance: tolerance() })}>Reducir</ToolButton>
-          <ToolButton title="El último cuadro igual al primero, con las tangentes continuas" onClick={() => props.onTool({ op: "closeCycle" })}>Cerrar ciclo</ToolButton>
+          <ToolButton title={t("Ruido en las keys elegidas (grados o unidades)")} onClick={() => props.onTool({ op: "noise", amount: noise() })}>{t("Ruido")}</ToolButton>
+          <NumberInput class="w-20 shrink-0" label={t("tol")} step={0.1} value={tolerance()} onChange={setTolerance} />
+          <ToolButton title={t("Quita keys que no cambian la curva más que la tolerancia")} onClick={() => props.onTool({ op: "reduce", tolerance: tolerance() })}>{t("Reducir")}</ToolButton>
+          <ToolButton title={t("El último cuadro igual al primero, con las tangentes continuas")} onClick={() => props.onTool({ op: "closeCycle" })}>{t("Cerrar ciclo")}</ToolButton>
         </Show>
         <Show when={props.mode === "mixer"}>
-          <ActionSelect placeholder="Agregar capa…" options={clipsForLayer()} onPick={(v) => props.mixer.onAddLayer(v)} />
-          <ToolButton title="El visor muestra la mezcla de las capas" active={props.mixer.mixer.enabled} onClick={() => props.mixer.onEnabled(!props.mixer.mixer.enabled)}>Ver la mezcla</ToolButton>
-          <ToolButton title="Hornea la mezcla a una animación nueva (para exportar o seguir editando)" disabled={props.mixer.mixer.layers.length === 0} onClick={props.mixer.onBake}>Hornear</ToolButton>
+          <ActionSelect placeholder={t("Agregar capa…")} options={clipsForLayer()} onPick={(v) => props.mixer.onAddLayer(v)} />
+          <ToolButton title={t("El visor muestra la mezcla de las capas")} active={props.mixer.mixer.enabled} onClick={() => props.mixer.onEnabled(!props.mixer.mixer.enabled)}>{t("Ver la mezcla")}</ToolButton>
+          <ToolButton title={t("Hornea la mezcla a una animación nueva (para exportar o seguir editando)")} disabled={props.mixer.mixer.layers.length === 0} onClick={props.mixer.onBake}>{t("Hornear")}</ToolButton>
           <Show when={layer()}>
             {(l) => (
               <>
                 <span class="w-px h-4 bg-border mx-1" />
-                <NumberInput class="w-24 shrink-0" label="peso" suffix="%" min={0} max={100} step={5} value={Math.round(l().weight * 100)} onChange={(v) => setLayer({ weight: Math.max(0, Math.min(1, v / 100)) }, "Peso de la capa")} />
-                <NumberInput class="w-24 shrink-0" label="desde" step={1} value={l().trimStart ?? props.mixer.clips.find((c) => c.id === l().clipId)?.start ?? 0} onChange={(v) => setLayer({ trimStart: Math.round(v) }, "Recortar capa")} />
-                <NumberInput class="w-24 shrink-0" label="hasta" step={1} value={l().trimEnd ?? props.mixer.clips.find((c) => c.id === l().clipId)?.end ?? 0} onChange={(v) => setLayer({ trimEnd: Math.round(v) }, "Recortar capa")} />
-                <NumberInput class="w-24 shrink-0" label="entra" step={1} min={0} value={l().blendIn} onChange={(v) => setLayer({ blendIn: Math.max(0, Math.round(v)) }, "Transición de entrada")} />
-                <NumberInput class="w-24 shrink-0" label="sale" step={1} min={0} value={l().blendOut} onChange={(v) => setLayer({ blendOut: Math.max(0, Math.round(v)) }, "Transición de salida")} />
+                <NumberInput class="w-24 shrink-0" label={t("peso")} suffix="%" min={0} max={100} step={5} value={Math.round(l().weight * 100)} onChange={(v) => setLayer({ weight: Math.max(0, Math.min(1, v / 100)) }, "Peso de la capa")} />
+                <NumberInput class="w-24 shrink-0" label={t("desde")} step={1} value={l().trimStart ?? props.mixer.clips.find((c) => c.id === l().clipId)?.start ?? 0} onChange={(v) => setLayer({ trimStart: Math.round(v) }, "Recortar capa")} />
+                <NumberInput class="w-24 shrink-0" label={t("hasta")} step={1} value={l().trimEnd ?? props.mixer.clips.find((c) => c.id === l().clipId)?.end ?? 0} onChange={(v) => setLayer({ trimEnd: Math.round(v) }, "Recortar capa")} />
+                <NumberInput class="w-24 shrink-0" label={t("entra")} step={1} min={0} value={l().blendIn} onChange={(v) => setLayer({ blendIn: Math.max(0, Math.round(v)) }, "Transición de entrada")} />
+                <NumberInput class="w-24 shrink-0" label={t("sale")} step={1} min={0} value={l().blendOut} onChange={(v) => setLayer({ blendOut: Math.max(0, Math.round(v)) }, "Transición de salida")} />
               </>
             )}
           </Show>
         </Show>
         <span class="w-px h-4 bg-border mx-1" />
-        <ToolButton title="Papel cebolla: la pose de los cuadros vecinos" active={props.onion.enabled} onClick={() => props.onOnion({ ...props.onion, enabled: !props.onion.enabled })}>Cebolla</ToolButton>
+        <ToolButton title={t("Papel cebolla: la pose de los cuadros vecinos")} active={props.onion.enabled} onClick={() => props.onOnion({ ...props.onion, enabled: !props.onion.enabled })}>{t("Cebolla")}</ToolButton>
         <Show when={props.onion.enabled}>
           <NumberInput class="w-16 shrink-0" label="−" min={0} max={5} step={1} value={props.onion.before} onChange={(v) => props.onOnion({ ...props.onion, before: Math.round(v) })} />
           <NumberInput class="w-16 shrink-0" label="+" min={0} max={5} step={1} value={props.onion.after} onChange={(v) => props.onOnion({ ...props.onion, after: Math.round(v) })} />
-          <NumberInput class="w-20 shrink-0" label="cada" min={1} max={24} step={1} value={props.onion.step} onChange={(v) => props.onOnion({ ...props.onion, step: Math.max(1, Math.round(v)) })} />
-          <ToolButton title="Fantasmas de la malla (si no, solo de los huesos)" active={props.onion.mesh} onClick={() => props.onOnion({ ...props.onion, mesh: !props.onion.mesh })}>Malla</ToolButton>
+          <NumberInput class="w-20 shrink-0" label={t("cada")} min={1} max={24} step={1} value={props.onion.step} onChange={(v) => props.onOnion({ ...props.onion, step: Math.max(1, Math.round(v)) })} />
+          <ToolButton title={t("Fantasmas de la malla (si no, solo de los huesos)")} active={props.onion.mesh} onClick={() => props.onOnion({ ...props.onion, mesh: !props.onion.mesh })}>{t("Malla")}</ToolButton>
         </Show>
-        <ToolButton title="Trayectorias de las articulaciones elegidas; sus keys se arrastran en el visor" active={props.paths} onClick={() => props.onPaths(!props.paths)}>Trayectorias</ToolButton>
+        <ToolButton title={t("Trayectorias de las articulaciones elegidas; sus keys se arrastran en el visor")} active={props.paths} onClick={() => props.onPaths(!props.paths)}>{t("Trayectorias")}</ToolButton>
       </div>
 
       {/* Regla con marcadores */}
       <div class="flex shrink-0 h-6 border-b border-border">
         <div class="shrink-0 px-2 flex items-center text-[10px] text-text-dim border-r border-border truncate" style={{ width: `${NAMES}px` }}>
-          {props.mode === "mixer" ? "Mezcla" : props.clip.name}
+          {props.mode === "mixer" ? t("Mezcla") : props.clip.name}
         </div>
         <div ref={lanesRef} class="relative flex-1 min-w-0 cursor-ew-resize select-none overflow-hidden" onPointerDown={scrub}>
           <For each={ticks()}>
@@ -473,7 +474,7 @@ export const Timeline: Component<TimelineProps> = (props) => {
                 <div
                   class="absolute bottom-0 flex items-end gap-0.5 cursor-pointer"
                   style={{ left: `${x(m.frame) - 4}px` }}
-                  title={`${m.name} · doble clic: renombrar · clic derecho: borrar`}
+                  title={t("{name} · doble clic: renombrar · clic derecho: borrar", { name: m.name })}
                   onPointerDown={(e) => pressMarker(e, m)}
                   onDblClick={(e) => {
                     e.stopPropagation();
@@ -550,7 +551,7 @@ export const Timeline: Component<TimelineProps> = (props) => {
           <div class="flex">
             <div class="shrink-0 border-r border-border" style={{ width: `${NAMES}px` }}>
               <div class="px-2 flex items-center text-xs font-semibold text-text border-b border-border/40" style={{ height: `${ROW}px` }}>
-                Resumen
+                {t("Resumen")}
               </div>
               <For each={props.rows}>
                 {(row) => (
@@ -582,10 +583,10 @@ export const Timeline: Component<TimelineProps> = (props) => {
                         class={clsx("shrink-0 mr-1.5", rowMuted(row) ? "text-text" : "text-text-dim hover:text-text")}
                         title={
                           rowMuted(row)
-                            ? "Activar: vuelve a reproducirse"
+                            ? t("Activar: vuelve a reproducirse")
                             : row.group
-                              ? "Silenciar el grupo: no se reproduce ni se exporta"
-                              : "Silenciar: no se reproduce ni se exporta (Mayús: también lo que cuelga)"
+                              ? t("Silenciar el grupo: no se reproduce ni se exporta")
+                              : t("Silenciar: no se reproduce ni se exporta (Mayús: también lo que cuelga)")
                         }
                         onPointerDown={(e) => e.stopPropagation()}
                         onClick={(e) => {
@@ -633,7 +634,7 @@ export const Timeline: Component<TimelineProps> = (props) => {
                           <div
                             class="absolute bottom-0 h-1 bg-red/80 pointer-events-none"
                             style={{ left: `${x(f) - scale() / 2}px`, width: `${Math.max(1, scale())}px` }}
-                            title="Fuera del límite de giro"
+                            title={t("Fuera del límite de giro")}
                           />
                         )}
                       </For>

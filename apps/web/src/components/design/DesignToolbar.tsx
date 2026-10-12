@@ -10,6 +10,7 @@ import type { DesignActions } from "../../lib/designActions";
 import * as D from "../icons/design";
 import * as Icons from "../icons";
 import { Tooltip } from "../ui";
+import { t } from "../../lib/i18n";
 
 type IconC = (p: { size?: number }) => JSX.Element;
 
@@ -24,9 +25,9 @@ interface Tool {
 
 /** Botón de la barra izquierda: solo el ícono; el nombre en la ayuda */
 export const SideButton: Component<{ label: string; icon: IconC; tip?: string; shortcut?: string; active?: boolean; disabled?: boolean; onClick: () => void }> = (props) => (
-  <Tooltip content={`${props.shortcut ? `${props.label} (${props.shortcut})` : props.label}${props.tip ? `: ${props.tip}` : ""}`} placement="right">
+  <Tooltip content={`${props.shortcut ? `${t(props.label)} (${props.shortcut})` : t(props.label)}${props.tip ? `: ${t(props.tip)}` : ""}`} placement="right">
     <button
-      aria-label={props.label}
+      aria-label={t(props.label)}
       class={clsx(
         "flex items-center justify-center w-8 h-7 shrink-0 rounded disabled:opacity-40 disabled:pointer-events-none",
         props.active ? "bg-accent text-bg" : "text-text-muted hover:text-text hover:bg-surface",
@@ -36,7 +37,7 @@ export const SideButton: Component<{ label: string; icon: IconC; tip?: string; s
     >
       <props.icon size={18} />
       {/* El nombre para lectores de pantalla (y las pruebas que buscan por texto) */}
-      <span class="sr-only">{props.label}</span>
+      <span class="sr-only">{t(props.label)}</span>
     </button>
   </Tooltip>
 );
@@ -60,10 +61,10 @@ const SideFamily: Component<{ name: string; tools: Tool[]; hasBody: boolean }> =
   return (
     <div ref={row} class="relative">
       <SideButton label={main.label} icon={main.icon} tip={main.tip} disabled={!!main.needsBody && !props.hasBody} onClick={main.run} />
-      <div class="absolute right-0 bottom-0" data-toolbar-menu={props.name} data-items={JSON.stringify(props.tools.map((t) => t.label))}>
-        <button class="flex items-end justify-end w-3 h-3 text-text-dim hover:text-text" title={props.name} onClick={() => setOpen(!open())}>
+      <div class="absolute right-0 bottom-0" data-toolbar-menu={props.name} data-items={JSON.stringify(props.tools.map((tool) => tool.label))}>
+        <button class="flex items-end justify-end w-3 h-3 text-text-dim hover:text-text" title={t(props.name)} onClick={() => setOpen(!open())}>
           <Icons.CaretRight size={8} />
-          <span class="sr-only">{props.name}</span>
+          <span class="sr-only">{t(props.name)}</span>
         </button>
       </div>
       <Show when={open()}>
@@ -74,18 +75,18 @@ const SideFamily: Component<{ name: string; tools: Tool[]; hasBody: boolean }> =
           style={{ left: `${row.getBoundingClientRect().right + 6}px`, top: `${row.getBoundingClientRect().top}px` }}
         >
           <For each={props.tools}>
-            {(t) => (
+            {(tool) => (
               <button
                 class="w-full flex items-center gap-2 px-2 py-1 text-xs text-left text-text-muted hover:text-text hover:bg-surface disabled:opacity-40 disabled:pointer-events-none"
-                title={t.tip}
-                disabled={!!t.needsBody && !props.hasBody}
+                title={tool.tip ? t(tool.tip) : undefined}
+                disabled={!!tool.needsBody && !props.hasBody}
                 onClick={() => {
                   setOpen(false);
-                  t.run();
+                  tool.run();
                 }}
               >
-                <t.icon size={16} />
-                {t.label}
+                <tool.icon size={16} />
+                {t(tool.label)}
               </button>
             )}
           </For>
@@ -112,7 +113,7 @@ export const DesignSideTools: Component<{ store: CadStore; ui: CadUi; actions: D
     { label: "Chaflán", icon: D.Chamfer, run: () => void a.startEdges("chamfer"), needsBody: true, tip: "Las aristas elegidas (o se eligen en el diálogo)" },
     { label: "Agujero", icon: D.Hole, run: a.addHole, needsBody: true, tip: "En los puntos (o círculos) del sketch elegido o el último: simple, con caja o avellanado" },
   ];
-  const button = (t: Tool) => <SideButton label={t.label} icon={t.icon} tip={t.tip} disabled={!!t.needsBody && !hasBody()} onClick={t.run} />;
+  const button = (tool: Tool) => <SideButton label={tool.label} icon={tool.icon} tip={tool.tip} disabled={!!tool.needsBody && !hasBody()} onClick={tool.run} />;
   return (
     <Show when={!ui.assemblyMode()}>
       <SideFamily name="Más sketches" tools={sketches} hasBody={hasBody()} />
@@ -145,7 +146,7 @@ const ToolMenu: Component<{ label: string; tools: (Tool | "-")[]; hasBody: boole
       ref={root}
       class="relative"
       data-toolbar-menu={props.label}
-      data-items={JSON.stringify(props.tools.flatMap((t) => (t === "-" ? [] : [t.label])))}
+      data-items={JSON.stringify(props.tools.flatMap((tool) => (tool === "-" ? [] : [tool.label])))}
     >
       <button
         class={clsx(
@@ -156,27 +157,27 @@ const ToolMenu: Component<{ label: string; tools: (Tool | "-")[]; hasBody: boole
         aria-expanded={open()}
         onClick={() => setOpen(!open())}
       >
-        {props.label}
+        {t(props.label)}
         <Icons.CaretDown size={10} />
       </button>
       <Show when={open()}>
         <div role="menu" class="absolute left-0 top-full mt-1 z-20 min-w-44 rounded-md border border-border bg-bg-lighter py-1 shadow-lg">
           <For each={props.tools}>
-            {(t) =>
-              t === "-" ? (
+            {(tool) =>
+              tool === "-" ? (
                 <div class="my-1 h-px bg-border" />
               ) : (
                 <button
                   class="flex w-full items-center gap-2 px-2.5 py-1.5 text-xs text-left text-text hover:bg-surface disabled:opacity-40 disabled:pointer-events-none"
-                  disabled={!!t.needsBody && !props.hasBody}
-                  title={t.tip}
+                  disabled={!!tool.needsBody && !props.hasBody}
+                  title={tool.tip ? t(tool.tip) : undefined}
                   onClick={() => {
                     setOpen(false);
-                    t.run();
+                    tool.run();
                   }}
                 >
-                  <t.icon size={16} />
-                  {t.label}
+                  <tool.icon size={16} />
+                  {t(tool.label)}
                 </button>
               )
             }
@@ -288,7 +289,7 @@ export const DesignToolbar: Component<{ store: CadStore; ui: CadUi; actions: Des
   return (
     <div class="flex items-center gap-0.5 rounded-md border border-border bg-bg-lighter/95 px-1.5 py-1 pointer-events-auto shadow-sm">
       {/* Diseño de las piezas o su ensamble */}
-      <div role="tablist" aria-label="Modo" class="flex items-center gap-0.5 rounded bg-surface/40 p-0.5">
+      <div role="tablist" aria-label={t("Modo")} class="flex items-center gap-0.5 rounded bg-surface/40 p-0.5">
         <For each={[["design", "Diseño"], ["assembly", "Ensamble"]] as const}>
           {([id, label]) => (
             <button
@@ -304,7 +305,7 @@ export const DesignToolbar: Component<{ store: CadStore; ui: CadUi; actions: Des
                 ui.setAssemblyMode(id === "assembly");
               }}
             >
-              {label}
+              {t(label)}
             </button>
           )}
         </For>

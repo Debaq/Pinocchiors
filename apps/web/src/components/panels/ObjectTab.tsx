@@ -2,6 +2,7 @@ import { Component, For, Show } from "solid-js";
 import * as THREE from "three";
 import { NumberInput } from "../ui";
 import { PlacementPanel, type PlacementPanelProps } from "./PlacementPanel";
+import { fmtNumber, t } from "../../lib/i18n";
 
 /** Nodo del archivo elegido en el Outliner: su transformación local */
 export interface ObjectTabNode {
@@ -34,15 +35,15 @@ export interface ObjectTabProps {
 export const ObjectTab: Component<ObjectTabProps> = (props) => (
   <Show
     when={props.meshInfo}
-    fallback={<p class="text-xs text-text-muted">Importa un modelo (Archivo → Importar modelo) para transformarlo.</p>}
+    fallback={<p class="text-xs text-text-muted">{t("Importa un modelo (Archivo → Importar modelo) para transformarlo.")}</p>}
   >
     {(info) => (
       <div class="space-y-4">
         <div class="flex justify-between gap-2 text-xs px-3 py-2 rounded-md bg-surface/30 border border-border">
           <span class="text-text font-mono uppercase">{info().format}</span>
           <span class="text-text-muted">
-            <span class="text-text font-mono">{info().vertices.toLocaleString()}</span> vértices ·{" "}
-            <span class="text-text font-mono">{info().faces.toLocaleString()}</span> caras
+            <span class="text-text font-mono">{fmtNumber(info().vertices)}</span> {t("vértices")} ·{" "}
+            <span class="text-text font-mono">{fmtNumber(info().faces)}</span> {t("caras")}
           </span>
         </div>
         <Show when={props.node}>
@@ -60,7 +61,7 @@ export const ObjectTab: Component<ObjectTabProps> = (props) => (
             };
             const row = (label: string, values: number[], step: number, suffix: string, onChange: (next: number[]) => void) => (
               <div class="space-y-1">
-                <span class="text-text-muted">{label}</span>
+                <span class="text-text-muted">{t(label)}</span>
                 <div class="grid grid-cols-3 gap-1">
                   <For each={values}>
                     {(v, i) => (
@@ -81,19 +82,18 @@ export const ObjectTab: Component<ObjectTabProps> = (props) => (
                   <span class="text-text font-medium truncate">{node().name}</span>
                   <span class="text-text-dim truncate">{node().hint}</span>
                 </div>
-                {row("Posición", node().translation, 0.01, "", (t) => props.onNodeTransform?.({ ...current(), translation: t as NodeTransform["translation"] }))}
+                {row("Posición", node().translation, 0.01, "", (tr) => props.onNodeTransform?.({ ...current(), translation: tr as NodeTransform["translation"] }))}
                 {row("Giro (XYZ)", euler(), 1, "°", setRotation)}
                 {row("Escala", node().scale, 0.01, "", (s) => props.onNodeTransform?.({ ...current(), scale: s as NodeTransform["scale"] }))}
                 <p class="text-[11px] text-text-dim leading-relaxed">
-                  Transformación local del archivo (respecto de su padre). Cambiarla rehace la malla: el rig y la
-                  retopología se descartan. Para mover el modelo entero usa las herramientas de abajo.
+                  {t("Transformación local del archivo (respecto de su padre). Cambiarla rehace la malla: el rig y la retopología se descartan. Para mover el modelo entero usa las herramientas de abajo.")}
                 </p>
                 <div class="flex gap-3">
                   <button class="text-accent hover:underline" onClick={() => props.onToggleNode?.()}>
-                    {node().hidden ? "Mostrar" : "Ocultar"}
+                    {node().hidden ? t("Mostrar") : t("Ocultar")}
                   </button>
                   <button class="text-text-muted hover:text-text" onClick={() => props.onDeselectNode?.()}>
-                    Quitar selección
+                    {t("Quitar selección")}
                   </button>
                 </div>
               </div>

@@ -4,6 +4,7 @@ import * as Icons from "../icons";
 import type { SkeletonPreset } from "../panels/SkeletonPanel";
 import { CATEGORIES, byUse, matches, mostUsed, templateFavorites, toggleFavorite } from "../../lib/templateUsage";
 import { thumbnail, type TemplateShape } from "../../lib/skeletonThumb";
+import { t, tn } from "../../lib/i18n";
 
 export interface TemplateGalleryProps {
   presets: SkeletonPreset[];
@@ -34,9 +35,9 @@ const Thumbnail: Component<{ shape?: TemplateShape }> = (props) => {
   return (
     <svg viewBox={`0 0 ${THUMB_W} ${THUMB_H}`} class="w-full h-auto" aria-hidden="true">
       <Show when={thumb()} fallback={<rect x="40" y="30" width="40" height="24" rx="4" fill="currentColor" opacity="0.08" />}>
-        {(t) => (
+        {(th) => (
           <g stroke-linecap="round">
-            <For each={t().segments}>
+            <For each={th().segments}>
               {(s) => (
                 <line
                   x1={s.x1}
@@ -49,7 +50,7 @@ const Thumbnail: Component<{ shape?: TemplateShape }> = (props) => {
                 />
               )}
             </For>
-            <For each={t().tips}>{(p) => <circle cx={p.x} cy={p.y} r="1.6" fill="currentColor" opacity={1 - 0.6 * p.depth} />}</For>
+            <For each={th().tips}>{(p) => <circle cx={p.x} cy={p.y} r="1.6" fill="currentColor" opacity={1 - 0.6 * p.depth} />}</For>
           </g>
         )}
       </Show>
@@ -96,15 +97,15 @@ export const TemplateGallery: Component<TemplateGalleryProps> = (props) => {
         <button
           type="button"
           class="w-full text-left p-2 space-y-1"
-          title={p.preset.description}
+          title={t(p.preset.description)}
           onClick={() => props.onPick(p.preset.id)}
         >
           <div class={clsx("rounded bg-bg/40 px-1", active() ? "text-accent" : "text-text-muted")}>
             <Thumbnail shape={props.shapes.get(p.preset.id)} />
           </div>
-          <div class={clsx("text-xs font-medium leading-tight", active() ? "text-accent" : "text-text")}>{p.preset.name}</div>
-          <div class="text-[10px] leading-snug text-text-muted line-clamp-2">{p.preset.description}</div>
-          <div class="text-[10px] font-mono text-text-dim">{p.preset.numBones} huesos</div>
+          <div class={clsx("text-xs font-medium leading-tight", active() ? "text-accent" : "text-text")}>{t(p.preset.name)}</div>
+          <div class="text-[10px] leading-snug text-text-muted line-clamp-2">{t(p.preset.description)}</div>
+          <div class="text-[10px] font-mono text-text-dim">{tn(p.preset.numBones, "{n} hueso", "{n} huesos")}</div>
         </button>
         <button
           type="button"
@@ -112,7 +113,7 @@ export const TemplateGallery: Component<TemplateGalleryProps> = (props) => {
             "absolute top-1.5 right-1.5 w-6 h-6 rounded flex items-center justify-center transition-colors",
             favorite() ? "text-warning" : "text-text-dim hover:text-text"
           )}
-          title={favorite() ? "Quitar de favoritas" : "Marcar como favorita"}
+          title={favorite() ? t("Quitar de favoritas") : t("Marcar como favorita")}
           aria-pressed={favorite()}
           onClick={() => toggleFavorite(p.preset.id)}
         >
@@ -130,7 +131,7 @@ export const TemplateGallery: Component<TemplateGalleryProps> = (props) => {
 
   const Heading: Component<{ label: string; count?: number }> = (h) => (
     <div class="text-[10px] font-semibold uppercase tracking-wide text-text-muted pt-1">
-      {h.label}
+      {t(h.label)}
       <Show when={h.count !== undefined}>
         <span class="font-mono font-normal ml-1.5">{h.count}</span>
       </Show>
@@ -146,7 +147,7 @@ export const TemplateGallery: Component<TemplateGalleryProps> = (props) => {
       )}
       onClick={() => setFilter(c.id)}
     >
-      {c.label} <span class="font-mono opacity-70">{c.count}</span>
+      {t(c.label)} <span class="font-mono opacity-70">{c.count}</span>
     </button>
   );
 
@@ -166,7 +167,7 @@ export const TemplateGallery: Component<TemplateGalleryProps> = (props) => {
               if (e.key === "Escape") setQuery("");
               else if (e.key === "Enter" && filtered().length > 0) props.onPick(filtered()[0].id);
             }}
-            placeholder={`Buscar entre ${props.presets.length}: gato, dinosaurio, alas, cuernos, cola…`}
+            placeholder={t("Buscar entre {n}: gato, dinosaurio, alas, cuernos, cola…", { n: props.presets.length })}
             class={clsx(
               "w-full h-8 pl-8 pr-7 rounded-md text-sm text-text",
               "bg-bg-lighter border border-border placeholder:text-text-muted/60",
@@ -176,7 +177,7 @@ export const TemplateGallery: Component<TemplateGalleryProps> = (props) => {
           <Show when={query()}>
             <button
               class="absolute right-1.5 top-1/2 -translate-y-1/2 w-5 h-5 flex items-center justify-center text-text-muted hover:text-text"
-              title="Limpiar búsqueda"
+              title={t("Limpiar búsqueda")}
               onClick={() => setQuery("")}
             >
               <Icons.X size={11} />
@@ -187,10 +188,10 @@ export const TemplateGallery: Component<TemplateGalleryProps> = (props) => {
           <button
             type="button"
             class="h-8 px-3 rounded-md bg-accent text-bg text-xs font-medium flex items-center gap-1 hover:opacity-90"
-            title="Cambiar partes de la plantilla elegida"
+            title={t("Cambiar partes de la plantilla elegida")}
             onClick={() => props.onCustomize?.()}
           >
-            Personalizar {selectedName()}
+            {t("Personalizar {name}", { name: t(selectedName()!) })}
             <Icons.CaretRight size={12} />
           </button>
         </Show>
@@ -208,7 +209,7 @@ export const TemplateGallery: Component<TemplateGalleryProps> = (props) => {
       <Show
         when={browsing()}
         fallback={
-          <Show when={filtered().length > 0} fallback={<p class="text-xs text-text-muted py-4">Ninguna plantilla coincide con «{query()}».</p>}>
+          <Show when={filtered().length > 0} fallback={<p class="text-xs text-text-muted py-4">{t("Ninguna plantilla coincide con «{query}».", { query: query() })}</p>}>
             <Grid items={filtered()} />
           </Show>
         }

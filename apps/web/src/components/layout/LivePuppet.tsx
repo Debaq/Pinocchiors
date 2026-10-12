@@ -6,6 +6,7 @@ import { LiveSolver, captureMotion, mirrorFrame, type CaptureFrame, type Capture
 import type { LiveCapture } from "../../lib/captureRunner";
 import type { SkeletonBone } from "../../lib/presetAnimations";
 import { Retargeter, type RetargetMap } from "../../lib/retarget";
+import { locale, t } from "../../lib/i18n";
 
 /** Uniones que se dibujan sobre la vista previa (índices de MediaPipe Pose) */
 const BONES: [number, number][] = [
@@ -109,16 +110,16 @@ export const LivePuppet: Component<LivePuppetProps> = (props) => {
     const seconds = Math.max(1e-3, (performance.now() - r.start) / 1000);
     const fps = Math.max(1, Math.round(r.frames.length / seconds));
     if (r.frames.filter(Boolean).length < 2) {
-      setError("No se vio a nadie durante la grabación (el cuerpo entero tiene que estar en cuadro)");
+      setError(t("No se vio a nadie durante la grabación (el cuerpo entero tiene que estar en cuadro)"));
       return;
     }
     const motion = captureMotion(r.frames, fps, { smoothing: smoothing() });
     if (!motion) {
-      setError("Faltan partes del cuerpo en toda la grabación (caderas, hombros o piernas)");
+      setError(t("Faltan partes del cuerpo en toda la grabación (caderas, hombros o piernas)"));
       return;
     }
     setError(undefined);
-    props.onRecorded(motion, `Cámara ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`);
+    props.onRecorded(motion, t("Cámara {time}", { time: new Date().toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit" }) }));
   };
 
   onMount(async () => {
@@ -145,13 +146,13 @@ export const LivePuppet: Component<LivePuppetProps> = (props) => {
   const busy = () => state() === "countdown" || state() === "recording";
 
   return (
-    <div class="absolute left-3 bottom-3 z-20 w-64 rounded-lg border border-border bg-bg/95 shadow-xl backdrop-blur-sm" role="dialog" aria-label="Cámara en vivo">
+    <div class="absolute left-3 bottom-3 z-20 w-64 rounded-lg border border-border bg-bg/95 shadow-xl backdrop-blur-sm" role="dialog" aria-label={t("Cámara en vivo")}>
       <div class="flex items-center justify-between px-3 h-9 border-b border-border">
         <span class="flex items-center gap-2 text-xs font-semibold text-text">
           <Icons.PersonArmsSpread size={14} class="text-accent" />
-          Cámara en vivo
+          {t("Cámara en vivo")}
         </span>
-        <button class="w-6 h-6 flex items-center justify-center rounded text-text-muted hover:text-text hover:bg-surface/40" aria-label="Cerrar la cámara" onClick={props.onClose}>
+        <button class="w-6 h-6 flex items-center justify-center rounded text-text-muted hover:text-text hover:bg-surface/40" aria-label={t("Cerrar la cámara")} onClick={props.onClose}>
           <Icons.X size={12} />
         </button>
       </div>
@@ -163,7 +164,7 @@ export const LivePuppet: Component<LivePuppetProps> = (props) => {
           </Show>
           <Show when={state() === "recording"}>
             <span class="absolute top-1 left-1 flex items-center gap-1 px-1.5 rounded bg-error/80 text-[10px] text-white">
-              <Icons.Record size={10} /> Grabando
+              <Icons.Record size={10} /> {t("Grabando")}
             </span>
           </Show>
         </div>
@@ -171,11 +172,11 @@ export const LivePuppet: Component<LivePuppetProps> = (props) => {
           <p class="text-xs text-error leading-relaxed">{error()}</p>
         </Show>
         <Show when={state() === "opening" && !error()}>
-          <p class="text-xs text-text-muted">Abriendo la cámara y el modelo de pose (unos 9 MB la primera vez)…</p>
+          <p class="text-xs text-text-muted">{t("Abriendo la cámara y el modelo de pose (unos 9 MB la primera vez)…")}</p>
         </Show>
         <Show when={state() === "calibrating"}>
           <p class="text-xs text-text-muted leading-relaxed">
-            Ponte de cuerpo entero, de frente y quieto: esa pose se toma como reposo.
+            {t("Ponte de cuerpo entero, de frente y quieto: esa pose se toma como reposo.")}
           </p>
         </Show>
         <Show when={state() !== "opening"}>
@@ -183,19 +184,19 @@ export const LivePuppet: Component<LivePuppetProps> = (props) => {
             when={state() === "recording"}
             fallback={
               <Button size="sm" variant="primary" fullWidth disabled={state() !== "live"} onClick={() => void record()}>
-                <Icons.Record size={12} /> Grabar animación (cuenta de 3)
+                <Icons.Record size={12} /> {t("Grabar animación (cuenta de 3)")}
               </Button>
             }
           >
             <Button size="sm" variant="danger" fullWidth onClick={stop}>
-              <Icons.Stop size={12} /> Detener y crear clip
+              <Icons.Stop size={12} /> {t("Detener y crear clip")}
             </Button>
           </Show>
-          <Button size="sm" variant="ghost" fullWidth disabled={busy()} onClick={recalibrate} title="Vuelve a tomar la pose de reposo">
-            <Icons.ArrowsClockwise size={12} /> Tomar el reposo de nuevo
+          <Button size="sm" variant="ghost" fullWidth disabled={busy()} onClick={recalibrate} title={t("Vuelve a tomar la pose de reposo")}>
+            <Icons.ArrowsClockwise size={12} /> {t("Tomar el reposo de nuevo")}
           </Button>
           <Slider
-            label="Suavizado"
+            label={t("Suavizado")}
             value={smoothing()}
             onChange={(v) => {
               setSmoothing(v);
@@ -207,7 +208,7 @@ export const LivePuppet: Component<LivePuppetProps> = (props) => {
             formatValue={(v) => `${Math.round(v * 100)} %`}
           />
           <Checkbox
-            label="Como espejo (tu derecha mueve su izquierda)"
+            label={t("Como espejo (tu derecha mueve su izquierda)")}
             checked={mirror()}
             disabled={busy()}
             onChange={(v) => {
@@ -215,7 +216,7 @@ export const LivePuppet: Component<LivePuppetProps> = (props) => {
               recalibrate();
             }}
           />
-          <Checkbox label="Desplazar el cuerpo" checked={rootMotion()} onChange={setRootMotion} />
+          <Checkbox label={t("Desplazar el cuerpo")} checked={rootMotion()} onChange={setRootMotion} />
         </Show>
       </div>
     </div>

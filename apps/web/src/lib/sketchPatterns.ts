@@ -16,6 +16,7 @@ import {
   type Sketch,
   type SketchPatternRecord,
 } from "./cad.ts";
+import { t as tr } from "./i18n.ts";
 
 export type { PatternSpec, SketchPatternRecord };
 
@@ -65,11 +66,11 @@ export function patternAt(s: Sketch, entity: number | undefined): { pattern: Ske
  */
 export function editPattern(s: Sketch, id: number, spec?: PatternSpec): string | undefined {
   const p = s.patterns?.find((x) => x.id === id);
-  if (!p) return "Ese patrón ya no está";
+  if (!p) return tr("Ese patrón ya no está");
   const source = p.source.filter((e) => s.entities.some((x) => x.id === e));
   if (!source.length) {
     dropPattern(s, id);
-    return "El original del patrón ya no está";
+    return tr("El original del patrón ya no está");
   }
   const next = spec ?? p.spec;
   // Probar en una copia: si no se puede, no se toca nada
@@ -102,7 +103,7 @@ function setSkipped(s: Sketch, p: SketchPatternRecord, copy: number, on: boolean
 /** Omite la copia `copy` del patrón (o la vuelve a poner) */
 export function toggleSkip(s: Sketch, id: number, copy: number): string | undefined {
   const p = s.patterns?.find((x) => x.id === id);
-  if (!p || !p.copies[copy]) return "Esa copia no es del patrón";
+  if (!p || !p.copies[copy]) return tr("Esa copia no es del patrón");
   const on = !p.skip.includes(copy);
   p.skip = on ? [...p.skip, copy].sort((a, b) => a - b) : p.skip.filter((k) => k !== copy);
   setSkipped(s, p, copy, on);
@@ -117,8 +118,13 @@ export function dropPattern(s: Sketch, id: number): void {
 
 /** Nombre corto para la interfaz */
 export function patternLabel(p: SketchPatternRecord): string {
-  const kinds = { linear: "lineal", circular: "circular", curve: "en curva", table: "por tabla" } as const;
   const n = p.copies.length + 1 - p.skip.length;
-  return `Patrón ${kinds[p.spec.kind]} · ${n} de ${p.copies.length + 1}`;
+  const total = p.copies.length + 1;
+  switch (p.spec.kind) {
+    case "linear": return tr("Patrón lineal · {n} de {total}", { n, total });
+    case "circular": return tr("Patrón circular · {n} de {total}", { n, total });
+    case "curve": return tr("Patrón en curva · {n} de {total}", { n, total });
+    case "table": return tr("Patrón por tabla · {n} de {total}", { n, total });
+  }
 }
 

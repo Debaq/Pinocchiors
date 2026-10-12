@@ -121,6 +121,7 @@ import { partKey } from "../../lib/objects";
 import { axisToVertical, faceToFloor, faceToFront, pointToOrigin, type Mat4 } from "../../lib/scanAlign";
 import { Button, Checkbox, IconButton, NumberInput, Select, Slider, Tooltip } from "../ui";
 import * as Icons from "../icons";
+import { t as tl, locale, tn } from "../../lib/i18n";
 
 export interface DesignStepProps {
   store: CadStore;
@@ -181,7 +182,7 @@ export const Formula: Component<{
   const shown = () => props.expr ?? (Number.isFinite(props.value) ? String(+props.value.toFixed(6)) : "0");
   const problem = () => err() ?? props.error ?? undefined;
   return (
-    <label class="flex items-center gap-2 text-xs" title={problem() ?? (props.expr ? `= ${+props.value.toFixed(6)}` : "Acepta fórmulas: ancho / 2, max(a, b)…")}>
+    <label class="flex items-center gap-2 text-xs" title={problem() ?? (props.expr ? `= ${+props.value.toFixed(6)}` : tl("Acepta fórmulas: ancho / 2, max(a, b)…"))}>
       <Show when={props.label}>
         <span class={clsx("text-text-muted shrink-0", (props.label?.length ?? 0) <= 2 ? "w-3" : "w-24")}>{props.label}</span>
       </Show>
@@ -232,51 +233,51 @@ const Section: Component<{ title: string; children: JSX.Element; right?: JSX.Ele
   </div>
 );
 
-const OP_OPTIONS = (Object.keys(OP_LABELS) as BodyOp[]).map((v) => ({ value: v, label: OP_LABELS[v] }));
+const OP_OPTIONS = (Object.keys(OP_LABELS) as BodyOp[]).map((v) => ({ value: v, get label() { return OP_LABELS[v]; } }));
 const RELIEF_OPTIONS = [
-  { value: "rectangle", label: "Ranura recta" },
-  { value: "obround", label: "Ranura con fondo redondo" },
-  { value: "none", label: "Sin alivio" },
+  { value: "rectangle", get label() { return tl("Ranura recta"); } },
+  { value: "obround", get label() { return tl("Ranura con fondo redondo"); } },
+  { value: "none", get label() { return tl("Sin alivio"); } },
 ];
 const CORNER_OPTIONS = [
-  { value: "none", label: "Muesca del doblez" },
-  { value: "round", label: "Redonda" },
-  { value: "square", label: "Cuadrada" },
+  { value: "none", get label() { return tl("Muesca del doblez"); } },
+  { value: "round", get label() { return tl("Redonda"); } },
+  { value: "square", get label() { return tl("Cuadrada"); } },
 ];
 const AXIS_DIRS: Record<string, P3> = { x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] };
 
 const BLEND_SIDE_OPTIONS = [
-  { value: "auto", label: "Según la geometría" },
-  { value: "convex", label: "Canto (saca material)" },
-  { value: "concave", label: "Rincón (agrega material)" },
+  { value: "auto", get label() { return tl("Según la geometría"); } },
+  { value: "convex", get label() { return tl("Canto (saca material)"); } },
+  { value: "concave", get label() { return tl("Rincón (agrega material)"); } },
 ];
 
 const ORIENT_OPTIONS = [
-  { value: "follow", label: "Sigue el camino" },
-  { value: "frenet", label: "Frenet (gira con la curva)" },
-  { value: "fixed", label: "Fija (no gira)" },
+  { value: "follow", get label() { return tl("Sigue el camino"); } },
+  { value: "frenet", get label() { return tl("Frenet (gira con la curva)"); } },
+  { value: "fixed", get label() { return tl("Fija (no gira)"); } },
 ];
 
 /** Número con `d` decimales; lo que redondea a cero se muestra sin signo (no "-0,00") */
-const fmt = (v: number, d = 2) => (Math.abs(v) < 0.5 * 10 ** -d ? 0 : v).toLocaleString("es", { maximumFractionDigits: d, minimumFractionDigits: d });
+const fmt = (v: number, d = 2) => (Math.abs(v) < 0.5 * 10 ** -d ? 0 : v).toLocaleString(locale(), { maximumFractionDigits: d, minimumFractionDigits: d });
 
 export function pickSummary(picks: { kind: string }[]): string {
   const count = (k: string) => picks.filter((p) => p.kind === k).length;
   const parts: [number, string, string][] = [
-    [count("region"), "región", "regiones"],
-    [count("face"), "cara", "caras"],
-    [count("edge"), "arista", "aristas"],
-    [count("vertex"), "vértice", "vértices"],
-    [count("plane") + count("refplane"), "plano", "planos"],
+    [count("region"), "{n} región", "{n} regiones"],
+    [count("face"), "{n} cara", "{n} caras"],
+    [count("edge"), "{n} arista", "{n} aristas"],
+    [count("vertex"), "{n} vértice", "{n} vértices"],
+    [count("plane") + count("refplane"), "{n} plano", "{n} planos"],
   ];
-  return parts.filter(([n]) => n > 0).map(([n, one, many]) => `${n} ${n === 1 ? one : many}`).join(", ");
+  return parts.filter(([n]) => n > 0).map(([n, one, many]) => tn(n, one, many)).join(", ");
 }
 
 function planeLabel(p: PlaneSpec): string {
-  if (p.type === "face") return "Cara del sólido";
-  if (p.type === "custom") return "Plano propio";
-  if (p.type === "reference") return "Plano de referencia";
-  if (p.type === "frame") return "Plano de un sistema de coordenadas";
+  if (p.type === "face") return tl("Cara del sólido");
+  if (p.type === "custom") return tl("Plano propio");
+  if (p.type === "reference") return tl("Plano de referencia");
+  if (p.type === "frame") return tl("Plano de un sistema de coordenadas");
   return PLANE_LABELS[p.type];
 }
 
@@ -300,7 +301,7 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
     ui.setPick({
       kind: "scan",
       shape,
-      prompt: shape === "plane" ? "Clic sobre una zona plana del modelo" : "Clic sobre una pared cilíndrica (agujero o tetón)",
+      prompt: shape === "plane" ? tl("Clic sobre una zona plana del modelo") : tl("Clic sobre una pared cilíndrica (agujero o tetón)"),
       done: (pick, triangle) => {
         ui.setPick({ kind: "none" });
         setScanResult({ pick, triangle });
@@ -327,7 +328,7 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
       void props.onAlignScan(m, description).catch((e) => say(String(e)));
     };
     if (how === "origin") {
-      return ui.setPick({ kind: "scan_point", prompt: "Clic en el punto del escaneo que va al origen", done: (p) => run(pointToOrigin(p), "Escaneo: punto al origen", "") });
+      return ui.setPick({ kind: "scan_point", prompt: tl("Clic en el punto del escaneo que va al origen"), done: (p) => run(pointToOrigin(p), tl("Escaneo: punto al origen"), "") });
     }
     const shape = how === "axis" ? "cylinder" : "plane";
     ui.setPick({
@@ -335,15 +336,15 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
       shape,
       prompt:
         how === "floor"
-          ? "Clic en la cara del escaneo que va apoyada en el piso"
+          ? tl("Clic en la cara del escaneo que va apoyada en el piso")
           : how === "front"
-            ? "Clic en la cara del escaneo que mira al frente"
-            : "Clic en un cilindro o agujero del escaneo: su eje queda vertical",
+            ? tl("Clic en la cara del escaneo que mira al frente")
+            : tl("Clic en un cilindro o agujero del escaneo: su eje queda vertical"),
       done: (pick) => {
         ui.setPick({ kind: "none" });
         if (pick.kind === "cylinder") return run(axisToVertical(pick.origin, pick.direction), "Escaneo: eje vertical", "");
-        if (how === "floor") return run(faceToFloor(pick.plane), "Escaneo: cara al piso", "");
-        run(faceToFront(pick.plane), "Escaneo: cara al frente", "Esa cara es horizontal: elegir una cara de costado");
+        if (how === "floor") return run(faceToFloor(pick.plane), tl("Escaneo: cara al piso"), "");
+        run(faceToFront(pick.plane), tl("Escaneo: cara al frente"), tl("Esa cara es horizontal: elegir una cara de costado"));
       },
     });
   };
@@ -355,7 +356,7 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
       return ui.setPick({
         kind: "scan",
         shape: what === "plane" ? "plane" : "cylinder",
-        prompt: what === "plane" ? "Clic en una zona plana del escaneo" : "Clic en un cilindro o agujero del escaneo",
+        prompt: what === "plane" ? tl("Clic en una zona plana del escaneo") : tl("Clic en un cilindro o agujero del escaneo"),
         done: (_, triangle, at) => {
           ui.setPick({ kind: "none" });
           void addScan(what === "plane" ? { kind: "ref_plane", triangle, at } : { kind: "ref_axis", triangle, at });
@@ -363,14 +364,14 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
       });
     }
     if (what === "point") {
-      return ui.setPick({ kind: "scan_point", prompt: "Clic en el punto del escaneo", done: (at, triangle) => void addScan({ kind: "ref_point", triangle, at }) });
+      return ui.setPick({ kind: "scan_point", prompt: tl("Clic en el punto del escaneo"), done: (at, triangle) => void addScan({ kind: "ref_point", triangle, at }) });
     }
     // Tres clics seguidos
     const points: [number, P3][] = [];
     const next = () =>
       ui.setPick({
         kind: "scan_point",
-        prompt: `Punto ${points.length + 1} de 3 sobre el escaneo`,
+        prompt: tl("Punto {v1} de 3 sobre el escaneo", { v1: points.length + 1 }),
         done: (at, triangle) => {
           points.push([triangle, at]);
           if (points.length < 3) next();
@@ -396,7 +397,7 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
         <Show
           when={store.doc()}
           fallback={
-            <p class="text-xs text-text-dim">Preparando el diseño…</p>
+            <p class="text-xs text-text-dim">{tl("Preparando el diseño…")}</p>
           }
         >
           <Switch>
@@ -414,27 +415,27 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
             <Match when={props.section === "design_part"}>
               <PartsSection store={store} ui={ui} />
               <Show when={!store.result()?.parts.length}>
-                <p class="text-xs text-text-dim">Todavía no hay piezas: crea un sólido con la barra de arriba del visor.</p>
+                <p class="text-xs text-text-dim">{tl("Todavía no hay piezas: crea un sólido con la barra de arriba del visor.")}</p>
               </Show>
             </Match>
             <Match when={props.section === "design_inspect"}>
               <BodySection store={store} ui={ui} />
               <Show when={!store.result()?.body}>
-                <p class="text-xs text-text-dim">Todavía no hay sólido para inspeccionar.</p>
+                <p class="text-xs text-text-dim">{tl("Todavía no hay sólido para inspeccionar.")}</p>
               </Show>
             </Match>
             <Match when={props.section === "design_scan"}>
               <Show
                 when={props.scanId !== undefined}
-                fallback={<p class="text-xs text-text-dim">Importa un modelo (un escaneo, un STL u OBJ) para tomar de él planos, cilindros y contornos.</p>}
+                fallback={<p class="text-xs text-text-dim">{tl("Importa un modelo (un escaneo, un STL u OBJ) para tomar de él planos, cilindros y contornos.")}</p>}
               >
-                <Section title="Desde el escaneo">
+                <Section title={tl("Desde el escaneo")}>
                   <p class="text-[11px] text-text-dim leading-relaxed">
-                    El escaneo se ve translúcido detrás del diseño. Elegir una zona ajusta un plano o un cilindro y lo convierte en operaciones.
+                    {tl("El escaneo se ve translúcido detrás del diseño. Elegir una zona ajusta un plano o un cilindro y lo convierte en operaciones.")}
                   </p>
                   <Show when={props.scans.length > 1}>
-                    <label class="flex items-center gap-2 text-xs text-text-muted" aria-label="Escaneo de referencia">
-                      <span class="shrink-0">Escaneo</span>
+                    <label class="flex items-center gap-2 text-xs text-text-muted" aria-label={tl("Escaneo de referencia")}>
+                      <span class="shrink-0">{tl("Escaneo")}</span>
                       <Select
                         options={props.scans.map((o) => ({ value: String(o.id), label: o.name }))}
                         value={String(props.scanId)}
@@ -442,91 +443,91 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                       />
                     </label>
                   </Show>
-                  <div class="space-y-1.5" aria-label="Alinear el escaneo">
-                    <span class="text-xs text-text-muted">Alinear el escaneo (antes de diseñar sobre él)</span>
+                  <div class="space-y-1.5" aria-label={tl("Alinear el escaneo")}>
+                    <span class="text-xs text-text-muted">{tl("Alinear el escaneo (antes de diseñar sobre él)")}</span>
                     <div class="grid grid-cols-2 gap-1.5">
-                      <Button size="sm" variant="ghost" title="La cara elegida queda apoyada en el piso" onClick={() => align("floor")}>
-                        Cara al piso
+                      <Button size="sm" variant="ghost" title={tl("La cara elegida queda apoyada en el piso")} onClick={() => align("floor")}>
+                        {tl("Cara al piso")}
                       </Button>
-                      <Button size="sm" variant="ghost" title="Gira en torno al eje vertical hasta que la cara mire al frente" onClick={() => align("front")}>
-                        Cara al frente
+                      <Button size="sm" variant="ghost" title={tl("Gira en torno al eje vertical hasta que la cara mire al frente")} onClick={() => align("front")}>
+                        {tl("Cara al frente")}
                       </Button>
-                      <Button size="sm" variant="ghost" title="El eje del cilindro queda vertical y pasa por el origen" onClick={() => align("axis")}>
-                        Eje vertical
+                      <Button size="sm" variant="ghost" title={tl("El eje del cilindro queda vertical y pasa por el origen")} onClick={() => align("axis")}>
+                        {tl("Eje vertical")}
                       </Button>
-                      <Button size="sm" variant="ghost" title="Corre el escaneo para que el punto quede en el origen" onClick={() => align("origin")}>
-                        Punto al origen
+                      <Button size="sm" variant="ghost" title={tl("Corre el escaneo para que el punto quede en el origen")} onClick={() => align("origin")}>
+                        {tl("Punto al origen")}
                       </Button>
                     </div>
                   </div>
-                  <div class="space-y-1.5" aria-label="Referencias del escaneo">
-                    <span class="text-xs text-text-muted">Referencias ligadas (siguen al escaneo)</span>
+                  <div class="space-y-1.5" aria-label={tl("Referencias del escaneo")}>
+                    <span class="text-xs text-text-muted">{tl("Referencias ligadas (siguen al escaneo)")}</span>
                     <div class="grid grid-cols-2 gap-1.5">
-                      <Button size="sm" variant="ghost" title="Plano ajustado a una zona plana" onClick={() => reference("plane")}>
-                        Plano de zona
+                      <Button size="sm" variant="ghost" title={tl("Plano ajustado a una zona plana")} onClick={() => reference("plane")}>
+                        {tl("Plano de zona")}
                       </Button>
-                      <Button size="sm" variant="ghost" title="Plano por tres puntos del escaneo" onClick={() => reference("points")}>
-                        Plano 3 puntos
+                      <Button size="sm" variant="ghost" title={tl("Plano por tres puntos del escaneo")} onClick={() => reference("points")}>
+                        {tl("Plano 3 puntos")}
                       </Button>
-                      <Button size="sm" variant="ghost" title="Eje de un cilindro o agujero" onClick={() => reference("axis")}>
-                        Eje de cilindro
+                      <Button size="sm" variant="ghost" title={tl("Eje de un cilindro o agujero")} onClick={() => reference("axis")}>
+                        {tl("Eje de cilindro")}
                       </Button>
-                      <Button size="sm" variant="ghost" title="Un punto de la superficie" onClick={() => reference("point")}>
-                        Punto
+                      <Button size="sm" variant="ghost" title={tl("Un punto de la superficie")} onClick={() => reference("point")}>
+                        {tl("Punto")}
                       </Button>
                     </div>
                   </div>
-                  <div class="space-y-1.5" aria-label="Escaneo como cuerpo">
-                    <span class="text-xs text-text-muted">El escaneo como cuerpo (encajes, cunas, moldes)</span>
+                  <div class="space-y-1.5" aria-label={tl("Escaneo como cuerpo")}>
+                    <span class="text-xs text-text-muted">{tl("El escaneo como cuerpo (encajes, cunas, moldes)")}</span>
                     <Button
                       size="sm"
                       variant="ghost"
                       fullWidth
-                      title="El escaneo cerrado como sólido: restarlo de una pieza deja el hueco donde calza, con la holgura que se elija"
+                      title={tl("El escaneo cerrado como sólido: restarlo de una pieza deja el hueco donde calza, con la holgura que se elija")}
                       onClick={() => {
                         // Con piezas, lo habitual es dejar el hueco donde calza el escaneo
                         const cut = !!store.result()?.body;
                         void store.addFeature({ type: "scan_body", offset: cut ? 0.2 : 0, faces: 20000, op: cut ? "cut" : "new" });
                       }}
                     >
-                      Escaneo como cuerpo
+                      {tl("Escaneo como cuerpo")}
                     </Button>
                     <div class="grid grid-cols-2 gap-1.5">
                       <Button
                         size="sm"
                         variant="ghost"
-                        title="Pieza que copia la piel del escaneo con un espesor (carcasa, funda)"
+                        title={tl("Pieza que copia la piel del escaneo con un espesor (carcasa, funda)")}
                         onClick={() => actions.startScanShell(false)}
                       >
-                        Carcasa
+                        {tl("Carcasa")}
                       </Button>
                       <Button
                         size="sm"
                         variant="ghost"
-                        title="Solo lo que cae bajo el contorno de un sketch, con espesor (férula, almohadilla, tapa que calza)"
+                        title={tl("Solo lo que cae bajo el contorno de un sketch, con espesor (férula, almohadilla, tapa que calza)")}
                         onClick={() => actions.startScanShell(true)}
                       >
-                        Parche desde sketch
+                        {tl("Parche desde sketch")}
                       </Button>
                     </div>
                     <p class="text-[11px] text-text-dim leading-relaxed">
-                      Hasta la piel: extrusión «Hasta el escaneo», «Cara al escaneo» (Modificar) y nervio «Hasta el escaneo».
+                      {tl("Hasta la piel: extrusión «Hasta el escaneo», «Cara al escaneo» (Modificar) y nervio «Hasta el escaneo».")}
                     </p>
                   </div>
-                  <span class="block text-xs text-text-muted">Tomar del escaneo</span>
+                  <span class="block text-xs text-text-muted">{tl("Tomar del escaneo")}</span>
                   <div class="grid grid-cols-2 gap-1.5">
                     <Button size="sm" onClick={() => pickScan("plane")}>
-                      Cara plana
+                      {tl("Cara plana")}
                     </Button>
                     <Button size="sm" onClick={() => pickScan("cylinder")}>
-                      Cilindro / agujero
+                      {tl("Cilindro / agujero")}
                     </Button>
                   </div>
                   <Show when={scanResult()}>
                     {(r) => <ScanResultCard result={r()} onAdd={addScan} />}
                   </Show>
                   <div class="space-y-1.5">
-                    <span class="text-xs text-text-muted">Corte del modelo por un plano</span>
+                    <span class="text-xs text-text-muted">{tl("Corte del modelo por un plano")}</span>
                     <div class="flex gap-1.5">
                       <Select
                         options={(["xy", "xz", "yz"] as const).map((k) => ({ value: k, label: PLANE_LABELS[k] }))}
@@ -534,31 +535,31 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                         onChange={(v) => setSliceBase(v as "xy" | "xz" | "yz")}
                       />
                     </div>
-                    <Num label="A distancia" value={sliceOffset()} onCommit={setSliceOffset} suffix="mm" />
+                    <Num label={tl("A distancia")} value={sliceOffset()} onCommit={setSliceOffset} suffix="mm" />
                     <Button size="sm" fullWidth onClick={() => void addScan({ kind: "slice", plane: offsetPlane(sliceBase(), sliceOffset()) })}>
-                      Sketch con el corte
+                      {tl("Sketch con el corte")}
                     </Button>
                   </div>
                   <Button size="sm" variant="ghost" fullWidth onClick={() => void detect()}>
-                    Detectar planos y cilindros
+                    {tl("Detectar planos y cilindros")}
                   </Button>
                   <DeviationCard store={store} ui={ui} />
                   <Show when={detections()}>
                     {(list) => (
                       <div class="max-h-48 overflow-y-auto space-y-0.5">
-                        <For each={list()} fallback={<p class="text-xs text-text-dim">No se encontraron zonas</p>}>
+                        <For each={list()} fallback={<p class="text-xs text-text-dim">{tl("No se encontraron zonas")}</p>}>
                           {(d) => (
                             <div class="group flex items-center gap-1 rounded hover:bg-surface">
                               <button class="flex-1 flex justify-between gap-2 px-2 py-1 text-xs text-left" onClick={() => ui.setScanHighlight(d.faces)}>
                                 <span class="text-text">
-                                  {d.shape.type === "plane" ? "Plano" : d.shape.type === "cylinder" ? `Cilindro r ${fmt(d.shape.radius)}` : `Esfera r ${fmt(d.shape.radius)}`}
+                                  {d.shape.type === "plane" ? tl("Plano") : d.shape.type === "cylinder" ? tl("Cilindro r {v1}", { v1: fmt(d.shape.radius) }) : tl("Esfera r {v1}", { v1: fmt(d.shape.radius) })}
                                 </span>
                                 <span class="text-text-dim font-mono">{fmt(d.area, 0)} mm²</span>
                               </button>
                               <Show when={d.shape.type !== "sphere"}>
                                 <button
                                   class="hidden group-hover:block px-1.5 text-[11px] text-accent hover:text-accent-hover"
-                                  title={d.shape.type === "plane" ? "Agregar el contorno como sketch" : "Agregar el cilindro"}
+                                  title={d.shape.type === "plane" ? tl("Agregar el contorno como sketch") : tl("Agregar el cilindro")}
                                   onClick={() =>
                                     void addScan(
                                       d.shape.type === "plane"
@@ -567,7 +568,7 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                                     )
                                   }
                                 >
-                                  Agregar
+                                  {tl("Agregar")}
                                 </button>
                               </Show>
                             </div>
@@ -589,10 +590,9 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
 
 const NoKernel: Component = () => (
   <div class="space-y-2">
-    <p class="text-xs text-warning">Esta compilación no incluye el núcleo CAD.</p>
+    <p class="text-xs text-warning">{tl("Esta compilación no incluye el núcleo CAD.")}</p>
     <p class="text-[11px] text-text-dim leading-relaxed">
-      El diseño paramétrico usa OpenCASCADE. Las versiones publicadas lo traen incluido; al compilar a mano hay que instalarlo (en Arch:
-      pacman -S opencascade).
+      {tl("El diseño paramétrico usa OpenCASCADE. Las versiones publicadas lo traen incluido; al compilar a mano hay que instalarlo (en Arch: pacman -S opencascade).")}
     </p>
   </div>
 );
@@ -612,9 +612,9 @@ const ParametersSection: Component<{ store: CadStore }> = (props) => {
   };
   return (
     <Section
-      title="Parámetros"
+      title={tl("Parámetros")}
       right={
-        <IconButton aria-label="Agregar parámetro" size="sm" variant="ghost" onClick={add}>
+        <IconButton aria-label={tl("Agregar parámetro")} size="sm" variant="ghost" onClick={add}>
           <Icons.Plus size={12} />
         </IconButton>
       }
@@ -623,8 +623,7 @@ const ParametersSection: Component<{ store: CadStore }> = (props) => {
         when={params().length > 0}
         fallback={
           <p class="text-[11px] text-text-dim leading-relaxed">
-            Medidas con nombre para usar en cualquier campo: escribir <span class="font-mono">ancho / 2</span> en una cota o una distancia
-            la deja atada al parámetro.
+            {tl("Medidas con nombre para usar en cualquier campo: escribir")} <span class="font-mono">{tl("ancho / 2")}</span> {tl("en una cota o una distancia la deja atada al parámetro.")}
           </p>
         }
       >
@@ -640,8 +639,8 @@ const ParametersSection: Component<{ store: CadStore }> = (props) => {
                     onChange={(e) => {
                       const name = e.currentTarget.value.trim();
                       if (name === p.name) return;
-                      if (!NAME_RE.test(name)) return setProblem(`«${name}» no sirve como nombre (letras, números y _)`);
-                      if (params().some((q, j) => j !== i() && q.name === name)) return setProblem(`ya hay un parámetro «${name}»`);
+                      if (!NAME_RE.test(name)) return setProblem(tl("«{name}» no sirve como nombre (letras, números y _)", { name }));
+                      if (params().some((q, j) => j !== i() && q.name === name)) return setProblem(tl("ya hay un parámetro «{name}»", { name }));
                       setProblem(undefined);
                       void store.updateParameter(i(), { name });
                     }}
@@ -664,7 +663,7 @@ const ParametersSection: Component<{ store: CadStore }> = (props) => {
                   <span class={clsx("w-14 text-right text-xs font-mono truncate", res()?.error ? "text-error" : "text-text-muted")} title={res()?.error ?? undefined}>
                     {res()?.error ? "error" : res()?.value != null ? fmt(res()!.value!, 3).replace(/,?0+$/, "") : ""}
                   </span>
-                  <IconButton aria-label="Quitar parámetro" size="sm" variant="ghost" onClick={() => void store.removeParameter(i())}>
+                  <IconButton aria-label={tl("Quitar parámetro")} size="sm" variant="ghost" onClick={() => void store.removeParameter(i())}>
                     <Icons.X size={10} />
                   </IconButton>
                 </div>
@@ -688,7 +687,7 @@ const ParametersSection: Component<{ store: CadStore }> = (props) => {
 /** Fecha corta: "8 oct 2026, 14:05" */
 const versionDate = (iso: string) => {
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString("es", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString(locale(), { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 };
 
 /** Versiones con nombre: instantáneas del diseño para volver a verlas, compararlas o restaurarlas */
@@ -704,11 +703,11 @@ const VersionsSection: Component<{ store: CadStore }> = (props) => {
   };
   const input = "min-w-0 px-1.5 py-0.5 rounded bg-surface/40 border border-border text-xs text-text outline-none focus:border-accent";
   return (
-    <Section title="Versiones">
+    <Section title={tl("Versiones")}>
       <div class="space-y-1.5" data-versions>
         <div class="flex gap-1">
           <input
-            aria-label="Nombre de la versión"
+            aria-label={tl("Nombre de la versión")}
             placeholder={nextVersionName(versions())}
             value={name()}
             class={clsx(input, "flex-1")}
@@ -716,12 +715,12 @@ const VersionsSection: Component<{ store: CadStore }> = (props) => {
             onKeyDown={(e) => e.key === "Enter" && save()}
           />
           <Button size="sm" onClick={save} disabled={store.viewing() !== undefined}>
-            Guardar versión
+            {tl("Guardar versión")}
           </Button>
         </div>
         <input
-          aria-label="Nota de la versión"
-          placeholder="Nota (opcional)"
+          aria-label={tl("Nota de la versión")}
+          placeholder={tl("Nota (opcional)")}
           value={note()}
           class={clsx(input, "w-full")}
           onInput={(e) => setNote(e.currentTarget.value)}
@@ -731,7 +730,7 @@ const VersionsSection: Component<{ store: CadStore }> = (props) => {
           when={versions().length > 0}
           fallback={
             <p class="text-[11px] text-text-dim leading-relaxed">
-              Guarda cómo está el diseño ("v1 enviada a imprimir") para verlo después, compararlo con el de ahora o volver a él.
+              {tl("Guarda cómo está el diseño (\"v1 enviada a imprimir\") para verlo después, compararlo con el de ahora o volver a él.")}
             </p>
           }
         >
@@ -746,7 +745,7 @@ const VersionsSection: Component<{ store: CadStore }> = (props) => {
               >
                 <div class="flex items-center gap-1">
                   <input
-                    aria-label={`Nombre de ${row.v.name}`}
+                    aria-label={tl("Nombre de {name}", { name: row.v.name })}
                     value={row.v.name}
                     class={clsx(input, "flex-1 border-transparent bg-transparent font-medium")}
                     onChange={(e) => void store.renameVersion(row.i, e.currentTarget.value)}
@@ -764,21 +763,21 @@ const VersionsSection: Component<{ store: CadStore }> = (props) => {
                     aria-label={`Ver ${row.v.name}`}
                     onClick={() => void store.viewVersion(store.viewing() === row.i ? undefined : row.i)}
                   >
-                    {store.viewing() === row.i ? "Volver" : "Ver"}
+                    {store.viewing() === row.i ? tl("Volver") : tl("Ver")}
                   </Button>
                   <Button
                     size="sm"
                     variant="ghost"
-                    aria-label={`Comparar con ${row.v.name}`}
+                    aria-label={tl("Comparar con {name}", { name: row.v.name })}
                     onClick={() => void store.compareVersion(store.comparison()?.version === row.i ? undefined : row.i)}
                   >
-                    {store.comparison()?.version === row.i ? "Ocultar" : "Comparar"}
+                    {store.comparison()?.version === row.i ? tl("Ocultar") : tl("Comparar")}
                   </Button>
-                  <Button size="sm" variant="ghost" aria-label={`Restaurar ${row.v.name}`} onClick={() => void store.restoreVersion(row.i)}>
-                    Restaurar
+                  <Button size="sm" variant="ghost" aria-label={tl("Restaurar {name}", { name: row.v.name })} onClick={() => void store.restoreVersion(row.i)}>
+                    {tl("Restaurar")}
                   </Button>
                   <span class="flex-1" />
-                  <IconButton aria-label={`Quitar ${row.v.name}`} size="sm" variant="ghost" onClick={() => void store.deleteVersion(row.i)}>
+                  <IconButton aria-label={tl("Quitar {name}", { name: row.v.name })} size="sm" variant="ghost" onClick={() => void store.deleteVersion(row.i)}>
                     <Icons.X size={10} />
                   </IconButton>
                 </div>
@@ -802,7 +801,7 @@ const ConfigurationsSection: Component<{ store: CadStore }> = (props) => {
     while (configs().some((c) => c.name === `Variante ${n}`)) n++;
     const index = configs().length;
     void store.commit((d) => {
-      d.configurations = [...(d.configurations ?? []), { name: `Variante ${n}`, values: {}, suppressed: [] }];
+      d.configurations = [...(d.configurations ?? []), { name: tl("Variante {n}", { n }), values: {}, suppressed: [] }];
       d.active_configuration = index;
     });
   };
@@ -813,9 +812,9 @@ const ConfigurationsSection: Component<{ store: CadStore }> = (props) => {
     });
   return (
     <Section
-      title="Configuraciones"
+      title={tl("Configuraciones")}
       right={
-        <IconButton aria-label="Agregar configuración" size="sm" variant="ghost" onClick={add}>
+        <IconButton aria-label={tl("Agregar configuración")} size="sm" variant="ghost" onClick={add}>
           <Icons.Plus size={12} />
         </IconButton>
       }
@@ -824,13 +823,12 @@ const ConfigurationsSection: Component<{ store: CadStore }> = (props) => {
         when={configs().length > 0}
         fallback={
           <p class="text-[11px] text-text-dim leading-relaxed">
-            Variantes de la misma pieza (M3, M4, M5; con o sin un agujero): cada una cambia parámetros y apaga operaciones. Se pueden exportar
-            todas juntas.
+            {tl("Variantes de la misma pieza (M3, M4, M5; con o sin un agujero): cada una cambia parámetros y apaga operaciones. Se pueden exportar todas juntas.")}
           </p>
         }
       >
         <div class="space-y-1" data-configs>
-          <For each={[{ name: "Base", index: null as number | null }, ...configs().map((c, i) => ({ name: c.name, index: i as number | null }))]}>
+          <For each={[{ name: tl("Base"), index: null as number | null }, ...configs().map((c, i) => ({ name: c.name, index: i as number | null }))]}>
             {(row) => (
               <div class="flex items-center gap-1.5">
                 <button
@@ -838,10 +836,10 @@ const ConfigurationsSection: Component<{ store: CadStore }> = (props) => {
                     "w-3 h-3 shrink-0 rounded-full border",
                     active() === row.index ? "bg-accent border-accent" : "border-border hover:border-accent",
                   )}
-                  aria-label={`Usar ${row.name}`}
+                  aria-label={tl("Usar {name}", { name: row.name })}
                   onClick={() => void store.commit((d) => (d.active_configuration = row.index))}
                 />
-                <Show when={row.index !== null} fallback={<span class="flex-1 text-xs text-text-muted">Base</span>}>
+                <Show when={row.index !== null} fallback={<span class="flex-1 text-xs text-text-muted">{tl("Base")}</span>}>
                   <input
                     value={row.name}
                     class="flex-1 min-w-0 px-1.5 py-0.5 rounded bg-surface/40 border border-border text-xs text-text outline-none focus:border-accent"
@@ -852,7 +850,7 @@ const ConfigurationsSection: Component<{ store: CadStore }> = (props) => {
                     onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
                   />
                   <IconButton
-                    aria-label={`Quitar ${row.name}`}
+                    aria-label={tl("Quitar {name}", { name: row.name })}
                     size="sm"
                     variant="ghost"
                     onClick={() =>
@@ -875,7 +873,7 @@ const ConfigurationsSection: Component<{ store: CadStore }> = (props) => {
         <Show when={active() !== null && configs()[active()!]}>
           {(c) => (
             <div class="space-y-1.5 rounded-md border border-border p-2" data-config-editor>
-              <Show when={params().length} fallback={<p class="text-[11px] text-text-dim">Sin parámetros: crear alguno arriba para variar medidas.</p>}>
+              <Show when={params().length} fallback={<p class="text-[11px] text-text-dim">{tl("Sin parámetros: crear alguno arriba para variar medidas.")}</p>}>
                 <For each={params()}>
                   {(p) => (
                     <label class="flex items-center gap-1.5 text-xs text-text-muted">
@@ -883,7 +881,7 @@ const ConfigurationsSection: Component<{ store: CadStore }> = (props) => {
                       <input
                         value={c().values?.[p.name] ?? ""}
                         placeholder={p.expr}
-                        aria-label={`${p.name} en ${c().name}`}
+                        aria-label={tl("{param} en {config}", { param: p.name, config: c().name })}
                         class="flex-1 min-w-0 px-1.5 py-0.5 rounded bg-surface/40 border border-border text-xs text-text font-mono outline-none focus:border-accent placeholder:text-text-dim"
                         onChange={(e) => {
                           const v = e.currentTarget.value.trim();
@@ -899,7 +897,7 @@ const ConfigurationsSection: Component<{ store: CadStore }> = (props) => {
                   )}
                 </For>
               </Show>
-              <p class="text-[11px] text-text-dim">Vacío: el valor de base. Operaciones apagadas en esta variante:</p>
+              <p class="text-[11px] text-text-dim">{tl("Vacío: el valor de base. Operaciones apagadas en esta variante:")}</p>
               <div class="max-h-40 overflow-y-auto space-y-0.5">
                 <For each={features()}>
                   {(f) => (
@@ -930,7 +928,7 @@ const ConfigurationsSection: Component<{ store: CadStore }> = (props) => {
 // ─── Árbol ────────────────────────────────────────────────────────────────
 
 /** Duración corta: "120 ms", "1,4 s" */
-const formatMs = (ms: number) => (ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toLocaleString("es", { maximumFractionDigits: 1 })} s`);
+const formatMs = (ms: number) => (ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toLocaleString(locale(), { maximumFractionDigits: 1 })} s`);
 
 /** Mensaje de error o advertencia de una operación (nada si está bien) */
 const problem = (st: FeatureState | undefined) => (st?.state === "error" || st?.state === "warning" ? st.message : undefined);
@@ -941,9 +939,9 @@ function featureTone(f: Feature, st: FeatureState | undefined): { tone: "error" 
   if (message) return { tone: "error", why: message };
   const k = f.kind;
   if (k.type !== "sketch" && k.type !== "surface_sketch") return undefined;
-  if (k.sketch.entities.length === 0 && !(k.sketch.texts ?? []).length) return { tone: "empty", why: "Sketch vacío" };
-  if (k.type === "sketch" && k.plane.type === "custom") return { tone: "error", why: "El plano del sketch no está ligado a ninguna referencia" };
-  if (!sketchAnchored(k.sketch)) return { tone: "error", why: "El dibujo no está ligado a ninguna referencia (origen, punto fijo o arista del modelo): se puede mover entero" };
+  if (k.sketch.entities.length === 0 && !(k.sketch.texts ?? []).length) return { tone: "empty", why: tl("Sketch vacío") };
+  if (k.type === "sketch" && k.plane.type === "custom") return { tone: "error", why: tl("El plano del sketch no está ligado a ninguna referencia") };
+  if (!sketchAnchored(k.sketch)) return { tone: "error", why: tl("El dibujo no está ligado a ninguna referencia (origen, punto fijo o arista del modelo): se puede mover entero") };
   return undefined;
 }
 
@@ -1006,7 +1004,7 @@ export const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) =>
   };
   const dropFeature = (d: TreeDrag) => {
     if (d.kind !== "feature") return;
-    if (!store.moveFeatureTo(d.id, d.to)) props.ui.setMessage("No se puede: quedaría antes de lo que necesita o después de lo que la usa");
+    if (!store.moveFeatureTo(d.id, d.to)) props.ui.setMessage(tl("No se puede: quedaría antes de lo que necesita o después de lo que la usa"));
   };
   const dropBar = (d: TreeDrag) => void store.setRollback(d.to >= count() ? null : d.to);
   // Carpetas: tramo [desde, hasta] de cada una y en cuál está cada fila
@@ -1035,11 +1033,11 @@ export const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) =>
   };
   const copyOps = () => {
     const n = store.copyFeatures(selectedIds());
-    props.ui.setMessage(n ? `${n === 1 ? "Operación copiada" : `${n} operaciones copiadas`}: Ctrl+V para pegar` : "Elegir en el árbol lo que se copia");
+    props.ui.setMessage(n === 1 ? tl("Operación copiada: Ctrl+V para pegar") : n ? tl("{n} operaciones copiadas: Ctrl+V para pegar", { n }) : tl("Elegir en el árbol lo que se copia"));
   };
   const pasteOps = async (list?: Feature[]) => {
     const ids = await store.pasteFeatures(list);
-    if (ids.length) props.ui.setMessage(`${ids.length === 1 ? "Pegada una operación" : `Pegadas ${ids.length} operaciones`} (lo que usaban de afuera queda igual)`);
+    if (ids.length) props.ui.setMessage((ids.length === 1 ? tl("Pegada una operación (lo que usaban de afuera queda igual)") : tl("Pegadas {n} operaciones (lo que usaban de afuera queda igual)", { n: ids.length })));
   };
   const onTreeKey = (e: KeyboardEvent) => {
     if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || props.ui.session()) return;
@@ -1076,10 +1074,10 @@ export const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) =>
       </Show>
       <Show when={barGap() === p.index}>
         <div
-          aria-label="Barra de retroceso"
+          aria-label={tl("Barra de retroceso")}
           data-rollback-bar
           class="group/bar relative py-1 cursor-ns-resize touch-none"
-          title={rollback() === null ? "Arrastrar hacia arriba para ver el diseño en un paso anterior" : "Barra de retroceso: lo de abajo no se calcula y lo nuevo se agrega acá"}
+          title={rollback() === null ? tl("Arrastrar hacia arriba para ver el diseño en un paso anterior") : tl("Barra de retroceso: lo de abajo no se calcula y lo nuevo se agrega acá")}
           onPointerDown={(e) => {
             e.preventDefault();
             track(e, () => ({ kind: "rollback", to: barAt() }), dropBar);
@@ -1097,7 +1095,7 @@ export const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) =>
   );
   return (
     <div data-feature-tree>
-      <Show when={count() > 0} fallback={<p class="px-1 text-xs text-text-dim">Todavía no hay operaciones</p>}>
+      <Show when={count() > 0} fallback={<p class="px-1 text-xs text-text-dim">{tl("Todavía no hay operaciones")}</p>}>
         <div class="space-y-0.5" ref={list}>
           {/* Por id: las filas no se rehacen cuando el documento se clona (un
               clic entre mousedown y mouseup se perdería) */}
@@ -1132,7 +1130,7 @@ export const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) =>
                           }
                         >
                           <input
-                            aria-label="Nombre de la carpeta"
+                            aria-label={tl("Nombre de la carpeta")}
                             class="flex-1 min-w-0 px-1 rounded bg-surface/40 border border-accent text-xs text-text outline-none"
                             value={fo().f.name}
                             ref={(el) => setTimeout(() => el.select())}
@@ -1154,10 +1152,10 @@ export const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) =>
                               .some((x) => featureTone(x, store.stateOf(x.id))?.tone === "error")
                           }
                         >
-                          <Icons.Warning size={12} class="text-error shrink-0" aria-label="Algo de la carpeta tiene problemas" />
+                          <Icons.Warning size={12} class="text-error shrink-0" aria-label={tl("Algo de la carpeta tiene problemas")} />
                         </Show>
                         <span class="hidden group-hover:flex" onClick={(e) => e.stopPropagation()}>
-                          <IconButton aria-label="Desagrupar" size="sm" variant="ghost" onClick={() => void store.updateFolder(fo().index, null)}>
+                          <IconButton aria-label={tl("Desagrupar")} size="sm" variant="ghost" onClick={() => void store.updateFolder(fo().index, null)}>
                             <Icons.X size={10} />
                           </IconButton>
                         </span>
@@ -1193,7 +1191,7 @@ export const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) =>
                       when={problem(state())}
                       fallback={<span class="w-3.5 text-center text-text-dim">{FEATURE_LABELS[f().kind.type][0]}</span>}
                     >
-                      <Icons.Warning size={14} aria-label={state()?.state === "warning" ? "Advertencia" : "Error"} class="shrink-0 text-error" />
+                      <Icons.Warning size={14} aria-label={state()?.state === "warning" ? tl("Advertencia") : tl("Error")} class="shrink-0 text-error" />
                     </Show>
                     <span
                       data-tone={tone()?.tone}
@@ -1210,17 +1208,17 @@ export const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) =>
                       {f().name}
                     </span>
                     <Show when={sketchHidden()}>
-                      <Icons.EyeSlash size={12} class="shrink-0 text-text-dim group-hover:hidden" aria-label="Oculto en el visor" />
+                      <Icons.EyeSlash size={12} class="shrink-0 text-text-dim group-hover:hidden" aria-label={tl("Oculto en el visor")} />
                     </Show>
                     {/* Las lentas dicen cuánto tardan (para saber qué frena el diseño) */}
                     <Show when={(state()?.ms ?? 0) >= 100}>
-                      <span class="text-[10px] font-mono text-text-dim group-hover:hidden" title="Lo que tardó la última vez que se calculó">
+                      <span class="text-[10px] font-mono text-text-dim group-hover:hidden" title={tl("Lo que tardó la última vez que se calculó")}>
                         {formatMs(state()!.ms!)}
                       </span>
                     </Show>
                     <span class="hidden group-hover:flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
                       <IconButton
-                        aria-label="Duplicar"
+                        aria-label={tl("Duplicar")}
                         size="sm"
                         variant="ghost"
                         onClick={() => {
@@ -1230,17 +1228,17 @@ export const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) =>
                       >
                         <Icons.Copy size={11} />
                       </IconButton>
-                      <IconButton aria-label="Subir" size="sm" variant="ghost" onClick={() => !store.moveFeature(f().id, -1) && props.ui.setMessage("No se puede: quedaría antes de lo que necesita")}>
+                      <IconButton aria-label={tl("Subir")} size="sm" variant="ghost" onClick={() => !store.moveFeature(f().id, -1) && props.ui.setMessage(tl("No se puede: quedaría antes de lo que necesita"))}>
                         <Icons.CaretDown size={10} class="rotate-180" />
                       </IconButton>
-                      <IconButton aria-label="Bajar" size="sm" variant="ghost" onClick={() => !store.moveFeature(f().id, 1) && props.ui.setMessage("No se puede: otra operación la necesita antes")}>
+                      <IconButton aria-label={tl("Bajar")} size="sm" variant="ghost" onClick={() => !store.moveFeature(f().id, 1) && props.ui.setMessage(tl("No se puede: otra operación la necesita antes"))}>
                         <Icons.CaretDown size={10} />
                       </IconButton>
                       <Show
                         when={["sketch", "plane", "axis", "point", "frame"].includes(f().kind.type)}
                         fallback={
                           <IconButton
-                            aria-label={f().suppressed ? "Activar" : "Suprimir"}
+                            aria-label={f().suppressed ? tl("Activar") : tl("Suprimir")}
                             size="sm"
                             variant="ghost"
                             onClick={() => void store.updateFeature(f().id, (x) => (x.suppressed = !x.suppressed))}
@@ -1250,7 +1248,7 @@ export const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) =>
                         }
                       >
                         <IconButton
-                          aria-label={props.ui.hiddenSketches().includes(f().id) ? "Mostrar en el visor" : "Ocultar en el visor"}
+                          aria-label={props.ui.hiddenSketches().includes(f().id) ? tl("Mostrar en el visor") : tl("Ocultar en el visor")}
                           size="sm"
                           variant="ghost"
                           onClick={() => props.ui.toggleSketchVisible(f().id)}
@@ -1259,10 +1257,10 @@ export const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) =>
                         </IconButton>
                       </Show>
                       <IconButton
-                        aria-label="Borrar"
+                        aria-label={tl("Borrar")}
                         size="sm"
                         variant="ghost"
-                        onClick={() => !store.removeFeature(f().id) && props.ui.setMessage("Otras operaciones dependen de esta: borrarlas primero")}
+                        onClick={() => !store.removeFeature(f().id) && props.ui.setMessage(tl("Otras operaciones dependen de esta: borrarlas primero"))}
                       >
                         <Icons.Trash size={12} />
                       </IconButton>
@@ -1284,26 +1282,26 @@ export const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) =>
                 void store.setRollback(i + 1);
               }}
             >
-              Retroceder hasta acá
+              {tl("Retroceder hasta acá")}
             </Button>
-            <Tooltip content="Mayús+clic en otra fila elige un tramo">
+            <Tooltip content={tl("Mayús+clic en otra fila elige un tramo")}>
               <Button
                 size="sm"
                 variant="ghost"
                 onClick={() => {
                   const r = selRange();
                   if (!r) return;
-                  if (!store.addFolder(r[0], r[1])) return props.ui.setMessage("Se pisa con otra carpeta");
+                  if (!store.addFolder(r[0], r[1])) return props.ui.setMessage(tl("Se pisa con otra carpeta"));
                   setRangeTo(undefined);
                 }}
               >
-                Agrupar en carpeta
+                {tl("Agrupar en carpeta")}
               </Button>
             </Tooltip>
           </Show>
           <Show when={rollback() !== null}>
             <Button size="sm" variant="ghost" onClick={() => void store.setRollback(null)}>
-              Calcular todo
+              {tl("Calcular todo")}
             </Button>
           </Show>
         </div>
@@ -1362,8 +1360,8 @@ export const FeatureEditor: Component<{
         options={[
           ...(["xy", "xz", "yz"] as const).map((k) => ({ value: k, label: PLANE_LABELS[k] })),
           ...refOptions(props.store, "plane", f().id),
-          ...(value.type === "face" ? [{ value: "face", label: lostFace ? "Cara del sólido · no encontrada" : "Cara del sólido" }] : []),
-          ...(value.type === "custom" ? [{ value: "custom", label: "Plano propio" }] : []),
+          ...(value.type === "face" ? [{ value: "face", label: lostFace ? tl("Cara del sólido · no encontrada") : tl("Cara del sólido") }] : []),
+          ...(value.type === "custom" ? [{ value: "custom", label: tl("Plano propio") }] : []),
         ]}
         value={current}
         onChange={(v) => {
@@ -1386,15 +1384,15 @@ export const FeatureEditor: Component<{
         <Show when={open()}>
           <div class="flex items-center gap-1">
             <Show when={props.store.busy()}>
-              <span class="text-[11px] text-text-dim">Calculando…</span>
+              <span class="text-[11px] text-text-dim">{tl("Calculando…")}</span>
             </Show>
             <Tooltip content="Aceptar (Enter)">
-              <IconButton aria-label="Aceptar" size="sm" variant="primary" onClick={() => void props.store.acceptDraft()}>
+              <IconButton aria-label={tl("Aceptar")} size="sm" variant="primary" onClick={() => void props.store.acceptDraft()}>
                 <Icons.Check size={12} />
               </IconButton>
             </Tooltip>
             <Tooltip content="Cancelar (Esc)">
-              <IconButton aria-label="Cancelar" size="sm" onClick={() => void props.store.cancelDraft()}>
+              <IconButton aria-label={tl("Cancelar")} size="sm" onClick={() => void props.store.cancelDraft()}>
                 <Icons.X size={12} />
               </IconButton>
             </Tooltip>
@@ -1445,18 +1443,18 @@ export const FeatureEditor: Component<{
               };
               return (
                 <>
-                  <Row label="Plano">{planeSpecSelect(k().plane, (p) => update((x) => x.type === "sketch" && (x.plane = p)), lost("plane").length > 0)}</Row>
-                  {field("Desplazamiento", "kind.offset", k().offset, (x, v) => x.type === "sketch" && (x.offset = v), "mm")}
-                  <Row label="Horizontal">
+                  <Row label={tl("Plano")}>{planeSpecSelect(k().plane, (p) => update((x) => x.type === "sketch" && (x.plane = p)), lost("plane").length > 0)}</Row>
+                  {field(tl("Desplazamiento"), "kind.offset", k().offset, (x, v) => x.type === "sketch" && (x.offset = v), "mm")}
+                  <Row label={tl("Horizontal")}>
                     <Select
                       options={[
-                        { value: "plane", label: "La del plano" },
+                        { value: "plane", label: tl("La del plano") },
                         ...(k().sketch.x_axis && !["x", "y", "z", "reference"].includes(k().sketch.x_axis!.type)
-                          ? [{ value: "picked", label: k().sketch.x_axis!.type === "edge" ? "Arista del sólido" : "Línea de otro sketch" }]
+                          ? [{ value: "picked", label: k().sketch.x_axis!.type === "edge" ? tl("Arista del sólido") : tl("Línea de otro sketch") }]
                           : []),
-                        { value: "x", label: "Eje X" },
-                        { value: "y", label: "Eje Y" },
-                        { value: "z", label: "Eje Z" },
+                        { value: "x", label: tl("Eje X") },
+                        { value: "y", label: tl("Eje Y") },
+                        { value: "z", label: tl("Eje Z") },
                         ...refOptions(props.store, "axis"),
                       ]}
                       value={(() => {
@@ -1474,14 +1472,14 @@ export const FeatureEditor: Component<{
                   <Button
                     size="sm"
                     fullWidth
-                    title="El eje x del sketch sigue a esa arista (o línea de otro sketch) proyectada al plano; el dibujo queda en su lugar"
+                    title={tl("El eje x del sketch sigue a esa arista (o línea de otro sketch) proyectada al plano; el dibujo queda en su lugar")}
                     variant={(props.ui.pick() as { owner?: string }).owner === `${f().id}:horizontal` ? "primary" : "default"}
                     onClick={() =>
                       props.ui.setPick({
                         kind: "axis",
                         owner: `${f().id}:horizontal`,
                         sketch: -1,
-                        prompt: "Clic en la arista del sólido que da la dirección horizontal del sketch",
+                        prompt: tl("Clic en la arista del sólido que da la dirección horizontal del sketch"),
                         done: (axis) => {
                           // Una línea del mismo sketch no puede orientarlo (dependería de sí mismo)
                           if (axis.type === "sketch_line" && axis.sketch === f().id) return;
@@ -1490,11 +1488,11 @@ export const FeatureEditor: Component<{
                       })
                     }
                   >
-                    Horizontal según una arista
+                    {tl("Horizontal según una arista")}
                   </Button>
                   <Checkbox
                     small
-                    label="Invertir la normal"
+                    label={tl("Invertir la normal")}
                     checked={!!k().sketch.flip_normal}
                     onChange={(c) =>
                       void props.store.commit((d) => {
@@ -1508,10 +1506,10 @@ export const FeatureEditor: Component<{
                     }
                   />
                   <p class="text-[11px] text-text-dim">
-                    {k().sketch.entities.length} entidades · {k().sketch.constraints.length} restricciones · {view()?.regions.length ?? 0} regiones
+                    {k().sketch.entities.length} {tl("entidades ·")} {k().sketch.constraints.length} {tl("restricciones ·")} {view()?.regions.length ?? 0} {tl("regiones")}
                   </p>
                   <Button size="sm" variant="primary" fullWidth icon={<Icons.PaintBrush size={14} />} onClick={() => props.ui.editSketch(f().id)}>
-                    Editar sketch
+                    {tl("Editar sketch")}
                   </Button>
                   {/* El sketch entero como JSON (puntos, entidades, restricciones, plano): para reportar un error y reproducirlo */}
                   <Button
@@ -1524,10 +1522,10 @@ export const FeatureEditor: Component<{
                       const s = props.ui.session();
                       const kind = s?.feature === f().id ? { ...k(), sketch: s.sketch } : k();
                       const code = JSON.stringify({ pinocchio: "sketch", name: f().name, kind });
-                      props.ui.setMessage((await copyText(code)) ? `Sketch «${f().name}» copiado como código (${code.length} caracteres)` : "No se pudo copiar al portapapeles");
+                      props.ui.setMessage((await copyText(code)) ? tl("Sketch «{name}» copiado como código ({length} caracteres)", { name: f().name, length: code.length }) : tl("No se pudo copiar al portapapeles"));
                     }}
                   >
-                    Copiar código
+                    {tl("Copiar código")}
                   </Button>
                 </>
               );
@@ -1541,20 +1539,20 @@ export const FeatureEditor: Component<{
               const setExtent = (e: Extent) => update((x) => x.type === "extrude" && (x.extent = e));
               return (
                 <>
-                  <Row label="Sketch">
+                  <Row label={tl("Sketch")}>
                     <Select options={sketchOptions()} value={String(k().sketch)} onChange={(v) => update((x) => x.type === "extrude" && (x.sketch = +v))} />
                   </Row>
-                  <Row label="Hasta">
+                  <Row label={tl("Hasta")}>
                     <Select
                       options={[
-                        { value: "blind", label: "Distancia" },
-                        { value: "symmetric", label: "Simétrica" },
-                        { value: "two_sides", label: "Dos direcciones" },
-                        { value: "through_all", label: "Atravesar todo" },
-                        { value: "up_to_next", label: "Hasta la siguiente" },
-                        { value: "up_to_face", label: "Hasta una cara" },
-                        { value: "up_to_vertex", label: "Hasta un punto" },
-                        { value: "up_to_scan", label: "Hasta el escaneo" },
+                        { value: "blind", label: tl("Distancia") },
+                        { value: "symmetric", label: tl("Simétrica") },
+                        { value: "two_sides", label: tl("Dos direcciones") },
+                        { value: "through_all", label: tl("Atravesar todo") },
+                        { value: "up_to_next", label: tl("Hasta la siguiente") },
+                        { value: "up_to_face", label: tl("Hasta una cara") },
+                        { value: "up_to_vertex", label: tl("Hasta un punto") },
+                        { value: "up_to_scan", label: tl("Hasta el escaneo") },
                       ]}
                       value={extentType()}
                       onChange={(v) => {
@@ -1575,7 +1573,7 @@ export const FeatureEditor: Component<{
                       ui={props.ui}
                       owner={`${f().id}:hasta`}
                       kind="face"
-                      label="Hasta la cara"
+                      label={tl("Hasta la cara")}
                       lost={lost("extent")}
                       refs={k().extent.type === "up_to_face" ? [(k().extent as { face: FaceRef }).face] : []}
                       onChange={(refs) => {
@@ -1585,7 +1583,7 @@ export const FeatureEditor: Component<{
                     />
                     <Show when={k().extent.type === "up_to_face"}>
                       {field(
-                        "Antes de la cara",
+                        tl("Antes de la cara"),
                         "kind.extent.offset",
                         (k().extent as { offset?: number }).offset ?? 0,
                         (x, v) => x.type === "extrude" && x.extent.type === "up_to_face" && (x.extent.offset = v || undefined),
@@ -1600,20 +1598,20 @@ export const FeatureEditor: Component<{
                           store={props.store}
                           ui={props.ui}
                           owner={`${f().id}:hasta-punto`}
-                          label="Hasta el punto"
+                          label={tl("Hasta el punto")}
                           value={e().point}
                           except={f().id}
                           onChange={(p) => setExtent({ type: "up_to_vertex", point: p })}
                         />
                         <p class="text-[11px] text-text-dim leading-relaxed">
-                          Llega hasta la altura del punto medida sobre la dirección de la extrusión; si el punto está detrás del plano, va hacia ese lado.
+                          {tl("Llega hasta la altura del punto medida sobre la dirección de la extrusión; si el punto está detrás del plano, va hacia ese lado.")}
                         </p>
                       </>
                     )}
                   </Show>
                   <Show when={k().extent.type === "blind" || k().extent.type === "symmetric" || k().extent.type === "two_sides"}>
                     {field(
-                      "Distancia",
+                      tl("Distancia"),
                       "kind.extent.distance",
                       (k().extent as { distance: number }).distance,
                       (x, v) => x.type === "extrude" && "distance" in x.extent && (x.extent.distance = v),
@@ -1622,29 +1620,29 @@ export const FeatureEditor: Component<{
                   </Show>
                   <Show when={k().extent.type === "up_to_scan"}>
                     {field(
-                      "Separación",
+                      tl("Separación"),
                       "kind.extent.offset",
                       (k().extent as { offset: number }).offset,
                       (x, v) => x.type === "extrude" && x.extent.type === "up_to_scan" && (x.extent.offset = v),
                       "mm",
                     )}
                     <p class="text-[11px] text-text-dim leading-relaxed">
-                      Llega hasta la piel del escaneo, aunque sea curva, y queda a esa distancia. Va hacia el lado donde está el escaneo.
+                      {tl("Llega hasta la piel del escaneo, aunque sea curva, y queda a esa distancia. Va hacia el lado donde está el escaneo.")}
                     </p>
                   </Show>
                   <Show when={k().extent.type === "two_sides"}>
                     {field(
-                      "Hacia atrás",
+                      tl("Hacia atrás"),
                       "kind.extent.second",
                       (k().extent as { second: number }).second,
                       (x, v) => x.type === "extrude" && x.extent.type === "two_sides" && (x.extent.second = v),
                       "mm",
                     )}
                   </Show>
-                  {field("Desde el plano a", "kind.start", k().start ?? 0, (x, v) => x.type === "extrude" && (x.start = v || undefined), "mm")}
+                  {field(tl("Desde el plano a"), "kind.start", k().start ?? 0, (x, v) => x.type === "extrude" && (x.start = v || undefined), "mm")}
                   <Checkbox
                     small
-                    label="Dirección propia"
+                    label={tl("Dirección propia")}
                     checked={!!k().direction}
                     onChange={(c) => update((x) => x.type === "extrude" && (x.direction = c ? { type: "z" } : null))}
                   />
@@ -1654,22 +1652,22 @@ export const FeatureEditor: Component<{
                         store={props.store}
                         ui={props.ui}
                         owner={`${f().id}:direccion`}
-                        label="A lo largo de"
+                        label={tl("A lo largo de")}
                         value={d()}
                         except={f().id}
                         onChange={(a) => update((x) => x.type === "extrude" && (x.direction = a))}
                       />
                     )}
                   </Show>
-                  {field("Desmolde", "kind.draft", k().draft ?? 0, (x, v) => x.type === "extrude" && (x.draft = v), "°")}
+                  {field(tl("Desmolde"), "kind.draft", k().draft ?? 0, (x, v) => x.type === "extrude" && (x.draft = v), "°")}
                   <Checkbox
                     small
-                    label="Delgada (solo una pared)"
+                    label={tl("Delgada (solo una pared)")}
                     checked={k().thin != null}
                     onChange={(c) => update((x) => x.type === "extrude" && (x.thin = c ? 1 : null))}
                   />
                   <Show when={k().thin != null}>
-                    {field("Espesor", "kind.thin", k().thin ?? 1, (x, v) => x.type === "extrude" && (x.thin = v), "mm")}
+                    {field(tl("Espesor"), "kind.thin", k().thin ?? 1, (x, v) => x.type === "extrude" && (x.thin = v), "mm")}
                   </Show>
                   <RegionBox
                     ui={props.ui}
@@ -1680,8 +1678,8 @@ export const FeatureEditor: Component<{
                     value={k().regions}
                     onChange={(r) => update((x) => x.type === "extrude" && (x.regions = r))}
                   />
-                  <Checkbox small label="Hacia el otro lado" checked={k().reverse} onChange={(c) => update((x) => x.type === "extrude" && (x.reverse = c))} />
-                  <Row label="Con el sólido">{opSelect(k().op, (o) => update((x) => x.type === "extrude" && (x.op = o)))}</Row>
+                  <Checkbox small label={tl("Hacia el otro lado")} checked={k().reverse} onChange={(c) => update((x) => x.type === "extrude" && (x.reverse = c))} />
+                  <Row label={tl("Con el sólido")}>{opSelect(k().op, (o) => update((x) => x.type === "extrude" && (x.op = o)))}</Row>
                 </>
               );
             }}
@@ -1701,17 +1699,17 @@ export const FeatureEditor: Component<{
               };
               return (
                 <>
-                  <Row label="Sketch">
+                  <Row label={tl("Sketch")}>
                     <Select options={sketchOptions()} value={String(k().sketch)} onChange={(v) => update((x) => x.type === "revolve" && (x.sketch = +v))} />
                   </Row>
-                  <Row label="Eje">
+                  <Row label={tl("Eje")}>
                     <Select
                       options={[
-                        ...(k().axis.type === "edge" ? [{ value: "edge", label: "Arista del sólido" }] : []),
+                        ...(k().axis.type === "edge" ? [{ value: "edge", label: tl("Arista del sólido") }] : []),
                         { value: "x", label: "X" },
                         { value: "y", label: "Y" },
                         { value: "z", label: "Z" },
-                        ...lines().map((l) => ({ value: `line:${l.id}`, label: `Línea ${l.id}${l.construction ? " (construcción)" : ""}` })),
+                        ...lines().map((l) => ({ value: `line:${l.id}`, label: l.construction ? tl("Línea {id} (construcción)", { id: l.id }) : tl("Línea {id}", { id: l.id }) })),
                         ...refOptions(props.store, "axis"),
                       ]}
                       value={axisValue()}
@@ -1736,12 +1734,12 @@ export const FeatureEditor: Component<{
                         kind: "axis",
                         owner: `${f().id}:eje`,
                         sketch: k().sketch,
-                        prompt: "Clic en la línea del sketch (o la arista del sólido) que hace de eje",
+                        prompt: tl("Clic en la línea del sketch (o la arista del sólido) que hace de eje"),
                         done: (axis) => update((x) => x.type === "revolve" && (x.axis = axis)),
                       })
                     }
                   >
-                    Elegir el eje en el visor
+                    {tl("Elegir el eje en el visor")}
                   </Button>
                   <RegionBox
                     ui={props.ui}
@@ -1752,13 +1750,13 @@ export const FeatureEditor: Component<{
                     value={k().regions}
                     onChange={(r) => update((x) => x.type === "revolve" && (x.regions = r))}
                   />
-                  <Row label="Hacia">
+                  <Row label={tl("Hacia")}>
                     <Select
                       options={[
-                        { value: "one", label: "Un lado" },
-                        { value: "symmetric", label: "Simétrica" },
-                        { value: "two_angles", label: "Dos ángulos" },
-                        { value: "up_to_face", label: "Hasta una cara" },
+                        { value: "one", label: tl("Un lado") },
+                        { value: "symmetric", label: tl("Simétrica") },
+                        { value: "two_angles", label: tl("Dos ángulos") },
+                        { value: "up_to_face", label: tl("Hasta una cara") },
                       ]}
                       value={upToFace() ? "up_to_face" : (k().extent?.type ?? "one")}
                       onChange={(v) => {
@@ -1778,7 +1776,7 @@ export const FeatureEditor: Component<{
                       ui={props.ui}
                       owner={`${f().id}:hasta`}
                       kind="face"
-                      label="Hasta la cara"
+                      label={tl("Hasta la cara")}
                       lost={lost("extent")}
                       refs={k().extent?.type === "up_to_face" ? [(k().extent as { face: FaceRef }).face] : []}
                       onChange={(refs) => {
@@ -1786,28 +1784,28 @@ export const FeatureEditor: Component<{
                         setUpToFace(false);
                       }}
                     />
-                    <p class="text-[11px] text-text-dim">Gira hacia el lado del signo del ángulo hasta encontrar la cara (plana o curva).</p>
+                    <p class="text-[11px] text-text-dim">{tl("Gira hacia el lado del signo del ángulo hasta encontrar la cara (plana o curva).")}</p>
                   </Show>
-                  {field("Ángulo", "kind.angle", k().angle, (x, v) => x.type === "revolve" && (x.angle = v), "°")}
+                  {field(tl("Ángulo"), "kind.angle", k().angle, (x, v) => x.type === "revolve" && (x.angle = v), "°")}
                   <Checkbox
                     small
-                    label="Delgada (solo una pared)"
+                    label={tl("Delgada (solo una pared)")}
                     checked={k().thin != null}
                     onChange={(c) => update((x) => x.type === "revolve" && (x.thin = c ? 1 : null))}
                   />
                   <Show when={k().thin != null}>
-                    {field("Espesor", "kind.thin", k().thin ?? 1, (x, v) => x.type === "revolve" && (x.thin = v), "mm")}
+                    {field(tl("Espesor"), "kind.thin", k().thin ?? 1, (x, v) => x.type === "revolve" && (x.thin = v), "mm")}
                   </Show>
                   <Show when={k().extent?.type === "two_angles"}>
                     {field(
-                      "Hacia atrás",
+                      tl("Hacia atrás"),
                       "kind.extent.second",
                       (k().extent as { second: number }).second,
                       (x, v) => x.type === "revolve" && x.extent?.type === "two_angles" && (x.extent.second = v),
                       "°",
                     )}
                   </Show>
-                  <Row label="Con el sólido">{opSelect(k().op, (o) => update((x) => x.type === "revolve" && (x.op = o)))}</Row>
+                  <Row label={tl("Con el sólido")}>{opSelect(k().op, (o) => update((x) => x.type === "revolve" && (x.op = o)))}</Row>
                 </>
               );
             }}
@@ -1815,12 +1813,12 @@ export const FeatureEditor: Component<{
           <Match when={f().kind.type === "primitive" && (f().kind as Extract<FeatureKind, { type: "primitive" }>)}>
             {(k) => {
               const fields: Record<string, [string, string][]> = {
-                box: [["dx", "Ancho (X)"], ["dy", "Fondo (Y)"], ["dz", "Alto (Z)"]],
-                cylinder: [["radius", "Radio"], ["height", "Alto"]],
-                cone: [["r1", "Radio abajo"], ["r2", "Radio arriba"], ["height", "Alto"]],
-                sphere: [["radius", "Radio"]],
-                torus: [["major", "Radio mayor"], ["minor", "Radio menor"]],
-                bolt: [["length", "Largo"]],
+                box: [["dx", "Ancho (X)"], ["dy", tl("Fondo (Y)")], ["dz", "Alto (Z)"]],
+                cylinder: [["radius", tl("Radio")], ["height", tl("Alto")]],
+                cone: [["r1", tl("Radio abajo")], ["r2", tl("Radio arriba")], ["height", tl("Alto")]],
+                sphere: [["radius", tl("Radio")]],
+                torus: [["major", tl("Radio mayor")], ["minor", tl("Radio menor")]],
+                bolt: [["length", tl("Largo")]],
                 nut: [],
                 washer: [],
               };
@@ -1874,7 +1872,7 @@ export const FeatureEditor: Component<{
                       feature={f().id}
                       value={k().link}
                       want={k().shape.type === "bolt" ? "internal" : "external"}
-                      what={k().shape.type === "bolt" ? "el tornillo" : "la tuerca"}
+                      what={k().shape.type === "bolt" ? tl("el tornillo") : tl("la tuerca")}
                       askAlways
                       onChange={setLink}
                     />
@@ -1883,7 +1881,7 @@ export const FeatureEditor: Component<{
                     {(st) => (
                       <>
                         <Show when={!linked()}>
-                          <Row label="Medida">
+                          <Row label={tl("Medida")}>
                             <Select
                               options={METRIC_HOLES.map((m) => ({ value: m.size, label: m.size }))}
                               value={st().size}
@@ -1893,7 +1891,7 @@ export const FeatureEditor: Component<{
                         </Show>
                         <Show when={st().type === "bolt" && (st() as Extract<PrimitiveShape, { type: "bolt" }>)}>
                           {(b) => (
-                            <Row label="Cabeza">
+                            <Row label={tl("Cabeza")}>
                               <Select
                                 options={BOLT_HEADS}
                                 value={b().head ?? "socket"}
@@ -1913,10 +1911,10 @@ export const FeatureEditor: Component<{
                     )}
                   </For>
                   <Show when={k().shape.type === "bolt" || k().shape.type === "nut"}>
-                    <Tooltip content="El filete de verdad (para imprimir); sin marcar, un cilindro liso, más rápido">
+                    <Tooltip content={tl("El filete de verdad (para imprimir); sin marcar, un cilindro liso, más rápido")}>
                       <Checkbox
                         small
-                        label="Rosca modelada"
+                        label={tl("Rosca modelada")}
                         checked={!!(standard() as { modeled?: boolean } | undefined)?.modeled}
                         onChange={(c) =>
                           update((x) => {
@@ -1928,12 +1926,12 @@ export const FeatureEditor: Component<{
                   </Show>
                   <Show when={k().shape.type === "box" && (k().shape as Extract<PrimitiveShape, { type: "box" }>)}>
                     {(bx) => (
-                      <Row label="Origen en">
+                      <Row label={tl("Origen en")}>
                         <Select
                           options={[
-                            { value: "center", label: "El centro" },
-                            { value: "base", label: "El centro de la base" },
-                            { value: "corner", label: "Una esquina" },
+                            { value: "center", label: tl("El centro") },
+                            { value: "base", label: tl("El centro de la base") },
+                            { value: "corner", label: tl("Una esquina") },
                           ]}
                           value={bx().centered_z ? "center" : bx().centered ? "base" : "corner"}
                           onChange={(v) =>
@@ -1951,31 +1949,31 @@ export const FeatureEditor: Component<{
                     {(l) => (
                       <>
                         {field(
-                          k().shape.type === "bolt" ? "Hundido" : "Hasta",
+                          k().shape.type === "bolt" ? tl("Hundido") : tl("Hasta"),
                           "kind.link.offset",
                           l().offset ?? 0,
                           (x, v) => x.type === "primitive" && x.link && (x.link.offset = v),
                           "mm",
                         )}
-                        <Checkbox small label="Por la otra boca" checked={!!l().flip} onChange={(c) => update((x) => x.type === "primitive" && !!x.link && (x.link.flip = c || undefined))} />
+                        <Checkbox small label={tl("Por la otra boca")} checked={!!l().flip} onChange={(c) => update((x) => x.type === "primitive" && !!x.link && (x.link.flip = c || undefined))} />
                         <p class="text-[11px] text-text-dim">
                           {k().shape.type === "bolt"
-                            ? "Va en el eje de la rosca, con la cabeza en la boca; «Hundido» lo mete más (negativo: queda afuera)."
-                            : "Va en el eje de la rosca; «Hasta» es cuánto avanza desde la boca."}
+                            ? tl("Va en el eje de la rosca, con la cabeza en la boca; «Hundido» lo mete más (negativo: queda afuera).")
+                            : tl("Va en el eje de la rosca; «Hasta» es cuánto avanza desde la boca.")}
                         </p>
                       </>
                     )}
                   </Show>
                   <Show when={!linked()}>
                   <div class="space-y-1">
-                    <span class="text-xs text-text-muted">Posición (mm)</span>
+                    <span class="text-xs text-text-muted">{tl("Posición (mm)")}</span>
                     <div class="grid grid-cols-3 gap-1">
                       <For each={["X", "Y", "Z"]}>
                         {(axis, i) => field(axis, `kind.origin.${i()}`, k().origin[i()], (x, v) => x.type === "primitive" && (x.origin[i()] = v))}
                       </For>
                     </div>
                   </div>
-                  <Row label="Eje">
+                  <Row label={tl("Eje")}>
                     <Select
                       options={["x", "y", "z"].map((a) => ({ value: a, label: a.toUpperCase() }))}
                       value={Object.entries(AXIS_DIRS).find(([, d]) => d.every((c, i) => Math.abs(c - k().z[i]) < 1e-9))?.[0] ?? "z"}
@@ -1989,7 +1987,7 @@ export const FeatureEditor: Component<{
                     />
                   </Row>
                   </Show>
-                  <Row label="Con el sólido">{opSelect(k().op, (o) => update((x) => x.type === "primitive" && (x.op = o)))}</Row>
+                  <Row label={tl("Con el sólido")}>{opSelect(k().op, (o) => update((x) => x.type === "primitive" && (x.op = o)))}</Row>
                 </>
               );
             }}
@@ -2005,12 +2003,12 @@ export const FeatureEditor: Component<{
               return (
                 <>
                   <Show when={kind.type === "chamfer"}>
-                    <Row label="Tipo">
+                    <Row label={tl("Tipo")}>
                       <Select
                         options={[
-                          { value: "equal", label: "Igual a los dos lados" },
-                          { value: "distance", label: "Dos distancias" },
-                          { value: "angle", label: "Distancia y ángulo" },
+                          { value: "equal", label: tl("Igual a los dos lados") },
+                          { value: "distance", label: tl("Dos distancias") },
+                          { value: "angle", label: tl("Distancia y ángulo") },
                         ]}
                         value={(k() as { second?: ChamferSecond | null }).second?.type ?? "equal"}
                         onChange={(v) =>
@@ -2023,28 +2021,28 @@ export const FeatureEditor: Component<{
                       />
                     </Row>
                   </Show>
-                  {field(kind.type === "fillet" ? ((k() as { radius2?: number | null }).radius2 != null ? "Radio al comienzo" : "Radio") : "Distancia", kind.type === "fillet" ? "kind.radius" : "kind.distance", value(), (x, v) => {
+                  {field(kind.type === "fillet" ? ((k() as { radius2?: number | null }).radius2 != null ? tl("Radio al comienzo") : tl("Radio")) : tl("Distancia"), kind.type === "fillet" ? "kind.radius" : "kind.distance", value(), (x, v) => {
                     if (x.type === "fillet") x.radius = v;
                     else if (x.type === "chamfer") x.distance = v;
                   }, "mm")}
                   <Show when={kind.type === "fillet"}>
                     <Checkbox
                       small
-                      label="Radio variable"
+                      label={tl("Radio variable")}
                       checked={(k() as { radius2?: number | null }).radius2 != null}
                       onChange={(c) => update((x) => x.type === "fillet" && (x.radius2 = c ? x.radius * 2 : null))}
                     />
                     <Show when={(k() as { radius2?: number | null }).radius2 != null}>
-                      {field("Radio al final", "kind.radius2", (k() as { radius2: number }).radius2, (x, v) => x.type === "fillet" && (x.radius2 = v), "mm")}
+                      {field(tl("Radio al final"), "kind.radius2", (k() as { radius2: number }).radius2, (x, v) => x.type === "fillet" && (x.radius2 = v), "mm")}
                     </Show>
-                    <div class="space-y-1" aria-label="Radios en el medio">
+                    <div class="space-y-1" aria-label={tl("Radios en el medio")}>
                       <For each={(k() as { points?: { at: number; radius: number }[] }).points ?? []}>
                         {(pt, i) => (
                           <div class="flex items-center gap-1" data-fillet-point={i()}>
                             <Num label="En %" value={pt.at * 100} onCommit={(v) => update((x) => x.type === "fillet" && !!x.points && (x.points[i()].at = v / 100))} />
                             <Num label="R" value={pt.radius} onCommit={(v) => update((x) => x.type === "fillet" && !!x.points && (x.points[i()].radius = v))} />
                             <IconButton
-                              aria-label={`Quitar el radio ${i() + 1}`}
+                              aria-label={tl("Quitar el radio {v1}", { v1: i() + 1 })}
                               size="sm"
                               variant="ghost"
                               onClick={() =>
@@ -2076,7 +2074,7 @@ export const FeatureEditor: Component<{
                           })
                         }
                       >
-                        Agregar radio en el medio
+                        {tl("Agregar radio en el medio")}
                       </Button>
                     </div>
                   </Show>
@@ -2085,11 +2083,11 @@ export const FeatureEditor: Component<{
                       <>
                         <Show
                           when={sec().type === "angle"}
-                          fallback={field("Otra distancia", "kind.second.distance", (sec() as { distance: number }).distance, (x, v) => x.type === "chamfer" && x.second?.type === "distance" && (x.second.distance = v), "mm")}
+                          fallback={field(tl("Otra distancia"), "kind.second.distance", (sec() as { distance: number }).distance, (x, v) => x.type === "chamfer" && x.second?.type === "distance" && (x.second.distance = v), "mm")}
                         >
-                          {field("Ángulo", "kind.second.degrees", (sec() as { degrees: number }).degrees, (x, v) => x.type === "chamfer" && x.second?.type === "angle" && (x.second.degrees = v), "°")}
+                          {field(tl("Ángulo"), "kind.second.degrees", (sec() as { degrees: number }).degrees, (x, v) => x.type === "chamfer" && x.second?.type === "angle" && (x.second.degrees = v), "°")}
                         </Show>
-                        <Checkbox small label="Medir desde la otra cara" checked={sec().flip} onChange={(c) => update((x) => x.type === "chamfer" && !!x.second && (x.second.flip = c))} />
+                        <Checkbox small label={tl("Medir desde la otra cara")} checked={sec().flip} onChange={(c) => update((x) => x.type === "chamfer" && !!x.second && (x.second.flip = c))} />
                       </>
                     )}
                   </Show>
@@ -2098,7 +2096,7 @@ export const FeatureEditor: Component<{
                     ui={props.ui}
                     owner={`${f().id}:aristas`}
                     kind="edges"
-                    label="Aristas"
+                    label={tl("Aristas")}
                     live={f().id}
                     lost={lost("edges")}
                     refs={(k() as { edges: EdgeRef[] }).edges}
@@ -2120,13 +2118,13 @@ export const FeatureEditor: Component<{
                   <Show
                     when={kind.type === "draft" && (k() as Extract<FeatureKind, { type: "draft" }>)}
                     fallback={
-                      field("Grosor de pared", "kind.thickness", (k() as { thickness: number }).thickness, (x, v) => x.type === "shell" && (x.thickness = v), "mm")
+                      field(tl("Grosor de pared"), "kind.thickness", (k() as { thickness: number }).thickness, (x, v) => x.type === "shell" && (x.thickness = v), "mm")
                     }
                   >
                     {(d) => (
                       <>
-                        {field("Ángulo", "kind.angle", d().angle, (x, v) => x.type === "draft" && (x.angle = v), "°")}
-                        <Row label="Plano neutro">{planeSpecSelect(d().neutral, (p) => update((x) => x.type === "draft" && (x.neutral = p)), lost("neutral").length > 0)}</Row>
+                        {field(tl("Ángulo"), "kind.angle", d().angle, (x, v) => x.type === "draft" && (x.angle = v), "°")}
+                        <Row label={tl("Plano neutro")}>{planeSpecSelect(d().neutral, (p) => update((x) => x.type === "draft" && (x.neutral = p)), lost("neutral").length > 0)}</Row>
                       </>
                     )}
                   </Show>
@@ -2137,7 +2135,7 @@ export const FeatureEditor: Component<{
                       owner={`${f().id}:otras`}
                       kind="faces"
                       optional
-                      label="Caras con otro espesor"
+                      label={tl("Caras con otro espesor")}
                       refs={((k() as { overrides?: { face: FaceRef }[] }).overrides ?? []).map((o) => o.face)}
                       onChange={(refs) =>
                         update((x) => {
@@ -2151,7 +2149,7 @@ export const FeatureEditor: Component<{
                     />
                     <For each={(k() as { overrides?: { face: FaceRef; thickness: number }[] }).overrides ?? []}>
                       {(o, i) =>
-                        field(`Espesor cara ${i() + 1}`, `kind.overrides.${i()}.thickness`, o.thickness, (x, v) => x.type === "shell" && !!x.overrides && (x.overrides[i()].thickness = v), "mm")
+                        field(tl("Espesor cara {v1}", { v1: i() + 1 }), `kind.overrides.${i()}.thickness`, o.thickness, (x, v) => x.type === "shell" && !!x.overrides && (x.overrides[i()].thickness = v), "mm")
                       }
                     </For>
                   </Show>
@@ -2160,7 +2158,7 @@ export const FeatureEditor: Component<{
                     ui={props.ui}
                     owner={`${f().id}:caras`}
                     kind="faces"
-                    label={kind.type === "shell" ? "Caras abiertas" : "Caras"}
+                    label={kind.type === "shell" ? tl("Caras abiertas") : tl("Caras")}
                     lost={lost("faces")}
                     refs={(k() as { faces: FaceRef[] }).faces}
                     onChange={(refs) =>
@@ -2179,8 +2177,8 @@ export const FeatureEditor: Component<{
                 <ToolChecklist tools={props.tools.filter((t) => t.id !== f().id)} value={k().features} onChange={(ids) => update((x) => x.type === "pattern" && (x.features = ids))} />
                 <Show when={k().pattern.type === "table" && (k().pattern as Extract<PatternKind, { type: "table" }>)}>
                   {(t) => (
-                    <div class="space-y-1" aria-label="Tabla de copias">
-                      <span class="text-xs text-text-muted">Desplazamiento de cada copia (mm)</span>
+                    <div class="space-y-1" aria-label={tl("Tabla de copias")}>
+                      <span class="text-xs text-text-muted">{tl("Desplazamiento de cada copia (mm)")}</span>
                       <For each={t().offsets}>
                         {(row, i) => (
                           <div class="flex items-center gap-1" data-table-row={i()}>
@@ -2195,7 +2193,7 @@ export const FeatureEditor: Component<{
                               )}
                             </For>
                             <IconButton
-                              aria-label={`Quitar la fila ${i() + 1}`}
+                              aria-label={tl("Quitar la fila {v1}", { v1: i() + 1 })}
                               size="sm"
                               variant="ghost"
                               onClick={() => update((x) => x.type === "pattern" && x.pattern.type === "table" && x.pattern.offsets.splice(i(), 1))}
@@ -2216,7 +2214,7 @@ export const FeatureEditor: Component<{
                           })
                         }
                       >
-                        Agregar fila
+                        {tl("Agregar fila")}
                       </Button>
                     </div>
                   )}
@@ -2224,7 +2222,7 @@ export const FeatureEditor: Component<{
                 <Show when={k().pattern.type === "fill" && (k().pattern as Extract<PatternKind, { type: "fill" }>)}>
                   {(fl) => (
                     <>
-                      <Row label="Región">
+                      <Row label={tl("Región")}>
                         <Select
                           options={sketchOptions()}
                           value={String(fl().sketch)}
@@ -2240,12 +2238,11 @@ export const FeatureEditor: Component<{
                         value={fl().regions}
                         onChange={(r) => update((x) => x.type === "pattern" && x.pattern.type === "fill" && (x.pattern.regions = r))}
                       />
-                      {field("Separación", "kind.pattern.spacing", fl().spacing, (x, v) => x.type === "pattern" && x.pattern.type === "fill" && (x.pattern.spacing = v), "mm")}
-                      {field("Margen al borde", "kind.pattern.margin", fl().margin, (x, v) => x.type === "pattern" && x.pattern.type === "fill" && (x.pattern.margin = v), "mm")}
-                      <Checkbox small label="Grilla hexagonal" checked={fl().hex} onChange={(c) => update((x) => x.type === "pattern" && x.pattern.type === "fill" && (x.pattern.hex = c))} />
+                      {field(tl("Separación"), "kind.pattern.spacing", fl().spacing, (x, v) => x.type === "pattern" && x.pattern.type === "fill" && (x.pattern.spacing = v), "mm")}
+                      {field(tl("Margen al borde"), "kind.pattern.margin", fl().margin, (x, v) => x.type === "pattern" && x.pattern.type === "fill" && (x.pattern.margin = v), "mm")}
+                      <Checkbox small label={tl("Grilla hexagonal")} checked={fl().hex} onChange={(c) => update((x) => x.type === "pattern" && x.pattern.type === "fill" && (x.pattern.hex = c))} />
                       <p class="text-[11px] text-text-dim">
-                        Copias a la separación elegida dentro de la región, con el centro a no menos del margen del borde. La grilla pasa por la operación
-                        original.
+                        {tl("Copias a la separación elegida dentro de la región, con el centro a no menos del margen del borde. La grilla pasa por la operación original.")}
                       </p>
                     </>
                   )}
@@ -2258,7 +2255,7 @@ export const FeatureEditor: Component<{
                     };
                     return (
                       <>
-                        <Row label="Puntos de">
+                        <Row label={tl("Puntos de")}>
                           <Select
                             options={sketchOptions()}
                             value={String(pt().sketch)}
@@ -2266,8 +2263,7 @@ export const FeatureEditor: Component<{
                           />
                         </Row>
                         <p class="text-[11px] text-text-dim">
-                          {pt().points.length ? `${pt().points.length} puntos elegidos` : `${loose()} puntos sueltos`}: una copia en cada uno, desde el más cercano a lo que se
-                          repite (ahí queda el original).
+                          {pt().points.length ? `${pt().points.length} puntos elegidos` : `${loose()} puntos sueltos`}{tl(": una copia en cada uno, desde el más cercano a lo que se repite (ahí queda el original).")}
                         </p>
                       </>
                     );
@@ -2278,7 +2274,7 @@ export const FeatureEditor: Component<{
                   when={k().pattern.type !== "curve"}
                   fallback={
                     <>
-                      <Row label="A lo largo de">
+                      <Row label={tl("A lo largo de")}>
                         <Select
                           options={[...sketchOptions(), ...refOptions(props.store, "curve").map((o) => ({ value: o.value.replace("ref:", "curve:"), label: o.label }))]}
                           value={(() => {
@@ -2295,8 +2291,8 @@ export const FeatureEditor: Component<{
                           }
                         />
                       </Row>
-                      {field("Cantidad", "kind.pattern.count", (k().pattern as { count: number }).count, (x, v) => x.type === "pattern" && "count" in x.pattern && (x.pattern.count = Math.max(2, Math.round(v))))}
-                      <p class="text-[11px] text-text-dim">Las copias se reparten de punta a punta del camino, sin girar.</p>
+                      {field(tl("Cantidad"), "kind.pattern.count", (k().pattern as { count: number }).count, (x, v) => x.type === "pattern" && "count" in x.pattern && (x.pattern.count = Math.max(2, Math.round(v))))}
+                      <p class="text-[11px] text-text-dim">{tl("Las copias se reparten de punta a punta del camino, sin girar.")}</p>
                     </>
                   }
                 >
@@ -2304,7 +2300,7 @@ export const FeatureEditor: Component<{
                   when={k().pattern.type === "linear" && (k().pattern as Extract<PatternKind, { type: "linear" }>)}
                   fallback={
                     <>
-                      <Row label="Eje">
+                      <Row label={tl("Eje")}>
                         <Select
                           options={[...["x", "y", "z"].map((a) => ({ value: a, label: a.toUpperCase() })), ...refOptions(props.store, "axis")]}
                           value={(() => {
@@ -2321,25 +2317,25 @@ export const FeatureEditor: Component<{
                           }
                         />
                       </Row>
-                      {field("Cantidad", "kind.pattern.count", (k().pattern as { count: number }).count, (x, v) => x.type === "pattern" && "count" in x.pattern && (x.pattern.count = Math.max(2, Math.round(v))))}
-                      {field("Ángulo total", "kind.pattern.angle", (k().pattern as { angle: number }).angle, (x, v) => x.type === "pattern" && x.pattern.type === "circular" && (x.pattern.angle = v), "°")}
+                      {field(tl("Cantidad"), "kind.pattern.count", (k().pattern as { count: number }).count, (x, v) => x.type === "pattern" && "count" in x.pattern && (x.pattern.count = Math.max(2, Math.round(v))))}
+                      {field(tl("Ángulo total"), "kind.pattern.angle", (k().pattern as { angle: number }).angle, (x, v) => x.type === "pattern" && x.pattern.type === "circular" && (x.pattern.angle = v), "°")}
                     </>
                   }
                 >
                   {(lin) => (
                     <>
-                      <Row label="Dirección">
+                      <Row label={tl("Dirección")}>
                         <Select
                           options={["x", "y", "z"].map((a) => ({ value: a, label: a.toUpperCase() }))}
                           value={Object.entries(AXIS_DIRS).find(([, d]) => d.every((c, i) => Math.abs(c - lin().direction[i]) < 1e-9))?.[0] ?? "x"}
                           onChange={(v) => update((x) => x.type === "pattern" && x.pattern.type === "linear" && (x.pattern.direction = AXIS_DIRS[v]))}
                         />
                       </Row>
-                      {field("Cantidad", "kind.pattern.count", lin().count, (x, v) => x.type === "pattern" && "count" in x.pattern && (x.pattern.count = Math.max(2, Math.round(v))))}
-                      {field("Separación", "kind.pattern.spacing", lin().spacing, (x, v) => x.type === "pattern" && x.pattern.type === "linear" && (x.pattern.spacing = v), "mm")}
+                      {field(tl("Cantidad"), "kind.pattern.count", lin().count, (x, v) => x.type === "pattern" && "count" in x.pattern && (x.pattern.count = Math.max(2, Math.round(v))))}
+                      {field(tl("Separación"), "kind.pattern.spacing", lin().spacing, (x, v) => x.type === "pattern" && x.pattern.type === "linear" && (x.pattern.spacing = v), "mm")}
                       <Checkbox
                         small
-                        label="También en otra dirección"
+                        label={tl("También en otra dirección")}
                         checked={!!lin().second}
                         onChange={(c) =>
                           update((x) => {
@@ -2352,7 +2348,7 @@ export const FeatureEditor: Component<{
                       <Show when={lin().second}>
                         {(s2) => (
                           <>
-                            <Row label="Dirección 2">
+                            <Row label={tl("Dirección 2")}>
                               <Select
                                 options={["x", "y", "z"].map((a) => ({ value: a, label: a.toUpperCase() }))}
                                 value={Object.entries(AXIS_DIRS).find(([, d]) => d.every((c, i) => Math.abs(c - s2().direction[i]) < 1e-9))?.[0] ?? "y"}
@@ -2360,13 +2356,13 @@ export const FeatureEditor: Component<{
                               />
                             </Row>
                             {field(
-                              "Cantidad 2",
+                              tl("Cantidad 2"),
                               "kind.pattern.second.count",
                               s2().count,
                               (x, v) => x.type === "pattern" && x.pattern.type === "linear" && x.pattern.second && (x.pattern.second.count = Math.max(1, Math.round(v))),
                             )}
                             {field(
-                              "Separación 2",
+                              tl("Separación 2"),
                               "kind.pattern.second.spacing",
                               s2().spacing,
                               (x, v) => x.type === "pattern" && x.pattern.type === "linear" && x.pattern.second && (x.pattern.second.spacing = v),
@@ -2388,10 +2384,10 @@ export const FeatureEditor: Component<{
             {(k) => (
               <>
                 <ToolChecklist tools={props.tools.filter((t) => t.id !== f().id)} value={k().features} onChange={(ids) => update((x) => x.type === "mirror" && (x.features = ids))} />
-                <Row label="Plano">{planeSpecSelect(k().plane, (p) => update((x) => x.type === "mirror" && (x.plane = p)))}</Row>
+                <Row label={tl("Plano")}>{planeSpecSelect(k().plane, (p) => update((x) => x.type === "mirror" && (x.plane = p)))}</Row>
                 <Checkbox
                   small
-                  label="El reflejo como pieza aparte"
+                  label={tl("El reflejo como pieza aparte")}
                   checked={k().op === "new"}
                   onChange={(c) => update((x) => x.type === "mirror" && (x.op = c ? "new" : undefined))}
                 />
@@ -2413,7 +2409,7 @@ export const FeatureEditor: Component<{
                             ui={props.ui}
                             owner={`${f().id}:aristas`}
                             kind="edges"
-                            label="Aristas"
+                            label={tl("Aristas")}
                             lost={lost("edges")}
                             refs={d().edges}
                             onChange={(refs) => setDef({ ...d(), edges: refs as EdgeRef[] })}
@@ -2428,14 +2424,14 @@ export const FeatureEditor: Component<{
                               />
                             )}
                           </For>
-                          <p class="text-[11px] text-text-dim">Las aristas y curvas se encadenan por sus extremos en una sola.</p>
+                          <p class="text-[11px] text-text-dim">{tl("Las aristas y curvas se encadenan por sus extremos en una sola.")}</p>
                         </>
                       )}
                     </Match>
                     <Match when={def().type === "projected" && (def() as Extract<CurveDef, { type: "projected" }>)}>
                       {(d) => (
                         <>
-                          <Row label="Curvas de">
+                          <Row label={tl("Curvas de")}>
                             <Select options={sketchOptions()} value={String(d().sketch)} onChange={(v) => setDef({ ...d(), sketch: +v, entities: [] })} />
                           </Row>
                           <SelectionBox
@@ -2443,20 +2439,20 @@ export const FeatureEditor: Component<{
                             ui={props.ui}
                             owner={`${f().id}:caras`}
                             kind="faces"
-                            label="Sobre las caras"
+                            label={tl("Sobre las caras")}
                             lost={lost("faces")}
                             refs={d().faces}
                             onChange={(refs) => setDef({ ...d(), faces: refs as FaceRef[] })}
                           />
-                          <p class="text-[11px] text-text-dim">Se proyectan a lo largo de la normal del sketch.</p>
+                          <p class="text-[11px] text-text-dim">{tl("Se proyectan a lo largo de la normal del sketch.")}</p>
                         </>
                       )}
                     </Match>
                     <Match when={def().type === "intersection" && (def() as Extract<CurveDef, { type: "intersection" }>)}>
                       {(d) => (
                         <>
-                          <SelectionBox store={props.store} ui={props.ui} owner={`${f().id}:a`} kind="faces" label="Caras" lost={lost("a")} refs={d().a} onChange={(refs) => setDef({ ...d(), a: refs as FaceRef[] })} />
-                          <SelectionBox store={props.store} ui={props.ui} owner={`${f().id}:b`} kind="faces" label="Con las caras" lost={lost("b")} refs={d().b} onChange={(refs) => setDef({ ...d(), b: refs as FaceRef[] })} />
+                          <SelectionBox store={props.store} ui={props.ui} owner={`${f().id}:a`} kind="faces" label={tl("Caras")} lost={lost("a")} refs={d().a} onChange={(refs) => setDef({ ...d(), a: refs as FaceRef[] })} />
+                          <SelectionBox store={props.store} ui={props.ui} owner={`${f().id}:b`} kind="faces" label={tl("Con las caras")} lost={lost("b")} refs={d().b} onChange={(refs) => setDef({ ...d(), b: refs as FaceRef[] })} />
                         </>
                       )}
                     </Match>
@@ -2471,14 +2467,14 @@ export const FeatureEditor: Component<{
                                     store={props.store}
                                     ui={props.ui}
                                     owner={`${f().id}:p${i()}`}
-                                    label={`Punto ${i() + 1}`}
+                                    label={tl("Punto {v1}", { v1: i() + 1 })}
                                     value={p}
                                     except={f().id}
                                     onChange={(q) => setDef({ ...d(), points: d().points.map((x, k) => (k === i() ? q : x)) })}
                                   />
                                 </div>
                                 <IconButton
-                                  aria-label={`Quitar el punto ${i() + 1}`}
+                                  aria-label={tl("Quitar el punto {v1}", { v1: i() + 1 })}
                                   size="sm"
                                   variant="ghost"
                                   onClick={() => setDef({ ...d(), points: d().points.filter((_, k) => k !== i()) })}
@@ -2497,9 +2493,9 @@ export const FeatureEditor: Component<{
                               setDef({ ...d(), points: [...d().points, { type: "at", point: at }] });
                             }}
                           >
-                            Agregar punto
+                            {tl("Agregar punto")}
                           </Button>
-                          <Checkbox small label="Cerrada" checked={d().closed} onChange={(c) => setDef({ ...d(), closed: c })} />
+                          <Checkbox small label={tl("Cerrada")} checked={d().closed} onChange={(c) => setDef({ ...d(), closed: c })} />
                         </>
                       )}
                     </Match>
@@ -2516,29 +2512,29 @@ export const FeatureEditor: Component<{
                   ui={props.ui}
                   owner={`${f().id}:bordes`}
                   kind="edges"
-                  label="Bordes a extender"
+                  label={tl("Bordes a extender")}
                   lost={lost("edges")}
                   refs={k().edges}
                   onChange={(refs) => update((x) => x.type === "surface_extend" && (x.edges = refs as EdgeRef[]))}
                 />
-                {field("Distancia", "kind.distance", k().distance, (x, v) => x.type === "surface_extend" && (x.distance = v), "mm")}
-                <p class="text-[11px] text-text-dim">Bordes libres de superficies: cada cara se alarga por ese lado siguiendo su forma.</p>
+                {field(tl("Distancia"), "kind.distance", k().distance, (x, v) => x.type === "surface_extend" && (x.distance = v), "mm")}
+                <p class="text-[11px] text-text-dim">{tl("Bordes libres de superficies: cada cara se alarga por ese lado siguiendo su forma.")}</p>
               </>
             )}
           </Match>
           <Match when={f().kind.type === "wrap" && (f().kind as Extract<FeatureKind, { type: "wrap" }>)}>
             {(k) => (
               <>
-                <Row label="Sketch envuelto">
+                <Row label={tl("Sketch envuelto")}>
                   <Select
                     options={(props.store.doc()?.features ?? []).filter((x) => x.kind.type === "surface_sketch").map((x) => ({ value: String(x.id), label: x.name }))}
                     value={String(k().sketch)}
                     onChange={(v) => update((x) => x.type === "wrap" && (x.sketch = +v))}
                   />
                 </Row>
-                {field("Profundidad", "kind.depth", k().depth, (x, v) => x.type === "wrap" && (x.depth = v), "mm")}
-                <Checkbox small label="Relieve (sobresale)" checked={k().emboss} onChange={(c) => update((x) => x.type === "wrap" && (x.emboss = c))} />
-                <p class="text-[11px] text-text-dim">Las regiones cerradas del sketch, siguiendo la forma de la cara: hundidas (grabado) o levantadas (relieve).</p>
+                {field(tl("Profundidad"), "kind.depth", k().depth, (x, v) => x.type === "wrap" && (x.depth = v), "mm")}
+                <Checkbox small label={tl("Relieve (sobresale)")} checked={k().emboss} onChange={(c) => update((x) => x.type === "wrap" && (x.emboss = c))} />
+                <p class="text-[11px] text-text-dim">{tl("Las regiones cerradas del sketch, siguiendo la forma de la cara: hundidas (grabado) o levantadas (relieve).")}</p>
               </>
             )}
           </Match>
@@ -2550,16 +2546,16 @@ export const FeatureEditor: Component<{
                   ui={props.ui}
                   owner={`${f().id}:caras`}
                   kind="faces"
-                  label="Caras a partir"
+                  label={tl("Caras a partir")}
                   lost={lost("faces")}
                   refs={k().faces}
                   onChange={(refs) => update((x) => x.type === "split_faces" && (x.faces = refs as FaceRef[]))}
                 />
-                <Row label="Con">
+                <Row label={tl("Con")}>
                   <Select
                     options={[
-                      { value: "plane", label: "Un plano" },
-                      { value: "silhouette", label: "La silueta (vista desde un eje)" },
+                      { value: "plane", label: tl("Un plano") },
+                      { value: "silhouette", label: tl("La silueta (vista desde un eje)") },
                       ...refOptions(props.store, "curve", f().id).map((o) => ({ value: o.value.replace("ref:", "curve:"), label: o.label })),
                     ]}
                     value={k().tool.type === "plane" ? "plane" : k().tool.type === "silhouette" ? "silhouette" : `curve:${(k().tool as { feature: number }).feature}`}
@@ -2579,7 +2575,7 @@ export const FeatureEditor: Component<{
                       store={props.store}
                       ui={props.ui}
                       owner={`${f().id}:mirada`}
-                      label="Mirando a lo largo de"
+                      label={tl("Mirando a lo largo de")}
                       value={t().direction}
                       except={f().id}
                       onChange={(a) => update((x) => x.type === "split_faces" && (x.tool = { type: "silhouette", direction: a }))}
@@ -2587,9 +2583,9 @@ export const FeatureEditor: Component<{
                   )}
                 </Show>
                 <Show when={k().tool.type === "plane" && (k().tool as { plane: PlaneSpec })}>
-                  {(t) => <Row label="Plano">{planeSpecSelect(t().plane, (p) => update((x) => x.type === "split_faces" && (x.tool = { type: "plane", plane: p })))}</Row>}
+                  {(t) => <Row label={tl("Plano")}>{planeSpecSelect(t().plane, (p) => update((x) => x.type === "split_faces" && (x.tool = { type: "plane", plane: p })))}</Row>}
                 </Show>
-                <p class="text-[11px] text-text-dim">Las caras quedan partidas (para desmoldes o colores distintos); la pieza sigue entera.</p>
+                <p class="text-[11px] text-text-dim">{tl("Las caras quedan partidas (para desmoldes o colores distintos); la pieza sigue entera.")}</p>
               </>
             )}
           </Match>
@@ -2601,14 +2597,14 @@ export const FeatureEditor: Component<{
                   ui={props.ui}
                   owner={`${f().id}:caras`}
                   kind="faces"
-                  label="Caras a girar"
+                  label={tl("Caras a girar")}
                   lost={lost("faces")}
                   refs={k().faces}
                   onChange={(refs) => update((x) => x.type === "rotate_face" && (x.faces = refs as FaceRef[]))}
                 />
-                <AxisField store={props.store} ui={props.ui} owner={`${f().id}:eje`} label="Bisagra" value={k().axis} except={f().id} onChange={(a) => update((x) => x.type === "rotate_face" && (x.axis = a))} />
-                {field("Ángulo", "kind.angle", k().angle, (x, v) => x.type === "rotate_face" && (x.angle = v), "°")}
-                <p class="text-[11px] text-text-dim">La bisagra suele ser una arista de la cara. Lo que sale de la pieza suma material y lo que entra resta.</p>
+                <AxisField store={props.store} ui={props.ui} owner={`${f().id}:eje`} label={tl("Bisagra")} value={k().axis} except={f().id} onChange={(a) => update((x) => x.type === "rotate_face" && (x.axis = a))} />
+                {field(tl("Ángulo"), "kind.angle", k().angle, (x, v) => x.type === "rotate_face" && (x.angle = v), "°")}
+                <p class="text-[11px] text-text-dim">{tl("La bisagra suele ser una arista de la cara. Lo que sale de la pieza suma material y lo que entra resta.")}</p>
               </>
             )}
           </Match>
@@ -2617,7 +2613,7 @@ export const FeatureEditor: Component<{
               <>
                 <Show
                   when={k().vertex.type === "picked" && (k().vertex as Extract<PointSpec, { type: "picked" }>)}
-                  fallback={<PointField store={props.store} ui={props.ui} owner={`${f().id}:vertice`} label="Vértice" value={k().vertex} except={f().id} onChange={(p) => update((x) => x.type === "vertex_chamfer" && (x.vertex = p))} />}
+                  fallback={<PointField store={props.store} ui={props.ui} owner={`${f().id}:vertice`} label={tl("Vértice")} value={k().vertex} except={f().id} onChange={(p) => update((x) => x.type === "vertex_chamfer" && (x.vertex = p))} />}
                 >
                   {(v) => (
                     <RefPicksBox
@@ -2631,33 +2627,32 @@ export const FeatureEditor: Component<{
                     />
                   )}
                 </Show>
-                {field("Distancia", "kind.distance", k().distance, (x, v) => x.type === "vertex_chamfer" && (x.distance = v), "mm")}
-                <p class="text-[11px] text-text-dim">Clic en el vértice (una esquina de tres aristas rectas): se corta a esa distancia sobre cada arista.</p>
+                {field(tl("Distancia"), "kind.distance", k().distance, (x, v) => x.type === "vertex_chamfer" && (x.distance = v), "mm")}
+                <p class="text-[11px] text-text-dim">{tl("Clic en el vértice (una esquina de tres aristas rectas): se corta a esa distancia sobre cada arista.")}</p>
               </>
             )}
           </Match>
           <Match when={f().kind.type === "full_round" && (f().kind as Extract<FeatureKind, { type: "full_round" }>)}>
             {(k) => (
               <>
-                <SelectionBox store={props.store} ui={props.ui} owner={`${f().id}:a`} kind="face" label="Un costado" lost={lost("side_a" as MissingRef["field"])} refs={k().side_a ? [k().side_a] : []} onChange={(r) => r[0] && update((x) => x.type === "full_round" && (x.side_a = r[0] as FaceRef))} />
-                <SelectionBox store={props.store} ui={props.ui} owner={`${f().id}:m`} kind="face" label="La cara del medio" lost={lost("middle" as MissingRef["field"])} refs={k().middle ? [k().middle] : []} onChange={(r) => r[0] && update((x) => x.type === "full_round" && (x.middle = r[0] as FaceRef))} />
-                <SelectionBox store={props.store} ui={props.ui} owner={`${f().id}:b`} kind="face" label="El otro costado" lost={lost("side_b" as MissingRef["field"])} refs={k().side_b ? [k().side_b] : []} onChange={(r) => r[0] && update((x) => x.type === "full_round" && (x.side_b = r[0] as FaceRef))} />
-                <p class="text-[11px] text-text-dim">El radio es la mitad de la distancia entre los costados (por ahora, caras planas).</p>
+                <SelectionBox store={props.store} ui={props.ui} owner={`${f().id}:a`} kind="face" label={tl("Un costado")} lost={lost("side_a" as MissingRef["field"])} refs={k().side_a ? [k().side_a] : []} onChange={(r) => r[0] && update((x) => x.type === "full_round" && (x.side_a = r[0] as FaceRef))} />
+                <SelectionBox store={props.store} ui={props.ui} owner={`${f().id}:m`} kind="face" label={tl("La cara del medio")} lost={lost("middle" as MissingRef["field"])} refs={k().middle ? [k().middle] : []} onChange={(r) => r[0] && update((x) => x.type === "full_round" && (x.middle = r[0] as FaceRef))} />
+                <SelectionBox store={props.store} ui={props.ui} owner={`${f().id}:b`} kind="face" label={tl("El otro costado")} lost={lost("side_b" as MissingRef["field"])} refs={k().side_b ? [k().side_b] : []} onChange={(r) => r[0] && update((x) => x.type === "full_round" && (x.side_b = r[0] as FaceRef))} />
+                <p class="text-[11px] text-text-dim">{tl("El radio es la mitad de la distancia entre los costados (por ahora, caras planas).")}</p>
               </>
             )}
           </Match>
           <Match when={f().kind.type === "face_blend" && (f().kind as Extract<FeatureKind, { type: "face_blend" }>)}>
             {(k) => (
               <>
-                <SelectionBox store={props.store} ui={props.ui} owner={`${f().id}:a`} kind="faces" label="Caras de un lado" lost={lost("a")} refs={k().a} onChange={(r) => update((x) => x.type === "face_blend" && (x.a = r as FaceRef[]))} />
-                <SelectionBox store={props.store} ui={props.ui} owner={`${f().id}:b`} kind="faces" label="Caras del otro lado" lost={lost("b")} refs={k().b} onChange={(r) => update((x) => x.type === "face_blend" && (x.b = r as FaceRef[]))} />
-                {field("Radio", "kind.radius", k().radius, (x, v) => x.type === "face_blend" && (x.radius = v), "mm")}
-                <Row label="Lado">
+                <SelectionBox store={props.store} ui={props.ui} owner={`${f().id}:a`} kind="faces" label={tl("Caras de un lado")} lost={lost("a")} refs={k().a} onChange={(r) => update((x) => x.type === "face_blend" && (x.a = r as FaceRef[]))} />
+                <SelectionBox store={props.store} ui={props.ui} owner={`${f().id}:b`} kind="faces" label={tl("Caras del otro lado")} lost={lost("b")} refs={k().b} onChange={(r) => update((x) => x.type === "face_blend" && (x.b = r as FaceRef[]))} />
+                {field(tl("Radio"), "kind.radius", k().radius, (x, v) => x.type === "face_blend" && (x.radius = v), "mm")}
+                <Row label={tl("Lado")}>
                   <Select options={BLEND_SIDE_OPTIONS} value={k().side ?? "auto"} onChange={(v) => update((x) => x.type === "face_blend" && (x.side = v === "auto" ? undefined : (v as BlendSide)))} />
                 </Row>
                 <p class="text-[11px] text-text-dim">
-                  Una bola del radio rueda apoyada a la vez en las caras de los dos lados (pueden no ser vecinas, ni planas): si están en un canto lo redondea,
-                  si forman un rincón lo rellena. Cada lado puede ser una cadena de caras tangentes (un óvalo, una pared con redondeos).
+                  {tl("Una bola del radio rueda apoyada a la vez en las caras de los dos lados (pueden no ser vecinas, ni planas): si están en un canto lo redondea, si forman un rincón lo rellena. Cada lado puede ser una cadena de caras tangentes (un óvalo, una pared con redondeos).")}
                 </p>
               </>
             )}
@@ -2670,14 +2665,13 @@ export const FeatureEditor: Component<{
                   ui={props.ui}
                   owner={`${f().id}:caras`}
                   kind="faces"
-                  label="Caras a eliminar"
+                  label={tl("Caras a eliminar")}
                   lost={lost("faces")}
                   refs={k().faces}
                   onChange={(refs) => update((x) => x.type === "delete_face" && (x.faces = refs as FaceRef[]))}
                 />
                 <p class="text-[11px] text-text-dim">
-                  Las caras vecinas se extienden hasta cerrar el hueco: sirve para tapar un agujero, sacar un redondeo o un resalte. Si las vecinas no se
-                  cruzan, da error.
+                  {tl("Las caras vecinas se extienden hasta cerrar el hueco: sirve para tapar un agujero, sacar un redondeo o un resalte. Si las vecinas no se cruzan, da error.")}
                 </p>
               </>
             )}
@@ -2685,7 +2679,7 @@ export const FeatureEditor: Component<{
           <Match when={f().kind.type === "surface_planar" && (f().kind as Extract<FeatureKind, { type: "surface_planar" }>)}>
             {(k) => (
               <>
-                <Row label="Sketch">
+                <Row label={tl("Sketch")}>
                   <Select options={sketchOptions()} value={String(k().sketch)} onChange={(v) => update((x) => x.type === "surface_planar" && ((x.sketch = +v), (x.regions = { type: "all" })))} />
                 </Row>
                 <RegionBox
@@ -2697,7 +2691,7 @@ export const FeatureEditor: Component<{
                   value={k().regions}
                   onChange={(r) => update((x) => x.type === "surface_planar" && (x.regions = r))}
                 />
-                <p class="text-[11px] text-text-dim">Las regiones quedan como una superficie sin espesor, aparte de las piezas.</p>
+                <p class="text-[11px] text-text-dim">{tl("Las regiones quedan como una superficie sin espesor, aparte de las piezas.")}</p>
               </>
             )}
           </Match>
@@ -2708,15 +2702,15 @@ export const FeatureEditor: Component<{
                   store={props.store}
                   ui={props.ui}
                   featureId={f().id}
-                  label="Desfasar"
-                  empty="Elegir superficies o piezas"
+                  label={tl("Desfasar")}
+                  empty={tl("Elegir superficies o piezas")}
                   value={k().parts}
                   missing={lost("parts")}
                   onChange={(v) => update((x) => x.type === "surface_offset" && (x.parts = v))}
                 />
-                {field("Distancia", "kind.distance", k().distance, (x, v) => x.type === "surface_offset" && (x.distance = v), "mm")}
+                {field(tl("Distancia"), "kind.distance", k().distance, (x, v) => x.type === "surface_offset" && (x.distance = v), "mm")}
                 <p class="text-[11px] text-text-dim">
-                  Una copia a esa distancia sobre la normal (negativa, hacia el otro lado). De una pieza sólida se copia su piel. Queda como superficie nueva.
+                  {tl("Una copia a esa distancia sobre la normal (negativa, hacia el otro lado). De una pieza sólida se copia su piel. Queda como superficie nueva.")}
                 </p>
               </>
             )}
@@ -2730,19 +2724,19 @@ export const FeatureEditor: Component<{
                   store={props.store}
                   ui={props.ui}
                   featureId={f().id}
-                  label="Piezas"
-                  empty="Todas"
+                  label={tl("Piezas")}
+                  empty={tl("Todas")}
                   value={k().parts}
                   missing={lost("parts")}
                   onChange={(v) => update((x) => x.type === "transform" && (x.parts = v))}
                 />
-                <Row label="Movimiento">
+                <Row label={tl("Movimiento")}>
                   <Select
                     options={[
-                      { value: "translate", label: "Desplazar" },
-                      { value: "rotate", label: "Girar" },
-                      { value: "points", label: "De un punto a otro" },
-                      { value: "align", label: "Alinear una cara a un plano" },
+                      { value: "translate", label: tl("Desplazar") },
+                      { value: "rotate", label: tl("Girar") },
+                      { value: "points", label: tl("De un punto a otro") },
+                      { value: "align", label: tl("Alinear una cara a un plano") },
                     ]}
                     value={alignPending() ? "align" : k().motion.type}
                     onChange={(v) => {
@@ -2767,7 +2761,7 @@ export const FeatureEditor: Component<{
                     ui={props.ui}
                     owner={`${f().id}:cara`}
                     kind="face"
-                    label="Cara a apoyar"
+                    label={tl("Cara a apoyar")}
                     lost={lost("face")}
                     refs={k().motion.type === "align" ? [(k().motion as Extract<Motion, { type: "align" }>).face] : []}
                     onChange={(refs) => {
@@ -2784,10 +2778,10 @@ export const FeatureEditor: Component<{
                 <Show when={k().motion.type === "align" && (k().motion as Extract<Motion, { type: "align" }>)}>
                   {(m) => (
                     <>
-                      <Row label="Sobre el plano">{planeSpecSelect(m().to, (p) => update((x) => x.type === "transform" && x.motion.type === "align" && (x.motion.to = p)))}</Row>
+                      <Row label={tl("Sobre el plano")}>{planeSpecSelect(m().to, (p) => update((x) => x.type === "transform" && x.motion.type === "align" && (x.motion.to = p)))}</Row>
                       <Checkbox
                         small
-                        label="Del otro lado del plano"
+                        label={tl("Del otro lado del plano")}
                         checked={m().flip}
                         onChange={(c) => update((x) => x.type === "transform" && x.motion.type === "align" && (x.motion.flip = c))}
                       />
@@ -2796,7 +2790,7 @@ export const FeatureEditor: Component<{
                 </Show>
                 <Show when={k().motion.type === "translate" && (k().motion as Extract<Motion, { type: "translate" }>)}>
                   {(m) => (
-                    <div class="grid grid-cols-3 gap-1" aria-label="Desplazamiento">
+                    <div class="grid grid-cols-3 gap-1" aria-label={tl("Desplazamiento")}>
                       <For each={["X", "Y", "Z"]}>
                         {(axis, i) =>
                           field(axis, `kind.motion.vector.${i()}`, m().vector[i()], (x, v) => x.type === "transform" && x.motion.type === "translate" && (x.motion.vector[i()] = v))
@@ -2812,12 +2806,12 @@ export const FeatureEditor: Component<{
                         store={props.store}
                         ui={props.ui}
                         owner={`${f().id}:eje`}
-                        label="Eje"
+                        label={tl("Eje")}
                         value={m().axis}
                         except={f().id}
                         onChange={(a) => update((x) => x.type === "transform" && x.motion.type === "rotate" && (x.motion.axis = a))}
                       />
-                      {field("Ángulo", "kind.motion.angle", m().angle, (x, v) => x.type === "transform" && x.motion.type === "rotate" && (x.motion.angle = v), "°")}
+                      {field(tl("Ángulo"), "kind.motion.angle", m().angle, (x, v) => x.type === "transform" && x.motion.type === "rotate" && (x.motion.angle = v), "°")}
                     </>
                   )}
                 </Show>
@@ -2828,7 +2822,7 @@ export const FeatureEditor: Component<{
                         store={props.store}
                         ui={props.ui}
                         owner={`${f().id}:desde`}
-                        label="Desde"
+                        label={tl("Desde")}
                         value={m().from}
                         except={f().id}
                         onChange={(p) => update((x) => x.type === "transform" && x.motion.type === "points" && (x.motion.from = p))}
@@ -2837,7 +2831,7 @@ export const FeatureEditor: Component<{
                         store={props.store}
                         ui={props.ui}
                         owner={`${f().id}:hasta`}
-                        label="Hasta"
+                        label={tl("Hasta")}
                         value={m().to}
                         except={f().id}
                         onChange={(p) => update((x) => x.type === "transform" && x.motion.type === "points" && (x.motion.to = p))}
@@ -2845,9 +2839,9 @@ export const FeatureEditor: Component<{
                     </>
                   )}
                 </Show>
-                <Checkbox small label="Copiar (las originales quedan)" checked={k().copy} onChange={(c) => update((x) => x.type === "transform" && (x.copy = c))} />
+                <Checkbox small label={tl("Copiar (las originales quedan)")} checked={k().copy} onChange={(c) => update((x) => x.type === "transform" && (x.copy = c))} />
                 <p class="text-[11px] text-text-dim">
-                  Sin piezas elegidas mueve todas (al alinear, la de la cara). Las copias quedan como piezas nuevas.
+                  {tl("Sin piezas elegidas mueve todas (al alinear, la de la cara). Las copias quedan como piezas nuevas.")}
                 </p>
               </>
               );
@@ -2872,11 +2866,11 @@ export const FeatureEditor: Component<{
               const set = (b: "xy" | "xz" | "yz", o: number) => update((x) => x.type === "split" && (x.plane = { type: "custom", plane: offsetPlane(b, o) }));
               return (
                 <>
-                  <Row label="Plano">
+                  <Row label={tl("Plano")}>
                     <Select options={(["xy", "xz", "yz"] as const).map((v) => ({ value: v, label: PLANE_LABELS[v] }))} value={base()} onChange={(v) => set(v as "xy", offset())} />
                   </Row>
-                  <Num label="A distancia" suffix="mm" value={offset()} onCommit={(v) => set(base(), v)} />
-                  <Checkbox small label="Conservar el otro lado" checked={k().flip} onChange={(c) => update((x) => x.type === "split" && (x.flip = c))} />
+                  <Num label={tl("A distancia")} suffix="mm" value={offset()} onCommit={(v) => set(base(), v)} />
+                  <Checkbox small label={tl("Conservar el otro lado")} checked={k().flip} onChange={(c) => update((x) => x.type === "split" && (x.flip = c))} />
                 </>
               );
             }}
@@ -2885,7 +2879,7 @@ export const FeatureEditor: Component<{
             {(k) => (
               <>
                 <p class="text-[11px] text-text-dim">{k().format.toUpperCase()} · {(k().data.length / 1024).toFixed(0)} KB</p>
-                <Row label="Con el sólido">{opSelect(k().op, (o) => update((x) => x.type === "import" && (x.op = o)))}</Row>
+                <Row label={tl("Con el sólido")}>{opSelect(k().op, (o) => update((x) => x.type === "import" && (x.op = o)))}</Row>
               </>
             )}
           </Match>
@@ -2893,16 +2887,16 @@ export const FeatureEditor: Component<{
             {(k) => (
               <>
                 <p class="text-[11px] text-text-dim leading-relaxed">
-                  El escaneo cerrado por vóxeles. Sigue al escaneo: si se alinea, se repara o se elige otro, se rehace.
+                  {tl("El escaneo cerrado por vóxeles. Sigue al escaneo: si se alinea, se repara o se elige otro, se rehace.")}
                 </p>
-                <Num label="Holgura" suffix="mm" step={0.05} value={k().offset} onCommit={(v) => update((x) => x.type === "scan_body" && (x.offset = v))} />
-                <p class="text-[11px] text-text-dim leading-relaxed">Positiva agranda el escaneo (el encaje no aprieta); negativa lo achica.</p>
-                <Row label="Forma">
+                <Num label={tl("Holgura")} suffix="mm" step={0.05} value={k().offset} onCommit={(v) => update((x) => x.type === "scan_body" && (x.offset = v))} />
+                <p class="text-[11px] text-text-dim leading-relaxed">{tl("Positiva agranda el escaneo (el encaje no aprieta); negativa lo achica.")}</p>
+                <Row label={tl("Forma")}>
                   <Select
                     options={[
-                      { value: "full", label: "Lleno" },
-                      { value: "out", label: "Carcasa hacia afuera" },
-                      { value: "in", label: "Carcasa hacia adentro" },
+                      { value: "full", label: tl("Lleno") },
+                      { value: "out", label: tl("Carcasa hacia afuera") },
+                      { value: "in", label: tl("Carcasa hacia adentro") },
                     ]}
                     value={!k().thickness ? "full" : k().thickness! > 0 ? "out" : "in"}
                     onChange={(v) =>
@@ -2916,7 +2910,7 @@ export const FeatureEditor: Component<{
                 </Row>
                 <Show when={k().thickness}>
                   <Num
-                    label="Espesor"
+                    label={tl("Espesor")}
                     suffix="mm"
                     step={0.5}
                     min={0.1}
@@ -2924,12 +2918,12 @@ export const FeatureEditor: Component<{
                     onCommit={(v) => update((x) => x.type === "scan_body" && (x.thickness = Math.sign(x.thickness || 1) * Math.max(0.1, Math.abs(v))))}
                   />
                   <p class="text-[11px] text-text-dim leading-relaxed">
-                    Desde la piel corrida la holgura. En escaneos grandes hay un mínimo (la grilla de vóxeles tiene un tope).
+                    {tl("Desde la piel corrida la holgura. En escaneos grandes hay un mínimo (la grilla de vóxeles tiene un tope).")}
                   </p>
                 </Show>
-                <Row label="Solo bajo">
+                <Row label={tl("Solo bajo")}>
                   <Select
-                    options={[{ value: "", label: "Todo el escaneo" }, ...sketchOptions()]}
+                    options={[{ value: "", label: tl("Todo el escaneo") }, ...sketchOptions()]}
                     value={k().region ? String(k().region!.sketch) : ""}
                     onChange={(v) => update((x) => x.type === "scan_body" && (x.region = v ? { sketch: +v, regions: { type: "all" } } : null))}
                   />
@@ -2947,32 +2941,32 @@ export const FeatureEditor: Component<{
                         onChange={(sel) => update((x) => x.type === "scan_body" && x.region && (x.region.regions = sel))}
                       />
                       <p class="text-[11px] text-text-dim leading-relaxed">
-                        El contorno se proyecta por la normal del sketch: queda el primer tramo del escaneo hacia cada lado.
+                        {tl("El contorno se proyecta por la normal del sketch: queda el primer tramo del escaneo hacia cada lado.")}
                       </p>
                     </>
                   )}
                 </Show>
                 <Num
-                  label="Triángulos"
+                  label={tl("Triángulos")}
                   step={1000}
                   min={500}
                   value={k().faces}
                   onCommit={(v) => update((x) => x.type === "scan_body" && (x.faces = Math.round(Math.min(100000, Math.max(500, v)))))}
                 />
-                <p class="text-[11px] text-text-dim leading-relaxed">Más es más fiel y hace más lentas las operaciones (unos 3 s cada 20 000).</p>
-                <Row label="Con el sólido">{opSelect(k().op, (o) => update((x) => x.type === "scan_body" && (x.op = o)))}</Row>
+                <p class="text-[11px] text-text-dim leading-relaxed">{tl("Más es más fiel y hace más lentas las operaciones (unos 3 s cada 20 000).")}</p>
+                <Row label={tl("Con el sólido")}>{opSelect(k().op, (o) => update((x) => x.type === "scan_body" && (x.op = o)))}</Row>
               </>
             )}
           </Match>
           <Match when={f().kind.type === "boolean" && (f().kind as Extract<FeatureKind, { type: "boolean" }>)}>
             {(k) => (
               <>
-                <Row label="Operación">
+                <Row label={tl("Operación")}>
                   <Select
                     options={[
-                      { value: "union", label: "Unir" },
-                      { value: "subtract", label: "Restar" },
-                      { value: "intersect", label: "Intersecar" },
+                      { value: "union", label: tl("Unir") },
+                      { value: "subtract", label: tl("Restar") },
+                      { value: "intersect", label: tl("Intersecar") },
                     ]}
                     value={k().op}
                     onChange={(v) => update((x) => x.type === "boolean" && (x.op = v as "union" | "subtract" | "intersect"))}
@@ -2982,8 +2976,8 @@ export const FeatureEditor: Component<{
                   store={props.store}
                   ui={props.ui}
                   featureId={f().id}
-                  label={k().op === "subtract" ? "Piezas que quedan" : "Piezas"}
-                  empty="Elegir las piezas"
+                  label={k().op === "subtract" ? tl("Piezas que quedan") : tl("Piezas")}
+                  empty={tl("Elegir las piezas")}
                   value={k().targets}
                   missing={lost("targets")}
                   onChange={(v) => update((x) => x.type === "boolean" && (x.targets = v))}
@@ -2993,15 +2987,15 @@ export const FeatureEditor: Component<{
                     store={props.store}
                     ui={props.ui}
                     featureId={f().id}
-                    label={k().op === "subtract" ? "Piezas que restan" : "Con"}
-                    empty={k().op === "subtract" ? "Elegir con qué restar" : "Ninguna más"}
+                    label={k().op === "subtract" ? tl("Piezas que restan") : tl("Con")}
+                    empty={k().op === "subtract" ? tl("Elegir con qué restar") : tl("Ninguna más")}
                     value={k().tools}
                     missing={lost("tools")}
                     onChange={(v) => update((x) => x.type === "boolean" && (x.tools = v))}
                   />
                 </Show>
                 <Show when={k().op === "subtract"}>
-                  <Checkbox small label="Conservar las que restan" checked={k().keep_tools} onChange={(c) => update((x) => x.type === "boolean" && (x.keep_tools = c))} />
+                  <Checkbox small label={tl("Conservar las que restan")} checked={k().keep_tools} onChange={(c) => update((x) => x.type === "boolean" && (x.keep_tools = c))} />
                 </Show>
               </>
             )}
@@ -3013,16 +3007,16 @@ export const FeatureEditor: Component<{
                   store={props.store}
                   ui={props.ui}
                   featureId={f().id}
-                  label="Piezas a partir"
-                  empty="Todos los sólidos"
+                  label={tl("Piezas a partir")}
+                  empty={tl("Todos los sólidos")}
                   value={k().parts}
                   missing={lost("parts")}
                   onChange={(v) => update((x) => x.type === "split_by" && (x.parts = v))}
                 />
-                <Row label="Con">
+                <Row label={tl("Con")}>
                   <Select
                     options={[
-                      { value: "plane", label: "Un plano" },
+                      { value: "plane", label: tl("Un plano") },
                       ...(props.store.result()?.parts ?? []).map((p) => ({ value: `part:${partKey(p.id)}`, label: `${p.name}${p.surface ? " (superficie)" : ""}` })),
                     ]}
                     value={k().tool.type === "plane" ? "plane" : `part:${partKey((k().tool as { part: PartId }).part)}`}
@@ -3039,11 +3033,10 @@ export const FeatureEditor: Component<{
                   />
                 </Row>
                 <Show when={k().tool.type === "plane" && (k().tool as { plane: PlaneSpec })}>
-                  {(t) => <Row label="Plano">{planeSpecSelect(t().plane, (p) => update((x) => x.type === "split_by" && x.tool.type === "plane" && (x.tool.plane = p)), lost("plane").length > 0)}</Row>}
+                  {(t) => <Row label={tl("Plano")}>{planeSpecSelect(t().plane, (p) => update((x) => x.type === "split_by" && x.tool.type === "plane" && (x.tool.plane = p)), lost("plane").length > 0)}</Row>}
                 </Show>
                 <p class="text-[11px] text-text-dim">
-                  Cada pedazo queda como una pieza. Con otra pieza (una superficie curva, por ejemplo) se parte por su forma; la herramienta queda como
-                  estaba. Las superficies se recortan con Superficies → Recortar.
+                  {tl("Cada pedazo queda como una pieza. Con otra pieza (una superficie curva, por ejemplo) se parte por su forma; la herramienta queda como estaba. Las superficies se recortan con Superficies → Recortar.")}
                 </p>
               </>
             )}
@@ -3056,8 +3049,8 @@ export const FeatureEditor: Component<{
                   store={props.store}
                   ui={props.ui}
                   featureId={f().id}
-                  label={kind.type === "split_parts" ? "Piezas a separar" : "Piezas a borrar"}
-                  empty={kind.type === "split_parts" ? "Todas" : "Elegir las piezas"}
+                  label={kind.type === "split_parts" ? tl("Piezas a separar") : tl("Piezas a borrar")}
+                  empty={kind.type === "split_parts" ? tl("Todas") : tl("Elegir las piezas")}
                   value={(k() as typeof kind).parts}
                   missing={lost("parts")}
                   onChange={(v) => update((x) => (x.type === "split_parts" || x.type === "delete_parts") && (x.parts = v))}
@@ -3110,19 +3103,19 @@ export const FeatureEditor: Component<{
               };
               return (
                 <>
-                  <Row label="Centros en">
+                  <Row label={tl("Centros en")}>
                     <Select options={sketchOptions()} value={String(k().sketch)} onChange={(v) => update((x) => x.type === "hole" && ((x.sketch = +v), (x.points = [])))} />
                   </Row>
                   <p class="text-[11px] text-text-dim">
-                    {sketchPoints().length ? `${sketchPoints().length} puntos del sketch` : `${view()?.sketch.entities.filter((e) => e.geometry.type === "circle").length ?? 0} centros de círculos`}
+                    {sketchPoints().length ? tl("{length} puntos del sketch", { length: sketchPoints().length }) : tl("{v1} centros de círculos", { v1: view()?.sketch.entities.filter((e) => e.geometry.type === "circle").length ?? 0 })}
                   </p>
-                  <Row label="Tipo">
+                  <Row label={tl("Tipo")}>
                     <Select
                       options={[
-                        { value: "simple", label: "Simple" },
-                        { value: "counterbore", label: "Con caja" },
-                        { value: "countersink", label: "Avellanado" },
-                        { value: "tapered", label: "Cónico" },
+                        { value: "simple", label: tl("Simple") },
+                        { value: "counterbore", label: tl("Con caja") },
+                        { value: "countersink", label: tl("Avellanado") },
+                        { value: "tapered", label: tl("Cónico") },
                       ]}
                       value={k().style.type}
                       onChange={(v) => {
@@ -3154,7 +3147,7 @@ export const FeatureEditor: Component<{
                       feature={f().id}
                       value={k().link}
                       want="any"
-                      what="el agujero"
+                      what={tl("el agujero")}
                       onChange={(link, src) =>
                         update((x) => {
                           if (x.type !== "hole") return;
@@ -3170,11 +3163,11 @@ export const FeatureEditor: Component<{
                     />
                   </Show>
                   <Show when={!k().link}>
-                  <Row label="Sistema">
+                  <Row label={tl("Sistema")}>
                     <Select
                       options={[
-                        { value: "metric", label: "Métrico (ISO)" },
-                        { value: "inch", label: "Pulgadas (UNC/UNF)" },
+                        { value: "metric", label: tl("Métrico (ISO)") },
+                        { value: "inch", label: tl("Pulgadas (UNC/UNF)") },
                       ]}
                       value={inch() ? "inch" : "metric"}
                       onChange={(v) => {
@@ -3187,9 +3180,9 @@ export const FeatureEditor: Component<{
                       }}
                     />
                   </Row>
-                  <Row label="Tamaño">
+                  <Row label={tl("Tamaño")}>
                     <Select
-                      options={[{ value: "", label: "A medida" }, ...table().map((m) => ({ value: m.size, label: m.size }))]}
+                      options={[{ value: "", label: tl("A medida") }, ...table().map((m) => ({ value: m.size, label: m.size }))]}
                       value={table().some((m) => m.size === fit()?.size) ? (fit()?.size ?? "") : ""}
                       onChange={(v) => v && applySize(v, fit()?.mode ?? "clearance")}
                     />
@@ -3197,12 +3190,12 @@ export const FeatureEditor: Component<{
                   </Show>
                   <Show when={fit()}>
                     {(fi) => (
-                      <Row label="Para">
+                      <Row label={tl("Para")}>
                         <Select
                           options={[
-                            { value: "clearance", label: "Que pase el tornillo" },
-                            { value: "tap", label: "Roscar (rosca cosmética)" },
-                            { value: "modeled", label: "Roscar (rosca modelada)" },
+                            { value: "clearance", label: tl("Que pase el tornillo") },
+                            { value: "tap", label: tl("Roscar (rosca cosmética)") },
+                            { value: "modeled", label: tl("Roscar (rosca modelada)") },
                           ]}
                           value={fi().mode}
                           onChange={(v) => applySize(fi().size || "M6", v as "clearance" | "tap" | "modeled")}
@@ -3212,29 +3205,28 @@ export const FeatureEditor: Component<{
                   </Show>
                   <Show
                     when={k().modeled}
-                    fallback={field("Diámetro", "kind.diameter", k().diameter, (x, v) => x.type === "hole" && (x.diameter = v), "mm")}
+                    fallback={field(tl("Diámetro"), "kind.diameter", k().diameter, (x, v) => x.type === "hole" && (x.diameter = v), "mm")}
                   >
                     {(t) => (
                       <>
                         <Show when={!k().link}>
-                          {field("Paso", "kind.modeled.pitch", t().pitch, (x, v) => x.type === "hole" && x.modeled && (x.modeled.pitch = v), "mm")}
+                          {field(tl("Paso"), "kind.modeled.pitch", t().pitch, (x, v) => x.type === "hole" && x.modeled && (x.modeled.pitch = v), "mm")}
                         </Show>
-                        {field("Holgura", "kind.modeled.clearance", t().clearance, (x, v) => x.type === "hole" && x.modeled && (x.modeled.clearance = v), "mm")}
+                        {field(tl("Holgura"), "kind.modeled.clearance", t().clearance, (x, v) => x.type === "hole" && x.modeled && (x.modeled.clearance = v), "mm")}
                         <Show when={!k().link}>
-                          <Checkbox small label="A izquierdas" checked={t().left} onChange={(c) => update((x) => x.type === "hole" && !!x.modeled && (x.modeled.left = c))} />
+                          <Checkbox small label={tl("A izquierdas")} checked={t().left} onChange={(c) => update((x) => x.type === "hole" && !!x.modeled && (x.modeled.left = c))} />
                         </Show>
                         <p class="text-[11px] text-text-dim">
-                          {threadName(t())}: el agujero sale con el filete (diámetro menor {fmt(t().nominal - 1.082532 * t().pitch + t().clearance)} mm). Para imprimir en FDM conviene
-                          una holgura de 0,2–0,4 mm. Cada vuelta del filete tarda en calcularse.
+                          {threadName(t())}{tl(": el agujero sale con el filete (diámetro menor")} {fmt(t().nominal - 1.082532 * t().pitch + t().clearance)} {tl("mm). Para imprimir en FDM conviene una holgura de 0,2–0,4 mm. Cada vuelta del filete tarda en calcularse.")}
                         </p>
                       </>
                     )}
                   </Show>
-                  <Row label="Profundidad">
+                  <Row label={tl("Profundidad")}>
                     <Select
                       options={[
-                        { value: "through_all", label: "Pasante" },
-                        { value: "blind", label: "Ciega" },
+                        { value: "through_all", label: tl("Pasante") },
+                        { value: "blind", label: tl("Ciega") },
                       ]}
                       value={k().depth.type}
                       onChange={(v) => v !== k().depth.type && update((x) => x.type === "hole" && (x.depth = v === "blind" ? { type: "blind", depth: 10 } : { type: "through_all" }))}
@@ -3244,28 +3236,28 @@ export const FeatureEditor: Component<{
                   <div class="flex items-center justify-between gap-2">
                     <Checkbox
                       small
-                      label="Hacia el otro lado"
+                      label={tl("Hacia el otro lado")}
                       checked={k().reverse ?? state()?.handles?.[0]?.reversed ?? false}
                       onChange={(c) => update((x) => x.type === "hole" && (x.reverse = c))}
                     />
-                    <Show when={k().reverse != null} fallback={<span class="text-[11px] text-text-dim">Automático</span>}>
+                    <Show when={k().reverse != null} fallback={<span class="text-[11px] text-text-dim">{tl("Automático")}</span>}>
                       <button
                         class="text-[11px] text-text-muted hover:text-text"
-                        title="Que vuelva a ir hacia el lado donde hay material"
+                        title={tl("Que vuelva a ir hacia el lado donde hay material")}
                         onClick={() => update((x) => x.type === "hole" && (x.reverse = null))}
                       >
-                        Automático
+                        {tl("Automático")}
                       </button>
                     </Show>
                   </div>
                   <Show when={k().depth.type === "blind"}>
-                    {field("Hasta", "kind.depth.depth", (k().depth as { depth: number }).depth, (x, v) => x.type === "hole" && x.depth.type === "blind" && (x.depth.depth = v), "mm")}
-                    {field("Punta", "kind.tip_angle", k().tip_angle, (x, v) => x.type === "hole" && (x.tip_angle = v), "°")}
+                    {field(tl("Hasta"), "kind.depth.depth", (k().depth as { depth: number }).depth, (x, v) => x.type === "hole" && x.depth.type === "blind" && (x.depth.depth = v), "mm")}
+                    {field(tl("Punta"), "kind.tip_angle", k().tip_angle, (x, v) => x.type === "hole" && (x.tip_angle = v), "°")}
                   </Show>
                   <Show when={k().style.type === "counterbore" && (k().style as { diameter: number; depth: number })}>
                     {(st) => (
                       <>
-                        {field("Caja: diámetro", "kind.style.diameter", st().diameter, (x, v) => x.type === "hole" && x.style.type === "counterbore" && (x.style.diameter = v), "mm")}
+                        {field(tl("Caja: diámetro"), "kind.style.diameter", st().diameter, (x, v) => x.type === "hole" && x.style.type === "counterbore" && (x.style.diameter = v), "mm")}
                         {field("Caja: profundidad", "kind.style.depth", st().depth, (x, v) => x.type === "hole" && x.style.type === "counterbore" && (x.style.depth = v), "mm")}
                       </>
                     )}
@@ -3273,23 +3265,23 @@ export const FeatureEditor: Component<{
                   <Show when={k().style.type === "countersink" && (k().style as { diameter: number; angle: number })}>
                     {(st) => (
                       <>
-                        {field("Avellanado: diámetro", "kind.style.diameter", st().diameter, (x, v) => x.type === "hole" && x.style.type === "countersink" && (x.style.diameter = v), "mm")}
-                        {field("Avellanado: ángulo", "kind.style.angle", st().angle, (x, v) => x.type === "hole" && x.style.type === "countersink" && (x.style.angle = v), "°")}
+                        {field(tl("Avellanado: diámetro"), "kind.style.diameter", st().diameter, (x, v) => x.type === "hole" && x.style.type === "countersink" && (x.style.diameter = v), "mm")}
+                        {field(tl("Avellanado: ángulo"), "kind.style.angle", st().angle, (x, v) => x.type === "hole" && x.style.type === "countersink" && (x.style.angle = v), "°")}
                       </>
                     )}
                   </Show>
                   <Show when={k().style.type === "tapered" && (k().style as { angle: number })}>
                     {(st) => (
                       <>
-                        {field("Cono: ángulo", "kind.style.angle", st().angle, (x, v) => x.type === "hole" && x.style.type === "tapered" && (x.style.angle = v), "°")}
+                        {field(tl("Cono: ángulo"), "kind.style.angle", st().angle, (x, v) => x.type === "hole" && x.style.type === "tapered" && (x.style.angle = v), "°")}
                         <p class="text-[11px] text-text-dim">
-                          Ángulo de la pared con el eje (NPT: 1°47' = 1,7833°). El diámetro es el de la boca; se angosta hasta el fondo.
+                          {tl("Ángulo de la pared con el eje (NPT: 1°47' = 1,7833°). El diámetro es el de la boca; se angosta hasta el fondo.")}
                         </p>
                       </>
                     )}
                   </Show>
                   <Show when={k().thread && !k().modeled}>
-                    <p class="text-[11px] text-text-dim">Rosca {k().thread} (cosmética: no se modela)</p>
+                    <p class="text-[11px] text-text-dim">{tl("Rosca")} {k().thread} {tl("(cosmética: no se modela)")}</p>
                   </Show>
                 </>
               );
@@ -3304,16 +3296,16 @@ export const FeatureEditor: Component<{
                   ui={props.ui}
                   owner={`${f().id}:cara`}
                   kind="face"
-                  label="Cara"
+                  label={tl("Cara")}
                   lost={lost("face")}
                   refs={[k().face]}
                   onChange={(refs) => refs[0] && update((x) => x.type === "surface_sketch" && (x.face = refs[0] as FaceRef))}
                 />
                 <Button size="sm" fullWidth onClick={() => void props.store.acceptDraft().then(() => props.ui.editSketch(f().id))}>
-                  Editar el sketch
+                  {tl("Editar el sketch")}
                 </Button>
                 <p class="text-[11px] text-text-dim">
-                  Se dibuja en el desarrollo de la cara (el plano tangente en su centro: X a lo largo de la cara, Y a lo ancho) y las curvas se llevan sobre ella midiendo sobre la superficie. Sirven de camino para un Barrido.
+                  {tl("Se dibuja en el desarrollo de la cara (el plano tangente en su centro: X a lo largo de la cara, Y a lo ancho) y las curvas se llevan sobre ella midiendo sobre la superficie. Sirven de camino para un Barrido.")}
                 </p>
               </>
             )}
@@ -3321,11 +3313,11 @@ export const FeatureEditor: Component<{
           <Match when={f().kind.type === "helix" && (f().kind as Extract<FeatureKind, { type: "helix" }>)}>
             {(k) => (
               <>
-                <AxisField store={props.store} ui={props.ui} owner={`${f().id}:eje`} label="Eje" value={k().axis} except={f().id} onChange={(a) => update((x) => x.type === "helix" && (x.axis = a))} />
-                {field(k().radius2 != null ? "Radio inicial" : "Radio", "kind.radius", k().radius, (x, v) => x.type === "helix" && (x.radius = v), "mm")}
+                <AxisField store={props.store} ui={props.ui} owner={`${f().id}:eje`} label={tl("Eje")} value={k().axis} except={f().id} onChange={(a) => update((x) => x.type === "helix" && (x.axis = a))} />
+                {field(k().radius2 != null ? tl("Radio inicial") : tl("Radio"), "kind.radius", k().radius, (x, v) => x.type === "helix" && (x.radius = v), "mm")}
                 <Checkbox
                   small
-                  label="Espiral plana"
+                  label={tl("Espiral plana")}
                   checked={!!k().flat}
                   onChange={(c) =>
                     update((x) => {
@@ -3337,7 +3329,7 @@ export const FeatureEditor: Component<{
                 />
                 <Checkbox
                   small
-                  label="Cónica (dos radios)"
+                  label={tl("Cónica (dos radios)")}
                   checked={k().radius2 != null}
                   onChange={(c) =>
                     update((x) => {
@@ -3348,14 +3340,14 @@ export const FeatureEditor: Component<{
                   }
                 />
                 <Show when={k().radius2 != null}>
-                  {field("Radio final", "kind.radius2", k().radius2 ?? k().radius, (x, v) => x.type === "helix" && (x.radius2 = v), "mm")}
+                  {field(tl("Radio final"), "kind.radius2", k().radius2 ?? k().radius, (x, v) => x.type === "helix" && (x.radius2 = v), "mm")}
                 </Show>
                 <Show when={!k().flat}>
-                  {field("Paso", "kind.pitch", k().pitch, (x, v) => x.type === "helix" && (x.pitch = v), "mm")}
+                  {field(tl("Paso"), "kind.pitch", k().pitch, (x, v) => x.type === "helix" && (x.pitch = v), "mm")}
                 </Show>
-                {field("Vueltas", "kind.turns", k().turns, (x, v) => x.type === "helix" && (x.turns = v))}
-                <Checkbox small label="A izquierdas" checked={k().left} onChange={(c) => update((x) => x.type === "helix" && (x.left = c))} />
-                <p class="text-[11px] text-text-dim">Para un resorte: un círculo en un plano que pase por el eje, en el arranque de la hélice, y un Barrido con la hélice como camino.</p>
+                {field(tl("Vueltas"), "kind.turns", k().turns, (x, v) => x.type === "helix" && (x.turns = v))}
+                <Checkbox small label={tl("A izquierdas")} checked={k().left} onChange={(c) => update((x) => x.type === "helix" && (x.left = c))} />
+                <p class="text-[11px] text-text-dim">{tl("Para un resorte: un círculo en un plano que pase por el eje, en el arranque de la hélice, y un Barrido con la hélice como camino.")}</p>
               </>
             )}
           </Match>
@@ -3367,20 +3359,20 @@ export const FeatureEditor: Component<{
                   ui={props.ui}
                   owner={`${f().id}:caras`}
                   kind="faces"
-                  label="Caras planas"
+                  label={tl("Caras planas")}
                   refs={k().faces}
                   lost={lost("faces")}
                   onChange={(refs) => update((x) => x.type === "move_face" && (x.faces = refs as FaceRef[]))}
                 />
-                {field("Distancia", "kind.distance", k().distance, (x, v) => x.type === "move_face" && (x.distance = v), "mm")}
-                <p class="text-[11px] text-text-dim">Positiva: hacia afuera (suma material); negativa: hacia adentro.</p>
+                {field(tl("Distancia"), "kind.distance", k().distance, (x, v) => x.type === "move_face" && (x.distance = v), "mm")}
+                <p class="text-[11px] text-text-dim">{tl("Positiva: hacia afuera (suma material); negativa: hacia adentro.")}</p>
               </>
             )}
           </Match>
           <Match when={f().kind.type === "sheet_metal" && (f().kind as Extract<FeatureKind, { type: "sheet_metal" }>)}>
             {(k) => (
               <>
-                <Row label="Sketch">
+                <Row label={tl("Sketch")}>
                   <Select options={sketchOptions()} value={String(k().sketch)} onChange={(v) => update((x) => x.type === "sheet_metal" && (x.sketch = +v))} />
                 </Row>
                 <RegionBox
@@ -3392,14 +3384,13 @@ export const FeatureEditor: Component<{
                   value={k().regions}
                   onChange={(r) => update((x) => x.type === "sheet_metal" && (x.regions = r))}
                 />
-                {field("Espesor", "kind.thickness", k().thickness, (x, v) => x.type === "sheet_metal" && (x.thickness = v), "mm")}
-                {field("Radio de doblez", "kind.radius", k().radius, (x, v) => x.type === "sheet_metal" && (x.radius = v), "mm")}
-                {field("Factor K", "kind.k_factor", k().k_factor, (x, v) => x.type === "sheet_metal" && (x.k_factor = v))}
-                <Checkbox small label="Hacia el otro lado" checked={k().flip} onChange={(c) => update((x) => x.type === "sheet_metal" && (x.flip = c))} />
-                <Row label="Con el sólido">{opSelect(k().op, (o) => update((x) => x.type === "sheet_metal" && (x.op = o)))}</Row>
+                {field(tl("Espesor"), "kind.thickness", k().thickness, (x, v) => x.type === "sheet_metal" && (x.thickness = v), "mm")}
+                {field(tl("Radio de doblez"), "kind.radius", k().radius, (x, v) => x.type === "sheet_metal" && (x.radius = v), "mm")}
+                {field(tl("Factor K"), "kind.k_factor", k().k_factor, (x, v) => x.type === "sheet_metal" && (x.k_factor = v))}
+                <Checkbox small label={tl("Hacia el otro lado")} checked={k().flip} onChange={(c) => update((x) => x.type === "sheet_metal" && (x.flip = c))} />
+                <Row label={tl("Con el sólido")}>{opSelect(k().op, (o) => update((x) => x.type === "sheet_metal" && (x.op = o)))}</Row>
                 <p class="text-[11px] text-text-dim">
-                  El radio es el interior de los dobleces de sus pestañas. El factor K dice dónde queda la fibra neutra (0,44 para acero y aluminio
-                  doblados en plegadora; 0,5 si el radio es grande): con él se calcula el largo del desarrollo.
+                  {tl("El radio es el interior de los dobleces de sus pestañas. El factor K dice dónde queda la fibra neutra (0,44 para acero y aluminio doblados en plegadora; 0,5 si el radio es grande): con él se calcula el largo del desarrollo.")}
                 </p>
               </>
             )}
@@ -3422,20 +3413,19 @@ export const FeatureEditor: Component<{
                     ui={props.ui}
                     owner={`${f().id}:arista`}
                     kind="edges"
-                    label="Arista del borde"
+                    label={tl("Arista del borde")}
                     refs={k().edge ? [k().edge!] : []}
                     lost={lost("edge")}
                     onChange={(refs) => update((x) => x.type === "flange" && (x.edge = (refs[refs.length - 1] as EdgeRef | undefined) ?? null))}
                   />
-                  {field("Largo", "kind.length", k().length, (x, v) => x.type === "flange" && (x.length = v), "mm")}
-                  {field("Ángulo", "kind.angle", k().angle, (x, v) => x.type === "flange" && (x.angle = v), "°")}
-                  {field("Radio", "kind.radius", k().radius ?? sheetRadius() ?? 0, (x, v) => x.type === "flange" && (x.radius = v), "mm")}
-                  <Checkbox small label="Doblar hacia el otro lado" checked={k().flip} onChange={(c) => update((x) => x.type === "flange" && (x.flip = c))} />
+                  {field(tl("Largo"), "kind.length", k().length, (x, v) => x.type === "flange" && (x.length = v), "mm")}
+                  {field(tl("Ángulo"), "kind.angle", k().angle, (x, v) => x.type === "flange" && (x.angle = v), "°")}
+                  {field(tl("Radio"), "kind.radius", k().radius ?? sheetRadius() ?? 0, (x, v) => x.type === "flange" && (x.radius = v), "mm")}
+                  <Checkbox small label={tl("Doblar hacia el otro lado")} checked={k().flip} onChange={(c) => update((x) => x.type === "flange" && (x.flip = c))} />
                   <p class="text-[11px] text-text-dim">
-                    Dobla hacia el lado de la cara de la arista elegida. El largo es la pared después del doblez; el radio, el interior (el de la chapa si
-                    no se cambia).
+                    {tl("Dobla hacia el lado de la cara de la arista elegida. El largo es la pared después del doblez; el radio, el interior (el de la chapa si no se cambia).")}
                   </p>
-                  <Row label="Alivio">
+                  <Row label={tl("Alivio")}>
                     <Select
                       options={RELIEF_OPTIONS}
                       value={k().relief ?? "rectangle"}
@@ -3443,9 +3433,9 @@ export const FeatureEditor: Component<{
                     />
                   </Row>
                   <Show when={(k().relief ?? "rectangle") !== "none"}>
-                    {field("Ancho del alivio", "kind.relief_width", k().relief_width ?? sheetThickness() ?? 0, (x, v) => x.type === "flange" && (x.relief_width = v), "mm")}
+                    {field(tl("Ancho del alivio"), "kind.relief_width", k().relief_width ?? sheetThickness() ?? 0, (x, v) => x.type === "flange" && (x.relief_width = v), "mm")}
                   </Show>
-                  <Row label="Esquina">
+                  <Row label={tl("Esquina")}>
                     <Select
                       options={CORNER_OPTIONS}
                       value={k().corner_relief ?? "none"}
@@ -3454,16 +3444,16 @@ export const FeatureEditor: Component<{
                   </Row>
                   <Checkbox
                     small
-                    label="Esquina cerrada con otra pestaña"
+                    label={tl("Esquina cerrada con otra pestaña")}
                     checked={!!k().closed_corner}
                     onChange={(c) => update((x) => x.type === "flange" && (x.closed_corner = c))}
                   />
                   <Show when={k().closed_corner}>
-                    {field("Holgura de la esquina", "kind.corner_gap", k().corner_gap ?? 0.2, (x, v) => x.type === "flange" && (x.corner_gap = v), "mm")}
+                    {field(tl("Holgura de la esquina"), "kind.corner_gap", k().corner_gap ?? 0.2, (x, v) => x.type === "flange" && (x.corner_gap = v), "mm")}
                   </Show>
                   <Show when={(k().corner_relief ?? "none") !== "none"}>
                     {field(
-                      k().corner_relief === "square" ? "Medio lado" : "Radio del alivio",
+                      k().corner_relief === "square" ? tl("Medio lado") : tl("Radio del alivio"),
                       "kind.corner_size",
                       k().corner_size ?? sheetThickness() ?? 0,
                       (x, v) => x.type === "flange" && (x.corner_size = v),
@@ -3471,9 +3461,7 @@ export const FeatureEditor: Component<{
                     )}
                   </Show>
                   <p class="text-[11px] text-text-dim">
-                    El alivio es una ranura en el extremo donde la chapa sigue al lado del doblez (una esquina hacia adentro): sin ella el doblez quedaría
-                    pegado y la chapa se rasgaría. Donde se junta con otra pestaña queda una muesca cuadrada del largo del doblez; también puede ser
-                    redonda o cuadrada más grande. El ancho, si no se cambia, es el espesor.
+                    {tl("El alivio es una ranura en el extremo donde la chapa sigue al lado del doblez (una esquina hacia adentro): sin ella el doblez quedaría pegado y la chapa se rasgaría. Donde se junta con otra pestaña queda una muesca cuadrada del largo del doblez; también puede ser redonda o cuadrada más grande. El ancho, si no se cambia, es el espesor.")}
                   </p>
                 </>
               );
@@ -3487,7 +3475,7 @@ export const FeatureEditor: Component<{
                   ui={props.ui}
                   owner={`${f().id}:cara`}
                   kind="face"
-                  label="Cara cilíndrica"
+                  label={tl("Cara cilíndrica")}
                   refs={[k().face]}
                   lost={lost("face")}
                   onChange={(refs) => refs.length && update((x) => x.type === "thread" && (x.face = refs[refs.length - 1] as FaceRef))}
@@ -3502,7 +3490,7 @@ export const FeatureEditor: Component<{
                     const own = props.store.result()?.threads?.find((t) => t.feature === f().id);
                     return own ? (own.internal ? "external" : "internal") : "any";
                   })()}
-                  what="la rosca"
+                  what={tl("la rosca")}
                   onChange={(link, src) =>
                     update((x) => {
                       if (x.type !== "thread") return;
@@ -3515,24 +3503,23 @@ export const FeatureEditor: Component<{
                   }
                 />
                 <Show when={!k().link}>
-                <Row label="Medida">
+                <Row label={tl("Medida")}>
                   <Select
-                    options={[{ value: "", label: "Paso a medida" }, ...METRIC_HOLES.map((m) => ({ value: String(m.pitch), label: `${m.size} × ${String(m.pitch).replace(".", ",")}` }))]}
+                    options={[{ value: "", label: tl("Paso a medida") }, ...METRIC_HOLES.map((m) => ({ value: String(m.pitch), label: `${m.size} × ${String(m.pitch).replace(".", ",")}` }))]}
                     value={METRIC_HOLES.some((m) => m.pitch === k().pitch) ? String(k().pitch) : ""}
                     onChange={(v) => v && update((x) => x.type === "thread" && (x.pitch = +v))}
                   />
                 </Row>
-                {field("Paso", "kind.pitch", k().pitch, (x, v) => x.type === "thread" && (x.pitch = v), "mm")}
+                {field(tl("Paso"), "kind.pitch", k().pitch, (x, v) => x.type === "thread" && (x.pitch = v), "mm")}
                 </Show>
-                {field("Largo", "kind.length", k().length, (x, v) => x.type === "thread" && (x.length = v), "mm")}
-                {field("Holgura", "kind.clearance", k().clearance, (x, v) => x.type === "thread" && (x.clearance = v), "mm")}
-                <Checkbox small label="Desde el otro extremo" checked={k().flip} onChange={(c) => update((x) => x.type === "thread" && (x.flip = c))} />
+                {field(tl("Largo"), "kind.length", k().length, (x, v) => x.type === "thread" && (x.length = v), "mm")}
+                {field(tl("Holgura"), "kind.clearance", k().clearance, (x, v) => x.type === "thread" && (x.clearance = v), "mm")}
+                <Checkbox small label={tl("Desde el otro extremo")} checked={k().flip} onChange={(c) => update((x) => x.type === "thread" && (x.flip = c))} />
                 <Show when={!k().link}>
-                  <Checkbox small label="A izquierdas" checked={k().left} onChange={(c) => update((x) => x.type === "thread" && (x.left = c))} />
+                  <Checkbox small label={tl("A izquierdas")} checked={k().left} onChange={(c) => update((x) => x.type === "thread" && (x.left = c))} />
                 </Show>
                 <p class="text-[11px] text-text-dim">
-                  En un eje, el cilindro es el diámetro nominal (Ø6 para M6); en un agujero, el diámetro menor (5 mm para M6). Largo 0: toda la cara. La
-                  holgura achica la rosca de un eje y agranda la de un agujero (0,2–0,4 mm para imprimir en FDM).
+                  {tl("En un eje, el cilindro es el diámetro nominal (Ø6 para M6); en un agujero, el diámetro menor (5 mm para M6). Largo 0: toda la cara. La holgura achica la rosca de un eje y agranda la de un agujero (0,2–0,4 mm para imprimir en FDM).")}
                 </p>
               </>
             )}
@@ -3540,24 +3527,24 @@ export const FeatureEditor: Component<{
           <Match when={f().kind.type === "rib" && (f().kind as Extract<FeatureKind, { type: "rib" }>)}>
             {(k) => (
               <>
-                <Row label="Sketch">
+                <Row label={tl("Sketch")}>
                   <Select options={sketchOptions()} value={String(k().sketch)} onChange={(v) => update((x) => x.type === "rib" && (x.sketch = +v))} />
                 </Row>
-                {field("Espesor", "kind.thickness", k().thickness, (x, v) => x.type === "rib" && (x.thickness = v), "mm")}
-                <Checkbox small label="Hacia el otro lado" checked={k().flip} onChange={(c) => update((x) => x.type === "rib" && (x.flip = c))} />
+                {field(tl("Espesor"), "kind.thickness", k().thickness, (x, v) => x.type === "rib" && (x.thickness = v), "mm")}
+                <Checkbox small label={tl("Hacia el otro lado")} checked={k().flip} onChange={(c) => update((x) => x.type === "rib" && (x.flip = c))} />
                 <Checkbox
                   small
-                  label="Hasta el escaneo"
+                  label={tl("Hasta el escaneo")}
                   checked={!!k().scan}
                   onChange={(c) => update((x) => x.type === "rib" && (x.scan = c ? { offset: 0 } : null))}
                 />
                 <Show when={k().scan}>
-                  {field("Separación", "kind.scan.offset", k().scan?.offset ?? 0, (x, v) => x.type === "rib" && !!x.scan && (x.scan.offset = v), "mm")}
+                  {field(tl("Separación"), "kind.scan.offset", k().scan?.offset ?? 0, (x, v) => x.type === "rib" && !!x.scan && (x.scan.offset = v), "mm")}
                 </Show>
                 <p class="text-[11px] text-text-dim">
                   {k().scan
-                    ? "Cada línea del sketch se lleva hasta la piel del escaneo, en su plano, con el espesor repartido a los dos lados."
-                    : "Cada línea del sketch se lleva hasta el sólido, en su plano, con el espesor repartido a los dos lados. El sketch tiene que estar en un plano que corte el sólido."}
+                    ? tl("Cada línea del sketch se lleva hasta la piel del escaneo, en su plano, con el espesor repartido a los dos lados.")
+                    : tl("Cada línea del sketch se lleva hasta el sólido, en su plano, con el espesor repartido a los dos lados. El sketch tiene que estar en un plano que corte el sólido.")}
                 </p>
               </>
             )}
@@ -3570,7 +3557,7 @@ export const FeatureEditor: Component<{
                   ui={props.ui}
                   owner={`${f().id}:caras`}
                   kind="faces"
-                  label="Caras planas"
+                  label={tl("Caras planas")}
                   refs={k().faces}
                   lost={lost("faces")}
                   onChange={(refs) => update((x) => x.type === "replace_face" && (x.faces = refs as FaceRef[]))}
@@ -3579,13 +3566,13 @@ export const FeatureEditor: Component<{
                   store={props.store}
                   ui={props.ui}
                   owner={`${f().id}:hasta`}
-                  label="Hasta"
+                  label={tl("Hasta")}
                   value={k().target}
                   except={f().id}
                   lost={lost("target").length > 0}
                   onChange={(p) => update((x) => x.type === "replace_face" && (x.target = p))}
                 />
-                <p class="text-[11px] text-text-dim">Las caras llegan hasta el plano: suma material si queda afuera, resta si queda adentro.</p>
+                <p class="text-[11px] text-text-dim">{tl("Las caras llegan hasta el plano: suma material si queda afuera, resta si queda adentro.")}</p>
               </>
             )}
           </Match>
@@ -3597,15 +3584,14 @@ export const FeatureEditor: Component<{
                   ui={props.ui}
                   owner={`${f().id}:caras`}
                   kind="faces"
-                  label="Caras planas"
+                  label={tl("Caras planas")}
                   refs={k().faces}
                   lost={lost("faces")}
                   onChange={(refs) => update((x) => x.type === "face_to_scan" && (x.faces = refs as FaceRef[]))}
                 />
-                {field("Separación", "kind.offset", k().offset, (x, v) => x.type === "face_to_scan" && (x.offset = v), "mm")}
+                {field(tl("Separación"), "kind.offset", k().offset, (x, v) => x.type === "face_to_scan" && (x.offset = v), "mm")}
                 <p class="text-[11px] text-text-dim">
-                  Las caras llegan hasta la piel del escaneo, aunque sea curva, y quedan a esa distancia: suma material si el escaneo está afuera, resta si
-                  está adentro.
+                  {tl("Las caras llegan hasta la piel del escaneo, aunque sea curva, y quedan a esa distancia: suma material si el escaneo está afuera, resta si está adentro.")}
                 </p>
               </>
             )}
@@ -3616,13 +3602,13 @@ export const FeatureEditor: Component<{
               const [perAxis, setPerAxis] = createSignal(!uniform());
               return (
                 <>
-                  <Checkbox small label="Distinta en cada eje" checked={perAxis()} onChange={(c) => {
+                  <Checkbox small label={tl("Distinta en cada eje")} checked={perAxis()} onChange={(c) => {
                     setPerAxis(c);
                     if (!c) update((x) => x.type === "scale" && (x.factor = [x.factor[0], x.factor[0], x.factor[0]]));
                   }} />
                   <Show
                     when={perAxis()}
-                    fallback={field("Factor", "kind.factor.0", k().factor[0], (x, v) => x.type === "scale" && (x.factor = [v, v, v]))}
+                    fallback={field(tl("Factor"), "kind.factor.0", k().factor[0], (x, v) => x.type === "scale" && (x.factor = [v, v, v]))}
                   >
                     <div class="grid grid-cols-3 gap-1">
                       <For each={["X", "Y", "Z"]}>
@@ -3630,7 +3616,7 @@ export const FeatureEditor: Component<{
                       </For>
                     </div>
                   </Show>
-                  <PointField store={props.store} ui={props.ui} owner={`${f().id}:centro`} label="Centro" value={k().center} except={f().id} onChange={(p) => update((x) => x.type === "scale" && (x.center = p))} />
+                  <PointField store={props.store} ui={props.ui} owner={`${f().id}:centro`} label={tl("Centro")} value={k().center} except={f().id} onChange={(p) => update((x) => x.type === "scale" && (x.center = p))} />
                 </>
               );
             }}
@@ -3646,7 +3632,7 @@ export const FeatureEditor: Component<{
                   ? s.kind.sketch.entities.filter((e) => !e.construction && ["line", "arc", "spline", "circle", "ellipse"].includes(e.geometry.type))
                   : [];
               };
-              const NAMES: Record<string, string> = { line: "Línea", arc: "Arco", spline: "Spline", circle: "Círculo", ellipse: "Elipse" };
+              const NAMES: Record<string, string> = { line: tl("Línea"), arc: tl("Arco"), spline: tl("Spline"), circle: tl("Círculo"), ellipse: tl("Elipse") };
               const upd = (m: (x: SurfaceKind) => void) => update((x) => (x.type === "surface_extrude" || x.type === "surface_revolve") && m(x));
               const ext = () => (k().type === "surface_extrude" ? (k() as Extract<FeatureKind, { type: "surface_extrude" }>) : undefined);
               const rev = () => (k().type === "surface_revolve" ? (k() as Extract<FeatureKind, { type: "surface_revolve" }>) : undefined);
@@ -3656,12 +3642,12 @@ export const FeatureEditor: Component<{
               };
               return (
                 <>
-                  <Row label="Sketch">
+                  <Row label={tl("Sketch")}>
                     <Select options={sketchOptions()} value={String(k().sketch)} onChange={(v) => upd((x) => ((x.sketch = +v), (x.entities = [])))} />
                   </Row>
-                  <div class="space-y-1" aria-label="Curvas">
-                    <span class="text-xs text-text-muted">Curvas (sin elegir: todas)</span>
-                    <For each={curves()} fallback={<p class="text-[11px] text-text-dim">Ese sketch no tiene curvas</p>}>
+                  <div class="space-y-1" aria-label={tl("Curvas")}>
+                    <span class="text-xs text-text-muted">{tl("Curvas (sin elegir: todas)")}</span>
+                    <For each={curves()} fallback={<p class="text-[11px] text-text-dim">{tl("Ese sketch no tiene curvas")}</p>}>
                       {(e) => (
                         <Checkbox
                           small
@@ -3675,12 +3661,12 @@ export const FeatureEditor: Component<{
                   <Show when={ext()}>
                     {(e) => (
                       <>
-                        <Row label="Hasta">
+                        <Row label={tl("Hasta")}>
                           <Select
                             options={[
-                              { value: "blind", label: "Distancia" },
-                              { value: "symmetric", label: "Simétrica" },
-                              { value: "two_sides", label: "Dos direcciones" },
+                              { value: "blind", label: tl("Distancia") },
+                              { value: "symmetric", label: tl("Simétrica") },
+                              { value: "two_sides", label: tl("Dos direcciones") },
                             ]}
                             value={e().extent.type}
                             onChange={(v) =>
@@ -3693,7 +3679,7 @@ export const FeatureEditor: Component<{
                           />
                         </Row>
                         {field(
-                          "Distancia",
+                          tl("Distancia"),
                           "kind.extent.distance",
                           (e().extent as { distance: number }).distance,
                           (x, v) => x.type === "surface_extrude" && "distance" in x.extent && (x.extent.distance = v),
@@ -3701,28 +3687,28 @@ export const FeatureEditor: Component<{
                         )}
                         <Show when={e().extent.type === "two_sides"}>
                           {field(
-                            "Hacia atrás",
+                            tl("Hacia atrás"),
                             "kind.extent.second",
                             (e().extent as { second: number }).second,
                             (x, v) => x.type === "surface_extrude" && x.extent.type === "two_sides" && (x.extent.second = v),
                             "mm",
                           )}
                         </Show>
-                        <Checkbox small label="Hacia el otro lado" checked={e().reverse} onChange={(c) => update((x) => x.type === "surface_extrude" && (x.reverse = c))} />
+                        <Checkbox small label={tl("Hacia el otro lado")} checked={e().reverse} onChange={(c) => update((x) => x.type === "surface_extrude" && (x.reverse = c))} />
                       </>
                     )}
                   </Show>
                   <Show when={rev()}>
                     {(r) => (
                       <>
-                        <Row label="Eje">
+                        <Row label={tl("Eje")}>
                           <Select
                             options={[
-                              ...(r().axis.type === "edge" ? [{ value: "edge", label: "Arista del sólido" }] : []),
+                              ...(r().axis.type === "edge" ? [{ value: "edge", label: tl("Arista del sólido") }] : []),
                               { value: "x", label: "X" },
                               { value: "y", label: "Y" },
                               { value: "z", label: "Z" },
-                              ...allLines().map((l) => ({ value: `line:${l.id}`, label: `Línea ${l.id}${l.construction ? " (construcción)" : ""}` })),
+                              ...allLines().map((l) => ({ value: `line:${l.id}`, label: l.construction ? tl("Línea {id} (construcción)", { id: l.id }) : tl("Línea {id}", { id: l.id }) })),
                               ...refOptions(props.store, "axis"),
                             ]}
                             value={(() => {
@@ -3741,13 +3727,12 @@ export const FeatureEditor: Component<{
                             }
                           />
                         </Row>
-                        {field("Ángulo", "kind.angle", r().angle, (x, v) => x.type === "surface_revolve" && (x.angle = v), "°")}
+                        {field(tl("Ángulo"), "kind.angle", r().angle, (x, v) => x.type === "surface_revolve" && (x.angle = v), "°")}
                       </>
                     )}
                   </Show>
                   <p class="text-[11px] text-text-dim">
-                    Una superficie no tiene espesor: no se une a los sólidos ni la cortan sin elegirla. Se cierra con Relleno y Coser, o se le da espesor
-                    con Engrosar.
+                    {tl("Una superficie no tiene espesor: no se une a los sólidos ni la cortan sin elegirla. Se cierra con Relleno y Coser, o se le da espesor con Engrosar.")}
                   </p>
                 </>
               );
@@ -3761,20 +3746,19 @@ export const FeatureEditor: Component<{
                   ui={props.ui}
                   owner={`${f().id}:borde`}
                   kind="edges"
-                  label="Aristas del borde"
+                  label={tl("Aristas del borde")}
                   refs={k().edges}
                   lost={lost("edges")}
                   onChange={(refs) => update((x) => x.type === "fill" && (x.edges = refs as EdgeRef[]))}
                 />
                 <Checkbox
                   small
-                  label="Tangente a las caras vecinas"
+                  label={tl("Tangente a las caras vecinas")}
                   checked={k().tangent}
                   onChange={(c) => update((x) => x.type === "fill" && (x.tangent = c))}
                 />
                 <p class="text-[11px] text-text-dim">
-                  El borde tiene que cerrarse. Plano y sin tangencia queda una cara plana; tangente, sigue la curvatura del borde de cada superficie
-                  (no sirve contra una pared perpendicular al relleno).
+                  {tl("El borde tiene que cerrarse. Plano y sin tangencia queda una cara plana; tangente, sigue la curvatura del borde de cada superficie (no sirve contra una pared perpendicular al relleno).")}
                 </p>
               </>
             )}
@@ -3786,15 +3770,15 @@ export const FeatureEditor: Component<{
                   store={props.store}
                   ui={props.ui}
                   featureId={f().id}
-                  label="Superficies"
-                  empty="Elegir las superficies"
+                  label={tl("Superficies")}
+                  empty={tl("Elegir las superficies")}
                   value={k().parts}
                   missing={lost("parts")}
                   onChange={(v) => update((x) => x.type === "sew" && (x.parts = v))}
                 />
-                <Checkbox small label="Hacer sólido si cierran" checked={k().solid} onChange={(c) => update((x) => x.type === "sew" && (x.solid = c))} />
-                {field("Separación máxima", "kind.tolerance", k().tolerance, (x, v) => x.type === "sew" && (x.tolerance = v), "mm")}
-                <p class="text-[11px] text-text-dim">Une los bordes que están a menos de la separación máxima. Las piezas cosidas pasan a ser una.</p>
+                <Checkbox small label={tl("Hacer sólido si cierran")} checked={k().solid} onChange={(c) => update((x) => x.type === "sew" && (x.solid = c))} />
+                {field(tl("Separación máxima"), "kind.tolerance", k().tolerance, (x, v) => x.type === "sew" && (x.tolerance = v), "mm")}
+                <p class="text-[11px] text-text-dim">{tl("Une los bordes que están a menos de la separación máxima. Las piezas cosidas pasan a ser una.")}</p>
               </>
             )}
           </Match>
@@ -3806,13 +3790,13 @@ export const FeatureEditor: Component<{
                   ui={props.ui}
                   owner={`${f().id}:caras`}
                   kind="faces"
-                  label="Caras"
+                  label={tl("Caras")}
                   refs={k().faces}
                   lost={lost("faces")}
                   onChange={(refs) => update((x) => x.type === "thicken" && (x.faces = refs as FaceRef[]))}
                 />
-                {field("Espesor", "kind.thickness", k().thickness, (x, v) => x.type === "thicken" && (x.thickness = v), "mm")}
-                <Row label="Con el sólido">{opSelect(k().op, (o) => update((x) => x.type === "thicken" && (x.op = o)))}</Row>
+                {field(tl("Espesor"), "kind.thickness", k().thickness, (x, v) => x.type === "thicken" && (x.thickness = v), "mm")}
+                <Row label={tl("Con el sólido")}>{opSelect(k().op, (o) => update((x) => x.type === "thicken" && (x.op = o)))}</Row>
               </>
             )}
           </Match>
@@ -3823,14 +3807,14 @@ export const FeatureEditor: Component<{
                 const s = pathSketch();
                 return s?.kind.type === "sketch" ? s.kind.sketch.entities.filter((e) => !e.construction && ["line", "arc", "spline"].includes(e.geometry.type)) : [];
               };
-              const NAMES: Record<string, string> = { line: "Línea", arc: "Arco", spline: "Spline" };
+              const NAMES: Record<string, string> = { line: tl("Línea"), arc: tl("Arco"), spline: tl("Spline") };
               return (
                 <>
-                  <Row label="Tipo de perfil">
+                  <Row label={tl("Tipo de perfil")}>
                     <Select
                       options={[
-                        { value: "sketch", label: "Regiones de un sketch" },
-                        { value: "circle", label: "Círculo (tubo)" },
+                        { value: "sketch", label: tl("Regiones de un sketch") },
+                        { value: "circle", label: tl("Círculo (tubo)") },
                       ]}
                       value={k().circle != null ? "circle" : "sketch"}
                       onChange={(v) => update((x) => x.type === "sweep" && (x.circle = v === "circle" ? 2 : null))}
@@ -3838,9 +3822,9 @@ export const FeatureEditor: Component<{
                   </Row>
                   <Show
                     when={k().circle == null}
-                    fallback={field("Radio del tubo", "kind.circle", k().circle ?? 2, (x, v) => x.type === "sweep" && (x.circle = v), "mm")}
+                    fallback={field(tl("Radio del tubo"), "kind.circle", k().circle ?? 2, (x, v) => x.type === "sweep" && (x.circle = v), "mm")}
                   >
-                    <Row label="Perfil">
+                    <Row label={tl("Perfil")}>
                       <Select options={sketchOptions()} value={String(k().sketch)} onChange={(v) => update((x) => x.type === "sweep" && (x.sketch = +v))} />
                     </Row>
                     <RegionBox
@@ -3853,7 +3837,7 @@ export const FeatureEditor: Component<{
                       onChange={(r) => update((x) => x.type === "sweep" && (x.regions = r))}
                     />
                   </Show>
-                  <Row label="Camino">
+                  <Row label={tl("Camino")}>
                     <Select
                       options={[...sketchOptions(), ...refOptions(props.store, "curve").map((o) => ({ value: o.value.replace("ref:", "curve:"), label: o.label }))]}
                       value={(() => {
@@ -3870,9 +3854,9 @@ export const FeatureEditor: Component<{
                     />
                   </Row>
                   <Show when={k().path.type === "sketch"}>
-                  <div class="space-y-1" aria-label="Tramos del camino">
-                    <span class="text-xs text-text-muted">Tramos (sin elegir: todos)</span>
-                    <For each={curves()} fallback={<p class="text-[11px] text-text-dim">Ese sketch no tiene líneas, arcos ni splines</p>}>
+                  <div class="space-y-1" aria-label={tl("Tramos del camino")}>
+                    <span class="text-xs text-text-muted">{tl("Tramos (sin elegir: todos)")}</span>
+                    <For each={curves()} fallback={<p class="text-[11px] text-text-dim">{tl("Ese sketch no tiene líneas, arcos ni splines")}</p>}>
                       {(e) => (
                         <Checkbox
                           small
@@ -3889,12 +3873,12 @@ export const FeatureEditor: Component<{
                     </For>
                   </div>
                   </Show>
-                  <Row label="Orientación">
+                  <Row label={tl("Orientación")}>
                     <Select options={ORIENT_OPTIONS} value={k().orient ?? "follow"} onChange={(v) => update((x) => x.type === "sweep" && (x.orient = v === "follow" ? undefined : (v as SweepOrient)))} />
                   </Row>
-                  <Row label="Curva guía">
+                  <Row label={tl("Curva guía")}>
                     <Select
-                      options={[{ value: "", label: "Ninguna" }, ...sketchOptions(), ...refOptions(props.store, "curve").map((o) => ({ value: o.value.replace("ref:", "curve:"), label: o.label }))]}
+                      options={[{ value: "", label: tl("Ninguna") }, ...sketchOptions(), ...refOptions(props.store, "curve").map((o) => ({ value: o.value.replace("ref:", "curve:"), label: o.label }))]}
                       value={(() => {
                         const g = k().guide;
                         return !g ? "" : g.type === "sketch" ? String(g.sketch) : `curve:${g.feature}`;
@@ -3909,18 +3893,18 @@ export const FeatureEditor: Component<{
                     />
                   </Row>
                   <Show when={!k().guide}>
-                    {field("Torsión", "kind.twist", k().twist ?? 0, (x, v) => x.type === "sweep" && (x.twist = v === 0 ? null : v), "°")}
+                    {field(tl("Torsión"), "kind.twist", k().twist ?? 0, (x, v) => x.type === "sweep" && (x.twist = v === 0 ? null : v), "°")}
                   </Show>
                   <Checkbox
                     small
-                    label="Delgado (solo una pared)"
+                    label={tl("Delgado (solo una pared)")}
                     checked={k().thin != null}
                     onChange={(c) => update((x) => x.type === "sweep" && (x.thin = c ? 1 : null))}
                   />
                   <Show when={k().thin != null}>
-                    {field("Espesor", "kind.thin", k().thin ?? 1, (x, v) => x.type === "sweep" && (x.thin = v), "mm")}
+                    {field(tl("Espesor"), "kind.thin", k().thin ?? 1, (x, v) => x.type === "sweep" && (x.thin = v), "mm")}
                   </Show>
-                  <Row label="Con el sólido">{opSelect(k().op, (o) => update((x) => x.type === "sweep" && (x.op = o)))}</Row>
+                  <Row label={tl("Con el sólido")}>{opSelect(k().op, (o) => update((x) => x.type === "sweep" && (x.op = o)))}</Row>
                 </>
               );
             }}
@@ -3928,10 +3912,10 @@ export const FeatureEditor: Component<{
           <Match when={f().kind.type === "surface_sweep" && (f().kind as Extract<FeatureKind, { type: "surface_sweep" }>)}>
             {(k) => (
               <>
-                <Row label="Curvas de">
+                <Row label={tl("Curvas de")}>
                   <Select options={sketchOptions()} value={String(k().sketch)} onChange={(v) => update((x) => x.type === "surface_sweep" && ((x.sketch = +v), (x.entities = [])))} />
                 </Row>
-                <Row label="Camino">
+                <Row label={tl("Camino")}>
                   <Select
                     options={[...sketchOptions(), ...refOptions(props.store, "curve").map((o) => ({ value: o.value.replace("ref:", "curve:"), label: o.label }))]}
                     value={(() => {
@@ -3947,14 +3931,14 @@ export const FeatureEditor: Component<{
                     }
                   />
                 </Row>
-                <Row label="Orientación">
+                <Row label={tl("Orientación")}>
                   <Select
                     options={ORIENT_OPTIONS}
                     value={k().orient ?? "follow"}
                     onChange={(v) => update((x) => x.type === "surface_sweep" && (x.orient = v === "follow" ? undefined : (v as SweepOrient)))}
                   />
                 </Row>
-                <p class="text-[11px] text-text-dim">Cada curva del sketch (abierta o cerrada) da una superficie sin espesor.</p>
+                <p class="text-[11px] text-text-dim">{tl("Cada curva del sketch (abierta o cerrada) da una superficie sin espesor.")}</p>
               </>
             )}
           </Match>
@@ -3963,7 +3947,7 @@ export const FeatureEditor: Component<{
               <>
                 <For each={k().sections}>
                   {(sec, i) => (
-                    <Row label={`Sección ${i() + 1}`}>
+                    <Row label={tl("Sección {v1}", { v1: i() + 1 })}>
                       <Select
                         options={sketchOptions()}
                         value={String(sec.sketch)}
@@ -3984,10 +3968,10 @@ export const FeatureEditor: Component<{
                     })
                   }
                 >
-                  Agregar sección
+                  {tl("Agregar sección")}
                 </Button>
-                <Checkbox small label="Caras planas entre secciones" checked={k().ruled} onChange={(c) => update((x) => x.type === "surface_loft" && (x.ruled = c))} />
-                <p class="text-[11px] text-text-dim">Cada sección es una cadena de curvas (abierta o cerrada) de un sketch.</p>
+                <Checkbox small label={tl("Caras planas entre secciones")} checked={k().ruled} onChange={(c) => update((x) => x.type === "surface_loft" && (x.ruled = c))} />
+                <p class="text-[11px] text-text-dim">{tl("Cada sección es una cadena de curvas (abierta o cerrada) de un sketch.")}</p>
               </>
             )}
           </Match>
@@ -3998,7 +3982,7 @@ export const FeatureEditor: Component<{
                   {(sec, i) => (
                     <div class="flex items-end gap-1">
                       <div class="flex-1">
-                        <Row label={`Sección ${i() + 1}`}>
+                        <Row label={tl("Sección {v1}", { v1: i() + 1 })}>
                           <Select
                             options={sketchOptions()}
                             value={String(sec.sketch)}
@@ -4007,7 +3991,7 @@ export const FeatureEditor: Component<{
                         </Row>
                       </div>
                       <IconButton
-                        aria-label={`Quitar la sección ${i() + 1}`}
+                        aria-label={tl("Quitar la sección {v1}", { v1: i() + 1 })}
                         size="sm"
                         variant="ghost"
                         disabled={k().sections.length <= 2}
@@ -4030,53 +4014,53 @@ export const FeatureEditor: Component<{
                     })
                   }
                 >
-                  Agregar sección
+                  {tl("Agregar sección")}
                 </Button>
-                <Checkbox small label="Caras planas entre secciones" checked={k().ruled} onChange={(c) => update((x) => x.type === "loft" && (x.ruled = c))} />
+                <Checkbox small label={tl("Caras planas entre secciones")} checked={k().ruled} onChange={(c) => update((x) => x.type === "loft" && (x.ruled = c))} />
                 <Checkbox
                   small
-                  label="Empieza en un punto"
+                  label={tl("Empieza en un punto")}
                   checked={!!k().start_point}
                   onChange={(c) => update((x) => x.type === "loft" && (x.start_point = c ? { type: "at", point: [0, 0, -10] } : null))}
                 />
                 <Show when={k().start_point}>
-                  {(p) => <PointField store={props.store} ui={props.ui} owner={`${f().id}:desde`} label="Punta inicial" value={p()} except={f().id} onChange={(q) => update((x) => x.type === "loft" && (x.start_point = q))} />}
+                  {(p) => <PointField store={props.store} ui={props.ui} owner={`${f().id}:desde`} label={tl("Punta inicial")} value={p()} except={f().id} onChange={(q) => update((x) => x.type === "loft" && (x.start_point = q))} />}
                 </Show>
                 <Checkbox
                   small
-                  label="Termina en un punto"
+                  label={tl("Termina en un punto")}
                   checked={!!k().end_point}
                   onChange={(c) => update((x) => x.type === "loft" && (x.end_point = c ? { type: "at", point: [0, 0, 20] } : null))}
                 />
                 <Show when={k().end_point}>
-                  {(p) => <PointField store={props.store} ui={props.ui} owner={`${f().id}:hasta`} label="Punta final" value={p()} except={f().id} onChange={(q) => update((x) => x.type === "loft" && (x.end_point = q))} />}
+                  {(p) => <PointField store={props.store} ui={props.ui} owner={`${f().id}:hasta`} label={tl("Punta final")} value={p()} except={f().id} onChange={(q) => update((x) => x.type === "loft" && (x.end_point = q))} />}
                 </Show>
-                <Checkbox small label="Cerrada (vuelve a la primera)" checked={!!k().closed} onChange={(c) => update((x) => x.type === "loft" && (x.closed = c || undefined))} />
+                <Checkbox small label={tl("Cerrada (vuelve a la primera)")} checked={!!k().closed} onChange={(c) => update((x) => x.type === "loft" && (x.closed = c || undefined))} />
                 <Checkbox
                   small
-                  label="Sale perpendicular a la primera sección"
+                  label={tl("Sale perpendicular a la primera sección")}
                   checked={k().start_tangent != null}
                   onChange={(c) => update((x) => x.type === "loft" && ((x.start_tangent = c ? 1 : null), c && (x.ruled = false)))}
                 />
                 <Show when={k().start_tangent != null}>
-                  {field("Peso al comienzo", "kind.start_tangent", k().start_tangent ?? 1, (x, v) => x.type === "loft" && (x.start_tangent = v))}
+                  {field(tl("Peso al comienzo"), "kind.start_tangent", k().start_tangent ?? 1, (x, v) => x.type === "loft" && (x.start_tangent = v))}
                 </Show>
                 <Checkbox
                   small
-                  label="Llega perpendicular a la última sección"
+                  label={tl("Llega perpendicular a la última sección")}
                   checked={k().end_tangent != null}
                   onChange={(c) => update((x) => x.type === "loft" && ((x.end_tangent = c ? 1 : null), c && (x.ruled = false)))}
                 />
                 <Show when={k().end_tangent != null}>
-                  {field("Peso al final", "kind.end_tangent", k().end_tangent ?? 1, (x, v) => x.type === "loft" && (x.end_tangent = v))}
+                  {field(tl("Peso al final"), "kind.end_tangent", k().end_tangent ?? 1, (x, v) => x.type === "loft" && (x.end_tangent = v))}
                 </Show>
-                <Checkbox small label="Delgada (solo una pared)" checked={k().thin != null} onChange={(c) => update((x) => x.type === "loft" && (x.thin = c ? 1 : null))} />
+                <Checkbox small label={tl("Delgada (solo una pared)")} checked={k().thin != null} onChange={(c) => update((x) => x.type === "loft" && (x.thin = c ? 1 : null))} />
                 <Show when={k().thin != null}>
-                  {field("Espesor", "kind.thin", k().thin ?? 1, (x, v) => x.type === "loft" && (x.thin = v), "mm")}
+                  {field(tl("Espesor"), "kind.thin", k().thin ?? 1, (x, v) => x.type === "loft" && (x.thin = v), "mm")}
                 </Show>
-                <Row label="Línea central">
+                <Row label={tl("Línea central")}>
                   <Select
-                    options={[{ value: "", label: "Ninguna" }, ...sketchOptions(), ...refOptions(props.store, "curve").map((o) => ({ value: o.value.replace("ref:", "curve:"), label: o.label }))]}
+                    options={[{ value: "", label: tl("Ninguna") }, ...sketchOptions(), ...refOptions(props.store, "curve").map((o) => ({ value: o.value.replace("ref:", "curve:"), label: o.label }))]}
                     value={(() => {
                       const p = k().path;
                       return !p ? "" : p.type === "sketch" ? String(p.sketch) : `curve:${p.feature}`;
@@ -4091,9 +4075,9 @@ export const FeatureEditor: Component<{
                   />
                 </Row>
                 <Show when={k().path}>
-                  <Row label="Curva guía">
+                  <Row label={tl("Curva guía")}>
                     <Select
-                      options={[{ value: "", label: "Ninguna" }, ...sketchOptions(), ...refOptions(props.store, "curve").map((o) => ({ value: o.value.replace("ref:", "curve:"), label: o.label }))]}
+                      options={[{ value: "", label: tl("Ninguna") }, ...sketchOptions(), ...refOptions(props.store, "curve").map((o) => ({ value: o.value.replace("ref:", "curve:"), label: o.label }))]}
                       value={(() => {
                         const p = k().guide;
                         return !p ? "" : p.type === "sketch" ? String(p.sketch) : `curve:${p.feature}`;
@@ -4108,14 +4092,13 @@ export const FeatureEditor: Component<{
                     />
                   </Row>
                 </Show>
-                <Row label="Con el sólido">{opSelect(k().op, (o) => update((x) => x.type === "loft" && (x.op = o)))}</Row>
+                <Row label={tl("Con el sólido")}>{opSelect(k().op, (o) => update((x) => x.type === "loft" && (x.op = o)))}</Row>
               </>
             )}
           </Match>
           <Match when={isScanReference(f().kind)}>
             <p class="text-[11px] text-text-dim leading-relaxed">
-              Tomado del escaneo: sigue al escaneo si se alinea, se mueve o se repara. Para cambiar de dónde sale, borrarlo y volver a tomarlo en la
-              pestaña «Desde el escaneo».
+              {tl("Tomado del escaneo: sigue al escaneo si se alinea, se mueve o se repara. Para cambiar de dónde sale, borrarlo y volver a tomarlo en la pestaña «Desde el escaneo».")}
             </p>
           </Match>
           <Match when={f().kind.type === "plane" && (f().kind as Extract<FeatureKind, { type: "plane" }>)}>
@@ -4125,14 +4108,14 @@ export const FeatureEditor: Component<{
               const base = (): PlaneSpec => (def().type === "offset" || def().type === "angle" ? (def() as { base: PlaneSpec }).base : { type: "xy" });
               return (
                 <>
-                  <Row label="Tipo">
+                  <Row label={tl("Tipo")}>
                     <Select
                       options={[
-                        { value: "offset", label: "Desplazado" },
-                        { value: "angle", label: "En ángulo" },
-                        { value: "midplane", label: "Plano medio" },
-                        { value: "three_points", label: "Por tres puntos" },
-                        { value: "picked", label: "Por clics (se deduce)" },
+                        { value: "offset", label: tl("Desplazado") },
+                        { value: "angle", label: tl("En ángulo") },
+                        { value: "midplane", label: tl("Plano medio") },
+                        { value: "three_points", label: tl("Por tres puntos") },
+                        { value: "picked", label: tl("Por clics (se deduce)") },
                       ]}
                       value={def().type}
                       onChange={(v) => {
@@ -4167,33 +4150,33 @@ export const FeatureEditor: Component<{
                             lost={lost("refs" as MissingRef["field"])}
                             onChange={(refs) => setDef({ ...d(), refs })}
                           />
-                          {field("Distancia", "kind.def.offset", d().offset ?? 0, (x, v) => x.type === "plane" && x.def.type === "picked" && (x.def.offset = v || undefined), "mm")}
-                          {field("Ángulo", "kind.def.angle", d().angle ?? 0, (x, v) => x.type === "plane" && x.def.type === "picked" && (x.def.angle = v || undefined), "°")}
-                          <Checkbox small label="Dar vuelta la normal" checked={!!d().flip} onChange={(c) => setDef({ ...d(), flip: c || undefined })} />
+                          {field(tl("Distancia"), "kind.def.offset", d().offset ?? 0, (x, v) => x.type === "plane" && x.def.type === "picked" && (x.def.offset = v || undefined), "mm")}
+                          {field(tl("Ángulo"), "kind.def.angle", d().angle ?? 0, (x, v) => x.type === "plane" && x.def.type === "picked" && (x.def.angle = v || undefined), "°")}
+                          <Checkbox small label={tl("Dar vuelta la normal")} checked={!!d().flip} onChange={(c) => setDef({ ...d(), flip: c || undefined })} />
                         </>
                       )}
                     </Match>
                     <Match when={def().type === "offset" && (def() as Extract<PlaneDef, { type: "offset" }>)}>
                       {(d) => (
                         <>
-                          <PlaneField store={props.store} ui={props.ui} owner={`${f().id}:base`} label="Desde" value={d().base} except={f().id} lost={lost("base").length > 0} onChange={(p) => setDef({ ...d(), base: p })} />
-                          {field("Distancia", "kind.def.distance", d().distance, (x, v) => x.type === "plane" && x.def.type === "offset" && (x.def.distance = v), "mm")}
+                          <PlaneField store={props.store} ui={props.ui} owner={`${f().id}:base`} label={tl("Desde")} value={d().base} except={f().id} lost={lost("base").length > 0} onChange={(p) => setDef({ ...d(), base: p })} />
+                          {field(tl("Distancia"), "kind.def.distance", d().distance, (x, v) => x.type === "plane" && x.def.type === "offset" && (x.def.distance = v), "mm")}
                         </>
                       )}
                     </Match>
                     <Match when={def().type === "angle" && (def() as Extract<PlaneDef, { type: "angle" }>)}>
                       {(d) => (
                         <>
-                          <PlaneField store={props.store} ui={props.ui} owner={`${f().id}:base`} label="Desde" value={d().base} except={f().id} lost={lost("base").length > 0} onChange={(p) => setDef({ ...d(), base: p })} />
-                          <AxisField store={props.store} ui={props.ui} owner={`${f().id}:eje`} label="Alrededor de" value={d().axis} except={f().id} onChange={(a) => setDef({ ...d(), axis: a })} />
-                          {field("Ángulo", "kind.def.angle", d().angle, (x, v) => x.type === "plane" && x.def.type === "angle" && (x.def.angle = v), "°")}
+                          <PlaneField store={props.store} ui={props.ui} owner={`${f().id}:base`} label={tl("Desde")} value={d().base} except={f().id} lost={lost("base").length > 0} onChange={(p) => setDef({ ...d(), base: p })} />
+                          <AxisField store={props.store} ui={props.ui} owner={`${f().id}:eje`} label={tl("Alrededor de")} value={d().axis} except={f().id} onChange={(a) => setDef({ ...d(), axis: a })} />
+                          {field(tl("Ángulo"), "kind.def.angle", d().angle, (x, v) => x.type === "plane" && x.def.type === "angle" && (x.def.angle = v), "°")}
                         </>
                       )}
                     </Match>
                     <Match when={def().type === "midplane" && (def() as Extract<PlaneDef, { type: "midplane" }>)}>
                       {(d) => (
                         <>
-                          <PlaneField store={props.store} ui={props.ui} owner={`${f().id}:a`} label="Entre" value={d().a} except={f().id} lost={lost("a").length > 0} onChange={(p) => setDef({ ...d(), a: p })} />
+                          <PlaneField store={props.store} ui={props.ui} owner={`${f().id}:a`} label={tl("Entre")} value={d().a} except={f().id} lost={lost("a").length > 0} onChange={(p) => setDef({ ...d(), a: p })} />
                           <PlaneField store={props.store} ui={props.ui} owner={`${f().id}:b`} label="Y" value={d().b} except={f().id} lost={lost("b").length > 0} onChange={(p) => setDef({ ...d(), b: p })} />
                         </>
                       )}
@@ -4206,7 +4189,7 @@ export const FeatureEditor: Component<{
                               store={props.store}
                               ui={props.ui}
                               owner={`${f().id}:p${k}`}
-                              label={`Punto ${k + 1}`}
+                              label={tl("Punto {v1}", { v1: k + 1 })}
                               value={d().points[k]}
                               except={f().id}
                               onChange={(p) => setDef({ ...d(), points: d().points.map((q, i) => (i === k ? p : q)) as [PointSpec, PointSpec, PointSpec] })}
@@ -4226,14 +4209,14 @@ export const FeatureEditor: Component<{
               const setDef = (d: AxisDef) => update((x) => x.type === "axis" && (x.def = d));
               return (
                 <>
-                  <Row label="Tipo">
+                  <Row label={tl("Tipo")}>
                     <Select
                       options={[
-                        { value: "two_points", label: "Por dos puntos" },
-                        { value: "edge", label: "Arista" },
-                        { value: "face", label: "Eje de un cilindro" },
-                        { value: "planes", label: "Cruce de dos planos" },
-                        { value: "picked", label: "Por clics (se deduce)" },
+                        { value: "two_points", label: tl("Por dos puntos") },
+                        { value: "edge", label: tl("Arista") },
+                        { value: "face", label: tl("Eje de un cilindro") },
+                        { value: "planes", label: tl("Cruce de dos planos") },
+                        { value: "picked", label: tl("Por clics (se deduce)") },
                       ]}
                       value={def().type}
                       onChange={(v) => {
@@ -4264,8 +4247,8 @@ export const FeatureEditor: Component<{
                     <Match when={def().type === "two_points" && (def() as Extract<AxisDef, { type: "two_points" }>)}>
                       {(d) => (
                         <>
-                          <PointField store={props.store} ui={props.ui} owner={`${f().id}:a`} label="Desde" value={d().a} except={f().id} onChange={(p) => setDef({ ...d(), a: p })} />
-                          <PointField store={props.store} ui={props.ui} owner={`${f().id}:b`} label="Hasta" value={d().b} except={f().id} onChange={(p) => setDef({ ...d(), b: p })} />
+                          <PointField store={props.store} ui={props.ui} owner={`${f().id}:a`} label={tl("Desde")} value={d().a} except={f().id} onChange={(p) => setDef({ ...d(), a: p })} />
+                          <PointField store={props.store} ui={props.ui} owner={`${f().id}:b`} label={tl("Hasta")} value={d().b} except={f().id} onChange={(p) => setDef({ ...d(), b: p })} />
                         </>
                       )}
                     </Match>
@@ -4276,7 +4259,7 @@ export const FeatureEditor: Component<{
                           ui={props.ui}
                           owner={`${f().id}:arista`}
                           kind="edges"
-                          label="Arista"
+                          label={tl("Arista")}
                           refs={d().edge ? [d().edge] : []}
                           lost={lost("edge")}
                           onChange={(refs) => refs.length && setDef({ type: "edge", edge: refs[refs.length - 1] as EdgeRef })}
@@ -4290,7 +4273,7 @@ export const FeatureEditor: Component<{
                           ui={props.ui}
                           owner={`${f().id}:cara`}
                           kind="face"
-                          label="Cara cilíndrica o cónica"
+                          label={tl("Cara cilíndrica o cónica")}
                           refs={d().face ? [d().face] : []}
                           lost={lost("face")}
                           onChange={(refs) => refs[0] && setDef({ type: "face", face: refs[0] as FaceRef })}
@@ -4300,8 +4283,8 @@ export const FeatureEditor: Component<{
                     <Match when={def().type === "planes" && (def() as Extract<AxisDef, { type: "planes" }>)}>
                       {(d) => (
                         <>
-                          <PlaneField store={props.store} ui={props.ui} owner={`${f().id}:a`} label="Plano" value={d().a} except={f().id} lost={lost("a").length > 0} onChange={(p) => setDef({ ...d(), a: p })} />
-                          <PlaneField store={props.store} ui={props.ui} owner={`${f().id}:b`} label="Con" value={d().b} except={f().id} lost={lost("b").length > 0} onChange={(p) => setDef({ ...d(), b: p })} />
+                          <PlaneField store={props.store} ui={props.ui} owner={`${f().id}:a`} label={tl("Plano")} value={d().a} except={f().id} lost={lost("a").length > 0} onChange={(p) => setDef({ ...d(), a: p })} />
+                          <PlaneField store={props.store} ui={props.ui} owner={`${f().id}:b`} label={tl("Con")} value={d().b} except={f().id} lost={lost("b").length > 0} onChange={(p) => setDef({ ...d(), b: p })} />
                         </>
                       )}
                     </Match>
@@ -4313,11 +4296,11 @@ export const FeatureEditor: Component<{
           <Match when={f().kind.type === "point" && (f().kind as Extract<FeatureKind, { type: "point" }>)}>
             {(k) => (
               <>
-                <Row label="Tipo">
+                <Row label={tl("Tipo")}>
                   <Select
                     options={[
-                      { value: "picked", label: "Por clics (se deduce)" },
-                      { value: "other", label: "Coordenadas, arista o referencia" },
+                      { value: "picked", label: tl("Por clics (se deduce)") },
+                      { value: "other", label: tl("Coordenadas, arista o referencia") },
                     ]}
                     value={k().def.type === "picked" ? "picked" : "other"}
                     onChange={(v) =>
@@ -4335,7 +4318,7 @@ export const FeatureEditor: Component<{
                       store={props.store}
                       ui={props.ui}
                       owner={`${f().id}:punto`}
-                      label="Punto"
+                      label={tl("Punto")}
                       value={k().def}
                       except={f().id}
                       onChange={(p) => update((x) => x.type === "point" && (x.def = p))}
@@ -4365,7 +4348,7 @@ export const FeatureEditor: Component<{
                   store={props.store}
                   ui={props.ui}
                   owner={`${f().id}:origen`}
-                  label="Origen"
+                  label={tl("Origen")}
                   value={k().origin}
                   except={f().id}
                   onChange={(p) => update((x) => x.type === "frame" && (x.origin = p))}
@@ -4374,14 +4357,14 @@ export const FeatureEditor: Component<{
                   store={props.store}
                   ui={props.ui}
                   owner={`${f().id}:z`}
-                  label="Eje Z"
+                  label={tl("Eje Z")}
                   value={k().z}
                   except={f().id}
                   onChange={(a) => update((x) => x.type === "frame" && (x.z = a))}
                 />
                 <Checkbox
                   small
-                  label="Hacia dónde va X"
+                  label={tl("Hacia dónde va X")}
                   checked={!!k().x}
                   onChange={(c) => update((x) => x.type === "frame" && (x.x = c ? { type: "x" } : undefined))}
                 />
@@ -4391,7 +4374,7 @@ export const FeatureEditor: Component<{
                       store={props.store}
                       ui={props.ui}
                       owner={`${f().id}:x`}
-                      label="Eje X"
+                      label={tl("Eje X")}
                       value={ax()}
                       except={f().id}
                       onChange={(a) => update((x) => x.type === "frame" && (x.x = a))}
@@ -4399,11 +4382,11 @@ export const FeatureEditor: Component<{
                   )}
                 </Show>
                 <div class="flex gap-3">
-                  <Checkbox small label="Invertir Z" checked={!!k().flip_z} onChange={(c) => update((x) => x.type === "frame" && (x.flip_z = c || undefined))} />
-                  <Checkbox small label="Invertir X" checked={!!k().flip_x} onChange={(c) => update((x) => x.type === "frame" && (x.flip_x = c || undefined))} />
+                  <Checkbox small label={tl("Invertir Z")} checked={!!k().flip_z} onChange={(c) => update((x) => x.type === "frame" && (x.flip_z = c || undefined))} />
+                  <Checkbox small label={tl("Invertir X")} checked={!!k().flip_x} onChange={(c) => update((x) => x.type === "frame" && (x.flip_x = c || undefined))} />
                 </div>
                 <p class="text-[11px] text-text-dim">
-                  Sin X propio, X sale del X del mundo (o del Y si Z va a lo largo de X). Se usa como sus tres planos, sus tres ejes y su origen.
+                  {tl("Sin X propio, X sale del X del mundo (o del Y si Z va a lo largo de X). Se usa como sus tres planos, sus tres ejes y su origen.")}
                 </p>
               </>
             )}
@@ -4415,8 +4398,8 @@ export const FeatureEditor: Component<{
             store={props.store}
             ui={props.ui}
             featureId={f().id}
-            label={f().kind.type === "hole" ? "En las piezas" : "Con las piezas"}
-            empty={f().kind.type === "hole" ? "La más cercana" : "Las que toca"}
+            label={f().kind.type === "hole" ? tl("En las piezas") : tl("Con las piezas")}
+            empty={f().kind.type === "hole" ? tl("La más cercana") : tl("Las que toca")}
             value={f().scope ?? []}
             auto={state()?.auto_scope}
             missing={lost("scope")}
@@ -4430,7 +4413,7 @@ export const FeatureEditor: Component<{
 };
 
 function planeLabelFor(f: Feature): string {
-  return f.kind.type === "sketch" ? `Sobre: ${planeLabel(f.kind.plane)}` : "";
+  return f.kind.type === "sketch" ? tl("Sobre: {v1}", { v1: planeLabel(f.kind.plane) }) : "";
 }
 
 // ─── Geometría de referencia en los diálogos ──────────────────────────────
@@ -4440,7 +4423,7 @@ function refOptions(store: CadStore, kind: "plane" | "axis" | "point" | "curve",
   const names = new Map((store.doc()?.features ?? []).map((f) => [f.id, f.name]));
   return (store.result()?.references ?? []).flatMap((r) => {
     if (r.id === except) return [];
-    const name = names.get(r.id) ?? `Referencia ${r.id}`;
+    const name = names.get(r.id) ?? tl("Referencia {id}", { id: r.id });
     // Un sistema de coordenadas da sus tres planos, sus tres ejes y su origen
     if (r.kind === "frame") {
       if (kind === "plane") return FRAME_PLANES.map(([n, label]) => ({ value: `frame:${r.id}:${n}`, label: `${name} · ${label}` }));
@@ -4489,8 +4472,8 @@ const PlaneField: Component<{ store: CadStore; ui: CadUi; owner: string; label: 
           options={[
             ...(["xy", "xz", "yz"] as const).map((k) => ({ value: k, label: PLANE_LABELS[k] })),
             ...refOptions(props.store, "plane", props.except),
-            { value: "face", label: props.lost ? "Cara del sólido · no encontrada" : "Cara del sólido" },
-            ...(props.value.type === "custom" ? [{ value: "custom", label: "Plano propio" }] : []),
+            { value: "face", label: props.lost ? tl("Cara del sólido · no encontrada") : tl("Cara del sólido") },
+            ...(props.value.type === "custom" ? [{ value: "custom", label: tl("Plano propio") }] : []),
           ]}
           value={current()}
           onChange={(v) => {
@@ -4531,9 +4514,9 @@ const AxisField: Component<{ store: CadStore; ui: CadUi; owner: string; label: s
           options={[
             ...(["x", "y", "z"] as const).map((k) => ({ value: k, label: k.toUpperCase() })),
             ...refOptions(props.store, "axis", props.except),
-            { value: "edge", label: "Arista del sólido" },
-            ...(props.value.type === "sketch_line" ? [{ value: "sketch_line", label: "Línea del sketch" }] : []),
-            ...(props.value.type === "custom" ? [{ value: "custom", label: "Eje propio" }] : []),
+            { value: "edge", label: tl("Arista del sólido") },
+            ...(props.value.type === "sketch_line" ? [{ value: "sketch_line", label: tl("Línea del sketch") }] : []),
+            ...(props.value.type === "custom" ? [{ value: "custom", label: tl("Eje propio") }] : []),
           ]}
           value={current()}
           onChange={(v) => {
@@ -4572,14 +4555,14 @@ const PointField: Component<{ store: CadStore; ui: CadUi; owner: string; label: 
       <Row label={props.label}>
         <Select
           options={[
-            { value: "at", label: "Coordenadas" },
-            { value: "center", label: "Centro de una arista" },
-            { value: "on_edge", label: "Sobre una arista recta" },
+            { value: "at", label: tl("Coordenadas") },
+            { value: "center", label: tl("Centro de una arista") },
+            { value: "on_edge", label: tl("Sobre una arista recta") },
             ...refOptions(props.store, "point", props.except),
             // Elegidos en el visor (no se arman desde la lista)
-            ...(props.value.type === "edge_end" ? [{ value: "edge_end", label: "Vértice del sólido" }] : []),
-            ...(props.value.type === "picked" ? [{ value: "picked", label: "Por clics" }] : []),
-            ...(props.value.type === "scan" ? [{ value: "scan", label: "Del escaneo" }] : []),
+            ...(props.value.type === "edge_end" ? [{ value: "edge_end", label: tl("Vértice del sólido") }] : []),
+            ...(props.value.type === "picked" ? [{ value: "picked", label: tl("Por clics") }] : []),
+            ...(props.value.type === "scan" ? [{ value: "scan", label: tl("Del escaneo") }] : []),
           ]}
           value={current()}
           onChange={(v) => {
@@ -4623,7 +4606,7 @@ const PointField: Component<{ store: CadStore; ui: CadUi; owner: string; label: 
         />
       </Show>
       <Show when={props.value.type === "on_edge" && props.value}>
-        {(p) => <Num label="Fracción del largo" step={0.05} value={p().at} onCommit={(v) => props.onChange({ ...p(), at: Math.min(1, Math.max(0, v)) })} />}
+        {(p) => <Num label={tl("Fracción del largo")} step={0.05} value={p().at} onCommit={(v) => props.onChange({ ...p(), at: Math.min(1, Math.max(0, v)) })} />}
       </Show>
     </div>
   );
@@ -4641,11 +4624,11 @@ const PointField: Component<{ store: CadStore; ui: CadUi; owner: string; label: 
 const SkipCopies: Component<{ value: number[]; onChange: (v: number[]) => void }> = (props) => (
   <>
     <label class="flex items-center gap-2 text-xs">
-      <span class="text-text-muted shrink-0 w-24">Omitir copias</span>
+      <span class="text-text-muted shrink-0 w-24">{tl("Omitir copias")}</span>
       <input
         type="text"
-        aria-label="Omitir copias"
-        placeholder="ninguna"
+        aria-label={tl("Omitir copias")}
+        placeholder={tl("ninguna")}
         value={props.value.join(", ")}
         class="w-full min-w-0 px-2 py-1 rounded bg-surface/40 border border-border text-xs text-text font-mono outline-none focus:border-accent"
         onChange={(e) => {
@@ -4661,7 +4644,7 @@ const SkipCopies: Component<{ value: number[]; onChange: (v: number[]) => void }
         }}
       />
     </label>
-    <p class="text-[11px] text-text-dim">Números de las copias que no se hacen (1 es la primera; en dos direcciones se cuentan por filas).</p>
+    <p class="text-[11px] text-text-dim">{tl("Números de las copias que no se hacen (1 es la primera; en dos direcciones se cuentan por filas).")}</p>
   </>
 );
 
@@ -4701,7 +4684,7 @@ const PartChecklist: Component<{
   // Se elige sobre el sólido de antes de la operación (lo que resta ya no se ve en la vista previa)
   const activate = () => {
     void props.store.setSelecting(true);
-    ui.setPick({ kind: "parts", owner: owner(), prompt: "Clic en las piezas (otra vez para quitarla)", toggle: (id) => toggle(id) });
+    ui.setPick({ kind: "parts", owner: owner(), prompt: tl("Clic en las piezas (otra vez para quitarla)"), toggle: (id) => toggle(id) });
   };
   // Elegidas resaltadas en el visor mientras se elige
   createEffect(() => {
@@ -4722,7 +4705,7 @@ const PartChecklist: Component<{
   return (
     <div class="space-y-1" aria-label={props.label}>
       <span class="text-xs text-text-muted">{props.label}</span>
-      <Show when={parts().length > 0} fallback={<p class="text-[11px] text-text-dim">Todavía no hay piezas</p>}>
+      <Show when={parts().length > 0} fallback={<p class="text-[11px] text-text-dim">{tl("Todavía no hay piezas")}</p>}>
         <div
           data-parts-box
           class={clsx(
@@ -4731,14 +4714,14 @@ const PartChecklist: Component<{
           )}
           onClick={() => (active() ? ui.cancelPick() : activate())}
         >
-          <Show when={shown().length > 0} fallback={<span class="text-text-dim">{active() ? "Clic en las piezas" : `${props.empty}: clic para elegir`}</span>}>
+          <Show when={shown().length > 0} fallback={<span class="text-text-dim">{active() ? tl("Clic en las piezas") : tl("{empty}: clic para elegir", { empty: props.empty })}</span>}>
             <For each={shown()}>
               {(id) => (
                 <div class="group flex items-center justify-between gap-1 rounded px-1 hover:bg-surface">
-                  <span class={clsx(props.value.length ? "text-text" : "text-text-muted")}>{nameOf(id) ?? "Pieza"}</span>
+                  <span class={clsx(props.value.length ? "text-text" : "text-text-muted")}>{nameOf(id) ?? tl("Pieza")}</span>
                   <button
                     class="opacity-0 group-hover:opacity-100 text-text-muted hover:text-text"
-                    aria-label={`Quitar ${nameOf(id) ?? "la pieza"}`}
+                    aria-label={tl("Quitar {v1}", { v1: nameOf(id) ?? tl("la pieza") })}
                     onClick={(e) => {
                       e.stopPropagation();
                       toggle(id);
@@ -4755,15 +4738,15 @@ const PartChecklist: Component<{
       <For each={gone()}>
         {(g) => (
           <div class="flex items-center justify-between text-[11px] text-error">
-            <span>Pieza no encontrada</span>
-            <button aria-label="Quitar la pieza no encontrada" onClick={() => props.onChange(props.value.filter((x) => !samePart(x, g)))}>
+            <span>{tl("Pieza no encontrada")}</span>
+            <button aria-label={tl("Quitar la pieza no encontrada")} onClick={() => props.onChange(props.value.filter((x) => !samePart(x, g)))}>
               <Icons.X size={10} />
             </button>
           </div>
         )}
       </For>
       <Show when={props.value.length === 0 && shown().length > 0}>
-        <p class="text-[11px] text-text-dim">{props.empty} (elegidas solas)</p>
+        <p class="text-[11px] text-text-dim">{props.empty} {tl("(elegidas solas)")}</p>
       </Show>
     </div>
   );
@@ -4772,16 +4755,16 @@ const PartChecklist: Component<{
 /** Qué regiones del sketch usar: todas o las elegidas con clic en el visor */
 // ─── Cajas de selección ───────────────────────────────────────────────────
 
-const NOUNS = { edges: "Arista", faces: "Cara", face: "Cara" } as const;
+const NOUNS = { get edges() { return tl("Arista"); }, get faces() { return tl("Cara"); }, get face() { return tl("Cara"); } } as const;
 const REF_PROMPTS = {
-  plane: "Clic en lo que define el plano: una cara o un plano; dos planos; un plano y una arista; una arista y un punto; tres vértices…",
-  axis: "Clic en lo que define el eje: una arista, una cara cilíndrica, dos vértices, dos planos…",
-  point: "Clic en lo que define el punto: un vértice, una arista (su medio o su centro), una arista y una cara…",
+  get plane() { return tl("Clic en lo que define el plano: una cara o un plano; dos planos; un plano y una arista; una arista y un punto; tres vértices…"); },
+  get axis() { return tl("Clic en lo que define el eje: una arista, una cara cilíndrica, dos vértices, dos planos…"); },
+  get point() { return tl("Clic en lo que define el punto: un vértice, una arista (su medio o su centro), una arista y una cara…"); },
 };
 const REF_HINTS = {
-  plane: "Una cara o un plano (desfasado) · dos planos (medio o bisector) · un plano y una línea (en ángulo) · una línea y un punto · una curva y un punto (normal) · una cara curva y un punto (tangente) · tres puntos",
-  axis: "Una arista o línea · una circunferencia · una cara cilíndrica o cónica · dos puntos · dos planos (su cruce) · un plano y un punto (normal)",
-  point: "Un vértice · una arista (su medio, o el centro si es circular) · una esfera · dos puntos (el medio) · una arista y una cara (el cruce) · un punto y un plano (la proyección) · dos líneas (su cruce)",
+  get plane() { return tl("Una cara o un plano (desfasado) · dos planos (medio o bisector) · un plano y una línea (en ángulo) · una línea y un punto · una curva y un punto (normal) · una cara curva y un punto (tangente) · tres puntos"); },
+  get axis() { return tl("Una arista o línea · una circunferencia · una cara cilíndrica o cónica · dos puntos · dos planos (su cruce) · un plano y un punto (normal)"); },
+  get point() { return tl("Un vértice · una arista (su medio, o el centro si es circular) · una esfera · dos puntos (el medio) · una arista y una cara (el cruce) · un punto y un plano (la proyección) · dos líneas (su cruce)"); },
 };
 
 /**
@@ -4803,21 +4786,21 @@ const RefPicksBox: Component<{
   const active = () => (ui.pick() as { owner?: string }).owner === props.owner;
   const names = () => new Map((props.store.doc()?.features ?? []).map((f) => [f.id, f.name]));
   const label = (r: RefPick): string => {
-    if (r.type === "face") return "Cara";
-    if (r.type === "edge") return "Arista";
+    if (r.type === "face") return tl("Cara");
+    if (r.type === "edge") return tl("Arista");
     if (r.type === "plane") {
       const p = r.plane;
-      return p.type === "reference" ? (names().get(p.feature) ?? "Plano") : p.type === "frame" ? `${names().get(p.feature) ?? "Sistema"} · ${FRAME_PLANES.find(([n]) => n === p.normal)![1]}` : p.type === "face" ? "Cara plana" : p.type === "custom" ? "Plano propio" : PLANE_LABELS[p.type];
+      return p.type === "reference" ? (names().get(p.feature) ?? tl("Plano")) : p.type === "frame" ? `${names().get(p.feature) ?? tl("Sistema")} · ${FRAME_PLANES.find(([n]) => n === p.normal)![1]}` : p.type === "face" ? tl("Cara plana") : p.type === "custom" ? tl("Plano propio") : PLANE_LABELS[p.type];
     }
     if (r.type === "axis") {
       const a = r.axis;
-      return a.type === "reference" ? (names().get(a.feature) ?? "Eje") : a.type === "frame" ? `${names().get(a.feature) ?? "Sistema"} · ${a.axis.toUpperCase()}` : a.type === "sketch_line" ? `Línea ${a.line}` : a.type === "x" || a.type === "y" || a.type === "z" ? `Eje ${a.type.toUpperCase()}` : "Eje";
+      return a.type === "reference" ? (names().get(a.feature) ?? tl("Eje")) : a.type === "frame" ? `${names().get(a.feature) ?? tl("Sistema")} · ${a.axis.toUpperCase()}` : a.type === "sketch_line" ? tl("Línea {line}", { line: a.line }) : a.type === "x" || a.type === "y" || a.type === "z" ? tl("Eje {a}", { a: a.type.toUpperCase() }) : tl("Eje");
     }
     const p = r.point;
-    if (p.type === "edge_end") return "Vértice";
-    if (p.type === "reference") return names().get(p.feature) ?? "Punto";
+    if (p.type === "edge_end") return tl("Vértice");
+    if (p.type === "reference") return names().get(p.feature) ?? tl("Punto");
     if (p.type === "at") return `Punto (${p.point.map((v) => +v.toFixed(2)).join("; ")})`;
-    return "Punto";
+    return tl("Punto");
   };
   const activate = () => {
     void props.store.setSelecting(true);
@@ -4849,8 +4832,8 @@ const RefPicksBox: Component<{
   };
   // Del árbol: planos, ejes y puntos de referencia (y los ejes base)
   const treeOptions = () => [
-    { value: "", label: "Sumar del árbol…" },
-    ...(["x", "y", "z"] as const).map((a) => ({ value: `axis:${a}`, label: `Eje ${a.toUpperCase()}` })),
+    { value: "", label: tl("Sumar del árbol…") },
+    ...(["x", "y", "z"] as const).map((a) => ({ value: `axis:${a}`, label: tl("Eje {a}", { a: a.toUpperCase() }) })),
     ...refOptions(props.store, "plane", props.feature).map((o) => ({ value: `plane:${o.value.slice(4)}`, label: o.label })),
     ...refOptions(props.store, "axis", props.feature).map((o) => ({ value: `axisref:${o.value.slice(4)}`, label: o.label })),
     ...refOptions(props.store, "point", props.feature).map((o) => ({ value: `point:${o.value.slice(4)}`, label: o.label })),
@@ -4870,21 +4853,21 @@ const RefPicksBox: Component<{
     if (r) props.onChange([...props.refs, r]);
   };
   return (
-    <div class="space-y-1" aria-label="Lo elegido" data-ref-picks>
+    <div class="space-y-1" aria-label={tl("Lo elegido")} data-ref-picks>
       <div class="flex items-center justify-between gap-2">
-        <span class="text-xs text-text-muted">Elegido</span>
+        <span class="text-xs text-text-muted">{tl("Elegido")}</span>
         <Button size="sm" variant={active() ? "primary" : "default"} onClick={() => (active() ? ui.cancelPick() : activate())}>
-          {active() ? "Listo" : "Elegir en el visor"}
+          {active() ? tl("Listo") : tl("Elegir en el visor")}
         </Button>
       </div>
-      <For each={props.refs} fallback={<p class="text-[11px] text-text-dim">Nada todavía: clic en el visor</p>}>
+      <For each={props.refs} fallback={<p class="text-[11px] text-text-dim">{tl("Nada todavía: clic en el visor")}</p>}>
         {(r, i) => (
           <div class="flex items-center gap-1 text-xs" data-ref-pick={i()}>
             <span class={clsx("flex-1 truncate", (props.lost ?? []).includes(i()) ? "text-error" : "text-text")}>
               {label(r)}
-              {(props.lost ?? []).includes(i()) ? " · no encontrada" : ""}
+              {(props.lost ?? []).includes(i()) ? tl(" · no encontrada") : ""}
             </span>
-            <IconButton aria-label={`Quitar ${label(r)}`} size="sm" variant="ghost" onClick={() => props.onChange(props.refs.filter((_, k) => k !== i()))}>
+            <IconButton aria-label={tl("Quitar {v1}", { v1: label(r) })} size="sm" variant="ghost" onClick={() => props.onChange(props.refs.filter((_, k) => k !== i()))}>
               <Icons.Trash size={11} />
             </IconButton>
           </div>
@@ -4893,7 +4876,7 @@ const RefPicksBox: Component<{
       <Select options={treeOptions()} value="" onChange={(v) => v && addFromTree(v)} />
       <Show when={how()} fallback={<p class="text-[11px] text-text-dim leading-relaxed">{problem() ?? REF_HINTS[props.what]}</p>}>
         <p class="text-[11px] text-accent" data-ref-how>
-          Se armó: {how()}
+          {tl("Se armó:")} {how()}
         </p>
       </Show>
     </div>
@@ -4901,9 +4884,9 @@ const RefPicksBox: Component<{
 };
 
 const PROMPTS = {
-  edges: "Clic en las aristas (otra vez para quitarla)",
-  faces: "Clic en las caras (otra vez para quitarla)",
-  face: "Clic en la cara",
+  get edges() { return tl("Clic en las aristas (otra vez para quitarla)"); },
+  get faces() { return tl("Clic en las caras (otra vez para quitarla)"); },
+  get face() { return tl("Clic en la cara"); },
 };
 
 /**
@@ -4945,7 +4928,7 @@ const ThreadLinkBox: Component<{
   const key = (l: { feature: number; index: number }) => `${l.feature}:${l.index}`;
   const source = () => (props.value ? threads().find((t) => key(t) === key(props.value!)) : undefined);
   const choose = (t: ThreadAxis | undefined) => props.onChange(t ? { feature: t.feature, index: t.index } : null, t ?? null);
-  const label = (t: ThreadAxis) => `${threadLabel(doc(), threads(), t)}${own().some((o) => coaxialThreads(t, o)) ? " (en el eje)" : ""}`;
+  const label = (t: ThreadAxis) => `${threadLabel(doc(), threads(), t)}${own().some((o) => coaxialThreads(t, o)) ? tl(" (en el eje)") : ""}`;
   const asking = () => !props.value && candidates().length > 0 && !threadDeclined().includes(props.feature) && (props.askAlways || !!suggested());
   const picking = () => (props.ui.pick() as { owner?: string }).owner === owner();
   const pick = () => {
@@ -4954,12 +4937,12 @@ const ThreadLinkBox: Component<{
     props.ui.setPick({
       kind: "face",
       owner: owner(),
-      prompt: "Clic en la rosca con la que se coordina: el agujero, el tornillo, la tuerca o el eje",
+      prompt: tl("Clic en la rosca con la que se coordina: el agujero, el tornillo, la tuerca o el eje"),
       done: (face) => {
         void props.store.setSelecting(false);
         const t = threadOfFace(face, candidates());
         if (t) choose(t);
-        else props.ui.setMessage(`Ahí no hay una rosca ${props.want === "internal" ? "interior " : props.want === "external" ? "exterior " : ""}anterior a esta operación`);
+        else props.ui.setMessage(props.want === "internal" ? tl("Ahí no hay una rosca interior anterior a esta operación") : props.want === "external" ? tl("Ahí no hay una rosca exterior anterior a esta operación") : tl("Ahí no hay una rosca anterior a esta operación"));
       },
     });
   };
@@ -4977,21 +4960,21 @@ const ThreadLinkBox: Component<{
       fallback={
         <div class="space-y-2 rounded border border-accent/60 bg-accent/10 p-2 text-xs" data-thread-question>
           <p class="text-text">
-            {suggested() ? `¿Coordinar ${props.what} con la rosca de ${threadLabel(doc(), threads(), suggested()!)}?` : `¿Coordinar ${props.what} con una rosca existente?`}
+            {suggested() ? tl("¿Coordinar {what} con la rosca de {v1}?", { what: props.what, v1: threadLabel(doc(), threads(), suggested()!) }) : tl("¿Coordinar {what} con una rosca existente?", { what: props.what })}
           </p>
-          <p class="text-[11px] text-text-dim">Toma su medida y su eje y alinea el filete para que calcen. No las une: cada una sigue siendo lo que es.</p>
+          <p class="text-[11px] text-text-dim">{tl("Toma su medida y su eje y alinea el filete para que calcen. No las une: cada una sigue siendo lo que es.")}</p>
           <Show when={!suggested()}>
-            <Select options={candidates().map((t) => ({ value: key(t), label: label(t) }))} value="" placeholder="Elegir la rosca" onChange={(v) => choose(candidates().find((t) => key(t) === v))} />
+            <Select options={candidates().map((t) => ({ value: key(t), label: label(t) }))} value="" placeholder={tl("Elegir la rosca")} onChange={(v) => choose(candidates().find((t) => key(t) === v))} />
           </Show>
           <div class="flex flex-wrap gap-1">
             <Show when={suggested()}>
               {(t) => (
                 <Button size="sm" variant="primary" onClick={() => choose(t())}>
-                  Coordinar
+                  {tl("Coordinar")}
                 </Button>
               )}
             </Show>
-            {pickButton("Elegir en el visor")}
+            {pickButton(tl("Elegir en el visor"))}
             <Button size="sm" variant="ghost" onClick={() => setThreadDeclined((d) => [...d, props.feature])}>
               No
             </Button>
@@ -5000,20 +4983,20 @@ const ThreadLinkBox: Component<{
       }
     >
       <div class="space-y-1">
-        <Row label="Rosca asociada">
+        <Row label={tl("Rosca asociada")}>
           <Select
-            options={[{ value: "", label: "Ninguna" }, ...candidates().map((t) => ({ value: key(t), label: label(t) })), ...(props.value && !source() ? [{ value: key(props.value), label: "(ya no está)" }] : [])]}
+            options={[{ value: "", label: tl("Ninguna") }, ...candidates().map((t) => ({ value: key(t), label: label(t) })), ...(props.value && !source() ? [{ value: key(props.value), label: tl("(ya no está)") }] : [])]}
             value={props.value ? key(props.value) : ""}
             onChange={(v) => choose(v ? candidates().find((t) => key(t) === v) : undefined)}
           />
         </Row>
         <Show when={props.value || candidates().length > 0}>
-          <div class="flex justify-end">{pickButton(props.value ? "Elegir otra en el visor" : "Elegir en el visor")}</div>
+          <div class="flex justify-end">{pickButton(props.value ? tl("Elegir otra en el visor") : tl("Elegir en el visor"))}</div>
         </Show>
         <Show when={source()}>
           {(t) => (
             <p class="text-[11px] text-text-dim">
-              {threadName(t().spec)} × {String(t().spec.pitch).replace(".", ",")}: medida, eje y fase del filete de {threadLabel(doc(), threads(), t()).split(" · ")[0]}. Si cambia, esta lo sigue.
+              {threadName(t().spec)} × {String(t().spec.pitch).replace(".", ",")}{tl(": medida, eje y fase del filete de")} {threadLabel(doc(), threads(), t()).split(" · ")[0]}{tl(". Si cambia, esta lo sigue.")}
             </p>
           )}
         </Show>
@@ -5114,7 +5097,7 @@ const SelectionBox: Component<{
     if (props.kind === "edges" && live !== undefined) {
       return ui.setPick({
         ...base,
-        prompt: "Clic en las aristas o en una cara (todas sus aristas); clic en lo redondeado lo quita",
+        prompt: tl("Clic en las aristas o en una cara (todas sus aristas); clic en lo redondeado lo quita"),
         kind: "edges",
         toggle: (r) => {
           const refs = props.refs as EdgeRef[];
@@ -5172,7 +5155,7 @@ const SelectionBox: Component<{
       >
         <Show
           when={props.refs.length > 0}
-          fallback={<span class="text-text-dim">{active() ? PROMPTS[props.kind] : "Nada elegido: clic para elegir"}</span>}
+          fallback={<span class="text-text-dim">{active() ? PROMPTS[props.kind] : tl("Nada elegido: clic para elegir")}</span>}
         >
           <For each={props.refs}>
             {(_, i) => (
@@ -5183,11 +5166,11 @@ const SelectionBox: Component<{
               >
                 <span class={clsx(isLost(i()) ? "text-error" : "text-text")}>
                   {NOUNS[props.kind]} {i() + 1}
-                  {isLost(i()) ? " · no encontrada" : ""}
+                  {isLost(i()) ? tl(" · no encontrada") : ""}
                 </span>
                 <button
                   class="opacity-0 group-hover:opacity-100 text-text-muted hover:text-text"
-                  aria-label={`Quitar ${NOUNS[props.kind].toLowerCase()} ${i() + 1}`}
+                  aria-label={tl("Quitar {noun} {n}", { noun: NOUNS[props.kind].toLowerCase(), n: i() + 1 })}
                   onClick={(e) => {
                     e.stopPropagation();
                     setHover(undefined);
@@ -5233,7 +5216,7 @@ const RegionBox: Component<{
       kind: "region",
       owner: props.owner,
       sketch: props.sketch,
-      prompt: "Clic dentro de las regiones a usar (otra vez para quitarla)",
+      prompt: tl("Clic dentro de las regiones a usar (otra vez para quitarla)"),
       chosen: points,
       toggle: (p) => {
         const view = props.store.sketchView(props.sketch);
@@ -5250,9 +5233,9 @@ const RegionBox: Component<{
   };
   return (
     <div class="space-y-1">
-      <span class="text-xs text-text-muted">Regiones</span>
+      <span class="text-xs text-text-muted">{tl("Regiones")}</span>
       <div
-        aria-label="Regiones"
+        aria-label={tl("Regiones")}
         data-selection-box
         class={clsx(
           "min-h-[2rem] rounded border px-1.5 py-1 cursor-pointer text-xs",
@@ -5260,17 +5243,17 @@ const RegionBox: Component<{
         )}
         onClick={() => (active() ? ui.cancelPick() : activate())}
       >
-        <Show when={points().length > 0} fallback={<span class="text-text-dim">Todas{active() ? " · clic en las regiones a usar" : ""}</span>}>
+        <Show when={points().length > 0} fallback={<span class="text-text-dim">{tl("Todas")}{active() ? tl(" · clic en las regiones a usar") : ""}</span>}>
           <For each={points()}>
             {(_, i) => (
               <div class="group flex items-center justify-between gap-1 rounded px-1 hover:bg-surface">
                 <span class={(props.lost ?? []).includes(i()) ? "text-error" : "text-text"}>
-                  Región {i() + 1}
-                  {(props.lost ?? []).includes(i()) ? " · no encontrada" : ""}
+                  {tl("Región")} {i() + 1}
+                  {(props.lost ?? []).includes(i()) ? tl(" · no encontrada") : ""}
                 </span>
                 <button
                   class="opacity-0 group-hover:opacity-100 text-text-muted hover:text-text"
-                  aria-label={`Quitar región ${i() + 1}`}
+                  aria-label={tl("Quitar región {v1}", { v1: i() + 1 })}
                   onClick={(e) => {
                     e.stopPropagation();
                     const next = points().filter((_, j) => j !== i());
@@ -5290,8 +5273,8 @@ const RegionBox: Component<{
 
 const ToolChecklist: Component<{ tools: Feature[]; value: number[]; onChange: (ids: number[]) => void }> = (props) => (
   <div class="space-y-1">
-    <span class="text-xs text-text-muted">Qué repetir (nada = todo el sólido)</span>
-    <For each={props.tools} fallback={<p class="text-[11px] text-text-dim">No hay operaciones con herramienta</p>}>
+    <span class="text-xs text-text-muted">{tl("Qué repetir (nada = todo el sólido)")}</span>
+    <For each={props.tools} fallback={<p class="text-[11px] text-text-dim">{tl("No hay operaciones con herramienta")}</p>}>
       {(t) => (
         <Checkbox
           small
@@ -5323,7 +5306,7 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
 
   const insert = () => {
     const p = parts().find((x) => partKey(x) === (part() || (parts()[0] && partKey(parts()[0]))));
-    if (!p) return props.ui.setMessage("El diseño todavía no tiene piezas");
+    if (!p) return props.ui.setMessage(tl("El diseño todavía no tiene piezas"));
     void store.editAssembly((a) => {
       const id = a.next_id || 1;
       const copies = a.instances.filter((i) => samePart(i.part, p.id)).length;
@@ -5348,7 +5331,7 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
       setPicking(step);
       props.ui.setPick({
         kind: "asm_face",
-        prompt: step === "a" ? "Clic en la cara de la primera pieza (plana o cilíndrica)" : "Clic en la cara de la segunda pieza",
+        prompt: step === "a" ? tl("Clic en la cara de la primera pieza (plana o cilíndrica)") : tl("Clic en la cara de la segunda pieza"),
         done: async (face) => {
           try {
             const c = await store.assemblyConnector(face);
@@ -5357,7 +5340,7 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
               return pick("b");
             }
             setPicking("");
-            if (!first || first.instance === c.instance) return props.ui.setMessage("Las dos caras tienen que ser de instancias distintas");
+            if (!first || first.instance === c.instance) return props.ui.setMessage(tl("Las dos caras tienen que ser de instancias distintas"));
             const a = first;
             void store.editAssembly((x) => {
               const id = x.next_id || 1;
@@ -5384,7 +5367,7 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
 
   return (
     <div class="space-y-3">
-      <Section title="Instancias">
+      <Section title={tl("Instancias")}>
         <div class="flex gap-1.5">
           <div class="flex-1">
             <Select
@@ -5394,25 +5377,25 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
             />
           </div>
           <Button size="sm" onClick={insert} disabled={!parts().length}>
-            Insertar
+            {tl("Insertar")}
           </Button>
         </div>
-        <For each={asm()?.instances ?? []} fallback={<p class="text-[11px] text-text-dim">Insertar piezas del diseño para ensamblarlas</p>}>
+        <For each={asm()?.instances ?? []} fallback={<p class="text-[11px] text-text-dim">{tl("Insertar piezas del diseño para ensamblarlas")}</p>}>
           {(inst) => (
             <div class="space-y-1 rounded border border-border p-1.5" data-instance={inst.id}>
               <div class="flex items-center gap-1.5 text-xs">
                 <span class="flex-1 truncate text-text">{inst.name}</span>
                 <Checkbox
                   small
-                  label="Fija"
+                  label={tl("Fija")}
                   checked={inst.fixed}
                   onChange={(c) => void store.editAssembly((a) => (a.instances.find((i) => i.id === inst.id)!.fixed = c))}
                 />
-                <IconButton aria-label={`Quitar ${inst.name}`} size="sm" variant="ghost" onClick={() => removeInstance(inst.id)}>
+                <IconButton aria-label={tl("Quitar {name}", { name: inst.name })} size="sm" variant="ghost" onClick={() => removeInstance(inst.id)}>
                   <Icons.Trash size={11} />
                 </IconButton>
               </div>
-              <span class="text-[10px] text-text-dim">Posición (mm)</span>
+              <span class="text-[10px] text-text-dim">{tl("Posición (mm)")}</span>
               <div class="grid grid-cols-3 gap-1">
                 <For each={["X", "Y", "Z"]}>
                   {(axis, k) => (
@@ -5424,7 +5407,7 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
                   )}
                 </For>
               </div>
-              <span class="text-[10px] text-text-dim">Giro (°)</span>
+              <span class="text-[10px] text-text-dim">{tl("Giro (°)")}</span>
               <div class="grid grid-cols-3 gap-1">
                 <For each={["X", "Y", "Z"]}>
                   {(axis, k) => (
@@ -5440,16 +5423,16 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
           )}
         </For>
       </Section>
-      <Section title="Relaciones">
+      <Section title={tl("Relaciones")}>
         <div class="flex gap-1.5">
           <div class="flex-1">
             <Select options={(Object.keys(MATE_LABELS) as MateKind[]).map((k) => ({ value: k, label: MATE_LABELS[k] }))} value={kind()} onChange={(v) => setKind(v as MateKind)} />
           </div>
           <Button size="sm" disabled={(asm()?.instances.length ?? 0) < 2 || !!picking()} onClick={newMate}>
-            {picking() === "a" ? "Cara 1…" : picking() === "b" ? "Cara 2…" : "Agregar"}
+            {picking() === "a" ? tl("Cara 1…") : picking() === "b" ? tl("Cara 2…") : tl("Agregar")}
           </Button>
         </div>
-        <For each={asm()?.mates ?? []} fallback={<p class="text-[11px] text-text-dim">Agregar: elegir el tipo y hacer clic en una cara de cada pieza</p>}>
+        <For each={asm()?.mates ?? []} fallback={<p class="text-[11px] text-text-dim">{tl("Agregar: elegir el tipo y hacer clic en una cara de cada pieza")}</p>}>
           {(m) => {
             const set = (f: (x: Mate) => void) => void store.editAssembly((a) => f(a.mates.find((x) => x.id === m.id)!));
             return (
@@ -5458,8 +5441,8 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
                   <span class="flex-1 truncate text-text" title={`${instName(m.a.instance)} ↔ ${instName(m.b.instance)}`}>
                     {m.name}
                   </span>
-                  <Checkbox small label="Invertir" checked={m.flip} onChange={(c) => set((x) => (x.flip = c))} />
-                  <IconButton aria-label={`Quitar ${m.name}`} size="sm" variant="ghost" onClick={() => void store.editAssembly((a) => (a.mates = a.mates.filter((x) => x.id !== m.id)))}>
+                  <Checkbox small label={tl("Invertir")} checked={m.flip} onChange={(c) => set((x) => (x.flip = c))} />
+                  <IconButton aria-label={tl("Quitar {name}", { name: m.name })} size="sm" variant="ghost" onClick={() => void store.editAssembly((a) => (a.mates = a.mates.filter((x) => x.id !== m.id)))}>
                     <Icons.Trash size={11} />
                   </IconButton>
                 </div>
@@ -5468,7 +5451,7 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
                 </p>
                 <Show when={m.kind === "revolute" || m.kind === "cylindrical"}>
                   <div class="flex items-center gap-1.5">
-                    <Checkbox small label="Ángulo" checked={m.angle != null} onChange={(c) => set((x) => (x.angle = c ? 0 : null))} />
+                    <Checkbox small label={tl("Ángulo")} checked={m.angle != null} onChange={(c) => set((x) => (x.angle = c ? 0 : null))} />
                     <Show when={m.angle != null}>
                       <div class="flex-1">
                         <Slider value={m.angle ?? 0} min={-180} max={180} step={1} onChange={(v) => set((x) => (x.angle = v))} />
@@ -5479,7 +5462,7 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
                 </Show>
                 <Show when={m.kind === "slider" || m.kind === "cylindrical"}>
                   <div class="flex items-center gap-1.5">
-                    <Checkbox small label="Distancia" checked={m.distance != null} onChange={(c) => set((x) => (x.distance = c ? 0 : null))} />
+                    <Checkbox small label={tl("Distancia")} checked={m.distance != null} onChange={(c) => set((x) => (x.distance = c ? 0 : null))} />
                     <Show when={m.distance != null}>
                       <div class="flex-1">
                         <Num value={m.distance ?? 0} suffix="mm" onCommit={(v) => set((x) => (x.distance = v))} />
@@ -5493,14 +5476,14 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
         </For>
         <Show when={sol()}>
           {(s) => (
-            <p class={clsx("text-[11px]", s().converged ? "text-text-dim" : "text-warning")} aria-label="Estado del ensamble">
+            <p class={clsx("text-[11px]", s().converged ? "text-text-dim" : "text-warning")} aria-label={tl("Estado del ensamble")}>
               {s().converged
                 ? s().dof === 0
-                  ? "Todo definido: no queda nada que se mueva"
+                  ? tl("Todo definido: no queda nada que se mueva")
                   : s().dof === 1
-                    ? "Queda 1 grado libre"
-                    : `Quedan ${s().dof} grados libres`
-                : `No se pueden cumplir todas las relaciones (desvío ${fmt(s().residual, 3)})`}
+                    ? tl("Queda 1 grado libre")
+                    : tl("Quedan {dof} grados libres", { dof: s().dof })
+                : tl("No se pueden cumplir todas las relaciones (desvío {v1})", { v1: fmt(s().residual, 3) })}
             </p>
           )}
         </Show>
@@ -5508,16 +5491,16 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
       <Show when={(asm()?.instances.length ?? 0) > 0}>
         <BomSection store={store} />
       </Show>
-      <Section title="Choques">
+      <Section title={tl("Choques")}>
         <Button size="sm" fullWidth disabled={(asm()?.instances.length ?? 0) < 2} onClick={() => void store.assemblyInterference().then(setHits)}>
-          Revisar choques
+          {tl("Revisar choques")}
         </Button>
         <Show when={hits()}>
           {(list) => (
-            <For each={list()} fallback={<p class="text-[11px] text-success">Ninguna pieza se pisa con otra</p>}>
+            <For each={list()} fallback={<p class="text-[11px] text-success">{tl("Ninguna pieza se pisa con otra")}</p>}>
               {([a, b, v]) => (
                 <p class="text-[11px] text-warning" data-hit>
-                  {instName(a)} y {instName(b)}: {fmt(v / 1000, 3)} cm³ en común
+                  {instName(a)} y {instName(b)}: {fmt(v / 1000, 3)} {tl("cm³ en común")}
                 </p>
               )}
             </For>
@@ -5555,14 +5538,14 @@ const BomSection: Component<{ store: CadStore }> = (props) => {
     await invoke("cad_write_text", { path, content: lines.join("\n") + "\n" });
   };
   return (
-    <Section title="Lista de materiales">
-      <table class="w-full text-[11px]" aria-label="Lista de materiales">
+    <Section title={tl("Lista de materiales")}>
+      <table class="w-full text-[11px]" aria-label={tl("Lista de materiales")}>
         <thead>
           <tr class="text-text-dim">
-            <th class="text-left font-normal">Pieza</th>
-            <th class="text-right font-normal">Cant.</th>
-            <th class="text-left font-normal pl-2">Material</th>
-            <th class="text-right font-normal">Masa</th>
+            <th class="text-left font-normal">{tl("Pieza")}</th>
+            <th class="text-right font-normal">{tl("Cant.")}</th>
+            <th class="text-left font-normal pl-2">{tl("Material")}</th>
+            <th class="text-right font-normal">{tl("Masa")}</th>
           </tr>
         </thead>
         <tbody>
@@ -5579,10 +5562,10 @@ const BomSection: Component<{ store: CadStore }> = (props) => {
         </tbody>
       </table>
       <Show when={total() !== null}>
-        <p class="text-xs text-text">Masa total: {fmtMass(total()!)}</p>
+        <p class="text-xs text-text">{tl("Masa total:")} {fmtMass(total()!)}</p>
       </Show>
       <Button size="sm" variant="ghost" fullWidth onClick={() => void exportCsv()}>
-        Exportar CSV
+        {tl("Exportar CSV")}
       </Button>
     </Section>
   );
@@ -5610,11 +5593,11 @@ const DeviationCard: Component<{ store: CadStore; ui: CadUi }> = (props) => {
   createEffect(on(() => props.store.result()?.version, () => props.ui.setDeviation(null), { defer: true }));
   const d = () => props.ui.deviation();
   return (
-    <div class="space-y-1.5 rounded-md border border-border p-2" aria-label="Comparar con el escaneo">
-      <span class="text-xs text-text-muted">Comparar el diseño con el escaneo</span>
-      <Num label="Tolerancia" value={tolerance()} step={0.05} suffix="mm" onCommit={(v) => setTolerance(Math.max(0.001, v))} />
+    <div class="space-y-1.5 rounded-md border border-border p-2" aria-label={tl("Comparar con el escaneo")}>
+      <span class="text-xs text-text-muted">{tl("Comparar el diseño con el escaneo")}</span>
+      <Num label={tl("Tolerancia")} value={tolerance()} step={0.05} suffix="mm" onCommit={(v) => setTolerance(Math.max(0.001, v))} />
       <Button size="sm" fullWidth disabled={busy() || !props.store.result()?.body} onClick={() => void run()}>
-        {busy() ? "Midiendo…" : "Comparar"}
+        {busy() ? tl("Midiendo…") : tl("Comparar")}
       </Button>
       <Show when={error()}>
         <p class="text-[11px] text-error">{error()}</p>
@@ -5624,17 +5607,17 @@ const DeviationCard: Component<{ store: CadStore; ui: CadUi }> = (props) => {
           <div class="space-y-0.5 text-xs">
             <div class="h-2 rounded" style={{ background: "linear-gradient(to right, rgb(51,89,242), rgb(77,191,230), rgb(64,191,89), rgb(242,204,51), rgb(230,51,38))" }} />
             <div class="flex justify-between text-[10px] text-text-dim">
-              <span>adentro</span>
+              <span>{tl("adentro")}</span>
               <span>± {fmt(dev().stats.tolerance)} mm</span>
-              <span>afuera</span>
+              <span>{tl("afuera")}</span>
             </div>
-            <Line label="Dentro de tolerancia">{fmt(dev().stats.within * 100, 1)} %</Line>
-            <Line label="Media (sesgo)">{fmt(dev().stats.mean, 3)} mm</Line>
-            <Line label="Media absoluta">{fmt(dev().stats.meanAbs, 3)} mm</Line>
+            <Line label={tl("Dentro de tolerancia")}>{fmt(dev().stats.within * 100, 1)} %</Line>
+            <Line label={tl("Media (sesgo)")}>{fmt(dev().stats.mean, 3)} mm</Line>
+            <Line label={tl("Media absoluta")}>{fmt(dev().stats.meanAbs, 3)} mm</Line>
             <Line label="P95">{fmt(dev().stats.p95, 3)} mm</Line>
-            <Line label="Máxima">{fmt(dev().stats.maxAbs, 3)} mm</Line>
+            <Line label={tl("Máxima")}>{fmt(dev().stats.maxAbs, 3)} mm</Line>
             <Button size="sm" variant="ghost" fullWidth onClick={() => props.ui.setDeviation(null)}>
-              Quitar los colores
+              {tl("Quitar los colores")}
             </Button>
           </div>
         )}
@@ -5655,13 +5638,13 @@ const ScanResultCard: Component<{ result: { pick: ScanPick; triangle: number }; 
           return (
             <>
               <p class="text-text">
-                {c.hole ? "Agujero" : "Cilindro"} · radio {fmt(c.radius, 3)} mm · largo {fmt(c.length)} mm
+                {c.hole ? tl("Agujero") : tl("Cilindro")} {tl("· radio")} {fmt(c.radius, 3)} {tl("mm · largo")} {fmt(c.length)} mm
               </p>
               <p class="text-text-dim">
-                Error {fmt(c.rms, 3)} mm · cubre {fmt(c.coverage * 100, 0)} % de la vuelta
+                {tl("Error")} {fmt(c.rms, 3)} {tl("mm · cubre")} {fmt(c.coverage * 100, 0)} {tl("% de la vuelta")}
               </p>
               <Button size="sm" variant="primary" fullWidth onClick={() => props.onAdd({ kind: "cylinder", triangle: props.result.triangle })}>
-                {c.hole ? "Agregar el agujero (resta)" : "Agregar el cilindro"}
+                {c.hole ? tl("Agregar el agujero (resta)") : tl("Agregar el cilindro")}
               </Button>
             </>
           );
@@ -5670,28 +5653,28 @@ const ScanResultCard: Component<{ result: { pick: ScanPick; triangle: number }; 
         {(p) => (
           <>
             <p class="text-text">
-              Plano · área {fmt(p().area, 1)} mm² · {p().boundary.length} contornos
+              {tl("Plano · área")} {fmt(p().area, 1)} mm² · {p().boundary.length} {tl("contornos")}
             </p>
             <p class="text-text-dim">
-              Error {fmt(p().rms, 3)} mm · espesor medido {p().depth != null ? `${fmt(p().depth!)} mm` : "no se pudo medir"}
+              {tl("Error")} {fmt(p().rms, 3)} {tl("mm · espesor medido")} {p().depth != null ? `${fmt(p().depth!)} mm` : tl("no se pudo medir")}
             </p>
-            <Num label="Profundidad" suffix="mm" value={depth() ?? p().depth ?? 10} onCommit={setDepth} />
-            <Row label="Con el sólido">
+            <Num label={tl("Profundidad")} suffix="mm" value={depth() ?? p().depth ?? 10} onCommit={setDepth} />
+            <Row label={tl("Con el sólido")}>
               <Select options={OP_OPTIONS} value={op()} onChange={(v) => setOp(v as BodyOp)} />
             </Row>
             <div class="grid grid-cols-2 gap-1.5">
               <Button size="sm" onClick={() => props.onAdd({ kind: "plane_outline", triangle: props.result.triangle, extrude: false })}>
-                Solo el sketch
+                {tl("Solo el sketch")}
               </Button>
               <Button
                 size="sm"
                 variant="primary"
                 onClick={() => props.onAdd({ kind: "plane_outline", triangle: props.result.triangle, extrude: true, depth: depth() ?? p().depth ?? 10, op: op() })}
               >
-                Sketch y extruir
+                {tl("Sketch y extruir")}
               </Button>
               <Button size="sm" variant="ghost" onClick={() => props.onAdd({ kind: "work_plane", triangle: props.result.triangle })}>
-                Plano de trabajo
+                {tl("Plano de trabajo")}
               </Button>
             </div>
           </>
@@ -5729,7 +5712,7 @@ const PartsSection: Component<{ store: CadStore; ui: CadUi }> = (props) => {
                 <div data-part={key(p)} class={clsx("group flex items-center gap-1.5 px-1 py-0.5 rounded text-xs hover:bg-surface", hidden() && "opacity-50")}>
                   <input
                     type="color"
-                    aria-label={`Color de ${p.name}`}
+                    aria-label={tl("Color de {name}", { name: p.name })}
                     class="w-4 h-4 shrink-0 rounded cursor-pointer bg-transparent border-0 p-0"
                     value={partColor(props.store.doc(), p, i())}
                     onChange={(e) => void props.store.setPartProps(p.id, { color: e.currentTarget.value })}
@@ -5739,7 +5722,7 @@ const PartsSection: Component<{ store: CadStore; ui: CadUi }> = (props) => {
                     fallback={
                       <span
                         class={clsx("flex-1 truncate cursor-pointer", open() === key(p) ? "text-accent" : "text-text")}
-                        title="Clic: ver y elegir material · doble clic: renombrar"
+                        title={tl("Clic: ver y elegir material · doble clic: renombrar")}
                         onClick={() => setOpen(open() === key(p) ? undefined : key(p))}
                         onDblClick={() => setRenaming(key(p))}
                       >
@@ -5748,7 +5731,7 @@ const PartsSection: Component<{ store: CadStore; ui: CadUi }> = (props) => {
                     }
                   >
                     <input
-                      aria-label="Nombre de la pieza"
+                      aria-label={tl("Nombre de la pieza")}
                       class="flex-1 min-w-0 px-1 rounded bg-surface/40 border border-accent text-xs text-text outline-none"
                       value={p.name}
                       ref={(el) => setTimeout(() => el.select())}
@@ -5769,7 +5752,7 @@ const PartsSection: Component<{ store: CadStore; ui: CadUi }> = (props) => {
                   </span>
                   <span class="hidden group-hover:flex">
                     <IconButton
-                      aria-label={`Borrar ${p.name}`}
+                      aria-label={tl("Borrar {name}", { name: p.name })}
                       size="sm"
                       variant="ghost"
                       onClick={() => void props.store.addFeature({ type: "delete_parts", parts: [p.id] })}
@@ -5778,7 +5761,7 @@ const PartsSection: Component<{ store: CadStore; ui: CadUi }> = (props) => {
                     </IconButton>
                   </span>
                   <IconButton
-                    aria-label={hidden() ? `Mostrar ${p.name}` : `Ocultar ${p.name}`}
+                    aria-label={hidden() ? tl("Mostrar {name}", { name: p.name }) : tl("Ocultar {name}", { name: p.name })}
                     size="sm"
                     variant="ghost"
                     onClick={() => void props.store.setPartProps(p.id, { hidden: !hidden() })}
@@ -5794,18 +5777,18 @@ const PartsSection: Component<{ store: CadStore; ui: CadUi }> = (props) => {
           {(p) => {
             const own = () => props.store.doc()?.parts?.find((x) => samePart(x.part, p().id))?.material ?? null;
             return (
-              <div class="space-y-1.5 rounded border border-border p-2 text-xs" aria-label={`Datos de ${p().name}`}>
-                <MaterialPicker value={own()} none="El del diseño" onChange={(m) => void props.store.setPartProps(p().id, { material: m })} />
-                <Show when={!p().surface} fallback={<Line label="Tipo">Superficie (sin espesor)</Line>}>
-                  <Line label="Volumen">{fmt(p().volume / 1000)} cm³</Line>
+              <div class="space-y-1.5 rounded border border-border p-2 text-xs" aria-label={tl("Datos de {name}", { name: p().name })}>
+                <MaterialPicker value={own()} none={tl("El del diseño")} onChange={(m) => void props.store.setPartProps(p().id, { material: m })} />
+                <Show when={!p().surface} fallback={<Line label={tl("Tipo")}>{tl("Superficie (sin espesor)")}</Line>}>
+                  <Line label={tl("Volumen")}>{fmt(p().volume / 1000)} cm³</Line>
                 </Show>
-                <Line label="Área">{fmt(p().area / 100)} cm²</Line>
+                <Line label={tl("Área")}>{fmt(p().area / 100)} cm²</Line>
                 <Show when={!p().surface && partMass(props.store.doc(), p()) !== null}>
-                  <Line label="Masa">
+                  <Line label={tl("Masa")}>
                     {fmtMass(partMass(props.store.doc(), p())!)} ({partMaterial(props.store.doc(), p())!.name})
                   </Line>
                 </Show>
-                <Line label="Centro">{p().center.map((v) => fmt(v, 2)).join(", ")} mm</Line>
+                <Line label={tl("Centro")}>{p().center.map((v) => fmt(v, 2)).join(", ")} mm</Line>
               </div>
             );
           }}
@@ -5824,24 +5807,24 @@ const MaterialPicker: Component<{ value: Material | null; none: string; onChange
   };
   return (
     <>
-      <Row label="Material">
+      <Row label={tl("Material")}>
         <Select
           options={[
             { value: "none", label: props.none },
             ...MATERIALS.map((m) => ({ value: m.name, label: `${m.name} (${m.density} kg/m³)` })),
-            { value: "custom", label: "Densidad propia" },
+            { value: "custom", label: tl("Densidad propia") },
           ]}
           value={choice()}
           onChange={(v) => {
             if (v === choice()) return;
             if (v === "none") props.onChange(null);
-            else if (v === "custom") props.onChange({ name: "Otro", density: props.value?.density ?? 1000 });
+            else if (v === "custom") props.onChange({ name: tl("Otro"), density: props.value?.density ?? 1000 });
             else props.onChange(MATERIALS.find((m) => m.name === v)!);
           }}
         />
       </Row>
       <Show when={choice() === "custom"}>
-        <Num label="Densidad" suffix="kg/m³" step={10} value={props.value!.density} onCommit={(v) => v > 0 && props.onChange({ name: props.value!.name, density: v })} />
+        <Num label={tl("Densidad")} suffix="kg/m³" step={10} value={props.value!.density} onCommit={(v) => v > 0 && props.onChange({ name: props.value!.name, density: v })} />
       </Show>
     </>
   );
@@ -5865,27 +5848,27 @@ const BodySection: Component<{ store: CadStore; ui: CadUi }> = (props) => (
       const setMaterial = (m: Material | null) => void props.store.commit((d) => (d.material = m));
       const total = () => designMass(props.store.doc(), props.store.result());
       return (
-        <Section title="Sólido">
+        <Section title={tl("Sólido")}>
           <div class="space-y-1 text-xs">
-            <Line label="Volumen">{fmt(b().volume / 1000)} cm³</Line>
-            <Line label="Área">{fmt(b().area / 100)} cm²</Line>
-            <Line label="Tamaño X × Y × Z">{size().map((v) => fmt(v, 1)).join(" × ")} mm</Line>
-            <Line label="Caras / aristas">
+            <Line label={tl("Volumen")}>{fmt(b().volume / 1000)} cm³</Line>
+            <Line label={tl("Área")}>{fmt(b().area / 100)} cm²</Line>
+            <Line label={tl("Tamaño X × Y × Z")}>{size().map((v) => fmt(v, 1)).join(" × ")} mm</Line>
+            <Line label={tl("Caras / aristas")}>
               {b().faces} / {b().edges}
             </Line>
             <Show when={!b().valid}>
-              <p class="text-warning">La forma tiene defectos: puede fallar al exportar o imprimir</p>
+              <p class="text-warning">{tl("La forma tiene defectos: puede fallar al exportar o imprimir")}</p>
             </Show>
           </div>
-          <MaterialPicker value={material()} none="Sin material" onChange={setMaterial} />
+          <MaterialPicker value={material()} none={tl("Sin material")} onChange={setMaterial} />
           <div class="space-y-1 text-xs">
             <Show when={total().mass !== null}>
-              <Line label="Masa">{fmtMass(total().mass!)}</Line>
+              <Line label={tl("Masa")}>{fmtMass(total().mass!)}</Line>
             </Show>
-            <Line label="Centro de masa">{(total().center ?? b().center).map((v) => fmt(v, 2)).join(", ")} mm</Line>
+            <Line label={tl("Centro de masa")}>{(total().center ?? b().center).map((v) => fmt(v, 2)).join(", ")} mm</Line>
             {/* Con una sola densidad: kg·mm² = mm⁵ × kg/m³ × 1e−9 */}
             <Show when={total().mass !== null && total().uniform && material()}>
-              <Line label="Inercia">
+              <Line label={tl("Inercia")}>
                 {b()
                   .inertia.map((v) => fmt(v * material()!.density * 1e-9, 3))
                   .join(" · ")}{" "}
@@ -5893,9 +5876,9 @@ const BodySection: Component<{ store: CadStore; ui: CadUi }> = (props) => (
               </Line>
             </Show>
           </div>
-          <Checkbox small label="Ver el centro de masa" checked={props.ui.showCenterOfMass()} onChange={(c) => props.ui.setShowCenterOfMass(c)} />
+          <Checkbox small label={tl("Ver el centro de masa")} checked={props.ui.showCenterOfMass()} onChange={(c) => props.ui.setShowCenterOfMass(c)} />
           <Button size="sm" fullWidth onClick={() => props.ui.setDrawingOpen(true)}>
-            Plano 2D (vistas, ocultas, cajetín)
+            {tl("Plano 2D (vistas, ocultas, cajetín)")}
           </Button>
         </Section>
       );
@@ -5908,11 +5891,11 @@ const BodySection: Component<{ store: CadStore; ui: CadUi }> = (props) => (
 type SketchPatternKind = "linear" | "circular" | "curve" | "table" | "fill";
 
 const SKETCH_PATTERNS: { value: SketchPatternKind; label: string }[] = [
-  { value: "linear", label: "Lineal" },
-  { value: "circular", label: "Circular" },
-  { value: "curve", label: "En curva" },
-  { value: "table", label: "Por tabla" },
-  { value: "fill", label: "De relleno" },
+  { value: "linear", get label() { return tl("Lineal"); } },
+  { value: "circular", get label() { return tl("Circular"); } },
+  { value: "curve", get label() { return tl("En curva"); } },
+  { value: "table", get label() { return tl("Por tabla"); } },
+  { value: "fill", get label() { return tl("De relleno"); } },
 ];
 
 // ─── Sketch 3D ───────────────────────────────────────────────────────────────
@@ -5920,27 +5903,27 @@ const SKETCH_PATTERNS: { value: SketchPatternKind; label: string }[] = [
 type Tool3d = "select" | "line" | "arc" | "spline" | "point";
 
 const TOOL3D: { id: Tool3d; label: string; prompt: string }[] = [
-  { id: "line", label: "Línea", prompt: "Clic en el plano activo, en un punto o en un vértice del sólido; cada clic sigue la línea" },
-  { id: "arc", label: "Arco", prompt: "Arco por tres puntos: comienzo, uno del medio y fin" },
-  { id: "spline", label: "Spline", prompt: "Clic en cada punto de paso; «Terminar trazo» la crea" },
-  { id: "point", label: "Punto", prompt: "Clic donde va el punto" },
-  { id: "select", label: "Elegir", prompt: "Clic en puntos y curvas para restringirlos (Mayús suma)" },
+  { id: "line", get label() { return tl("Línea"); }, get prompt() { return tl("Clic en el plano activo, en un punto o en un vértice del sólido; cada clic sigue la línea"); } },
+  { id: "arc", get label() { return tl("Arco"); }, get prompt() { return tl("Arco por tres puntos: comienzo, uno del medio y fin"); } },
+  { id: "spline", get label() { return tl("Spline"); }, get prompt() { return tl("Clic en cada punto de paso; «Terminar trazo» la crea"); } },
+  { id: "point", get label() { return tl("Punto"); }, get prompt() { return tl("Clic donde va el punto"); } },
+  { id: "select", get label() { return tl("Elegir"); }, get prompt() { return tl("Clic en puntos y curvas para restringirlos (Mayús suma)"); } },
 ];
 
 const C3D_LABELS: Record<Constraint3d["type"], string> = {
-  coincident: "Coincidentes",
-  fixed: "Fijo",
-  attach: "Sobre el modelo",
-  on_plane: "Sobre el plano",
-  along_axis: "Paralela al eje",
-  parallel: "Paralelas",
-  perpendicular: "Perpendiculares",
-  equal: "Mismo largo",
-  tangent: "Tangentes",
-  midpoint: "Punto medio",
-  length: "Largo",
-  distance: "Distancia",
-  angle: "Ángulo",
+  get coincident() { return tl("Coincidentes"); },
+  get fixed() { return tl("Fijo"); },
+  get attach() { return tl("Sobre el modelo"); },
+  get on_plane() { return tl("Sobre el plano"); },
+  get along_axis() { return tl("Paralela al eje"); },
+  get parallel() { return tl("Paralelas"); },
+  get perpendicular() { return tl("Perpendiculares"); },
+  get equal() { return tl("Mismo largo"); },
+  get tangent() { return tl("Tangentes"); },
+  get midpoint() { return tl("Punto medio"); },
+  get length() { return tl("Largo"); },
+  get distance() { return tl("Distancia"); },
+  get angle() { return tl("Ángulo"); },
 };
 
 /** Ids de puntos y entidades que nombra una restricción del sketch 3D */
@@ -6085,23 +6068,23 @@ const Sketch3dEditor: Component<{ store: CadStore; ui: CadUi; feature: Feature }
     const E = selEntities();
     const out: { label: string; make: () => Constraint3d[] }[] = [];
     if (P.length === 2 && E.length === 0) {
-      out.push({ label: "Coincidentes", make: () => [{ type: "coincident", a: P[0], b: P[1] }] });
-      out.push({ label: "Distancia", make: () => [{ type: "distance", a: P[0], b: P[1], value: round(len3(sub3(coords(s, P[1])!, coords(s, P[0])!))) }] });
+      out.push({ label: tl("Coincidentes"), make: () => [{ type: "coincident", a: P[0], b: P[1] }] });
+      out.push({ label: tl("Distancia"), make: () => [{ type: "distance", a: P[0], b: P[1], value: round(len3(sub3(coords(s, P[1])!, coords(s, P[0])!))) }] });
     }
     if (P.length >= 1 && E.length === 0) {
-      out.push({ label: "Sobre el plano activo", make: () => P.map((p) => ({ type: "on_plane", point: p, plane: { type: planeKey() }, offset: offset() }) as Constraint3d) });
-      out.push({ label: "Fijo", make: () => P.map((p) => ({ type: "fixed", point: p, at: coords(s, p)! }) as Constraint3d) });
+      out.push({ label: tl("Sobre el plano activo"), make: () => P.map((p) => ({ type: "on_plane", point: p, plane: { type: planeKey() }, offset: offset() }) as Constraint3d) });
+      out.push({ label: tl("Fijo"), make: () => P.map((p) => ({ type: "fixed", point: p, at: coords(s, p)! }) as Constraint3d) });
     }
     if (L.length === 1 && P.length === 0 && E.length === 1) {
-      for (const axis of ["x", "y", "z"] as const) out.push({ label: `Paralela a ${axis.toUpperCase()}`, make: () => [{ type: "along_axis", line: L[0], axis }] });
-      out.push({ label: "Largo", make: () => [{ type: "length", line: L[0], value: round(len3(lineVec(s, L[0])!)) }] });
+      for (const axis of ["x", "y", "z"] as const) out.push({ label: tl("Paralela a {axis}", { axis: axis.toUpperCase() }), make: () => [{ type: "along_axis", line: L[0], axis }] });
+      out.push({ label: tl("Largo"), make: () => [{ type: "length", line: L[0], value: round(len3(lineVec(s, L[0])!)) }] });
     }
     if (L.length === 2 && E.length === 2 && P.length === 0) {
-      out.push({ label: "Paralelas", make: () => [{ type: "parallel", a: L[0], b: L[1] }] });
-      out.push({ label: "Perpendiculares", make: () => [{ type: "perpendicular", a: L[0], b: L[1] }] });
-      out.push({ label: "Mismo largo", make: () => [{ type: "equal", a: L[0], b: L[1] }] });
+      out.push({ label: tl("Paralelas"), make: () => [{ type: "parallel", a: L[0], b: L[1] }] });
+      out.push({ label: tl("Perpendiculares"), make: () => [{ type: "perpendicular", a: L[0], b: L[1] }] });
+      out.push({ label: tl("Mismo largo"), make: () => [{ type: "equal", a: L[0], b: L[1] }] });
       out.push({
-        label: "Ángulo",
+        label: tl("Ángulo"),
         make: () => {
           const [u, v] = [lineVec(s, L[0])!, lineVec(s, L[1])!];
           const cos = (u[0] * v[0] + u[1] * v[1] + u[2] * v[2]) / (len3(u) * len3(v) || 1);
@@ -6110,9 +6093,9 @@ const Sketch3dEditor: Component<{ store: CadStore; ui: CadUi; feature: Feature }
       });
     }
     if (E.length === 2 && P.length === 0 && E.every((e) => e.geometry.type === "line" || e.geometry.type === "arc") && E.some((e) => e.geometry.type === "arc")) {
-      out.push({ label: "Tangentes", make: () => [{ type: "tangent", a: E[0].id, b: E[1].id }] });
+      out.push({ label: tl("Tangentes"), make: () => [{ type: "tangent", a: E[0].id, b: E[1].id }] });
     }
-    if (P.length === 1 && L.length === 1 && E.length === 1) out.push({ label: "Punto medio", make: () => [{ type: "midpoint", point: P[0], line: L[0] }] });
+    if (P.length === 1 && L.length === 1 && E.length === 1) out.push({ label: tl("Punto medio"), make: () => [{ type: "midpoint", point: P[0], line: L[0] }] });
     return out;
   };
   /** Borra lo elegido: entidades, puntos sueltos y lo que los nombra */
@@ -6130,15 +6113,15 @@ const Sketch3dEditor: Component<{ store: CadStore; ui: CadUi; feature: Feature }
   const statusText = () => {
     const r = report();
     if (!r) return "";
-    if (r.status === "well_constrained") return "Totalmente definido";
-    if (r.status === "under_constrained") return `${r.dof} grados de libertad`;
-    return "Hay restricciones en conflicto (en rojo); lo demás se cumple";
+    if (r.status === "well_constrained") return tl("Totalmente definido");
+    if (r.status === "under_constrained") return tl("{dof} grados de libertad", { dof: r.dof });
+    return tl("Hay restricciones en conflicto (en rojo); lo demás se cumple");
   };
   const onePoint = () => (selPoints().length === 1 && selEntities().length === 0 ? sketch().points.find((p) => p.id === selPoints()[0]) : undefined);
 
   return (
     <div class="space-y-2" data-sketch3d>
-      <div class="flex flex-wrap gap-1" role="radiogroup" aria-label="Herramienta del sketch 3D">
+      <div class="flex flex-wrap gap-1" role="radiogroup" aria-label={tl("Herramienta del sketch 3D")}>
         <For each={TOOL3D}>
           {(t) => (
             <button
@@ -6153,32 +6136,32 @@ const Sketch3dEditor: Component<{ store: CadStore; ui: CadUi; feature: Feature }
           )}
         </For>
       </div>
-      <Row label="Plano activo">
+      <Row label={tl("Plano activo")}>
         <Select
           options={(["xy", "xz", "yz"] as const).map((k) => ({ value: k, label: PLANE_LABELS[k] }))}
           value={planeKey()}
           onChange={(v) => setPlaneKey(v as "xy" | "xz" | "yz")}
         />
       </Row>
-      <Num label="Desplazado" suffix="mm" step={1} value={offset()} onCommit={setOffset} />
+      <Num label={tl("Desplazado")} suffix="mm" step={1} value={offset()} onCommit={setOffset} />
       <div class="flex flex-wrap gap-1.5">
         <Button size="sm" variant="ghost" disabled={trace().length === 0} onClick={endTrace}>
-          Terminar trazo
+          {tl("Terminar trazo")}
         </Button>
         <Show when={ui.pick().kind !== "sketch3d"}>
           <Button size="sm" onClick={() => setTool(tool())}>
-            Dibujar en el visor
+            {tl("Dibujar en el visor")}
           </Button>
         </Show>
       </div>
       <p class={clsx("text-xs", report()?.status === "well_constrained" ? "text-success" : report()?.status === "over_constrained" ? "text-error" : "text-text-muted")} data-sketch3d-status>
-        {sketch().points.length} puntos · {sketch().entities.length} curvas
+        {sketch().points.length} {tl("puntos ·")} {sketch().entities.length} {tl("curvas")}
         <Show when={statusText()}> · {statusText()}</Show>
       </p>
 
       <Show when={ui.sel3d().length > 0}>
         <div class="space-y-1.5 rounded border border-border p-1.5">
-          <p class="text-[11px] text-text-dim">Elegido: {ui.sel3d().length}</p>
+          <p class="text-[11px] text-text-dim">{tl("Elegido:")} {ui.sel3d().length}</p>
           <Show when={onePoint()}>
             {(p) => (
               <div class="grid grid-cols-3 gap-1">
@@ -6218,18 +6201,18 @@ const Sketch3dEditor: Component<{ store: CadStore; ui: CadUi; feature: Feature }
                   void change((s) => s.entities.forEach((e) => ids.has(e.id) && (e.construction = on)));
                 }}
               >
-                Construcción
+                {tl("Construcción")}
               </Button>
             </Show>
             <Button size="sm" variant="danger" icon={<Icons.Trash size={12} />} onClick={removeSelected}>
-              Borrar
+              {tl("Borrar")}
             </Button>
           </div>
         </div>
       </Show>
 
       <Show when={sketch().constraints.length > 0}>
-        <div class="space-y-0.5 max-h-56 overflow-y-auto" aria-label="Restricciones del sketch 3D">
+        <div class="space-y-0.5 max-h-56 overflow-y-auto" aria-label={tl("Restricciones del sketch 3D")}>
           <For each={sketch().constraints}>
             {(c, i) => {
               const conflict = () => report()?.conflicting.includes(i()) ?? false;
@@ -6239,8 +6222,8 @@ const Sketch3dEditor: Component<{ store: CadStore; ui: CadUi; feature: Feature }
                   class={clsx("flex items-center gap-2 px-1.5 py-0.5 rounded text-xs hover:bg-surface", conflict() ? "bg-error/15 text-error" : "text-text-muted")}
                   data-constraint3d={c.type}
                 >
-                  <button class="flex-1 truncate text-left hover:text-text" title="Elegir lo que restringe" onClick={() => ui.setSel3d(ids3d(c))}>
-                    {c.type === "along_axis" ? `Paralela a ${c.axis.toUpperCase()}` : C3D_LABELS[c.type]}
+                  <button class="flex-1 truncate text-left hover:text-text" title={tl("Elegir lo que restringe")} onClick={() => ui.setSel3d(ids3d(c))}>
+                    {c.type === "along_axis" ? tl("Paralela a {axis}", { axis: c.axis.toUpperCase() }) : C3D_LABELS[c.type]}
                   </button>
                   <Show when={value() !== undefined}>
                     <div class="w-20">
@@ -6257,7 +6240,7 @@ const Sketch3dEditor: Component<{ store: CadStore; ui: CadUi; feature: Feature }
                       />
                     </div>
                   </Show>
-                  <IconButton size="sm" aria-label="Quitar" onClick={() => void change((s) => s.constraints.splice(i(), 1))}>
+                  <IconButton size="sm" aria-label={tl("Quitar")} onClick={() => void change((s) => s.constraints.splice(i(), 1))}>
                     <Icons.X size={11} />
                   </IconButton>
                 </div>
@@ -6267,8 +6250,7 @@ const Sketch3dEditor: Component<{ store: CadStore; ui: CadUi; feature: Feature }
         </div>
       </Show>
       <p class="text-[11px] text-text-dim leading-relaxed">
-        Clic en un vértice del sólido: el punto queda atado a él. Las líneas casi paralelas a un eje quedan paralelas. Sirve de camino para un Barrido (elegirlo como curva); un perfil en un plano que la cruce se
-        ubica con «Perforar» en su sketch.
+        {tl("Clic en un vértice del sólido: el punto queda atado a él. Las líneas casi paralelas a un eje quedan paralelas. Sirve de camino para un Barrido (elegirlo como curva); un perfil en un plano que la cruce se ubica con «Perforar» en su sketch.")}
       </p>
     </div>
   );
@@ -6388,7 +6370,7 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
       setPatternRotate(sp.rotate);
     } else if (sp.kind === "curve") setCurveRotate(sp.rotate);
     setEditingPattern(p.id);
-    ui.setMessage("Cambiar los datos y «Rehacer el patrón»");
+    ui.setMessage(tl("Cambiar los datos y «Rehacer el patrón»"));
   };
   // Restricciones que faltan: se piden con el botón; cambiar el sketch deja la lista vieja
   const [missing, setMissing] = createSignal<SketchSuggestion[]>();
@@ -6427,7 +6409,7 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
     setAssistBusy(true);
     try {
       const more = await props.store.defineSketch(sketch(), defineRelations());
-      if (more.length === 0) ui.setMessage("No encontré qué agregar: lo que queda libre no se define con cotas simples");
+      if (more.length === 0) ui.setMessage(tl("No encontré qué agregar: lo que queda libre no se define con cotas simples"));
       else {
         add(more);
         setMissing(undefined);
@@ -6446,12 +6428,12 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
     const names = new Map((doc?.features ?? []).map((f) => [f.id, f.name]));
     return (props.store.result()?.references ?? [])
       .filter((r) => (r.kind === "curve" || r.kind === "curves") && before.has(r.id))
-      .map((r) => ({ value: String(r.id), label: names.get(r.id) ?? `Curva ${r.id}` }));
+      .map((r) => ({ value: String(r.id), label: names.get(r.id) ?? tl("Curva {id}", { id: r.id }) }));
   };
   /** Ata el punto a donde la curva cruza el plano del sketch (el cruce más cercano) */
   const pierce = (pid: number, curve: number): string | undefined => {
     const ref = props.store.result()?.references.find((r) => r.id === curve);
-    if (!ref || (ref.kind !== "curve" && ref.kind !== "curves")) return "Esa curva no está calculada";
+    if (!ref || (ref.kind !== "curve" && ref.kind !== "curves")) return tl("Esa curva no está calculada");
     const plane = s().plane;
     const n = plane.normal;
     const side = (p: P3) => (p[0] - plane.origin[0]) * n[0] + (p[1] - plane.origin[1]) * n[1] + (p[2] - plane.origin[2]) * n[2];
@@ -6470,7 +6452,7 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
       }
     }
     const p = point(pid);
-    if (!p || hits.length === 0) return "Esa curva no cruza el plano del sketch";
+    if (!p || hits.length === 0) return tl("Esa curva no cruza el plano del sketch");
     const at = hits.reduce((best, h) => (Math.hypot(h[0] - p.x, h[1] - p.y) < Math.hypot(best[0] - p.x, best[1] - p.y) ? h : best));
     const rounded: P2 = [Math.round(at[0] * 1e6) / 1e6, Math.round(at[1] * 1e6) / 1e6];
     ui.change((sk) => {
@@ -6502,89 +6484,88 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
         }
       }}
     >
-      <Section title="Sketch">
+      <Section title={tl("Sketch")}>
         <p class="text-[11px] text-text-dim leading-relaxed">
-          Dibujar en el visor. Con «Elegir» se marcan puntos y líneas (Mayús suma) para restringirlos; los puntos se arrastran y el sketch se
-          recalcula respetando las medidas.
+          {tl("Dibujar en el visor. Con «Elegir» se marcan puntos y líneas (Mayús suma) para restringirlos; los puntos se arrastran y el sketch se recalcula respetando las medidas.")}
         </p>
         <Show when={s().report}>
           {(r) => (
             <p class={clsx("text-xs", r().status === "well_constrained" ? "text-success" : r().status === "under_constrained" ? "text-text-muted" : "text-error")}>
               {r().status === "well_constrained"
-                ? "Totalmente definido"
+                ? tl("Totalmente definido")
                 : r().status === "under_constrained"
-                  ? `${r().dof} grados de libertad`
+                  ? tl("{dof} grados de libertad", { dof: r().dof })
                   : r().status === "over_constrained"
                     ? r().partial
-                      ? "Hay restricciones en conflicto (marcadas en rojo); lo demás se cumple"
-                      : "Hay restricciones en conflicto (marcadas en rojo)"
-                    : "No se pudo resolver"}
+                      ? tl("Hay restricciones en conflicto (marcadas en rojo); lo demás se cumple")
+                      : tl("Hay restricciones en conflicto (marcadas en rojo)")
+                    : tl("No se pudo resolver")}
               {" · "}
-              {s().regions.length} regiones cerradas
+              {s().regions.length} {tl("regiones cerradas")}
             </p>
           )}
         </Show>
         <Show when={ui.scanOutline()?.sketch.entities.length}>
-          <div class="flex items-center gap-2 rounded-md border border-border p-2" aria-label="Corte del escaneo">
-            <span class="flex-1 text-[11px] text-text-dim leading-snug">El escaneo corta este plano (línea naranja): sirve de guía y de anclaje.</span>
+          <div class="flex items-center gap-2 rounded-md border border-border p-2" aria-label={tl("Corte del escaneo")}>
+            <span class="flex-1 text-[11px] text-text-dim leading-snug">{tl("El escaneo corta este plano (línea naranja): sirve de guía y de anclaje.")}</span>
             <Button size="sm" onClick={useScanOutline}>
-              Usar el corte
+              {tl("Usar el corte")}
             </Button>
           </div>
         </Show>
-        <div class="space-y-1.5 border-b border-border pb-2" aria-label="Ayudas al dibujar">
+        <div class="space-y-1.5 border-b border-border pb-2" aria-label={tl("Ayudas al dibujar")}>
           <div class="flex flex-wrap gap-x-3">
-            <Checkbox small label="Rejilla" checked={ui.assist().grid} onChange={(c) => ui.setAssist({ grid: c })} />
-            <Checkbox small label="Anclar a la rejilla" checked={ui.assist().gridSnap} onChange={(c) => ui.setAssist({ gridSnap: c })} />
+            <Checkbox small label={tl("Rejilla")} checked={ui.assist().grid} onChange={(c) => ui.setAssist({ grid: c })} />
+            <Checkbox small label={tl("Anclar a la rejilla")} checked={ui.assist().gridSnap} onChange={(c) => ui.setAssist({ gridSnap: c })} />
           </div>
-          <Num label="Paso de la rejilla" suffix="mm" step={1} min={0} value={ui.assist().spacing} onCommit={(v) => v > 0 && ui.setAssist({ spacing: v })} />
+          <Num label={tl("Paso de la rejilla")} suffix="mm" step={1} min={0} value={ui.assist().spacing} onCommit={(v) => v > 0 && ui.setAssist({ spacing: v })} />
           <div class="flex flex-wrap gap-x-3">
             <Show when={!s().sheet}>
-              <Checkbox small label="Corte en el plano" checked={ui.assist().section} onChange={(c) => ui.setAssist({ section: c })} />
-              <Checkbox small label="Ocultar el modelo" checked={ui.assist().hideModel} onChange={(c) => ui.setAssist({ hideModel: c })} />
+              <Checkbox small label={tl("Corte en el plano")} checked={ui.assist().section} onChange={(c) => ui.setAssist({ section: c })} />
+              <Checkbox small label={tl("Ocultar el modelo")} checked={ui.assist().hideModel} onChange={(c) => ui.setAssist({ hideModel: c })} />
             </Show>
           </div>
           <Show
             when={ui.symmetryAxis() !== undefined && entity(ui.symmetryAxis()!)}
             fallback={
               <Show when={lines().length === 1 && selEntities().length === 1}>
-                <Button size="sm" title="Lo que se dibuje desde ahora sale reflejado en la línea elegida y atado por simetría" onClick={() => ui.setSymmetryAxis(lines()[0]!.id)}>
-                  Simetría al dibujar (eje: la línea elegida)
+                <Button size="sm" title={tl("Lo que se dibuje desde ahora sale reflejado en la línea elegida y atado por simetría")} onClick={() => ui.setSymmetryAxis(lines()[0]!.id)}>
+                  {tl("Simetría al dibujar (eje: la línea elegida)")}
                 </Button>
               </Show>
             }
           >
             <div class="flex items-center gap-2 text-xs" data-symmetry-axis={ui.symmetryAxis()}>
-              <span class="flex-1 text-accent">Simetría al dibujar activa</span>
+              <span class="flex-1 text-accent">{tl("Simetría al dibujar activa")}</span>
               <Button size="sm" variant="ghost" onClick={() => ui.setSymmetryAxis(undefined)}>
-                Apagar
+                {tl("Apagar")}
               </Button>
             </div>
           </Show>
         </div>
-        <div class="space-y-1.5" aria-label="Revisar el contorno">
+        <div class="space-y-1.5" aria-label={tl("Revisar el contorno")}>
           <ProblemList ui={ui} sketch={sketch()} />
-          <Num label="Tolerancia" suffix="mm" step={0.01} min={0} value={repairTol()} onCommit={setRepairTol} />
+          <Num label={tl("Tolerancia")} suffix="mm" step={0.01} min={0} value={repairTol()} onCommit={setRepairTol} />
           <div class="flex flex-wrap gap-1.5">
             <Button
               size="sm"
-              title="Junta los extremos a menos de la tolerancia, quita lo más corto que ella, parte las curvas en los cruces y las T y junta los puntos sueltos con el que tengan encima"
+              title={tl("Junta los extremos a menos de la tolerancia, quita lo más corto que ella, parte las curvas en los cruces y las T y junta los puntos sueltos con el que tengan encima")}
               onClick={() => {
                 let r: ReturnType<typeof repairSketch> | undefined;
                 ui.change((sk) => (r = repairSketch(sk, repairTol())));
                 const n = r!.joined + r!.removed + r!.split + r!.points;
                 ui.setMessage(
                   n
-                    ? `Reparado: ${r!.joined} extremos juntados, ${r!.removed} entidades cortísimas quitadas, ${r!.split} cruces partidos, ${r!.points} puntos sueltos juntados`
-                    : "No había nada que reparar con esa tolerancia",
+                    ? tl("Reparado: {joined} extremos juntados, {removed} entidades cortísimas quitadas, {split} cruces partidos, {points} puntos sueltos juntados", { joined: r!.joined, removed: r!.removed, split: r!.split, points: r!.points })
+                    : tl("No había nada que reparar con esa tolerancia"),
                 );
               }}
             >
-              Reparar
+              {tl("Reparar")}
             </Button>
             <Button
               size="sm"
-              title="Quita las líneas, círculos y arcos repetidos y junta los que se pisan en parte (lo que las nombraba pasa a la que queda)"
+              title={tl("Quita las líneas, círculos y arcos repetidos y junta los que se pisan en parte (lo que las nombraba pasa a la que queda)")}
               onClick={() => {
                 let n = 0;
                 let m = 0;
@@ -6592,53 +6573,53 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                   n = removeDuplicates(sk);
                   m = mergeOverlaps(sk);
                 });
-                const parts = [n && `${n} ${n === 1 ? "repetida quitada" : "repetidas quitadas"}`, m && `${m} ${m === 1 ? "encimada juntada" : "encimadas juntadas"}`].filter(Boolean);
-                ui.setMessage(parts.length ? parts.join(", ") : "No hay entidades repetidas ni encimadas");
+                const parts = [n && tn(n, "{n} repetida quitada", "{n} repetidas quitadas"), m && tn(m, "{n} encimada juntada", "{n} encimadas juntadas")].filter(Boolean);
+                ui.setMessage(parts.length ? parts.join(", ") : tl("No hay entidades repetidas ni encimadas"));
               }}
             >
-              Eliminar duplicados
+              {tl("Eliminar duplicados")}
             </Button>
             <Button
               size="sm"
-              title="Une con una línea los extremos sueltos, de a pares, primero los más cercanos"
+              title={tl("Une con una línea los extremos sueltos, de a pares, primero los más cercanos")}
               onClick={() => {
                 let made: number[] = [];
                 ui.change((sk) => (made = closeContour(sk)));
-                ui.setMessage(made.length ? `${made.length} ${made.length === 1 ? "línea nueva" : "líneas nuevas"} cierran el contorno` : "No hay extremos sueltos para unir");
+                ui.setMessage(made.length ? (made.length === 1 ? tl("1 línea nueva cierra el contorno") : tl("{n} líneas nuevas cierran el contorno", { n: made.length })) : tl("No hay extremos sueltos para unir"));
               }}
             >
-              Cerrar contorno
+              {tl("Cerrar contorno")}
             </Button>
           </div>
         </div>
       </Section>
 
-      <Section title="Definir">
+      <Section title={tl("Definir")}>
         <Show when={selEntities().length === 1 && entityDof(selEntities()[0]!.id)}>
           {(n) => (
             <p class="text-xs text-text-muted" data-entity-dof={n()}>
-              Lo elegido tiene {n()} {n() === 1 ? "grado libre" : "grados libres"} (las flechas amarillas muestran hacia dónde se mueve)
+              {tl("Lo elegido tiene")} {tn(n(), "{n} grado libre", "{n} grados libres")} {tl("(las flechas amarillas muestran hacia dónde se mueve)")}
             </p>
           )}
         </Show>
         <div class="flex flex-wrap gap-1.5">
-          <Button size="sm" disabled={assistBusy()} title="Relaciones casi cumplidas (casi horizontal, casi coincidentes…) y cotas que faltan" onClick={() => void askMissing()}>
-            Sugerir restricciones
+          <Button size="sm" disabled={assistBusy()} title={tl("Relaciones casi cumplidas (casi horizontal, casi coincidentes…) y cotas que faltan")} onClick={() => void askMissing()}>
+            {tl("Sugerir restricciones")}
           </Button>
           <Button
             size="sm"
             disabled={assistBusy() || s().report?.status === "well_constrained"}
-            title="Agrega lo que falta para que quede totalmente definido: cotas con lo que mide ahora (nada se mueve) desde el origen"
+            title={tl("Agrega lo que falta para que quede totalmente definido: cotas con lo que mide ahora (nada se mueve) desde el origen")}
             onClick={() => void defineAll()}
           >
-            Definir todo
+            {tl("Definir todo")}
           </Button>
         </div>
-        <Checkbox small label="Con las relaciones casi cumplidas" checked={defineRelations()} onChange={setDefineRelations} />
+        <Checkbox small label={tl("Con las relaciones casi cumplidas")} checked={defineRelations()} onChange={setDefineRelations} />
         <Show when={missing()}>
           {(list) => (
-            <Show when={list().length > 0} fallback={<p class="text-xs text-text-dim">No falta nada evidente</p>}>
-              <div class="space-y-0.5 max-h-56 overflow-y-auto" aria-label="Restricciones sugeridas">
+            <Show when={list().length > 0} fallback={<p class="text-xs text-text-dim">{tl("No falta nada evidente")}</p>}>
+              <div class="space-y-0.5 max-h-56 overflow-y-auto" aria-label={tl("Restricciones sugeridas")}>
                 <For each={list()}>
                   {(m) => (
                     <div
@@ -6653,14 +6634,14 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                         <span class="text-text-dim"> · {m.why}</span>
                       </span>
                       <Button size="sm" variant="ghost" onClick={() => applyMissing([m])}>
-                        Agregar
+                        {tl("Agregar")}
                       </Button>
                     </div>
                   )}
                 </For>
               </div>
               <Button size="sm" onClick={() => applyMissing(list())}>
-                Agregar todas ({list().length})
+                {tl("Agregar todas (")}{list().length})
               </Button>
             </Show>
           )}
@@ -6668,15 +6649,15 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
       </Section>
 
       <Section title={`Elegido (${sel().length})`}>
-        <Show when={sel().length > 0} fallback={<p class="text-xs text-text-dim">Nada elegido</p>}>
+        <Show when={sel().length > 0} fallback={<p class="text-xs text-text-dim">{tl("Nada elegido")}</p>}>
           <Show when={selEntities().length >= 1}>
             <Button
               size="sm"
               variant="ghost"
-              title="Todas las del mismo tipo y la misma medida (largo de las líneas, radio de círculos y arcos) que la primera elegida"
+              title={tl("Todas las del mismo tipo y la misma medida (largo de las líneas, radio de círculos y arcos) que la primera elegida")}
               onClick={() => ui.setSelection(similarTo(selEntities()[0]!.id))}
             >
-              Elegir similares
+              {tl("Elegir similares")}
             </Button>
           </Show>
           <div class="flex flex-wrap gap-1.5">
@@ -6690,13 +6671,13 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
             </Index>
           </div>
           <Show when={selPoints().length === 1 && selEntities().length === 0 && pierceCurves().length > 0}>
-            <div class="flex flex-wrap items-center gap-1.5" aria-label="Perforar">
-              <span class="text-xs text-text-muted">Perforar:</span>
+            <div class="flex flex-wrap items-center gap-1.5" aria-label={tl("Perforar")}>
+              <span class="text-xs text-text-muted">{tl("Perforar:")}</span>
               <For each={pierceCurves()}>
                 {(c) => (
                   <Button
                     size="sm"
-                    title="El punto va donde la curva cruza el plano del sketch (y la sigue si cambia)"
+                    title={tl("El punto va donde la curva cruza el plano del sketch (y la sigue si cambia)")}
                     onClick={() => {
                       const msg = pierce(selPoints()[0], +c.value);
                       if (msg) ui.setMessage(msg);
@@ -6710,16 +6691,16 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
           </Show>
           <Show when={corners().length > 0}>
             <div class="flex flex-wrap gap-x-3">
-              <Checkbox small label="Esquina virtual" checked={keepCorner()} onChange={setKeepCorner} />
-              <Checkbox small label="Recortar" checked={trimCorner()} onChange={setTrimCorner} />
+              <Checkbox small label={tl("Esquina virtual")} checked={keepCorner()} onChange={setKeepCorner} />
+              <Checkbox small label={tl("Recortar")} checked={trimCorner()} onChange={setTrimCorner} />
             </div>
             <div class="flex items-end gap-1.5">
               <div class="flex-1">
-                <Num label="Radio" suffix="mm" step={0.5} value={cornerRadius()} onCommit={setCornerRadius} />
+                <Num label={tl("Radio")} suffix="mm" step={0.5} value={cornerRadius()} onCommit={setCornerRadius} />
               </div>
               <Button data-preview=""
                 size="sm"
-                title="Con varias esquinas elegidas, todas con el mismo radio (una cota y las demás iguales)"
+                title={tl("Con varias esquinas elegidas, todas con el mismo radio (una cota y las demás iguales)")}
                 onClick={() => {
                   let msg: string | undefined;
                   const points = corners();
@@ -6739,18 +6720,18 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                   else ui.setSelection([]);
                 }}
               >
-                {corners().length > 1 ? `Redondear ${corners().length} esquinas` : "Redondear esquina"}
+                {corners().length > 1 ? tl("Redondear {length} esquinas", { length: corners().length }) : tl("Redondear esquina")}
               </Button>
             </div>
-            <div class="space-y-1" aria-label="Chaflán de la esquina">
-              <Num label="Chaflán" suffix="mm" step={0.5} value={chamferDist()} onCommit={setChamferDist} />
+            <div class="space-y-1" aria-label={tl("Chaflán de la esquina")}>
+              <Num label={tl("Chaflán")} suffix="mm" step={0.5} value={chamferDist()} onCommit={setChamferDist} />
               <div class="flex items-center gap-1.5">
                 <div class="w-24 shrink-0">
                   <Select
                     options={[
-                      { value: "equal", label: "Igual" },
-                      { value: "distance", label: "Dos dist." },
-                      { value: "angle", label: "Ángulo" },
+                      { value: "equal", label: tl("Igual") },
+                      { value: "distance", label: tl("Dos dist.") },
+                      { value: "angle", label: tl("Ángulo") },
                     ]}
                     value={chamferMode()}
                     onChange={(v) => {
@@ -6763,8 +6744,8 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                   <div class="flex-1 min-w-0">
                     <input
                       type="number"
-                      aria-label={chamferMode() === "angle" ? "Ángulo del chaflán" : "Segunda distancia del chaflán"}
-                      title={chamferMode() === "angle" ? "Ángulo (°) entre el chaflán y la primera línea" : "Distancia (mm) sobre la segunda línea"}
+                      aria-label={chamferMode() === "angle" ? tl("Ángulo del chaflán") : tl("Segunda distancia del chaflán")}
+                      title={chamferMode() === "angle" ? tl("Ángulo (°) entre el chaflán y la primera línea") : tl("Distancia (mm) sobre la segunda línea")}
                       value={chamferSecond()}
                       step={chamferMode() === "angle" ? 5 : 0.5}
                       class="w-full min-w-0 px-2 py-1 rounded bg-surface/40 border border-border text-xs text-text font-mono outline-none focus:border-accent [appearance:textfield]"
@@ -6777,7 +6758,7 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                 </Show>
                 <Button data-preview=""
                   size="sm"
-                  title="La primera distancia va sobre la primera línea de la esquina; el ángulo, entre el chaflán y esa línea"
+                  title={tl("La primera distancia va sobre la primera línea de la esquina; el ángulo, entre el chaflán y esa línea")}
                   onClick={() => {
                     let msg: string | undefined;
                     const second = chamferMode() === "angle" ? { angle: chamferSecond() } : { distance: chamferMode() === "equal" ? chamferDist() : chamferSecond() };
@@ -6792,7 +6773,7 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                     else ui.setSelection([]);
                   }}
                 >
-                  Achaflanar
+                  {tl("Achaflanar")}
                 </Button>
               </div>
             </div>
@@ -6807,7 +6788,7 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
           >
             <Button data-preview=""
               size="sm"
-              title="Dos líneas alineadas o dos arcos del mismo círculo con un extremo común pasan a ser una sola entidad"
+              title={tl("Dos líneas alineadas o dos arcos del mismo círculo con un extremo común pasan a ser una sola entidad")}
               onClick={() => {
                 const [a, b] = selEntities().map((e) => e!.id);
                 let msg: string | undefined;
@@ -6816,17 +6797,17 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                 if (!msg) ui.setSelection([a]);
               }}
             >
-              Unir
+              {tl("Unir")}
             </Button>
           </Show>
           <Show when={selEntities().length === 1 && selPoints().length === 0 && ["line", "arc"].includes(selEntities()[0]!.geometry.type)}>
             <div class="flex items-end gap-1.5">
               <div class="flex-1">
-                <Num label="Partes" step={1} min={2} value={splitParts()} onCommit={(v) => setSplitParts(Math.max(2, Math.round(v)))} />
+                <Num label={tl("Partes")} step={1} min={2} value={splitParts()} onCommit={(v) => setSplitParts(Math.max(2, Math.round(v)))} />
               </div>
               <Button data-preview=""
                 size="sm"
-                title="Parte la línea o el arco en partes iguales (las líneas quedan con el mismo largo atado)"
+                title={tl("Parte la línea o el arco en partes iguales (las líneas quedan con el mismo largo atado)")}
                 onClick={() => {
                   const id = selEntities()[0]!.id;
                   let msg: string | undefined;
@@ -6835,18 +6816,18 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                   if (!msg) ui.setSelection([]);
                 }}
               >
-                Partir en {splitParts()}
+                {tl("Partir en")} {splitParts()}
               </Button>
             </div>
           </Show>
           <Show when={selEntities().length > 0}>
             <div class="flex items-end gap-1.5">
               <div class="flex-1">
-                <Num label="Distancia" suffix="mm" step={0.5} value={offsetDist()} onCommit={setOffsetDist} />
+                <Num label={tl("Distancia")} suffix="mm" step={0.5} value={offsetDist()} onCommit={setOffsetDist} />
               </div>
               <Button data-preview=""
                 size="sm"
-                title="En un lazo cerrado, positivo es hacia afuera; en una cadena abierta, a la izquierda del recorrido"
+                title={tl("En un lazo cerrado, positivo es hacia afuera; en una cadena abierta, a la izquierda del recorrido")}
                 onClick={() => {
                   let msg: string | undefined;
                   const regions = s().regions;
@@ -6887,24 +6868,24 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                   ui.setMessage(msg);
                 }}
               >
-                Equidistante
+                {tl("Equidistante")}
               </Button>
             </div>
-            <div class="flex flex-wrap gap-x-3" aria-label="Más opciones del equidistante">
-              <Checkbox small label="Original a construcción" checked={offsetToConstruction()} onChange={setOffsetToConstruction} />
-              <Checkbox small label="Distancia como cota" checked={offsetDim()} onChange={setOffsetDim} />
+            <div class="flex flex-wrap gap-x-3" aria-label={tl("Más opciones del equidistante")}>
+              <Checkbox small label={tl("Original a construcción")} checked={offsetToConstruction()} onChange={setOffsetToConstruction} />
+              <Checkbox small label={tl("Distancia como cota")} checked={offsetDim()} onChange={setOffsetDim} />
             </div>
-            <div class="flex items-center gap-2" aria-label="Opciones del equidistante">
-              <Checkbox small label="A los dos lados" checked={offsetBoth()} onChange={setOffsetBoth} />
+            <div class="flex items-center gap-2" aria-label={tl("Opciones del equidistante")}>
+              <Checkbox small label={tl("A los dos lados")} checked={offsetBoth()} onChange={setOffsetBoth} />
               <div class="w-20">
-                <Num label="Copias" step={1} min={1} value={offsetCopies()} onCommit={(v) => setOffsetCopies(Math.max(1, Math.round(v)))} />
+                <Num label={tl("Copias")} step={1} min={1} value={offsetCopies()} onCommit={(v) => setOffsetCopies(Math.max(1, Math.round(v)))} />
               </div>
               <div class="flex-1 min-w-0">
                 <Select
                   options={[
-                    { value: "open", label: "Extremos abiertos" },
-                    { value: "round", label: "Extremos redondos" },
-                    { value: "line", label: "Extremos rectos" },
+                    { value: "open", label: tl("Extremos abiertos") },
+                    { value: "round", label: tl("Extremos redondos") },
+                    { value: "line", label: tl("Extremos rectos") },
                   ]}
                   value={offsetCaps()}
                   onChange={(v) => setOffsetCaps(v as OffsetCaps)}
@@ -6915,7 +6896,7 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
           <Show when={selEntities().length === 1 && selEntities()[0]!.geometry.type === "spline"}>
             <Button
               size="sm"
-              title="Une el último punto con el primero (o la abre entre ellos)"
+              title={tl("Une el último punto con el primero (o la abre entre ellos)")}
               onClick={() => {
                 const id = selEntities()[0]!.id;
                 ui.change((sk) => {
@@ -6924,11 +6905,11 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                 });
               }}
             >
-              {(selEntities()[0]!.geometry as { closed?: boolean }).closed ? "Abrir la spline" : "Cerrar la spline"}
+              {(selEntities()[0]!.geometry as { closed?: boolean }).closed ? tl("Abrir la spline") : tl("Cerrar la spline")}
             </Button>
             <Button
               size="sm"
-              title="Puntos que dan la dirección de salida y de llegada; se arrastran"
+              title={tl("Puntos que dan la dirección de salida y de llegada; se arrastran")}
               onClick={() => {
                 const id = selEntities()[0]!.id;
                 let msg: string | undefined;
@@ -6936,7 +6917,7 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                 ui.setMessage(msg);
               }}
             >
-              Manijas en los extremos sí/no
+              {tl("Manijas en los extremos sí/no")}
             </Button>
           </Show>
           <SplineTools ui={ui} />
@@ -6945,7 +6926,7 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
               <Show when={lines().length > 0 && selEntities().length > 1}>
                 <Button data-preview=""
                   size="sm"
-                  title="El eje es la primera línea elegida; lo demás se copia reflejado"
+                  title={tl("El eje es la primera línea elegida; lo demás se copia reflejado")}
                   onClick={() => {
                     const ids = selEntities().map((e) => e!.id);
                     const axis = lines()[0]!.id;
@@ -6959,17 +6940,17 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                     if (!msg) ui.setSelection([]);
                   }}
                 >
-                  Simetría (eje: primera línea elegida)
+                  {tl("Simetría (eje: primera línea elegida)")}
                 </Button>
               </Show>
               {/* Sin una línea elegida: en los ejes del sketch (una línea de construcción por el origen) */}
               <Show when={lines().length === 0}>
-                <div class="flex flex-wrap items-center gap-1.5" aria-label="Simetría en los ejes">
-                  <For each={[["x", "Simetría en el eje X"], ["y", "Simetría en el eje Y"]] as const}>
+                <div class="flex flex-wrap items-center gap-1.5" aria-label={tl("Simetría en los ejes")}>
+                  <For each={[["x", tl("Simetría en el eje X")], ["y", tl("Simetría en el eje Y")]] as const}>
                     {([axis, label]) => (
                       <Button data-preview=""
                         size="sm"
-                        title="El reflejo atado por simetría a una línea de construcción por el origen"
+                        title={tl("El reflejo atado por simetría a una línea de construcción por el origen")}
                         onClick={() => {
                           const ids = selEntities().map((e) => e!.id);
                           let msg: string | undefined;
@@ -6995,34 +6976,34 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                   </For>
                 </div>
               </Show>
-              <Checkbox small label="Quitar el original (mover)" checked={mirrorMove()} onChange={setMirrorMove} />
+              <Checkbox small label={tl("Quitar el original (mover)")} checked={mirrorMove()} onChange={setMirrorMove} />
               <Show when={selPattern()}>
                 {(sp) => (
                   <div class="space-y-1 rounded border border-border p-1.5" data-pattern-box>
                     <div class="text-xs text-text-muted">
                       {patternLabel(sp().pattern)}
-                      {sp().copy >= 0 ? ` · copia ${sp().copy + 2}` : " · el original"}
+                      {sp().copy >= 0 ? tl(" · copia {n}", { n: sp().copy + 2 }) : tl(" · el original")}
                     </div>
                     <div class="flex flex-wrap gap-1.5">
-                      <Button size="sm" title="Carga sus datos en los campos de abajo para cambiarlos" onClick={() => loadPattern(sp().pattern)}>
-                        Editar el patrón
+                      <Button size="sm" title={tl("Carga sus datos en los campos de abajo para cambiarlos")} onClick={() => loadPattern(sp().pattern)}>
+                        {tl("Editar el patrón")}
                       </Button>
                       <Show when={sp().copy >= 0}>
                         <Button
                           data-preview=""
                           size="sm"
-                          title="La copia queda de construcción (no forma regiones) y sigue así al rehacer el patrón"
+                          title={tl("La copia queda de construcción (no forma regiones) y sigue así al rehacer el patrón")}
                           onClick={() => {
                             const { pattern, copy } = sp();
                             ui.change((sk) => void toggleSkip(sk, pattern.id, copy));
                           }}
                         >
-                          {sp().pattern.skip.includes(sp().copy) ? "Volver a poner la copia" : "Omitir esta copia"}
+                          {sp().pattern.skip.includes(sp().copy) ? tl("Volver a poner la copia") : tl("Omitir esta copia")}
                         </Button>
                       </Show>
                       <Button
                         size="sm"
-                        title="Rehace el patrón con el original como está ahora (si se le agregó algo, las copias también lo tienen)"
+                        title={tl("Rehace el patrón con el original como está ahora (si se le agregó algo, las copias también lo tienen)")}
                         onClick={() => {
                           const id = sp().pattern.id;
                           let msg: string | undefined;
@@ -7030,19 +7011,19 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                           ui.setMessage(msg);
                         }}
                       >
-                        Rehacer con el original
+                        {tl("Rehacer con el original")}
                       </Button>
                       <Button
                         size="sm"
                         variant="ghost"
-                        title="Las copias quedan sueltas, con sus restricciones; el patrón ya no se puede editar"
+                        title={tl("Las copias quedan sueltas, con sus restricciones; el patrón ya no se puede editar")}
                         onClick={() => {
                           const id = sp().pattern.id;
                           ui.change((sk) => dropPattern(sk, id));
                           if (editingPattern() === id) setEditingPattern(undefined);
                         }}
                       >
-                        Soltar el patrón
+                        {tl("Soltar el patrón")}
                       </Button>
                     </div>
                   </div>
@@ -7050,16 +7031,16 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
               </Show>
               <Show when={editing()}>
                 <div class="flex items-center justify-between text-[11px] text-accent">
-                  Editando: {patternLabel(editing()!)}
+                  {tl("Editando:")} {patternLabel(editing()!)}
                   <button class="underline text-text-muted" onClick={() => setEditingPattern(undefined)}>
-                    Cancelar
+                    {tl("Cancelar")}
                   </button>
                 </div>
               </Show>
               <div class="flex items-end gap-1.5">
                 <Show when={patternKind() !== "table" && patternKind() !== "fill"}>
                   <div class="flex-1">
-                    <Num label="Cantidad" min={2} value={patternCount()} onCommit={(v) => setPatternCount(Math.max(2, Math.round(v)))} />
+                    <Num label={tl("Cantidad")} min={2} value={patternCount()} onCommit={(v) => setPatternCount(Math.max(2, Math.round(v)))} />
                   </div>
                 </Show>
                 <div class={patternKind() === "table" || patternKind() === "fill" ? "flex-1" : undefined}>
@@ -7072,39 +7053,38 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                     <Num label="X" suffix="mm" step={1} value={patternStep()[0]} onCommit={(v) => setPatternStep([v, patternStep()[1]])} />
                     <Num label="Y" suffix="mm" step={1} value={patternStep()[1]} onCommit={(v) => setPatternStep([patternStep()[0], v])} />
                   </div>
-                  <Checkbox small label="Distancia total (de la primera a la última)" checked={patternTotal()} onChange={setPatternTotal} />
-                  <Num label="Filas" min={1} value={patternRows()} onCommit={(v) => setPatternRows(Math.max(1, Math.round(v)))} />
+                  <Checkbox small label={tl("Distancia total (de la primera a la última)")} checked={patternTotal()} onChange={setPatternTotal} />
+                  <Num label={tl("Filas")} min={1} value={patternRows()} onCommit={(v) => setPatternRows(Math.max(1, Math.round(v)))} />
                   <Show when={patternRows() > 1}>
-                    <div class="flex gap-1.5" aria-label="Paso entre filas">
+                    <div class="flex gap-1.5" aria-label={tl("Paso entre filas")}>
                       <Num label="X" suffix="mm" step={1} value={patternStep2()[0]} onCommit={(v) => setPatternStep2([v, patternStep2()[1]])} />
                       <Num label="Y" suffix="mm" step={1} value={patternStep2()[1]} onCommit={(v) => setPatternStep2([patternStep2()[0], v])} />
                     </div>
                   </Show>
                 </Match>
                 <Match when={patternKind() === "circular"}>
-                  <Num label="Ángulo" suffix="°" step={15} value={patternAngle()} onCommit={setPatternAngle} />
-                  <Checkbox small label="Girar las copias" checked={patternRotate()} onChange={setPatternRotate} />
+                  <Num label={tl("Ángulo")} suffix="°" step={15} value={patternAngle()} onCommit={setPatternAngle} />
+                  <Checkbox small label={tl("Girar las copias")} checked={patternRotate()} onChange={setPatternRotate} />
                   <p class="text-[11px] text-text-dim">
-                    {selPoints().length === 1 ? "Alrededor del punto elegido" : "Alrededor del origen (o elegir también un punto)"};{" "}
-                    {Math.abs(patternAngle()) >= 360 ? "repartidos en la vuelta" : "de punta a punta del ángulo (negativo: horario)"}
+                    {selPoints().length === 1 ? tl("Alrededor del punto elegido") : tl("Alrededor del origen (o elegir también un punto)")};{" "}
+                    {Math.abs(patternAngle()) >= 360 ? tl("repartidos en la vuelta") : tl("de punta a punta del ángulo (negativo: horario)")}
                   </p>
                 </Match>
                 <Match when={patternKind() === "curve"}>
-                  <Checkbox small label="Girar con la curva" checked={curveRotate()} onChange={setCurveRotate} />
+                  <Checkbox small label={tl("Girar con la curva")} checked={curveRotate()} onChange={setCurveRotate} />
                   <p class="text-[11px] text-text-dim">
-                    El camino es la primera entidad elegida (línea, arco, círculo, spline o elipse); las copias se reparten de punta a punta. En líneas,
-                    arcos y círculos siguen al camino si cambia.
+                    {tl("El camino es la primera entidad elegida (línea, arco, círculo, spline o elipse); las copias se reparten de punta a punta. En líneas, arcos y círculos siguen al camino si cambia.")}
                   </p>
                 </Match>
                 <Match when={patternKind() === "table"}>
-                  <div class="space-y-1" aria-label="Tabla de copias">
-                    <span class="text-xs text-text-muted">Desplazamiento de cada copia (mm)</span>
+                  <div class="space-y-1" aria-label={tl("Tabla de copias")}>
+                    <span class="text-xs text-text-muted">{tl("Desplazamiento de cada copia (mm)")}</span>
                     <For each={tableRows()}>
                       {(row, i) => (
                         <div class="flex items-center gap-1" data-table-row={i()}>
                           <Num label="X" step={1} value={row[0]} onCommit={(v) => setTableRows(tableRows().map((r, j) => (j === i() ? [v, r[1]] : r)))} />
                           <Num label="Y" step={1} value={row[1]} onCommit={(v) => setTableRows(tableRows().map((r, j) => (j === i() ? [r[0], v] : r)))} />
-                          <IconButton aria-label={`Quitar la fila ${i() + 1}`} size="sm" variant="ghost" onClick={() => setTableRows(tableRows().filter((_, j) => j !== i()))}>
+                          <IconButton aria-label={tl("Quitar la fila {v1}", { v1: i() + 1 })} size="sm" variant="ghost" onClick={() => setTableRows(tableRows().filter((_, j) => j !== i()))}>
                             <Icons.Trash size={11} />
                           </IconButton>
                         </div>
@@ -7118,17 +7098,16 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                         setTableRows([...tableRows(), [last[0] + 10, last[1]]]);
                       }}
                     >
-                      Agregar fila
+                      {tl("Agregar fila")}
                     </Button>
                   </div>
                 </Match>
                 <Match when={patternKind() === "fill"}>
-                  <Num label="Separación" suffix="mm" step={1} min={0} value={fillSpacing()} onCommit={(v) => setFillSpacing(Math.max(0.01, v))} />
-                  <Num label="Margen al borde" suffix="mm" step={0.5} min={0} value={fillMargin()} onCommit={(v) => setFillMargin(Math.max(0, v))} />
-                  <Checkbox small label="Grilla hexagonal" checked={fillHex()} onChange={setFillHex} />
+                  <Num label={tl("Separación")} suffix="mm" step={1} min={0} value={fillSpacing()} onCommit={(v) => setFillSpacing(Math.max(0.01, v))} />
+                  <Num label={tl("Margen al borde")} suffix="mm" step={0.5} min={0} value={fillMargin()} onCommit={(v) => setFillMargin(Math.max(0, v))} />
+                  <Checkbox small label={tl("Grilla hexagonal")} checked={fillHex()} onChange={setFillHex} />
                   <p class="text-[11px] text-text-dim">
-                    La región es el lazo cerrado de la primera entidad elegida; entran las copias enteras a no menos del margen del borde. La grilla pasa
-                    por el original.
+                    {tl("La región es el lazo cerrado de la primera entidad elegida; entran las copias enteras a no menos del margen del borde. La grilla pasa por el original.")}
                   </p>
                 </Match>
               </Switch>
@@ -7147,7 +7126,7 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                   if (kind === "linear") spec = { kind, count: n, offset: step, rows: patternRows(), offset2: patternStep2() };
                   else if (kind === "circular") {
                     const center = edit?.spec.kind === "circular" ? edit.spec.center : selPoints().length === 1 ? selPoints()[0] : sketch().origin;
-                    if (center === undefined) msg = "Elegir el punto alrededor del cual repetir";
+                    if (center === undefined) msg = tl("Elegir el punto alrededor del cual repetir");
                     else spec = { kind, count: n, center, span: patternAngle(), rotate: patternRotate() };
                   } else if (kind === "curve") spec = { kind, count: n, path: edit?.spec.kind === "curve" ? edit.spec.path : ids[0], rotate: curveRotate() };
                   else if (kind === "table") spec = { kind, offsets: tableRows() };
@@ -7159,7 +7138,7 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                     const first = ids[0];
                     const region = s().regions.find((r) => r.outer.pieces.some((p) => p.entity === first));
                     const border = new Set(region?.outer.pieces.map((p) => p.entity));
-                    if (!region) msg = "La primera entidad elegida tiene que ser el borde de una región cerrada";
+                    if (!region) msg = tl("La primera entidad elegida tiene que ser el borde de una región cerrada");
                     else
                       ui.change((sk) => (msg = fillPattern(sk, ids.filter((id) => !border.has(id)), region, fillSpacing(), fillHex(), fillMargin())));
                   }
@@ -7167,16 +7146,16 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                   if (!msg) ui.setSelection([]);
                 }}
               >
-                {editing() ? "Rehacer el patrón" : "Repetir en patrón"}
+                {editing() ? tl("Rehacer el patrón") : tl("Repetir en patrón")}
               </Button>
             </div>
           </Show>
           {/* Con números (con el mouse: herramientas Mover, Copiar, Girar y Escalar de la barra) */}
-          <div class="space-y-1.5 border-t border-border pt-1.5" aria-label="Transformar">
-            <span class="text-xs text-text-muted">Transformar lo elegido (girar y escalar desde su centro)</span>
+          <div class="space-y-1.5 border-t border-border pt-1.5" aria-label={tl("Transformar")}>
+            <span class="text-xs text-text-muted">{tl("Transformar lo elegido (girar y escalar desde su centro)")}</span>
             <Checkbox
               small
-              label="Soltar de lo que no se mueve"
+              label={tl("Soltar de lo que no se mueve")}
               checked={ui.detachOnMove()}
               onChange={ui.setDetachOnMove}
             />
@@ -7186,52 +7165,52 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
             </div>
             <div class="flex gap-1.5">
               <Button size="sm" onClick={() => ui.setMessage(ui.transformSelected(translation(moveBy())))}>
-                Mover
+                {tl("Mover")}
               </Button>
               <Button data-preview="" size="sm" onClick={() => ui.setMessage(ui.transformSelected(translation(moveBy()), { copy: true, times: copyTimes() }))}>
-                {copyTimes() > 1 ? `Copiar ${copyTimes()} veces` : "Copiar corrido"}
+                {copyTimes() > 1 ? tl("Copiar {v1} veces", { v1: copyTimes() }) : tl("Copiar corrido")}
               </Button>
               <div class="w-20">
-                <Num label="Veces" step={1} min={1} value={copyTimes()} onCommit={(v) => setCopyTimes(Math.max(1, Math.round(v)))} />
+                <Num label={tl("Veces")} step={1} min={1} value={copyTimes()} onCommit={(v) => setCopyTimes(Math.max(1, Math.round(v)))} />
               </div>
             </div>
             <div class="flex items-end gap-1.5">
               <div class="flex-1">
-                <Num label="Ángulo" suffix="°" step={15} value={turnBy()} onCommit={setTurnBy} />
+                <Num label={tl("Ángulo")} suffix="°" step={15} value={turnBy()} onCommit={setTurnBy} />
               </div>
               <Button
                 size="sm"
-                title="Alrededor del centro de lo elegido; positivo: antihorario"
+                title={tl("Alrededor del centro de lo elegido; positivo: antihorario")}
                 onClick={() => {
                   const c = selectionCenter(sketch(), sel());
-                  ui.setMessage(c ? ui.transformSelected(rotation(c, turnBy())) : "Elegir primero lo que se gira");
+                  ui.setMessage(c ? ui.transformSelected(rotation(c, turnBy())) : tl("Elegir primero lo que se gira"));
                 }}
               >
-                Girar
+                {tl("Girar")}
               </Button>
             </div>
             <div class="flex items-end gap-1.5">
               <div class="flex-1">
-                <Num label="Factor" step={0.1} min={0.001} value={scaleBy()} onCommit={(v) => v > 0 && setScaleBy(v)} />
+                <Num label={tl("Factor")} step={0.1} min={0.001} value={scaleBy()} onCommit={(v) => v > 0 && setScaleBy(v)} />
               </div>
               <Button
                 size="sm"
-                title="Desde el centro de lo elegido; las cotas toman la medida nueva"
+                title={tl("Desde el centro de lo elegido; las cotas toman la medida nueva")}
                 onClick={() => {
                   const c = selectionCenter(sketch(), sel());
-                  ui.setMessage(c ? ui.transformSelected(scaling(c, scaleBy()), { scale: scaleBy() }) : "Elegir primero lo que se escala");
+                  ui.setMessage(c ? ui.transformSelected(scaling(c, scaleBy()), { scale: scaleBy() }) : tl("Elegir primero lo que se escala"));
                 }}
               >
-                Escalar
+                {tl("Escalar")}
               </Button>
             </div>
           </div>
           <div class="flex gap-1.5">
             <Button size="sm" variant="ghost" onClick={() => ui.toggleConstruction()} disabled={selEntities().length === 0}>
-              Construcción sí/no (Q)
+              {tl("Construcción sí/no (Q)")}
             </Button>
             <Button size="sm" variant="danger" icon={<Icons.Trash size={12} />} onClick={() => ui.deleteSelection()} disabled={selEntities().length === 0}>
-              Borrar
+              {tl("Borrar")}
             </Button>
           </div>
         </Show>
@@ -7246,18 +7225,18 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
       <SketchFiles ui={ui} store={props.store} />
       <SketchOrganize ui={ui} />
 
-      <Section title="Restricciones">
-        <Show when={sketch().constraints.length > 0} fallback={<p class="text-xs text-text-dim">Sin restricciones</p>}>
-          <div class="flex flex-wrap gap-1" aria-label="Elegir restricciones">
+      <Section title={tl("Restricciones")}>
+        <Show when={sketch().constraints.length > 0} fallback={<p class="text-xs text-text-dim">{tl("Sin restricciones")}</p>}>
+          <div class="flex flex-wrap gap-1" aria-label={tl("Elegir restricciones")}>
             <Button size="sm" variant="ghost" onClick={() => ui.setSelectedConstraints(sketch().constraints.flatMap((c, i) => (isDimension(c) ? [] : [i])))}>
-              Todas las restricciones
+              {tl("Todas las restricciones")}
             </Button>
             <Button size="sm" variant="ghost" onClick={() => ui.setSelectedConstraints(sketch().constraints.flatMap((c, i) => (isDimension(c) ? [i] : [])))}>
-              Todas las cotas
+              {tl("Todas las cotas")}
             </Button>
             <Show when={ui.selectedConstraints().length > 0}>
               <Button size="sm" variant="danger" icon={<Icons.Trash size={12} />} onClick={() => ui.removeConstraints(ui.selectedConstraints())}>
-                Quitar elegidas ({ui.selectedConstraints().length})
+                {tl("Quitar elegidas (")}{ui.selectedConstraints().length})
               </Button>
             </Show>
           </div>
@@ -7281,7 +7260,7 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                         "w-4 h-4 shrink-0 rounded border text-[10px] leading-none",
                         ui.selectedConstraints().includes(i()) ? "bg-cyan text-bg border-cyan" : "border-border text-text-dim hover:text-text",
                       )}
-                      title="Elegir la restricción (Mayús suma; Supr la quita)"
+                      title={tl("Elegir la restricción (Mayús suma; Supr la quita)")}
                       onClick={(e) =>
                         ui.setSelectedConstraints((cur) =>
                           e.shiftKey ? (cur.includes(i()) ? cur.filter((x) => x !== i()) : [...cur, i()]) : cur.length === 1 && cur[0] === i() ? [] : [i()],
@@ -7292,7 +7271,7 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                     </button>
                     <button
                       class="flex-1 truncate text-left hover:text-text"
-                      title="Elegir lo que restringe"
+                      title={tl("Elegir lo que restringe")}
                       onClick={() => ui.setSelection(constraintIds(c))}
                     >
                       {CONSTRAINT_LABELS[c.type]}
@@ -7300,7 +7279,7 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                     <Show when={value() !== undefined}>
                       <Show
                         when={!isReference(c)}
-                        fallback={<span class="w-28 px-1.5 font-mono text-text-dim" title="Cota de referencia: mide, no restringe">({+value()!.toFixed(3)})</span>}
+                        fallback={<span class="w-28 px-1.5 font-mono text-text-dim" title={tl("Cota de referencia: mide, no restringe")}>({+value()!.toFixed(3)})</span>}
                       >
                         <div class="w-28">
                           <Formula
@@ -7310,16 +7289,16 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                           />
                         </div>
                       </Show>
-                      <Tooltip content={isReference(c) ? "Pasar a cota que restringe" : "Dejar como cota de referencia (solo mide)"}>
+                      <Tooltip content={isReference(c) ? tl("Pasar a cota que restringe") : tl("Dejar como cota de referencia (solo mide)")}>
                         <button
                           class={clsx("px-1 rounded text-[10px] border", isReference(c) ? "border-accent text-accent" : "border-border text-text-dim hover:text-text")}
                           onClick={() => ui.toggleReference(i())}
                         >
-                          Ref
+                          {tl("Ref")}
                         </button>
                       </Tooltip>
                     </Show>
-                    <IconButton aria-label="Quitar restricción" size="sm" variant="ghost" onClick={() => ui.removeConstraint(i())}>
+                    <IconButton aria-label={tl("Quitar restricción")} size="sm" variant="ghost" onClick={() => ui.removeConstraint(i())}>
                       <Icons.X size={10} />
                     </IconButton>
                   </div>
@@ -7332,10 +7311,10 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
 
       <div class="flex gap-2">
         <Button size="sm" variant="primary" onClick={() => void ui.finishSketch()}>
-          Terminar sketch
+          {tl("Terminar sketch")}
         </Button>
         <Button size="sm" variant="ghost" onClick={() => ui.cancelSketch()}>
-          Descartar cambios
+          {tl("Descartar cambios")}
         </Button>
       </div>
     </div>
@@ -7343,12 +7322,12 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
 };
 
 const SELECT_KINDS: { kind: SelectKind; label: string }[] = [
-  { kind: "lines", label: "Líneas" },
-  { kind: "round", label: "Círculos y arcos" },
-  { kind: "construction", label: "Construcción" },
-  { kind: "points", label: "Puntos" },
-  { kind: "free", label: "Sin definir" },
-  { kind: "all", label: "Todo" },
+  { kind: "lines", get label() { return tl("Líneas"); } },
+  { kind: "round", get label() { return tl("Círculos y arcos"); } },
+  { kind: "construction", get label() { return tl("Construcción"); } },
+  { kind: "points", get label() { return tl("Puntos"); } },
+  { kind: "free", get label() { return tl("Sin definir"); } },
+  { kind: "all", get label() { return tl("Todo"); } },
 ];
 
 /** Usar del modelo: silueta, intersección, otro sketch y romper el vínculo */
@@ -7373,24 +7352,24 @@ const SketchModelRefs: Component<{ ui: CadUi; store: CadStore }> = (props) => {
     }
   };
   return (
-    <Section title="Usar del modelo">
+    <Section title={tl("Usar del modelo")}>
       <p class="text-[11px] text-text-dim leading-relaxed">
-        Con Usar (J), clic en una arista o en una cara del sólido (la cara trae todo su contorno). Lo usado queda ligado: si el modelo cambia, se mueve con él.
+        {tl("Con Usar (J), clic en una arista o en una cara del sólido (la cara trae todo su contorno). Lo usado queda ligado: si el modelo cambia, se mueve con él.")}
       </p>
       <div class="flex flex-wrap gap-1.5">
-        <Button size="sm" disabled={busy()} title="El contorno del sólido visto desde la normal del plano, con los agujeros pasantes" onClick={() => void run(() => ui.useModel("silhouette"))}>
-          Silueta
+        <Button size="sm" disabled={busy()} title={tl("El contorno del sólido visto desde la normal del plano, con los agujeros pasantes")} onClick={() => void run(() => ui.useModel("silhouette"))}>
+          {tl("Silueta")}
         </Button>
-        <Button size="sm" disabled={busy()} title="Las curvas donde el plano del sketch corta el sólido" onClick={() => void run(() => ui.useModel("section"))}>
-          Intersección
+        <Button size="sm" disabled={busy()} title={tl("Las curvas donde el plano del sketch corta el sólido")} onClick={() => void run(() => ui.useModel("section"))}>
+          {tl("Intersección")}
         </Button>
       </div>
       <Show when={earlier().length > 0}>
-        <span class="text-xs text-text-muted">De otro sketch</span>
+        <span class="text-xs text-text-muted">{tl("De otro sketch")}</span>
         <div class="flex flex-wrap gap-1.5">
           <For each={earlier()}>
             {(f) => (
-              <Button size="sm" variant="ghost" disabled={busy()} title="Todas sus curvas y puntos, proyectados a este plano" onClick={() => void run(() => ui.useSketch(f.id))}>
+              <Button size="sm" variant="ghost" disabled={busy()} title={tl("Todas sus curvas y puntos, proyectados a este plano")} onClick={() => void run(() => ui.useSketch(f.id))}>
                 {f.name}
               </Button>
             )}
@@ -7399,8 +7378,8 @@ const SketchModelRefs: Component<{ ui: CadUi; store: CadStore }> = (props) => {
       </Show>
       <div class="flex items-center justify-between gap-2">
         <span class="text-xs text-text-muted">{linked().length === 1 ? "1 curva ligada" : `${linked().length} curvas ligadas`}</span>
-        <Button size="sm" variant="ghost" disabled={selectedLinked() === 0} title="Lo elegido deja de seguir al modelo y queda editable" onClick={() => ui.setMessage(ui.breakLinks())}>
-          Romper vínculo
+        <Button size="sm" variant="ghost" disabled={selectedLinked() === 0} title={tl("Lo elegido deja de seguir al modelo y queda editable")} onClick={() => ui.setMessage(ui.breakLinks())}>
+          {tl("Romper vínculo")}
         </Button>
       </div>
     </Section>
@@ -7454,7 +7433,7 @@ const SketchEntities: Component<{ ui: CadUi }> = (props) => {
   );
   return (
     <Section title={`Entidades (${rows().length})`}>
-      <div class="flex flex-wrap gap-1" aria-label="Elegir por tipo">
+      <div class="flex flex-wrap gap-1" aria-label={tl("Elegir por tipo")}>
         <For each={SELECT_KINDS}>
           {(k) => (
             <Button size="sm" variant="ghost" onClick={() => ui.setSelection(selectByKind(sketch(), k.kind, ui.session()?.report?.free_entities ?? []))}>
@@ -7463,8 +7442,8 @@ const SketchEntities: Component<{ ui: CadUi }> = (props) => {
           )}
         </For>
       </div>
-      <p class="text-[11px] text-text-dim">Doble clic en el visor elige la cadena unida; Ctrl+A, todo.</p>
-      <div class="max-h-48 overflow-y-auto rounded border border-border" aria-label="Lista de entidades">
+      <p class="text-[11px] text-text-dim">{tl("Doble clic en el visor elige la cadena unida; Ctrl+A, todo.")}</p>
+      <div class="max-h-48 overflow-y-auto rounded border border-border" aria-label={tl("Lista de entidades")}>
         <For each={rows().slice(0, MAX_ROWS)}>
           {(r) => (
             <button
@@ -7485,13 +7464,13 @@ const SketchEntities: Component<{ ui: CadUi }> = (props) => {
           )}
         </For>
         <Show when={rows().length > MAX_ROWS}>
-          <p class="px-2 py-0.5 text-[11px] text-text-dim">… y {rows().length - MAX_ROWS} más</p>
+          <p class="px-2 py-0.5 text-[11px] text-text-dim">… y {rows().length - MAX_ROWS} {tl("más")}</p>
         </Show>
       </div>
       {/* Propiedades: escribir un valor mueve la geometría (las restricciones mandan) */}
       <Show when={single()}>
         {(it) => (
-          <div class="space-y-1.5 border-t border-border pt-1.5" aria-label="Propiedades">
+          <div class="space-y-1.5 border-t border-border pt-1.5" aria-label={tl("Propiedades")}>
             <Switch>
               <Match when={it().kind === "point" && it()}>{(p) => <PointFields point={(p() as { point: number }).point} />}</Match>
               <Match when={it().kind === "entity" && (it() as { e: SketchEntity }).e}>
@@ -7505,7 +7484,7 @@ const SketchEntities: Component<{ ui: CadUi }> = (props) => {
                           return (
                             <>
                               <Num
-                                label="Largo"
+                                label={tl("Largo")}
                                 suffix="mm"
                                 step={1}
                                 value={len()}
@@ -7525,7 +7504,7 @@ const SketchEntities: Component<{ ui: CadUi }> = (props) => {
                         {(c) => (
                           <>
                             <PointFields point={c().center} label="Centro " />
-                            <Num label="Diámetro" suffix="mm" step={1} value={2 * c().radius} onCommit={(v) => ui.setCircleRadius(e().id, v / 2)} />
+                            <Num label={tl("Diámetro")} suffix="mm" step={1} value={2 * c().radius} onCommit={(v) => ui.setCircleRadius(e().id, v / 2)} />
                           </>
                         )}
                       </Match>
@@ -7536,7 +7515,7 @@ const SketchEntities: Component<{ ui: CadUi }> = (props) => {
                             <>
                               <PointFields point={a().center} label="Centro " />
                               <Num
-                                label="Radio"
+                                label={tl("Radio")}
                                 suffix="mm"
                                 step={1}
                                 value={r()}
@@ -7595,7 +7574,7 @@ async function shrinkImage(data: string, size: number): Promise<{ data: string; 
   const img = new Image();
   await new Promise<void>((ok, fail) => {
     img.onload = () => ok();
-    img.onerror = () => fail(new Error("no es una imagen"));
+    img.onerror = () => fail(new Error(tl("no es una imagen")));
     img.src = data;
   });
   const [w, h] = [img.naturalWidth || 1, img.naturalHeight || 1];
@@ -7621,7 +7600,7 @@ const SketchFiles: Component<{ ui: CadUi; store: CadStore }> = (props) => {
   const [asLines, setAsLines] = createSignal(false);
   const [calLength, setCalLength] = createSignal(100);
   const params = () => Object.fromEntries((props.store.result()?.parameters ?? []).filter((p) => p.value != null).map((p) => [p.key, p.value!]));
-  const name = () => (ui.session()?.sheet ? "hoja" : (props.store.doc()?.features.find((f) => f.id === ui.session()?.feature)?.name ?? "sketch"));
+  const name = () => (ui.session()?.sheet ? tl("hoja") : (props.store.doc()?.features.find((f) => f.id === ui.session()?.feature)?.name ?? "sketch"));
 
   /** Puntos → una spline por ellos (cerrada si vuelve al comienzo) o una polilínea */
   const addPoints = (pts: P2[], lines: boolean) => {
@@ -7646,7 +7625,7 @@ const SketchFiles: Component<{ ui: CadUi; store: CadStore }> = (props) => {
     const pts = parseCoordinates(f.content);
     if (typeof pts === "string") return ui.setMessage(pts);
     addPoints(pts, asLines());
-    ui.setMessage(`${pts.length} puntos de ${f.name}`);
+    ui.setMessage(tl("{length} puntos de {name}", { length: pts.length, name: f.name }));
   };
   const importDxf = async () => {
     const f = await pickFile(".dxf", "text");
@@ -7657,7 +7636,7 @@ const SketchFiles: Component<{ ui: CadUi; store: CadStore }> = (props) => {
     ui.change((sk) => (made = addShapes(sk, r.shapes)));
     ui.setSelection(made);
     const skipped = Object.entries(r.skipped).map(([k, n]) => `${n} ${k}`);
-    ui.setMessage(`${made.length} entidades de ${f.name}${skipped.length ? ` (salteadas: ${skipped.join(", ")})` : ""}`);
+    ui.setMessage((skipped.length ? tl("{n} entidades de {name} (salteadas: {skipped})", { n: made.length, name: f.name, skipped: skipped.join(", ") }) : tl("{n} entidades de {name}", { n: made.length, name: f.name })));
   };
   const exportAs = async (ext: "dxf" | "svg") => {
     const path = await save({ filters: [{ name: ext.toUpperCase(), extensions: [ext] }], defaultPath: `${name().replace(/[^\p{L}\p{N}_-]+/gu, "_") || "sketch"}.${ext}` });
@@ -7679,7 +7658,7 @@ const SketchFiles: Component<{ ui: CadUi; store: CadStore }> = (props) => {
         const id = Math.max(0, ...(sk.images ?? []).map((i) => i.id)) + 1;
         sk.images = [...(sk.images ?? []), { id, name: f.name, data: img.data, at: [0, 0], width: 100, height: (100 * img.h) / img.w, angle: 0, opacity: 0.6 }];
       });
-      ui.setMessage("Calco agregado: calibrarlo con dos puntos de medida conocida");
+      ui.setMessage(tl("Calco agregado: calibrarlo con dos puntos de medida conocida"));
     } catch (e) {
       ui.setMessage(String(e));
     }
@@ -7693,7 +7672,7 @@ const SketchFiles: Component<{ ui: CadUi; store: CadStore }> = (props) => {
     const cal = ui.calibration();
     if (!cal?.a || !cal.b) return;
     const d = Math.hypot(cal.b[0] - cal.a[0], cal.b[1] - cal.a[1]);
-    if (!(d > 1e-9) || !(calLength() > 0)) return ui.setMessage("Marcar dos puntos distintos y una medida positiva");
+    if (!(d > 1e-9) || !(calLength() > 0)) return ui.setMessage(tl("Marcar dos puntos distintos y una medida positiva"));
     const k = calLength() / d;
     const a = cal.a;
     ui.change((sk) => {
@@ -7706,8 +7685,8 @@ const SketchFiles: Component<{ ui: CadUi; store: CadStore }> = (props) => {
   };
 
   return (
-    <Section title="Archivos y fórmulas">
-      <div class="space-y-1.5" aria-label="Curva por ecuación">
+    <Section title={tl("Archivos y fórmulas")}>
+      <div class="space-y-1.5" aria-label={tl("Curva por ecuación")}>
         <Select
           options={[
             { value: "explicit", label: "y = f(x)" },
@@ -7732,38 +7711,38 @@ const SketchFiles: Component<{ ui: CadUi; store: CadStore }> = (props) => {
             onChange={(e) => setFy(e.currentTarget.value)}
           />
         </Show>
-        <Num label={kind() === "explicit" ? "x desde" : "t desde"} step={1} value={from()} onCommit={setFrom} />
-        <Num label="hasta" step={1} value={to()} onCommit={setTo} />
-        <Num label="Puntos" step={5} min={2} value={samples()} onCommit={(v) => setSamples(Math.max(2, Math.round(v)))} />
+        <Num label={kind() === "explicit" ? tl("x desde") : tl("t desde")} step={1} value={from()} onCommit={setFrom} />
+        <Num label={tl("hasta")} step={1} value={to()} onCommit={setTo} />
+        <Num label={tl("Puntos")} step={5} min={2} value={samples()} onCommit={(v) => setSamples(Math.max(2, Math.round(v)))} />
         <p class="text-[11px] text-text-dim">
-          Con + − * / ^, sin cos tan sqrt abs exp ln log, pi y los parámetros del diseño; ángulos en radianes.
+          {tl("Con + − * / ^, sin cos tan sqrt abs exp ln log, pi y los parámetros del diseño; ángulos en radianes.")}
         </p>
         <Button size="sm" onClick={addCurve}>
-          Agregar curva
+          {tl("Agregar curva")}
         </Button>
       </div>
       <div class="space-y-1.5 border-t border-border pt-1.5">
         <div class="flex flex-wrap items-center gap-1.5">
-          <Button size="sm" title="Un punto por fila: x, y (o x; y con coma decimal); la z se ignora" onClick={() => void fromCoordinates()}>
-            Curva desde archivo…
+          <Button size="sm" title={tl("Un punto por fila: x, y (o x; y con coma decimal); la z se ignora")} onClick={() => void fromCoordinates()}>
+            {tl("Curva desde archivo…")}
           </Button>
-          <Checkbox small label="Como polilínea" checked={asLines()} onChange={setAsLines} />
+          <Checkbox small label={tl("Como polilínea")} checked={asLines()} onChange={setAsLines} />
         </div>
         <div class="flex flex-wrap gap-1.5">
-          <Button size="sm" title="Líneas, arcos, círculos, polilíneas, splines, elipses y puntos (DWG no: guardarlo como DXF)" onClick={() => void importDxf()}>
-            Importar DXF…
+          <Button size="sm" title={tl("Líneas, arcos, círculos, polilíneas, splines, elipses y puntos (DWG no: guardarlo como DXF)")} onClick={() => void importDxf()}>
+            {tl("Importar DXF…")}
           </Button>
           <Button size="sm" onClick={() => void exportAs("dxf")}>
-            Exportar DXF
+            {tl("Exportar DXF")}
           </Button>
           <Button size="sm" onClick={() => void exportAs("svg")}>
-            Exportar SVG
+            {tl("Exportar SVG")}
           </Button>
         </div>
       </div>
-      <div class="space-y-1.5 border-t border-border pt-1.5" aria-label="Calcos">
-        <Button size="sm" title="Una imagen de referencia para dibujar encima (solo se ve al editar el sketch)" onClick={() => void addImage()}>
-          Agregar calco…
+      <div class="space-y-1.5 border-t border-border pt-1.5" aria-label={tl("Calcos")}>
+        <Button size="sm" title={tl("Una imagen de referencia para dibujar encima (solo se ve al editar el sketch)")} onClick={() => void addImage()}>
+          {tl("Agregar calco…")}
         </Button>
         <For each={sketch().images ?? []}>
           {(im) => (
@@ -7775,31 +7754,31 @@ const SketchFiles: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                 <Button
                   size="sm"
                   variant="ghost"
-                  title="Clic en dos puntos de la imagen y después su medida real"
+                  title={tl("Clic en dos puntos de la imagen y después su medida real")}
                   onClick={() => {
                     ui.setCalibration({ image: im.id });
                     ui.setTool("calibrate");
-                    ui.setMessage("Clic en dos puntos de la imagen a una distancia conocida");
+                    ui.setMessage(tl("Clic en dos puntos de la imagen a una distancia conocida"));
                   }}
                 >
-                  Calibrar
+                  {tl("Calibrar")}
                 </Button>
                 <Button size="sm" variant="ghost" onClick={() => ui.change((sk) => (sk.images = (sk.images ?? []).filter((i) => i.id !== im.id)))}>
-                  Quitar
+                  {tl("Quitar")}
                 </Button>
               </div>
               <Show when={ui.calibration()?.image === im.id && ui.calibration()?.b}>
                 <div class="flex items-end gap-1.5">
                   <div class="flex-1 min-w-0">
-                    <Num label="Eso mide" suffix="mm" step={1} value={calLength()} onCommit={setCalLength} />
+                    <Num label={tl("Eso mide")} suffix="mm" step={1} value={calLength()} onCommit={setCalLength} />
                   </div>
                   <Button size="sm" variant="primary" onClick={applyCalibration}>
-                    Aplicar la medida
+                    {tl("Aplicar la medida")}
                   </Button>
                 </div>
               </Show>
-              <Num label="Ancho" suffix="mm" step={10} value={im.width} onCommit={(v) => v > 0 && setImage(im.id, { width: v, height: (im.height * v) / im.width })} />
-              <Num label="Giro" suffix="°" step={5} value={im.angle ?? 0} onCommit={(v) => setImage(im.id, { angle: v })} />
+              <Num label={tl("Ancho")} suffix="mm" step={10} value={im.width} onCommit={(v) => v > 0 && setImage(im.id, { width: v, height: (im.height * v) / im.width })} />
+              <Num label={tl("Giro")} suffix="°" step={5} value={im.angle ?? 0} onCommit={(v) => setImage(im.id, { angle: v })} />
               <div class="flex gap-1.5">
                 <Num label="X" suffix="mm" step={5} value={im.at[0]} onCommit={(v) => setImage(im.id, { at: [v, im.at[1]] })} />
                 <Num label="Y" suffix="mm" step={5} value={im.at[1]} onCommit={(v) => setImage(im.id, { at: [im.at[0], v] })} />
@@ -7830,20 +7809,20 @@ const SketchOrganize: Component<{ ui: CadUi }> = (props) => {
     });
 
   return (
-    <Section title="Organización">
-      <div class="space-y-1" aria-label="Capas">
+    <Section title={tl("Organización")}>
+      <div class="space-y-1" aria-label={tl("Capas")}>
         <div class="flex items-center gap-1.5">
-          <span class="flex-1 text-xs text-text-muted">Capas</span>
+          <span class="flex-1 text-xs text-text-muted">{tl("Capas")}</span>
           <Button
             size="sm"
             variant="ghost"
             onClick={() => {
               let id = 0;
-              ui.change((sk) => (id = addLayer(sk, `Capa ${(sk.layers?.length ?? 0) + 1}`)));
+              ui.change((sk) => (id = addLayer(sk, tl("Capa {v1}", { v1: (sk.layers?.length ?? 0) + 1 }))));
               ui.setActiveLayer(id);
             }}
           >
-            Nueva capa
+            {tl("Nueva capa")}
           </Button>
         </div>
         <For each={sketch().layers ?? []}>
@@ -7852,8 +7831,8 @@ const SketchOrganize: Component<{ ui: CadUi }> = (props) => {
               <input
                 type="radio"
                 name="capa-activa"
-                aria-label={`Dibujar en ${l.name}`}
-                title="Lo que se dibuja cae en esta capa"
+                aria-label={tl("Dibujar en {name}", { name: l.name })}
+                title={tl("Lo que se dibuja cae en esta capa")}
                 checked={ui.activeLayer() === l.id}
                 onChange={() => ui.setActiveLayer(l.id)}
               />
@@ -7863,13 +7842,13 @@ const SketchOrganize: Component<{ ui: CadUi }> = (props) => {
                 onChange={(e) => setLayerProp(l.id, { name: e.currentTarget.value || l.name })}
               />
               <button aria-label={`Ver ${l.name}`} aria-pressed={!l.hidden} class={clsx("px-1 rounded hover:bg-surface", l.hidden && "text-text-dim line-through")} onClick={() => setLayerProp(l.id, { hidden: !l.hidden })}>
-                Ver
+                {tl("Ver")}
               </button>
-              <button aria-label={`Bloquear ${l.name}`} aria-pressed={!!l.locked} class={clsx("px-1 rounded hover:bg-surface", l.locked ? "text-warning" : "text-text-dim")} onClick={() => setLayerProp(l.id, { locked: !l.locked })}>
-                {l.locked ? "Bloq." : "Libre"}
+              <button aria-label={tl("Bloquear {name}", { name: l.name })} aria-pressed={!!l.locked} class={clsx("px-1 rounded hover:bg-surface", l.locked ? "text-warning" : "text-text-dim")} onClick={() => setLayerProp(l.id, { locked: !l.locked })}>
+                {l.locked ? tl("Bloq.") : tl("Libre")}
               </button>
               <IconButton
-                aria-label={`Borrar ${l.name}`}
+                aria-label={tl("Borrar {name}", { name: l.name })}
                 size="sm"
                 variant="ghost"
                 onClick={() => {
@@ -7885,11 +7864,11 @@ const SketchOrganize: Component<{ ui: CadUi }> = (props) => {
         <Show when={(sketch().layers?.length ?? 0) > 0}>
           <label class="flex items-center gap-1.5 text-xs text-text-muted">
             <input type="radio" name="capa-activa" checked={ui.activeLayer() === undefined} onChange={() => ui.setActiveLayer(undefined)} />
-            Dibujar sin capa
+            {tl("Dibujar sin capa")}
           </label>
           <Show when={sel().length > 0}>
-            <div class="flex flex-wrap items-center gap-1 text-xs" aria-label="Pasar lo elegido a una capa">
-              <span class="text-text-muted">Pasar lo elegido a:</span>
+            <div class="flex flex-wrap items-center gap-1 text-xs" aria-label={tl("Pasar lo elegido a una capa")}>
+              <span class="text-text-muted">{tl("Pasar lo elegido a:")}</span>
               <For each={sketch().layers ?? []}>
                 {(l) => (
                   <Button size="sm" variant="ghost" onClick={() => ui.change((sk) => setLayer(sk, sel(), l.id))}>
@@ -7898,28 +7877,28 @@ const SketchOrganize: Component<{ ui: CadUi }> = (props) => {
                 )}
               </For>
               <Button size="sm" variant="ghost" onClick={() => ui.change((sk) => setLayer(sk, sel(), null))}>
-                Sin capa
+                {tl("Sin capa")}
               </Button>
             </div>
           </Show>
         </Show>
       </div>
-      <div class="space-y-1.5 border-t border-border pt-1.5" aria-label="Bloques">
+      <div class="space-y-1.5 border-t border-border pt-1.5" aria-label={tl("Bloques")}>
         <Show when={sel().length > 0 && !selectedCopy()}>
           <div class="flex items-center gap-1.5">
             <input
-              aria-label="Nombre del bloque"
+              aria-label={tl("Nombre del bloque")}
               class="flex-1 min-w-0 px-2 py-1 rounded bg-surface/40 border border-border text-xs text-text outline-none focus:border-accent"
-              placeholder={`Bloque ${(sketch().blocks?.length ?? 0) + 1}`}
+              placeholder={tl("Bloque {v1}", { v1: (sketch().blocks?.length ?? 0) + 1 })}
               value={blockName()}
               onInput={(e) => setBlockName(e.currentTarget.value)}
             />
             <Button
               size="sm"
-              title="Lo elegido pasa a ser un bloque (origen: el punto elegido o el centro); se inserta varias veces y editarlo cambia todas las copias"
+              title={tl("Lo elegido pasa a ser un bloque (origen: el punto elegido o el centro); se inserta varias veces y editarlo cambia todas las copias")}
               onClick={() => {
                 const ids = sel();
-                const nm = blockName().trim() || `Bloque ${(sketch().blocks?.length ?? 0) + 1}`;
+                const nm = blockName().trim() || tl("Bloque {v1}", { v1: (sketch().blocks?.length ?? 0) + 1 });
                 let msg: string | undefined;
                 ui.change((sk) => {
                   const r = createBlock(sk, ids, nm);
@@ -7929,14 +7908,14 @@ const SketchOrganize: Component<{ ui: CadUi }> = (props) => {
                 if (!msg) setBlockName("");
               }}
             >
-              Hacer bloque
+              {tl("Hacer bloque")}
             </Button>
           </div>
         </Show>
         <Show when={selectedCopy()}>
           {(t) => (
-            <Button size="sm" title="La copia queda suelta (con las restricciones del bloque) y deja de cambiar con él" onClick={() => ui.change((sk) => explodeBlock(sk, t().id))}>
-              Desarmar la copia de «{t().text}»
+            <Button size="sm" title={tl("La copia queda suelta (con las restricciones del bloque) y deja de cambiar con él")} onClick={() => ui.change((sk) => explodeBlock(sk, t().id))}>
+              {tl("Desarmar la copia de «")}{t().text}»
             </Button>
           )}
         </Show>
@@ -7944,7 +7923,7 @@ const SketchOrganize: Component<{ ui: CadUi }> = (props) => {
           {(b) => (
             <div class="flex items-center gap-1 text-xs" data-block={b.id}>
               <span class="flex-1 truncate text-text-muted">
-                {b.name} <span class="text-text-dim">· {copies(b.id)} copias</span>
+                {b.name} <span class="text-text-dim">· {copies(b.id)} {tl("copias")}</span>
               </span>
               <Button
                 size="sm"
@@ -7952,16 +7931,16 @@ const SketchOrganize: Component<{ ui: CadUi }> = (props) => {
                 onClick={() => {
                   ui.setBlockToInsert({ block: b.id, angle: insertAngle(), scale: insertScale() });
                   ui.setTool("block_insert");
-                  ui.setMessage(`Clic donde va el origen de «${b.name}» (Esc termina)`);
+                  ui.setMessage(tl("Clic donde va el origen de «{name}» (Esc termina)", { name: b.name }));
                 }}
               >
-                Insertar
+                {tl("Insertar")}
               </Button>
               <Button size="sm" variant="ghost" disabled={!!ui.blockEdit()} onClick={() => ui.editBlock(b.id)}>
-                Editar
+                {tl("Editar")}
               </Button>
               <Show when={copies(b.id) === 0}>
-                <IconButton aria-label={`Borrar el bloque ${b.name}`} size="sm" variant="ghost" onClick={() => ui.change((sk) => (sk.blocks = (sk.blocks ?? []).filter((x) => x.id !== b.id)))}>
+                <IconButton aria-label={tl("Borrar el bloque {name}", { name: b.name })} size="sm" variant="ghost" onClick={() => ui.change((sk) => (sk.blocks = (sk.blocks ?? []).filter((x) => x.id !== b.id)))}>
                   <Icons.X size={11} />
                 </IconButton>
               </Show>
@@ -7969,13 +7948,13 @@ const SketchOrganize: Component<{ ui: CadUi }> = (props) => {
           )}
         </For>
         <Show when={(sketch().blocks?.length ?? 0) > 0}>
-          <div class="space-y-1" aria-label="Copias nuevas">
-            <Num label="Giro" suffix="°" step={15} value={insertAngle()} onCommit={(v) => {
+          <div class="space-y-1" aria-label={tl("Copias nuevas")}>
+            <Num label={tl("Giro")} suffix="°" step={15} value={insertAngle()} onCommit={(v) => {
               setInsertAngle(v);
               const bi = ui.blockToInsert();
               if (bi) ui.setBlockToInsert({ ...bi, angle: v });
             }} />
-            <Num label="Escala" suffix="×" step={0.5} value={insertScale()} onCommit={(v) => {
+            <Num label={tl("Escala")} suffix="×" step={0.5} value={insertScale()} onCommit={(v) => {
               if (!(v > 0)) return;
               setInsertScale(v);
               const bi = ui.blockToInsert();
@@ -7987,7 +7966,7 @@ const SketchOrganize: Component<{ ui: CadUi }> = (props) => {
       <div class="border-t border-border pt-1.5">
         <Button
           size="sm"
-          title="Para pegarlo como un sketch nuevo en otro plano o cara («Pegar sketch» en la barra de Diseño)"
+          title={tl("Para pegarlo como un sketch nuevo en otro plano o cara («Pegar sketch» en la barra de Diseño)")}
           onClick={() => {
             const copy: Sketch = structuredClone(sketch());
             // Lo ligado al modelo y lo que nombra otras operaciones no viaja
@@ -7996,10 +7975,10 @@ const SketchOrganize: Component<{ ui: CadUi }> = (props) => {
             delete copy.x_axis;
             delete copy.flip_normal;
             ui.setSketchCopy(copy);
-            ui.setMessage("Sketch copiado: «Pegar sketch» en la barra de Diseño");
+            ui.setMessage(tl("Sketch copiado: «Pegar sketch» en la barra de Diseño"));
           }}
         >
-          Copiar el sketch entero
+          {tl("Copiar el sketch entero")}
         </Button>
       </div>
     </Section>
@@ -8034,18 +8013,18 @@ const SplineTools: Component<{ ui: CadUi }> = (props) => {
   return (
     <Show when={owner() || splines().length || pts().length >= 3 || convertible() || ui.combEntity() !== undefined}>
       <div class="space-y-1.5 border-t border-border pt-1.5" data-spline-tools>
-        <div class="text-[11px] text-text-dim">Splines</div>
+        <div class="text-[11px] text-text-dim">{tl("Splines")}</div>
         <div class="flex flex-wrap gap-1.5">
           <Show when={owner()}>
             {(o) => (
               <>
                 <Show when={o().kind === "spline"}>
-                  <Button size="sm" title="Un punto que da la dirección de la curva en ese punto (se arrastra)" onClick={() => run((sk) => toggleSplineHandle(sk, o().entity, o().point))}>
-                    Manija en el punto sí/no
+                  <Button size="sm" title={tl("Un punto que da la dirección de la curva en ese punto (se arrastra)")} onClick={() => run((sk) => toggleSplineHandle(sk, o().entity, o().point))}>
+                    {tl("Manija en el punto sí/no")}
                   </Button>
                 </Show>
                 <Button size="sm" onClick={() => run((sk) => removeSplinePoint(sk, o().entity, o().point), () => void ui.setSelection([]))}>
-                  {o().kind === "spline" ? "Quitar el punto de la spline" : "Quitar el polo"}
+                  {o().kind === "spline" ? tl("Quitar el punto de la spline") : tl("Quitar el polo")}
                 </Button>
               </>
             )}
@@ -8053,7 +8032,7 @@ const SplineTools: Component<{ ui: CadUi }> = (props) => {
           <Show when={pts().length >= 3 && !ents().length}>
             <Button
               size="sm"
-              title="Spline por polos que pasa por el primero y el último y se acerca a los demás (en el orden en que se eligieron)"
+              title={tl("Spline por polos que pasa por el primero y el último y se acerca a los demás (en el orden en que se eligieron)")}
               onClick={() =>
                 run(
                   (sk) => fitSplineToPoints(sk, pts(), tol()),
@@ -8061,25 +8040,25 @@ const SplineTools: Component<{ ui: CadUi }> = (props) => {
                 )
               }
             >
-              Spline de ajuste
+              {tl("Spline de ajuste")}
             </Button>
           </Show>
           <Show when={splines().length === 1}>
             <Button
               size="sm"
-              title="Saca puntos (o polos) mientras la curva no se aparte más que la tolerancia"
-              onClick={() => run((sk) => simplifySpline(sk, splines()[0].id, tol()), (n) => (typeof n === "number" ? (n ? `Se sacaron ${n}` : "No hay nada que sacar con esa tolerancia") : undefined))}
+              title={tl("Saca puntos (o polos) mientras la curva no se aparte más que la tolerancia")}
+              onClick={() => run((sk) => simplifySpline(sk, splines()[0].id, tol()), (n) => (typeof n === "number" ? (n ? tl("Se sacaron {n}", { n }) : tl("No hay nada que sacar con esa tolerancia")) : undefined))}
             >
-              Simplificar
+              {tl("Simplificar")}
             </Button>
             <Button size="sm" aria-pressed={ui.combEntity() === splines()[0].id} onClick={() => ui.setCombEntity(ui.combEntity() === splines()[0].id ? undefined : splines()[0].id)}>
-              Peine de curvatura
+              {tl("Peine de curvatura")}
             </Button>
           </Show>
           <Show when={convertible()}>
             <Button
               size="sm"
-              title="Líneas, arcos y splines por puntos unidos por los extremos pasan a una spline por polos (los arcos, con un error de ~0,03 % del radio)"
+              title={tl("Líneas, arcos y splines por puntos unidos por los extremos pasan a una spline por polos (los arcos, con un error de ~0,03 % del radio)")}
               onClick={() =>
                 run(
                   (sk) => convertToBSpline(sk, ents().map((e) => e.id)),
@@ -8087,27 +8066,27 @@ const SplineTools: Component<{ ui: CadUi }> = (props) => {
                 )
               }
             >
-              Convertir a spline por polos
+              {tl("Convertir a spline por polos")}
             </Button>
           </Show>
           <Show when={splines().length === 1 && splines()[0].geometry.type === "bspline"}>
             <Button
               size="sm"
-              title="Pasa la spline por polos a una por puntos de paso sobre la curva (se aparta a lo sumo 0,5 % de su tamaño)"
+              title={tl("Pasa la spline por polos a una por puntos de paso sobre la curva (se aparta a lo sumo 0,5 % de su tamaño)")}
               onClick={() => run((sk) => bsplineToThrough(sk, splines()[0].id))}
             >
-              A puntos de paso
+              {tl("A puntos de paso")}
             </Button>
           </Show>
         </div>
         <label class="flex items-center gap-1 text-[11px] text-text-muted">
-          Tolerancia
+          {tl("Tolerancia")}
           <input
             type="number"
             min="0.0001"
             step="0.01"
             value={tol()}
-            aria-label="Tolerancia de las splines"
+            aria-label={tl("Tolerancia de las splines")}
             class="w-16 px-1 py-0.5 rounded bg-surface/40 border border-border text-xs text-text font-mono outline-none focus:border-accent"
             onChange={(e) => setTol(Math.max(1e-4, parseFloat(e.currentTarget.value) || 0.05))}
           />
@@ -8116,9 +8095,9 @@ const SplineTools: Component<{ ui: CadUi }> = (props) => {
         <Show when={comb()}>
           {(c) => (
             <p class="text-[11px] text-text-muted" data-curvature>
-              Radio mínimo {Number.isFinite(c().minRadius) ? `${+c().minRadius.toFixed(3)} mm` : "— (recta)"} · {c().inflections.length} inflexiones
+              {tl("Radio mínimo")} {Number.isFinite(c().minRadius) ? `${+c().minRadius.toFixed(3)} mm` : "— (recta)"} · {c().inflections.length} {tl("inflexiones")}
               <button class="ml-1 underline hover:text-text" onClick={() => ui.setCombEntity(undefined)}>
-                ocultar
+                {tl("ocultar")}
               </button>
             </p>
           )}
@@ -8138,7 +8117,7 @@ function ProblemList(props: { ui: CadUi; sketch: Sketch }) {
   return (
     <Show when={items().length}>
       <details class="text-xs" data-problem-list>
-        <summary class="cursor-pointer text-text-muted">Ver la lista ({items().length})</summary>
+        <summary class="cursor-pointer text-text-muted">{tl("Ver la lista (")}{items().length})</summary>
         <div class="max-h-40 overflow-auto mt-1 space-y-0.5">
           <For each={items()}>
             {(it) => (

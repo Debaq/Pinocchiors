@@ -1,5 +1,6 @@
 import { Component } from "solid-js";
 import { clsx } from "clsx";
+import { t } from "../../lib/i18n";
 
 export interface PlaceholderStepProps {
   title: string;
@@ -33,7 +34,7 @@ export const PlaceholderStep: Component<PlaceholderStepProps> = (props) => {
           "bg-orange/15 text-orange border border-orange/30"
         )}
       >
-        Proximamente
+        {t("Proximamente")}
       </span>
 
       {/* Description */}

@@ -3,6 +3,7 @@ import { clsx } from "clsx";
 import { Button } from "../ui";
 import * as Icons from "../icons";
 import type { AnimationClip } from "../../lib/animation";
+import { t } from "../../lib/i18n";
 
 export interface AnimateStepProps {
   /** Hay esqueleto con pesos sobre la malla que se ve */
@@ -61,45 +62,44 @@ export const AnimateStep: Component<AnimateStepProps> = (props) => {
 
   return (
     <div class="space-y-5">
-      <h3 class="text-sm font-semibold text-text">Animar</h3>
+      <h3 class="text-sm font-semibold text-text">{t("Animar")}</h3>
       <Show
         when={props.ready}
         fallback={
           <div class="space-y-2">
             <p class="text-xs text-text-muted leading-relaxed p-2 rounded-md bg-orange/10 border border-orange/30">
-              {props.blocker ?? "Para animar hace falta el esqueleto con sus pesos: calcúlalos en el paso Esqueleto."}
+              {props.blocker ? t(props.blocker) : t("Para animar hace falta el esqueleto con sus pesos: calcúlalos en el paso Esqueleto.")}
             </p>
             <Show when={props.onComputeWeights}>
               <Button size="sm" fullWidth variant="primary" onClick={props.onComputeWeights} disabled={props.computing}>
-                {props.computing ? "Calculando pesos…" : "Calcular pesos ahora"}
+                {props.computing ? t("Calculando pesos…") : t("Calcular pesos ahora")}
               </Button>
             </Show>
             <Button size="sm" fullWidth variant="ghost" onClick={props.onGoSkeleton}>
-              Ir a Esqueleto
+              {t("Ir a Esqueleto")}
             </Button>
           </div>
         }
       >
         <p class="text-xs text-text-muted leading-relaxed">
-          Elige una articulación, gírala con R (o desplázala con G) e inserta keys en la línea de tiempo. Con
-          auto-key, cada cambio confirmado crea su key.
+          {t("Elige una articulación, gírala con R (o desplázala con G) e inserta keys en la línea de tiempo. Con auto-key, cada cambio confirmado crea su key.")}
         </p>
 
         {/* Animaciones */}
         <div class="space-y-2">
           <div class="flex items-center justify-between">
-            <span class="text-xs font-semibold text-text">Animaciones</span>
+            <span class="text-xs font-semibold text-text">{t("Animaciones")}</span>
             <div class="flex gap-1">
               <Button size="sm" variant="ghost" onClick={props.onNewClip}>
-                <span class="flex items-center gap-1"><Icons.Plus size={12} /> Nueva</span>
+                <span class="flex items-center gap-1"><Icons.Plus size={12} /> {t("Nueva")}</span>
               </Button>
               <Button size="sm" variant="ghost" onClick={props.onDuplicateClip} disabled={!active()}>
-                Duplicar
+                {t("Duplicar")}
               </Button>
             </div>
           </div>
           <div class="rounded border border-border divide-y divide-border/60">
-            <For each={props.clips} fallback={<p class="px-2 py-2 text-xs text-text-dim">Sin animaciones.</p>}>
+            <For each={props.clips} fallback={<p class="px-2 py-2 text-xs text-text-dim">{t("Sin animaciones.")}</p>}>
               {(clip) => (
                 <button
                   class={clsx(
@@ -110,7 +110,7 @@ export const AnimateStep: Component<AnimateStepProps> = (props) => {
                 >
                   <span class="truncate">{clip.name}</span>
                   <span class="font-mono text-text-dim">
-                    {clip.end - clip.start + 1} c · {clip.tracks.length} art.
+                    {t("{c} c · {a} art.", { c: clip.end - clip.start + 1, a: clip.tracks.length })}
                   </span>
                 </button>
               )}
@@ -125,7 +125,7 @@ export const AnimateStep: Component<AnimateStepProps> = (props) => {
                   onChange={(e) => props.onRenameClip?.(e.currentTarget.value.trim() || clip().name)}
                 />
                 <Button size="sm" variant="ghost" onClick={props.onDeleteClip}>
-                  Borrar
+                  {t("Borrar")}
                 </Button>
               </div>
             )}
@@ -134,47 +134,46 @@ export const AnimateStep: Component<AnimateStepProps> = (props) => {
 
         {/* Captura de movimiento */}
         <div class="space-y-1.5">
-          <span class="text-xs font-semibold text-text">Captura de movimiento</span>
+          <span class="text-xs font-semibold text-text">{t("Captura de movimiento")}</span>
           <Button size="sm" fullWidth variant={props.puppeteering ? "default" : "primary"} onClick={props.onTogglePuppet}>
             <span class="flex items-center gap-1">
-              <Icons.PersonArmsSpread size={12} /> {props.puppeteering ? "Apagar la cámara" : "Mover con la cámara en vivo"}
+              <Icons.PersonArmsSpread size={12} /> {props.puppeteering ? t("Apagar la cámara") : t("Mover con la cámara en vivo")}
             </span>
           </Button>
           <p class="text-xs text-text-dim leading-relaxed">
-            El esqueleto copia tus movimientos frente a la cámara; graba para guardarlos como animación.
+            {t("El esqueleto copia tus movimientos frente a la cámara; graba para guardarlos como animación.")}
           </p>
           <div class="grid grid-cols-2 gap-1">
-            <Button size="sm" variant="ghost" onClick={props.onCaptureVideo} title="Detecta los movimientos de una persona en un video grabado">
-              Desde un video…
+            <Button size="sm" variant="ghost" onClick={props.onCaptureVideo} title={t("Detecta los movimientos de una persona en un video grabado")}>
+              {t("Desde un video…")}
             </Button>
-            <Button size="sm" variant="ghost" onClick={props.onImportBvh} title="Animación de captura de movimiento en formato BVH">
-              Importar BVH…
+            <Button size="sm" variant="ghost" onClick={props.onImportBvh} title={t("Animación de captura de movimiento en formato BVH")}>
+              {t("Importar BVH…")}
             </Button>
           </div>
         </div>
 
-        <Button size="sm" fullWidth variant="ghost" onClick={props.onOpenLibrary} title="Animaciones básicas, poses de fábrica y poses guardadas">
-          <span class="flex items-center gap-1"><Icons.Play size={12} /> Biblioteca de animaciones y poses</span>
+        <Button size="sm" fullWidth variant="ghost" onClick={props.onOpenLibrary} title={t("Animaciones básicas, poses de fábrica y poses guardadas")}>
+          <span class="flex items-center gap-1"><Icons.Play size={12} /> {t("Biblioteca de animaciones y poses")}</span>
         </Button>
 
         <div class="text-xs">
-          <span class="text-text-muted">Articulación: </span>
-          <span class="text-text">{props.selectedBoneName ?? "ninguna (clic en una esfera)"}</span>
+          <span class="text-text-muted">{t("Articulación:")}{" "}</span>
+          <span class="text-text">{props.selectedBoneName ?? t("ninguna (clic en una esfera)")}</span>
         </div>
 
         <Show when={props.hasWeights}>
-          <Button size="sm" fullWidth variant="ghost" onClick={props.onPaintWeights} title="Vuelve a Esqueleto con el pincel de pesos (B)">
-            <span class="flex items-center gap-1"><Icons.PaintBrush size={12} /> Pintar pesos</span>
+          <Button size="sm" fullWidth variant="ghost" onClick={props.onPaintWeights} title={t("Vuelve a Esqueleto con el pincel de pesos (B)")}>
+            <span class="flex items-center gap-1"><Icons.PaintBrush size={12} /> {t("Pintar pesos")}</span>
           </Button>
         </Show>
 
         <div class="space-y-1">
           <Button size="sm" fullWidth variant={props.editorOpen ? "default" : "primary"} onClick={props.onToggleEditor}>
-            {props.editorOpen ? "Cerrar el editor de pose y rig" : "Abrir el editor de pose y rig"}
+            {props.editorOpen ? t("Cerrar el editor de pose y rig") : t("Abrir el editor de pose y rig")}
           </Button>
           <p class="text-xs text-text-dim leading-relaxed">
-            Articulación y límites, herramientas de pose, IK y rig, al costado del visor (Ctrl+E). El borde se arrastra
-            para darle más ancho.
+            {t("Articulación y límites, herramientas de pose, IK y rig, al costado del visor (Ctrl+E). El borde se arrastra para darle más ancho.")}
           </p>
         </div>
 
@@ -183,8 +182,8 @@ export const AnimateStep: Component<AnimateStepProps> = (props) => {
           <For each={SHORTCUTS}>
             {([keys, description]) => (
               <div class="flex justify-between text-xs">
-                <span class="font-mono text-text">{keys}</span>
-                <span class="text-text-muted">{description}</span>
+                <span class="font-mono text-text">{t(keys)}</span>
+                <span class="text-text-muted">{t(description)}</span>
               </div>
             )}
           </For>

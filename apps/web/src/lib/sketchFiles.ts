@@ -5,6 +5,7 @@
 
 import { addEntity, addPoint, type Geometry, type P2, type Sketch } from "./cad.ts";
 import { polylineOf } from "./sketchCheck.ts";
+import { t as tr } from "./i18n.ts";
 
 const sub = (a: P2, b: P2): P2 => [a[0] - b[0], a[1] - b[1]];
 const len = (v: P2) => Math.hypot(v[0], v[1]);
@@ -28,7 +29,7 @@ export function parseCoordinates(text: string): P2[] | string {
     if (nums.length < 2 || nums.some((v) => !Number.isFinite(v))) continue;
     out.push([nums[0], nums[1]]);
   }
-  if (out.length < 2) return "El archivo no tiene al menos dos filas con x e y";
+  if (out.length < 2) return tr("El archivo no tiene al menos dos filas con x e y");
   return out;
 }
 
@@ -141,17 +142,17 @@ export function parseDxf(text: string): { shapes: Shape[]; skipped: Record<strin
   const pairs: [number, string][] = [];
   for (let i = 0; i + 1 < lines.length; i += 2) {
     const code = Number(lines[i].trim());
-    if (!Number.isInteger(code)) return "No parece un DXF de texto (DWG y DXF binario no se leen: guardarlo como DXF ASCII)";
+    if (!Number.isInteger(code)) return tr("No parece un DXF de texto (DWG y DXF binario no se leen: guardarlo como DXF ASCII)");
     pairs.push([code, lines[i + 1].trim()]);
   }
-  if (!pairs.some(([c, v]) => c === 0 && v === "SECTION")) return "No parece un DXF (no tiene secciones)";
+  if (!pairs.some(([c, v]) => c === 0 && v === "SECTION")) return tr("No parece un DXF (no tiene secciones)");
   // Unidades
   let unit = 1;
   const iu = pairs.findIndex(([c, v]) => c === 9 && v === "$INSUNITS");
   if (iu >= 0 && pairs[iu + 1]?.[0] === 70) unit = UNITS[Number(pairs[iu + 1][1])] ?? 1;
   // Entidades: grupos que empiezan con código 0 dentro de ENTITIES
   const start = pairs.findIndex(([c, v], i) => c === 2 && v === "ENTITIES" && pairs[i - 1]?.[1] === "SECTION");
-  if (start < 0) return "El DXF no tiene entidades";
+  if (start < 0) return tr("El DXF no tiene entidades");
   const ents: { type: string; data: [number, string][] }[] = [];
   for (let i = start + 1; i < pairs.length; i++) {
     const [c, v] = pairs[i];

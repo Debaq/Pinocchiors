@@ -5,23 +5,24 @@
  */
 
 import { createSignal } from "solid-js";
+import { t } from "./i18n.ts";
 
 export type Theme = "dark" | "graphite" | "nord" | "warm" | "light" | "sepia";
 export type ThemeSetting = Theme | "system";
 
 /** Temas, con sus colores en styles/app.css (`:root[data-theme="…"]`) */
 export const THEMES: { value: Theme; label: string }[] = [
-  { value: "dark", label: "Drácula (oscuro)" },
-  { value: "graphite", label: "Grafito (oscuro neutro)" },
-  { value: "nord", label: "Ártico (oscuro frío)" },
-  { value: "warm", label: "Brasa (oscuro cálido)" },
-  { value: "light", label: "Claro" },
-  { value: "sepia", label: "Papel (claro cálido)" },
+  { value: "dark", get label() { return t("Drácula (oscuro)"); } },
+  { value: "graphite", get label() { return t("Grafito (oscuro neutro)"); } },
+  { value: "nord", get label() { return t("Ártico (oscuro frío)"); } },
+  { value: "warm", get label() { return t("Brasa (oscuro cálido)"); } },
+  { value: "light", get label() { return t("Claro"); } },
+  { value: "sepia", get label() { return t("Papel (claro cálido)"); } },
 ];
 
 export const THEME_OPTIONS: { value: ThemeSetting; label: string }[] = [
-  ...THEMES,
-  { value: "system", label: "Según el sistema" },
+  ...THEMES.map((th) => ({ value: th.value, get label() { return th.label; } })),
+  { value: "system", get label() { return t("Según el sistema"); } },
 ];
 
 const isSetting = (v: unknown): v is ThemeSetting => v === "system" || THEMES.some((t) => t.value === v);

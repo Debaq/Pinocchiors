@@ -4,6 +4,7 @@
 // Funciones puras sobre `Sketch`: se prueban con node (e2e/sketchShapes.test.mjs).
 
 import { addEntity, addPoint, type P2, type Sketch } from "./cad.ts";
+import { t as tr } from "./i18n.ts";
 
 const sub = (a: P2, b: P2): P2 => [a[0] - b[0], a[1] - b[1]];
 const dist = (a: P2, b: P2) => Math.hypot(a[0] - b[0], a[1] - b[1]);
@@ -122,7 +123,7 @@ function ccwSweep(c: P2, a: P2, b: P2): number {
 export function addArcSlot(s: Sketch, center: number, start: number, end: number, w: number): { axis: number; outer: number; inner: number; capStart: number; capEnd: number } | string {
   const [c, a, b] = [pos(s, center), pos(s, start), pos(s, end)];
   const R = dist(c, a);
-  if (w <= 0 || w >= R) return "El ancho tiene que ser menor que el radio del arco";
+  if (w <= 0 || w >= R) return tr("El ancho tiene que ser menor que el radio del arco");
   const u = (p: P2): P2 => {
     const v = sub(p, c);
     const l = Math.hypot(v[0], v[1]) || 1;

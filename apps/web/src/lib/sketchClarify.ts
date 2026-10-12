@@ -5,6 +5,7 @@
 
 import { CONSTRAINT_LABELS, constraintIds, constraintValue, type P2, type Sketch } from "./cad.ts";
 import { ENTITY_NAMES, polylineOf } from "./sketchCheck.ts";
+import { t as tr } from "./i18n.ts";
 
 /** Colores de la vista separada (tokens del tema), uno por candidata */
 export const SPREAD_COLORS = ["cyan", "purple", "orange", "success", "warning"];
@@ -54,7 +55,7 @@ export function describeEntity(s: Sketch, id: number): { name: string; detail: s
   if (g.type === "line") parts.push(`${num(dist(at(g.start), at(g.end)))} mm`, `P${g.start} → P${g.end}`);
   else if (g.type === "circle") parts.push(`R ${num(g.radius)}`, `centro P${g.center}`);
   else if (g.type === "arc") parts.push(`R ${num(dist(at(g.center), at(g.start)))}`, `P${g.start} → P${g.end}`);
-  if (e.construction) parts.push("construcción");
+  if (e.construction) parts.push(tr("construcción"));
   const constraints = s.constraints
     .filter((c) => constraintIds(c).includes(id))
     .map((c) => {

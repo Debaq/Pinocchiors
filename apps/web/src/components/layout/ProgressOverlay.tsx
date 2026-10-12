@@ -1,5 +1,6 @@
 import { Component, Show } from "solid-js";
 import { ProgressBar } from "../ui";
+import { t } from "../../lib/i18n";
 
 export interface ProgressOverlayProps {
   progress?: {
@@ -21,7 +22,7 @@ export const ProgressOverlay: Component<ProgressOverlayProps> = (props) => {
       <div class="pointer-events-none absolute inset-x-0 bottom-6 flex justify-center z-20">
         <div class="animate-slide-up w-80 max-w-[90%] rounded-lg border border-border bg-bg-darker/90 px-4 py-3 shadow-lg backdrop-blur">
           <div class="flex items-center justify-between gap-3 mb-2">
-            <span class="text-xs text-text truncate">{props.progress!.label ?? "Trabajando..."}</span>
+            <span class="text-xs text-text truncate">{props.progress!.label ?? t("Trabajando...")}</span>
             <Show when={props.progress!.value !== undefined}>
               <span class="text-xs font-mono text-text-muted">{props.progress!.value}%</span>
             </Show>

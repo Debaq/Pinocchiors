@@ -1,5 +1,6 @@
 import { createSignal, type Component } from "solid-js";
 import * as Icons from "../components/icons";
+import { t } from "./i18n.ts";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -36,72 +37,72 @@ export interface PipelineStep {
 export const PIPELINE_STEPS: PipelineStep[] = [
   {
     id: "import",
-    label: "Importar",
+    get label() { return t("Importar"); },
     icon: Icons.FilePlus,
   },
   {
     id: "structure",
-    label: "Estructura",
+    get label() { return t("Estructura"); },
     icon: Icons.TreeStructure,
   },
   {
     id: "repair",
-    label: "Reparar",
+    get label() { return t("Reparar"); },
     icon: Icons.Wrench,
   },
   {
     id: "remesh",
-    label: "Remallar",
+    get label() { return t("Remallar"); },
     icon: Icons.GridFour,
   },
   {
     id: "uv",
-    label: "UV / Piel",
+    get label() { return t("UV / Piel"); },
     icon: Icons.Checkerboard,
   },
   {
     id: "skeleton",
-    label: "Esqueleto",
+    get label() { return t("Esqueleto"); },
     icon: Icons.Bone,
   },
   {
     id: "animate",
-    label: "Animar",
+    get label() { return t("Animar"); },
     icon: Icons.Play,
   },
   {
     id: "print3d",
-    label: "Fabricar",
+    get label() { return t("Fabricar"); },
     icon: Icons.Hammer,
   },
   {
     id: "scan",
-    label: "Escáner 3D",
+    get label() { return t("Escáner 3D"); },
     icon: Icons.Scan,
   },
   {
     id: "design",
-    label: "Diseño",
+    get label() { return t("Diseño"); },
     icon: Icons.Ruler,
   },
   {
     id: "design_part",
-    label: "Pieza",
+    get label() { return t("Pieza"); },
     icon: Icons.Cube,
   },
   {
     id: "design_inspect",
-    label: "Inspección",
+    get label() { return t("Inspección"); },
     icon: Icons.MagnifyingGlass,
   },
   {
     id: "design_scan",
-    label: "Desde el escaneo",
+    get label() { return t("Desde el escaneo"); },
     icon: Icons.Scan,
   },
   {
     id: "export",
-    label: "Exportar",
+    get label() { return t("Exportar"); },
     icon: Icons.Export,
   },
 ];
@@ -125,13 +126,13 @@ export interface Workspace {
 }
 
 export const WORKSPACES: Workspace[] = [
-  { id: "prepare", label: "Preparar", sections: ["structure", "repair", "remesh", "uv"] },
+  { id: "prepare", get label() { return t("Preparar"); }, sections: ["structure", "repair", "remesh", "uv"] },
   // Sin modelo se puede armar y animar un esqueleto solo, y exportarlo
-  { id: "rig", label: "Rig y animación", sections: ["skeleton", "animate"], withoutModel: true },
-  { id: "print", label: "Fabricar", sections: ["print3d"] },
+  { id: "rig", get label() { return t("Rig y animación"); }, sections: ["skeleton", "animate"], withoutModel: true },
+  { id: "print", get label() { return t("Fabricar"); }, sections: ["print3d"] },
   { id: "scan", label: "Orizon3D", sections: ["scan"], withoutModel: true },
   // CAD paramétrico: se diseña desde cero o calcando el modelo cargado
-  { id: "design", label: "Diseñar", sections: ["design", "design_part", "design_inspect", "design_scan"], withoutModel: true },
+  { id: "design", get label() { return t("Diseñar"); }, sections: ["design", "design_part", "design_inspect", "design_scan"], withoutModel: true },
 ];
 
 /**

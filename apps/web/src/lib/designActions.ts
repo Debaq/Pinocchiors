@@ -2,6 +2,7 @@
 // la barra de herramientas del visor, el menú del clic derecho y el panel.
 
 import { createSignal } from "solid-js";
+import { t as tr } from "./i18n.ts";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
@@ -84,7 +85,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     }
     ui.setPick({
       kind: "place",
-      prompt: content ? "Elegir dónde se pega el sketch: un plano base, una cara plana u otro sketch" : "Elegir dónde va el sketch: un plano base, una cara plana u otro sketch",
+      prompt: content ? tr("Elegir dónde se pega el sketch: un plano base, una cara plana u otro sketch") : tr("Elegir dónde va el sketch: un plano base, una cara plana u otro sketch"),
       done: (spec, offset) => void newSketch(spec, offset),
     });
   };
@@ -92,7 +93,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
   /** Pega el sketch entero copiado como un sketch nuevo (en el plano elegido o se pide uno) */
   const pasteSketch = () => {
     const copy = ui.sketchCopy();
-    if (!copy) return say("No hay un sketch copiado («Copiar el sketch entero» en el panel del sketch)");
+    if (!copy) return say(tr("No hay un sketch copiado («Copiar el sketch entero» en el panel del sketch)"));
     void startSketch(structuredClone(copy));
   };
 
@@ -109,7 +110,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
       ui.clearPicks();
       return make(ref);
     }
-    ui.setPick({ kind: "face", prompt: "Elegir la cara sobre la que va el sketch (un cilindro, un cono, una superficie…)", done: (ref) => void make(ref) });
+    ui.setPick({ kind: "face", prompt: tr("Elegir la cara sobre la que va el sketch (un cilindro, un cono, una superficie…)"), done: (ref) => void make(ref) });
   };
 
   /** Regiones elegidas en el visor, del primer sketch que tenga alguna */
@@ -146,7 +147,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     const picked = pickedRegions();
     const profile = picked ? sketches().find((f) => f.id === picked.sketch) : [...profileSketches()].pop();
     const path = [...sketches()].reverse().find((s) => s.id !== profile?.id && !profileSketches().includes(s)) ?? [...sketches()].reverse().find((s) => s.id !== profile?.id);
-    if (!profile || !path) return say("Hacen falta dos sketches: el perfil (una región cerrada) y el camino");
+    if (!profile || !path) return say(tr("Hacen falta dos sketches: el perfil (una región cerrada) y el camino"));
     ui.clearPicks();
     void store.addFeature({
       type: "sweep",
@@ -161,7 +162,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
   const addTube = () => {
     const doc = store.doc();
     const last = [...(doc?.features ?? [])].reverse().find((f) => f.kind.type === "sketch" || f.kind.type === "helix" || f.kind.type === "sketch3d" || f.kind.type === "curve");
-    if (!last) return say("Primero hace falta un camino: un sketch, una hélice o una curva");
+    if (!last) return say(tr("Primero hace falta un camino: un sketch, una hélice o una curva"));
     const path = last.kind.type === "sketch" ? { type: "sketch" as const, sketch: last.id, entities: [] } : { type: "curve" as const, feature: last.id };
     ui.clearPicks();
     void store.addFeature({ type: "sweep", sketch: last.id, regions: { type: "all" }, path, op: "join", circle: 2 });
@@ -170,7 +171,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
   /** Grabado o relieve con el último sketch envuelto */
   const addWrap = (emboss: boolean) => {
     const s = [...(store.doc()?.features ?? [])].reverse().find((f) => f.kind.type === "surface_sketch");
-    if (!s) return say("Primero un sketch envuelto: «Sketch» sobre una cara curva, con regiones cerradas");
+    if (!s) return say(tr("Primero un sketch envuelto: «Sketch» sobre una cara curva, con regiones cerradas"));
     ui.clearPicks();
     void store.addFeature({ type: "wrap", sketch: s.id, depth: 1, emboss });
   };
@@ -203,11 +204,11 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
   /** Redondeo completo con tres caras elegidas: las dos paralelas opuestas son los costados */
   const startFullRound = async () => {
     const picked = ui.picks().flatMap((p) => (p.kind === "face" ? [p.face] : []));
-    if (picked.length !== 3) return say("Elegir tres caras: los dos costados paralelos y la del medio");
+    if (picked.length !== 3) return say(tr("Elegir tres caras: los dos costados paralelos y la del medio"));
     const infos = await Promise.all(picked.map((f) => invoke<{ normal: P3 }>("cad_face_info", { face: f })));
     const dot = (a: P3, b: P3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
     const pair = [[0, 1], [0, 2], [1, 2]].find(([i, j]) => dot(infos[i].normal, infos[j].normal) < -0.999);
-    if (!pair) return say("Dos de las tres caras tienen que ser paralelas y opuestas (los costados)");
+    if (!pair) return say(tr("Dos de las tres caras tienen que ser paralelas y opuestas (los costados)"));
     const middle = [0, 1, 2].find((k) => !pair.includes(k))!;
     const [a, m, b] = await Promise.all([picked[pair[0]], picked[middle], picked[pair[1]]].map((f) => store.faceRef(f)));
     ui.clearPicks();
@@ -225,7 +226,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
   /** Superficie por transición: por las curvas de los dos últimos sketches */
   const addSurfaceLoft = () => {
     const list = sketches();
-    if (list.length < 2) return say("Hacen falta dos sketches con curvas");
+    if (list.length < 2) return say(tr("Hacen falta dos sketches con curvas"));
     ui.clearPicks();
     void store.addFeature({ type: "surface_loft", sections: list.slice(-2).map((s) => ({ sketch: s.id, entities: [] })), ruled: false });
   };
@@ -233,7 +234,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
   /** Superficie por barrido: las curvas del anteúltimo sketch por el último */
   const addSurfaceSweep = () => {
     const list = sketches();
-    if (list.length < 2) return say("Hacen falta dos sketches: las curvas del perfil y el camino");
+    if (list.length < 2) return say(tr("Hacen falta dos sketches: las curvas del perfil y el camino"));
     const [profile, path] = list.slice(-2);
     ui.clearPicks();
     void store.addFeature({ type: "surface_sweep", sketch: profile.id, entities: [], path: { type: "sketch", sketch: path.id, entities: [] } });
@@ -259,11 +260,11 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
    * nominal) o un agujero (es el menor). El paso sale del métrico más cercano.
    */
   const startThread = async () => {
-    if (!store.result()?.body) return say("Primero hace falta un sólido");
+    if (!store.result()?.body) return say(tr("Primero hace falta un sólido"));
     const face = ui.picks().find((p) => p.kind === "face");
-    if (!face || face.kind !== "face") return say("Elegir primero la cara cilíndrica: el eje o el agujero que se rosca");
+    if (!face || face.kind !== "face") return say(tr("Elegir primero la cara cilíndrica: el eje o el agujero que se rosca"));
     const info = await invoke<{ surface: string; radius?: number | null }>("cad_face_info", { face: face.face });
-    if (info.surface !== "cylinder" || !info.radius) return say("La rosca va sobre una cara cilíndrica");
+    if (info.surface !== "cylinder" || !info.radius) return say(tr("La rosca va sobre una cara cilíndrica"));
     const d = 2 * info.radius;
     const near = METRIC_HOLES.reduce((best, m) => {
       const err = Math.min(Math.abs(m.nominal - d), Math.abs(m.nominal - 1.082532 * m.pitch - d));
@@ -276,16 +277,16 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
 
   /** Nervio con el sketch elegido en el árbol (o el último): sus líneas hasta el sólido */
   const startRib = () => {
-    if (!store.result()?.body) return say("Primero hace falta un sólido");
+    if (!store.result()?.body) return say(tr("Primero hace falta un sólido"));
     const sel = selectedFeature();
     const sketch = sel?.kind.type === "sketch" ? sel : [...sketches()].pop();
-    if (!sketch) return say("Primero un sketch con la línea del nervio, en un plano que corte el sólido");
+    if (!sketch) return say(tr("Primero un sketch con la línea del nervio, en un plano que corte el sólido"));
     void store.addFeature({ type: "rib", sketch: sketch.id, thickness: 2, flip: false });
   };
 
   /** Reemplazar cara: las caras elegidas; con dos o más, la última es hasta dónde llegan */
   const startReplaceFace = async () => {
-    if (!store.result()?.body) return say("Primero hace falta un sólido");
+    if (!store.result()?.body) return say(tr("Primero hace falta un sólido"));
     const picked = ui.picks().flatMap((p) => (p.kind === "face" ? [p.face] : []));
     const refs = await Promise.all(picked.map((f) => store.faceRef(f)));
     ui.clearPicks();
@@ -300,14 +301,14 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
   const startScanShell = (patch: boolean) => {
     const sel = selectedFeature();
     const sketch = sel?.kind.type === "sketch" ? sel : [...sketches()].pop();
-    if (patch && !sketch) return say("Primero un sketch con el contorno del parche, en un plano que mire al escaneo");
+    if (patch && !sketch) return say(tr("Primero un sketch con el contorno del parche, en un plano que mire al escaneo"));
     const region = patch && sketch ? { sketch: sketch.id, regions: { type: "all" as const } } : null;
     void store.addFeature({ type: "scan_body", offset: 0.2, thickness: 2, faces: 20000, op: "new", region });
   };
 
   /** Cara al escaneo: las caras elegidas hasta la piel del escaneo */
   const startFaceToScan = async () => {
-    if (!store.result()?.body) return say("Primero hace falta un sólido");
+    if (!store.result()?.body) return say(tr("Primero hace falta un sólido"));
     const picked = ui.picks().flatMap((p) => (p.kind === "face" ? [p.face] : []));
     const refs = await Promise.all(picked.map((f) => store.faceRef(f)));
     ui.clearPicks();
@@ -319,7 +320,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     const sel = selectedFeature();
     const features = sel && toolFeatures().includes(sel) ? [sel.id] : [];
     const path = [...sketches()].pop();
-    if (!path) return say("Primero un sketch con el camino (líneas o arcos)");
+    if (!path) return say(tr("Primero un sketch con el camino (líneas o arcos)"));
     void store.addFeature({ type: "pattern", features, pattern: { type: "curve", path: { type: "sketch", sketch: path.id, entities: [] }, count: 4 } });
   };
 
@@ -338,13 +339,13 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
    */
   const holeOnFace = async (face: number, at?: P3) => {
     const info = await invoke<{ surface: string; point: P3 }>("cad_face_info", { face });
-    if (info.surface !== "plane") return say("Esa cara no es plana: el agujero va en una cara plana");
+    if (info.surface !== "plane") return say(tr("Esa cara no es plana: el agujero va en una cara plana"));
     const ref = await store.faceRef(face);
     const p = at ?? info.point;
-    const id = await store.addFeature({ type: "sketch", plane: { type: "face", face: ref }, offset: 0, sketch: emptySketch() }, "Centros del agujero");
+    const id = await store.addFeature({ type: "sketch", plane: { type: "face", face: ref }, offset: 0, sketch: emptySketch() }, tr("Centros del agujero"));
     await store.settled();
     const plane = store.sketchView(id)?.plane;
-    if (!plane) return say("No se pudo ubicar el plano de la cara");
+    if (!plane) return say(tr("No se pudo ubicar el plano de la cara"));
     const d = [p[0] - plane.origin[0], p[1] - plane.origin[1], p[2] - plane.origin[2]];
     const [x, n] = [plane.x_dir, plane.normal];
     const y = [n[1] * x[2] - n[2] * x[1], n[2] * x[0] - n[0] * x[2], n[0] * x[1] - n[1] * x[0]];
@@ -371,10 +372,10 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     }
     const last = [...sketches()].pop();
     if (last && hasCenters(last)) return holeIn(last.id);
-    if (!store.result()?.body) return say("Primero hace falta un sólido");
+    if (!store.result()?.body) return say(tr("Primero hace falta un sólido"));
     ui.setPick({
       kind: "hole",
-      prompt: "Clic en la cara plana donde va el agujero (cerca del centro de la cara, se ancla al centro)",
+      prompt: tr("Clic en la cara plana donde va el agujero (cerca del centro de la cara, se ancla al centro)"),
       done: (face, at) => void holeOnFace(face, at),
     });
   };
@@ -382,7 +383,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
   /** Transición entre los dos últimos sketches con regiones */
   const addLoft = () => {
     const list = profileSketches().slice(-2);
-    if (list.length < 2) return say("Hacen falta al menos dos sketches con una región cerrada, en planos distintos");
+    if (list.length < 2) return say(tr("Hacen falta al menos dos sketches con una región cerrada, en planos distintos"));
     void store.addFeature({ type: "loft", sections: list.map((s) => ({ sketch: s.id, regions: { type: "all" } })), ruled: false, op: "join" });
   };
 
@@ -393,12 +394,12 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
    */
   const extrudeFace = async (face: number) => {
     const info = await invoke<{ surface: string }>("cad_face_info", { face });
-    if (info.surface !== "plane") return say("Esa cara no es plana: se extruyen caras planas (o regiones de un sketch)");
+    if (info.surface !== "plane") return say(tr("Esa cara no es plana: se extruyen caras planas (o regiones de un sketch)"));
     const ref = await store.faceRef(face);
-    const id = await store.addFeature({ type: "sketch", plane: { type: "face", face: ref }, offset: 0, sketch: emptySketch() }, "Contorno de la cara");
+    const id = await store.addFeature({ type: "sketch", plane: { type: "face", face: ref }, offset: 0, sketch: emptySketch() }, tr("Contorno de la cara"));
     await store.settled();
     const plane = store.sketchView(id)?.plane;
-    if (!plane) return say("No se pudo ubicar el plano de la cara");
+    if (!plane) return say(tr("No se pudo ubicar el plano de la cara"));
     const edges = await store.projectFace(face, plane);
     await store.updateFeature(id, (f) => {
       if (f.kind.type === "sketch") addProjected(f.kind.sketch, edges, (i) => ({ edge: edges[i].ref }));
@@ -417,7 +418,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
       return void extrudeFace(face.face);
     }
     const s = picked ? sketches().find((f) => f.id === picked.sketch) : targetSketch();
-    if (!s) return say("Primero hace falta un sketch con una región cerrada");
+    if (!s) return say(tr("Primero hace falta un sketch con una región cerrada"));
     if (!picked && noRegions(s)) return;
     ui.clearPicks();
     void store.addFeature({
@@ -434,7 +435,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
   const addSheetMetal = () => {
     const picked = pickedRegions();
     const s = picked ? sketches().find((f) => f.id === picked.sketch) : targetSketch();
-    if (!s) return say("Primero hace falta un sketch con una región cerrada");
+    if (!s) return say(tr("Primero hace falta un sketch con una región cerrada"));
     ui.clearPicks();
     void store.addFeature({
       type: "sheet_metal",
@@ -451,7 +452,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
   /** Superficie extruida con todas las curvas del sketch elegido (o del último) */
   const addSurfaceExtrude = () => {
     const s = targetSketch();
-    if (!s) return say("Primero hace falta un sketch con curvas (abiertas o cerradas)");
+    if (!s) return say(tr("Primero hace falta un sketch con curvas (abiertas o cerradas)"));
     ui.clearPicks();
     void store.addFeature({ type: "surface_extrude", sketch: s.id, entities: [], extent: { type: "blind", distance: 10 }, reverse: false });
   };
@@ -459,7 +460,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
   /** Superficie de revolución: eje = la primera línea de construcción del sketch, o Z */
   const addSurfaceRevolve = () => {
     const s = targetSketch();
-    if (!s || s.kind.type !== "sketch") return say("Primero hace falta un sketch con curvas (abiertas o cerradas)");
+    if (!s || s.kind.type !== "sketch") return say(tr("Primero hace falta un sketch con curvas (abiertas o cerradas)"));
     ui.clearPicks();
     const axisLine = s.kind.sketch.entities.find((e) => e.construction && e.geometry.type === "line");
     const axis: AxisSpec = axisLine ? { type: "sketch_line", sketch: s.id, line: axisLine.id } : { type: "z" };
@@ -468,7 +469,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
 
   /** Relleno del borde de aristas elegido (si no hay, se elige en el diálogo) */
   const startFill = async () => {
-    if (!store.result()?.body) return say("Primero hace falta una superficie o un sólido con un borde que cerrar");
+    if (!store.result()?.body) return say(tr("Primero hace falta una superficie o un sólido con un borde que cerrar"));
     const picked = ui.picks().flatMap((p) => (p.kind === "edge" ? [p.edge] : []));
     const edges = await Promise.all(picked.map((e) => store.edgeRef(e)));
     ui.clearPicks();
@@ -480,13 +481,13 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     const surfaces = (store.result()?.parts ?? []).filter((p) => p.surface).map((p) => p.id);
     const picked = pickedParts();
     const parts = picked.length > 0 ? picked : surfaces;
-    if (parts.length === 0) return say("No hay superficies para coser");
+    if (parts.length === 0) return say(tr("No hay superficies para coser"));
     void store.addFeature({ type: "sew", parts, solid: true, tolerance: 0.01 });
   };
 
   /** Pestaña en la arista elegida (si no hay, se elige en el diálogo) */
   const startFlange = async () => {
-    if (!store.result()?.body) return say("Primero hace falta una chapa");
+    if (!store.result()?.body) return say(tr("Primero hace falta una chapa"));
     const pick = ui.picks().find((p) => p.kind === "edge");
     const edge = pick?.kind === "edge" ? await store.edgeRef(pick.edge) : undefined;
     ui.clearPicks();
@@ -496,7 +497,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
   const addRevolve = () => {
     const picked = pickedRegions();
     const s = picked ? sketches().find((f) => f.id === picked.sketch) : targetSketch();
-    if (!s || s.kind.type !== "sketch") return say("Primero hace falta un sketch con una región cerrada");
+    if (!s || s.kind.type !== "sketch") return say(tr("Primero hace falta un sketch con una región cerrada"));
     if (!picked && noRegions(s)) return;
     ui.clearPicks();
     // Eje: la línea central del sketch, si no la primera de construcción, o Z
@@ -518,7 +519,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
 
   /** Redondeo o chaflán con las aristas ya elegidas; si no hay, se eligen en la caja del diálogo */
   const startEdges = async (kind: "fillet" | "chamfer" | "surface_extend") => {
-    if (!store.result()?.body) return say("Primero hace falta un sólido");
+    if (!store.result()?.body) return say(tr("Primero hace falta un sólido"));
     const picked = ui.picks().flatMap((p) => (p.kind === "edge" ? [p.edge] : []));
     const edges = await Promise.all(picked.map((e) => store.edgeRef(e)));
     ui.clearPicks();
@@ -529,7 +530,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
 
   /** Vaciado o desmolde con las caras ya elegidas; si no hay, se eligen en la caja del diálogo */
   const startFaces = async (kind: "shell" | "draft" | "delete_face") => {
-    if (!store.result()?.body) return say("Primero hace falta un sólido");
+    if (!store.result()?.body) return say(tr("Primero hace falta un sólido"));
     const picked = ui.picks().flatMap((p) => (p.kind === "face" ? [p.face] : []));
     const faces = await Promise.all(picked.map((f) => store.faceRef(f)));
     ui.clearPicks();
@@ -556,7 +557,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
       const withPoints = sketches()
         .filter((s) => s.id !== own && s.kind.type === "sketch" && s.kind.sketch.entities.some((e) => e.geometry.type === "point" && !e.construction))
         .pop();
-      if (!withPoints) return say("Primero un sketch con puntos sueltos (y la operación que se repite)");
+      if (!withPoints) return say(tr("Primero un sketch con puntos sueltos (y la operación que se repite)"));
       void store.addFeature({ type: "pattern", features, pattern: { type: "points", sketch: withPoints.id, points: [] } });
       return;
     }
@@ -568,7 +569,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
       const region = sketches()
         .filter((s) => s.id !== own && (store.sketchView(s.id)?.regions.length ?? 1) > 0)
         .pop();
-      if (!region) return say("Primero un sketch con la región a llenar (y la operación que se repite)");
+      if (!region) return say(tr("Primero un sketch con la región a llenar (y la operación que se repite)"));
       void store.addFeature({ type: "pattern", features, pattern: { type: "fill", sketch: region.id, regions: { type: "all" }, spacing: 10, hex: false, margin: 2 } });
       return;
     }
@@ -599,7 +600,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
   /** Recortar superficies con un plano: Cortar por plano con las superficies de alcance */
   const trimWithPlane = async () => {
     const parts = surfaceParts();
-    if (parts.length === 0) return say("No hay superficies para recortar");
+    if (parts.length === 0) return say(tr("No hay superficies para recortar"));
     const id = await store.addFeature({ type: "split", plane: { type: "custom", plane: offsetPlane("xy", 0) }, flip: false });
     void store.updateFeature(id, (f) => (f.scope = parts));
   };
@@ -607,7 +608,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
   /** Recortar superficies con un sólido: booleana restar (en el diálogo, intersecar para quedarse con lo de adentro) */
   const trimWithSolid = () => {
     const parts = surfaceParts();
-    if (parts.length === 0) return say("No hay superficies para recortar");
+    if (parts.length === 0) return say(tr("No hay superficies para recortar"));
     const solids = pickedParts().filter((id) => !parts.some((p) => samePart(p, id)));
     void store.addFeature({ type: "boolean", op: "subtract", targets: parts, tools: solids, keep_tools: true });
   };
@@ -725,7 +726,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
         depth = seat.depth ?? undefined;
       } else if (face?.kind === "face") {
         const f = await invoke<{ surface: string; point: P3; normal: P3 }>("cad_face_info", { face: face.face });
-        if (f.surface !== "plane") return say("Elige el borde de un agujero o una cara plana");
+        if (f.surface !== "plane") return say(tr("Elige el borde de un agujero o una cara plana"));
         const n = f.normal;
         const a: P3 = Math.abs(n[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
         // X: perpendicular a la normal
@@ -812,7 +813,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
       if (kind === "intersection") return void store.addFeature({ type: "curve", def: { type: "intersection", a: faces.slice(0, 1), b: faces.slice(1) } });
       if (kind === "projected") {
         const s = targetSketch();
-        if (!s) return say("Primero un sketch con las curvas a proyectar");
+        if (!s) return say(tr("Primero un sketch con las curvas a proyectar"));
         return void store.addFeature({ type: "curve", def: { type: "projected", sketch: s.id, entities: [], faces } });
       }
       const pts: PointSpec[] = points.length >= 2 ? points : [{ type: "at", point: [0, 0, 0] }, { type: "at", point: [20, 0, 0] }, { type: "at", point: [20, 20, 10] }];
@@ -823,7 +824,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     /** Las regiones del sketch elegido (o del último) como superficie plana */
     addSurfacePlanar: () => {
       const s = targetSketch();
-      if (!s) return say("Primero hace falta un sketch con una región cerrada");
+      if (!s) return say(tr("Primero hace falta un sketch con una región cerrada"));
       ui.clearPicks();
       void store.addFeature({ type: "surface_planar", sketch: s.id, regions: { type: "all" } });
     },
@@ -831,7 +832,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     addSurfaceOffset: () => {
       const picked = pickedParts();
       const parts = picked.length > 0 ? picked : surfaceParts();
-      if (parts.length === 0) return say("Elegir una superficie (o una pieza) para desfasar");
+      if (parts.length === 0) return say(tr("Elegir una superficie (o una pieza) para desfasar"));
       ui.clearPicks();
       void store.addFeature({ type: "surface_offset", parts, distance: 5 });
     },

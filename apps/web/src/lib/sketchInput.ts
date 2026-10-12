@@ -3,6 +3,7 @@
 // (e2e/sketchInput.test.mjs).
 
 import type { P2 } from "./cad.ts";
+import { t as tr } from "./i18n.ts";
 
 /** Un número con coma o punto decimal */
 function num(text: string): number | undefined {
@@ -27,18 +28,18 @@ function pair(text: string): [number, number] | undefined {
  */
 export function parseCoords(text: string, last: P2 | undefined): P2 | string {
   let t = text.trim();
-  if (!t) return "Escribir x, y · @dx, dy · @d<ángulo";
+  if (!t) return tr("Escribir x, y · @dx, dy · @d<ángulo");
   const relative = t.startsWith("@");
   if (relative) t = t.slice(1);
   const base: P2 = relative ? (last ?? [0, 0]) : [0, 0];
   if (t.includes("<")) {
     const [d, a] = t.split("<").map(num);
-    if (d === undefined || a === undefined) return "Polar: @distancia<ángulo (por ejemplo @20<45)";
+    if (d === undefined || a === undefined) return tr("Polar: @distancia<ángulo (por ejemplo @20<45)");
     const r = (a * Math.PI) / 180;
     return [base[0] + d * Math.cos(r), base[1] + d * Math.sin(r)];
   }
   const p = pair(t);
-  if (!p) return "Coordenadas: x, y (o x; y con coma decimal)";
+  if (!p) return tr("Coordenadas: x, y (o x; y con coma decimal)");
   return [base[0] + p[0], base[1] + p[1]];
 }
 

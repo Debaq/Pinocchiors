@@ -1,6 +1,7 @@
 import { Component, For, Show } from "solid-js";
 import { clsx } from "clsx";
 import { ProgressBar } from "../ui";
+import { t, tx } from "../../lib/i18n";
 import type { KeyHint } from "../../lib/designHints";
 
 export interface StatusBarProps {
@@ -47,7 +48,7 @@ export const StatusBar: Component<StatusBarProps> = (props) => {
 
         <Show
           when={props.hints}
-          fallback={<span class="text-xs text-text-muted truncate">{props.message ?? "Listo"}</span>}
+          fallback={<span class="text-xs text-text-muted truncate">{props.message ?? tx("estado", "Listo")}</span>}
         >
           {(hints) => (
             <div class="flex items-center gap-3 min-w-0 overflow-hidden whitespace-nowrap" data-hints>
@@ -55,7 +56,7 @@ export const StatusBar: Component<StatusBarProps> = (props) => {
                 {(h) => (
                   <span class="flex items-center gap-1 text-xs text-text-muted">
                     <kbd class="px-1 rounded border border-border bg-surface/40 font-sans text-[10px] text-text">{h.keys}</kbd>
-                    {h.label}
+                    {t(h.label)}
                   </span>
                 )}
               </For>
@@ -67,7 +68,7 @@ export const StatusBar: Component<StatusBarProps> = (props) => {
       {/* Right - Info */}
       <div class="flex items-center gap-4 min-w-0">
         <Show when={props.hints && props.message}>
-          <span class="text-xs text-text-muted truncate">{props.message}</span>
+          <span class="text-xs text-text-muted truncate">{t(props.message!)}</span>
         </Show>
         <Show when={props.info}>
           <span class="text-xs font-mono text-text-muted truncate">{props.info}</span>

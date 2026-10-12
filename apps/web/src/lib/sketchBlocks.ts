@@ -20,6 +20,7 @@ import {
   type SketchText,
 } from "./cad.ts";
 import { selectedEntities } from "./sketchTransform.ts";
+import { t as tr } from "./i18n.ts";
 
 const pos = (s: Sketch, id: number): P2 => {
   const p = s.points.find((q) => q.id === id)!;
@@ -39,11 +40,11 @@ function inGroup(s: Sketch, ids: number[]): boolean {
  */
 export function createBlock(s: Sketch, ids: number[], name: string): SketchText | string {
   const ents = selectedEntities(s, ids);
-  if (!ents.length) return "Elegir lo que forma el bloque";
-  if (inGroup(s, ids)) return "Un texto o una copia de bloque no puede ir dentro de otro bloque";
+  if (!ents.length) return tr("Elegir lo que forma el bloque");
+  if (inGroup(s, ids)) return tr("Un texto o una copia de bloque no puede ir dentro de otro bloque");
   const entIds = new Set(ents.map((e) => e.id));
   const pts = [...new Set(ents.flatMap((e) => geometryPoints(e.geometry)))].filter((p) => p !== s.origin);
-  if (!pts.length) return "Lo elegido no tiene puntos propios";
+  if (!pts.length) return tr("Lo elegido no tiene puntos propios");
   // Origen: un punto elegido suelto, o el centro de la caja
   const chosen = ids.filter((id) => pts.includes(id) && !entIds.has(id));
   let anchor: number;
@@ -90,7 +91,7 @@ function frameOf(degrees: number, scale: number): [number, number, number, numbe
  */
 export function insertBlock(s: Sketch, blockId: number, at: P2, degrees = 0, scale = 1, reuse?: { anchor: number; id: number; frame?: [number, number, number, number] }): SketchText | string {
   const b = (s.blocks ?? []).find((x) => x.id === blockId);
-  if (!b) return "No existe ese bloque";
+  if (!b) return tr("No existe ese bloque");
   const anchor = reuse?.anchor ?? addPoint(s, at);
   const base = reuse ? pos(s, anchor) : at;
   const m = reuse?.frame ? reuse.frame.map((v) => v * scale) : frameOf(degrees, scale);
@@ -136,8 +137,8 @@ export function blockSketch(b: SketchBlock): Sketch {
 /** Guarda lo editado como la definición del bloque y rehace sus copias */
 export function saveBlock(s: Sketch, blockId: number, edited: Sketch): string | undefined {
   const b = (s.blocks ?? []).find((x) => x.id === blockId);
-  if (!b) return "No existe ese bloque";
-  if (!edited.entities.length) return "El bloque quedó vacío";
+  if (!b) return tr("No existe ese bloque");
+  if (!edited.entities.length) return tr("El bloque quedó vacío");
   // El origen del sketch del bloque pasa a ser el punto 0
   const o = edited.origin ?? 0;
   const f = (id: number) => (id === o ? 0 : id === 0 ? o : id);

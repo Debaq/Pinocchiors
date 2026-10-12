@@ -17,6 +17,7 @@ import {
 } from "../../lib/Viewer3D";
 import type { FloorCandidate } from "../../lib/placement";
 import { ContextMenu, type MenuEntry } from "../ui/ContextMenu";
+import { fmtNumber, t } from "../../lib/i18n";
 
 export interface ViewportProps {
   // Callbacks
@@ -114,12 +115,12 @@ export const Viewport: Component<ViewportProps> = (props) => {
     if (!viewer) return;
     const v = viewer;
     const items: MenuEntry[] = [
-      { header: "Vista" },
-      { label: "Ver todo", shortcut: "Inicio", onSelect: () => v.resetView(), disabled: !props.meshData && !props.skeletonData },
-      { label: "Frente", shortcut: "1", onSelect: () => v.setView("front") },
-      { label: "Derecha", shortcut: "3", onSelect: () => v.setView("right") },
-      { label: "Arriba", shortcut: "7", onSelect: () => v.setView("top") },
-      { label: "Atrás", shortcut: "Ctrl+1", onSelect: () => v.setView("back") },
+      { header: t("Vista") },
+      { label: t("Ver todo"), shortcut: "Inicio", onSelect: () => v.resetView(), disabled: !props.meshData && !props.skeletonData },
+      { label: t("Frente"), shortcut: "1", onSelect: () => v.setView("front") },
+      { label: t("Derecha"), shortcut: "3", onSelect: () => v.setView("right") },
+      { label: t("Arriba"), shortcut: "7", onSelect: () => v.setView("top") },
+      { label: t("Atrás"), shortcut: "Ctrl+1", onSelect: () => v.setView("back") },
     ];
     const extra = props.contextMenuItems?.() ?? [];
     if (extra.length > 0) items.push({ separator: true }, ...extra);
@@ -250,7 +251,7 @@ export const Viewport: Component<ViewportProps> = (props) => {
         {/* Ayuda de la orientación */}
         <Show when={props.placementMode}>
           <div class="absolute top-3 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-md bg-purple/90 text-bg text-xs font-medium">
-            {PLACEMENT_HINTS[props.placementMode!]}
+            {t(PLACEMENT_HINTS[props.placementMode!])}
           </div>
         </Show>
 
@@ -260,13 +261,13 @@ export const Viewport: Component<ViewportProps> = (props) => {
           fallback={
             <Show when={(props.meshData || props.skeletonData) && props.toolHint && !props.placementMode && !props.paintSettings}>
               <div class="absolute top-3 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-md bg-bg-darker/80 text-text-muted text-xs">
-                {props.toolHint}
+                {t(props.toolHint!)}
               </div>
             </Show>
           }
         >
           <div class="absolute top-3 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-md bg-orange/90 text-bg text-xs font-medium">
-            {hint()}
+            {t(hint()!)}
           </div>
         </Show>
 
@@ -287,10 +288,10 @@ export const Viewport: Component<ViewportProps> = (props) => {
             )}
           >
             <span class="text-xs text-text-muted">
-              Vértices: <span class="text-text font-mono">{props.vertices?.toLocaleString() ?? "--"}</span>
+              {t("Vértices:")} <span class="text-text font-mono">{props.vertices !== undefined ? fmtNumber(props.vertices) : "--"}</span>
             </span>
             <span class="text-xs text-text-muted">
-              Caras: <span class="text-text font-mono">{props.faces?.toLocaleString() ?? "--"}</span>
+              {t("Caras:")} <span class="text-text font-mono">{props.faces !== undefined ? fmtNumber(props.faces) : "--"}</span>
             </span>
             <Show when={props.meshData && gridLabel()}>
               <span class="text-xs text-text-muted">{gridLabel()}</span>

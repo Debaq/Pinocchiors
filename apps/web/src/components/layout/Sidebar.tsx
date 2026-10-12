@@ -2,6 +2,7 @@ import { ParentComponent, Show, createSignal } from "solid-js";
 import { clsx } from "clsx";
 import { Tooltip } from "../ui";
 import * as Icons from "../icons";
+import { t } from "../../lib/i18n";
 
 export type SidebarPosition = "left" | "right";
 
@@ -90,7 +91,7 @@ export const Sidebar: ParentComponent<SidebarProps> = (props) => {
           )}
         >
           <Tooltip
-            content={collapsed() ? "Expandir" : "Colapsar"}
+            content={collapsed() ? t("Expandir") : t("Colapsar")}
             placement={props.position === "left" ? "right" : "left"}
           >
             <button
@@ -103,7 +104,7 @@ export const Sidebar: ParentComponent<SidebarProps> = (props) => {
                 "transition-all duration-100"
               )}
               onClick={() => setCollapsed(!collapsed())}
-              aria-label={collapsed() ? "Expandir panel" : "Colapsar panel"}
+              aria-label={collapsed() ? t("Expandir panel") : t("Colapsar panel")}
             >
               <Icons.CaretRight
                 size={14}

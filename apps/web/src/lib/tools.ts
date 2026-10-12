@@ -1,4 +1,5 @@
 import type { PipelineStepId } from "./pipeline";
+import { t } from "./i18n.ts";
 
 export type ToolId = "select" | "move" | "rotate" | "scale" | "paint" | "measure";
 
@@ -19,31 +20,31 @@ export interface ToolDef {
 
 const MEASURE: ToolDef = {
   id: "measure",
-  label: "Medir",
+  get label() { return t("Medir"); },
   shortcut: "M",
-  hint: "Medir: clic en dos puntos de la superficie · Ctrl+clic: al vértice más cercano",
+  get hint() { return t("Medir: clic en dos puntos de la superficie · Ctrl+clic: al vértice más cercano"); },
 };
 
 export const TOOLSETS: Record<ToolContext, ToolDef[]> = {
   object: [
-    { id: "select", label: "Seleccionar", shortcut: "Q" },
-    { id: "move", label: "Mover modelo", shortcut: "G", hint: "Arrastra una flecha o un plano del gizmo para mover el modelo" },
-    { id: "rotate", label: "Rotar modelo", shortcut: "R", hint: "Arrastra un anillo del gizmo para girar el modelo en torno a su centro" },
-    { id: "scale", label: "Escalar modelo", shortcut: "S", hint: "Arrastra el gizmo para escalar el modelo (parejo, desde la base)" },
+    { id: "select", get label() { return t("Seleccionar"); }, shortcut: "Q" },
+    { id: "move", get label() { return t("Mover modelo"); }, shortcut: "G", get hint() { return t("Arrastra una flecha o un plano del gizmo para mover el modelo"); } },
+    { id: "rotate", get label() { return t("Rotar modelo"); }, shortcut: "R", get hint() { return t("Arrastra un anillo del gizmo para girar el modelo en torno a su centro"); } },
+    { id: "scale", get label() { return t("Escalar modelo"); }, shortcut: "S", get hint() { return t("Arrastra el gizmo para escalar el modelo (parejo, desde la base)"); } },
     MEASURE,
   ],
   skeleton: [
-    { id: "select", label: "Seleccionar articulación", shortcut: "Q", hint: "Clic: seleccionar articulación · G mover · R rotar · rueda/botón central: vista" },
-    { id: "move", label: "Mover articulación", hint: "Selecciona una articulación y arrastra el gizmo (G: mover con el mouse)" },
-    { id: "rotate", label: "Rotar esqueleto / probar pose", hint: "Sin pesos gira el esqueleto entero; con pesos prueba poses por articulación" },
-    { id: "scale", label: "Escalar esqueleto", shortcut: "S", hint: "El gizmo escala el esqueleto entero desde su centro" },
-    { id: "paint", label: "Pintar pesos", shortcut: "B" },
+    { id: "select", get label() { return t("Seleccionar articulación"); }, shortcut: "Q", get hint() { return t("Clic: seleccionar articulación · G mover · R rotar · rueda/botón central: vista"); } },
+    { id: "move", get label() { return t("Mover articulación"); }, get hint() { return t("Selecciona una articulación y arrastra el gizmo (G: mover con el mouse)"); } },
+    { id: "rotate", get label() { return t("Rotar esqueleto / probar pose"); }, get hint() { return t("Sin pesos gira el esqueleto entero; con pesos prueba poses por articulación"); } },
+    { id: "scale", get label() { return t("Escalar esqueleto"); }, shortcut: "S", get hint() { return t("El gizmo escala el esqueleto entero desde su centro"); } },
+    { id: "paint", get label() { return t("Pintar pesos"); }, shortcut: "B" },
     MEASURE,
   ],
   animate: [
-    { id: "select", label: "Seleccionar articulación", shortcut: "Q", hint: "Clic: articulación (Shift suma, doble clic: cadena) · R girar · G mover · I insertar key" },
-    { id: "rotate", label: "Girar articulación", hint: "Selecciona una articulación y gira el gizmo (R: girar con el mouse)" },
-    { id: "move", label: "Mover articulación", hint: "Selecciona una articulación y arrastra el gizmo (G: mover con el mouse)" },
+    { id: "select", get label() { return t("Seleccionar articulación"); }, shortcut: "Q", get hint() { return t("Clic: articulación (Shift suma, doble clic: cadena) · R girar · G mover · I insertar key"); } },
+    { id: "rotate", get label() { return t("Girar articulación"); }, get hint() { return t("Selecciona una articulación y gira el gizmo (R: girar con el mouse)"); } },
+    { id: "move", get label() { return t("Mover articulación"); }, get hint() { return t("Selecciona una articulación y arrastra el gizmo (G: mover con el mouse)"); } },
     MEASURE,
   ],
 };

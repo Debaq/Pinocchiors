@@ -3,6 +3,7 @@
 // (e2e/sketchTyped.test.mjs).
 
 import type { P2 } from "./cad.ts";
+import { t as tr } from "./i18n.ts";
 
 /** Un número con coma o punto decimal */
 function num(text: string): number | undefined {
@@ -15,10 +16,10 @@ export type TypedTransform = { delta: P2 } | { degrees: number } | { factor: num
 
 /** Lo que se pide en cada herramienta */
 export const TYPED_HINT: Record<"move" | "copy" | "rotate" | "scale", string> = {
-  move: "distancia · dx; dy · d<ángulo",
-  copy: "distancia · dx; dy · d<ángulo",
-  rotate: "ángulo °",
-  scale: "factor",
+  get move() { return tr("distancia · dx; dy · d<ángulo"); },
+  get copy() { return tr("distancia · dx; dy · d<ángulo"); },
+  get rotate() { return tr("ángulo °"); },
+  get scale() { return tr("factor"); },
 };
 
 /**
@@ -29,18 +30,18 @@ export const TYPED_HINT: Record<"move" | "copy" | "rotate" | "scale", string> = 
  */
 export function parseTypedTransform(tool: "move" | "copy" | "rotate" | "scale", text: string, dir?: P2): TypedTransform | string {
   const t = text.trim();
-  if (!t) return `Escribir ${TYPED_HINT[tool]}`;
+  if (!t) return tr("Escribir {hint}", { hint: TYPED_HINT[tool] });
   if (tool === "rotate") {
     const a = num(t.replace(/°$/, ""));
-    return a === undefined ? "El ángulo en grados (por ejemplo 90 o -45)" : { degrees: a };
+    return a === undefined ? tr("El ángulo en grados (por ejemplo 90 o -45)") : { degrees: a };
   }
   if (tool === "scale") {
     const k = num(t.replace(/^[x×]/i, ""));
-    return k === undefined || !(k > 0) ? "El factor tiene que ser un número mayor que 0" : { factor: k };
+    return k === undefined || !(k > 0) ? tr("El factor tiene que ser un número mayor que 0") : { factor: k };
   }
   if (t.includes("<")) {
     const [d, a] = t.split("<").map(num);
-    if (d === undefined || a === undefined) return "Polar: distancia<ángulo (por ejemplo 20<45)";
+    if (d === undefined || a === undefined) return tr("Polar: distancia<ángulo (por ejemplo 20<45)");
     const r = (a * Math.PI) / 180;
     return { delta: [d * Math.cos(r), d * Math.sin(r)] };
   }
@@ -48,10 +49,10 @@ export function parseTypedTransform(tool: "move" | "copy" | "rotate" | "scale", 
   const parts = t.includes(";") ? t.split(";") : /,\s/.test(t) ? t.split(",") : /\s/.test(t) ? t.split(/\s+/) : [t];
   if (parts.length === 2) {
     const [x, y] = parts.map(num);
-    return x === undefined || y === undefined ? "Corrimiento: dx; dy (por ejemplo 10; -5)" : { delta: [x, y] };
+    return x === undefined || y === undefined ? tr("Corrimiento: dx; dy (por ejemplo 10; -5)") : { delta: [x, y] };
   }
   const d = num(t);
-  if (d === undefined || parts.length > 2) return `Escribir ${TYPED_HINT[tool]}`;
+  if (d === undefined || parts.length > 2) return tr("Escribir {hint}", { hint: TYPED_HINT[tool] });
   const len = dir ? Math.hypot(dir[0], dir[1]) : 0;
   const u: P2 = len > 1e-12 ? [dir![0] / len, dir![1] / len] : [1, 0];
   return { delta: [u[0] * d, u[1] * d] };

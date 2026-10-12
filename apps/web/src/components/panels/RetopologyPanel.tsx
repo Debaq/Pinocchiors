@@ -1,6 +1,7 @@
 import { Component, Show } from "solid-js";
 import { Panel, Slider, Checkbox, Button, Select } from "../ui";
 import * as Icons from "../icons";
+import { fmtNumber, t, tx } from "../../lib/i18n";
 
 export type RebuildMode = "auto" | "always" | "never";
 export type SymmetryAxis = "none" | "x" | "y" | "z";
@@ -33,17 +34,17 @@ export interface QuadQuality {
 }
 
 const SYMMETRY_OPTIONS = [
-  { value: "none", label: "Sin simetría" },
+  { value: "none", get label() { return t("Sin simetría"); } },
   // Ejes como se muestran (Z arriba): el valor es el eje interno (Y arriba)
-  { value: "x", label: "Espejo en X (izquierda-derecha)" },
-  { value: "z", label: "Espejo en Y (frente-atrás)" },
-  { value: "y", label: "Espejo en Z (arriba-abajo)" },
+  { value: "x", get label() { return t("Espejo en X (izquierda-derecha)"); } },
+  { value: "z", get label() { return t("Espejo en Y (frente-atrás)"); } },
+  { value: "y", get label() { return t("Espejo en Z (arriba-abajo)"); } },
 ];
 
 const REBUILD_OPTIONS = [
-  { value: "auto", label: "Automática (si la malla está rota)" },
-  { value: "always", label: "Siempre" },
-  { value: "never", label: "Nunca" },
+  { value: "auto", get label() { return t("Automática (si la malla está rota)"); } },
+  { value: "always", get label() { return t("Siempre"); } },
+  { value: "never", get label() { return t("Nunca"); } },
 ];
 
 export interface RetopologyPanelProps {
@@ -72,22 +73,22 @@ export const RetopologyPanel: Component<RetopologyPanelProps> = (props) => {
   };
 
   return (
-    <Panel title="Retopología" icon={<Icons.GridFour size={14} />} defaultOpen>
+    <Panel title={t("Retopología")} icon={<Icons.GridFour size={14} />} defaultOpen>
       <div class="space-y-5">
         {/* Target Quads */}
         <Slider
-          label="Quads objetivo"
+          label={t("Quads objetivo")}
           value={props.config.targetQuads}
           onChange={(value) => updateConfig({ targetQuads: Math.round(value) })}
           min={100}
           max={50000}
           step={100}
-          formatValue={(v) => v.toLocaleString()}
+          formatValue={(v) => fmtNumber(v)}
         />
 
         {/* Preserve Sharp Edges */}
         <Checkbox
-          label="Preservar bordes agudos"
+          label={t("Preservar bordes agudos")}
           checked={props.config.preserveSharp}
           onChange={(checked) => updateConfig({ preserveSharp: checked })}
         />
@@ -95,7 +96,7 @@ export const RetopologyPanel: Component<RetopologyPanelProps> = (props) => {
         {/* Sharp Angle (only visible when preserveSharp is true) */}
         <Show when={props.config.preserveSharp}>
           <Slider
-            label="Ángulo de borde"
+            label={t("Ángulo de borde")}
             value={props.config.sharpAngle}
             onChange={(value) => updateConfig({ sharpAngle: value })}
             min={15}
@@ -108,30 +109,28 @@ export const RetopologyPanel: Component<RetopologyPanelProps> = (props) => {
         {/* UV seams */}
         <div class="space-y-1">
           <Checkbox
-            label="Seguir las costuras de UV"
+            label={t("Seguir las costuras de UV")}
             checked={props.config.followSeams}
             onChange={(checked) => updateConfig({ followSeams: checked })}
           />
           <p class="text-xs text-text-muted leading-relaxed">
-            Cada quad queda dentro de una isla del mapa original y la textura se traslada sin
-            estirarse en las costuras. Desmárcalo si vas a desplegar y hornear en UV / Piel: los
-            quads salen más parejos.
+            {t("Cada quad queda dentro de una isla del mapa original y la textura se traslada sin estirarse en las costuras. Desmárcalo si vas a desplegar y hornear en UV / Piel: los quads salen más parejos.")}
           </p>
         </div>
 
         {/* Mirror symmetry */}
         <Select
-          label="Simetría"
+          label={tx("simetría", "Simetría")}
           options={SYMMETRY_OPTIONS}
           value={props.config.symmetry}
           onChange={(value) => updateConfig({ symmetry: value as SymmetryAxis })}
         />
 
         {/* Advanced options */}
-        <Panel title="Avanzado" defaultOpen={false}>
+        <Panel title={t("Avanzado")} defaultOpen={false}>
           <div class="space-y-5 pt-2">
             <Slider
-              label="Seguir la curvatura"
+              label={t("Seguir la curvatura")}
               value={Math.round(props.config.curvatureAlignment * 100)}
               onChange={(value) => updateConfig({ curvatureAlignment: value / 100 })}
               min={0}
@@ -141,26 +140,25 @@ export const RetopologyPanel: Component<RetopologyPanelProps> = (props) => {
             />
 
             <Checkbox
-              label="Densidad adaptativa (rasgos delgados)"
+              label={t("Densidad adaptativa (rasgos delgados)")}
               checked={props.config.adaptiveDensity}
               onChange={(checked) => updateConfig({ adaptiveDensity: checked })}
             />
             <Show when={props.config.adaptiveDensity}>
               <p class="text-xs text-text-muted leading-relaxed">
-                Conserva puntas, dedos y paredes finas con quads más chicos, a cambio de algunos
-                vértices irregulares más.
+                {t("Conserva puntas, dedos y paredes finas con quads más chicos, a cambio de algunos vértices irregulares más.")}
               </p>
             </Show>
 
             <Select
-              label="Reparar malla rota"
+              label={t("Reparar malla rota")}
               options={REBUILD_OPTIONS}
               value={props.config.rebuild}
               onChange={(value) => updateConfig({ rebuild: value as RebuildMode })}
             />
 
             <Slider
-              label="Iteraciones de suavizado"
+              label={t("Iteraciones de suavizado")}
               value={props.config.smoothIterations}
               onChange={(value) => updateConfig({ smoothIterations: Math.round(value) })}
               min={1}
@@ -181,12 +179,12 @@ export const RetopologyPanel: Component<RetopologyPanelProps> = (props) => {
           <Show when={!props.isProcessing} fallback={
             <span class="flex items-center gap-2">
               <span class="animate-spin">⏳</span>
-              Procesando...
+              {t("Procesando...")}
             </span>
           }>
             <span class="flex items-center gap-2">
               <Icons.Lightning size={16} />
-              Retopologizar
+              {t("Retopologizar")}
             </span>
           </Show>
         </Button>
@@ -198,32 +196,32 @@ export const RetopologyPanel: Component<RetopologyPanelProps> = (props) => {
               <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="20 6 9 17 4 12" />
               </svg>
-              Retopología completada
+              {t("Retopología completada")}
             </div>
 
             <Show when={props.quality}>
               {(q) => (
                 <div class="space-y-1 rounded bg-surface/20 p-2">
                   <QualityRow
-                    label="Vértices irregulares"
+                    label={t("Vértices irregulares")}
                     value={`${q().irregular_percent.toFixed(1)}%`}
                     warn={q().irregular_percent > 8}
                   />
                   <QualityRow
-                    label="Quads deformes"
-                    value={q().poor_quads.toLocaleString()}
+                    label={t("Quads deformes")}
+                    value={fmtNumber(q().poor_quads)}
                     warn={q().folded_quads > 0}
                   />
                   <QualityRow
-                    label="Quads plegados"
-                    value={q().folded_quads.toLocaleString()}
+                    label={t("Quads plegados")}
+                    value={fmtNumber(q().folded_quads)}
                     warn={q().folded_quads > 0}
                   />
-                  <QualityRow label="Quads estirados" value={q().stretched_quads.toLocaleString()} />
-                  <QualityRow label="Desvío de ángulos" value={`${q().mean_angle_deviation.toFixed(1)}°`} />
+                  <QualityRow label={t("Quads estirados")} value={fmtNumber(q().stretched_quads)} />
+                  <QualityRow label={t("Desvío de ángulos")} value={`${q().mean_angle_deviation.toFixed(1)}°`} />
                   <Show when={q().max_distance_percent !== null}>
                     <QualityRow
-                      label="Distancia máx. a la original"
+                      label={t("Distancia máx. a la original")}
                       value={`${q().max_distance_percent!.toFixed(2)}%`}
                       warn={q().max_distance_percent! > 2}
                     />
@@ -233,7 +231,7 @@ export const RetopologyPanel: Component<RetopologyPanelProps> = (props) => {
             </Show>
 
             <Checkbox
-              label="Mostrar malla de quads"
+              label={t("Mostrar malla de quads")}
               checked={props.showQuadMesh}
               onChange={(checked) => props.onShowQuadMeshChange?.(checked)}
             />

@@ -2,6 +2,7 @@ import { Component } from "solid-js";
 import { Panel, Slider, Checkbox, Button } from "../ui";
 import * as Icons from "../icons";
 import { defaultLights, type LightSettings } from "../../lib/Viewer3D";
+import { t } from "../../lib/i18n";
 
 export interface LightsPanelProps {
   lights: LightSettings;
@@ -12,14 +13,13 @@ export interface LightsPanelProps {
 export const LightsPanel: Component<LightsPanelProps> = (props) => {
   const update = (partial: Partial<LightSettings>) => props.onChange?.({ ...props.lights, ...partial });
   return (
-    <Panel id="lights" title="Luces" icon={<Icons.Lightning size={14} />} defaultOpen>
+    <Panel id="lights" title={t("Luces")} icon={<Icons.Lightning size={14} />} defaultOpen>
       <div class="space-y-4 pt-1">
         <p class="text-xs text-text-muted leading-relaxed">
-          Mantén <span class="text-text">L</span> y arrastra con clic izquierdo en el visor: gira la luz principal alrededor
-          del modelo.
+          {t("Mantén")} <span class="text-text">L</span> {t("y arrastra con clic izquierdo en el visor: gira la luz principal alrededor del modelo.")}
         </p>
         <Slider
-          label="Dirección"
+          label={t("Dirección")}
           value={Math.round(props.lights.azimuth)}
           onChange={(v) => update({ azimuth: v })}
           min={-180}
@@ -28,7 +28,7 @@ export const LightsPanel: Component<LightsPanelProps> = (props) => {
           formatValue={(v) => `${v}°`}
         />
         <Slider
-          label="Altura"
+          label={t("Altura")}
           value={Math.round(props.lights.elevation)}
           onChange={(v) => update({ elevation: v })}
           min={-10}
@@ -37,7 +37,7 @@ export const LightsPanel: Component<LightsPanelProps> = (props) => {
           formatValue={(v) => `${v}°`}
         />
         <Slider
-          label="Intensidad"
+          label={t("Intensidad")}
           value={props.lights.intensity}
           onChange={(v) => update({ intensity: v })}
           min={0}
@@ -46,7 +46,7 @@ export const LightsPanel: Component<LightsPanelProps> = (props) => {
           formatValue={(v) => v.toFixed(1)}
         />
         <label class="flex items-center justify-between text-xs text-text-muted">
-          Color
+          {t("Color")}
           <input
             type="color"
             value={props.lights.color}
@@ -55,7 +55,7 @@ export const LightsPanel: Component<LightsPanelProps> = (props) => {
           />
         </label>
         <Slider
-          label="Relleno"
+          label={t("Relleno")}
           value={props.lights.fill}
           onChange={(v) => update({ fill: v })}
           min={0}
@@ -64,7 +64,7 @@ export const LightsPanel: Component<LightsPanelProps> = (props) => {
           formatValue={(v) => v.toFixed(1)}
         />
         <Slider
-          label="Ambiente"
+          label={t("Ambiente")}
           value={props.lights.ambient}
           onChange={(v) => update({ ambient: v })}
           min={0}
@@ -73,7 +73,7 @@ export const LightsPanel: Component<LightsPanelProps> = (props) => {
           formatValue={(v) => v.toFixed(1)}
         />
         <Slider
-          label="Reflejos del entorno"
+          label={t("Reflejos del entorno")}
           value={props.lights.environment}
           onChange={(v) => update({ environment: v })}
           min={0}
@@ -82,12 +82,12 @@ export const LightsPanel: Component<LightsPanelProps> = (props) => {
           formatValue={(v) => v.toFixed(1)}
         />
         <Checkbox
-          label="Luz desde la cámara"
+          label={t("Luz desde la cámara")}
           checked={props.lights.headlight}
           onChange={(headlight) => update({ headlight })}
         />
         <Button variant="ghost" fullWidth onClick={() => props.onChange?.({ ...defaultLights })}>
-          Restablecer luces
+          {t("Restablecer luces")}
         </Button>
       </div>
     </Panel>

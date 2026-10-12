@@ -8,6 +8,7 @@
 // floor ceil round sign. Los ángulos van en radianes.
 
 import type { P2 } from "./cad.ts";
+import { t as tr } from "./i18n.ts";
 
 type Node = { k: "num"; v: number } | { k: "var"; name: string } | { k: "neg"; a: Node } | { k: "bin"; op: string; a: Node; b: Node } | { k: "call"; f: string; args: Node[] };
 
@@ -43,7 +44,7 @@ function tokens(text: string): string[] {
   while (i < t.length) {
     re.lastIndex = i;
     const m = re.exec(t);
-    if (!m) throw new Error(`no entiendo «${t.slice(i).trim().slice(0, 12)}»`);
+    if (!m) throw new Error(tr("no entiendo «{texto}»", { texto: t.slice(i).trim().slice(0, 12) }));
     out.push(m[1] === "**" ? "^" : m[1]);
     i = re.lastIndex;
     while (i < t.length && /\s/.test(t[i])) i++;
@@ -58,8 +59,8 @@ export function parseFormula(text: string): Node {
   const peek = () => tk[i];
   const take = (want?: string) => {
     const t = tk[i++];
-    if (want && t !== want) throw new Error(`falta «${want}»`);
-    if (t === undefined) throw new Error("la fórmula está incompleta");
+    if (want && t !== want) throw new Error(tr("falta «{texto}»", { texto: want }));
+    if (t === undefined) throw new Error(tr("la fórmula está incompleta"));
     return t;
   };
   // sum := prod (('+'|'-') prod)*
@@ -108,7 +109,7 @@ export function parseFormula(text: string): Node {
     if (/^[\d.]/.test(t)) return { k: "num", v: Number(t) };
     if (/^[A-Za-z_]/.test(t)) {
       if (peek() === "(") {
-        if (!FUNCS[t]) throw new Error(`no conozco la función «${t}»`);
+        if (!FUNCS[t]) throw new Error(tr("no conozco la función «{nombre}»", { nombre: t }));
         take("(");
         const args = [sum()];
         while (peek() === ",") {
@@ -120,10 +121,10 @@ export function parseFormula(text: string): Node {
       }
       return { k: "var", name: t };
     }
-    throw new Error(`no esperaba «${t}»`);
+    throw new Error(tr("no esperaba «{texto}»", { texto: t }));
   };
   const root = sum();
-  if (i < tk.length) throw new Error(`sobra «${tk[i]}»`);
+  if (i < tk.length) throw new Error(tr("sobra «{texto}»", { texto: tk[i] }));
   return root;
 }
 
@@ -135,7 +136,7 @@ export function evalFormula(n: Node, vars: Record<string, number>): number {
     case "var": {
       if (n.name in vars) return vars[n.name];
       if (n.name in CONSTS) return CONSTS[n.name];
-      throw new Error(`no conozco «${n.name}»`);
+      throw new Error(tr("no conozco «{nombre}»", { nombre: n.name }));
     }
     case "neg":
       return -evalFormula(n.a, vars);
@@ -167,13 +168,13 @@ export interface CurveSpec {
  */
 export function sampleCurve(spec: CurveSpec, params: Record<string, number> = {}): P2[] | string {
   const n = Math.max(2, Math.min(500, Math.round(spec.samples)));
-  if (!(Number.isFinite(spec.from) && Number.isFinite(spec.to)) || spec.from === spec.to) return "El intervalo tiene que tener largo";
+  if (!(Number.isFinite(spec.from) && Number.isFinite(spec.to)) || spec.from === spec.to) return tr("El intervalo tiene que tener largo");
   let fx: Node, fy: Node | undefined;
   try {
     fx = parseFormula(spec.fx);
     if (spec.kind === "parametric") fy = parseFormula(spec.fy ?? "");
   } catch (e) {
-    return `Fórmula: ${(e as Error).message}`;
+    return tr("Fórmula: {error}", { error: (e as Error).message });
   }
   const out: P2[] = [];
   const v = spec.kind === "explicit" ? "x" : "t";
@@ -182,11 +183,11 @@ export function sampleCurve(spec: CurveSpec, params: Record<string, number> = {}
       const u = spec.from + ((spec.to - spec.from) * i) / (n - 1);
       const vars = { ...params, [v]: u };
       const p: P2 = spec.kind === "explicit" ? [u, evalFormula(fx, vars)] : [evalFormula(fx, vars), evalFormula(fy!, vars)];
-      if (!Number.isFinite(p[0]) || !Number.isFinite(p[1])) return `La fórmula no da un número en ${v} = ${+u.toFixed(6)}`;
+      if (!Number.isFinite(p[0]) || !Number.isFinite(p[1])) return tr("La fórmula no da un número en {v} = {u}", { v, u: +u.toFixed(6) });
       out.push(p);
     }
   } catch (e) {
-    return `Fórmula: ${(e as Error).message}`;
+    return tr("Fórmula: {error}", { error: (e as Error).message });
   }
   return out;
 }

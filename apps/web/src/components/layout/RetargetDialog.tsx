@@ -3,6 +3,7 @@ import { Button, Checkbox, NumberInput } from "../ui";
 import * as Icons from "../icons";
 import type { SkeletonBone } from "../../lib/presetAnimations";
 import type { RetargetMap } from "../../lib/retarget";
+import { t } from "../../lib/i18n";
 
 export interface RetargetRequest {
   /** De dónde viene el movimiento (nombre del archivo o del clip) */
@@ -45,7 +46,7 @@ export const RetargetDialog: Component<RetargetDialogProps> = (props) => {
     props.onConfirm({
       map: map(),
       rootMotion: rootMotion(),
-      name: name().trim() || "Animación importada",
+      name: name().trim() || t("Animación importada"),
       saveTemplate: saveTemplate(),
       range: [Math.min(first(), last()), Math.max(first(), last())],
     });
@@ -69,23 +70,27 @@ export const RetargetDialog: Component<RetargetDialogProps> = (props) => {
       class="fixed inset-0 z-50 flex items-center justify-center bg-bg-darker/70 backdrop-blur-sm p-4"
       onPointerDown={(e) => e.target === e.currentTarget && props.onCancel()}
     >
-      <div role="dialog" aria-label="Importar animación" class="w-full max-w-lg max-h-full flex flex-col rounded-lg border border-border bg-bg shadow-xl">
+      <div role="dialog" aria-label={t("Importar animación")} class="w-full max-w-lg max-h-full flex flex-col rounded-lg border border-border bg-bg shadow-xl">
         <div class="flex items-center justify-between px-4 h-11 border-b border-border shrink-0">
           <h2 class="flex items-center gap-2 text-sm font-semibold text-text">
             <Icons.Person size={16} class="text-accent" />
-            Importar animación
+            {t("Importar animación")}
           </h2>
-          <button class="w-7 h-7 flex items-center justify-center rounded text-text-muted hover:text-text hover:bg-surface/40" aria-label="Cancelar" onClick={props.onCancel}>
+          <button class="w-7 h-7 flex items-center justify-center rounded text-text-muted hover:text-text hover:bg-surface/40" aria-label={t("Cancelar")} onClick={props.onCancel}>
             <Icons.X size={14} />
           </button>
         </div>
         <div class="p-4 space-y-3 overflow-y-auto min-h-0">
           <p class="text-xs text-text-muted leading-relaxed">
-            {props.sourceName}: {props.source.length} articulaciones, {props.frames} cuadros a {props.fps} fps. Cada articulación del modelo apunta
-            como la del origen que tenga asignada; las proporciones y la pose de reposo pueden ser distintas.
+            {t("{name}: {joints} articulaciones, {frames} cuadros a {fps} fps. Cada articulación del modelo apunta como la del origen que tenga asignada; las proporciones y la pose de reposo pueden ser distintas.", {
+              name: props.sourceName,
+              joints: props.source.length,
+              frames: props.frames,
+              fps: props.fps,
+            })}
           </p>
           <label class="block space-y-1">
-            <span class="text-xs text-text-muted">Nombre del clip</span>
+            <span class="text-xs text-text-muted">{t("Nombre del clip")}</span>
             <input
               class="w-full px-2 py-1 rounded bg-surface/40 border border-border text-xs text-text outline-none focus:border-accent"
               value={name()}
@@ -94,7 +99,7 @@ export const RetargetDialog: Component<RetargetDialogProps> = (props) => {
           </label>
           <div class="grid grid-cols-2 gap-2">
             <NumberInput
-              label="Desde el cuadro"
+              label={t("Desde el cuadro")}
               value={first()}
               min={0}
               max={Math.max(0, props.frames - 1)}
@@ -102,7 +107,7 @@ export const RetargetDialog: Component<RetargetDialogProps> = (props) => {
               onChange={(v) => setFirst(Math.max(0, Math.min(props.frames - 1, Math.round(v))))}
             />
             <NumberInput
-              label="Hasta el cuadro"
+              label={t("Hasta el cuadro")}
               value={last()}
               min={0}
               max={Math.max(0, props.frames - 1)}
@@ -112,10 +117,12 @@ export const RetargetDialog: Component<RetargetDialogProps> = (props) => {
           </div>
           <div class="flex items-center justify-between text-xs">
             <span class="text-text-muted">
-              Mapeo: {mapped()} de {rows().length} articulaciones {props.fromTemplate ? "(plantilla guardada)" : "(automático)"}
+              {props.fromTemplate
+                ? t("Mapeo: {mapped} de {total} articulaciones (plantilla guardada)", { mapped: mapped(), total: rows().length })
+                : t("Mapeo: {mapped} de {total} articulaciones (automático)", { mapped: mapped(), total: rows().length })}
             </span>
             <button class="text-accent hover:underline" onClick={() => setMap(new Map())}>
-              Vaciar
+              {t("Vaciar")}
             </button>
           </div>
           <div class="rounded border border-border divide-y divide-border/60 max-h-72 overflow-y-auto">
@@ -134,22 +141,22 @@ export const RetargetDialog: Component<RetargetDialogProps> = (props) => {
                       setMap(next);
                     }}
                   >
-                    <option value="">(sin mover)</option>
+                    <option value="">{t("(sin mover)")}</option>
                     <For each={props.source}>{(b, k) => <option value={k()}>{b.name}</option>}</For>
                   </select>
                 </div>
               )}
             </For>
           </div>
-          <Checkbox label="Desplazar la raíz (si no, la animación queda en el lugar)" checked={rootMotion()} onChange={setRootMotion} />
-          <Checkbox label="Guardar este mapeo para los archivos con el mismo esqueleto" checked={saveTemplate()} onChange={setSaveTemplate} />
+          <Checkbox label={t("Desplazar la raíz (si no, la animación queda en el lugar)")} checked={rootMotion()} onChange={setRootMotion} />
+          <Checkbox label={t("Guardar este mapeo para los archivos con el mismo esqueleto")} checked={saveTemplate()} onChange={setSaveTemplate} />
         </div>
         <div class="flex justify-end gap-2 px-4 py-3 border-t border-border shrink-0">
           <Button size="sm" variant="ghost" onClick={props.onCancel}>
-            Cancelar
+            {t("Cancelar")}
           </Button>
           <Button size="sm" variant="primary" onClick={confirm} disabled={mapped() === 0}>
-            Crear clip
+            {t("Crear clip")}
           </Button>
         </div>
       </div>

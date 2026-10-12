@@ -1,5 +1,7 @@
+import { t, tn, tx, locale } from "./lib/i18n";
+import { tBackend } from "./lib/i18nBackend";
 import { Component, createEffect, createMemo, createSignal, on, onMount, onCleanup, Show, untrack, type JSX } from "solid-js";
-import { invoke as rawInvoke, Channel, type InvokeArgs, type InvokeOptions } from "@tauri-apps/api/core";
+import { invoke as tauriInvoke, Channel, type InvokeArgs, type InvokeOptions } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
@@ -458,6 +460,12 @@ const replayable = (cmd: string, args?: InvokeArgs) =>
   REPLAYABLE.has(cmd) || (cmd === "remove_object" && (args as { kind?: string } | undefined)?.kind === "quadmesh");
 
 /** `invoke` que además graba los comandos de geometría del paso deshacible en curso */
+/** Los errores del backend (texto en español) llegan en el idioma activo */
+const rawInvoke = <T,>(cmd: string, args?: InvokeArgs, options?: InvokeOptions): Promise<T> =>
+  tauriInvoke<T>(cmd, args, options).catch((e) => {
+    throw typeof e === "string" ? tBackend(e) : e;
+  });
+
 const invoke = <T,>(cmd: string, args?: InvokeArgs, options?: InvokeOptions): Promise<T> => {
   const recorder = recorders[recorders.length - 1];
   if (recorder && replayable(cmd, args)) recorder.push({ cmd, args: recordableArgs(args) });
@@ -519,10 +527,10 @@ export const App: Component = () => {
     const parts: { key: string; name: string; id?: PartId }[] = (cad.result()?.parts ?? []).map((p) => ({ key: `${p.id.feature}:${p.id.index}`, name: p.name, id: p.id }));
     // El ensamble: cada instancia en su lugar (STEP con nombres, 3MF con un objeto por instancia)
     const n = cad.committed()?.assembly?.instances.length ?? 0;
-    if (n > 0) parts.push({ key: "assembly", name: `Ensamble (${n} ${n === 1 ? "instancia" : "instancias"})` });
+    if (n > 0) parts.push({ key: "assembly", name: t("Ensamble ({count})", { count: tn(n, "{n} instancia", "{n} instancias") }) });
     // Un archivo por variante (nombre-variante.ext)
     const c = cad.committed()?.configurations?.length ?? 0;
-    if (c > 0) parts.push({ key: "configs", name: `Todas las configuraciones (${c + 1} archivos)` });
+    if (c > 0) parts.push({ key: "configs", name: t("Todas las configuraciones ({n} archivos)", { n: c + 1 }) });
     return parts;
   };
   const openExport = () => {
@@ -619,7 +627,7 @@ export const App: Component = () => {
 
   // State
   const [fps, setFps] = createSignal(0);
-  const [statusMessage, setStatusMessage] = createSignal("Listo - Importa un modelo para comenzar");
+  const [statusMessage, setStatusMessage] = createSignal(t("Listo - Importa un modelo para comenzar"));
   // En Diseñar la barra muestra atajos; los mensajes nuevos se ven unos segundos a la derecha
   const [freshStatus, setFreshStatus] = createSignal(false);
   let freshTimer: ReturnType<typeof setTimeout> | undefined;
@@ -643,7 +651,7 @@ export const App: Component = () => {
     const generation = progressGeneration;
     // Un aviso que llega después de terminar la tarea no vuelve a mostrar la barra
     channel.onmessage = (msg) => {
-      if (generation === progressGeneration) setProgress({ value: msg.percent, label: msg.message });
+      if (generation === progressGeneration) setProgress({ value: msg.percent, label: tBackend(msg.message) });
     };
     return channel;
   };
@@ -663,7 +671,7 @@ export const App: Component = () => {
   /** Malla actual del backend, en binario (sin JSON), con la estructura y
    * los materiales del archivo de origen */
   const fetchMeshData = () =>
-    busy("Cargando en el visor...", async () => {
+    busy(t("Cargando en el visor..."), async () => {
       const mesh = decodeMesh(await invoke<ArrayBuffer>("get_mesh_data"));
       await loadSceneAppearance();
       return mesh;
@@ -758,7 +766,7 @@ export const App: Component = () => {
   /** Avisa y devuelve `true` si otra tarea larga está en curso */
   const blockedByTask = () => {
     if (!isProcessing() && !progress() && !switching()) return false;
-    setStatusMessage("Hay un proceso en curso: espera a que termine");
+    setStatusMessage(t("Hay un proceso en curso: espera a que termine"));
     return true;
   };
   const [boneNames, setBoneNames] = createSignal<string[]>([]);
@@ -1015,18 +1023,18 @@ export const App: Component = () => {
     const names: Record<TextureExportKind, string> = {
       xcf: "GIMP",
       psd: "Photoshop / Krita",
-      png: "Imagen PNG",
-      layout: "Malla UV (PNG)",
+      png: t("Imagen PNG"),
+      layout: t("Malla UV (PNG)"),
     };
     const path = await save({ defaultPath: textureFileName(key, kind), filters: [{ name: names[kind], extensions: [ext] }] });
     if (!path) return;
     try {
       setIsProcessing(true);
-      setStatusMessage("Exportando textura...");
+      setStatusMessage(t("Exportando textura..."));
       await invoke("export_texture", { key, path, layoutOnly: kind === "layout" });
-      setStatusMessage(`Textura exportada: ${path}`);
+      setStatusMessage(t("Textura exportada: {path}", { path }));
     } catch (e) {
-      setStatusMessage(`Error: ${e}`);
+      setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
     } finally {
       setIsProcessing(false);
     }
@@ -1038,18 +1046,18 @@ export const App: Component = () => {
       if (!key) return;
       const path = await open({
         multiple: false,
-        filters: [{ name: "Imágenes y capas", extensions: ["xcf", "psd", "png", "jpg", "jpeg", "webp"] }],
+        filters: [{ name: t("Imágenes y capas"), extensions: ["xcf", "psd", "png", "jpg", "jpeg", "webp"] }],
       });
       if (!path || Array.isArray(path)) return;
       try {
         setIsProcessing(true);
-        setStatusMessage("Importando textura...");
+        setStatusMessage(t("Importando textura..."));
         await invoke("import_texture", { key, path });
-        done("Importar textura");
+        done(t("Importar textura"));
         await reloadTextures();
-        setStatusMessage("Textura reemplazada (las capas de la malla UV se ignoran)");
+        setStatusMessage(t("Textura reemplazada (las capas de la malla UV se ignoran)"));
       } catch (e) {
-        setStatusMessage(`Error: ${e}`);
+        setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
       } finally {
         setIsProcessing(false);
       }
@@ -1059,12 +1067,12 @@ export const App: Component = () => {
     const key = textureKey();
     if (!key) return;
     try {
-      setStatusMessage("Abriendo en GIMP...");
+      setStatusMessage(t("Abriendo en GIMP..."));
       const path = await invoke<string>("edit_texture_externally", { key, format: "xcf" });
       setExternalEdit({ key, lastUpdate: null });
-      setStatusMessage(`Editando ${path}: guarda en GIMP (Ctrl+S) y la textura se recarga sola`);
+      setStatusMessage(t("Editando {path}: guarda en GIMP (Ctrl+S) y la textura se recarga sola", { path }));
     } catch (e) {
-      setStatusMessage(`Error: ${e}`);
+      setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
     }
   };
 
@@ -1075,15 +1083,15 @@ export const App: Component = () => {
         await reloadTextures();
       } catch (e) {
         console.error("Texture reload error:", e);
-        setStatusMessage(`No se pudo recargar la textura desde GIMP: ${e}`);
+        setStatusMessage(t("No se pudo recargar la textura desde GIMP: {e}", { e: tBackend(String(e)) }));
         return;
       }
       const time = new Date().toLocaleTimeString();
       setExternalEdit((prev) => prev && { ...prev, lastUpdate: time });
-      setStatusMessage(`Textura recargada desde GIMP (${time})`);
+      setStatusMessage(t("Textura recargada desde GIMP ({time})", { time }));
     }),
     listen<{ message: string }>("texture-update-failed", (e) => {
-      setStatusMessage(`No se pudo recargar la textura: ${e.payload.message}`);
+      setStatusMessage(t("No se pudo recargar la textura: {e}", { e: tBackend(e.payload.message) }));
     }),
   ];
   onCleanup(() => unlistenTexture.forEach((p) => p.then((unlisten) => unlisten())));
@@ -1106,7 +1114,7 @@ export const App: Component = () => {
         setCheckerTexture(await decodeImage(await invoke<ArrayBuffer>("get_checker_texture")));
       } catch (e) {
         console.error("Checker texture error:", e);
-        setStatusMessage(`No se pudo generar el tablero de UV: ${e}`);
+        setStatusMessage(t("No se pudo generar el tablero de UV: {e}", { e: tBackend(String(e)) }));
         return;
       }
     }
@@ -1279,46 +1287,46 @@ export const App: Component = () => {
 
   const sendSceneEdit = async (d: SceneEdit) => {
     if (d.op === "remove") {
-      await busy(`Borrando ${d.name}...`, () => invoke("remove_scene_node", { node: d.node }));
+      await busy(t("Borrando {name}...", { name: d.name }), () => invoke("remove_scene_node", { node: d.node }));
     } else {
-      await busy(`Moviendo ${d.name}...`, () =>
+      await busy(t("Moviendo {name}...", { name: d.name }), () =>
         invoke("set_scene_node_transform", { node: d.node, translation: d.after.translation, rotation: d.after.rotation, scale: d.after.scale })
       );
     }
-    await afterSceneEdit(d.op === "remove" ? `Borraste ${d.name} del modelo` : `Moviste ${d.name}`);
+    await afterSceneEdit(d.op === "remove" ? t("Borraste {name} del modelo", { name: d.name }) : t("Moviste {name}", { name: d.name }));
   };
 
   const undoSceneEdit = async (d: SceneEdit) => {
-    await busy("Deshaciendo...", () => invoke("undo_scene_edit"));
-    await afterSceneEdit(d.op === "remove" ? `Volvió ${d.name}` : `${d.name} volvió a su lugar`);
+    await busy(t("Deshaciendo..."), () => invoke("undo_scene_edit"));
+    await afterSceneEdit(d.op === "remove" ? t("Volvió {name}", { name: d.name }) : t("{name} volvió a su lugar", { name: d.name }));
   };
 
   /** Borra la geometría del nodo (y de sus hijos): sale de la malla y de lo exportado */
   const deleteFileNode = async (index: number) => {
-    const name = sceneStructure()?.nodes[index]?.name || `nodo ${index}`;
+    const name = sceneStructure()?.nodes[index]?.name || t("nodo {n}", { n: index });
     try {
-      await history.execute(`Borrar ${name}`, { kind: "sceneEdit", data: { op: "remove", node: index, name } });
+      await history.execute(t("Borrar {name}", { name }), { kind: "sceneEdit", data: { op: "remove", node: index, name } });
     } catch (e) {
-      setStatusMessage(`Error: ${e}`);
+      setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
       return;
     }
     const removed = new Set(nodeSubtree(index));
     setHiddenFileNodes((list) => list.filter((n) => !removed.has(n)));
     if (selectedFileNode() !== undefined && removed.has(selectedFileNode()!)) setSelectedFileNode(undefined);
-    setStatusMessage(`${name} borrado del modelo (también de lo que se exporte). Ctrl+Z lo trae de vuelta`);
+    setStatusMessage(t("{name} borrado del modelo (también de lo que se exporte). Ctrl+Z lo trae de vuelta", { name }));
   };
 
   /** Transformación local de un nodo del archivo (pestaña Objeto) */
   const transformFileNode = async (index: number, after: NodeTransform) => {
     const node = sceneStructure()?.nodes[index];
     if (!node) return;
-    const name = node.name || `nodo ${index}`;
+    const name = node.name || t("nodo {n}", { n: index });
     const before: NodeTransform = { translation: node.translation, rotation: node.rotation, scale: node.scale };
     try {
-      await history.execute(`Mover ${name}`, { kind: "sceneEdit", data: { op: "transform", node: index, name, before, after } });
-      setStatusMessage(`${name}: transformación cambiada (el rig y la retopología se descartan)`);
+      await history.execute(t("Mover {name}", { name }), { kind: "sceneEdit", data: { op: "transform", node: index, name, before, after } });
+      setStatusMessage(t("{name}: transformación cambiada (el rig y la retopología se descartan)", { name }));
     } catch (e) {
-      setStatusMessage(`Error: ${e}`);
+      setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
     }
   };
 
@@ -1338,7 +1346,7 @@ export const App: Component = () => {
       label: PLANE_LABELS[id],
       visible: cadUi.showPlanes() && !cadUi.hiddenPlanes().includes(id),
       selected: picks.some((p) => p.kind === "plane" && p.plane === id),
-      hint: "Plano base del diseño",
+      hint: t("Plano base del diseño"),
     }));
     doc.features.forEach((f, i) => {
       const kind = f.kind.type;
@@ -1354,7 +1362,7 @@ export const App: Component = () => {
         deletable: true,
         muted,
         error: state?.state === "error",
-        hint: state?.state === "error" ? state.message : muted ? (f.suppressed ? "Suprimida" : "Después de la barra de retroceso") : undefined,
+        hint: state?.state === "error" ? state.message : muted ? (f.suppressed ? t("Suprimida") : t("Después de la barra de retroceso")) : undefined,
       });
     });
     return { planes, featureTree, featureCount: doc.features.length };
@@ -1404,7 +1412,7 @@ export const App: Component = () => {
         selected: false,
         readonly: true,
         children: [],
-        hint: isCadObject(o) ? "Se rehace sola si la pieza cambia en el diseño" : undefined,
+        hint: isCadObject(o) ? t("Se rehace sola si la pieza cambia en el diseño") : undefined,
       }));
       if (isCadObject(o)) {
         const i = parts.findIndex((p) => partKey(p.id) === partKey(o.source.part));
@@ -1424,7 +1432,14 @@ export const App: Component = () => {
             readonly: true,
             deletable: false,
             struck: true,
-            hint: `${replaced.from.length > 1 ? "Unida con otras" : "Partida"}${into.length ? ` en ${into.join(", ")}` : ""}: clic elige ${into.length > 1 ? "esas" : "esa"}`,
+            hint: (() => {
+              const joined = replaced.from.length > 1;
+              const n = into.length;
+              if (n === 0) return joined ? t("Unida con otras: clic elige esa") : t("Partida: clic elige esa");
+              const list = into.join(", ");
+              if (n === 1) return joined ? t("Unida con otras en {list}: clic elige esa", { list }) : t("Partida en {list}: clic elige esa", { list });
+              return joined ? t("Unida con otras en {list}: clic elige esas", { list }) : t("Partida en {list}: clic elige esas", { list });
+            })(),
           }];
         }
         if (!view && !materialized(o, active)) return [];
@@ -1434,7 +1449,7 @@ export const App: Component = () => {
           label: o.name,
           active: isActive,
           modifications,
-          meshLabel: "Malla generada",
+          meshLabel: t("Malla generada"),
           selected: isActive || extraObjects().includes(o.id) || (!!view && pickedParts().has(partKey(view.id))),
           visible: inDesign() ? !view || !partHidden(doc, view) : isActive ? viewSettings().showMesh : !hiddenGhosts().includes(o.id),
           readonly: inDesign() ? !view : !isActive && !o.ui,
@@ -1442,8 +1457,8 @@ export const App: Component = () => {
           color: view ? partColor(doc, view, i) : undefined,
           muted: !view,
           hint: view
-            ? `Pieza del diseño · ${(view.volume / 1000).toLocaleString("es", { maximumFractionDigits: 2 })} cm³`
-            : "Ya no está en el diseño: queda la última malla",
+            ? t("Pieza del diseño · {vol} cm³", { vol: (view.volume / 1000).toLocaleString(locale(), { maximumFractionDigits: 2 }) })
+            : t("Ya no está en el diseño: queda la última malla"),
         }];
       }
       return [{
@@ -1456,7 +1471,7 @@ export const App: Component = () => {
         visible: isActive ? viewSettings().showMesh : !hiddenGhosts().includes(o.id),
         readonly: !isActive && !o.ui,
         deletable: true,
-        hint: isActive ? undefined : "Clic para trabajar con este objeto",
+        hint: isActive ? undefined : t("Clic para trabajar con este objeto"),
       }];
     });
   };
@@ -1488,14 +1503,14 @@ export const App: Component = () => {
   const activateObject = (id: number, ensureMesh = !inDesign()) =>
     (switchingObject = switchingObject.then(async () => {
       if (id !== activeObjectId()) {
-        if (operations > 0) return void setStatusMessage("Espera a que termine la operación para cambiar de objeto");
+        if (operations > 0) return void setStatusMessage(t("Espera a que termine la operación para cambiar de objeto"));
         const current = activeObjectId();
         const ui = projectUi(false);
         const saved = history.save();
         try {
-          await busy("Cambiando de objeto...", () => invoke("object_activate", { id }));
+          await busy(t("Cambiando de objeto..."), () => invoke("object_activate", { id }));
         } catch (e) {
-          return void setStatusMessage(`Error: ${e}`);
+          return void setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
         }
         const target = objects().find((o) => o.id === id);
         setObjects((list) =>
@@ -1556,7 +1571,7 @@ export const App: Component = () => {
     try {
       await invoke("object_remove", { id });
     } catch (e) {
-      return setStatusMessage(`Error: ${e}`);
+      return setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
     }
     const was = objects().find((o) => o.id === id);
     if (was?.history) dropSnapshotsOf(was.history);
@@ -1592,18 +1607,18 @@ export const App: Component = () => {
     if (!parts.some((p) => partKey(p.id) === partKey(object.source.part))) return;
     let r: { changed: boolean; hash: string; info: MeshInfo | null };
     try {
-      r = await busy(`Preparando la malla de ${object.name}...`, () =>
+      r = await busy(t("Preparando la malla de {name}...", { name: object.name }), () =>
         invoke("cad_part_to_model", { part: object.source.part, known: object.source.hash ?? null, onProgress: progressChannel() })
       );
     } catch (e) {
-      return setStatusMessage(`Error: ${e}`);
+      return setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
     }
     if (!r.changed || !r.info) return;
     const first = !object.source.hash;
     setObjects((list) => list.map((o) => (o.id === object.id && isCadObject(o) ? { ...o, source: { ...o.source, hash: r.hash } } : o)));
     setSwitching(true);
     try {
-      if (first) await showNewModel(r.info, `Malla de ${object.name}`);
+      if (first) await showNewModel(r.info, t("Malla de {name}", { name: object.name }));
       else await replayModifications(r.info);
       setFileName(object.name);
     } finally {
@@ -1626,7 +1641,7 @@ export const App: Component = () => {
     // Lo último que dijeron los pasos de Fabricar (el panel muestra eso)
     let subdivided: TauriSubdivideResult | undefined;
     try {
-      await busy("Rehaciendo las modificaciones...", async () => {
+      await busy(t("Rehaciendo las modificaciones..."), async () => {
         for (const node of history.trail()) {
           const step = node.step;
           if (step?.kind === "placement") {
@@ -1650,7 +1665,7 @@ export const App: Component = () => {
         }
       });
     } catch (e) {
-      setStatusMessage(`El diseño cambió y no se pudo rehacer todo: ${e}`);
+      setStatusMessage(t("El diseño cambió y no se pudo rehacer todo: {e}", { e: tBackend(String(e)) }));
     }
     for (const node of history.nodes()) {
       if (node.step?.kind !== "snapshot" || node.milestone) continue;
@@ -1661,7 +1676,7 @@ export const App: Component = () => {
       }
     }
     history.seal((step) => step.kind === "snapshot");
-    history.milestone("Malla regenerada del diseño");
+    history.milestone(t("Malla regenerada del diseño"));
     // La interfaz relee del backend lo que quedó (malla, quads, esqueleto, pesos)
     await restoreProjectUi(projectUi(false), true);
     // Las cantidades guardadas en la interfaz son de la malla vieja: se cuentan en la nueva
@@ -1673,7 +1688,7 @@ export const App: Component = () => {
     }));
     if (meshAnalysis()) setMeshAnalysis(await invoke<TauriPrint3dAnalysis>("analyze_print3d").catch(() => undefined));
     if (subdivideResult()) setSubdivideResult(subdivided);
-    if (count > 0 || hadWeights) setStatusMessage(`El diseño cambió: malla nueva con ${count} modificación${count === 1 ? "" : "es"} rehecha${count === 1 ? "" : "s"}`);
+    if (count > 0 || hadWeights) setStatusMessage(count === 1 ? t("El diseño cambió: malla nueva con 1 modificación rehecha") : t("El diseño cambió: malla nueva con {n} modificaciones rehechas", { n: count }));
   };
 
   // Los demás objetos se ven en gris en el visor (los que ya tienen malla y no se ocultaron)
@@ -1864,8 +1879,8 @@ export const App: Component = () => {
 
   const swapSnapshot = async (id: number, side: "before" | "after") => {
     const ui = snapshotUi.get(id);
-    if (!ui) throw new Error("la copia para deshacer ya no está");
-    await busy(side === "before" ? "Deshaciendo..." : "Rehaciendo...", () => invoke("swap_snapshot", { id }));
+    if (!ui) throw new Error(t("la copia para deshacer ya no está"));
+    await busy(side === "before" ? t("Deshaciendo...") : t("Rehaciendo..."), () => invoke("swap_snapshot", { id }));
     await restoreProjectUi(ui[side], true);
   };
 
@@ -1889,124 +1904,126 @@ export const App: Component = () => {
     // Con un sketch abierto se deshace dentro del sketch
     if (inDesign()) return cadUi.session() ? cadUi.undoSketch() : cad.undo();
     if (cloudEditing()) return void scanCloud.history(false);
-    if (operations > 0) return setStatusMessage("Espera a que termine la operación para deshacer");
-    void history.undo().catch((e) => setStatusMessage(`No se pudo deshacer: ${e}`));
+    if (operations > 0) return setStatusMessage(t("Espera a que termine la operación para deshacer"));
+    void history.undo().catch((e) => setStatusMessage(t("No se pudo deshacer: {e}", { e: tBackend(String(e)) })));
   };
   const redo = () => {
     if (inDesign()) return cadUi.session() ? cadUi.redoSketch() : cad.redo();
     if (cloudEditing()) return void scanCloud.history(true);
-    if (operations > 0) return setStatusMessage("Espera a que termine la operación para rehacer");
-    void history.redo().catch((e) => setStatusMessage(`No se pudo rehacer: ${e}`));
+    if (operations > 0) return setStatusMessage(t("Espera a que termine la operación para rehacer"));
+    void history.redo().catch((e) => setStatusMessage(t("No se pudo rehacer: {e}", { e: tBackend(String(e)) })));
   };
 
   // Shortcuts
   const shortcuts = createShortcutManager();
 
   const shortcutDefs: ShortcutDef[] = [
-    { key: "s", ctrl: true, action: () => handleSaveProject(), description: "Guardar proyecto" },
-    { key: "s", ctrl: true, shift: true, action: () => handleSaveProject(true), description: "Guardar proyecto como" },
-    { key: "n", ctrl: true, action: () => handleNewProject(), description: "Proyecto nuevo" },
-    { key: "o", ctrl: true, action: () => handleOpenProject(), description: "Abrir proyecto" },
-    { key: "i", ctrl: true, action: () => handleLoad(), description: "Importar modelo" },
-    { key: "z", ctrl: true, action: () => undo(), description: "Deshacer" },
-    { key: "z", ctrl: true, shift: true, action: () => redo(), description: "Rehacer" },
-    { key: "q", action: () => useTool("select"), description: "Seleccionar" },
+    { key: "s", ctrl: true, action: () => handleSaveProject(), get description() { return t("Guardar proyecto"); } },
+    { key: "s", ctrl: true, shift: true, action: () => handleSaveProject(true), get description() { return t("Guardar proyecto como"); } },
+    { key: "n", ctrl: true, action: () => handleNewProject(), get description() { return t("Proyecto nuevo"); } },
+    { key: "o", ctrl: true, action: () => handleOpenProject(), get description() { return t("Abrir proyecto"); } },
+    { key: "i", ctrl: true, action: () => handleLoad(), get description() { return t("Importar modelo"); } },
+    { key: "z", ctrl: true, action: () => undo(), get description() { return t("Deshacer"); } },
+    { key: "z", ctrl: true, shift: true, action: () => redo(), get description() { return t("Rehacer"); } },
+    { key: "q", action: () => useTool("select"), get description() { return t("Seleccionar"); } },
     // Sobre el modelo, G/R/S eligen el gizmo. Sobre el esqueleto, como en
     // Blender, G y R son operaciones modales sobre la articulación
     // seleccionada (el mouse mueve, clic confirma, clic derecho/Esc cancela)
     {
       key: "g",
       action: () => (toolCtx() === "object" ? useTool("move") : viewerRef?.startModal("grab")),
-      description: "Mover (modelo o articulación)",
+      get description() { return t("Mover (modelo o articulación)"); },
     },
     {
       key: "r",
       action: () => (toolCtx() === "object" ? useTool("rotate") : viewerRef?.startModal("rotate")),
-      description: "Rotar (modelo, o pose de prueba)",
+      get description() { return t("Rotar (modelo, o pose de prueba)"); },
     },
-    { key: "s", action: () => useTool("scale"), description: "Escalar (modelo o esqueleto entero)" },
-    { key: "m", action: () => useTool("measure"), description: "Medir" },
-    { key: "Home", action: () => viewerRef?.resetView(), description: "Ver todo" },
+    { key: "s", action: () => useTool("scale"), get description() { return t("Escalar (modelo o esqueleto entero)"); } },
+    { key: "m", action: () => useTool("measure"), get description() { return t("Medir"); } },
+    { key: "Home", action: () => viewerRef?.resetView(), get description() { return t("Ver todo"); } },
     {
       key: " ",
       action: () =>
         animating() ? setPlaying(!playing()) : showPlayback() ? togglePreview() : viewerRef?.resetView(),
-      description: "Reproducir / ver todo",
+      get description() { return t("Reproducir / ver todo"); },
     },
-    { key: "i", action: () => animating() && handleInsertKey(), description: "Insertar key" },
+    { key: "i", action: () => animating() && handleInsertKey(), get description() { return t("Insertar key"); } },
     {
       key: "x",
       action: () => (cloudEditing() ? scanCloud.deleteSelection() : animating() && handleDeleteKeys()),
-      description: "Borrar keys / puntos seleccionados",
+      get description() { return t("Borrar keys / puntos seleccionados"); },
     },
     {
       key: "Delete",
       action: () => (cloudEditing() ? scanCloud.deleteSelection() : animating() && handleDeleteKeys()),
-      description: "Borrar keys / puntos seleccionados",
+      get description() { return t("Borrar keys / puntos seleccionados"); },
     },
-    { key: "i", ctrl: true, action: () => cloudEditing() && scanCloud.select("invert"), description: "Invertir la selección de la nube" },
-    { key: "ArrowLeft", action: () => animating() && stepFrame(-1), description: "Cuadro anterior" },
-    { key: "ArrowRight", action: () => animating() && stepFrame(1), description: "Cuadro siguiente" },
-    { key: "ArrowLeft", shift: true, action: () => animating() && stepFrame(-Infinity), description: "Al inicio" },
-    { key: "ArrowRight", shift: true, action: () => animating() && stepFrame(Infinity), description: "Al final" },
-    { key: ".", action: () => viewerRef?.focusSelection(), description: "Centrar en la selección" },
+    { key: "i", ctrl: true, action: () => cloudEditing() && scanCloud.select("invert"), get description() { return t("Invertir la selección de la nube"); } },
+    { key: "ArrowLeft", action: () => animating() && stepFrame(-1), get description() { return t("Cuadro anterior"); } },
+    { key: "ArrowRight", action: () => animating() && stepFrame(1), get description() { return t("Cuadro siguiente"); } },
+    { key: "ArrowLeft", shift: true, action: () => animating() && stepFrame(-Infinity), get description() { return t("Al inicio"); } },
+    { key: "ArrowRight", shift: true, action: () => animating() && stepFrame(Infinity), get description() { return t("Al final"); } },
+    { key: ".", action: () => viewerRef?.focusSelection(), get description() { return t("Centrar en la selección"); } },
     {
       key: "f",
       action: () => (paintSettings() ? viewerRef?.startModal("radius") : viewerRef?.focusSelection()),
-      description: "Radio del pincel / centrar",
+      get description() { return t("Radio del pincel / centrar"); },
     },
-    { key: "f", shift: true, action: () => viewerRef?.startModal("strength"), description: "Intensidad del pincel" },
-    { key: "n", action: () => setShowContextPanel(!showContextPanel()), description: "Mostrar/ocultar panel" },
+    { key: "f", shift: true, action: () => viewerRef?.startModal("strength"), get description() { return t("Intensidad del pincel"); } },
+    { key: "n", action: () => setShowContextPanel(!showContextPanel()), get description() { return t("Mostrar/ocultar panel"); } },
     {
       key: "z",
       alt: true,
       action: () => setViewSettings((prev) => ({ ...prev, xray: !prev.xray })),
-      description: "Rayos X",
+      get description() { return t("Rayos X"); },
     },
-    { key: "1", action: () => viewerRef?.setView("front"), description: "Vista frontal" },
-    { key: "3", action: () => viewerRef?.setView("right"), description: "Vista derecha" },
-    { key: "7", action: () => viewerRef?.setView("top"), description: "Vista superior" },
-    { key: "1", ctrl: true, action: () => viewerRef?.setView("back"), description: "Vista trasera" },
-    { key: "3", ctrl: true, action: () => viewerRef?.setView("left"), description: "Vista izquierda" },
-    { key: "7", ctrl: true, action: () => viewerRef?.setView("bottom"), description: "Vista inferior" },
-    { key: "b", action: () => useTool("paint"), description: "Pintar pesos" },
+    { key: "1", action: () => viewerRef?.setView("front"), get description() { return t("Vista frontal"); } },
+    { key: "3", action: () => viewerRef?.setView("right"), get description() { return t("Vista derecha"); } },
+    { key: "7", action: () => viewerRef?.setView("top"), get description() { return t("Vista superior"); } },
+    { key: "1", ctrl: true, action: () => viewerRef?.setView("back"), get description() { return t("Vista trasera"); } },
+    { key: "3", ctrl: true, action: () => viewerRef?.setView("left"), get description() { return t("Vista izquierda"); } },
+    { key: "7", ctrl: true, action: () => viewerRef?.setView("bottom"), get description() { return t("Vista inferior"); } },
+    { key: "b", action: () => useTool("paint"), get description() { return t("Pintar pesos"); } },
     // Pose (Animar): selección, reiniciar, copiar y pegar
     {
       key: "a",
       action: () => (cloudEditing() ? scanCloud.select("all") : rigging() && handleSelectCommand("all")),
-      description: "Seleccionar todo",
+      get description() { return t("Seleccionar todo"); },
     },
     {
       key: "a",
       alt: true,
       action: () => (cloudEditing() ? scanCloud.select("none") : rigging() && handleSelectCommand("none")),
-      description: "No seleccionar nada",
+      get description() { return t("No seleccionar nada"); },
     },
-    { key: "[", action: () => rigging() && handleSelectCommand("parent"), description: "Seleccionar el padre" },
-    { key: "{", shift: true, action: () => rigging() && handleSelectCommand("parent", true), description: "Sumar el padre" },
-    { key: "]", action: () => rigging() && handleSelectCommand("children"), description: "Seleccionar los hijos" },
-    { key: "}", shift: true, action: () => rigging() && handleSelectCommand("children", true), description: "Sumar los descendientes" },
-    { key: "m", ctrl: true, shift: true, action: () => rigging() && handleSelectCommand("mirror"), description: "Seleccionar el espejo" },
-    { key: "g", shift: true, action: () => rigging() && handleSelectCommand("group"), description: "Seleccionar el grupo" },
-    { key: "r", alt: true, action: () => animating() && handleResetPose("rotation"), description: "Giro en reposo" },
-    { key: "g", alt: true, action: () => animating() && handleResetPose("translation"), description: "Posición de reposo" },
+    { key: "[", action: () => rigging() && handleSelectCommand("parent"), get description() { return t("Seleccionar el padre"); } },
+    { key: "{", shift: true, action: () => rigging() && handleSelectCommand("parent", true), get description() { return t("Sumar el padre"); } },
+    { key: "]", action: () => rigging() && handleSelectCommand("children"), get description() { return t("Seleccionar los hijos"); } },
+    { key: "}", shift: true, action: () => rigging() && handleSelectCommand("children", true), get description() { return t("Sumar los descendientes"); } },
+    { key: "m", ctrl: true, shift: true, action: () => rigging() && handleSelectCommand("mirror"), get description() { return t("Seleccionar el espejo"); } },
+    { key: "g", shift: true, action: () => rigging() && handleSelectCommand("group"), get description() { return t("Seleccionar el grupo"); } },
+    { key: "r", alt: true, action: () => animating() && handleResetPose("rotation"), get description() { return t("Giro en reposo"); } },
+    { key: "g", alt: true, action: () => animating() && handleResetPose("translation"), get description() { return t("Posición de reposo"); } },
     {
       key: "e",
       ctrl: true,
       action: () => (animating() ? toggleRigEditor() : inSkeletonStep() && toggleSkeletonEditor()),
-      description: "Editor de pose y rig, o constructor de cuerpo",
+      get description() { return t("Editor de pose y rig, o constructor de cuerpo"); },
     },
-    { key: "c", ctrl: true, action: () => animating() && handleCopyPose(), description: "Copiar pose" },
-    { key: "v", ctrl: true, action: () => animating() && handlePastePose(false), description: "Pegar pose" },
-    { key: "v", ctrl: true, shift: true, action: () => animating() && handlePastePose(true), description: "Pegar pose espejada" },
+    { key: "c", ctrl: true, action: () => animating() && handleCopyPose(), get description() { return t("Copiar pose"); } },
+    { key: "v", ctrl: true, action: () => animating() && handlePastePose(false), get description() { return t("Pegar pose"); } },
+    { key: "v", ctrl: true, shift: true, action: () => animating() && handlePastePose(true), get description() { return t("Pegar pose espejada"); } },
   ];
 
 
   // Para la pestaña de atajos del panel derecho
-  const keyName = (key: string) => (key === " " ? "Espacio" : key.length === 1 ? key.toUpperCase() : key);
+  const keyName = (key: string) => (key === " " ? t("Espacio") : key.length === 1 ? key.toUpperCase() : key);
   const shortcutHints = shortcutDefs.map((d) => ({
     keys: [d.ctrl && "Ctrl", d.shift && "Shift", d.alt && "Alt", keyName(d.key)].filter(Boolean).join("+"),
-    description: d.description,
+    get description() {
+      return d.description;
+    },
   }));
 
   // Load presets on mount
@@ -2037,7 +2054,7 @@ export const App: Component = () => {
       setSupportedFormats(formats);
     } catch (e) {
       console.error("Error loading presets:", e);
-      setStatusMessage("Error conectando con el backend");
+      setStatusMessage(t("Error conectando con el backend"));
     }
   });
 
@@ -2067,14 +2084,14 @@ export const App: Component = () => {
 
       const extensions = formats.import.flatMap((f) => f.extensions);
       const selected = await open({
-        title: opts.projects ? "Abrir un proyecto o importar un modelo 3D" : "Importar modelo 3D (con sus texturas, si vienen aparte)",
+        title: opts.projects ? t("Abrir un proyecto o importar un modelo 3D") : t("Importar modelo 3D (con sus texturas, si vienen aparte)"),
         multiple: true,
         filters: [
           {
-            name: opts.projects ? "Proyectos, modelos 3D y texturas" : "Modelos 3D y texturas",
+            name: opts.projects ? t("Proyectos, modelos 3D y texturas") : t("Modelos 3D y texturas"),
             extensions: [...(opts.projects ? ["pinocchio"] : []), ...extensions, ...TEXTURE_FILE_EXTENSIONS],
           },
-          ...(opts.projects ? [{ name: "Proyecto de Pinocchio", extensions: ["pinocchio"] }] : []),
+          ...(opts.projects ? [{ name: t("Proyecto de Pinocchio"), extensions: ["pinocchio"] }] : []),
           ...formats.import.map((f) => ({
             name: f.name,
             extensions: f.extensions,
@@ -2092,41 +2109,41 @@ export const App: Component = () => {
       }
       const models = files.filter((f) => extensions.includes(extensionOf(f)));
       if (models.length !== 1) {
-        setStatusMessage(models.length === 0 ? "Elige también el modelo 3D, no solo las texturas" : "Elige un solo modelo 3D (las texturas pueden ser varias)");
+        setStatusMessage(models.length === 0 ? t("Elige también el modelo 3D, no solo las texturas") : t("Elige un solo modelo 3D (las texturas pueden ser varias)"));
         return;
       }
       const filePath = models[0];
       const textures = files.filter((f) => f !== filePath && TEXTURE_FILE_EXTENSIONS.includes(extensionOf(f)));
       const name = filePath.split(/[\\/]/).pop() ?? filePath;
-      setStatusMessage(`Importando ${name}...`);
+      setStatusMessage(t("Importando {name}...", { name }));
 
       // El modelo importado es un objeto nuevo de la escena (los demás quedan)
       const target = await objectForNewModel(name);
       setSwitching(true);
       let info: MeshInfo;
       try {
-        info = await busy(`Importando ${name}...`, () =>
+        info = await busy(t("Importando {name}...", { name }), () =>
           invoke<MeshInfo>("import_model", { path: filePath, textures, onProgress: progressChannel() })
         );
       } catch (e) {
         if (target.created) await removeObject(target.id);
         throw e;
       }
-      await showNewModel(info, `Importar ${name}`);
+      await showNewModel(info, t("Importar {name}", { name }));
       // El nombre cambia solo si la importación salió bien
       setFileName(name);
       const attached = info.textures ?? [];
       const skipped = info.textures_skipped ?? [];
       if (attached.length > 0 || skipped.length > 0) {
         const parts = [];
-        if (attached.length > 0) parts.push(`${attached.length === 1 ? "1 textura puesta" : `${attached.length} texturas puestas`} (${attached.join("; ")})`);
-        if (skipped.length > 0) parts.push(`sin usar: ${skipped.join("; ")}`);
-        setStatusMessage(`Modelo cargado: ${parts.join(" · ")}`);
+        if (attached.length > 0) parts.push(`${attached.length === 1 ? t("1 textura puesta") : t("{n} texturas puestas", { n: attached.length })} (${attached.join("; ")})`);
+        if (skipped.length > 0) parts.push(t("sin usar: {list}", { list: skipped.join("; ") }));
+        setStatusMessage(t("Modelo cargado: {parts}", { parts: parts.join(" · ") }));
       }
       pipeline.setActiveStep(opts.then ?? "structure");
     } catch (e) {
       console.error("Import error:", e);
-      setStatusMessage(`Error: ${e}`);
+      setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
       setProgress(undefined);
     } finally {
       setSwitching(false);
@@ -2141,7 +2158,7 @@ export const App: Component = () => {
     try {
       let info: MeshInfo;
       try {
-        info = await busy("Creando el modelo del escáner...", () =>
+        info = await busy(t("Creando el modelo del escáner..."), () =>
           invoke<MeshInfo>(fromCloud ? "scan_cloud_create_model" : "scanner_create_model", { settings, onProgress: progressChannel() })
         );
       } catch (e) {
@@ -2151,10 +2168,10 @@ export const App: Component = () => {
       setFileName("Escaneo");
       // Se ve el modelo nuevo; la nube sigue en edición por si hay que retocarla
       scanCloud.setShown(false);
-      await showNewModel(info, "Escanear");
+      await showNewModel(info, t("Escanear"));
     } catch (e) {
       console.error("Scan model error:", e);
-      setStatusMessage(`Error: ${e}`);
+      setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
     } finally {
       setIsProcessing(false);
     }
@@ -2174,7 +2191,11 @@ export const App: Component = () => {
     setMeshInfo({ vertices: info.num_vertices, faces: info.num_faces, format: info.format });
 
     setStatusMessage(
-      `Modelo cargado: ${info.num_vertices.toLocaleString()} vertices, ${info.num_faces.toLocaleString()} caras (${info.format})`
+      t("Modelo cargado: {vertices} vertices, {faces} caras ({format})", {
+        vertices: info.num_vertices.toLocaleString(),
+        faces: info.num_faces.toLocaleString(),
+        format: info.format,
+      })
     );
 
     // Reset other states
@@ -2198,7 +2219,7 @@ export const App: Component = () => {
     setCanUndoPrintScale(false);
 
     if (keepClips) {
-      setStatusMessage("Modelo cargado: calcula los pesos en Esqueleto para ver las animaciones sobre él");
+      setStatusMessage(t("Modelo cargado: calcula los pesos en Esqueleto para ver las animaciones sobre él"));
     }
 
     // El archivo trae esqueleto y pesos: queda listo para animar sus clips
@@ -2214,9 +2235,14 @@ export const App: Component = () => {
       setClips(imported);
       setActiveClipId(imported[0]?.id);
       pipeline.markCompleted("skeleton");
-      const animations = imported.length === 1 ? "1 animación" : `${imported.length} animaciones`;
+      const animations = tn(imported.length, "{n} animación", "{n} animaciones");
       setStatusMessage(
-        `Modelo cargado: ${info.num_vertices.toLocaleString()} vertices, esqueleto de ${info.rig.num_bones} huesos y ${animations} (${info.format})`
+        t("Modelo cargado: {vertices} vertices, esqueleto de {bones} huesos y {animations} ({format})", {
+          vertices: info.num_vertices.toLocaleString(),
+          bones: info.rig.num_bones,
+          animations,
+          format: info.format,
+        })
       );
     }
 
@@ -2248,7 +2274,7 @@ export const App: Component = () => {
 
         const preset = skeletonPresets().find((p) => p.id === presetId);
         if (preset) {
-          setStatusMessage(`Esqueleto seleccionado: ${preset.name} (${preset.numBones} huesos)`);
+          setStatusMessage(t("Esqueleto seleccionado: {name} ({n} huesos)", { name: preset.name, n: preset.numBones }));
         }
 
         setAutorigComplete(false);
@@ -2257,7 +2283,7 @@ export const App: Component = () => {
         setBoneEditMode(false);
       } catch (e) {
         console.error("Skeleton error:", e);
-        setStatusMessage(`Error: ${e}`);
+        setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
         // La lista vuelve a mostrar la plantilla que sigue puesta
         if (request === skeletonRequest) setSelectedSkeleton(previous);
       }
@@ -2267,14 +2293,14 @@ export const App: Component = () => {
     undoable(async (done) => {
       try {
         setIsProcessing(true);
-        setProgress({ value: 0, label: "Preparando..." });
-        setStatusMessage("Ejecutando autorig...");
+        setProgress({ value: 0, label: t("Preparando...") });
+        setStatusMessage(t("Ejecutando autorig..."));
 
         const config = autorigConfig();
 
         const onProgress = new Channel<Progress>();
         onProgress.onmessage = (msg) => {
-          setProgress({ value: msg.percent, label: msg.message });
+          setProgress({ value: msg.percent, label: tBackend(msg.message) });
         };
 
         await invoke("run_autorig", {
@@ -2285,9 +2311,9 @@ export const App: Component = () => {
           },
           onProgress,
         });
-        done("Calcular pesos");
+        done(t("Calcular pesos"));
 
-        setProgress({ value: 100, label: "Cargando pesos en el visor..." });
+        setProgress({ value: 100, label: t("Cargando pesos en el visor...") });
         const viewerWeights = decodeWeights(await invoke<ArrayBuffer>("get_weights_data"));
         setWeightsData(viewerWeights);
         setBoneNames(viewerWeights.boneNames);
@@ -2301,22 +2327,22 @@ export const App: Component = () => {
         setAutorigError(undefined);
         setPaintMirrorLoaded(false);
         setProgress(undefined);
-        setStatusMessage(`Autorig completado - ${viewerWeights.numBones} huesos procesados`);
+        setStatusMessage(t("Autorig completado - {n} huesos procesados", { n: viewerWeights.numBones }));
 
         // Pipeline: mark skeleton as completed
         pipeline.markCompleted("skeleton");
       } catch (e) {
         console.error("Autorig error:", e);
-        setStatusMessage(`Error: ${e}`);
+        setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
         setIsProcessing(false);
         setProgress(undefined);
         // Que no pase desapercibido: sin pesos no se puede animar ni pintar
-        const message = String(e).replace(/^Error:\s*/, "");
+        const message = tBackend(String(e).replace(/^Error:\s*/, ""));
         setAutorigError(message);
         void confirmAction({
-          title: "No se pudieron calcular los pesos",
-          message: `${message}\n\nPrueba con calidad "rápida", revisa que el esqueleto quede dentro de la malla o repara la malla (Preparar → Reparar) y vuelve a calcularlos.`,
-          confirmLabel: "Entendido",
+          title: t("No se pudieron calcular los pesos"),
+          message: t("{message}\n\nPrueba con calidad \"rápida\", revisa que el esqueleto quede dentro de la malla o repara la malla (Preparar → Reparar) y vuelve a calcularlos.", { message }),
+          confirmLabel: t("Entendido"),
         });
       }
     });
@@ -2384,16 +2410,16 @@ export const App: Component = () => {
   const animating = () => pipeline.activeStep() === "animate" && animationReady();
   /** Qué falta para animar, dicho para el usuario (`undefined` si nada) */
   const animationBlocker = createMemo(() => {
-    if (!skeletonData()) return "Falta el esqueleto: elige una plantilla en la sección Esqueleto.";
+    if (!skeletonData()) return t("Falta el esqueleto: elige una plantilla en la sección Esqueleto.");
     if (!meshLoaded()) return undefined;
     const w = weightsData();
     if (autorigComplete() && w && w.numBones !== skeletonData()!.bones.length) {
-      return `Los pesos son de otro esqueleto (${w.numBones} huesos; el esqueleto tiene ${skeletonData()!.bones.length}): vuelve a calcularlos en Esqueleto → Pesos.`;
+      return t("Los pesos son de otro esqueleto ({n} huesos; el esqueleto tiene {m}): vuelve a calcularlos en Esqueleto → Pesos.", { n: w.numBones, m: skeletonData()!.bones.length });
     }
     if (autorigComplete() && w) return undefined;
-    if (autorigError()) return `El último cálculo de pesos falló: ${autorigError()}`;
-    if (weightsNotice()) return `${weightsNotice()} y los pesos se descartaron: vuelve a calcularlos en Esqueleto → Pesos.`;
-    return "Faltan los pesos: calcúlalos en Esqueleto → 4. Pesos (después se pueden pintar).";
+    if (autorigError()) return t("El último cálculo de pesos falló: {e}", { e: autorigError()! });
+    if (weightsNotice()) return t("{notice} y los pesos se descartaron: vuelve a calcularlos en Esqueleto → Pesos.", { notice: weightsNotice()! });
+    return t("Faltan los pesos: calcúlalos en Esqueleto → 4. Pesos (después se pueden pintar).");
   });
 
   // Fuera del paso Animar, las animaciones del modelo se reproducen una tras
@@ -2585,11 +2611,11 @@ export const App: Component = () => {
       else if (branch && bones[row.joint]) addBranch(row.joint);
       else refs.push({ bone: row.bone });
     }
-    void editClip(muted ? "Silenciar pista" : "Activar pista", (clip) => setTracksMuted(clip, refs, muted));
+    void editClip(muted ? t("Silenciar pista") : t("Activar pista"), (clip) => setTracksMuted(clip, refs, muted));
   };
 
   const handleNewClip = () => {
-    const clip = createClip(`Acción ${clips().length + 1}`, activeClip()?.fps ?? 24);
+    const clip = createClip(t("Acción {n}", { n: clips().length + 1 }), activeClip()?.fps ?? 24);
     setClips([...clips(), clip]);
     setActiveClipId(clip.id);
     setKeySelection(new Set<string>());
@@ -2599,7 +2625,7 @@ export const App: Component = () => {
   const handleDuplicateClip = () => {
     const clip = activeClip();
     if (!clip) return;
-    const copy = duplicateClip(clip, `${clip.name} (copia)`);
+    const copy = duplicateClip(clip, t("{name} (copia)", { name: clip.name }));
     setClips([...clips(), copy]);
     setActiveClipId(copy.id);
   };
@@ -2609,7 +2635,7 @@ export const App: Component = () => {
     const clip = activeClip();
     if (!clip) return;
     const after = before.filter((c) => c.id !== clip.id);
-    await history.execute("Borrar animación", {
+    await history.execute(t("Borrar animación"), {
       kind: "clips",
       data: { before, after, activeBefore: clip.id, activeAfter: after[after.length - 1]?.id },
     });
@@ -2635,7 +2661,7 @@ export const App: Component = () => {
     for (let i = 2; names.has(name); i++) name = `${preset.name} ${i}`;
     // Son keys FK: las cadenas de IK las siguen solas mientras no se muevan sus controles
     const clip = generateAnimation(b, id, { verticalSwim: selectedSkeleton() === "plan:dolphin" || bodyPlan()?.flukes === true }, name);
-    await history.execute(`Animación: ${name}`, {
+    await history.execute(t("Animación: {name}", { name }), {
       kind: "clips",
       data: { before, after: [...kept, clip], activeBefore: active?.id, activeAfter: clip.id },
     });
@@ -2670,12 +2696,12 @@ export const App: Component = () => {
     ];
     if (entries.length === 0) return;
     const f = Math.round(frame());
-    void editClip(entries.length === 1 ? "Insertar key" : "Insertar keys", (c) =>
+    void editClip(entries.length === 1 ? t("Insertar key") : t("Insertar keys"), (c) =>
       insertKeys(c, f, entries, keyInterpolation())
     );
     const label = (e: (typeof entries)[number]) => ("kind" in e ? s.controls.find((c) => c.id === e.bone)?.name ?? e.bone : e.bone);
     setStatusMessage(
-      entries.length === 1 ? `Key de ${label(entries[0])} en el cuadro ${f}` : `Keys de ${entries.length} articulaciones en el cuadro ${f}`
+      entries.length === 1 ? t("Key de {name} en el cuadro {f}", { name: label(entries[0]), f }) : t("Keys de {n} articulaciones en el cuadro {f}", { n: entries.length, f })
     );
   };
 
@@ -2729,7 +2755,7 @@ export const App: Component = () => {
     const ctx = rigCtx();
     const body = ctx.body;
     if (!body) {
-      setStatusMessage("No se reconoció el cuerpo: pon los resortes a mano en cada hueso");
+      setStatusMessage(t("No se reconoció el cuerpo: pon los resortes a mano en cada hueso"));
       return;
     }
     const withIk = new Set((ctx.settings.ikChains ?? []).filter((c) => !c.disabled).flatMap((c) => c.joints));
@@ -2746,11 +2772,11 @@ export const App: Component = () => {
       count += names.length;
     }
     if (count === 0) {
-      setStatusMessage("No hay orejas, colas, antenas ni trompas sin IK para poner resortes");
+      setStatusMessage(t("No hay orejas, colas, antenas ni trompas sin IK para poner resortes"));
       return;
     }
-    void changeRig("Resortes automáticos", settings);
-    setStatusMessage(`Resortes en ${count} articulaciones: se ven al reproducir (se hornean al exportar)`);
+    void changeRig(t("Resortes automáticos"), settings);
+    setStatusMessage(t("Resortes en {n} articulaciones: se ven al reproducir (se hornean al exportar)", { n: count }));
   };
 
   const changeBoneProps = (description: string, change: Partial<BoneProps>) => {
@@ -2776,7 +2802,7 @@ export const App: Component = () => {
       }
       if (roll !== null) next = withBoneProps(next, [ctx.bones[j].name], { roll: Math.abs(roll) < 1e-9 ? undefined : roll });
     }
-    if (next !== rigSettings()) void changeRig("Roll", next);
+    if (next !== rigSettings()) void changeRig(t("Roll"), next);
   };
 
   /** Giro (ejes locales, grados) y desplazamiento de la articulación activa, como los muestra el visor */
@@ -2806,7 +2832,7 @@ export const App: Component = () => {
     applyPoseEdit(pose);
   };
 
-  const handleAutoGroups = () => void changeRig("Grupos automáticos", withAutoGroups(rigSettings(), rigBones()));
+  const handleAutoGroups = () => void changeRig(t("Grupos automáticos"), withAutoGroups(rigSettings(), rigBones()));
 
   const handleNewGroup = () => {
     const names = jointSelection().map((j) => rigBones()[j].name);
@@ -2815,8 +2841,8 @@ export const App: Component = () => {
     const id = newRigId("group");
     const hue = (s.groups.length * 67) % 360;
     const color = `#${new THREE.Color().setHSL(hue / 360, 0.65, 0.58).getHexString()}`;
-    const next = withBoneProps({ ...s, groups: [...s.groups, { id, name: `Grupo ${s.groups.length + 1}`, color }] }, names, { group: id });
-    void changeRig("Grupo nuevo", next);
+    const next = withBoneProps({ ...s, groups: [...s.groups, { id, name: t("Grupo {n}", { n: s.groups.length + 1 }), color }] }, names, { group: id });
+    void changeRig(t("Grupo nuevo"), next);
   };
 
   const handleSelectGroup = (groupId: string) => {
@@ -2855,13 +2881,13 @@ export const App: Component = () => {
 
     const control: RigControl = {
       id: newRigId("ctl"),
-      name: bone ? `${bone.name}_ctl` : `Control ${s.controls.length + 1}`,
+      name: bone ? `${bone.name}_ctl` : t("Control {n}", { n: s.controls.length + 1 }),
       parent: bone?.name ?? null,
       shape: "circle",
       position,
       size: (ctx.body?.size ?? 1) * 0.05,
     };
-    await changeRig("Agregar control", { ...s, controls: [...s.controls, control] });
+    await changeRig(t("Agregar control"), { ...s, controls: [...s.controls, control] });
     handleSelectControl(control.id);
   };
 
@@ -2881,18 +2907,18 @@ export const App: Component = () => {
     setSelectedSkeleton(undefined);
     setBodyPlan(undefined);
     setFitInfo(undefined);
-    dropWeights("Cambiaste la estructura del esqueleto");
+    dropWeights(t("Cambiaste la estructura del esqueleto"));
   };
 
   const changeSkeletonBones = async (description: string, after: EditBone[], select?: number) => {
     try {
       await history.execute(description, { kind: "skeletonBones", data: { before: editBones(), after } });
       if (select !== undefined) selectJoints([select], select);
-      setStatusMessage(`${description}: ${after.length} huesos`);
+      setStatusMessage(t("{description}: {n} huesos", { description, n: after.length }));
       return true;
     } catch (e) {
       console.error("Skeleton edit error:", e);
-      setStatusMessage(`Error: ${e}`);
+      setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
       return false;
     }
   };
@@ -2902,7 +2928,7 @@ export const App: Component = () => {
     const bones = editBones();
     if (!bones[j]) return;
     const { bones: after, index } = addChildBone(bones, j, bodyAxes(rigCtx().body).up);
-    void changeSkeletonBones(`Hueso nuevo en ${bones[j].name}`, after, index);
+    void changeSkeletonBones(t("Hueso nuevo en {name}", { name: bones[j].name }), after, index);
   };
 
   const handleDeleteBone = () => {
@@ -2911,10 +2937,10 @@ export const App: Component = () => {
     if (!bones[j]) return;
     const after = removeBone(bones, j);
     if (!after) {
-      setStatusMessage("El esqueleto necesita al menos un hueso");
+      setStatusMessage(t("El esqueleto necesita al menos un hueso"));
       return;
     }
-    void changeSkeletonBones(`Borrar ${bones[j].name}`, after);
+    void changeSkeletonBones(t("Borrar {name}", { name: bones[j].name }), after);
   };
 
   /** Renombra un hueso y lo que lo nombra: propiedades del rig, cadenas, restricciones, controles y pistas */
@@ -2924,11 +2950,11 @@ export const App: Component = () => {
     const from = bones[j]?.name;
     if (!from || name === from) return;
     if (bones.some((b) => b.name === name)) {
-      setStatusMessage(`Ya hay un hueso «${name}»`);
+      setStatusMessage(t("Ya hay un hueso «{name}»", { name }));
       return;
     }
     const after = bones.map((b, i) => (i === j ? { ...b, name } : b));
-    if (!(await changeSkeletonBones(`Renombrar ${from} a ${name}`, after, j))) return;
+    if (!(await changeSkeletonBones(t("Renombrar {from} a {name}", { from, name }), after, j))) return;
     const s = rigSettings();
     const rename = (n: string) => (n === from ? name : n);
     const renamedBones = { ...s.bones };
@@ -2936,7 +2962,7 @@ export const App: Component = () => {
       renamedBones[name] = renamedBones[from];
       delete renamedBones[from];
     }
-    await changeRig("Renombrar en el rig", {
+    await changeRig(t("Renombrar en el rig"), {
       ...s,
       bones: renamedBones,
       controls: s.controls.map((c) => (c.parent === from ? { ...c, parent: name } : c)),
@@ -2950,7 +2976,7 @@ export const App: Component = () => {
     });
     const before = clips();
     const renamed = before.map((c) => ({ ...c, tracks: c.tracks.map((t) => (!t.kind && t.bone === from ? { ...t, bone: name } : t)) }));
-    await history.execute("Renombrar en las animaciones", {
+    await history.execute(t("Renombrar en las animaciones"), {
       kind: "clips",
       data: { before, after: renamed, activeBefore: activeClipId(), activeAfter: activeClipId() },
     });
@@ -2960,13 +2986,13 @@ export const App: Component = () => {
     const bones = editBones();
     if (bones.length === 0) return;
     const stem = (fileName() ?? "esqueleto").replace(/\.[^.]+$/, "");
-    const path = await save({ title: "Exportar esqueleto", defaultPath: `${stem} - esqueleto.json`, filters: [{ name: "Esqueleto JSON", extensions: ["json"] }] });
+    const path = await save({ title: t("Exportar esqueleto"), defaultPath: `${stem} - esqueleto.json`, filters: [{ name: t("Esqueleto JSON"), extensions: ["json"] }] });
     if (!path) return;
     try {
       await invoke("write_text_file", { path, contents: skeletonToJson(stem, bones) });
-      setStatusMessage(`Esqueleto exportado: ${path}`);
+      setStatusMessage(t("Esqueleto exportado: {path}", { path }));
     } catch (e) {
-      setStatusMessage(`Error: ${e}`);
+      setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
     }
   };
 
@@ -2975,11 +3001,11 @@ export const App: Component = () => {
     if (!picked) return;
     try {
       const { bones } = skeletonFromJson(picked.text);
-      if (await changeSkeletonBones(`Esqueleto de ${picked.name}`, bones)) {
-        setStatusMessage(`Esqueleto de ${picked.name}: ${bones.length} huesos. Ajústalo al modelo o muévelo a mano`);
+      if (await changeSkeletonBones(t("Esqueleto de {name}", { name: picked.name }), bones)) {
+        setStatusMessage(t("Esqueleto de {name}: {n} huesos. Ajústalo al modelo o muévelo a mano", { name: picked.name, n: bones.length }));
       }
     } catch (e) {
-      setStatusMessage(`No se pudo leer ${picked.name}: ${e instanceof Error ? e.message : e}`);
+      setStatusMessage(t("No se pudo leer {name}: {e}", { name: picked.name, e: tBackend(e instanceof Error ? e.message : String(e)) }));
     }
   };
 
@@ -2995,11 +3021,11 @@ export const App: Component = () => {
       custom={customSkeletons().map((s) => ({ id: s.id, name: s.name, bones: s.bones.length }))}
       onSaveCustom={(name) => {
         setCustomSkeletons([...customSkeletons(), { id: `skel-${Date.now().toString(36)}`, name, bones: editBones() }]);
-        setStatusMessage(`Esqueleto guardado: ${name}`);
+        setStatusMessage(t("Esqueleto guardado: {name}", { name }));
       }}
       onApplyCustom={(id) => {
         const s = customSkeletons().find((x) => x.id === id);
-        if (s) void changeSkeletonBones(`Esqueleto: ${s.name}`, s.bones.map((b) => ({ ...b, position: [...b.position] as Vec3 })));
+        if (s) void changeSkeletonBones(t("Esqueleto: {name}", { name: s.name }), s.bones.map((b) => ({ ...b, position: [...b.position] as Vec3 })));
       }}
       onDeleteCustom={(id) => setCustomSkeletons(customSkeletons().filter((x) => x.id !== id))}
     />
@@ -3017,14 +3043,14 @@ export const App: Component = () => {
     const from = skeleton.bones.map((b) => [...b.position] as Vec3);
     const to = v.getPosedJointPositions();
     try {
-      await history.execute("Aplicar pose como reposo", { kind: "restPose", data: { from, to } });
+      await history.execute(t("Aplicar pose como reposo"), { kind: "restPose", data: { from, to } });
       setStatusMessage(
         clips().some((c) => c.tracks.length > 0)
-          ? "Pose aplicada como reposo: las keys ahora giran desde el reposo nuevo"
-          : "Pose aplicada como reposo"
+          ? t("Pose aplicada como reposo: las keys ahora giran desde el reposo nuevo")
+          : t("Pose aplicada como reposo")
       );
     } catch (e) {
-      setStatusMessage(`Error: ${e}`);
+      setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
     }
   };
 
@@ -3037,7 +3063,7 @@ export const App: Component = () => {
     for (const j of current.rotations.keys()) reset.rotations.set(j, [0, 0, 0, 1]);
     for (const j of current.translations.keys()) reset.translations.set(j, [0, 0, 0]);
     for (const id of current.controls.keys()) reset.controls.set(id, { rotation: [0, 0, 0, 1], translation: [0, 0, 0] });
-    applyPoseEdit(reset, "Pose de reposo");
+    applyPoseEdit(reset, t("Pose de reposo"));
   };
 
   const rigPanel = () => (
@@ -3072,19 +3098,19 @@ export const App: Component = () => {
     if (timelineMode() === "curves") {
       const refs = curveRefs();
       if (refs.size === 0) return;
-      void editClip("Borrar keys", (c) => deleteKeyRefs(c, refs, rigCtx().rotation));
+      void editClip(t("Borrar keys"), (c) => deleteKeyRefs(c, refs, rigCtx().rotation));
       setCurveSelection(new Set<string>());
       return;
     }
     const selection = keySelection();
     if (selection.size === 0) return;
-    void editClip("Borrar keys", (c) => deleteKeys(c, selection));
+    void editClip(t("Borrar keys"), (c) => deleteKeys(c, selection));
     setKeySelection(new Set<string>());
   };
 
   const handleMoveKeys = (delta: number) => {
     const selection = keySelection();
-    void editClip("Mover keys", (c) => moveKeys(c, selection, delta));
+    void editClip(t("Mover keys"), (c) => moveKeys(c, selection, delta));
     setKeySelection(new Set([...selection].map((id) => {
       const { bone, frame: f } = parseKeyId(id);
       return keyId(bone, f + delta);
@@ -3095,11 +3121,11 @@ export const App: Component = () => {
     setKeyInterpolation(interpolation);
     if (timelineMode() === "curves") {
       const refs = curveRefs();
-      if (refs.size > 0) void editClip("Interpolación", (c) => setInterpolation(c, refs, interpolation, rigCtx().rotation));
+      if (refs.size > 0) void editClip(t("Interpolación"), (c) => setInterpolation(c, refs, interpolation, rigCtx().rotation));
       return;
     }
     const selection = keySelection();
-    if (selection.size > 0) void editClip("Interpolación", (c) => setKeysInterpolation(c, selection, interpolation));
+    if (selection.size > 0) void editClip(t("Interpolación"), (c) => setKeysInterpolation(c, selection, interpolation));
   };
 
   // ─── Edición de animación (F5): curvas, herramientas, marcadores ──────────
@@ -3172,7 +3198,7 @@ export const App: Component = () => {
     const target = () => (refs.size > 0 ? refs : allRefs(clip, new Set(curveTracks().map((t) => `${t.kind ?? "b"}|${t.bone}`))));
     const needs = () => {
       if (refs.size > 0) return true;
-      setStatusMessage("Elige keys primero");
+      setStatusMessage(t("Elige keys primero"));
       return false;
     };
     const clearSelections = () => {
@@ -3181,58 +3207,58 @@ export const App: Component = () => {
     };
     switch (tool.op) {
       case "handles":
-        if (needs()) void editClip("Manijas", (c) => setHandleMode(c, refs, tool.value, rot));
+        if (needs()) void editClip(t("Manijas"), (c) => setHandleMode(c, refs, tool.value, rot));
         break;
       case "ease":
-        if (needs()) void editClip({ in: "Acelerar", out: "Frenar", both: "Acelerar y frenar", none: "Sin aceleración" }[tool.value], (c) => setEase(c, refs, tool.value, rot));
+        if (needs()) void editClip({ in: t("Acelerar"), out: t("Frenar"), both: t("Acelerar y frenar"), none: t("Sin aceleración") }[tool.value], (c) => setEase(c, refs, tool.value, rot));
         break;
       case "scale":
         if (!(tool.factor > 0)) {
-          setStatusMessage("Escalar: el factor tiene que ser mayor que 0");
+          setStatusMessage(t("Escalar: el factor tiene que ser mayor que 0"));
           break;
         }
         if (needs()) {
-          void editClip("Escalar keys", (c) => scaleKeys(c, refs, Math.round(frame()), tool.factor));
+          void editClip(t("Escalar keys"), (c) => scaleKeys(c, refs, Math.round(frame()), tool.factor));
           clearSelections();
         }
         break;
       case "retime": {
         if (!(tool.factor > 0)) {
-          setStatusMessage("Retiempo: el factor tiene que ser mayor que 0");
+          setStatusMessage(t("Retiempo: el factor tiene que ser mayor que 0"));
           break;
         }
         if (!needs()) break;
         const frames = [...refs].map((id) => parseKeyRef(id).frame);
         const [a, b] = [Math.min(...frames), Math.max(...frames)];
         if (b <= a) {
-          setStatusMessage("Retiempo: elige keys de al menos dos cuadros");
+          setStatusMessage(t("Retiempo: elige keys de al menos dos cuadros"));
           break;
         }
-        void editClip("Retiempo", (c) => retime(c, a, b, tool.factor));
+        void editClip(t("Retiempo"), (c) => retime(c, a, b, tool.factor));
         clearSelections();
         break;
       }
       case "closeCycle": {
         const tracks = new Set(curveTracks().map((t) => `${t.kind ?? "b"}|${t.bone}`));
-        void editClip("Cerrar ciclo", (c) => closeCycle(c, jointSelection().length > 0 || selectedControl() ? tracks : null, rot));
+        void editClip(t("Cerrar ciclo"), (c) => closeCycle(c, jointSelection().length > 0 || selectedControl() ? tracks : null, rot));
         break;
       }
       case "eulerFilter":
-        void editClip("Filtro Euler", (c) => eulerFilter(c, target(), rot));
+        void editClip(t("Filtro Euler"), (c) => eulerFilter(c, target(), rot));
         break;
       case "smooth":
-        void editClip("Suavizar", (c) => smoothKeys(c, target(), 0.6, rot));
+        void editClip(t("Suavizar"), (c) => smoothKeys(c, target(), 0.6, rot));
         break;
       case "noise":
-        if (needs()) void editClip("Ruido", (c) => noiseKeys(c, refs, tool.amount, rot, Date.now() % 100000));
+        if (needs()) void editClip(t("Ruido"), (c) => noiseKeys(c, refs, tool.amount, rot, Date.now() % 100000));
         break;
       case "reduce":
-        void editClip("Reducir keys", (c) => reduceSelectedKeys(c, target(), tool.tolerance, rot));
+        void editClip(t("Reducir keys"), (c) => reduceSelectedKeys(c, target(), tool.tolerance, rot));
         clearSelections();
         break;
       case "marker": {
         const f = Math.round(frame());
-        void editClip("Marcador", (c) => withMarker(c, f, `M${(c.markers?.length ?? 0) + 1}`));
+        void editClip(t("Marcador"), (c) => withMarker(c, f, `M${(c.markers?.length ?? 0) + 1}`));
         break;
       }
       case "interpolation":
@@ -3242,11 +3268,11 @@ export const App: Component = () => {
   };
 
   const handleMarker = (change: { rename?: { frame: number; name: string }; move?: { from: number; to: number }; remove?: number }) => {
-    if (change.rename) void editClip("Renombrar marcador", (c) => withMarker(c, change.rename!.frame, change.rename!.name));
-    if (change.remove !== undefined) void editClip("Borrar marcador", (c) => withoutMarker(c, change.remove!));
+    if (change.rename) void editClip(t("Renombrar marcador"), (c) => withMarker(c, change.rename!.frame, change.rename!.name));
+    if (change.remove !== undefined) void editClip(t("Borrar marcador"), (c) => withoutMarker(c, change.remove!));
     if (change.move) {
       const { from, to } = change.move;
-      void editClip("Mover marcador", (c) => {
+      void editClip(t("Mover marcador"), (c) => {
         const m = c.markers?.find((x) => x.frame === from);
         return m ? withMarker(withoutMarker(c, from), to, m.name) : c;
       });
@@ -3309,17 +3335,17 @@ export const App: Component = () => {
       blendIn: 0,
       blendOut: 0,
     };
-    changeMixer("Agregar capa", { enabled: true, layers: [...m.layers, layer] }, true);
+    changeMixer(t("Agregar capa"), { enabled: true, layers: [...m.layers, layer] }, true);
     setSelectedLayer(layer.id);
   };
 
   const handleBakeMixer = async () => {
-    const baked = bakeMixer(mixer(), clips(), rigCtx(), "Mezcla", activeClip()?.fps ?? 24);
+    const baked = bakeMixer(mixer(), clips(), rigCtx(), t("Mezcla"), activeClip()?.fps ?? 24);
     const before = clips();
-    await history.execute("Hornear la mezcla", { kind: "clips", data: { before, after: [...before, baked], activeBefore: activeClipId(), activeAfter: baked.id } });
+    await history.execute(t("Hornear la mezcla"), { kind: "clips", data: { before, after: [...before, baked], activeBefore: activeClipId(), activeAfter: baked.id } });
     setMixer({ ...mixer(), enabled: false });
     setTimelineMode("keys");
-    setStatusMessage("La mezcla quedó horneada en la animación «Mezcla»");
+    setStatusMessage(t("La mezcla quedó horneada en la animación «Mezcla»"));
   };
 
   // ─── Papel cebolla y trayectorias ─────────────────────────────────────────
@@ -3507,7 +3533,7 @@ export const App: Component = () => {
     const joints = jointsOrAll();
     const control = selectedControl();
     const controls = control ? [control] : jointSelection().length === 0 ? rigSettings().controls.map((c) => c.id) : [];
-    const labels = { rotation: "Giro en reposo", translation: "Posición de reposo", all: "Pose de reposo" };
+    const labels = { rotation: t("Giro en reposo"), translation: t("Posición de reposo"), all: t("Pose de reposo") };
     applyPoseEdit(resetPose(control ? [] : joints, what, controls), labels[what]);
   };
 
@@ -3517,10 +3543,10 @@ export const App: Component = () => {
     const selection = jointSelection();
     const pose = mirrorPose(v.getPose(), rigCtx(), mode, selection.length > 0 ? selection : undefined);
     if (pose.rotations.size === 0 && pose.controls.size === 0) {
-      setStatusMessage("Nada que reflejar: el esqueleto no tiene pares izquierda/derecha");
+      setStatusMessage(t("Nada que reflejar: el esqueleto no tiene pares izquierda/derecha"));
       return;
     }
-    const labels = { flip: "Pose volteada", leftToRight: "Izquierda copiada a la derecha", rightToLeft: "Derecha copiada a la izquierda" };
+    const labels = { flip: t("Pose volteada"), leftToRight: t("Izquierda copiada a la derecha"), rightToLeft: t("Derecha copiada a la izquierda") };
     applyPoseEdit(pose, labels[mode]);
   };
 
@@ -3530,7 +3556,7 @@ export const App: Component = () => {
     const entries = poseToNames(v.getPose(), rigCtx(), jointsOrAll());
     copyPose(entries);
     setCanPaste(true);
-    setStatusMessage(`Pose copiada (${Object.keys(entries).length} huesos)`);
+    setStatusMessage(t("Pose copiada ({n} huesos)", { n: Object.keys(entries).length }));
   };
 
   const handlePastePose = (mirrored: boolean) => {
@@ -3539,27 +3565,27 @@ export const App: Component = () => {
     const ctx = rigCtx();
     const pose = namesToPose(mirrored ? mirrorEntries(entries, ctx) : entries, ctx);
     if (pose.rotations.size === 0) {
-      setStatusMessage("La pose copiada no tiene huesos con estos nombres");
+      setStatusMessage(t("La pose copiada no tiene huesos con estos nombres"));
       return;
     }
-    applyPoseEdit(pose, mirrored ? "Pose pegada del otro lado" : "Pose pegada");
+    applyPoseEdit(pose, mirrored ? t("Pose pegada del otro lado") : t("Pose pegada"));
   };
 
-  const handleBreakdown = (t: number, commit: boolean) => {
+  const handleBreakdown = (amount: number, commit: boolean) => {
     const clip = activeClip();
     if (!clip) return;
-    const pose = breakdownPose(clip, frame(), jointsOrAll(), rigCtx(), t);
+    const pose = breakdownPose(clip, frame(), jointsOrAll(), rigCtx(), amount);
     if (pose.rotations.size === 0) {
-      if (commit) setStatusMessage("Intermedia: hace falta una key antes y otra después de este cuadro");
+      if (commit) setStatusMessage(t("Intermedia: hace falta una key antes y otra después de este cuadro"));
       return;
     }
-    livePreview(pose, commit, `Intermedia al ${Math.round(t * 100)} %`);
+    livePreview(pose, commit, t("Intermedia al {pct} %", { pct: Math.round(amount * 100) }));
   };
 
   const handlePushRelax = (factor: number, commit: boolean) => {
     const base = liveBase("push");
     if (!base) return;
-    livePreview(pushRelax(base, jointsOrAll(), factor), commit, factor >= 1 ? "Pose empujada" : "Pose relajada");
+    livePreview(pushRelax(base, jointsOrAll(), factor), commit, factor >= 1 ? t("Pose empujada") : t("Pose relajada"));
   };
 
   /** Pose de la biblioteca o de fábrica, lista para aplicar */
@@ -3582,7 +3608,7 @@ export const App: Component = () => {
     const target = sourcePose(source);
     const base = liveBase("library");
     if (!target || !base) return;
-    livePreview(blendPose(base, target, factor), commit, "Pose de la biblioteca aplicada");
+    livePreview(blendPose(base, target, factor), commit, t("Pose de la biblioteca aplicada"));
   };
 
   const handleSavePose = async (selectionOnly: boolean) => {
@@ -3591,12 +3617,12 @@ export const App: Component = () => {
     const joints = selectionOnly ? jointSelection() : animatableJoints(rigCtx());
     const pose: StoredPose = {
       id: newRigId("pose"),
-      name: `Pose ${poseLibrary().length + 1}`,
+      name: t("Pose {n}", { n: poseLibrary().length + 1 }),
       thumbnail: v.snapshot(96),
       bones: poseToNames(v.getPose(), rigCtx(), joints),
     };
-    await history.execute("Guardar pose", { kind: "poseLibrary", data: { before: poseLibrary(), after: [...poseLibrary(), pose] } });
-    setStatusMessage(`${pose.name} guardada en la biblioteca`);
+    await history.execute(t("Guardar pose"), { kind: "poseLibrary", data: { before: poseLibrary(), after: [...poseLibrary(), pose] } });
+    setStatusMessage(t("{name} guardada en la biblioteca", { name: pose.name }));
   };
 
   const changePoseLibrary = (description: string, after: StoredPose[]) =>
@@ -3673,20 +3699,20 @@ export const App: Component = () => {
         : { target: control ? `control:${control}` : others[0] }),
       ...(type === "driver" ? { axis: 0 as const, angle: 90, value: 0 } : {}),
     };
-    await setConstraints(`Restricción: ${label}`, [...(rigSettings().constraints ?? []), constraint]);
+    await setConstraints(t("Restricción: {label}", { label }), [...(rigSettings().constraints ?? []), constraint]);
     setSelectedConstraint(constraint.id);
     if (type !== "driver" && type !== "distribute" && !constraint.target) {
-      setStatusMessage("Elige el objetivo en el panel (o crea la restricción con el objetivo elegido con Mayús)");
+      setStatusMessage(t("Elige el objetivo en el panel (o crea la restricción con el objetivo elegido con Mayús)"));
     }
   };
 
   const handleDeleteConstraint = async (id: string) => {
-    await setConstraints("Borrar restricción", (rigSettings().constraints ?? []).filter((c) => c.id !== id));
+    await setConstraints(t("Borrar restricción"), (rigSettings().constraints ?? []).filter((c) => c.id !== id));
     // Sus keys de influencia ya no sirven
     const before = clips();
     const after = tidyClips(before, rigSettings());
     if (after.some((c, i) => c !== before[i])) {
-      await history.execute("Ordenar pistas del rig", { kind: "clips", data: { before, after, activeBefore: activeClipId(), activeAfter: activeClipId() } });
+      await history.execute(t("Ordenar pistas del rig"), { kind: "clips", data: { before, after, activeBefore: activeClipId(), activeAfter: activeClipId() } });
     }
     setSelectedConstraint(undefined);
   };
@@ -3697,7 +3723,7 @@ export const App: Component = () => {
     const k = i + direction;
     if (i < 0 || k < 0 || k >= list.length) return;
     [list[i], list[k]] = [list[k], list[i]];
-    void setConstraints("Orden de las restricciones", list);
+    void setConstraints(t("Orden de las restricciones"), list);
   };
 
   /** Influencia o valor del driver: provisorio al arrastrar, key (o valor fijo) al soltar */
@@ -3722,7 +3748,7 @@ export const App: Component = () => {
       setPoseTick((t) => t + 1);
       return;
     }
-    const label = channel === "blend" ? "Influencia de la restricción" : "Valor del driver";
+    const label = channel === "blend" ? t("Influencia de la restricción") : t("Valor del driver");
     if (asKey) {
       if (!activeClip()) handleNewClip();
       void editClip(label, (x) => insertScalarKey(x, c.id, channel, f, value, keyInterpolation()));
@@ -3757,7 +3783,7 @@ export const App: Component = () => {
       setPoseTick((t) => t + 1);
       return;
     }
-    const labels = { blend: "Mezcla IK/FK", pin: value >= 0.5 ? "Fijar" : "Soltar", roll: "Balanceo del pie" };
+    const labels = { blend: t("Mezcla IK/FK"), pin: value >= 0.5 ? t("Fijar") : t("Soltar"), roll: t("Balanceo del pie") };
     if (asKey) {
       if (!activeClip()) handleNewClip();
       void editClip(labels[channel], (c) => insertScalarKey(c, chain.id, channel, f, value, keyInterpolation()));
@@ -3775,19 +3801,19 @@ export const App: Component = () => {
     const next = autoRig(rigCtx());
     const chains = (next.ikChains ?? []).filter((c) => c.auto);
     if (chains.length === 0) {
-      setStatusMessage("No se reconoció el cuerpo: crea las cadenas a mano con la selección");
+      setStatusMessage(t("No se reconoció el cuerpo: crea las cadenas a mano con la selección"));
       return;
     }
-    await changeRig("Rig automático", next);
+    await changeRig(t("Rig automático"), next);
     // Rehacer el rig puede dejar pistas de cadenas o controles que ya no existen
     const before = clips();
     const after = tidyClips(before, next);
     if (after.some((c, i) => c !== before[i])) {
-      await history.execute("Ordenar pistas del rig", { kind: "clips", data: { before, after, activeBefore: activeClipId(), activeAfter: activeClipId() } });
+      await history.execute(t("Ordenar pistas del rig"), { kind: "clips", data: { before, after, activeBefore: activeClipId(), activeAfter: activeClipId() } });
     }
     setSelectedChain(chains[0].id);
     setStatusMessage(
-      `Rig automático: ${chains.length} cadenas de IK. Lo animado con keys FK sigue igual; mueve un control o sube la mezcla para pasarlo a IK`
+      t("Rig automático: {n} cadenas de IK. Lo animado con keys FK sigue igual; mueve un control o sube la mezcla para pasarlo a IK", { n: chains.length })
     );
   };
 
@@ -3810,7 +3836,7 @@ export const App: Component = () => {
     }
     if (solver === "root") joints = [ctx.body?.root ?? ctx.bones.findIndex((b) => b.parent === null)];
     if (solver === "twoBone" && joints.length < 3) {
-      setStatusMessage("Dos huesos: elige el tobillo o la muñeca (con dos articulaciones arriba)");
+      setStatusMessage(t("Dos huesos: elige el tobillo o la muñeca (con dos articulaciones arriba)"));
       return;
     }
     const names = joints.map((j) => ctx.bones[j].name);
@@ -3853,7 +3879,7 @@ export const App: Component = () => {
         chain.pole = controls[1].id;
       }
     }
-    await changeRig("Cadena de IK", { ...s, controls: [...s.controls, ...controls], ikChains: [...(s.ikChains ?? []), chain] });
+    await changeRig(t("Cadena de IK"), { ...s, controls: [...s.controls, ...controls], ikChains: [...(s.ikChains ?? []), chain] });
     setSelectedChain(chain.id);
   };
 
@@ -3875,8 +3901,8 @@ export const App: Component = () => {
         const p = v.getJointPose(j);
         return p ? [{ bone: ctx.bones[j].name, rotation: p.rotation, translation: Math.hypot(...p.translation) > 1e-9 ? p.translation : undefined }] : [];
       });
-      await editClip("IK → FK", (c) => insertScalarKey(insertKeys(c, f, entries, keyInterpolation()), chain.id, "blend", f, 0, keyInterpolation()));
-      setStatusMessage(`${chain.name}: en FK`);
+      await editClip(t("IK → FK"), (c) => insertScalarKey(insertKeys(c, f, entries, keyInterpolation()), chain.id, "blend", f, 0, keyInterpolation()));
+      setStatusMessage(t("{name}: en FK", { name: chain.name }));
       return;
     }
     // La pose que se ve (en FK para esta cadena, con el resto de la pila)
@@ -3936,7 +3962,7 @@ export const App: Component = () => {
       if (chain.footRoll) next = insertScalarKey(next, chain.id, "roll", f, 0, keyInterpolation());
       return next;
     });
-    setStatusMessage(`${chain.name}: en IK`);
+    setStatusMessage(t("{name}: en IK", { name: chain.name }));
   };
 
   // ─── Panel de articulación (F4) ───────────────────────────────────────────
@@ -4034,10 +4060,10 @@ export const App: Component = () => {
     return [
       name,
       `X ${x}° Y ${y}° Z ${z}°`,
-      locked.length > 0 ? `bloqueado ${locked.join("")}` : "",
-      moved ? "desplazado" : "",
-      excess > 0.5 ? `fuera del límite ${excess.toFixed(0)}° (se recorta)` : "",
-      jointSelection().length > 1 ? `${jointSelection().length} elegidas` : "",
+      locked.length > 0 ? t("bloqueado {axes}", { axes: locked.join("") }) : "",
+      moved ? t("desplazado") : "",
+      excess > 0.5 ? t("fuera del límite {deg}° (se recorta)", { deg: excess.toFixed(0) }) : "",
+      jointSelection().length > 1 ? t("{n} elegidas", { n: jointSelection().length }) : "",
     ]
       .filter(Boolean)
       .join(" · ");
@@ -4053,9 +4079,9 @@ export const App: Component = () => {
   const handleLimitKind = (kind: "none" | "hinge" | "ball") => {
     const j = activeJoint();
     if (j < 0) return;
-    if (kind === "none") return setActiveLimits("Sin límite", undefined);
+    if (kind === "none") return setActiveLimits(t("Sin límite"), undefined);
     const anatomical = anatomicalLimits(rigCtx()).get(j);
-    setActiveLimits(kind === "hinge" ? "Bisagra" : "Rótula", anatomical?.kind === kind ? anatomical : defaultLimits(kind));
+    setActiveLimits(kind === "hinge" ? t("Bisagra") : t("Rótula"), anatomical?.kind === kind ? anatomical : defaultLimits(kind));
   };
 
   /** Cambiar la key de `frame` de la activa por swing, twist o ángulo de bisagra */
@@ -4072,7 +4098,7 @@ export const App: Component = () => {
     const q = fromJointSpace(r, ctx.frames[j]);
     const interpolation = clip.tracks.find((t) => t.bone === name)?.rotation.find((k) => k.frame === keyFrame)?.interpolation;
     const next = insertKeys(clip, keyFrame, [{ bone: name, rotation: q }], interpolation ?? keyInterpolation());
-    if (commit) void editClip("Editar key", () => next);
+    if (commit) void editClip(t("Editar key"), () => next);
     else {
       viewer()?.setPose(evaluatePose(next, frame(), ctx));
       setPoseTick((t) => t + 1);
@@ -4143,7 +4169,7 @@ export const App: Component = () => {
     if (mode === "observed") {
       const found = observedLimits(clips(), ctx, joints, new Map(joints.map((j) => [j, kindOf(j)])));
       found.forEach((l, j) => (set(j, l), count++));
-      if (found.size === 0) return setStatusMessage("No hay animaciones con keys de donde sacar los límites");
+      if (found.size === 0) return setStatusMessage(t("No hay animaciones con keys de donde sacar los límites"));
     }
     if (mode === "mesh") {
       const mesh = meshData();
@@ -4165,9 +4191,9 @@ export const App: Component = () => {
         count++;
       }
     }
-    const labels = { anatomical: "Límites anatómicos", mesh: "Límites por la malla", observed: "Límites por la animación", clear: "Quitar límites" };
+    const labels = { anatomical: t("Límites anatómicos"), mesh: t("Límites por la malla"), observed: t("Límites por la animación"), clear: t("Quitar límites") };
     void changeRig(labels[mode], next);
-    if (mode !== "clear") setStatusMessage(`${labels[mode]}: ${count} articulaciones`);
+    if (mode !== "clear") setStatusMessage(t("{what}: {n} articulaciones", { what: labels[mode], n: count }));
   };
 
   /** La selección ordenada de la raíz hacia la punta, si forma una cadena */
@@ -4310,7 +4336,7 @@ export const App: Component = () => {
       const pair = ctx.mirror[j];
       if (op === "mirror" && l && pair !== null) next = withBoneProps(next, [ctx.bones[pair].name], { limits: mirrorLimits(l) });
     }
-    const labels = { copyActive: "Límites iguales a la activa", mirror: "Límites al lado espejo", scale: "Escalar límites" };
+    const labels = { copyActive: t("Límites iguales a la activa"), mirror: t("Límites al lado espejo"), scale: t("Escalar límites") };
     void changeRig(labels[op], next);
   };
 
@@ -4396,21 +4422,21 @@ export const App: Component = () => {
   const handleConnectConstraint = async (target: string, owner: string) => {
     const constraint: RigConstraint = {
       id: newRigId(CONSTRAINT_PREFIX.slice(0, -1)),
-      name: `Copiar giro: ${owner}`,
+      name: t("Copiar giro: {owner}", { owner }),
       type: "copyRotation",
       owner,
       target,
       space: "local",
     };
-    await setConstraints("Restricción: Copiar giro", [...(rigSettings().constraints ?? []), constraint]);
+    await setConstraints(t("Restricción: Copiar giro"), [...(rigSettings().constraints ?? []), constraint]);
     setSelectedConstraint(constraint.id);
-    setStatusMessage(`${owner} copia el giro de ${target}: cambia el tipo en Restricciones (pestaña IK)`);
+    setStatusMessage(t("{owner} copia el giro de {target}: cambia el tipo en Restricciones (pestaña IK)", { owner, target }));
   };
 
   const handleReparent = (controlNode: string, boneName: string | null) => {
     const cid = controlNode.slice(2);
     const s = rigSettings();
-    void changeRig(boneName ? `El control sigue a ${boneName}` : "Control suelto", {
+    void changeRig(boneName ? t("El control sigue a {name}", { name: boneName }) : t("Control suelto"), {
       ...s,
       controls: s.controls.map((c) => (c.id === cid ? { ...c, parent: boneName } : c)),
     });
@@ -4441,7 +4467,7 @@ export const App: Component = () => {
     return [...totals.entries()]
       .sort((a, b) => b[1] - a[1])
       .slice(0, 5)
-      .map(([b, w]) => ({ name: ctx.bones[b]?.name ?? `hueso ${b}`, fraction: sum > 0 ? w / sum : 0 }));
+      .map(([b, w]) => ({ name: ctx.bones[b]?.name ?? t("hueso {n}", { n: b }), fraction: sum > 0 ? w / sum : 0 }));
   });
 
   // El rango de la activa en 3D
@@ -4470,7 +4496,7 @@ export const App: Component = () => {
       posing={animating()}
       canMesh={!!weightsData() && !!meshData()}
       hasSelection={jointSelection().length > 0}
-      onLimitsOff={(off) => void changeRig(off ? "No aplicar límites" : "Aplicar límites", { ...rigSettings(), limitsOff: off || undefined })}
+      onLimitsOff={(off) => void changeRig(off ? t("No aplicar límites") : t("Aplicar límites"), { ...rigSettings(), limitsOff: off || undefined })}
       onLimits={setActiveLimits}
       onLimitsPreview={setLimitsPreview}
       onKind={handleLimitKind}
@@ -4507,7 +4533,7 @@ export const App: Component = () => {
       onSelectChain={setSelectedChain}
       onChangeChain={changeChain}
       onDeleteChain={(id) =>
-        void changeRig("Borrar cadena", { ...rigSettings(), ikChains: (rigSettings().ikChains ?? []).filter((c) => c.id !== id) })
+        void changeRig(t("Borrar cadena"), { ...rigSettings(), ikChains: (rigSettings().ikChains ?? []).filter((c) => c.id !== id) })
       }
       onScalar={handleIkScalar}
       onMatch={(to) => void handleMatch(to)}
@@ -4545,11 +4571,11 @@ export const App: Component = () => {
     const f = Math.round(frame());
     const pose = clip ? evaluatePose(clip, f, ctx) : (viewer()?.getPose() ?? evaluatePose(undefined, 0, ctx));
     const previous = clip && f > clip.start ? evaluatePose(clip, f - 1, ctx) : null;
-    const baked = ragdollClip(ctx, pose, previous, { seconds, fps: clip?.fps ?? 24, name: `Ragdoll ${clips().length + 1}` });
+    const baked = ragdollClip(ctx, pose, previous, { seconds, fps: clip?.fps ?? 24, name: t("Ragdoll {n}", { n: clips().length + 1 }) });
     const before = clips();
-    await history.execute("Ragdoll", { kind: "clips", data: { before, after: [...before, baked], activeBefore: activeClipId(), activeAfter: baked.id } });
+    await history.execute(t("Ragdoll"), { kind: "clips", data: { before, after: [...before, baked], activeBefore: activeClipId(), activeAfter: baked.id } });
     setFrame(baked.start);
-    setStatusMessage(`Caída horneada en «${baked.name}» (${seconds} s)`);
+    setStatusMessage(t("Caída horneada en «{name}» ({seconds} s)", { name: baked.name, seconds }));
   };
 
   const posePanel = (
@@ -4578,8 +4604,8 @@ export const App: Component = () => {
       factory={body() ? availablePoses(body()!) : []}
       library={poseLibrary()}
       onSavePose={(selectionOnly) => void handleSavePose(selectionOnly)}
-      onDeletePose={(id) => changePoseLibrary("Borrar pose", poseLibrary().filter((p) => p.id !== id))}
-      onRenamePose={(id, name) => changePoseLibrary("Renombrar pose", poseLibrary().map((p) => (p.id === id ? { ...p, name } : p)))}
+      onDeletePose={(id) => changePoseLibrary(t("Borrar pose"), poseLibrary().filter((p) => p.id !== id))}
+      onRenamePose={(id, name) => changePoseLibrary(t("Renombrar pose"), poseLibrary().map((p) => (p.id === id ? { ...p, name } : p)))}
       onApplyPose={handleApplyLibraryPose}
     />
   );
@@ -4714,10 +4740,10 @@ export const App: Component = () => {
     if (after.every((p, i) => p.every((x, k) => Math.abs(x - before[i][k]) < 1e-12))) return;
     try {
       await history.execute(description, { kind: "jointPositions", data: { before, after } });
-      dropWeights("Ajustaste el esqueleto");
+      dropWeights(t("Ajustaste el esqueleto"));
     } catch (e) {
       console.error("Joint tune error:", e);
-      setStatusMessage(`Error: ${e}`);
+      setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
     }
   };
   const tunedJoint = () => {
@@ -4739,7 +4765,7 @@ export const App: Component = () => {
     const axis = { forward, back: forward, up, down: up, right, left: right }[direction];
     const sign = direction === "back" || direction === "down" || direction === "left" ? -1 : 1;
     const d = sign * fraction * skeletonSize();
-    void tuneJoints(`Mover ${rigBones()[j].name} ${DIRECTION_NAMES[direction]}`, (ps, ctx) =>
+    void tuneJoints(t("Mover {name} {direction}", { name: rigBones()[j].name, direction: t(DIRECTION_NAMES[direction]) }), (ps, ctx) =>
       moveJoints(ps, ctx, j, [axis[0] * d, axis[1] * d, axis[2] * d], withChildren, symmetricEdit())
     );
   };
@@ -4753,12 +4779,12 @@ export const App: Component = () => {
     const side = sideOf(p, jointEditCtx(), skeletonSize()) || 1;
     const [axis, angle] =
       rotation === "pitch" ? [right, -rad] : rotation === "spread" ? [forward, side * rad] : [up, -rad];
-    void tuneJoints(`Girar desde ${rigBones()[j].name}`, (ps, ctx) => rotateLimb(ps, ctx, j, axis, angle, symmetricEdit()));
+    void tuneJoints(t("Girar desde {name}", { name: rigBones()[j].name }), (ps, ctx) => rotateLimb(ps, ctx, j, axis, angle, symmetricEdit()));
   };
   const handleTuneStretch = (fraction: number) => {
     const j = tunedJoint();
     if (j < 0) return;
-    void tuneJoints(`${fraction > 0 ? "Alargar" : "Acortar"} hasta ${rigBones()[j].name}`, (ps, ctx) =>
+    void tuneJoints(fraction > 0 ? t("Alargar hasta {name}", { name: rigBones()[j].name }) : t("Acortar hasta {name}", { name: rigBones()[j].name }), (ps, ctx) =>
       stretchBone(ps, ctx, j, fraction * skeletonSize(), symmetricEdit())
     );
   };
@@ -4767,7 +4793,7 @@ export const App: Component = () => {
     if (j < 0) return;
     const target = fromView(view);
     const p = rigBones()[j].position;
-    void tuneJoints(`Posición de ${rigBones()[j].name}`, (ps, ctx) =>
+    void tuneJoints(t("Posición de {name}", { name: rigBones()[j].name }), (ps, ctx) =>
       moveJoints(ps, ctx, j, [target[0] - p[0], target[1] - p[1], target[2] - p[2]], withChildren, symmetricEdit())
     );
   };
@@ -4791,7 +4817,7 @@ export const App: Component = () => {
       onStretch={handleTuneStretch}
       onCopySide={() => {
         const j = tunedJoint();
-        if (j >= 0) void tuneJoints("Copiar el lado al otro", (ps, ctx) => copySide(ps, ctx, j, skeletonSize()));
+        if (j >= 0) void tuneJoints(t("Copiar el lado al otro"), (ps, ctx) => copySide(ps, ctx, j, skeletonSize()));
       }}
       onCenter={meshLoaded() ? () => handleCenterBones(true) : undefined}
       disabled={isProcessing()}
@@ -4872,7 +4898,7 @@ export const App: Component = () => {
       const assembly = part?.key === "assembly";
       const base = assembly ? "ensamble" : part ? part.name.replace(/[^\p{L}\p{N}_-]+/gu, "_") : (fileName() ?? "diseño").replace(/\.[^.]+$/, "");
       const selected = await save({
-        title: `Exportar ${name}`,
+        title: t("Exportar {name}", { name }),
         defaultPath: `${base}.${extensions[0]}`,
         filters: [{ name, extensions }],
       });
@@ -4894,24 +4920,24 @@ export const App: Component = () => {
             const p = path.replace(/(\.[^./]+)$/, `-${v.name.replace(/[^\p{L}\p{N}_-]+/gu, "_")}$1`);
             await cad.commit((d) => (d.active_configuration = v.index));
             await cad.settled();
-            total += await busy(`Exportando ${v.name}...`, () => cad.exportDesign(p, format));
+            total += await busy(t("Exportando {name}...", { name: v.name }), () => cad.exportDesign(p, format));
             files.push(p);
           }
         } finally {
           await cad.commit((d) => (d.active_configuration = before));
         }
         setLastExport({ bytes: total, files });
-        setStatusMessage(`Exportadas ${files.length} variantes (${formatBytes(total)})`);
+        setStatusMessage(t("Exportadas {n} variantes ({size})", { n: files.length, size: formatBytes(total) }));
         pipeline.markCompleted("export");
         return;
       }
-      const bytes = await busy(`Exportando a ${file}...`, () => cad.exportDesign(path, format, part?.id, assembly));
+      const bytes = await busy(t("Exportando a {file}...", { file: file ?? "" }), () => cad.exportDesign(path, format, part?.id, assembly));
       setLastExport({ bytes, files: [path] });
-      setStatusMessage(`Diseño exportado: ${file} (${formatBytes(bytes)})`);
+      setStatusMessage(t("Diseño exportado: {file} ({size})", { file: file ?? "", size: formatBytes(bytes) }));
       pipeline.markCompleted("export");
     } catch (e) {
       console.error("Export error:", e);
-      setStatusMessage(`Error: ${e}`);
+      setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
       setProgress(undefined);
     }
   };
@@ -4926,7 +4952,7 @@ export const App: Component = () => {
 
       const baseName = (fileName() ?? (meshLoaded() ? "modelo" : "esqueleto")).replace(/\.[^.]+$/, "");
       const selected = await save({
-        title: `Exportar ${format.name}`,
+        title: t("Exportar {name}", { name: format.name }),
         defaultPath: `${baseName}.${format.extensions[0]}`,
         filters: [{ name: format.name, extensions: format.extensions }],
       });
@@ -4944,7 +4970,7 @@ export const App: Component = () => {
       const mix = mixer().enabled && mixer().layers.length > 0 ? bakeMixer(mixer(), clips(), rigCtx(), "Mezcla", activeClip()?.fps ?? 24) : undefined;
       const exported = bvh ? (mix ? [mix] : clips().filter((c) => c.id === activeClipId())) : mix ? [...clips(), mix] : clips();
       const withAnimations = bvh || skeletonOnly || includeRig;
-      const result = await busy(`Exportando a ${name}...`, () => invoke<ExportResult>("export_model", {
+      const result = await busy(t("Exportando a {file}...", { file: name ?? "" }), () => invoke<ExportResult>("export_model", {
         config: {
           format: opts.format,
           path,
@@ -4971,13 +4997,13 @@ export const App: Component = () => {
       }));
 
       setLastExport({ bytes: result.total_bytes, files: result.files_created });
-      setStatusMessage(`${result.message}: ${name} (${formatBytes(result.total_bytes)})`);
+      setStatusMessage(t("{message}: {name} ({size})", { message: tBackend(result.message), name: name ?? "", size: formatBytes(result.total_bytes) }));
 
       // Pipeline: mark export as completed
       pipeline.markCompleted("export");
     } catch (e) {
       console.error("Export error:", e);
-      setStatusMessage(`Error: ${e}`);
+      setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
       setProgress(undefined);
     }
   };
@@ -4988,7 +5014,7 @@ export const App: Component = () => {
 
   /** Planos candidatos y centro de masa de la malla actual */
   const loadPlacementInfo = async () => {
-    const info = await busy("Buscando planos de apoyo...", () => invoke<PlacementInfo>("get_placement_info"));
+    const info = await busy(t("Buscando planos de apoyo..."), () => invoke<PlacementInfo>("get_placement_info"));
     setFloorCandidates(info.candidates);
     setCenterOfMass(new THREE.Vector3(...info.center_of_mass));
     return info;
@@ -5021,9 +5047,9 @@ export const App: Component = () => {
    */
   const alignScan = async (matrix: Mat4, description: string) => {
     const id = scanObjectId();
-    if (id === undefined) throw new Error("No hay escaneo");
+    if (id === undefined) throw new Error(t("No hay escaneo"));
     if (id !== activeObjectId()) await activateObject(id);
-    if (id !== activeObjectId()) throw new Error("No se pudo elegir el escaneo");
+    if (id !== activeObjectId()) throw new Error(t("No se pudo elegir el escaneo"));
     const mm = await invoke<number>("cad_mm_per_unit");
     await applyPlacement(new THREE.Matrix4().fromArray(toSceneMatrix(matrix, mm)), description);
   };
@@ -5036,7 +5062,7 @@ export const App: Component = () => {
       return true;
     } catch (e) {
       console.error("Placement error:", e);
-      setStatusMessage(`Error: ${e}`);
+      setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
       return false;
     }
   };
@@ -5046,7 +5072,7 @@ export const App: Component = () => {
       try {
         await loadPlacementInfo();
       } catch (e) {
-        setStatusMessage(`Error: ${e}`);
+        setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
         return;
       }
     }
@@ -5071,16 +5097,16 @@ export const App: Component = () => {
         pick.kind === "candidate"
           ? new THREE.Vector3(...floorCandidates()[pick.index].normal)
           : surfaceNormal(pick, positions);
-      await applyPlacement(floorMatrix(positions, normal), "Piso elegido: modelo apoyado en la grilla");
+      await applyPlacement(floorMatrix(positions, normal), t("Piso elegido: modelo apoyado en la grilla"));
     } else if (pick.kind === "surface" && mode === "front") {
       const matrix = frontMatrix(positions, surfaceNormal(pick, positions));
       if (!matrix) {
-        setStatusMessage("Esa cara mira hacia arriba o abajo: elige una lateral");
+        setStatusMessage(t("Esa cara mira hacia arriba o abajo: elige una lateral"));
         return;
       }
-      await applyPlacement(matrix, "Frente elegido: el modelo mira hacia −Y (vista frontal)");
+      await applyPlacement(matrix, t("Frente elegido: el modelo mira hacia −Y (vista frontal)"));
     } else if (pick.kind === "surface" && mode === "point") {
-      await applyPlacement(originMatrix(positions, "point", undefined, new THREE.Vector3(...pick.point)), "Origen en el punto elegido");
+      await applyPlacement(originMatrix(positions, "point", undefined, new THREE.Vector3(...pick.point)), t("Origen en el punto elegido"));
     }
   };
 
@@ -5088,12 +5114,12 @@ export const App: Component = () => {
   const handleRotate = (axis: Axis, degrees: number) => {
     const data = meshData();
     const { axis: inner, sign } = VIEW_AXES[axis];
-    if (data) applyPlacement(rotationMatrix(data.positions, inner, sign * degrees), `Giro de ${degrees}° en ${axis.toUpperCase()}`);
+    if (data) applyPlacement(rotationMatrix(data.positions, inner, sign * degrees), t("Giro de {degrees}° en {axis}", { degrees, axis: axis.toUpperCase() }));
   };
 
   const handleMirror = (axis: Axis) => {
     const data = meshData();
-    if (data) applyPlacement(mirrorMatrix(data.positions, VIEW_AXES[axis].axis), `Espejado en ${axis.toUpperCase()}`);
+    if (data) applyPlacement(mirrorMatrix(data.positions, VIEW_AXES[axis].axis), t("Espejado en {axis}", { axis: axis.toUpperCase() }));
   };
 
   const handleScaleModel = (factor: number, description: string) => {
@@ -5105,12 +5131,12 @@ export const App: Component = () => {
   const handleMoveModel = (offset: [number, number, number]) => {
     const u = gridUnits();
     const shown = offset.map((v) => Number((v * (u.metersPerUnit / u.unitMeters)).toPrecision(5)));
-    applyPlacement(translationMatrix(fromView(offset)), `Mover ${shown.join(", ")} ${u.unitLabel}`);
+    applyPlacement(translationMatrix(fromView(offset)), t("Mover {amount} {unit}", { amount: shown.join(", "), unit: u.unitLabel }));
   };
 
   const handleDrop = () => {
     const data = meshData();
-    if (data) applyPlacement(dropMatrix(data.positions), "Modelo apoyado en el piso");
+    if (data) applyPlacement(dropMatrix(data.positions), t("Modelo apoyado en el piso"));
   };
 
   const ORIGIN_LABELS: Record<OriginMode, string> = {
@@ -5133,21 +5159,21 @@ export const App: Component = () => {
         com = centerOfMass() ?? new THREE.Vector3(...(await loadPlacementInfo()).center_of_mass);
       } catch (e) {
         console.error("Center of mass error:", e);
-        setStatusMessage(`No se pudo calcular el centro de masa: ${e}`);
+        setStatusMessage(t("No se pudo calcular el centro de masa: {e}", { e: tBackend(String(e)) }));
         return;
       }
     }
-    await applyPlacement(originMatrix(data.positions, mode, com), `Origen en el ${ORIGIN_LABELS[mode]}`);
+    await applyPlacement(originMatrix(data.positions, mode, com), t("Origen en el {what}", { what: t(ORIGIN_LABELS[mode]) }));
   };
 
   const handleUvUnwrap = () =>
     undoable(async (done) => {
       try {
         setIsProcessing(true);
-        setProgress({ value: 0, label: "Desplegando..." });
-        setStatusMessage("Desplegando UV y horneando texturas...");
+        setProgress({ value: 0, label: t("Desplegando...") });
+        setStatusMessage(t("Desplegando UV y horneando texturas..."));
         const onProgress = new Channel<Progress>();
-        onProgress.onmessage = (msg) => setProgress({ value: msg.percent, label: msg.message });
+        onProgress.onmessage = (msg) => setProgress({ value: msg.percent, label: tBackend(msg.message) });
         const config = uvConfig();
         const info = await invoke<UvInfo>("run_uv_unwrap", {
           config: {
@@ -5160,20 +5186,21 @@ export const App: Component = () => {
           },
           onProgress,
         });
-        done("Desplegar UV");
-        setProgress({ value: 100, label: "Cargando en el visor..." });
+        done(t("Desplegar UV"));
+        setProgress({ value: 100, label: t("Cargando en el visor...") });
         await refreshSkin();
         setUvPreview("texture");
         setShowQuadMesh(true);
         setExportUseRetopology(true);
         pipeline.markCompleted("uv");
         setStatusMessage(
-          `UV desplegadas: ${info.num_charts ?? 0} islas, estiramiento ${info.stretch?.toFixed(3) ?? "--"}` +
-            (info.texture_size > 0 ? `, texturas de ${info.texture_size} px` : "")
+          (info.texture_size > 0
+            ? t("UV desplegadas: {charts} islas, estiramiento {stretch}, texturas de {size} px", { charts: info.num_charts ?? 0, stretch: info.stretch?.toFixed(3) ?? "--", size: info.texture_size })
+            : t("UV desplegadas: {charts} islas, estiramiento {stretch}", { charts: info.num_charts ?? 0, stretch: info.stretch?.toFixed(3) ?? "--" }))
         );
       } catch (e) {
         console.error("UV unwrap error:", e);
-        setStatusMessage(`Error: ${e}`);
+        setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
       } finally {
         setIsProcessing(false);
         setProgress(undefined);
@@ -5186,10 +5213,10 @@ export const App: Component = () => {
     undoable(async (done) => {
       try {
         setIsProcessing(true);
-        setProgress({ value: 0, label: "Desplegando..." });
-        setStatusMessage("Desplegando UV de la malla original...");
+        setProgress({ value: 0, label: t("Desplegando...") });
+        setStatusMessage(t("Desplegando UV de la malla original..."));
         const onProgress = new Channel<Progress>();
-        onProgress.onmessage = (msg) => setProgress({ value: msg.percent, label: msg.message });
+        onProgress.onmessage = (msg) => setProgress({ value: msg.percent, label: tBackend(msg.message) });
         const config = uvConfig();
         const result = await invoke<{ uv: UvInfo; mesh_info: MeshInfo; rig_kept: boolean }>("unwrap_original_mesh", {
           config: {
@@ -5202,7 +5229,7 @@ export const App: Component = () => {
           },
           onProgress,
         });
-        done("Desplegar UV del original");
+        done(t("Desplegar UV del original"));
         setCanUndoUnwrap(true);
         // Deshacer la reparación de antes descartaría el desplegado
         setCanUndoRepair(false);
@@ -5210,18 +5237,19 @@ export const App: Component = () => {
         setRepairResult(undefined);
         dropWeights();
         clearQuadMesh();
-        setProgress({ value: 100, label: "Cargando en el visor..." });
+        setProgress({ value: 100, label: t("Cargando en el visor...") });
         setMeshData(await fetchMeshData());
         setMeshInfo({ vertices: result.mesh_info.num_vertices, faces: result.mesh_info.num_faces, format: meshInfo().format });
         if (result.rig_kept) await keepRig();
         pipeline.markCompleted("uv");
         setStatusMessage(
-          `UV desplegadas: ${result.uv.num_charts ?? 0} islas, estiramiento ${result.uv.stretch?.toFixed(3) ?? "--"}` +
-            (result.uv.texture_size > 0 ? `, texturas de ${result.uv.texture_size} px` : "")
+          (result.uv.texture_size > 0
+            ? t("UV desplegadas: {charts} islas, estiramiento {stretch}, texturas de {size} px", { charts: result.uv.num_charts ?? 0, stretch: result.uv.stretch?.toFixed(3) ?? "--", size: result.uv.texture_size })
+            : t("UV desplegadas: {charts} islas, estiramiento {stretch}", { charts: result.uv.num_charts ?? 0, stretch: result.uv.stretch?.toFixed(3) ?? "--" }))
         );
       } catch (e) {
         console.error("UV unwrap original error:", e);
-        setStatusMessage(`Error: ${e}`);
+        setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
       } finally {
         setIsProcessing(false);
         setProgress(undefined);
@@ -5232,19 +5260,19 @@ export const App: Component = () => {
     undoable(async (done) => {
       try {
         setIsProcessing(true);
-        const info = await busy("Volviendo a la malla anterior...", () =>
+        const info = await busy(t("Volviendo a la malla anterior..."), () =>
           invoke<MeshInfo & { rig_kept: boolean }>("undo_unwrap_original")
         );
-        done("Deshacer desplegado del original");
+        done(t("Deshacer desplegado del original"));
         setCanUndoUnwrap(false);
         dropWeights();
         clearQuadMesh();
         setMeshData(await fetchMeshData());
         setMeshInfo({ vertices: info.num_vertices, faces: info.num_faces, format: meshInfo().format });
         if (info.rig_kept) await keepRig();
-        setStatusMessage("Desplegado deshecho");
+        setStatusMessage(t("Desplegado deshecho"));
       } catch (e) {
-        setStatusMessage(`Error: ${e}`);
+        setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
       } finally {
         setIsProcessing(false);
       }
@@ -5255,11 +5283,11 @@ export const App: Component = () => {
       try {
         setIsProcessing(true);
         await invoke<UvInfo>("restore_transferred_uvs");
-        done("Volver a las UV trasladadas");
+        done(t("Volver a las UV trasladadas"));
         await refreshSkin();
-        setStatusMessage("UV trasladadas del modelo original");
+        setStatusMessage(t("UV trasladadas del modelo original"));
       } catch (e) {
-        setStatusMessage(`Error: ${e}`);
+        setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
       } finally {
         setIsProcessing(false);
       }
@@ -5269,14 +5297,14 @@ export const App: Component = () => {
     undoable(async (done) => {
       try {
         setIsProcessing(true);
-        setProgress({ value: 0, label: "Preparando retopologia..." });
-        setStatusMessage("Ejecutando QuadriFlow...");
+        setProgress({ value: 0, label: t("Preparando retopologia...") });
+        setStatusMessage(t("Ejecutando QuadriFlow..."));
 
         const config = retopologyConfig();
 
         const onProgress = new Channel<Progress>();
         onProgress.onmessage = (msg) => {
-          setProgress({ value: msg.percent, label: msg.message });
+          setProgress({ value: msg.percent, label: tBackend(msg.message) });
         };
 
         const info = await invoke<TauriQuadMeshInfo>("run_retopology", {
@@ -5293,12 +5321,12 @@ export const App: Component = () => {
           },
           onProgress,
         });
-        done("Retopología");
+        done(t("Retopología"));
 
         setQuadMeshInfo({ vertices: info.num_vertices, quads: info.num_quads });
         setQuadQuality(info.quality);
 
-        setProgress({ value: 100, label: "Cargando en el visor..." });
+        setProgress({ value: 100, label: t("Cargando en el visor...") });
         const quadData = decodeMesh(await invoke<ArrayBuffer>("get_quad_mesh_data"));
         setQuadMeshData(quadData);
         // Las etapas siguientes usan la malla nueva; el rig la sigue con los
@@ -5317,17 +5345,22 @@ export const App: Component = () => {
         const uvNote =
           info.uv_seam_faces === null
             ? ""
-            : ` · UV trasladadas (${info.uv_seam_faces.toLocaleString()} caras cruzan costuras)`;
-        const rigNote = info.rig_kept ? " · esqueleto y pesos trasladados" : "";
+            : t(" · UV trasladadas ({n} caras cruzan costuras)", { n: info.uv_seam_faces.toLocaleString() });
+        const rigNote = info.rig_kept ? t(" · esqueleto y pesos trasladados") : "";
         setStatusMessage(
-          `Retopologia completada: ${info.num_vertices.toLocaleString()} vertices, ${info.num_quads.toLocaleString()} quads${uvNote}${rigNote}`
+          t("Retopologia completada: {vertices} vertices, {quads} quads{uv}{rig}", {
+            vertices: info.num_vertices.toLocaleString(),
+            quads: info.num_quads.toLocaleString(),
+            uv: uvNote,
+            rig: rigNote,
+          })
         );
 
         // Pipeline: mark retopology as completed
         pipeline.markCompleted("remesh");
       } catch (e) {
         console.error("Retopology error:", e);
-        setStatusMessage(`Error: ${e}`);
+        setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
         setIsProcessing(false);
         setProgress(undefined);
       }
@@ -5340,9 +5373,9 @@ export const App: Component = () => {
   const handleAnalyzeMesh = async () => {
     try {
       setIsProcessing(true);
-      setStatusMessage("Analizando malla...");
+      setStatusMessage(t("Analizando malla..."));
       const config = repairAnalysisConfig();
-      const result = await busy("Analizando malla...", () =>
+      const result = await busy(t("Analizando malla..."), () =>
         invoke<MeshDiagnostics>("analyze_mesh", {
           config: {
             check_self_intersections: config.checkSelfIntersections,
@@ -5353,12 +5386,12 @@ export const App: Component = () => {
       setIsProcessing(false);
       setStatusMessage(
         result.is_healthy
-          ? "Malla saludable - no requiere reparación"
-          : "Análisis completado - se encontraron problemas"
+          ? t("Malla saludable - no requiere reparación")
+          : t("Análisis completado - se encontraron problemas")
       );
     } catch (e) {
       console.error("Analyze error:", e);
-      setStatusMessage(`Error: ${e}`);
+      setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
       setIsProcessing(false);
     }
   };
@@ -5367,9 +5400,9 @@ export const App: Component = () => {
     undoable(async (done) => {
       try {
         setIsProcessing(true);
-        setStatusMessage("Reparando malla...");
+        setStatusMessage(t("Reparando malla..."));
         const opts = repairOptions();
-        const result = await busy("Reparando malla...", () => invoke<TauriRepairResult>("repair_mesh", {
+        const result = await busy(t("Reparando malla..."), () => invoke<TauriRepairResult>("repair_mesh", {
           onProgress: progressChannel(),
           config: {
             merge_duplicates: opts.mergeDuplicates,
@@ -5384,7 +5417,7 @@ export const App: Component = () => {
             resolve_intersections: opts.resolveIntersections,
           },
         }));
-        done("Reparar malla");
+        done(t("Reparar malla"));
 
         setRepairResult(result);
         setDiagnostics(result.new_diagnostics);
@@ -5408,13 +5441,13 @@ export const App: Component = () => {
         setIsProcessing(false);
         setStatusMessage(
           result.new_diagnostics.is_healthy
-            ? "Reparación completada: malla sana"
-            : "Reparación completada (revisa el diagnóstico)"
+            ? t("Reparación completada: malla sana")
+            : t("Reparación completada (revisa el diagnóstico)")
         );
         pipeline.markCompleted("repair");
       } catch (e) {
         console.error("Repair error:", e);
-        setStatusMessage(`Error: ${e}`);
+        setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
         setIsProcessing(false);
       }
     });
@@ -5422,11 +5455,11 @@ export const App: Component = () => {
   const handleUndoRepair = () =>
     undoable(async (done) => {
       try {
-        setStatusMessage("Deshaciendo reparación...");
-        const info = await busy("Deshaciendo reparación...", () =>
+        setStatusMessage(t("Deshaciendo reparación..."));
+        const info = await busy(t("Deshaciendo reparación..."), () =>
           invoke<MeshInfo & { rig_kept: boolean }>("undo_repair")
         );
-        done("Deshacer reparación");
+        done(t("Deshacer reparación"));
 
         const data = await fetchMeshData();
         setMeshData(data);
@@ -5437,10 +5470,10 @@ export const App: Component = () => {
         dropWeights();
         clearQuadMesh();
         if (info.rig_kept) await keepRig();
-        setStatusMessage("Reparación deshecha");
+        setStatusMessage(t("Reparación deshecha"));
       } catch (e) {
         console.error("Undo repair error:", e);
-        setStatusMessage(`Error: ${e}`);
+        setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
       }
     });
 
@@ -5500,11 +5533,16 @@ export const App: Component = () => {
     const grid = await rawInvoke<VoxelGridInfo>("remesh_voxel_grid", { voxelMm: voxelSize(voxelConfig(), info) }).catch(() => voxelGrid());
     if (grid) setVoxelGrid(grid);
     if (!grid || !isHeavyGrid(grid)) return true;
-    const memory = grid.memory_mb >= 1000 ? `${(grid.memory_mb / 1000).toLocaleString("es", { maximumFractionDigits: 1 })} GB` : `${Math.ceil(grid.memory_mb)} MB`;
+    const memory = grid.memory_mb >= 1000 ? `${(grid.memory_mb / 1000).toLocaleString(locale(), { maximumFractionDigits: 1 })} GB` : `${Math.ceil(grid.memory_mb)} MB`;
     return confirmAction({
-      title: "Vóxeles muy finos",
-      message: `Con vóxeles de ${formatMm(grid.voxel_mm)} la grilla es de ${grid.dims.join(" × ")}: necesita unos ${memory} de memoria, deja cerca de ${grid.triangles.toLocaleString("es")} triángulos y puede tardar más de un minuto. ¿Seguir?`,
-      confirmLabel: "Seguir",
+      title: t("Vóxeles muy finos"),
+      message: t("Con vóxeles de {size} la grilla es de {dims}: necesita unos {memory} de memoria, deja cerca de {triangles} triángulos y puede tardar más de un minuto. ¿Seguir?", {
+        size: formatMm(grid.voxel_mm),
+        dims: grid.dims.join(" × "),
+        memory,
+        triangles: grid.triangles.toLocaleString(locale()),
+      }),
+      confirmLabel: tx("confirmar", "Seguir"),
     });
   };
   createEffect(
@@ -5522,7 +5560,7 @@ export const App: Component = () => {
 
   /** Desviación en % del tamaño, sin cifras de más */
   const deviationText = (percent: number) =>
-    percent < 0.001 ? "menos de 0,001 %" : `${percent.toLocaleString("es", { maximumSignificantDigits: 2 })} %`;
+    percent < 0.001 ? t("menos de 0,001 %") : `${percent.toLocaleString(locale(), { maximumSignificantDigits: 2 })} %`;
 
   /** Parámetros, mensaje y paso del historial del modo elegido */
   const remeshJob = () => {
@@ -5533,9 +5571,9 @@ export const App: Component = () => {
       return {
         mode,
         params: isotropicParams(config),
-        busy: "Remallando con triángulos parejos...",
-        step: `Remallado isótropo (${config.edgeMm == null ? "automático" : edge})`,
-        done: (stats: RemeshStats) => `Malla isótropa: ${stats.after.triangles.toLocaleString("es")} triángulos de ${edge}`,
+        busy: t("Remallando con triángulos parejos..."),
+        step: t("Remallado isótropo ({edge})", { edge: config.edgeMm == null ? t("automático") : edge }),
+        done: (stats: RemeshStats) => t("Malla isótropa: {n} triángulos de {edge}", { n: stats.after.triangles.toLocaleString(locale()), edge }),
       };
     }
     if (mode === "quads") {
@@ -5543,12 +5581,12 @@ export const App: Component = () => {
       return {
         mode,
         params: quadsParams(config),
-        busy: "Juntando triángulos en quads...",
-        step: config.allQuads ? "Triángulos a quads (todo quads)" : "Triángulos a quads",
+        busy: t("Juntando triángulos en quads..."),
+        step: config.allQuads ? t("Triángulos a quads (todo quads)") : t("Triángulos a quads"),
         done: (stats: RemeshStats) => {
           const quads = stats.after.quads ?? 0;
           const loose = stats.after.triangles - 2 * quads;
-          return `${quads.toLocaleString("es")} quads${loose > 0 ? ` y ${loose.toLocaleString("es")} triángulos sueltos` : ""}`;
+          return loose > 0 ? t("{quads} quads y {loose} triángulos sueltos", { quads: quads.toLocaleString(locale()), loose: loose.toLocaleString(locale()) }) : t("{quads} quads", { quads: quads.toLocaleString(locale()) });
         },
       };
     }
@@ -5557,9 +5595,9 @@ export const App: Component = () => {
       return {
         mode,
         params: voxelParams(config),
-        busy: "Rehaciendo la superficie desde el volumen...",
-        step: `Rehacer con vóxeles (${config.resolution} en el lado largo)`,
-        done: (stats: RemeshStats) => `Superficie rehecha: ${stats.after.triangles.toLocaleString("es")} triángulos, cerrada`,
+        busy: t("Rehaciendo la superficie desde el volumen..."),
+        step: t("Rehacer con vóxeles ({n} en el lado largo)", { n: config.resolution }),
+        done: (stats: RemeshStats) => t("Superficie rehecha: {n} triángulos, cerrada", { n: stats.after.triangles.toLocaleString(locale()) }),
       };
     }
     if (mode === "smooth") {
@@ -5568,18 +5606,18 @@ export const App: Component = () => {
       return {
         mode,
         params: smoothParams(config),
-        busy: "Suavizando...",
-        step: `Suavizar malla (${passes} ${passes === 1 ? "pasada" : "pasadas"})`,
-        done: (stats: RemeshStats) => `Malla suavizada: se movió hasta ${deviationText(stats.deviation.max_percent)} del tamaño`,
+        busy: t("Suavizando..."),
+        step: t("Suavizar malla ({passes})", { passes: tn(passes, "{n} pasada", "{n} pasadas") }),
+        done: (stats: RemeshStats) => t("Malla suavizada: se movió hasta {dev} del tamaño", { dev: deviationText(stats.deviation.max_percent) }),
       };
     }
     const config = simplifyConfig();
     return {
       mode,
       params: simplifyParams(config),
-      busy: "Simplificando...",
-      step: `Simplificar malla (${config.percent.toLocaleString("es")} %)`,
-      done: (stats: RemeshStats) => `Malla simplificada: ${stats.after.triangles.toLocaleString("es")} triángulos`,
+      busy: t("Simplificando..."),
+      step: t("Simplificar malla ({pct} %)", { pct: config.percent.toLocaleString(locale()) }),
+      done: (stats: RemeshStats) => t("Malla simplificada: {n} triángulos", { n: stats.after.triangles.toLocaleString(locale()) }),
     };
   };
 
@@ -5588,7 +5626,7 @@ export const App: Component = () => {
     try {
       setIsProcessing(true);
       const { mode, params } = remeshJob();
-      const stats = await busy("Calculando la vista previa...", async () => {
+      const stats = await busy(t("Calculando la vista previa..."), async () => {
         const stats = await invoke<RemeshStats>("remesh_preview", { params, onProgress: progressChannel() });
         setRemeshPreviewData(decodeMesh(await invoke<ArrayBuffer>("get_remesh_preview_data")));
         return stats;
@@ -5597,14 +5635,18 @@ export const App: Component = () => {
       const quads = stats.after.quads ?? 0;
       const faces =
         quads > 0
-          ? `${quads.toLocaleString("es")} quads y ${(stats.after.triangles - 2 * quads).toLocaleString("es")} triángulos sueltos`
-          : `${stats.after.triangles.toLocaleString("es")} triángulos`;
+          ? t("{quads} quads y {loose} triángulos sueltos", { quads: quads.toLocaleString(locale()), loose: (stats.after.triangles - 2 * quads).toLocaleString(locale()) })
+          : t("{n} triángulos", { n: stats.after.triangles.toLocaleString(locale()) });
       setStatusMessage(
-        `Vista previa: ${faces} (antes ${stats.before.triangles.toLocaleString("es")} triángulos), se aleja hasta ${deviationText(stats.deviation.max_percent)}`
+        t("Vista previa: {faces} (antes {before} triángulos), se aleja hasta {dev}", {
+          faces,
+          before: stats.before.triangles.toLocaleString(locale()),
+          dev: deviationText(stats.deviation.max_percent),
+        })
       );
     } catch (e) {
       console.error("Remesh preview error:", e);
-      setStatusMessage(`Error: ${e}`);
+      setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
     } finally {
       setIsProcessing(false);
     }
@@ -5628,25 +5670,26 @@ export const App: Component = () => {
     if (info.has_skin)
       choices.push({
         id: "texture",
-        label: "Trasladar la textura",
+        label: t("Trasladar la textura"),
         description:
-          "Se despliega la malla nueva y se hornea sobre su mapa la apariencia de ahora: textura, colores y relieve. Tarda unos segundos más.",
+          t("Se despliega la malla nueva y se hornea sobre su mapa la apariencia de ahora: textura, colores y relieve. Tarda unos segundos más."),
         checked: true,
       });
     if (info.has_rig)
       choices.push({
         id: "rig",
-        label: "Trasladar los pesos",
-        description: "Cada vértice nuevo toma los pesos del punto más cercano de la malla de ahora.",
+        label: t("Trasladar los pesos"),
+        description: t("Cada vértice nuevo toma los pesos del punto más cercano de la malla de ahora."),
         checked: true,
       });
-    const name = mode === "voxel" ? "Vóxeles" : "Isótropo";
+    const name = mode === "voxel" ? t("Vóxeles") : t("Isótropo");
     const answer = await confirmChoices({
-      title: "Es una malla nueva",
-      message: `${name} rehace la malla: sus vértices no son los de ahora, así que no traen ${
-        info.has_skin && info.has_rig ? "UV ni pesos" : info.has_skin ? "UV" : "pesos"
-      }. Lo que no se traslade se descarta.`,
-      confirmLabel: "Aplicar",
+      title: t("Es una malla nueva"),
+      message: t("{name} rehace la malla: sus vértices no son los de ahora, así que no traen {what}. Lo que no se traslade se descarta.", {
+        name,
+        what: info.has_skin && info.has_rig ? t("UV ni pesos") : info.has_skin ? t("UV") : t("pesos"),
+      }),
+      confirmLabel: t("Aplicar"),
       choices,
     });
     if (!answer) return null;
@@ -5687,10 +5730,10 @@ export const App: Component = () => {
         if (job.mode === "isotropic" || job.mode === "voxel") await loadSceneAppearance();
         setRemeshStats({ mode: job.mode, kind: "applied", stats: result.stats });
         pipeline.markCompleted("remesh");
-        setStatusMessage(`${job.done(result.stats)}${result.rig_kept ? " (los pesos pasaron a la malla nueva)" : ""}`);
+        setStatusMessage(`${job.done(result.stats)}${result.rig_kept ? t(" (los pesos pasaron a la malla nueva)") : ""}`);
       } catch (e) {
         console.error("Remesh apply error:", e);
-        setStatusMessage(`Error: ${e}`);
+        setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
       } finally {
         setIsProcessing(false);
       }
@@ -5703,16 +5746,20 @@ export const App: Component = () => {
   const handleAnalyzePrint3d = async () => {
     try {
       setIsProcessing(true);
-      setStatusMessage("Analizando el modelo para fabricar...");
-      const result = await busy("Analizando el modelo para fabricar...", () => invoke<TauriPrint3dAnalysis>("analyze_print3d"));
+      setStatusMessage(t("Analizando el modelo para fabricar..."));
+      const result = await busy(t("Analizando el modelo para fabricar..."), () => invoke<TauriPrint3dAnalysis>("analyze_print3d"));
       setMeshAnalysis(result);
       setIsProcessing(false);
       setStatusMessage(
-        `Análisis 3D: ${result.dimensions[0].toFixed(1)} x ${result.dimensions[1].toFixed(1)} x ${result.dimensions[2].toFixed(1)} mm`
+        t("Análisis 3D: {x} x {y} x {z} mm", {
+          x: result.dimensions[0].toFixed(1),
+          y: result.dimensions[1].toFixed(1),
+          z: result.dimensions[2].toFixed(1),
+        })
       );
     } catch (e) {
       console.error("Print3D analyze error:", e);
-      setStatusMessage(`Error: ${e}`);
+      setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
       setIsProcessing(false);
     }
   };
@@ -5721,7 +5768,7 @@ export const App: Component = () => {
     undoable(async (done) => {
       try {
         setIsProcessing(true);
-        const result = await busy("Deshaciendo escala...", () => invoke<TauriPrint3dAnalysis>("undo_print_scale"));
+        const result = await busy(t("Deshaciendo escala..."), () => invoke<TauriPrint3dAnalysis>("undo_print_scale"));
         setMeshAnalysis(result);
         setSubdivideResult(undefined);
         setAutorigComplete(false);
@@ -5730,11 +5777,11 @@ export const App: Component = () => {
         const data = await fetchMeshData();
         setMeshData(data);
         setCanUndoPrintScale(false);
-        done("Deshacer escala");
-        setStatusMessage("Escala deshecha");
+        done(t("Deshacer escala"));
+        setStatusMessage(t("Escala deshecha"));
       } catch (e) {
         console.error("Undo scale error:", e);
-        setStatusMessage(`Error: ${e}`);
+        setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
       } finally {
         setIsProcessing(false);
       }
@@ -5744,11 +5791,11 @@ export const App: Component = () => {
     undoable(async (done) => {
       try {
         setIsProcessing(true);
-        setStatusMessage("Escalando malla...");
-        const result = await busy("Escalando malla...", () => invoke<TauriPrint3dAnalysis>("scale_mesh_for_print", { params }));
+        setStatusMessage(t("Escalando malla..."));
+        const result = await busy(t("Escalando malla..."), () => invoke<TauriPrint3dAnalysis>("scale_mesh_for_print", { params }));
         setMeshAnalysis(result);
         setCanUndoPrintScale(true);
-        done("Escalar para fabricar");
+        done(t("Escalar para fabricar"));
         // El backend descarta el rig al cambiar la geometría
         setAutorigComplete(false);
         setWeightsData(undefined);
@@ -5760,11 +5807,15 @@ export const App: Component = () => {
 
         setIsProcessing(false);
         setStatusMessage(
-          `Escalado completado: ${result.dimensions[0].toFixed(1)} x ${result.dimensions[1].toFixed(1)} x ${result.dimensions[2].toFixed(1)} mm`
+          t("Escalado completado: {x} x {y} x {z} mm", {
+            x: result.dimensions[0].toFixed(1),
+            y: result.dimensions[1].toFixed(1),
+            z: result.dimensions[2].toFixed(1),
+          })
         );
       } catch (e) {
         console.error("Scale error:", e);
-        setStatusMessage(`Error: ${e}`);
+        setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
         setIsProcessing(false);
       }
     });
@@ -5773,16 +5824,16 @@ export const App: Component = () => {
     undoable(async (done) => {
       try {
         setIsProcessing(true);
-        setStatusMessage("Subdividiendo malla...");
-        const result = await busy("Subdividiendo malla...", () => invoke<TauriSubdivideResult>("subdivide_mesh", { config }));
-        done("Dividir en piezas");
+        setStatusMessage(t("Subdividiendo malla..."));
+        const result = await busy(t("Subdividiendo malla..."), () => invoke<TauriSubdivideResult>("subdivide_mesh", { config }));
+        done(t("Dividir en piezas"));
         setSubdivideResult(result);
         setIsProcessing(false);
-        setStatusMessage(`Subdivisión completada: ${result.piece_count} piezas`);
+        setStatusMessage(t("Subdivisión completada: {n} piezas", { n: result.piece_count }));
         pipeline.markCompleted("print3d");
       } catch (e) {
         console.error("Subdivide error:", e);
-        setStatusMessage(`Error: ${e}`);
+        setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
         setIsProcessing(false);
       }
     });
@@ -5791,36 +5842,36 @@ export const App: Component = () => {
   const handleExportObjects = async (format: string, spacing: number | null) => {
     const list = selectedObjects();
     try {
-      const path = await save({ title: "Exportar los objetos juntos", filters: [{ name: format.toUpperCase(), extensions: [format] }] });
+      const path = await save({ title: t("Exportar los objetos juntos"), filters: [{ name: format.toUpperCase(), extensions: [format] }] });
       if (!path) return;
-      const bytes = await busy(`Exportando ${list.length} objetos...`, () =>
+      const bytes = await busy(t("Exportando {n} objetos...", { n: list.length }), () =>
         invoke<number>("export_objects", { ids: list.map((o) => o.id), names: list.map((o) => o.name), path, format, spacing }),
       );
-      setStatusMessage(`${list.length} objetos exportados (${(bytes / 1024).toLocaleString("es", { maximumFractionDigits: 0 })} KB)`);
+      setStatusMessage(t("{n} objetos exportados ({kb} KB)", { n: list.length, kb: (bytes / 1024).toLocaleString(locale(), { maximumFractionDigits: 0 }) }));
     } catch (e) {
-      setStatusMessage(`Error: ${e}`);
+      setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
     }
   };
 
   const handleExportPiece = async (index: number) => {
     try {
       const selected = await save({
-        title: "Exportar pieza STL",
+        title: t("Exportar pieza STL"),
         filters: [{ name: "STL", extensions: ["stl"] }],
       });
       if (!selected) return;
 
-      setStatusMessage(`Exportando pieza ${index + 1}...`);
-      const result = await busy(`Exportando pieza ${index + 1}...`, () =>
+      setStatusMessage(t("Exportando pieza {n}...", { n: index + 1 }));
+      const result = await busy(t("Exportando pieza {n}...", { n: index + 1 }), () =>
         invoke<ExportResult>("export_print3d_piece", {
           pieceIndex: index,
           path: selected,
         })
       );
-      setStatusMessage(result.message);
+      setStatusMessage(tBackend(result.message));
     } catch (e) {
       console.error("Export piece error:", e);
-      setStatusMessage(`Error: ${e}`);
+      setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
     }
   };
 
@@ -5841,17 +5892,17 @@ export const App: Component = () => {
     if (request !== transformRequest) return;
     setSkeletonData(tauriSkeletonToViewer(data));
     // El backend descartó los pesos (eran del esqueleto anterior): la interfaz también
-    if (autorigComplete()) dropWeights("Transformaste el esqueleto entero");
+    if (autorigComplete()) dropWeights(t("Transformaste el esqueleto entero"));
   };
 
   /** Texto del paso en el historial: qué cambió y a cuánto */
   const describeTransform = (before: SkeletonTransform, after: SkeletonTransform) => {
     const same = (a: number[], b: number[]) => a.every((v, i) => v === b[i]);
     const parts: string[] = [];
-    if (after.scale !== before.scale) parts.push(`escala ${after.scale.toFixed(2)}x`);
-    if (!same(after.translation, before.translation)) parts.push("posición");
-    if (!same(after.rotation, before.rotation)) parts.push(`giro ${after.rotation.map((r) => `${Math.round(r)}°`).join(" ")}`);
-    return parts.length > 0 ? `Esqueleto: ${parts.join(" · ")}` : "Transformar esqueleto";
+    if (after.scale !== before.scale) parts.push(t("escala {n}x", { n: after.scale.toFixed(2) }));
+    if (!same(after.translation, before.translation)) parts.push(t("posición"));
+    if (!same(after.rotation, before.rotation)) parts.push(t("giro {deg}", { deg: after.rotation.map((r) => `${Math.round(r)}°`).join(" ") }));
+    return parts.length > 0 ? t("Esqueleto: {parts}", { parts: parts.join(" · ") }) : t("Transformar esqueleto");
   };
 
   const handleTransformChange = async (transform: SkeletonTransform) => {
@@ -5863,7 +5914,7 @@ export const App: Component = () => {
       });
     } catch (e) {
       console.error("Transform error:", e);
-      setStatusMessage(`Error: ${e}`);
+      setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
     }
   };
 
@@ -5908,7 +5959,7 @@ export const App: Component = () => {
       try {
         const data = await invoke<TauriSkeletonData>("select_body_plan", { plan });
         if (request !== skeletonRequest) return;
-        done(presetId ? "Cuerpo desde cero" : "Esqueleto por forma de cuerpo");
+        done(presetId ? t("Cuerpo desde cero") : t("Esqueleto por forma de cuerpo"));
         if (presetId) {
           setSkeletonLoaded(true);
           setAutorigComplete(false);
@@ -5917,11 +5968,11 @@ export const App: Component = () => {
         setSkeletonData(tauriSkeletonToViewer(data));
         setSkeletonTransform({ ...defaultTransform });
         setFitInfo(undefined);
-        dropWeights("Cambiaste la forma del cuerpo");
-        setStatusMessage(`Plantilla con ${data.bones.length} huesos: ajústala al modelo`);
+        dropWeights(t("Cambiaste la forma del cuerpo"));
+        setStatusMessage(t("Plantilla con {n} huesos: ajústala al modelo", { n: data.bones.length }));
       } catch (e) {
         console.error("Body plan error:", e);
-        setStatusMessage(`Error: ${e}`);
+        setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
         // El panel vuelve a mostrar la forma que sigue puesta
         if (request === skeletonRequest) {
           setBodyPlan(previous);
@@ -5938,31 +5989,31 @@ export const App: Component = () => {
       await handleBodyPlanChange(plan, `plan:${shape}`);
     } catch (e) {
       console.error("Body shape error:", e);
-      setStatusMessage(`Error: ${e}`);
+      setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
     }
   };
 
   const handleAutoFit = () =>
     undoable(async (done) => {
       try {
-        const fit = await busy("Detectando extremidades y ajustando el esqueleto...", () =>
+        const fit = await busy(t("Detectando extremidades y ajustando el esqueleto..."), () =>
           invoke<TauriAutoFitResult>("auto_fit_skeleton")
         );
-        done("Ajustar esqueleto al modelo");
+        done(t("Ajustar esqueleto al modelo"));
         setSkeletonData(tauriSkeletonToViewer(fit.skeleton));
         setSkeletonTransform({ ...defaultTransform });
-        dropWeights("Volviste a ajustar el esqueleto al modelo");
+        dropWeights(t("Volviste a ajustar el esqueleto al modelo"));
         setFitInfo({
           quality: fit.quality,
           extremities: fit.extremities,
           unusedExtremities: fit.unused_extremities.length,
         });
         setStatusMessage(
-          `Esqueleto ajustado: ${fit.extremities} extremidades, proporciones ${Math.round(fit.quality * 100)} %`
+          t("Esqueleto ajustado: {limbs} extremidades, proporciones {pct} %", { limbs: fit.extremities, pct: Math.round(fit.quality * 100) })
         );
       } catch (e) {
         console.error("Auto-fit error:", e);
-        setStatusMessage(`Error: ${e}`);
+        setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
       }
     });
 
@@ -5976,10 +6027,10 @@ export const App: Component = () => {
           const data = plan
             ? await invoke<TauriSkeletonData>("select_body_plan", { plan })
             : await invoke<TauriSkeletonData>("select_skeleton", { presetId });
-          done("Resetear esqueleto");
+          done(t("Resetear esqueleto"));
           setSkeletonData(tauriSkeletonToViewer(data));
           setSkeletonTransform({ ...defaultTransform });
-          setStatusMessage("Esqueleto reseteado");
+          setStatusMessage(t("Esqueleto reseteado"));
         } catch (e) {
           console.error("Reset error:", e);
         }
@@ -6022,9 +6073,9 @@ export const App: Component = () => {
     from: [number, number, number],
     to: [number, number, number]
   ) => {
-    dropWeights("Moviste una articulación");
+    dropWeights(t("Moviste una articulación"));
     // Ya está aplicado: el visor lo fue mandando durante el arrastre
-    await history.execute("Mover articulación", { kind: "moveJoint", data: { index, from, to } }, { applied: true });
+    await history.execute(t("Mover articulación"), { kind: "moveJoint", data: { index, from, to } }, { applied: true });
   };
 
   /** Centra en el volumen la articulación seleccionada, o todas */
@@ -6032,17 +6083,17 @@ export const App: Component = () => {
     undoable(async (done) => {
       const selected = viewSettings().selectedBone;
       try {
-        const data = await busy("Centrando articulaciones...", () =>
+        const data = await busy(t("Centrando articulaciones..."), () =>
           invoke<TauriSkeletonData>("center_bones", { bones: onlySelected && selected >= 0 ? [selected] : null })
         );
-        done(onlySelected ? "Centrar articulación" : "Centrar articulaciones");
+        done(onlySelected ? t("Centrar articulación") : t("Centrar articulaciones"));
         setSkeletonData(tauriSkeletonToViewer(data));
         setSkeletonTransform({ ...defaultTransform });
-        dropWeights("Centraste articulaciones");
-        setStatusMessage(onlySelected ? "Articulación centrada en el miembro" : "Articulaciones centradas");
+        dropWeights(t("Centraste articulaciones"));
+        setStatusMessage(onlySelected ? t("Articulación centrada en el miembro") : t("Articulaciones centradas"));
       } catch (e) {
         console.error("Center bones error:", e);
-        setStatusMessage(`Error: ${e}`);
+        setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
       }
     });
 
@@ -6065,9 +6116,9 @@ export const App: Component = () => {
 
   const toolDisabledReason = (tool: ToolId) => {
     // Sin modelo se trabaja sobre el esqueleto solo
-    if (!meshLoaded() && (toolCtx() === "object" || tool === "paint")) return "importa un modelo";
-    if (toolCtx() !== "object" && tool !== "select" && tool !== "measure" && !skeletonData()) return "primero elige un esqueleto";
-    if (tool === "paint" && !autorigComplete()) return "primero calcula los pesos";
+    if (!meshLoaded() && (toolCtx() === "object" || tool === "paint")) return t("importa un modelo");
+    if (toolCtx() !== "object" && tool !== "select" && tool !== "measure" && !skeletonData()) return t("primero elige un esqueleto");
+    if (tool === "paint" && !autorigComplete()) return t("primero calcula los pesos");
     return undefined;
   };
 
@@ -6076,7 +6127,7 @@ export const App: Component = () => {
     const m = new THREE.Matrix4().fromArray(matrix);
     const factor = Number(new THREE.Vector3().setFromMatrixScale(m).x.toPrecision(4));
     const description =
-      mode === "translate" ? "Mover el modelo" : mode === "rotate" ? "Rotar el modelo" : `Escalar el modelo ×${factor.toLocaleString()}`;
+      mode === "translate" ? t("Mover el modelo") : mode === "rotate" ? t("Rotar el modelo") : t("Escalar el modelo ×{factor}", { factor: factor.toLocaleString() });
     if (!(await applyPlacement(m, description))) viewerRef?.clearObjectPreview();
   };
 
@@ -6088,25 +6139,25 @@ export const App: Component = () => {
           "set_active_mesh",
           { retopology: useRetopology }
         );
-        done(useRetopology ? "Usar la malla de quads" : "Usar la malla original");
+        done(useRetopology ? t("Usar la malla de quads") : t("Usar la malla original"));
         setActiveQuad(active);
         // El rig pasa a la malla elegida con los pesos trasladados
         if (rig_kept) await reloadWeights();
         else dropWeights();
         setStatusMessage(
           active
-            ? "UV, esqueleto y pesos usan la malla retopologizada"
-            : "UV y piel siguen en la retopología; esqueleto y pesos usan la malla original"
+            ? t("UV, esqueleto y pesos usan la malla retopologizada")
+            : t("UV y piel siguen en la retopología; esqueleto y pesos usan la malla original")
         );
       } catch (e) {
-        setStatusMessage(`Error: ${e}`);
+        setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
       }
     });
 
   /** Pincel: mapa de calor del hueso activo y simetría de vértices */
   const startPainting = async () => {
     if (!autorigComplete()) {
-      setStatusMessage("Primero calcula los pesos");
+      setStatusMessage(t("Primero calcula los pesos"));
       return;
     }
     setViewSettings((prev) => ({
@@ -6141,10 +6192,10 @@ export const App: Component = () => {
     try {
       // El visor ya lo tiene aplicado; falta mandarlo al backend
       await sendWeights(data.vertices, data.after);
-      await history.execute("Pintar pesos", { kind: "paintWeights", data }, { applied: true });
+      await history.execute(t("Pintar pesos"), { kind: "paintWeights", data }, { applied: true });
     } catch (e) {
       console.error("Paint error:", e);
-      setStatusMessage(`Error al guardar los pesos: ${e}`);
+      setStatusMessage(t("Error al guardar los pesos: {e}", { e: tBackend(String(e)) }));
     }
   };
 
@@ -6260,9 +6311,9 @@ export const App: Component = () => {
     // Lo del diseño se deshace con el historial del propio diseño
     const feature = cadFeatureOfNode(nodeId);
     if (feature !== undefined) {
-      const name = cad.doc()?.features.find((f) => f.id === feature)?.name ?? "La operación";
-      if (!cad.removeFeature(feature)) setStatusMessage(`${name}: otras operaciones dependen de ella`);
-      else setStatusMessage(`${name} borrada`);
+      const name = cad.doc()?.features.find((f) => f.id === feature)?.name ?? t("La operación");
+      if (!cad.removeFeature(feature)) setStatusMessage(t("{name}: otras operaciones dependen de ella", { name }));
+      else setStatusMessage(t("{name} borrada", { name }));
       return;
     }
     const object = objectOfNode(nodeId);
@@ -6274,7 +6325,7 @@ export const App: Component = () => {
           await cad.acceptDraft();
         }
         if (!isCadObject(object) || materialized(object, activeObjectId()) || !view) await removeObject(object.id);
-        setStatusMessage(`${object.name} borrado`);
+        setStatusMessage(t("{name} borrado", { name: object.name }));
       })();
       return;
     }
@@ -6291,23 +6342,23 @@ export const App: Component = () => {
       try {
         await invoke("remove_object", { kind });
       } catch (e) {
-        setStatusMessage(`Error: ${e}`);
+        setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
         return;
       }
       if (kind === "skeleton") {
         clearSkeletonUi();
-        setStatusMessage("Esqueleto borrado");
+        setStatusMessage(t("Esqueleto borrado"));
       } else if (kind === "weights") {
         dropWeights();
-        setStatusMessage("Pesos borrados");
+        setStatusMessage(t("Pesos borrados"));
       } else {
         // Un rig calculado sobre los quads se queda sin malla
         if (usesQuad()) dropWeights();
         clearQuadMesh();
-        setStatusMessage("Retopología borrada");
+        setStatusMessage(t("Retopología borrada"));
       }
       // Lo anterior apuntaba a lo borrado: deshacer no pasa de acá
-      done({ skeleton: "Borrar esqueleto", weights: "Borrar pesos", quadmesh: "Borrar retopología" }[kind]!);
+      done({ skeleton: t("Borrar esqueleto"), weights: t("Borrar pesos"), quadmesh: t("Borrar retopología") }[kind]!);
     });
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -6380,7 +6431,7 @@ export const App: Component = () => {
 
   /** Pregunta antes de descartar el trabajo actual, solo si hay algo sin guardar */
   const confirmDiscard = async (title: string, message: string, confirmLabel: string) =>
-    !(await hasUnsavedWork()) || confirmAction({ title, message: `${message} Hay cambios sin guardar: se pierden.`, confirmLabel, danger: true });
+    !(await hasUnsavedWork()) || confirmAction({ title, message: t("{message} Hay cambios sin guardar: se pierden.", { message }), confirmLabel, danger: true });
   const [gridSettings, setGridSettings] = createPersisted<GridSettings>("settings.grid", { unit: "auto", modelUnit: "auto" });
   const [themeSetting, setThemeSetting] = createPersisted<ThemeSetting>("settings.theme", "dark");
   createEffect(() => applyTheme(themeSetting()));
@@ -6399,7 +6450,7 @@ export const App: Component = () => {
         : (Object.keys(UNIT_METERS) as LengthUnit[]).reduce((best, u) =>
             Math.abs(Math.log(UNIT_METERS[u] / metersPerUnit)) < Math.abs(Math.log(UNIT_METERS[best] / metersPerUnit)) ? u : best
           );
-    return { metersPerUnit, unitMeters: UNIT_METERS[unit], unitLabel: unit === "in" ? "pulg" : unit };
+    return { metersPerUnit, unitMeters: UNIT_METERS[unit], unitLabel: unit === "in" ? t("pulg") : unit };
   });
   createEffect(() => viewer()?.setGridUnits(gridUnits()));
 
@@ -6612,43 +6663,43 @@ export const App: Component = () => {
   /** Guarda en el archivo del proyecto; sin archivo (o con `as`) lo pregunta */
   const handleSaveProject = async (as = false) => {
     if (!hasProjectWork()) {
-      setStatusMessage("No hay nada que guardar: importa un modelo, elige un esqueleto o empieza un diseño");
+      setStatusMessage(t("No hay nada que guardar: importa un modelo, elige un esqueleto o empieza un diseño"));
       return;
     }
     let path = as ? undefined : projectPath();
     if (!path) {
       const stem = (fileName() ?? "proyecto").replace(/\.[^.]+$/, "");
       const chosen = await save({
-        title: "Guardar proyecto",
+        title: t("Guardar proyecto"),
         defaultPath: projectPath() ?? `${stem}.pinocchio`,
-        filters: [{ name: "Proyecto de Pinocchio", extensions: ["pinocchio"] }],
+        filters: [{ name: t("Proyecto de Pinocchio"), extensions: ["pinocchio"] }],
       });
       if (!chosen) return;
       path = chosen.endsWith(".pinocchio") ? chosen : `${chosen}.pinocchio`;
     }
     try {
-      const saved = await busy("Guardando proyecto...", () =>
+      const saved = await busy(t("Guardando proyecto..."), () =>
         invoke<ProjectSaved>("save_project", { path, ui: projectUi(), onlyIfChanged: false })
       );
       setProjectPath(path);
       scheduleUnsavedCheck(0);
-      setStatusMessage(`Proyecto guardado: ${baseName(path!)} (${(saved.bytes / 1e6).toFixed(1)} MB)`);
+      setStatusMessage(t("Proyecto guardado: {name} ({mb} MB)", { name: baseName(path!), mb: (saved.bytes / 1e6).toFixed(1) }));
       // Lo guardado ya está a salvo: la recuperación vieja no debe ofrecerse al abrir la app
       invoke("clear_recovery").catch(() => {});
     } catch (e) {
       console.error("Save project error:", e);
-      setStatusMessage(`Error al guardar: ${e}`);
+      setStatusMessage(t("Error al guardar: {e}", { e: tBackend(String(e)) }));
     }
   };
 
   /** Abre un proyecto (`path`) o pregunta cuál; `recovered` = viene del archivo de recuperación */
   const handleOpenProject = async (path?: string, recovered = false) => {
     if (blockedByTask()) return;
-    if (!(await confirmDiscard("Abrir proyecto", "Se cierra el trabajo actual.", "Abrir otro proyecto"))) return;
+    if (!(await confirmDiscard(t("Abrir proyecto"), t("Se cierra el trabajo actual."), t("Abrir otro proyecto")))) return;
     if (!path) {
       const chosen = await open({
-        title: "Abrir proyecto",
-        filters: [{ name: "Proyecto de Pinocchio", extensions: ["pinocchio"] }],
+        title: t("Abrir proyecto"),
+        filters: [{ name: t("Proyecto de Pinocchio"), extensions: ["pinocchio"] }],
       });
       if (!chosen) return;
       path = typeof chosen === "string" ? chosen : chosen[0];
@@ -6656,7 +6707,7 @@ export const App: Component = () => {
     let opened: ProjectOpened | undefined;
     setSwitching(true);
     try {
-      opened = await busy("Abriendo proyecto...", () => invoke<ProjectOpened>("open_project", { path }));
+      opened = await busy(t("Abriendo proyecto..."), () => invoke<ProjectOpened>("open_project", { path }));
       await restoreProjectUi(opened.ui);
       cadUi.cancelSketch(false);
       await cad.reload();
@@ -6665,16 +6716,16 @@ export const App: Component = () => {
       // La recuperación no es el archivo del usuario: el próximo Guardar pregunta dónde
       setProjectPath(recovered ? undefined : path);
       setRecovery(undefined);
-      setStatusMessage(recovered ? "Sesión recuperada" : `Proyecto abierto: ${baseName(path)}`);
+      setStatusMessage(recovered ? t("Sesión recuperada") : t("Proyecto abierto: {name}", { name: baseName(path) }));
     } catch (e) {
       console.error("Open project error:", e);
       if (opened) {
         // El backend ya tiene el proyecto nuevo pero la interfaz quedó a medias:
         // que el próximo Guardar pregunte dónde, así no pisa el archivo anterior
         setProjectPath(undefined);
-        setStatusMessage(`El proyecto se abrió con errores (guárdalo con otro nombre): ${e}`);
+        setStatusMessage(t("El proyecto se abrió con errores (guárdalo con otro nombre): {e}", { e: tBackend(String(e)) }));
       } else {
-        setStatusMessage(`Error al abrir: ${e}`);
+        setStatusMessage(t("Error al abrir: {e}", { e: tBackend(String(e)) }));
       }
     } finally {
       setSwitching(false);
@@ -6685,9 +6736,9 @@ export const App: Component = () => {
   const handleNewProject = async () => {
     if (blockedByTask()) return;
     const discard = await confirmDiscard(
-      "Proyecto nuevo",
-      "Se cierran el modelo, el esqueleto, las animaciones y el historial.",
-      "Empezar de cero"
+      t("Proyecto nuevo"),
+      t("Se cierran el modelo, el esqueleto, las animaciones y el historial."),
+      t("Empezar de cero")
     );
     if (!discard) return;
     setSwitching(true);
@@ -6704,9 +6755,9 @@ export const App: Component = () => {
       setUvPreview("texture");
       setTextureEditor(undefined);
       setProjectPath(undefined);
-      setStatusMessage("Proyecto nuevo");
+      setStatusMessage(t("Proyecto nuevo"));
     } catch (e) {
-      setStatusMessage(`Error: ${e}`);
+      setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
     } finally {
       setSwitching(false);
     }
@@ -6716,9 +6767,9 @@ export const App: Component = () => {
   const handleRevertToOriginal = () =>
     undoable(async (done) => {
       const ok = await confirmAction({
-        title: "Volver al modelo original",
-        message: "Se descarta todo lo hecho sobre el modelo: reparación, esqueleto, pesos, retopología, UV y animaciones.",
-        confirmLabel: "Descartar",
+        title: t("Volver al modelo original"),
+        message: t("Se descarta todo lo hecho sobre el modelo: reparación, esqueleto, pesos, retopología, UV y animaciones."),
+        confirmLabel: t("Descartar"),
         danger: true,
       });
       if (!ok) return;
@@ -6734,11 +6785,11 @@ export const App: Component = () => {
         setSubdivideResult(undefined);
         setCanUndoPrintScale(false);
         setLastExport(undefined);
-        done("Volver al modelo original");
+        done(t("Volver al modelo original"));
         setMeshData(await fetchMeshData());
-        setStatusMessage("Modelo original restaurado");
+        setStatusMessage(t("Modelo original restaurado"));
       } catch (e) {
-        setStatusMessage(`Error: ${e}`);
+        setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
       }
     });
 
@@ -6799,7 +6850,7 @@ export const App: Component = () => {
   const togglePuppet = () => {
     if (puppeteering()) return setPuppeteering(false);
     if (rigBones().length === 0) {
-      setStatusMessage("Primero elige o ajusta un esqueleto: la cámara mueve sus articulaciones");
+      setStatusMessage(t("Primero elige o ajusta un esqueleto: la cámara mueve sus articulaciones"));
       return;
     }
     setPuppeteering(true);
@@ -6811,7 +6862,7 @@ export const App: Component = () => {
   const [capturing, setCapturing] = createSignal(false);
   const handleCapture = () => {
     if (rigBones().length === 0) {
-      setStatusMessage("Primero elige o ajusta un esqueleto: la captura se pasa a sus articulaciones");
+      setStatusMessage(t("Primero elige o ajusta un esqueleto: la captura se pasa a sus articulaciones"));
       return;
     }
     setCapturing(true);
@@ -6842,7 +6893,7 @@ export const App: Component = () => {
   const handleImportBvh = async () => {
     const bones = rigBones();
     if (bones.length === 0) {
-      setStatusMessage("Primero elige o ajusta un esqueleto: la animación se pasa a sus articulaciones");
+      setStatusMessage(t("Primero elige o ajusta un esqueleto: la animación se pasa a sus articulaciones"));
       return;
     }
     const picked = await pickTextFile(".bvh");
@@ -6850,7 +6901,7 @@ export const App: Component = () => {
     try {
       openRetarget(bvhMotion(parseBvh(picked.text)), picked.name);
     } catch (e) {
-      setStatusMessage(`No se pudo leer ${picked.name}: ${e instanceof Error ? e.message : e}`);
+      setStatusMessage(t("No se pudo leer {name}: {e}", { name: picked.name, e: tBackend(e instanceof Error ? e.message : String(e)) }));
     }
   };
 
@@ -6869,35 +6920,35 @@ export const App: Component = () => {
       if ("contacts" in request.motion) {
         const pins = withContactPins(clip, request.motion as CaptureMotion, result.map, request.target, result.range[0]);
         clip = pins.clip;
-        note = pins.pinned > 0 ? `, pies fijados en ${pins.pinned} patas` : ". Crea el rig automático (IK) para que los pies no patinen";
+        note = pins.pinned > 0 ? t(", pies fijados en {n} patas", { n: pins.pinned }) : t(". Crea el rig automático (IK) para que los pies no patinen");
       }
       const before = clips();
-      await history.execute(`Importar animación: ${clip.name}`, {
+      await history.execute(t("Importar animación: {name}", { name: clip.name }), {
         kind: "clips",
         data: { before, after: [...before, clip], activeBefore: activeClipId(), activeAfter: clip.id },
       });
       setFrame(clip.start);
       pipeline.setActiveStep("animate");
-      setStatusMessage(`Animación importada: ${clip.name} (${clip.end - clip.start + 1} cuadros, ${clip.tracks.length} articulaciones)${note}`);
+      setStatusMessage(t("Animación importada: {name} ({frames} cuadros, {joints} articulaciones){note}", { name: clip.name, frames: clip.end - clip.start + 1, joints: clip.tracks.length, note }));
     } catch (e) {
       console.error("Retarget error:", e);
-      setStatusMessage(`No se pudo pasar la animación al esqueleto: ${e instanceof Error ? e.message : e}`);
+      setStatusMessage(t("No se pudo pasar la animación al esqueleto: {e}", { e: tBackend(e instanceof Error ? e.message : String(e)) }));
     }
   };
 
   const fileMenuItems = (): MenuEntry[] => [
-    { label: "Nuevo proyecto", shortcut: "Ctrl+N", onSelect: () => handleNewProject() },
-    { label: "Abrir proyecto…", shortcut: "Ctrl+O", onSelect: () => handleOpenProject() },
-    { label: "Guardar", shortcut: "Ctrl+S", disabled: !hasProjectWork(), onSelect: () => handleSaveProject() },
-    { label: "Guardar como…", shortcut: "Ctrl+Shift+S", disabled: !hasProjectWork(), onSelect: () => handleSaveProject(true) },
+    { label: t("Nuevo proyecto"), shortcut: "Ctrl+N", onSelect: () => handleNewProject() },
+    { label: t("Abrir proyecto…"), shortcut: "Ctrl+O", onSelect: () => handleOpenProject() },
+    { label: t("Guardar"), shortcut: "Ctrl+S", disabled: !hasProjectWork(), onSelect: () => handleSaveProject() },
+    { label: t("Guardar como…"), shortcut: "Ctrl+Shift+S", disabled: !hasProjectWork(), onSelect: () => handleSaveProject(true) },
     { separator: true },
-    { label: "Importar modelo…", shortcut: "Ctrl+I", onSelect: () => handleLoad() },
-    { label: "Importar animación (BVH)…", disabled: !skeletonData(), onSelect: () => void handleImportBvh() },
-    { label: "Capturar movimiento de un video…", disabled: !skeletonData(), onSelect: handleCapture },
-    { label: "Exportar…", disabled: !hasWork() && !hasDesignBody(), onSelect: openExport },
-    { label: "Volver al modelo original…", disabled: !meshLoaded(), onSelect: () => handleRevertToOriginal() },
+    { label: t("Importar modelo…"), shortcut: "Ctrl+I", onSelect: () => handleLoad() },
+    { label: t("Importar animación (BVH)…"), disabled: !skeletonData(), onSelect: () => void handleImportBvh() },
+    { label: t("Capturar movimiento de un video…"), disabled: !skeletonData(), onSelect: handleCapture },
+    { label: t("Exportar…"), disabled: !hasWork() && !hasDesignBody(), onSelect: openExport },
+    { label: t("Volver al modelo original…"), disabled: !meshLoaded(), onSelect: () => handleRevertToOriginal() },
     { separator: true },
-    { label: "Configuración…", onSelect: () => setSettingsOpen(true) },
+    { label: t("Configuración…"), onSelect: () => setSettingsOpen(true) },
   ];
 
   // Guardado automático: al archivo del proyecto, o al de recuperación si aún
@@ -6919,7 +6970,7 @@ export const App: Component = () => {
       const saved = await invoke<ProjectSaved>("save_project", { path, ui: projectUi(), onlyIfChanged: true });
       if (saved.written && settings.enabled) {
         const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-        setStatusMessage(`Guardado automático ${toProject ? "" : "(recuperación) "}a las ${time}`);
+        setStatusMessage(toProject ? t("Guardado automático a las {time}", { time }) : t("Guardado automático (recuperación) a las {time}", { time }));
       }
     } catch (e) {
       console.error("Autosave error:", e);
@@ -6938,9 +6989,9 @@ export const App: Component = () => {
       unlistenClose = await getCurrentWindow().onCloseRequested(async (event) => {
         if (await hasUnsavedWork()) {
           const ok = await confirmAction({
-            title: "Cerrar Pinocchio",
-            message: "Hay cambios sin guardar: se pierden (queda la última copia de recuperación).",
-            confirmLabel: "Cerrar sin guardar",
+            title: t("Cerrar Pinocchio"),
+            message: t("Hay cambios sin guardar: se pierden (queda la última copia de recuperación)."),
+            confirmLabel: t("Cerrar sin guardar"),
             danger: true,
           });
           if (!ok) event.preventDefault();
@@ -6956,7 +7007,7 @@ export const App: Component = () => {
   // Ningún error asíncrono queda mudo: si nadie lo atrapó, va a la barra de estado
   const onUnhandled = (e: PromiseRejectionEvent) => {
     console.error("Unhandled rejection:", e.reason);
-    setStatusMessage(`Error: ${e.reason instanceof Error ? e.reason.message : String(e.reason)}`);
+    setStatusMessage(t("Error: {e}", { e: tBackend(e.reason instanceof Error ? e.reason.message : String(e.reason)) }));
   };
   window.addEventListener("unhandledrejection", onUnhandled);
   onCleanup(() => window.removeEventListener("unhandledrejection", onUnhandled));
@@ -6976,19 +7027,19 @@ export const App: Component = () => {
     const toggle = (key: "showMesh" | "showWireframe" | "showSkeleton" | "showWeights") =>
       setViewSettings((prev) => ({ ...prev, [key]: !prev[key] }));
     const items: MenuEntry[] = [
-      { header: "Mostrar" },
-      { label: "Malla", checked: view.showMesh, onSelect: () => toggle("showMesh") },
-      { label: "Wireframe", checked: view.showWireframe, onSelect: () => toggle("showWireframe") },
-      { label: "Grilla", checked: showGrid(), onSelect: () => handleToggleVisibility("grid") },
+      { header: t("Mostrar") },
+      { label: t("Malla"), checked: view.showMesh, onSelect: () => toggle("showMesh") },
+      { label: t("Wireframe"), checked: view.showWireframe, onSelect: () => toggle("showWireframe") },
+      { label: t("Grilla"), checked: showGrid(), onSelect: () => handleToggleVisibility("grid") },
     ];
-    if (skeletonLoaded()) items.push({ label: "Esqueleto", checked: view.showSkeleton, onSelect: () => toggle("showSkeleton") });
+    if (skeletonLoaded()) items.push({ label: t("Esqueleto"), checked: view.showSkeleton, onSelect: () => toggle("showSkeleton") });
     if (skeletonLoaded()) {
-      items.push({ label: autorigComplete() ? "Pesos" : "Influencia estimada", checked: view.showWeights, onSelect: () => toggle("showWeights") });
+      items.push({ label: autorigComplete() ? t("Pesos") : t("Influencia estimada"), checked: view.showWeights, onSelect: () => toggle("showWeights") });
     }
-    items.push({ label: "Rayos X", shortcut: "Alt+Z", checked: view.xray === true, onSelect: () => setViewSettings((prev) => ({ ...prev, xray: !prev.xray })) });
+    items.push({ label: t("Rayos X"), shortcut: "Alt+Z", checked: view.xray === true, onSelect: () => setViewSettings((prev) => ({ ...prev, xray: !prev.xray })) });
     const removable: MenuEntry[] = [];
-    if (skeletonLoaded()) removable.push({ label: "Borrar esqueleto", danger: true, onSelect: () => handleDeleteNode("skeleton") });
-    if (quadMeshLoaded()) removable.push({ label: "Borrar retopología", danger: true, onSelect: () => handleDeleteNode("quadmesh") });
+    if (skeletonLoaded()) removable.push({ label: t("Borrar esqueleto"), danger: true, onSelect: () => handleDeleteNode("skeleton") });
+    if (quadMeshLoaded()) removable.push({ label: t("Borrar retopología"), danger: true, onSelect: () => handleDeleteNode("quadmesh") });
     if (removable.length > 0) items.push({ separator: true }, ...removable);
     return items;
   };
@@ -7167,7 +7218,7 @@ export const App: Component = () => {
               onPlacementPick={handlePlacementPick}
               onNodePicked={(node) => {
                 setSelectedFileNode(node);
-                setStatusMessage(`Nodo del archivo: ${sceneStructure()?.nodes[node]?.name || `nodo ${node}`}`);
+                setStatusMessage(t("Nodo del archivo: {name}", { name: sceneStructure()?.nodes[node]?.name || t("nodo {n}", { n: node }) }));
               }}
               onBoneSelected={handleBoneSelected}
               onBoneMoved={handleBoneMoved}
@@ -7277,8 +7328,8 @@ export const App: Component = () => {
               <button
                 class="absolute top-1/2 -translate-y-1/2 right-0 z-10 w-5 h-10 flex items-center justify-center rounded-l-md bg-bg-lighter border border-r-0 border-border text-text-muted hover:text-text"
                 onClick={() => setShowContextPanel(true)}
-                title="Mostrar panel (N)"
-                aria-label="Mostrar panel"
+                title={t("Mostrar panel (N)")}
+                aria-label={t("Mostrar panel")}
               >
                 <Icons.CaretRight size={12} class="rotate-180" />
               </button>
@@ -7395,8 +7446,8 @@ export const App: Component = () => {
                 if (index === undefined || !node) return undefined;
                 const mesh = node.mesh !== null ? sceneStructure()?.meshes[node.mesh] : undefined;
                 return {
-                  name: node.name || `nodo ${index}`,
-                  hint: mesh ? `malla ${mesh.name || node.mesh}` : node.skin !== null ? "skin" : "nodo",
+                  name: node.name || t("nodo {n}", { n: index }),
+                  hint: mesh ? t("malla {name}", { name: mesh.name || node.mesh || "" }) : node.skin !== null ? "skin" : t("nodo"),
                   translation: node.translation,
                   rotation: node.rotation,
                   scale: node.scale,

@@ -2,6 +2,7 @@ import { Component, For, Show, createResource, createSignal } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { Button, Checkbox, NumberInput, Select } from "../ui";
 import * as Icons from "../icons";
+import { fmtNumber, t } from "../../lib/i18n";
 
 /** Medidas de un objeto (en mm, Z arriba) */
 interface ObjectInfo {
@@ -20,14 +21,14 @@ export interface SelectedObjectsPanelProps {
 }
 
 const FORMATS = [
-  { value: "3mf", label: "3MF (un objeto por pieza)" },
-  { value: "stl", label: "STL (todo junto)" },
+  { value: "3mf", get label() { return t("3MF (un objeto por pieza)"); } },
+  { value: "stl", get label() { return t("STL (todo junto)"); } },
   { value: "obj", label: "OBJ" },
   { value: "ply", label: "PLY" },
   { value: "glb", label: "GLB" },
 ];
 
-const mm = (v: number) => v.toLocaleString("es", { maximumFractionDigits: 1 });
+const mm = (v: number) => fmtNumber(v, { maximumFractionDigits: 1 });
 
 /**
  * Varios objetos elegidos en el Outliner (Ctrl o Mayús + clic): sus medidas y
@@ -53,8 +54,8 @@ export const SelectedObjectsPanel: Component<SelectedObjectsPanelProps> = (props
     };
   };
   return (
-    <div class="space-y-3" aria-label="Objetos elegidos">
-      <h4 class="text-xs font-semibold uppercase tracking-wider text-text-muted">Objetos elegidos ({props.objects.length})</h4>
+    <div class="space-y-3" aria-label={t("Objetos elegidos")}>
+      <h4 class="text-xs font-semibold uppercase tracking-wider text-text-muted">{t("Objetos elegidos ({n})", { n: props.objects.length })}</h4>
       <div class="space-y-1">
         <For each={props.objects}>
           {(o) => (
@@ -62,7 +63,7 @@ export const SelectedObjectsPanel: Component<SelectedObjectsPanelProps> = (props
               <span class="truncate text-text">{o.name}</span>
               <span class="font-mono text-[10px] text-text-dim">
                 <Show when={infoOf(o.id)} fallback="…">
-                  {(i) => `${mm(i().size[0])} × ${mm(i().size[1])} × ${mm(i().size[2])} mm · ${(i().volume / 1000).toLocaleString("es", { maximumFractionDigits: 2 })} cm³`}
+                  {(i) => `${mm(i().size[0])} × ${mm(i().size[1])} × ${mm(i().size[2])} mm · ${fmtNumber(i().volume / 1000, { maximumFractionDigits: 2 })} cm³`}
                 </Show>
               </span>
             </div>
@@ -70,20 +71,20 @@ export const SelectedObjectsPanel: Component<SelectedObjectsPanelProps> = (props
         </For>
       </div>
       <Select options={FORMATS} value={format()} onChange={setFormat} />
-      <Checkbox small label="Acomodar en la cama, en fila" checked={arrange()} onChange={setArrange} />
+      <Checkbox small label={t("Acomodar en la cama, en fila")} checked={arrange()} onChange={setArrange} />
       <Show when={arrange()}>
         <div class="flex items-center gap-2 text-xs">
-          <span class="text-text-muted">Separación</span>
+          <span class="text-text-muted">{t("Separación")}</span>
           <NumberInput value={spacing()} min={0} step={1} suffix="mm" onChange={(v) => setSpacing(Math.max(0, v))} />
         </div>
         <Show when={row()}>
-          {(r) => <p class="text-[11px] text-text-dim">La fila ocupa {mm(r().x)} × {mm(r().y)} mm y {mm(r().z)} mm de alto.</p>}
+          {(r) => <p class="text-[11px] text-text-dim">{t("La fila ocupa {x} × {y} mm y {z} mm de alto.", { x: mm(r().x), y: mm(r().y), z: mm(r().z) })}</p>}
         </Show>
       </Show>
       <Button size="sm" fullWidth disabled={props.isProcessing} onClick={() => props.onExport(format(), arrange() ? spacing() : null)}>
-        <Icons.Export size={12} /> Exportar juntos
+        <Icons.Export size={12} /> {t("Exportar juntos")}
       </Button>
-      <p class="text-[11px] text-text-dim">Ctrl o Mayús + clic en el Outliner suma o quita objetos. Lo demás de Fabricar actúa sobre el activo.</p>
+      <p class="text-[11px] text-text-dim">{t("Ctrl o Mayús + clic en el Outliner suma o quita objetos. Lo demás de Fabricar actúa sobre el activo.")}</p>
     </div>
   );
 };

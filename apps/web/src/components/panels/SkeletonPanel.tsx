@@ -3,6 +3,7 @@ import { clsx } from "clsx";
 import { Panel } from "../ui";
 import * as Icons from "../icons";
 import { byUse, matches } from "../../lib/templateUsage";
+import { t } from "../../lib/i18n";
 
 export interface SkeletonPreset {
   id: string;
@@ -32,7 +33,7 @@ export const SkeletonPanel: Component<SkeletonPanelProps> = (props) => {
     props.presets.find((p) => p.id === props.selectedPreset);
 
   return (
-    <Panel title="Esqueleto" icon={<Icons.Bone size={14} />} defaultOpen>
+    <Panel title={t("Esqueleto")} icon={<Icons.Bone size={14} />} defaultOpen>
       <div class="space-y-2">
         {/* Buscador */}
         <div class="relative">
@@ -47,7 +48,7 @@ export const SkeletonPanel: Component<SkeletonPanelProps> = (props) => {
               if (e.key === "Escape") setQuery("");
               else if (e.key === "Enter" && filtered().length > 0) props.onPresetChange?.(filtered()[0].id);
             }}
-            placeholder={`Buscar entre ${props.presets.length} esqueletos…`}
+            placeholder={t("Buscar entre {n} esqueletos…", { n: props.presets.length })}
             class={clsx(
               "w-full h-8 pl-8 pr-7 rounded-md text-sm text-text",
               "bg-bg-lighter border border-border placeholder:text-text-muted/60",
@@ -57,7 +58,7 @@ export const SkeletonPanel: Component<SkeletonPanelProps> = (props) => {
           <Show when={query()}>
             <button
               class="absolute right-1.5 top-1/2 -translate-y-1/2 w-5 h-5 flex items-center justify-center text-text-muted hover:text-text"
-              title="Limpiar búsqueda"
+              title={t("Limpiar búsqueda")}
               onClick={() => setQuery("")}
             >
               <Icons.X size={11} />
@@ -69,7 +70,7 @@ export const SkeletonPanel: Component<SkeletonPanelProps> = (props) => {
         <div class="max-h-56 overflow-y-auto rounded-md border border-border divide-y divide-border">
           <For
             each={filtered()}
-            fallback={<p class="px-3 py-3 text-xs text-text-muted text-center">Ningún esqueleto coincide con «{query()}»</p>}
+            fallback={<p class="px-3 py-3 text-xs text-text-muted text-center">{t("Ningún esqueleto coincide con «{q}»", { q: query() })}</p>}
           >
             {(preset) => (
               <button
@@ -84,7 +85,7 @@ export const SkeletonPanel: Component<SkeletonPanelProps> = (props) => {
                 onClick={() => props.onPresetChange?.(preset.id)}
               >
                 <span class="text-sm truncate">{preset.name}</span>
-                <span class="text-[10px] font-mono text-text-muted shrink-0">{preset.numBones} huesos</span>
+                <span class="text-[10px] font-mono text-text-muted shrink-0">{t("{n} huesos", { n: preset.numBones })}</span>
               </button>
             )}
           </For>
@@ -97,7 +98,7 @@ export const SkeletonPanel: Component<SkeletonPanelProps> = (props) => {
               {selectedPreset()!.description}
             </p>
             <p class="text-xs">
-              <span class="text-text-muted">Huesos:</span>{" "}
+              <span class="text-text-muted">{t("Huesos:")}</span>{" "}
               <span class="text-accent font-mono">
                 {selectedPreset()!.numBones}
               </span>

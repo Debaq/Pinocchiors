@@ -1,6 +1,7 @@
 import { Component, Show, For, createSignal } from "solid-js";
 import { Button, Select, NumberInput } from "../ui";
 import * as Icons from "../icons";
+import { fmtNumber, t } from "../../lib/i18n";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -92,7 +93,7 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
     <div class="space-y-4">
       {/* Análisis */}
       <div class="space-y-3">
-        <h4 class="text-xs font-semibold uppercase tracking-wider text-text-muted">Análisis</h4>
+        <h4 class="text-xs font-semibold uppercase tracking-wider text-text-muted">{t("Análisis")}</h4>
 
         <Button
           onClick={props.onAnalyze}
@@ -103,7 +104,7 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
           size="sm"
           icon={<Icons.Ruler size={14} />}
         >
-          Analizar para impresión
+          {t("Analizar para impresión")}
         </Button>
       </div>
 
@@ -112,35 +113,35 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
         <div class="space-y-2 p-3 rounded-md bg-surface/30 border border-border">
           <div class="space-y-1.5">
             <div class="flex justify-between text-xs">
-              <span class="text-text-muted">Dimensiones</span>
+              <span class="text-text-muted">{t("Dimensiones")}</span>
               <span class="text-text font-mono">
                 {formatMm(props.analysis!.dimensions[0])} x {formatMm(props.analysis!.dimensions[1])} x {formatMm(props.analysis!.dimensions[2])} mm
               </span>
             </div>
             <div class="flex justify-between text-xs">
-              <span class="text-text-muted">Volumen</span>
+              <span class="text-text-muted">{t("Volumen")}</span>
               <span class="text-text font-mono">{formatCm3(props.analysis!.volume)} cm³</span>
             </div>
             <div class="flex justify-between text-xs">
-              <span class="text-text-muted">Área</span>
+              <span class="text-text-muted">{t("Área")}</span>
               <span class="text-text font-mono">{formatCm2(props.analysis!.surface_area)} cm²</span>
             </div>
             <div class="flex justify-between text-xs">
-              <span class="text-text-muted">Cerrada</span>
+              <span class="text-text-muted">{t("Cerrada")}</span>
               <span class={props.analysis!.is_closed ? "text-green" : "text-red"}>
-                {props.analysis!.is_closed ? "Sí" : "No"}
+                {props.analysis!.is_closed ? t("Sí") : t("No")}
               </span>
             </div>
             <div class="flex justify-between text-xs">
-              <span class="text-text-muted">Triángulos</span>
-              <span class="text-text font-mono">{props.analysis!.triangle_count.toLocaleString()}</span>
+              <span class="text-text-muted">{t("Triángulos")}</span>
+              <span class="text-text font-mono">{fmtNumber(props.analysis!.triangle_count)}</span>
             </div>
           </div>
         </div>
 
         {/* Escalar */}
         <div class="space-y-3 pt-2 border-t border-border/50">
-          <h4 class="text-xs font-semibold uppercase tracking-wider text-text-muted">Escalar</h4>
+          <h4 class="text-xs font-semibold uppercase tracking-wider text-text-muted">{t("Escalar")}</h4>
 
           <div class="space-y-2">
             <div class="flex gap-2 items-end">
@@ -158,11 +159,11 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
                 variant="default"
                 size="sm"
               >
-                Escalar
+                {t("Escalar")}
               </Button>
             </div>
 
-            <p class="text-[10px] text-text-dim">Dimensiones objetivo (mm):</p>
+            <p class="text-[10px] text-text-dim">{t("Dimensiones objetivo (mm):")}</p>
             <div class="flex gap-1.5">
               <NumberInput
                 label="X"
@@ -193,7 +194,7 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
               size="sm"
               fullWidth
             >
-              Ajustar a medida
+              {t("Ajustar a medida")}
             </Button>
             <Button
               onClick={() => props.onUndoScale?.()}
@@ -202,16 +203,16 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
               size="sm"
               fullWidth
             >
-              Deshacer escala
+              {t("Deshacer escala")}
             </Button>
           </div>
         </div>
 
         {/* Subdividir */}
         <div class="space-y-3 pt-2 border-t border-border/50">
-          <h4 class="text-xs font-semibold uppercase tracking-wider text-text-muted">Subdividir</h4>
+          <h4 class="text-xs font-semibold uppercase tracking-wider text-text-muted">{t("Subdividir")}</h4>
 
-          <p class="text-[10px] text-text-dim">Volumen de impresión (mm):</p>
+          <p class="text-[10px] text-text-dim">{t("Volumen de impresión (mm):")}</p>
           <div class="flex gap-1.5">
             <NumberInput
               label="X"
@@ -237,18 +238,18 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
           </div>
 
           <Select
-            label="Estrategia"
+            label={t("Estrategia")}
             options={[
-              { value: "grid", label: "Grid (regular)" },
-              { value: "optimal", label: "Optimal (menos cortes)" },
-              { value: "zlayers", label: "Capas Z" },
+              { value: "grid", label: t("Grid (regular)") },
+              { value: "optimal", label: t("Optimal (menos cortes)") },
+              { value: "zlayers", label: t("Capas Z") },
             ]}
             value={strategy()}
             onChange={setStrategy}
           />
 
           <NumberInput
-            label="Margen"
+            label={t("Margen")}
             value={margin()}
             onChange={setMargin}
             min={0}
@@ -272,7 +273,7 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
             size="sm"
             icon={<Icons.Scissors size={14} />}
           >
-            Subdividir
+            {t("Subdividir")}
           </Button>
         </div>
       </Show>
@@ -281,7 +282,7 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
       <Show when={props.subdivideResult}>
         <div class="space-y-2 pt-2 border-t border-border/50">
           <h4 class="text-xs font-semibold uppercase tracking-wider text-text-muted">
-            Piezas ({props.subdivideResult!.piece_count})
+            {t("Piezas")} ({props.subdivideResult!.piece_count})
           </h4>
 
           <div class="space-y-1.5 max-h-48 overflow-y-auto">

@@ -5,6 +5,7 @@ import * as Icons from "../icons";
 import type { PlacementMode } from "../../lib/Viewer3D";
 import type { OriginMode } from "../../lib/placement";
 import { AXES, type Axis } from "../../lib/axes";
+import { t } from "../../lib/i18n";
 
 export interface PlacementPanelProps {
   /** Qué se está eligiendo con el clic (`undefined` = nada) */
@@ -28,10 +29,10 @@ export interface PlacementPanelProps {
 }
 
 const ORIGIN_OPTIONS = [
-  { value: "base", label: "Centro de la base" },
-  { value: "box", label: "Centro de la caja" },
-  { value: "mass", label: "Centro de masa" },
-  { value: "point", label: "Punto con clic" },
+  { value: "base", get label() { return t("Centro de la base"); } },
+  { value: "box", get label() { return t("Centro de la caja"); } },
+  { value: "mass", get label() { return t("Centro de masa"); } },
+  { value: "point", get label() { return t("Punto con clic"); } },
 ];
 
 /** Conversiones típicas de un modelo que vino en otra unidad */
@@ -138,12 +139,12 @@ export const PlacementPanel: Component<PlacementPanelProps> = (props) => {
   const setDimension = (axis: number, value: number) => {
     const current = dims()[axis];
     if (!(value > 0) || !(current > 0)) return;
-    const names = ["ancho", "fondo", "alto"];
-    props.onScale?.(value / current, `Escalar: ${names[axis]} ${fmt(value)} ${unitLabel()}`);
+    const names = [t("ancho"), t("fondo"), t("alto")];
+    props.onScale?.(value / current, t("Escalar: {eje} {valor} {unidad}", { eje: names[axis], valor: fmt(value), unidad: unitLabel() }));
   };
 
   return (
-    <Panel title="Orientación" icon={<Icons.CubeFocus size={14} />} defaultOpen>
+    <Panel title={t("Orientación")} icon={<Icons.CubeFocus size={14} />} defaultOpen>
       <div class="space-y-4">
         <div class="space-y-2">
           <Button
@@ -152,7 +153,7 @@ export const PlacementPanel: Component<PlacementPanelProps> = (props) => {
             fullWidth
             disabled={props.disabled}
           >
-            {props.mode === "floor" ? "Cancelar" : "Elegir piso"}
+            {props.mode === "floor" ? t("Cancelar") : t("Elegir piso")}
           </Button>
           <Button
             onClick={() => toggle("front")}
@@ -160,15 +161,14 @@ export const PlacementPanel: Component<PlacementPanelProps> = (props) => {
             fullWidth
             disabled={props.disabled}
           >
-            {props.mode === "front" ? "Cancelar" : "Elegir frente"}
+            {props.mode === "front" ? t("Cancelar") : t("Elegir frente")}
           </Button>
           <p class="text-[11px] text-text-muted leading-snug">
-            Todo esto transforma el modelo. Si ya hay esqueleto, retopología o pesos, se transforman con él para seguir
-            calzando.
+            {t("Todo esto transforma el modelo. Si ya hay esqueleto, retopología o pesos, se transforman con él para seguir calzando.")}
           </p>
         </div>
 
-        <Section title="Girar">
+        <Section title={t("Girar")}>
           <div class="grid grid-cols-3 gap-1.5">
             <For each={[-90, 90]}>
               {(degrees) => (
@@ -186,21 +186,21 @@ export const PlacementPanel: Component<PlacementPanelProps> = (props) => {
             <AxisPicker value={rotAxis()} onChange={setRotAxis} />
             <CommitInput value={rotDegrees()} onCommit={setRotDegrees} wheelStep={1} suffix="°" disabled={props.disabled} />
             <Button size="sm" onClick={() => props.onRotate?.(rotAxis(), rotDegrees())} disabled={props.disabled}>
-              Girar
+              {t("Girar")}
             </Button>
           </div>
           {/* STL, PLY y 3MF se leen con Z arriba; GLB y OBJ con Y arriba. Si el archivo no seguía la costumbre, queda acostado */}
           <div class="grid grid-cols-2 gap-1.5">
             <Button size="sm" onClick={() => props.onRotate?.("x", -90)} disabled={props.disabled}>
-              <span title="Para un GLB u OBJ que quedó acostado: su programa usaba Z arriba">Venía con Z arriba</span>
+              <span title={t("Para un GLB u OBJ que quedó acostado: su programa usaba Z arriba")}>{t("Venía con Z arriba")}</span>
             </Button>
             <Button size="sm" onClick={() => props.onRotate?.("x", 90)} disabled={props.disabled}>
-              <span title="Para un STL, PLY o 3MF que quedó acostado: su programa usaba Y arriba">Venía con Y arriba</span>
+              <span title={t("Para un STL, PLY o 3MF que quedó acostado: su programa usaba Y arriba")}>{t("Venía con Y arriba")}</span>
             </Button>
           </div>
         </Section>
 
-        <Section title="Espejar">
+        <Section title={t("Espejar")}>
           <div class="grid grid-cols-3 gap-1.5">
             <For each={AXES}>
               {(axis) => (
@@ -212,9 +212,9 @@ export const PlacementPanel: Component<PlacementPanelProps> = (props) => {
           </div>
         </Section>
 
-        <Section title={`Tamaño${unitLabel() ? ` (${unitLabel()})` : ""}`}>
+        <Section title={`${t("Tamaño")}${unitLabel() ? ` (${unitLabel()})` : ""}`}>
           <div class="grid grid-cols-3 gap-1.5">
-            <For each={["Ancho", "Fondo", "Alto"]}>
+            <For each={[t("Ancho"), t("Fondo"), t("Alto")]}>
               {(name, i) => (
                 <div class="space-y-0.5">
                   <span class="text-[10px] text-text-muted">
@@ -224,7 +224,7 @@ export const PlacementPanel: Component<PlacementPanelProps> = (props) => {
                     value={dims()[i()]}
                     onCommit={(v) => setDimension(i(), v)}
                     disabled={props.disabled || !props.size}
-                    title="Escribe una medida: el modelo se escala en proporción"
+                    title={t("Escribe una medida: el modelo se escala en proporción")}
                   />
                 </div>
               )}
@@ -234,27 +234,27 @@ export const PlacementPanel: Component<PlacementPanelProps> = (props) => {
             <CommitInput value={factor()} onCommit={setFactor} wheelStep={0.1} label="×" disabled={props.disabled} />
             <Button
               size="sm"
-              onClick={() => factor() > 0 && props.onScale?.(factor(), `Escalar ×${fmt(factor())}`)}
+              onClick={() => factor() > 0 && props.onScale?.(factor(), t("Escalar ×{f}", { f: fmt(factor()) }))}
               disabled={props.disabled || !(factor() > 0)}
             >
-              Escalar
+              {t("Escalar")}
             </Button>
           </div>
           <div class="grid grid-cols-2 gap-1.5">
             <For each={CONVERSIONS}>
               {(c) => (
-                <Button size="sm" onClick={() => props.onScale?.(c.factor, `Convertir ${c.label}`)} disabled={props.disabled}>
-                  <span title={c.title}>{c.label}</span>
+                <Button size="sm" onClick={() => props.onScale?.(c.factor, t("Convertir {c}", { c: c.label }))} disabled={props.disabled}>
+                  <span title={t(c.title)}>{t(c.label)}</span>
                 </Button>
               )}
             </For>
           </div>
           <p class="text-[11px] text-text-muted leading-snug">
-            La escala es igual en los tres ejes y se hace desde el centro de la base, así el modelo sigue apoyado.
+            {t("La escala es igual en los tres ejes y se hace desde el centro de la base, así el modelo sigue apoyado.")}
           </p>
         </Section>
 
-        <Section title={`Mover${unitLabel() ? ` (${unitLabel()})` : ""}`}>
+        <Section title={`${t("Mover")}${unitLabel() ? ` (${unitLabel()})` : ""}`}>
           <div class="grid grid-cols-3 gap-1.5">
             <For each={AXES}>
               {(axis, i) => (
@@ -274,10 +274,10 @@ export const PlacementPanel: Component<PlacementPanelProps> = (props) => {
             onClick={() => props.onMove?.(move().map((v) => v / perUnit()) as [number, number, number])}
             disabled={props.disabled || move().every((v) => v === 0)}
           >
-            Mover
+            {t("Mover")}
           </Button>
           <Select
-            label="Origen"
+            label={t("Origen")}
             options={ORIGIN_OPTIONS}
             value={origin()}
             onChange={(value) => setOrigin(value as OriginMode)}
@@ -290,10 +290,10 @@ export const PlacementPanel: Component<PlacementPanelProps> = (props) => {
               onClick={() => (props.mode === "point" ? props.onPickMode?.(undefined) : props.onOrigin?.(origin()))}
               disabled={props.disabled}
             >
-              {props.mode === "point" ? "Cancelar" : "Fijar origen"}
+              {props.mode === "point" ? t("Cancelar") : t("Fijar origen")}
             </Button>
             <Button size="sm" onClick={() => props.onDrop?.()} disabled={props.disabled}>
-              Apoyar en el piso
+              {t("Apoyar en el piso")}
             </Button>
           </div>
         </Section>

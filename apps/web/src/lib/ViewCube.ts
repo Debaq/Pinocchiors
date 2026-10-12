@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { themeColor, themeHex } from "./theme";
+import { t } from "./i18n.ts";
 
 /** Lado del cubo en pantalla (px CSS) y margen a la esquina superior derecha */
 const SIZE = 130;
@@ -100,7 +101,7 @@ export class ViewCube {
     const COLORS = colors();
     const geometry = new THREE.BoxGeometry(2, 2, 2);
     const materials = FACE_LABELS.map((label) => {
-      const map = faceTexture(label, COLORS);
+      const map = faceTexture(t(label), COLORS);
       const material = new THREE.MeshBasicMaterial({ map });
       this.disposables.push(map, material);
       return material;

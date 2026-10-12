@@ -4,6 +4,7 @@
 // node (e2e/sketchSnap.test.mjs).
 
 import type { P2, P3, Plane, Sketch } from "./cad";
+import { t as tr } from "./i18n.ts";
 
 export type SnapKind =
   /** Punto existente (extremo, vértice) */
@@ -114,24 +115,24 @@ const PRIORITY: Record<SnapKind, number> = {
 };
 
 export const SNAP_GLYPHS: Record<SnapKind, { glyph: string; label: string }> = {
-  point: { glyph: "●", label: "Punto" },
-  origin: { glyph: "◎", label: "Origen" },
-  center: { glyph: "⊙", label: "Centro" },
-  intersection: { glyph: "✕", label: "Intersección" },
-  midpoint: { glyph: "△", label: "Punto medio" },
-  quadrant: { glyph: "◇", label: "Cuadrante" },
-  on_line: { glyph: "∕", label: "Sobre la línea" },
-  on_circle: { glyph: "◠", label: "Sobre la curva" },
-  aligned: { glyph: "┆", label: "Alineado" },
-  horizontal: { glyph: "—", label: "Horizontal" },
-  vertical: { glyph: "|", label: "Vertical" },
-  parallel: { glyph: "∥", label: "Paralela" },
-  perpendicular: { glyph: "⊥", label: "Perpendicular" },
-  tangent: { glyph: "◡", label: "Tangente" },
-  solid_vertex: { glyph: "●", label: "Vértice del sólido" },
-  solid_center: { glyph: "⊙", label: "Centro de la arista" },
-  solid_midpoint: { glyph: "△", label: "Medio de la arista" },
-  on_edge: { glyph: "∕", label: "Sobre la arista" },
+  point: { glyph: "●", get label() { return tr("Punto"); } },
+  origin: { glyph: "◎", get label() { return tr("Origen"); } },
+  center: { glyph: "⊙", get label() { return tr("Centro"); } },
+  intersection: { glyph: "✕", get label() { return tr("Intersección"); } },
+  midpoint: { glyph: "△", get label() { return tr("Punto medio"); } },
+  quadrant: { glyph: "◇", get label() { return tr("Cuadrante"); } },
+  on_line: { glyph: "∕", get label() { return tr("Sobre la línea"); } },
+  on_circle: { glyph: "◠", get label() { return tr("Sobre la curva"); } },
+  aligned: { glyph: "┆", get label() { return tr("Alineado"); } },
+  horizontal: { glyph: "—", get label() { return tr("Horizontal"); } },
+  vertical: { glyph: "|", get label() { return tr("Vertical"); } },
+  parallel: { glyph: "∥", get label() { return tr("Paralela"); } },
+  perpendicular: { glyph: "⊥", get label() { return tr("Perpendicular"); } },
+  tangent: { glyph: "◡", get label() { return tr("Tangente"); } },
+  solid_vertex: { glyph: "●", get label() { return tr("Vértice del sólido"); } },
+  solid_center: { glyph: "⊙", get label() { return tr("Centro de la arista"); } },
+  solid_midpoint: { glyph: "△", get label() { return tr("Medio de la arista"); } },
+  on_edge: { glyph: "∕", get label() { return tr("Sobre la arista"); } },
   free: { glyph: "", label: "" },
 };
 

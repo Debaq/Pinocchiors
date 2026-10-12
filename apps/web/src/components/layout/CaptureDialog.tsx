@@ -3,6 +3,7 @@ import { Button, Checkbox, Slider } from "../ui";
 import * as Icons from "../icons";
 import { captureMotion, type CaptureMotion } from "../../lib/capture";
 import type { LiveCapture } from "../../lib/captureRunner";
+import { locale, t } from "../../lib/i18n";
 
 /** Uniones que se dibujan sobre la vista previa (índices de MediaPipe Pose) */
 const BONES: [number, number][] = [
@@ -114,15 +115,15 @@ export const CaptureDialog: Component<CaptureDialogProps> = (props) => {
     const { frames, fps: rate } = capture.stopRecording();
     closeLive();
     if (frames.filter(Boolean).length < 2) {
-      setError("No se vio a nadie durante la grabación (el cuerpo entero tiene que estar en cuadro)");
+      setError(t("No se vio a nadie durante la grabación (el cuerpo entero tiene que estar en cuadro)"));
       return;
     }
     const motion = captureMotion(frames, rate, { smoothing: smoothing() });
     if (!motion) {
-      setError("Faltan partes del cuerpo en toda la grabación (caderas, hombros o piernas)");
+      setError(t("Faltan partes del cuerpo en toda la grabación (caderas, hombros o piernas)"));
       return;
     }
-    props.onMotion(motion, `Cámara ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`);
+    props.onMotion(motion, t("Cámara {time}", { time: new Date().toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit" }) }));
   };
 
   const run = async () => {
@@ -141,9 +142,9 @@ export const CaptureDialog: Component<CaptureDialogProps> = (props) => {
         signal: abort.signal,
       });
       const found = frames.filter(Boolean).length;
-      if (found < 2) throw new Error("No se encontró a nadie en el video (se necesita el cuerpo entero a la vista)");
+      if (found < 2) throw new Error(t("No se encontró a nadie en el video (se necesita el cuerpo entero a la vista)"));
       const motion = captureMotion(frames, fps(), { smoothing: smoothing() });
-      if (!motion) throw new Error("Faltan partes del cuerpo en todo el video (caderas, hombros o piernas)");
+      if (!motion) throw new Error(t("Faltan partes del cuerpo en todo el video (caderas, hombros o piernas)"));
       props.onMotion(motion, file.name);
     } catch (e) {
       if (e instanceof DOMException && e.name === "AbortError") return;
@@ -185,35 +186,34 @@ export const CaptureDialog: Component<CaptureDialogProps> = (props) => {
 
   return (
     <div class="fixed inset-0 z-50 flex items-center justify-center bg-bg-darker/70 backdrop-blur-sm p-4">
-      <div role="dialog" aria-label="Capturar movimiento" class="w-full max-w-md rounded-lg border border-border bg-bg shadow-xl">
+      <div role="dialog" aria-label={t("Capturar movimiento")} class="w-full max-w-md rounded-lg border border-border bg-bg shadow-xl">
         <div class="flex items-center justify-between px-4 h-11 border-b border-border">
           <h2 class="flex items-center gap-2 text-sm font-semibold text-text">
             <Icons.Record size={16} class="text-accent" />
-            Capturar movimiento
+            {t("Capturar movimiento")}
           </h2>
-          <button class="w-7 h-7 flex items-center justify-center rounded text-text-muted hover:text-text hover:bg-surface/40" aria-label="Cancelar" onClick={cancel}>
+          <button class="w-7 h-7 flex items-center justify-center rounded text-text-muted hover:text-text hover:bg-surface/40" aria-label={t("Cancelar")} onClick={cancel}>
             <Icons.X size={14} />
           </button>
         </div>
         <div class="p-4 space-y-3">
           <p class="text-xs text-text-muted leading-relaxed">
-            Una persona, de cuerpo entero, con buena luz y ropa que no tape las articulaciones. La profundidad sale de una
-            sola cámara: el giro del antebrazo y lo que queda tapado son poco fiables. Empezar quieto, de frente, ayuda.
+            {t("Una persona, de cuerpo entero, con buena luz y ropa que no tape las articulaciones. La profundidad sale de una sola cámara: el giro del antebrazo y lo que queda tapado son poco fiables. Empezar quieto, de frente, ayuda.")}
           </p>
           <div class="grid grid-cols-2 gap-1">
             <Button size="sm" variant={source() === "file" ? "primary" : "default"} disabled={!!progress() || !!live()} onClick={() => setSource("file")}>
-              Archivo de video
+              {t("Archivo de video")}
             </Button>
             <Button size="sm" variant={source() === "camera" ? "primary" : "default"} disabled={!!progress()} onClick={() => setSource("camera")}>
-              Cámara en vivo
+              {t("Cámara en vivo")}
             </Button>
           </div>
           <Show when={source() === "file"}>
             <div class="flex items-center gap-2">
               <Button size="sm" onClick={async () => setVideo(await pickFile("video/*"))} disabled={!!progress()}>
-                <Icons.FolderOpen size={12} /> Video…
+                <Icons.FolderOpen size={12} /> {t("Video…")}
               </Button>
-              <span class="text-xs font-mono text-text-muted truncate">{video()?.name ?? "ninguno"}</span>
+              <span class="text-xs font-mono text-text-muted truncate">{video()?.name ?? t("ninguno")}</span>
             </div>
           </Show>
           <Show when={source() === "camera"}>
@@ -228,7 +228,7 @@ export const CaptureDialog: Component<CaptureDialogProps> = (props) => {
                 when={live()}
                 fallback={
                   <Button size="sm" fullWidth disabled={liveState() === "opening" || (useLocalModel() && !model())} onClick={() => void openCamera()}>
-                    {liveState() === "opening" ? "Abriendo…" : "Abrir cámara"}
+                    {liveState() === "opening" ? t("Abriendo…") : t("Abrir cámara")}
                   </Button>
                 }
               >
@@ -236,12 +236,12 @@ export const CaptureDialog: Component<CaptureDialogProps> = (props) => {
                   when={liveState() === "recording"}
                   fallback={
                     <Button size="sm" variant="primary" fullWidth disabled={liveState() === "countdown"} onClick={() => void record()}>
-                      <Icons.Record size={12} /> Grabar (cuenta de 3)
+                      <Icons.Record size={12} /> {t("Grabar (cuenta de 3)")}
                     </Button>
                   }
                 >
                   <Button size="sm" variant="danger" fullWidth onClick={stopRecording}>
-                    <Icons.Stop size={12} /> Detener y usar
+                    <Icons.Stop size={12} /> {t("Detener y usar")}
                   </Button>
                 </Show>
               </Show>
@@ -249,10 +249,10 @@ export const CaptureDialog: Component<CaptureDialogProps> = (props) => {
           </Show>
           <div class="grid grid-cols-2 gap-3">
             <Show when={source() === "file"} fallback={<div />}>
-              <Slider label="Cuadros por segundo" value={fps()} onChange={(v) => setFps(Math.round(v))} min={12} max={60} step={1} disabled={!!progress()} />
+              <Slider label={t("Cuadros por segundo")} value={fps()} onChange={(v) => setFps(Math.round(v))} min={12} max={60} step={1} disabled={!!progress()} />
             </Show>
             <Slider
-              label="Suavizado"
+              label={t("Suavizado")}
               value={smoothing()}
               onChange={setSmoothing}
               min={0}
@@ -263,17 +263,17 @@ export const CaptureDialog: Component<CaptureDialogProps> = (props) => {
             />
           </div>
           <Checkbox
-            label="Usar un modelo descargado (.task, sin conexión)"
+            label={t("Usar un modelo descargado (.task, sin conexión)")}
             checked={useLocalModel()}
             onChange={setUseLocalModel}
           />
           <Show
             when={useLocalModel()}
-            fallback={<p class="text-[11px] text-text-dim leading-relaxed">El modelo de pose (unos 9 MB) se baja de Google la primera vez.</p>}
+            fallback={<p class="text-[11px] text-text-dim leading-relaxed">{t("El modelo de pose (unos 9 MB) se baja de Google la primera vez.")}</p>}
           >
             <div class="flex items-center gap-2">
               <Button size="sm" onClick={async () => setModel(await pickFile(".task"))} disabled={!!progress()}>
-                Modelo…
+                {t("Modelo…")}
               </Button>
               <span class="text-xs font-mono text-text-muted truncate">{model()?.name ?? "pose_landmarker_full.task"}</span>
             </div>
@@ -285,7 +285,7 @@ export const CaptureDialog: Component<CaptureDialogProps> = (props) => {
                   <div class="h-full bg-accent" style={{ width: `${(100 * p().done) / p().total}%` }} />
                 </div>
                 <p class="text-xs text-text-muted">
-                  Detectando: cuadro {p().done} de {p().total}
+                  {t("Detectando: cuadro {done} de {total}", { done: p().done, total: p().total })}
                 </p>
               </div>
             )}
@@ -296,11 +296,11 @@ export const CaptureDialog: Component<CaptureDialogProps> = (props) => {
         </div>
         <div class="flex justify-end gap-2 px-4 py-3 border-t border-border">
           <Button size="sm" variant="ghost" onClick={cancel}>
-            {progress() ? "Detener" : "Cancelar"}
+            {progress() ? t("Detener") : t("Cancelar")}
           </Button>
           <Show when={source() === "file"}>
             <Button size="sm" variant="primary" onClick={() => void run()} disabled={!video() || !!progress() || (useLocalModel() && !model())}>
-              Detectar
+              {t("Detectar")}
             </Button>
           </Show>
         </div>
