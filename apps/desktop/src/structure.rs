@@ -419,6 +419,38 @@ pub fn assign_scene_material(
     Ok(())
 }
 
+/// Asigna un material a triángulos sueltos (numerados como los dibuja el
+/// visor). Las primitivas con solo parte de sus caras elegidas se parten: la
+/// malla unida se rehace y el rig y la retopología ya no corresponden.
+/// Devuelve si la geometría cambió.
+#[tauri::command]
+pub fn assign_scene_material_faces(
+    state: State<'_, AppState>,
+    material: Option<usize>,
+    faces: Vec<u32>,
+) -> Result<bool, String> {
+    if faces.is_empty() {
+        return Err("No hay caras elegidas".into());
+    }
+    let mut scene_lock = state.scene.lock().unwrap();
+    let scene = scene_lock.as_ref().ok_or("No hay escena cargada")?;
+    if material.is_some_and(|m| m >= scene.materials.len()) {
+        return Err("No existe ese material".into());
+    }
+    let mut next = scene.clone();
+    if !next.assign_material_to_faces(&faces, material) {
+        *scene_lock = Some(next);
+        return Ok(false);
+    }
+    let mesh = crate::commands::scene_to_pinocchio_mesh(&next)?;
+    *scene_lock = Some(next);
+    drop(scene_lock);
+    state.mesh.lock().unwrap().replace(mesh);
+    state.rig_on_quad.store(false, std::sync::atomic::Ordering::SeqCst);
+    state.geometry_changed();
+    Ok(true)
+}
+
 /// Imagen de una textura de la escena, tal cual (PNG, JPEG o WebP)
 #[tauri::command]
 pub async fn get_scene_texture(app: AppHandle, index: usize) -> Result<Response, String> {

@@ -17,6 +17,7 @@ mod animation;
 mod transform;
 mod world;
 mod polygon;
+mod faces;
 
 pub use scene::{Scene, Node, SceneError};
 pub use mesh::{Mesh, Primitive, VertexAttribute, IndexData};

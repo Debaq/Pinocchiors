@@ -30,6 +30,10 @@ export interface ViewportProps {
   onNodesPicked?: (nodes: number[], mode: "set" | "add" | "remove" | "toggle") => void;
   /** Elegir partes del archivo con clic y recuadro */
   nodePicking?: boolean;
+  /** Elegir triángulos sueltos (clic y recuadro) y cuáles están elegidos */
+  onFacesPicked?: (faces: number[], mode: "set" | "add" | "remove" | "toggle") => void;
+  facePicking?: boolean;
+  pickedFaces?: number[];
   onBoneSelected?: (index: number) => void;
   onBoneMoved?: (index: number, position: [number, number, number]) => void;
   /** Modo animación: se confirmó un giro o desplazamiento de estas articulaciones */
@@ -140,6 +144,7 @@ export const Viewport: Component<ViewportProps> = (props) => {
         onPlacementPick: (pick) => props.onPlacementPick?.(pick),
         onNodePicked: (node) => props.onNodePicked?.(node),
         onNodesPicked: (nodes, mode) => props.onNodesPicked?.(nodes, mode),
+        onFacesPicked: (faces, mode) => props.onFacesPicked?.(faces, mode),
         onBoneSelected: props.onBoneSelected,
         onBoneMoved: props.onBoneMoved,
         onBoneMoveCommitted: (index, from, to) => props.onBoneMoveCommitted?.(index, from, to),
@@ -186,6 +191,11 @@ export const Viewport: Component<ViewportProps> = (props) => {
   });
 
   createEffect(() => viewer?.setNodePicking(!!props.nodePicking));
+  createEffect(() => viewer?.setFacePicking(!!props.facePicking));
+  createEffect(() => {
+    props.meshData;
+    viewer?.setFaceSelection(props.facePicking ? (props.pickedFaces ?? []) : []);
+  });
 
   createEffect(() => {
     const materials = props.sceneMaterials ?? [];

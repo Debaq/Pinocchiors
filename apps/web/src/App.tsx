@@ -934,6 +934,49 @@ export const App: Component = () => {
     });
 
   /** Cargar una imagen de un archivo como mapa del material (con UV; sin ellas no se ve) */
+  // Material por triángulos: elegir caras en el visor y asignarles un material
+  const [faceMode, setFaceMode] = createSignal(false);
+  const [pickedFaces, setPickedFaces] = createSignal<number[]>([]);
+  const pickFaces = (faces: number[], mode: "set" | "add" | "remove" | "toggle") =>
+    setPickedFaces((current) => {
+      if (mode === "set") return faces;
+      const set = new Set(current);
+      for (const f of faces) {
+        if (mode === "add") set.add(f);
+        else if (mode === "remove") set.delete(f);
+        else if (!set.delete(f)) set.add(f);
+      }
+      return [...set];
+    });
+  const invertFaces = () => {
+    const total = Math.floor((meshData()?.indices.length ?? 0) / 3);
+    const picked = new Set(pickedFaces());
+    setPickedFaces(Array.from({ length: total }, (_, i) => i).filter((i) => !picked.has(i)));
+  };
+  const allFaces = () => setPickedFaces(Array.from({ length: Math.floor((meshData()?.indices.length ?? 0) / 3) }, (_, i) => i));
+
+  /** Material (o uno nuevo) a los triángulos elegidos; si parte primitivas, el rig y la retopología se descartan */
+  const assignFaces = (material: number | null | "new") =>
+    void flushMaterialEdit().then(() =>
+      undoable(async (done) => {
+        const faces = pickedFaces();
+        if (faces.length === 0) return;
+        try {
+          let target: number | null;
+          if (material === "new") {
+            target = await invoke<number>("add_scene_material", { name: `${t("Material")} ${(sceneStructure()?.materials.length ?? 0) + 1}`, copyOf: null });
+          } else target = material;
+          const split = await invoke<boolean>("assign_scene_material_faces", { material: target, faces });
+          if (split) await afterSceneEdit(t("Partiste el modelo para darle material a unas caras"));
+          else await reloadAfterMaterials();
+          setPickedFaces([]);
+          done(t("Material por caras"));
+        } catch (e) {
+          setStatusMessage(tBackend(String(e)));
+        }
+      })
+    );
+
   const loadMap = async (index: number, slot: TextureSlot) => {
     const path = await open({
       multiple: false,
@@ -965,6 +1008,8 @@ export const App: Component = () => {
   const [meshInfo, setMeshInfo] = createSignal({ vertices: 0, faces: 0, format: "" });
   const [meshData, setMeshData] = createSignal<MeshData | undefined>();
   /** Diagonal de la caja del modelo: escala del grosor del vidrio */
+  // Otra malla: los índices de triángulo ya no son los mismos
+  createEffect(on(meshData, () => setPickedFaces([]), { defer: true }));
   const glassScale = createMemo(() => {
     const positions = meshData()?.positions;
     if (!positions || positions.length < 3) return 1;
@@ -7687,6 +7732,15 @@ export const App: Component = () => {
                 onTarget={(target) => setShowQuadMesh(target === "quad")}
               />
             </div>
+                faces={{
+                  active: faceMode(),
+                  count: pickedFaces().length,
+                  onToggle: () => setFaceMode((on) => !on),
+                  onClear: () => setPickedFaces([]),
+                  onAll: allFaces,
+                  onInvert: invertFaces,
+                  onAssign: assignFaces,
+                }}
             <div class="shrink-0 w-1 cursor-col-resize bg-border hover:bg-accent/50 transition-colors" onPointerDown={(e) => (materialEditorTab() === "textures" ? resizeEditor(e) : resizeMaterialEditor(e))} />
           </Show>
           {/* Orizon3D a la izquierda del visor */}
@@ -7762,6 +7816,9 @@ export const App: Component = () => {
               paintSettings={paintSettings()}
               meshData={showsPreview() ? remeshPreviewData() : displayQuad() ? quadMeshData() : meshData()}
               sceneMaterials={viewerMaterials()}
+              facePicking={faceMode() && materialEditorVisible() && materialEditorTab() === "materials" && !animating() && !displayQuad()}
+              pickedFaces={pickedFaces()}
+              onFacesPicked={pickFaces}
               lights={lights()}
               onLightsChanged={setLights}
               textures={viewerTextures()}

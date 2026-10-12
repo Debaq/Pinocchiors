@@ -71,6 +71,7 @@ pub fn run() {
             structure::add_scene_material,
             structure::remove_scene_material,
             structure::assign_scene_material,
+            structure::assign_scene_material_faces,
             structure::get_scene_texture,
             // Editar texturas en otras aplicaciones
             textures::export_texture,

@@ -198,6 +198,8 @@ export interface ViewerCallbacks {
   onNodePicked?: (node: number) => void;
   /** Clic o recuadro sobre las partes del archivo; `mode` dice cómo se combina con lo elegido */
   onNodesPicked?: (nodes: number[], mode: "set" | "add" | "remove" | "toggle") => void;
+  /** Clic o recuadro sobre triángulos sueltos (índices de `MeshData.indices` / 3) */
+  onFacesPicked?: (faces: number[], mode: "set" | "add" | "remove" | "toggle") => void;
   onWeightsPainted?: (stroke: PaintStroke) => void;
   /** La luz principal se movió arrastrando con L */
   onLightsChanged?: (lights: LightSettings) => void;
@@ -979,6 +981,11 @@ export class Viewer3D {
     }
     // Sobre el gizmo de las herramientas, lo maneja el gizmo
     if (this.transformControls?.dragging || this.transformControls?.axis) return;
+    // Triángulos sueltos: clic elige uno y arrastrar dibuja un recuadro
+    if (this.facePicking && this.callbacks.onFacesPicked && this.activeTool === "select" && this.pickJoint(e) < 0) {
+      this.nodeDrag = { start: this.canvasPoint(e), current: this.canvasPoint(e), moved: false };
+      return;
+    }
     // Partes del archivo: clic las elige y arrastrar dibuja un recuadro
     if (this.nodePicking && this.callbacks.onNodesPicked && this.activeTool === "select" && this.pickJoint(e) < 0) {
       this.nodeDrag = { start: this.canvasPoint(e), current: this.canvasPoint(e), moved: false };
@@ -4877,7 +4884,7 @@ export class Viewer3D {
 
   private clearMesh(): void {
     const meshGeometry = this.currentMesh?.geometry;
-    for (const key of ["nodeHighlight", "nodeHover"] as const) {
+    for (const key of ["nodeHighlight", "nodeHover", "faceOverlay"] as const) {
       const overlay = this[key];
       if (!overlay) continue;
       this.meshGroup.remove(overlay);
@@ -4976,6 +4983,127 @@ export class Viewer3D {
   }
 
 
+  // ─── Elegir triángulos sueltos (material por caras) ──────────────────────
+
+  private facePicking = false;
+  private faceOverlay: THREE.Mesh | null = null;
+  private pickedFaces: Uint32Array = new Uint32Array(0);
+
+  /** Activa elegir triángulos con el clic izquierdo (y con recuadro al arrastrar) */
+  setFacePicking(on: boolean): void {
+    if (this.facePicking === on) return;
+    this.facePicking = on;
+    if (on) this.setHoveredNodes([]);
+    else this.endNodeDrag();
+  }
+
+  /** Resalta estos triángulos (índices de `MeshData.indices` / 3) */
+  setFaceSelection(faces: ArrayLike<number>): void {
+    this.pickedFaces = Uint32Array.from(faces);
+    this.updateFaceOverlay();
+    this.requestRender();
+  }
+
+  private updateFaceOverlay(): void {
+    if (this.faceOverlay) {
+      this.meshGroup.remove(this.faceOverlay);
+      this.faceOverlay.geometry.dispose();
+      (this.faceOverlay.material as THREE.Material).dispose();
+      this.faceOverlay = null;
+    }
+    const data = this.meshData;
+    const mesh = this.currentMesh;
+    if (!data || !mesh || this.pickedFaces.length === 0) return;
+    const index = new Uint32Array(this.pickedFaces.length * 3);
+    let at = 0;
+    for (const face of this.pickedFaces) {
+      if (face * 3 + 2 >= data.indices.length) continue;
+      index.set(data.indices.subarray(face * 3, face * 3 + 3), at);
+      at += 3;
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", mesh.geometry.getAttribute("position"));
+    geometry.setIndex(new THREE.BufferAttribute(index.subarray(0, at), 1));
+    const material = new THREE.MeshBasicMaterial({
+      color: 0xff79c6,
+      transparent: true,
+      opacity: 0.55,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+    });
+    this.faceOverlay = new THREE.Mesh(geometry, material);
+    this.faceOverlay.renderOrder = 2;
+    this.meshGroup.add(this.faceOverlay);
+  }
+
+  /** Triángulo de `MeshData` que corresponde al `faceIndex` de un rayo (los nodos ocultos no están en la geometría) */
+  private dataFace(faceIndex: number): number | null {
+    const data = this.meshData;
+    if (!data) return null;
+    if (this.hiddenNodes.size === 0 || !data.groups || !data.groupNodes) return faceIndex;
+    let seen = 0;
+    for (let g = 0; g * 3 + 2 < data.groups.length; g++) {
+      const triangles = data.groups[g * 3 + 1] / 3;
+      if (this.hiddenNodes.has(data.groupNodes[g])) continue;
+      if (faceIndex < seen + triangles) return data.groups[g * 3] / 3 + (faceIndex - seen);
+      seen += triangles;
+    }
+    return null;
+  }
+
+  /** Triángulo bajo el puntero */
+  private faceUnder(e: PointerEvent): number | null {
+    const mesh = this.currentMesh;
+    if (!mesh?.visible) return null;
+    this.raycaster.setFromCamera(this.getMousePosition(e), this.camera);
+    const hit = this.raycaster.intersectObject(mesh)[0];
+    return hit?.faceIndex != null ? this.dataFace(hit.faceIndex) : null;
+  }
+
+  /** Triángulos de frente cuyo centro cae dentro del recuadro (coordenadas del lienzo) */
+  private facesInRect(a: [number, number], b: [number, number]): number[] {
+    const data = this.meshData;
+    const mesh = this.currentMesh;
+    if (!data || !mesh) return [];
+    const rect = this.canvas.getBoundingClientRect();
+    const [x0, x1] = [Math.min(a[0], b[0]), Math.max(a[0], b[0])];
+    const [y0, y1] = [Math.min(a[1], b[1]), Math.max(a[1], b[1])];
+    const { positions, indices } = data;
+    const eye = this.camera.position;
+    const p = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
+    const c = new THREE.Vector3();
+    const n = new THREE.Vector3();
+    const e1 = new THREE.Vector3();
+    const e2 = new THREE.Vector3();
+    const found: number[] = [];
+    const scan = (from: number, to: number) => {
+      for (let t = from; t < to; t++) {
+        for (let k = 0; k < 3; k++) {
+          const i = indices[t * 3 + k] * 3;
+          p[k].set(positions[i], positions[i + 1], positions[i + 2]).applyMatrix4(mesh.matrixWorld);
+        }
+        c.copy(p[0]).add(p[1]).add(p[2]).divideScalar(3);
+        n.crossVectors(e1.subVectors(p[1], p[0]), e2.subVectors(p[2], p[0]));
+        if (n.dot(e1.subVectors(c, eye)) > 0) continue;
+        c.project(this.camera);
+        if (c.z < -1 || c.z > 1) continue;
+        const x = ((c.x + 1) / 2) * rect.width;
+        const y = ((1 - c.y) / 2) * rect.height;
+        if (x >= x0 && x <= x1 && y >= y0 && y <= y1) found.push(t);
+      }
+    };
+    if (data.groups && data.groupNodes && this.hiddenNodes.size > 0) {
+      for (let g = 0; g * 3 + 2 < data.groups.length; g++) {
+        if (this.hiddenNodes.has(data.groupNodes[g])) continue;
+        scan(data.groups[g * 3] / 3, (data.groups[g * 3] + data.groups[g * 3 + 1]) / 3);
+      }
+    } else scan(0, indices.length / 3);
+    return found;
+  }
+
   // ─── Elegir partes del archivo con clic y recuadro ─────────────────────────
 
   private nodePicking = false;
@@ -5045,6 +5173,15 @@ export class Viewer3D {
     this.endNodeDrag();
     if (e.button !== 0) return;
     const mode = e.ctrlKey || e.metaKey ? "remove" : e.shiftKey ? "add" : "set";
+    if (this.facePicking) {
+      if (!drag.moved) {
+        const face = this.faceUnder(e);
+        this.callbacks.onFacesPicked?.(face === null ? [] : [face], face === null ? "set" : e.shiftKey ? "toggle" : mode);
+      } else {
+        this.callbacks.onFacesPicked?.(this.facesInRect(drag.start, drag.current), mode);
+      }
+      return;
+    }
     if (!drag.moved) {
       // Clic: la parte bajo el puntero (nada = quitar la selección)
       const mesh = this.currentMesh;
