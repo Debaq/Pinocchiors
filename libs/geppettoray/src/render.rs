@@ -7,6 +7,7 @@ use crate::image_out::Image;
 use crate::rng::Rng;
 use crate::bsdf::Bsdf;
 use crate::env::Environment;
+use crate::glass::{absorption_sigma, fresnel_dielectric, reflect, refract};
 use crate::scene::{RayMaterial, RayScene, Triangle};
 use glam::{Vec2, Vec3};
 use rayon::prelude::*;
@@ -106,9 +107,12 @@ fn radiance(scene: &RayScene, s: &Settings, mut ray: Ray, rng: &mut Rng) -> Vec3
     let mut prev_p = Vec3::ZERO;
     let env_map = s.environment.map.as_deref();
     let mut depth = 0u32;
-    // Cada iteración es un vértice; los cruces descartados (cara trasera) no cuentan
+    // Extinción del volumen en el que está el rayo (dentro de un vidrio o líquido cerrado)
+    let mut medium: Option<Vec3> = None;
+    // Cada iteración es un vértice; los cruces descartados (cara trasera) y los eventos
+    // de vidrio no cuentan como rebote, pero el total se acota
     let mut guard = 0;
-    while guard < 4 * (s.max_depth + 2) {
+    while guard < 64 + 4 * s.max_depth {
         guard += 1;
         let Some(hit) = scene.closest_alpha(&ray, f32::INFINITY, rng) else {
             let mut le = s.environment.eval(ray.dir);
@@ -118,13 +122,16 @@ fn radiance(scene: &RayScene, s: &Settings, mut ray: Ray, rng: &mut Rng) -> Vec3
             sum += throughput * le;
             break;
         };
+        if let Some(sigma) = medium {
+            throughput *= Vec3::new((-sigma.x * hit.t).exp(), (-sigma.y * hit.t).exp(), (-sigma.z * hit.t).exp());
+        }
         let tri = &scene.triangles[hit.tri as usize];
         let mat = scene.material(tri);
         let w = 1.0 - hit.u - hit.v;
         let p = tri.v0 + tri.e1 * hit.u + tri.e2 * hit.v;
         let g = tri.geometric_normal();
         let back = g.dot(ray.dir) > 0.0;
-        if back && !mat.double_sided {
+        if back && !mat.double_sided && mat.transmission <= 0.0 {
             // Cara trasera de un material de una sola cara: el rayo la atraviesa
             ray = Ray { origin: p + ray.dir * eps, dir: ray.dir };
             continue;
@@ -180,10 +187,44 @@ fn radiance(scene: &RayScene, s: &Settings, mut ray: Ray, rng: &mut Rng) -> Vec3
             metallic *= mr.z;
         }
         let n = apply_normal_map(scene, mat, tri, uv, n);
+
+        // Vidrio y líquidos: interfaz lisa, se elige reflexión o refracción con la
+        // probabilidad de Fresnel (el peso queda en 1). Es un evento delta: sin luz
+        // directa en este vértice y sin MIS en el siguiente.
+        let t_prob = if medium.is_some() { 1.0 } else { (mat.transmission * (1.0 - metallic.clamp(0.0, 1.0))).clamp(0.0, 1.0) };
+        if t_prob > 0.0 && rng.next_f32() < t_prob {
+            let volume = mat.thickness > 0.0;
+            let cos_i = n.dot(-ray.dir).clamp(1e-4, 1.0);
+            // Aire por fuera; el volumen se recorre hacia adentro por la cara frontal
+            let (n1, n2) = if volume && back { (mat.ior, 1.0) } else { (1.0, mat.ior) };
+            let f = fresnel_dielectric(cos_i, n1, n2);
+            let (dir, side) = if rng.next_f32() < f {
+                (reflect(ray.dir, n), 1.0)
+            } else if volume {
+                match refract(ray.dir, n, n1 / n2) {
+                    Some(d) => {
+                        medium = if back { None } else { Some(absorption_sigma(base, mat.thickness)) };
+                        (d, -1.0)
+                    }
+                    None => (reflect(ray.dir, n), 1.0),
+                }
+            } else {
+                // Lámina delgada: la luz sigue derecha y se tiñe con el color base
+                throughput *= base;
+                (ray.dir, -1.0)
+            };
+            if dir.dot(gn) * side <= 0.0 {
+                break;
+            }
+            ray = Ray { origin: p + gn * (eps * side), dir };
+            prev_pdf = 0.0;
+            continue;
+        }
+
         let bsdf = if mat.lambert {
             Bsdf::lambert(base)
         } else {
-            Bsdf::new(base, metallic, roughness, mat.clearcoat, mat.clearcoat_roughness)
+            Bsdf::with_ior(base, metallic, roughness, mat.clearcoat, mat.clearcoat_roughness, mat.ior)
         };
         let (t, b) = onb(n);
         let to_local = |v: Vec3| Vec3::new(v.dot(t), v.dot(b), v.dot(n));

@@ -81,10 +81,16 @@ fn lum(c: Vec3) -> f32 {
 
 impl Bsdf {
     pub fn new(base: Vec3, metallic: f32, roughness: f32, coat: f32, coat_roughness: f32) -> Self {
+        Self::with_ior(base, metallic, roughness, coat, coat_roughness, 1.5)
+    }
+
+    /// Como [`Bsdf::new`], con el IOR del dieléctrico (fija su reflectancia frontal F0)
+    pub fn with_ior(base: Vec3, metallic: f32, roughness: f32, coat: f32, coat_roughness: f32, ior: f32) -> Self {
+        let f0_diel = ((ior - 1.0) / (ior + 1.0)).powi(2);
         let metallic = metallic.clamp(0.0, 1.0);
         let roughness = roughness.clamp(0.0, 1.0);
         let diffuse = base * (1.0 - metallic);
-        let f0 = Vec3::splat(0.04).lerp(base, metallic);
+        let f0 = Vec3::splat(f0_diel).lerp(base, metallic);
         let coat = coat.clamp(0.0, 1.0);
         let wd = lum(diffuse);
         let ws = lum(f0).max(0.06);

@@ -35,6 +35,13 @@ pub struct RayMaterial {
     pub clearcoat: f32,
     pub clearcoat_roughness: f32,
     pub uv_scale: Vec2,
+    /// Fracción de luz que atraviesa (vidrio, líquidos); la interfaz es lisa
+    pub transmission: f32,
+    pub ior: f32,
+    /// > 0: volumen cerrado; la luz se refracta al entrar y salir y el color base la
+    /// absorbe a lo largo de este recorrido (Beer–Lambert). 0: lámina delgada, sin
+    /// refracción, que solo tiñe con el color base
+    pub thickness: f32,
 }
 
 impl RayMaterial {
@@ -74,6 +81,9 @@ impl Default for RayMaterial {
             clearcoat: 0.0,
             clearcoat_roughness: 0.0,
             uv_scale: Vec2::ONE,
+            transmission: 0.0,
+            ior: 1.5,
+            thickness: 0.0,
         }
     }
 }
@@ -292,6 +302,9 @@ impl RayScene {
                     clearcoat: m.clearcoat_factor,
                     clearcoat_roughness: m.clearcoat_roughness_factor,
                     uv_scale: Vec2::from(m.uv_scale),
+                    transmission: m.transmission_factor,
+                    ior: m.ior,
+                    thickness: m.thickness_factor,
                 }
             })
             .collect();
@@ -339,20 +352,29 @@ impl RayScene {
 
     /// Cruce más cercano respetando máscara y mezcla
     pub fn closest_alpha(&self, ray: &Ray, t_max: f32, rng: &mut crate::rng::Rng) -> Option<Hit> {
-        self.bvh.closest_with(&self.triangles, ray, t_max, &mut |ti, u, v| self.passes(ti, u, v, rng))
+        self.bvh.closest_with(&self.triangles, ray, t_max, &mut |ti, u, v| self.passes(ti, u, v, rng, false))
     }
 
     pub fn occluded_alpha(&self, ray: &Ray, t_max: f32, rng: &mut crate::rng::Rng) -> bool {
-        self.bvh.occluded_with(&self.triangles, ray, t_max, &mut |ti, u, v| self.passes(ti, u, v, rng))
+        self.bvh.occluded_with(&self.triangles, ray, t_max, &mut |ti, u, v| self.passes(ti, u, v, rng, true))
     }
 
-    fn passes(&self, ti: u32, u: f32, v: f32, rng: &mut crate::rng::Rng) -> bool {
+    /// ¿Este cruce cuenta como golpe? En rayos de sombra el vidrio deja pasar la luz con
+    /// probabilidad igual a lo que transmite (sombras falsas sin cáusticas: la luz no se
+    /// desvía, pero tampoco queda un vidrio negro)
+    fn passes(&self, ti: u32, u: f32, v: f32, rng: &mut crate::rng::Rng, shadow: bool) -> bool {
         let tri = &self.triangles[ti as usize];
         let mat = self.material(tri);
-        match mat.alpha {
+        let solid = match mat.alpha {
             RayAlpha::Opaque => true,
             RayAlpha::Mask(cut) => self.alpha_at(tri, mat, u, v) >= cut,
             RayAlpha::Blend => rng.next_f32() < self.alpha_at(tri, mat, u, v),
+        };
+        if solid && shadow && mat.transmission > 0.0 {
+            let tint = mat.base_color.truncate();
+            let pass = mat.transmission * (tint.x + tint.y + tint.z) / 3.0;
+            return rng.next_f32() >= pass;
         }
+        solid
     }
 }
