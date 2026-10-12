@@ -61,9 +61,9 @@ Outliner, todo son **opciones del panel Render** (espacio Render, Alt+7).
 - Descartado: cámaras/luces como nodos del `Scene` y HDR propio. Si el motor Rust (fase 3)
   los necesita, salen de estos presets.
 
-## Fase 3 — Motor de render propio en Rust
+## Fase 3 — GeppettoRay, motor de render propio en Rust
 
-Crate nuevo `libs/render/` (pide permiso antes de crear la carpeta). CPU primero, con rayon;
+Motor llamado **GeppettoRay** (el carpintero que da vida a Pinocchio). Crate nuevo `libs/geppettoray/` (pide permiso antes de crear la carpeta). CPU primero, con rayon;
 el GPU (wgpu compute) queda como fase aparte si hace falta velocidad.
 
 Entrada: el `Scene` de converter (mallas, materiales PBR, texturas, esqueleto y animación) más
@@ -80,11 +80,13 @@ cámara, luces y mundo de la fase 2. Los materiales ya son los de glTF, así que
 | 3g | **Progreso en la app**: pasadas progresivas con vista previa que se afina, mosaicos, **Cancelar**, tiempo estimado (como ya hacen retopología y remallar, en segundo plano). |
 | 3h | **Animación**: un fotograma por pose evaluada en CPU (esqueleto + pesos), secuencia PNG y, si ffmpeg está, video; reanudar un render interrumpido. |
 
+**Estado (2026-10-12): 3a hecha, sin commitear.** `libs/geppettoray/`: BVH propia (SAH por cubetas), `RayScene::from_scene` (vía `world_primitives`), cámara pinhole, path tracer difuso + emisión con ruleta rusa, entorno uniforme y sol con muestreo directo, PNG sRGB. Tests: horno blanco, caja cerrada (serie geométrica), BVH vs fuerza bruta, sol sobre plano. Siguiente: 3b.
+
 Decisiones abiertas (para cuando lleguemos):
-- BVH propia o el crate `bvh`/`embree` (Embree es rapidísimo pero trae dependencia C++; la
+- ~~BVH propia o el crate `bvh`/`embree`~~ → propia (decidido en 3a); antes: `bvh`/`embree` (Embree es rapidísimo pero trae dependencia C++; la
   compilación a wasm y el empaquetado pesan).
 - Cuánto del Principled BSDF de Blender copiar; arrancar con el modelo de glTF y sumar.
-- Si el motor corre dentro de la app o también como `apps/render` (CLI como `apps/converter`).
+- Si el motor corre dentro de la app o también como `apps/geppettoray` (CLI como `apps/converter`).
 
 Verificación (obligatoria desde 3a):
 - **Prueba del horno blanco**: esfera blanca difusa dentro de luz uniforme sale del mismo

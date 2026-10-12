@@ -1,0 +1,13 @@
+[package]
+name = "geppettoray"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "GeppettoRay: motor de render propio (path tracing en CPU) de Pinocchio"
+
+[dependencies]
+converter-scene = { workspace = true }
+glam = { workspace = true }
+rayon = { workspace = true }
+image = { workspace = true }
+thiserror = { workspace = true }

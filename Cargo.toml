@@ -19,6 +19,8 @@ members = [
     "libs/uv/core",
     # Orizon3D - Escáneres 3D
     "libs/orizon3d",
+    # GeppettoRay - Motor de render propio
+    "libs/geppettoray",
     # CAD paramétrico
     "libs/cad/solver",
     "libs/cad/occt",
@@ -123,6 +125,7 @@ quadriflow-core = { path = "libs/quadriflow/core" }
 # Crates internos - UV
 uv-core = { path = "libs/uv/core" }
 orizon3d-core = { path = "libs/orizon3d" }
+geppettoray = { path = "libs/geppettoray" }
 
 # Crates internos - CAD
 cad-solver = { path = "libs/cad/solver" }
