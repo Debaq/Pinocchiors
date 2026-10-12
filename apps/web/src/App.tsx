@@ -1,4 +1,6 @@
 import { t, tn, tx, locale } from "./lib/i18n";
+import { defaultExportFormat, showFps } from "./lib/settings";
+import { followUiScale } from "./lib/uiScale";
 import { tBackend } from "./lib/i18nBackend";
 import { Component, createEffect, createMemo, createSignal, on, onMount, onCleanup, Show, untrack, type JSX } from "solid-js";
 import { invoke as tauriInvoke, Channel, type InvokeArgs, type InvokeOptions } from "@tauri-apps/api/core";
@@ -81,7 +83,7 @@ import { addDrawing, drawingSheets, drawingTree, parseElementNode, removeDrawing
 import { isCadObject, isGeometryStep, materialized, nextObjectId, partKey, savedTrail, syncCadObjects, type SceneObject } from "./lib/objects";
 import { TOOLSETS, toolContext, type ToolId } from "./lib/tools";
 import { createHistoryStore, type SavedHistory } from "./lib/history";
-import { createShortcutManager, type ShortcutDef } from "./lib/shortcuts";
+import { bindingOf, createShortcutManager, formatBinding, type ShortcutDef } from "./lib/shortcuts";
 import { decodeMesh, decodeWeights } from "./lib/buffers";
 import { createPersisted, startDrag } from "./lib/ui-state";
 import { PlaybackBar, type PlaybackSegment } from "./components/layout/PlaybackBar";
@@ -821,7 +823,7 @@ export const App: Component = () => {
   const [exportCompactUv, setExportCompactUv] = createSignal<boolean | undefined>();
   const compactUv = () =>
     exportCompactUv() ?? ((uvInfo()?.mode === "unwrapped" || canUndoUnwrap()) && (uvConfig().layout ?? "paintable") === "paintable");
-  const [exportOptions, setExportOptions] = createSignal<ExportOptions>(defaultExportOptions);
+  const [exportOptions, setExportOptions] = createSignal<ExportOptions>({ ...defaultExportOptions, format: defaultExportFormat() as ExportOptions["format"] });
   // Sin modelo solo sirven los formatos que llevan el esqueleto solo
   createEffect(() => {
     const opts = exportOptions();
@@ -2018,9 +2020,10 @@ export const App: Component = () => {
 
 
   // Para la pestaña de atajos del panel derecho
-  const keyName = (key: string) => (key === " " ? t("Espacio") : key.length === 1 ? key.toUpperCase() : key);
   const shortcutHints = shortcutDefs.map((d) => ({
-    keys: [d.ctrl && "Ctrl", d.shift && "Shift", d.alt && "Alt", keyName(d.key)].filter(Boolean).join("+"),
+    get keys() {
+      return formatBinding(bindingOf(d));
+    },
     get description() {
       return d.description;
     },
@@ -6435,6 +6438,7 @@ export const App: Component = () => {
   const [gridSettings, setGridSettings] = createPersisted<GridSettings>("settings.grid", { unit: "auto", modelUnit: "auto" });
   const [themeSetting, setThemeSetting] = createPersisted<ThemeSetting>("settings.theme", "dark");
   createEffect(() => applyTheme(themeSetting()));
+  followUiScale();
   onCleanup(followSystemTheme(themeSetting));
 
   // La grilla (y las medidas del panel Orientación) se miden en unidades
@@ -7116,7 +7120,7 @@ export const App: Component = () => {
         {/* Header */}
         <Header
           title="Pinocchio"
-          fps={fps()}
+          fps={showFps() ? fps() : undefined}
           fileName={projectPath() ? baseName(projectPath()!) : fileName()}
           unsaved={unsaved()}
           fileMenu={fileMenuItems}
@@ -7707,6 +7711,11 @@ export const App: Component = () => {
           onGridChange={setGridSettings}
           theme={themeSetting()}
           onThemeChange={setThemeSetting}
+          trackpad={trackpadNavigation()}
+          onTrackpadChange={(on) => {
+            setTrackpadNavigation(on);
+            setViewSettings((prev) => ({ ...prev, trackpadNavigation: on }));
+          }}
           fileMetersPerUnit={sceneStructure()?.meters_per_unit}
           projectPath={projectPath()}
           onClose={() => setSettingsOpen(false)}

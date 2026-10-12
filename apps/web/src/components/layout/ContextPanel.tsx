@@ -106,12 +106,12 @@ export interface ShortcutHint {
 type TabId = "section" | "object" | "view" | "lights" | "history" | "info";
 
 /** Gestos del visor que no pasan por el gestor de atajos */
-const MOUSE_HINTS: ShortcutHint[] = [
-  { keys: "Central / Alt+Izq", description: "Orbitar" },
-  { keys: "Shift+Central", description: "Desplazar" },
-  { keys: "Rueda / Ctrl+Central", description: "Zoom" },
-  { keys: "Clic", description: "Seleccionar articulación" },
-  { keys: "L+arrastrar", description: "Girar la luz" },
+export const MOUSE_HINTS: ShortcutHint[] = [
+  { get keys() { return t("Central / Alt+Izq"); }, description: "Orbitar" },
+  { get keys() { return t("Shift+Central"); }, description: "Desplazar" },
+  { get keys() { return t("Rueda / Ctrl+Central"); }, description: "Zoom" },
+  { get keys() { return t("Clic"); }, description: "Seleccionar articulación" },
+  { get keys() { return t("L+arrastrar"); }, description: "Girar la luz" },
 ];
 
 const FIXED_TABS: { id: Exclude<TabId, "section">; label: string; icon: Component<{ size?: number }> }[] = [
@@ -418,7 +418,7 @@ const HintList: Component<{ hints: ShortcutHint[] }> = (props) => (
         <div class="flex items-center justify-between gap-3 text-xs">
           <span class="text-text-muted truncate">{t(h.description)}</span>
           <kbd class="shrink-0 px-1.5 rounded bg-surface/60 border border-border font-mono text-[11px] text-text">
-            {t(h.keys)}
+            {h.keys}
           </kbd>
         </div>
       )}

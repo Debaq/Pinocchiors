@@ -39,7 +39,7 @@ import type { DesignActions } from "../../lib/designActions";
 import * as Icons from "../icons";
 import * as SketchIcons from "../icons/sketch";
 // `t` se usa como nombre de variable en muchos lugares de este archivo: se importa como `tr`
-import { fmtNumber, t as tr } from "../../lib/i18n";
+import { fmtNumber, t as tr, tx } from "../../lib/i18n";
 
 /** mm³ o cm³ según el tamaño */
 const formatVolume = (v: number) => (v >= 1000 ? `${fmtNumber(v / 1000, { maximumFractionDigits: 2 })} cm³` : `${fmtNumber(v, { maximumFractionDigits: 1 })} mm³`);
@@ -4276,7 +4276,7 @@ export const CadView: Component<CadViewProps> = (props) => {
                     class={clsx("px-1.5 py-0.5 rounded text-xs font-bold", textBold() ? "bg-accent text-bg" : "text-text-muted hover:bg-surface")}
                     onClick={() => setTextBold(!textBold())}
                   >
-                    {tr("N")}
+                    {tx("estilo", "N")}
                   </button>
                   <button
                     aria-pressed={textItalic()}
@@ -4284,7 +4284,7 @@ export const CadView: Component<CadViewProps> = (props) => {
                     class={clsx("px-1.5 py-0.5 rounded text-xs italic", textItalic() ? "bg-accent text-bg" : "text-text-muted hover:bg-surface")}
                     onClick={() => setTextItalic(!textItalic())}
                   >
-                    {tr("K")}
+                    {tx("estilo", "K")}
                   </button>
                   <For each={[["left", tr("Izq.")], ["center", tr("Centro")], ["right", tr("Der.")]] as const}>
                     {([k, label]) => (
