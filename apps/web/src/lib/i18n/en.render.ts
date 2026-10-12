@@ -1,0 +1,40 @@
+import type { Catalog } from "../i18n";
+
+/** RenderDialog.tsx, renderStill.ts y el botón Render de Exportar */
+export const en_render: Catalog = {
+  "Render": "Render",
+  "Renderizar": "Render",
+  "Renderizando...": "Rendering...",
+  "Render cancelado": "Render cancelled",
+  "Render de la vista": "Render the view",
+  "Guardar render": "Save render",
+  "Imagen": "Image",
+  "Render guardado: {name} ({w} × {h}, {size})": "Render saved: {name} ({w} × {h}, {size})",
+  "Guarda una imagen de lo que se ve, en alta calidad.": "Saves a high-quality image of what you see.",
+  "Sale de lo que se ve ahora: misma posición, giro y zoom. El marco del visor muestra el área exacta; mueve la vista para encuadrar.":
+    "It comes from what you see now: same position, rotation and zoom. The frame in the viewport shows the exact area; move the view to compose the shot.",
+  "Pantalla": "Screen",
+  "Luz": "Light",
+  "Sombras suaves": "Soft shadows",
+  "Oclusión ambiental": "Ambient occlusion",
+  "Las sombras salen de la luz principal y ganan penumbra con 4 o 16 cuadros. La oclusión oscurece rincones y contactos.":
+    "Shadows come from the main light and get a penumbra with 4 or 16 frames. Occlusion darkens corners and contacts.",
+  "Bloquear la relación": "Lock aspect ratio",
+  "Fondo de la imagen": "Image background",
+  "El del visor": "Viewport's",
+  "Transparente": "Transparent",
+  "Color del fondo": "Background color",
+  "JPG no guarda transparencia: el fondo saldrá blanco.": "JPG can't store transparency: the background will be white.",
+  "Borrador (1 cuadro)": "Draft (1 frame)",
+  "Normal (4 cuadros)": "Normal (4 frames)",
+  "Alta (16 cuadros)": "High (16 frames)",
+  "Calidad de compresión": "Compression quality",
+  "Gizmos y guías": "Gizmos and guides",
+  "Resaltados de selección": "Selection highlights",
+  "Ya hay un render en curso": "A render is already running",
+  "No se pudo crear la imagen": "Could not create the image",
+  "Esta ventana no puede guardar {f}; prueba con PNG": "This window can't save {f}; try PNG",
+  "Falta la imagen del render": "The render image is missing",
+  "Falta la ruta del render": "The render path is missing",
+  "La ruta del render no es válida": "The render path is not valid",
+};

@@ -5,6 +5,7 @@
 
 import * as THREE from "three";
 import { GlowHalo } from "./glowHalo";
+import { renderFrameRect, renderStillImage, type RenderStillOptions, type StillImage } from "./renderStill";
 import { THEME_EVENT, themeHex } from "./theme";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { CameraRig, type CameraPose } from "./cameraRig";
@@ -1743,7 +1744,7 @@ export class Viewer3D {
 
   private onResize(): void {
     const parent = this.canvas.parentElement;
-    if (!parent) return;
+    if (!parent || this.stillBusy) return;
 
     const width = parent.clientWidth;
     const height = parent.clientHeight;
@@ -1754,6 +1755,7 @@ export class Viewer3D {
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height);
     this.glowHalo?.setSize(width, height);
+    this.updateRenderFrame();
   }
 
   /** Pide un cuadro; varias peticiones antes del próximo se juntan en uno */
@@ -1767,6 +1769,7 @@ export class Viewer3D {
 
   private animate = (): void => {
     this.animationId = null;
+    if (this.stillBusy) return;
     if (this.cameraRig.moving) {
       this.cameraRig.step();
       // Sin arrastre residual de la amortiguación durante el giro
@@ -3217,6 +3220,7 @@ export class Viewer3D {
     this.clearCloud();
     this.cloudOverlay?.remove();
     this.selectionBox?.remove();
+    this.renderFrame?.remove();
     this.cameraRig.viewCube.dispose();
     this.renderer.dispose();
   }
@@ -4713,6 +4717,108 @@ export class Viewer3D {
       }
     }
     return best < 0 ? null : [normals[3 * best], normals[3 * best + 1], normals[3 * best + 2]];
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // RENDER DE UNA IMAGEN
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /** Marco de render en pantalla: relación de aspecto que saldrá, o null si no se muestra */
+  private renderFrameAspect: number | null = null;
+  private renderFrame: HTMLDivElement | null = null;
+  /** Mientras se renderiza, el visor no dibuja ni se redimensiona: la cámara está prestada */
+  private stillBusy = false;
+
+  /** Tamaño de la vista en píxeles reales (lo que sale con el tamaño "Pantalla" del render) */
+  getViewSize(): { width: number; height: number } {
+    const ratio = this.renderer.getPixelRatio();
+    return { width: Math.round(this.canvas.clientWidth * ratio), height: Math.round(this.canvas.clientHeight * ratio) };
+  }
+
+  /** Muestra (o quita con `null`) el marco con el área exacta de la imagen a renderizar */
+  setRenderFrame(aspect: number | null): void {
+    this.renderFrameAspect = aspect;
+    this.updateRenderFrame();
+  }
+
+  private updateRenderFrame(): void {
+    const aspect = this.renderFrameAspect;
+    if (aspect === null) {
+      if (this.renderFrame) this.renderFrame.style.display = "none";
+      return;
+    }
+    if (!this.renderFrame) {
+      const box = document.createElement("div");
+      // La sombra gigante oscurece lo que queda fuera del marco
+      box.style.cssText =
+        "position:absolute;pointer-events:none;z-index:4;box-sizing:border-box;border:1px solid var(--accent, #bd93f9);box-shadow:0 0 0 9999px rgba(0,0,0,0.4)";
+      this.canvas.parentElement?.appendChild(box);
+      this.renderFrame = box;
+    }
+    const w = this.canvas.clientWidth;
+    const h = this.canvas.clientHeight;
+    if (!w || !h) return;
+    const rect = renderFrameRect(w, h, aspect);
+    const style = this.renderFrame.style;
+    style.display = "block";
+    style.left = `${this.canvas.offsetLeft + rect.x}px`;
+    style.top = `${this.canvas.offsetTop + rect.y}px`;
+    style.width = `${rect.w}px`;
+    style.height = `${rect.h}px`;
+  }
+
+  /**
+   * Renderiza lo que se ve al tamaño pedido y devuelve la imagen codificada.
+   * Sale de la misma cámara, recortada alrededor del centro si la relación de aspecto es otra.
+   */
+  async renderStill(opts: RenderStillOptions, onProgress?: (fraction: number) => void, signal?: AbortSignal): Promise<StillImage> {
+    if (this.stillBusy) throw new Error(tr("Ya hay un render en curso"));
+    const hidden: THREE.Object3D[] = [];
+    if (opts.hideGrid) hidden.push(this.grid);
+    if (opts.hideSkeleton) hidden.push(this.skeletonGroup, this.controlsGroup);
+    if (opts.hideSkeleton && this.limitGizmo) hidden.push(this.limitGizmo.group);
+    if (opts.hideGizmos) {
+      const gizmo = this.transformControls?.getHelper();
+      for (const o of [gizmo, this.sunMarker, this.brushCursor, this.axesHelper, this.placementGroup, this.measureGroup, this.ghostGroup]) {
+        if (o) hidden.push(o);
+      }
+    }
+    if (opts.hideSelection) {
+      for (const o of [this.nodeHighlight, this.nodeHover, this.previewOverlay]) if (o) hidden.push(o);
+    }
+    const visible = hidden.map((o) => o.visible);
+    const mesh = this.rig?.mesh ?? this.currentMesh;
+    const glowMaterials = this.glowMaterials;
+    const strength = this.glowStrength;
+    const camera = this.camera;
+    this.stillBusy = true;
+    hidden.forEach((o) => (o.visible = false));
+    try {
+      return await renderStillImage(
+        {
+          renderer: this.renderer,
+          scene: this.scene,
+          camera,
+          viewAspect: this.canvas.clientWidth / Math.max(1, this.canvas.clientHeight),
+          key: {
+            light: this.lightRig.key,
+            center: this.lightRig.key.target.position.clone(),
+            radius: this.currentMesh ? Math.max(new THREE.Box3().setFromObject(this.currentMesh).getSize(new THREE.Vector3()).length(), 1e-3) : 5,
+          },
+          glow:
+            glowMaterials && mesh?.visible
+              ? (halo, target) => halo.render(this.scene, camera, mesh, glowMaterials, strength, target)
+              : null,
+        },
+        opts,
+        onProgress,
+        signal,
+      );
+    } finally {
+      hidden.forEach((o, i) => (o.visible = visible[i]));
+      this.stillBusy = false;
+      this.onResize();
+    }
   }
 
   /**

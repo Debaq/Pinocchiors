@@ -48,8 +48,15 @@ export class GlowHalo {
     this.composer.setSize(width, height);
   }
 
-  /** Dibuja el halo de `mesh` sobre el cuadro ya dibujado; `strength` va de 0 a 1 */
-  render(scene: THREE.Scene, camera: THREE.Camera, mesh: THREE.Mesh, glow: THREE.Material | THREE.Material[], strength: number): void {
+  /** Dibuja el halo de `mesh` sobre el cuadro ya dibujado (la pantalla o `target`); `strength` va de 0 a 1 */
+  render(
+    scene: THREE.Scene,
+    camera: THREE.Camera,
+    mesh: THREE.Mesh,
+    glow: THREE.Material | THREE.Material[],
+    strength: number,
+    target: THREE.WebGLRenderTarget | null = null
+  ): void {
     const renderer = this.renderer;
     const background = scene.background;
     const material = mesh.material;
@@ -77,7 +84,7 @@ export class GlowHalo {
     }
 
     this.quad.material.map = this.composer.readBuffer.texture;
-    renderer.setRenderTarget(null);
+    renderer.setRenderTarget(target);
     renderer.autoClear = false;
     renderer.render(this.quadScene, this.quadCamera);
     renderer.autoClear = autoClear;

@@ -5224,3 +5224,53 @@ mod tests {
         assert_eq!(weights, data.weights);
     }
 }
+
+/// Guarda la imagen de un render. El cuerpo de la petición es el archivo tal cual
+/// (sin pasar por JSON: pesa megas) y la ruta va en la cabecera `path`, con
+/// `encodeURIComponent`.
+#[tauri::command]
+pub async fn write_render_image(request: tauri::ipc::Request<'_>) -> Result<u64, String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("Falta la imagen del render".to_string());
+    };
+    let encoded = request
+        .headers()
+        .get("path")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| "Falta la ruta del render".to_string())?;
+    let path = decode_uri_component(encoded).ok_or_else(|| "La ruta del render no es válida".to_string())?;
+    std::fs::write(&path, bytes).map_err(|e| format!("No se pudo escribir {path}: {e}"))?;
+    Ok(bytes.len() as u64)
+}
+
+/// Deshace `encodeURIComponent` (%XX en UTF-8)
+fn decode_uri_component(text: &str) -> Option<String> {
+    let raw = text.as_bytes();
+    let mut out = Vec::with_capacity(raw.len());
+    let mut i = 0;
+    while i < raw.len() {
+        if raw[i] == b'%' {
+            let hex = std::str::from_utf8(raw.get(i + 1..i + 3)?).ok()?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(raw[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+#[cfg(test)]
+mod render_image_tests {
+    use super::decode_uri_component;
+
+    #[test]
+    fn decodifica_rutas_con_espacios_y_tildes() {
+        assert_eq!(
+            decode_uri_component("%2Fhome%2Fnick%2FMi%20carpeta%2Fmodelo%C3%B1.png").as_deref(),
+            Some("/home/nick/Mi carpeta/modeloñ.png")
+        );
+        assert_eq!(decode_uri_component("%zz"), None);
+    }
+}

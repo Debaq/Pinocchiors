@@ -10,9 +10,10 @@ import { en_lib2 } from "./en.lib2.ts";
 import { en_app } from "./en.app.ts";
 import { en_settings } from "./en.settings.ts";
 import { enFixes } from "./en.fixes.ts";
+import { en_render } from "./en.render.ts";
 
 /**
  * Inglés: clave = texto en español tal cual está en el código. Un archivo por
  * zona (en.<zona>.ts) para que se trabajen sin pisarse
  */
-export const en: Catalog = { ...enShell, ...en_layout1, ...en_layout2, ...en_ui_steps, ...en_panels1, ...en_panels2, ...en_lib1, ...en_lib2, ...en_app, ...en_settings, ...enFixes };
+export const en: Catalog = { ...enShell, ...en_layout1, ...en_layout2, ...en_ui_steps, ...en_panels1, ...en_panels2, ...en_lib1, ...en_lib2, ...en_app, ...en_settings, ...enFixes, ...en_render };

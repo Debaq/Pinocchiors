@@ -55,6 +55,7 @@ pub fn run() {
             commands::get_supported_formats,
             commands::import_model,
             commands::export_model,
+            commands::write_render_image,
             commands::get_mesh_data,
             commands::get_mesh_preview,
             commands::set_mesh_build,

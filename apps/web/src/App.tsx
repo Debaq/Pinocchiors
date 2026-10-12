@@ -116,6 +116,7 @@ type SceneEdit =
 import { bvhMotion, parseBvh } from "./lib/bvh";
 import { autoMap, retargetClip, type RetargetMap, type SourceMotion } from "./lib/retarget";
 import { ConfirmDialog, type ConfirmChoice, type ConfirmRequest } from "./components/layout/ConfirmDialog";
+import { RenderDialog, defaultRenderSettings, renderPixels, type RenderSettings } from "./components/layout/RenderDialog";
 
 interface ProjectSaved {
   written: boolean;
@@ -1063,6 +1064,16 @@ export const App: Component = () => {
     }
   });
   const [lastExport, setLastExport] = createSignal<{ bytes: number; files: string[] } | undefined>();
+
+  // ── Render de una imagen ──
+  const [renderOpen, setRenderOpen] = createSignal(false);
+  const [renderSettingsRaw, setRenderSettings] = createPersisted<RenderSettings>("render.settings", defaultRenderSettings);
+  // Con opciones nuevas, las guardadas de antes se completan con las de fábrica
+  const renderSettings = () => ({ ...defaultRenderSettings, ...renderSettingsRaw() });
+  const [renderDir, setRenderDir] = createPersisted<string>("render.dir", "");
+  const [renderProgress, setRenderProgress] = createSignal<number | undefined>();
+  const [renderViewSize, setRenderViewSize] = createSignal({ width: 1280, height: 720 });
+  let renderAbort: AbortController | undefined;
   const [canUndoPrintScale, setCanUndoPrintScale] = createSignal(false);
 
   // Animación: clips con keys por articulación, cuadro actual y reproducción
@@ -2302,6 +2313,7 @@ export const App: Component = () => {
       get description() { return t("Ir a {name}", { name: t(ws.label) }); },
     })),
     { key: ",", ctrl: true, area: "file", action: () => setSettingsOpen(true), get description() { return t("Abrir Configuración"); } },
+    { key: "r", ctrl: true, shift: true, area: "file", action: () => openRender(), get description() { return t("Render de la vista"); } },
     { key: "e", ctrl: true, shift: true, area: "file", action: () => (hasWork() || hasDesignBody()) && openExport(), get description() { return t("Exportar"); } },
     { key: "z", shift: true, area: "view", action: () => setViewSettings((prev) => ({ ...prev, showWireframe: !prev.showWireframe })), get description() { return t("Alambre"); } },
   ];
@@ -5381,6 +5393,89 @@ export const App: Component = () => {
     }
   };
 
+  // ── Render de una imagen ──
+  // Sin cámaras todavía: sale de la vista, recortada al aspecto elegido (PLAN_RENDER.md, fase 1)
+
+  const openRender = () => {
+    const v = viewer();
+    if (!v || !hasWork() || inDesign()) return;
+    setRenderViewSize(v.getViewSize());
+    setRenderOpen(true);
+  };
+  const closeRender = () => {
+    renderAbort?.abort();
+    setRenderOpen(false);
+  };
+  // El tamaño de la vista cambia con la ventana y los paneles
+  createEffect(() => {
+    if (!renderOpen()) return;
+    const update = () => {
+      const v = viewer();
+      if (v) setRenderViewSize(v.getViewSize());
+    };
+    const id = window.setInterval(update, 400);
+    onCleanup(() => clearInterval(id));
+  });
+  // Marco con el área exacta que saldrá, mientras el diálogo está abierto
+  createEffect(() => {
+    const v = viewer();
+    if (!v || !renderOpen()) return;
+    const { width, height } = renderPixels(renderSettings(), renderViewSize());
+    v.setRenderFrame(width / height);
+    onCleanup(() => v.setRenderFrame(null));
+  });
+
+  const handleRender = async () => {
+    const v = viewer();
+    if (!v || renderProgress() !== undefined) return;
+    const s = renderSettings();
+    const ext = s.format === "jpeg" ? "jpg" : s.format;
+    const base = (fileName() ?? "render").replace(/\.[^.]+$/, "");
+    const dir = renderDir();
+    const selected = await save({
+      title: t("Guardar render"),
+      defaultPath: dir ? `${dir}/${base}.${ext}` : `${base}.${ext}`,
+      filters: [{ name: t("Imagen"), extensions: [ext] }],
+    });
+    if (!selected) return;
+    const path = /\.[^./]+$/.test(selected) ? selected : `${selected}.${ext}`;
+    setRenderDir(path.slice(0, Math.max(0, path.lastIndexOf("/"))));
+    const controller = new AbortController();
+    renderAbort = controller;
+    setRenderProgress(0);
+    try {
+      const { width, height } = renderPixels(s, v.getViewSize());
+      const image = await v.renderStill(
+        {
+          width,
+          height,
+          background: s.background,
+          color: s.color,
+          samples: s.samples,
+          format: s.format,
+          quality: s.quality / 100,
+          hideGrid: s.hideGrid,
+          hideSkeleton: s.hideSkeleton,
+          hideGizmos: s.hideGizmos,
+          hideSelection: s.hideSelection,
+          shadows: s.shadows,
+          ambientOcclusion: s.ambientOcclusion,
+        },
+        setRenderProgress,
+        controller.signal,
+      );
+      // El archivo viaja como cuerpo crudo (sin JSON): las imágenes grandes pesan megas
+      const bytes = await invoke<number>("write_render_image", image.bytes, { headers: { path: encodeURIComponent(path) } });
+      setStatusMessage(t("Render guardado: {name} ({w} × {h}, {size})", { name: path.split("/").pop() ?? "", w: image.width, h: image.height, size: formatBytes(bytes) }));
+    } catch (e) {
+      const cancelled = e instanceof DOMException && e.name === "AbortError";
+      setStatusMessage(cancelled ? t("Render cancelado") : t("Error: {e}", { e: tBackend(String(e instanceof Error ? e.message : e)) }));
+    } finally {
+      renderAbort = undefined;
+      setRenderProgress(undefined);
+    }
+  };
+
   // ── Orientación ──
   // El backend aplica la transformación a malla, quads, esqueleto y rig;
   // deshacer es aplicar la inversa
@@ -8100,6 +8195,8 @@ export const App: Component = () => {
               onCompactUvChange: setExportCompactUv,
               options: exportOptions(),
               onOptionsChange: setExportOptions,
+              onRender: openRender,
+              renderOpen: renderOpen(),
               lastExport: lastExport(),
             }}
             viewSettings={viewSettings()}
@@ -8173,6 +8270,18 @@ export const App: Component = () => {
 
       <Show when={retargeting()}>
         {(request) => <RetargetDialog {...request()} onConfirm={(r) => void confirmRetarget(r)} onCancel={() => setRetargeting(undefined)} />}
+      </Show>
+
+      <Show when={renderOpen()}>
+        <RenderDialog
+          settings={renderSettings()}
+          onSettingsChange={setRenderSettings}
+          viewSize={renderViewSize()}
+          progress={renderProgress()}
+          onRender={() => void handleRender()}
+          onStop={() => renderAbort?.abort()}
+          onClose={closeRender}
+        />
       </Show>
 
       {/* Con clave: cada pregunta nueva arma el diálogo de cero (sus casillas) */}

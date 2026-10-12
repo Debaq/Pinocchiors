@@ -132,6 +132,9 @@ export interface ExportStepProps {
   onCompactUvChange?: (value: boolean) => void;
   options: ExportOptions;
   onOptionsChange?: (options: ExportOptions) => void;
+  /** Abre el diálogo de Render (imagen de lo que se ve) */
+  onRender?: () => void;
+  renderOpen?: boolean;
   /** Tamaño y archivos de la última exportación */
   lastExport?: { bytes: number; files: string[] };
 }
@@ -334,6 +337,19 @@ export const ExportStep: Component<ExportStepProps> = (props) => {
       >
         {t("Exportar {f}", { f: current().name })}
       </Button>
+
+      <Show when={!props.design && !props.skeletonOnly}>
+        <Button
+          onClick={props.onRender}
+          disabled={!props.canExport || props.renderOpen}
+          variant="default"
+          fullWidth
+          icon={<Icons.FrameCorners size={16} />}
+        >
+          {t("Render")}
+        </Button>
+        <p class="-mt-3 text-[10px] text-text-dim leading-relaxed">{t("Guarda una imagen de lo que se ve, en alta calidad.")}</p>
+      </Show>
 
       <Show when={props.lastExport}>
         {(last) => (
