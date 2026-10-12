@@ -7466,6 +7466,7 @@ export const App: Component = () => {
                   return node ? node.name || t("nodo {n}", { n: picked[0] }) : undefined;
                 })()}
                 nodePrimitives={selectedNodePrimitives()}
+                onlySelected={pickedNodes().length > 0}
                 actions={materialActions()}
                 skinMaterials={skinMaterialInfos()}
                 onEditSkin={editSkinMaterial}

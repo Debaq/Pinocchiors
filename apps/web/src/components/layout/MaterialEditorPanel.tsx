@@ -20,6 +20,8 @@ export interface MaterialEditorPanelProps {
   /** Nombre del objeto elegido (undefined si no hay) */
   nodeName?: string;
   nodePrimitives: NodePrimitive[];
+  /** Con partes elegidas, la lista muestra solo los materiales que usan */
+  onlySelected?: boolean;
   actions: MaterialActions;
   /** Materiales de la piel de la retopología y su edición */
   skinMaterials: MaterialInfo[];
@@ -37,6 +39,14 @@ export interface MaterialEditorPanelProps {
  */
 export const MaterialEditorPanel: Component<MaterialEditorPanelProps> = (props) => {
   const onSkin = () => props.target === "quad";
+  /** Materiales de la lista con su índice: los de la selección, o todos si no hay selección */
+  const listed = () => {
+    const all = onSkin() ? props.skinMaterials : props.actions.materials;
+    const entries = all.map((material, index) => ({ material, index }));
+    if (onSkin() || !props.onlySelected) return entries;
+    const used = new Set(props.nodePrimitives.flatMap((p) => (p.material === null ? [] : [p.material])));
+    return entries.filter((e) => used.has(e.index));
+  };
   return (
     <section class="flex flex-col h-full min-w-0 bg-bg-darker">
       <header class="flex items-center gap-1 h-9 px-2 shrink-0 border-b border-border">
@@ -91,19 +101,22 @@ export const MaterialEditorPanel: Component<MaterialEditorPanelProps> = (props) 
           }
         >
           <div class="[column-width:320px] [column-gap:1.25rem] space-y-0">
-            <For each={onSkin() ? props.skinMaterials : props.actions.materials}>
-              {(m, i) => (
+            <Show when={props.onlySelected && !onSkin() && listed().length === 0}>
+              <p class="text-xs text-text-muted">{t("Las partes elegidas no tienen material: usa la pestaña Objeto para darles uno.")}</p>
+            </Show>
+            <For each={listed()}>
+              {(entry) => (
                 <div class="break-inside-avoid mb-4 space-y-2">
                   <div class="flex items-center gap-2">
-                    <span class="w-4 h-4 rounded border border-border shrink-0" style={{ background: cssColor(m.base_color) }} />
-                    <span class="text-xs text-text font-medium truncate">{m.name || t("material {i}", { i: i() })}</span>
+                    <span class="w-4 h-4 rounded border border-border shrink-0" style={{ background: cssColor(entry.material.base_color) }} />
+                    <span class="text-xs text-text font-medium truncate">{entry.material.name || t("material {i}", { i: entry.index })}</span>
                   </div>
                   <MaterialEditor
-                    material={m}
-                    onChange={(patch) => (onSkin() ? props.onEditSkin(i(), patch) : props.actions.onEdit(i(), patch))}
+                    material={entry.material}
+                    onChange={(patch) => (onSkin() ? props.onEditSkin(entry.index, patch) : props.actions.onEdit(entry.index, patch))}
                   />
                   <Show when={!onSkin()}>
-                    <button class="text-xs text-text-muted hover:text-text" onClick={() => props.actions.onRemove(i())}>
+                    <button class="text-xs text-text-muted hover:text-text" onClick={() => props.actions.onRemove(entry.index)}>
                       {t("Quitar material")}
                     </button>
                   </Show>

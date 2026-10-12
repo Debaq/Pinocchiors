@@ -382,4 +382,5 @@ export const en_panels2: Catalog = {
   "Goma": "Rubber",
   "Tela": "Cloth",
   "Color plano": "Flat color",
+  "Las partes elegidas no tienen material: usa la pestaña Objeto para darles uno.": "The picked parts have no material: use the Object tab to give them one.",
 };
