@@ -8,7 +8,7 @@
  */
 
 import * as THREE from "three";
-import { THEME_EVENT, themeColor, themeHex } from "./theme";
+import { THEME_EVENT, themeAlpha, themeHex } from "./theme";
 
 /** Qué canal de la imagen se ve: todos, uno en gris o el alfa */
 export type ImageChannel = "rgba" | "r" | "g" | "b" | "a";
@@ -17,9 +17,7 @@ const CHANNEL_INDEX: Record<ImageChannel, number> = { rgba: 0, r: 1, g: 2, b: 3,
 
 /** Color de tema con alfa opcional (#rrggbbaa) como color y opacidad */
 function themeRgba(name: string): { color: THREE.Color; opacity: number } {
-  const value = themeColor(name);
-  const alpha = value.startsWith("#") && value.length === 9 ? parseInt(value.slice(7, 9), 16) / 255 : 1;
-  return { color: new THREE.Color(themeHex(name)), opacity: alpha };
+  return { color: new THREE.Color(themeHex(name)), opacity: themeAlpha(name) };
 }
 
 /** Qué aristas de la malla se dibujan sobre la imagen */

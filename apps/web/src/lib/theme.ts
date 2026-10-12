@@ -74,9 +74,41 @@ export function themeColor(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(`--color-${name}`).trim();
 }
 
+let probe: CanvasRenderingContext2D | null | undefined;
+
+/**
+ * Color CSS como 0xRRGGBB y alfa 0–1. El build minifica los valores
+ * (`#ffffff` → `#fff`, a veces nombres o `rgb()`), así que se acepta
+ * cualquier forma: hex de 3/4/6/8 dígitos directo y el resto vía canvas
+ */
+export function parseCssColor(value: string): { hex: number; alpha: number } | null {
+  let h = value.trim().toLowerCase();
+  if (h.startsWith("#") && /^#[0-9a-f]+$/.test(h)) {
+    h = h.slice(1);
+    if (h.length === 3 || h.length === 4) h = [...h].map((c) => c + c).join("");
+    if (h.length === 6) return { hex: parseInt(h, 16), alpha: 1 };
+    if (h.length === 8) return { hex: parseInt(h.slice(0, 6), 16), alpha: parseInt(h.slice(6), 16) / 255 };
+    return null;
+  }
+  if (!h) return null;
+  probe ??= document.createElement("canvas").getContext("2d");
+  if (!probe) return null;
+  // Un valor inválido deja fillStyle como estaba: se parte de un centinela
+  probe.fillStyle = "#010203";
+  probe.fillStyle = h;
+  const norm = String(probe.fillStyle);
+  if (norm.startsWith("#")) return norm === "#010203" && h !== "#010203" ? null : parseCssColor(norm);
+  const m = norm.match(/rgba?\(\s*(\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?/);
+  if (!m) return null;
+  return { hex: (+m[1] << 16) | (+m[2] << 8) | +m[3], alpha: m[4] === undefined ? 1 : +m[4] };
+}
+
 /** Igual que `themeColor` pero como número 0xRRGGBB (ignora el alfa) */
 export function themeHex(name: string): number {
-  const value = themeColor(name);
-  const hex = value.startsWith("#") ? value.slice(1, 7) : "";
-  return hex.length === 6 ? parseInt(hex, 16) : 0xff00ff;
+  return parseCssColor(themeColor(name))?.hex ?? 0x808080;
+}
+
+/** Alfa (0–1) de una variable del tema; 1 si no trae */
+export function themeAlpha(name: string): number {
+  return parseCssColor(themeColor(name))?.alpha ?? 1;
 }
