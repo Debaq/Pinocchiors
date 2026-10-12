@@ -92,15 +92,44 @@ impl Bvh {
 
     /// Triángulo más cercano que cruza el rayo en (0, t_max)
     pub fn closest(&self, tris: &[Triangle], ray: &Ray, t_max: f32) -> Option<Hit> {
-        self.traverse(tris, ray, t_max, false)
+        self.traverse(tris, ray, t_max, false, &mut |_, _, _| true)
     }
 
     /// ¿Hay algo entre el origen y `t_max`? (rayos de sombra)
     pub fn occluded(&self, tris: &[Triangle], ray: &Ray, t_max: f32) -> bool {
-        self.traverse(tris, ray, t_max, true).is_some()
+        self.traverse(tris, ray, t_max, true, &mut |_, _, _| true).is_some()
     }
 
-    fn traverse(&self, tris: &[Triangle], ray: &Ray, mut t_max: f32, any: bool) -> Option<Hit> {
+    /// Como [`Bvh::closest`], pero `accept(triángulo, u, v)` puede descartar un cruce
+    /// (opacidad: máscara y mezcla)
+    pub fn closest_with(
+        &self,
+        tris: &[Triangle],
+        ray: &Ray,
+        t_max: f32,
+        accept: &mut impl FnMut(u32, f32, f32) -> bool,
+    ) -> Option<Hit> {
+        self.traverse(tris, ray, t_max, false, accept)
+    }
+
+    pub fn occluded_with(
+        &self,
+        tris: &[Triangle],
+        ray: &Ray,
+        t_max: f32,
+        accept: &mut impl FnMut(u32, f32, f32) -> bool,
+    ) -> bool {
+        self.traverse(tris, ray, t_max, true, accept).is_some()
+    }
+
+    fn traverse(
+        &self,
+        tris: &[Triangle],
+        ray: &Ray,
+        mut t_max: f32,
+        any: bool,
+        accept: &mut impl FnMut(u32, f32, f32) -> bool,
+    ) -> Option<Hit> {
         if tris.is_empty() {
             return None;
         }
@@ -118,6 +147,9 @@ impl Bvh {
                 for i in node.first..node.first + node.count {
                     let ti = self.order[i as usize];
                     if let Some((t, u, v)) = tris[ti as usize].intersect(ray, t_max) {
+                        if !accept(ti, u, v) {
+                            continue;
+                        }
                         t_max = t;
                         best = Some(Hit { t, tri: ti, u, v });
                         if any {

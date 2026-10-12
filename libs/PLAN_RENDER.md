@@ -82,6 +82,8 @@ cámara, luces y mundo de la fase 2. Los materiales ya son los de glTF, así que
 
 **Estado (2026-10-12): 3a hecha, sin commitear.** `libs/geppettoray/`: BVH propia (SAH por cubetas), `RayScene::from_scene` (vía `world_primitives`), cámara pinhole, path tracer difuso + emisión con ruleta rusa, entorno uniforme y sol con muestreo directo, PNG sRGB. Tests: horno blanco, caja cerrada (serie geométrica), BVH vs fuerza bruta, sol sobre plano. Siguiente: 3b.
 
+**3b hecha (2026-10-12):** BSDF glTF (difuso Ashikhmin–Shirley + GGX Smith correlacionado + Schlick, barniz como 2.º lóbulo GGX, muestreo VNDF y mezcla de lóbulos), texturas PNG/JPEG/WebP con filtrado bilineal y repetición (base y emisión en sRGB→lineal), metal/rugosidad desde textura, mapa de normales (tangentes por triángulo desde las UV, no MikkTSpace), color de vértice, opacidad Mask y Blend estocástica (también en rayos de sombra), unlit. Decisiones: el mapa de oclusión se **ignora** a propósito (el path tracing calcula la oclusión real; aplicarlo la duplicaría); sin mipmaps (el antialiasing por muestreo lo compensa); solo set UV 0 y escala UV. Tests: reciprocidad, energía ≤ 1, pdf, textura, máscara/mezcla, espejo metálico, mapa de normales plano, horno blanco con material completo.
+
 Decisiones abiertas (para cuando lleguemos):
 - ~~BVH propia o el crate `bvh`/`embree`~~ → propia (decidido en 3a); antes: `bvh`/`embree` (Embree es rapidísimo pero trae dependencia C++; la
   compilación a wasm y el empaquetado pesan).

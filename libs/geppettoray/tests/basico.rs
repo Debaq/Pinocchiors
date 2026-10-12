@@ -34,7 +34,7 @@ fn cam() -> Camera {
 fn horno_blanco() {
     let scene = RayScene::new(
         sphere(1.0, 0, false),
-        vec![RayMaterial { albedo: Vec3::ONE, emission: Vec3::ZERO, double_sided: true }],
+        vec![RayMaterial::diffuse(Vec3::ONE, Vec3::ZERO)],
     );
     let s = Settings {
         width: 24,
@@ -57,7 +57,7 @@ fn caja_cerrada_serie_geometrica() {
     let a = 0.5;
     let scene = RayScene::new(
         sphere(2.0, 0, true),
-        vec![RayMaterial { albedo: Vec3::splat(a), emission: Vec3::ONE, double_sided: true }],
+        vec![RayMaterial::diffuse(Vec3::splat(a), Vec3::ONE)],
     );
     let s = Settings {
         width: 16,
@@ -114,7 +114,7 @@ fn sol_sobre_plano() {
         Triangle::new([a, c, b], None, None, 0), // normal +Y
         Triangle::new([a, d, c], None, None, 0),
     ];
-    let scene = RayScene::new(tris, vec![RayMaterial { albedo: Vec3::splat(0.6), emission: Vec3::ZERO, double_sided: false }]);
+    let scene = RayScene::new(tris, vec![RayMaterial { double_sided: false, ..RayMaterial::diffuse(Vec3::splat(0.6), Vec3::ZERO) }]);
     let sun_dir = Vec3::new(0.0, 1.0, 1.0).normalize();
     let s = Settings {
         width: 8,
@@ -129,5 +129,24 @@ fn sol_sobre_plano() {
     let img = render(&scene, &camera, &s);
     let expected = 0.6 / std::f32::consts::PI * 3.0 * sun_dir.y;
     let mean = img.pixels.iter().sum::<Vec3>() / img.pixels.len() as f32;
-    assert!((mean.x - expected).abs() < 1e-3, "{} vs {expected}", mean.x);
+    // El difuso pierde ~4 % por el Fresnel de la capa dieléctrica y el especular suma un poco
+    assert!((mean.x / expected - 1.0).abs() < 0.04, "{} vs {expected}", mean.x);
+}
+
+/// Horno blanco con el material completo (dieléctrico blanco): conserva casi toda la energía y nunca crea.
+#[test]
+fn horno_blanco_material_completo() {
+    let mat = RayMaterial { base_color: glam::Vec4::ONE, roughness: 0.5, ..Default::default() };
+    let scene = RayScene::new(sphere(1.0, 0, false), vec![mat]);
+    let s = Settings {
+        width: 24,
+        height: 24,
+        samples: 64,
+        max_depth: 16,
+        environment: Environment { color: Vec3::ONE },
+        ..Default::default()
+    };
+    let img = render(&scene, &cam(), &s);
+    let mean = (img.pixels.iter().sum::<Vec3>() / img.pixels.len() as f32).x;
+    assert!(mean < 1.02 && mean > 0.85, "media {mean}");
 }
