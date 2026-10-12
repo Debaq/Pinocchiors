@@ -3284,6 +3284,27 @@ pub fn get_uv_info(state: State<'_, AppState>) -> Option<UvInfo> {
     skin.as_ref().map(|s| uv_info(s, scene.as_ref()))
 }
 
+/// Caras desde las que desplegar toma tiempo (el costo crece más que lineal)
+const HEAVY_UNWRAP_FACES: usize = 300_000;
+
+/// Avisos del desplegado: una malla muy densa y el objeto en curso.
+fn unwrap_progress(channel: Channel<Progress>, faces: usize) -> impl Fn(usize, usize) {
+    if faces > HEAVY_UNWRAP_FACES {
+        let _ = channel.send(Progress {
+            stage: "unwrap".to_string(),
+            percent: 10,
+            message: format!("Malla de {faces} caras: tarda; conviene simplificar o retopologizar antes de desplegar"),
+        });
+    }
+    move |done, total| {
+        let _ = channel.send(Progress {
+            stage: "unwrap".to_string(),
+            percent: (10 + 85 * done / total.max(1)) as u32,
+            message: format!("Desplegando objeto {} de {total}...", done + 1),
+        });
+    }
+}
+
 /// Despliega la malla retopologizada y hornea sobre el mapa nuevo las
 /// texturas del original (color, metal/rugosidad, oclusión, emisión y la
 /// normal con el detalle de la malla original)
@@ -3312,6 +3333,7 @@ pub async fn run_uv_unwrap(
         percent: 10,
         message: "Cortando islas, desplegando y horneando texturas...".to_string(),
     });
+    let progress = unwrap_progress(on_progress.clone(), quad.num_faces());
     let skin = tauri::async_runtime::spawn_blocking(move || {
         let (positions, faces) = quad_arrays(&quad);
         let surface = uv_core::scene_surface(&scene);
@@ -3319,7 +3341,7 @@ pub async fn run_uv_unwrap(
             texture_size: config.texture_size,
             unwrap: config.unwrap_options(),
         };
-        uv_core::unwrapped_skin_by_parts(&scene, surface.as_ref(), &positions, &faces, parts.as_ref(), &options)
+        uv_core::unwrapped_skin_with_progress(&scene, surface.as_ref(), &positions, &faces, parts.as_ref(), &options, &progress)
     })
     .await
     .map_err(|e| format!("El desplegado terminó inesperadamente: {e}"))?;
@@ -3373,10 +3395,10 @@ pub async fn unwrap_original_mesh(
         percent: 10,
         message: "Cortando islas, desplegando y horneando texturas...".to_string(),
     });
-    in_background(app, move |state| unwrap_original_impl(state, &config)).await
+    in_background(app, move |state| unwrap_original_impl(state, &config, on_progress)).await
 }
 
-fn unwrap_original_impl(state: &AppState, config: &UvUnwrapConfig) -> Result<UnwrapOriginalInfo, String> {
+fn unwrap_original_impl(state: &AppState, config: &UvUnwrapConfig, on_progress: Channel<Progress>) -> Result<UnwrapOriginalInfo, String> {
     {
         let _guard = state.try_begin_processing().ok_or("Ya hay un proceso en curso")?;
         let scene = state.scene.lock().unwrap().clone().ok_or("No hay escena cargada")?;
@@ -3396,7 +3418,9 @@ fn unwrap_original_impl(state: &AppState, config: &UvUnwrapConfig) -> Result<Unw
             texture_size: config.texture_size,
             unwrap: config.unwrap_options(),
         };
-        let skin = uv_core::unwrapped_skin_by_parts(&scene, surface.as_ref(), &positions, &faces, parts.as_ref(), &options);
+        let progress = unwrap_progress(on_progress, faces.len());
+        let skin =
+            uv_core::unwrapped_skin_with_progress(&scene, surface.as_ref(), &positions, &faces, parts.as_ref(), &options, &progress);
         let (mut new_scene, _) = uv_core::skin_scene(&positions, &faces, Some(&skin), &scene);
         for m in &mut new_scene.meshes {
             m.name = "unwrapped".into();
@@ -4448,7 +4472,7 @@ mod tests {
         *state.mesh_before_repair.lock().unwrap() = Some(scene_to_pinocchio_mesh(&scene).unwrap());
 
         let config = UvUnwrapConfig { texture_size: 256, padding: 4, max_angle: 55.0, layout: None, by_parts: None };
-        let info = unwrap_original_impl(&state, &config).unwrap();
+        let info = unwrap_original_impl(&state, &config, Channel::new(|_| Ok(()))).unwrap();
         assert_eq!(info.uv.num_charts, Some(6), "una isla por cara del cubo");
         assert!(info.mesh_info.has_uvs);
         let unwrapped = state.scene.lock().unwrap().clone().unwrap();

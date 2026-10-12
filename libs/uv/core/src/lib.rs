@@ -29,6 +29,7 @@ pub use charts::ChartOptions;
 pub use compact::{compact_skin, compacted_scene};
 pub use skin::{
     checker_texture, material_surface, scene_surface, skin_scene, transferred_skin, unwrapped_skin, unwrapped_skin_by_parts,
+    unwrapped_skin_with_progress,
     BakeOptions, Skin, SkinInfo, SkinParts,
 };
 pub use parts::clean_parts;

@@ -145,6 +145,20 @@ pub fn unwrapped_skin_by_parts<const N: usize>(
     parts: Option<&SkinParts>,
     options: &BakeOptions,
 ) -> Skin<N> {
+    unwrapped_skin_with_progress(scene, surface, positions, faces, parts, options, &|_, _| {})
+}
+
+/// Como [`unwrapped_skin_by_parts`], avisando con `progress(hecho, total)`
+/// antes de desplegar cada objeto (un objeto por material de origen).
+pub fn unwrapped_skin_with_progress<const N: usize>(
+    scene: &Scene,
+    surface: Option<&UvSurface>,
+    positions: &[[f64; 3]],
+    faces: &[[usize; N]],
+    parts: Option<&SkinParts>,
+    options: &BakeOptions,
+    progress: &dyn Fn(usize, usize),
+) -> Skin<N> {
     // Varios objetos con material propio: cada uno se despliega y hornea
     // aparte, con su atlas
     let geometry = if surface.is_none() { material_surface(scene) } else { None };
@@ -154,7 +168,7 @@ pub fn unwrapped_skin_by_parts<const N: usize>(
         distinct.sort_unstable();
         distinct.dedup();
         if distinct.len() > 1 {
-            return unwrapped_skin_per_object(scene, positions, faces, parts, options, &groups, &distinct);
+            return unwrapped_skin_per_object(scene, positions, faces, parts, options, &groups, &distinct, progress);
         }
     }
     unwrapped_skin_single(scene, surface, positions, faces, parts, options)
@@ -169,6 +183,7 @@ fn unwrapped_skin_per_object<const N: usize>(
     options: &BakeOptions,
     groups: &[usize],
     distinct: &[usize],
+    progress: &dyn Fn(usize, usize),
 ) -> Skin<N> {
     let prims = scene.world_primitives();
     let mut corners = vec![[[0.0f32; 2]; N]; faces.len()];
@@ -177,7 +192,8 @@ fn unwrapped_skin_per_object<const N: usize>(
     let mut textures: Vec<Texture> = Vec::new();
     let (mut charts, mut stretch_sum, mut coverage_sum, mut weight, mut tex_size) = (0usize, 0.0, 0.0, 0.0, 0u32);
 
-    for &group in distinct {
+    for (done, &group) in distinct.iter().enumerate() {
+        progress(done, distinct.len());
         let ids: Vec<usize> = (0..faces.len()).filter(|&f| groups[f] == group).collect();
         // Vértices del grupo, renumerados
         let mut remap: HashMap<usize, usize> = HashMap::new();
