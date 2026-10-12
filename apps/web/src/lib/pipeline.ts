@@ -138,8 +138,8 @@ export interface Workspace {
 }
 
 export const WORKSPACES: Workspace[] = [
-  { id: "prepare", get label() { return t("Preparar"); }, sections: ["structure", "repair", "remesh", "uv"] },
-  { id: "materials", get label() { return t("Materiales"); }, sections: ["materials"] },
+  { id: "prepare", get label() { return t("Preparar"); }, sections: ["structure", "repair", "remesh"] },
+  { id: "materials", get label() { return t("Materiales"); }, sections: ["uv", "materials"] },
   // Sin modelo se puede armar y animar un esqueleto solo, y exportarlo
   { id: "rig", get label() { return t("Rig y animación"); }, sections: ["skeleton", "animate"], withoutModel: true },
   { id: "print", get label() { return t("Fabricar"); }, sections: ["print3d"] },
