@@ -79,6 +79,8 @@ export interface SceneTreeState {
   structure?: SceneStructure;
   /** Nodos del archivo ocultos en el visor */
   hiddenNodes?: Set<number>;
+  /** Objetos de la retopología (uno por material de su piel), si son más de uno */
+  quadObjects?: QuadObjectRow[];
   /** Nodo del archivo elegido */
   selectedNode?: number;
   /** Planos y operaciones del diseño paramétrico */
@@ -87,6 +89,15 @@ export interface SceneTreeState {
   objects?: ObjectRow[];
   /** Planos 2D del diseño con sus elementos (con diseño, aunque no haya ninguno: el grupo tiene «+») */
   drawings?: SceneNode[];
+}
+
+/** Un objeto de la malla de quads (id `qobj-<material>`) */
+export interface QuadObjectRow {
+  index: number;
+  name: string;
+  quads: number;
+  visible: boolean;
+  selected: boolean;
 }
 
 /** Hay geometría en el nodo o debajo de él (se puede ocultar o borrar) */
@@ -169,6 +180,9 @@ export function buildSceneTree(state: SceneTreeState): SceneNode {
       visible: state.showMesh,
       expanded: false,
       selected: false,
+      // La retopología la reemplazó: queda tachada, como una pieza partida
+      struck: state.hasQuadMesh || undefined,
+      hint: state.hasQuadMesh ? t("Reemplazada por la retopología") : undefined,
       children: state.structure ? fileNodes(state.structure, state.hiddenNodes ?? new Set(), state.selectedNode) : [],
     });
   }
@@ -192,7 +206,16 @@ export function buildSceneTree(state: SceneTreeState): SceneNode {
       deletable: true,
       expanded: false,
       selected: false,
-      children: [],
+      children: (state.quadObjects ?? []).map((o) => ({
+        id: `qobj-${o.index}`,
+        type: "part" as const,
+        label: o.name,
+        visible: o.visible,
+        expanded: false,
+        selected: o.selected,
+        hint: t("{n} quads", { n: o.quads.toLocaleString() }),
+        children: [],
+      })),
     });
   }
   if (state.hasSkeleton && state.skeletonData) {

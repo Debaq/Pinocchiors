@@ -85,7 +85,7 @@ import { MaterialEditorPanel, type MaterialEditorTab } from "./components/layout
 /** Alt+número de cada espacio (fijo: agregar uno nuevo no cambia los demás) */
 const WORKSPACE_KEYS: Record<WorkspaceId, string> = { prepare: "1", rig: "2", print: "3", scan: "4", design: "5", materials: "6", render: "7" };
 import { VIEW_AXES, fromView, toView, viewSize, type Axis } from "./lib/axes";
-import { buildSceneTree, type CadOutline, type CadOutlineItem, type ObjectRow, type SceneNode } from "./lib/scene-tree";
+import { buildSceneTree, type QuadObjectRow, type CadOutline, type CadOutlineItem, type ObjectRow, type SceneNode } from "./lib/scene-tree";
 import { addDrawing, drawingSheets, drawingTree, parseElementNode, removeDrawing, removeElement, toggleElement, updateDrawing } from "./lib/drawingDoc";
 import { isCadObject, isGeometryStep, materialized, nextObjectId, partKey, savedTrail, syncCadObjects, type SceneObject } from "./lib/objects";
 import { TOOLSETS, toolContext, type ToolId } from "./lib/tools";
@@ -1438,6 +1438,7 @@ export const App: Component = () => {
     setQuadMeshInfo({ vertices: 0, quads: 0 });
     setQuadQuality(undefined);
     setQuadObjects([]);
+    setHiddenQuadObjects([]);
     setShowQuadMesh(false);
     setExportUseRetopology(false);
     setActiveQuad(false);
@@ -1556,6 +1557,8 @@ export const App: Component = () => {
   /** Nodos del archivo ocultos en el visor y el elegido (índices de `sceneStructure().nodes`) */
   const [hiddenFileNodes, setHiddenFileNodes] = createSignal<number[]>([]);
   const [selectedFileNode, setSelectedFileNode] = createSignal<number | undefined>();
+  /** Objetos de la malla de quads ocultos (con los quads a la vista, las partes elegidas son objetos de su piel) */
+  const [hiddenQuadObjects, setHiddenQuadObjects] = createSignal<number[]>([]);
   /** El nodo y todo lo que cuelga de él */
   /** Partes elegidas además de la principal (clic con Shift o recuadro) */
   const [extraFileNodes, setExtraFileNodes] = createSignal<number[]>([]);
@@ -1576,8 +1579,9 @@ export const App: Component = () => {
     setSelectedFileNode(next[0]);
     setExtraFileNodes(next.slice(1));
     if (next.length === 1) {
-      const node = sceneStructure()?.nodes[next[0]];
-      setStatusMessage(t("Nodo del archivo: {name}", { name: node?.name || t("nodo {n}", { n: next[0] }) }));
+      const node = displayQuad() ? undefined : sceneStructure()?.nodes[next[0]];
+      const name = displayQuad() ? quadObjectName(next[0]) : node?.name || t("nodo {n}", { n: next[0] });
+      setStatusMessage(t("Nodo del archivo: {name}", { name }));
     } else if (next.length > 1) setStatusMessage(t("{n} partes elegidas", { n: next.length }));
   };
 
@@ -1593,12 +1597,19 @@ export const App: Component = () => {
     }
     return out;
   };
-  createEffect(() => viewer()?.setHiddenNodes(hiddenFileNodes().flatMap(nodeSubtree)));
+  createEffect(() => viewer()?.setHiddenNodes(displayQuad() ? hiddenQuadObjects() : hiddenFileNodes().flatMap(nodeSubtree)));
   // En Animar la malla se mueve con el rig y el resaltado quedaría quieto
   createEffect(() => {
     const nodes = pickedNodes();
-    viewer()?.setHighlightedNodes(animating() ? [] : [...new Set(nodes.flatMap(nodeSubtree))]);
+    viewer()?.setHighlightedNodes(animating() ? [] : displayQuad() ? nodes : [...new Set(nodes.flatMap(nodeSubtree))]);
   });
+  // Otra malla a la vista: lo elegido era de la otra (nodos del archivo u objetos de quads)
+  createEffect(
+    on(displayQuad, () => {
+      setSelectedFileNode(undefined);
+      setExtraFileNodes([]);
+    }, { defer: true })
+  );
   // Otro archivo: los índices de nodo ya no son los mismos
   createEffect(
     on(fileName, () => {
@@ -2131,6 +2142,28 @@ export const App: Component = () => {
     })
   );
 
+  /** Nombre de un objeto de la malla de quads (el material de su piel) */
+  const quadObjectName = (index: number) => skinMaterialInfos()[index]?.name || t("Material {n}", { n: index });
+  /** Objetos de la malla de quads para el Outliner: uno por material de su piel, si hay más de uno */
+  const quadObjectRows = (): QuadObjectRow[] | undefined => {
+    const groups = quadMeshData()?.groups;
+    if (!groups || groups.length < 6 || !quadMeshLoaded()) return undefined;
+    const rows: QuadObjectRow[] = [];
+    const picked = displayQuad() ? pickedNodes() : [];
+    for (let g = 0; g + 2 < groups.length; g += 3) {
+      const index = groups[g + 2];
+      if (index === 0xffffffff) continue;
+      rows.push({
+        index,
+        name: quadObjectName(index),
+        quads: groups[g + 1] / 6,
+        visible: !hiddenQuadObjects().includes(index),
+        selected: picked.includes(index),
+      });
+    }
+    return rows.length > 1 ? rows : undefined;
+  };
+
   // Derived scene tree
   const sceneTree = () => buildSceneTree({
     hasMesh: meshLoaded(),
@@ -2149,6 +2182,7 @@ export const App: Component = () => {
     structure: sceneStructure(),
     hiddenNodes: new Set(hiddenFileNodes()),
     selectedNode: selectedFileNode(),
+    quadObjects: quadObjectRows(),
     cad: cadOutline(),
     objects: objectRows(),
     drawings: cad.doc() ? drawingTree(drawingSheets(cad.doc()), cadUi.drawingOpen() ? cadUi.activeDrawing() : undefined, cadUi.drawingSel()) : undefined,
@@ -5051,6 +5085,13 @@ export const App: Component = () => {
     onOpenTexture: (index, slot) => openTextureEditor(displayQuad() ? "quad" : "original", { material: index, slot }),
   });
   const selectedNodePrimitives = (): NodePrimitive[] => {
+    // Con los quads a la vista, las partes elegidas son objetos de su piel: cada uno, su material
+    if (displayQuad()) {
+      const count = skinMaterialInfos().length;
+      return pickedNodes()
+        .filter((n) => n < count)
+        .map((n) => ({ mesh: 0, primitive: n, material: n, shared: 1 }));
+    }
     const structure = sceneStructure();
     if (!structure) return [];
     const uses = structure.meshes.flatMap((m) => m.primitives).filter((p) => p.material !== null);
@@ -5979,6 +6020,7 @@ export const App: Component = () => {
         setQuadMeshInfo({ vertices: info.num_vertices, quads: info.num_quads });
         setQuadQuality(info.quality);
         setQuadObjects(info.objects ?? []);
+        setHiddenQuadObjects([]);
 
         setProgress({ value: 100, label: t("Cargando en el visor...") });
         const quadData = decodeMesh(await invoke<ArrayBuffer>("get_quad_mesh_data"));
@@ -6898,6 +6940,11 @@ export const App: Component = () => {
       toggleFileNode(Number(nodeId.slice(5)));
       return;
     }
+    if (nodeId.startsWith("qobj-")) {
+      const index = Number(nodeId.slice(5));
+      setHiddenQuadObjects((list) => (list.includes(index) ? list.filter((n) => n !== index) : [...list, index]));
+      return;
+    }
     switch (nodeId) {
       case "mesh":
         setViewSettings((prev) => ({ ...prev, showMesh: !prev.showMesh }));
@@ -7755,6 +7802,14 @@ export const App: Component = () => {
       setSelectedFileNode(selectedFileNode() === index ? undefined : index);
       return;
     }
+    if (nodeId.startsWith("qobj-")) {
+      const index = Number(nodeId.slice(5));
+      // Los objetos son de la malla de quads: si no está a la vista, se la muestra
+      if (!displayQuad()) setShowQuadMesh(true);
+      setExtraFileNodes([]);
+      setSelectedFileNode(selectedFileNode() === index && displayQuad() ? undefined : index);
+      return;
+    }
     if (nodeId.startsWith("bone-")) {
       const index = parseInt(nodeId.replace("bone-", ""));
       setViewSettings((prev) => ({ ...prev, selectedBone: index }));
@@ -7860,6 +7915,7 @@ export const App: Component = () => {
                 nodeName={(() => {
                   const picked = pickedNodes();
                   if (picked.length > 1) return t("{n} partes elegidas", { n: picked.length });
+                  if (displayQuad()) return picked.length === 1 ? quadObjectName(picked[0]) : undefined;
                   const node = picked.length === 1 ? sceneStructure()?.nodes[picked[0]] : undefined;
                   return node ? node.name || t("nodo {n}", { n: picked[0] }) : undefined;
                 })()}
@@ -7978,7 +8034,7 @@ export const App: Component = () => {
               onViewerReady={handleViewerReady}
               onFpsUpdate={setFps}
               onPlacementPick={handlePlacementPick}
-              nodePicking={["prepare", "materials"].includes(pipeline.workspace()?.id ?? "") && !animating() && !displayQuad()}
+              nodePicking={["prepare", "materials"].includes(pipeline.workspace()?.id ?? "") && !animating()}
               onNodesPicked={pickNodes}
               facePicking={faceMode() && materialEditorVisible() && materialEditorTab() === "materials" && !animating() && !displayQuad()}
               pickedFaces={pickedFaces()}
@@ -7986,7 +8042,11 @@ export const App: Component = () => {
               onNodePicked={(node) => {
                 setExtraFileNodes([]);
                 setSelectedFileNode(node);
-                setStatusMessage(t("Nodo del archivo: {name}", { name: sceneStructure()?.nodes[node]?.name || t("nodo {n}", { n: node }) }));
+                setStatusMessage(
+                  t("Nodo del archivo: {name}", {
+                    name: displayQuad() ? quadObjectName(node) : sceneStructure()?.nodes[node]?.name || t("nodo {n}", { n: node }),
+                  })
+                );
               }}
               onBoneSelected={handleBoneSelected}
               onBoneMoved={handleBoneMoved}
@@ -8466,7 +8526,13 @@ export const App: Component = () => {
             onDeleteNode={handleDeleteNode}
             onHoverNode={(id) => {
               // Solo las partes del archivo ("node-N") se destacan en el visor
-              const hovered = id?.startsWith("node-") && !animating() ? nodeSubtree(Number(id.slice(5))) : [];
+              const hovered = animating()
+                ? []
+                : id?.startsWith("node-")
+                  ? nodeSubtree(Number(id.slice(5)))
+                  : id?.startsWith("qobj-") && displayQuad()
+                    ? [Number(id.slice(5))]
+                    : [];
               viewer()?.setHoveredNodes(hovered);
             }}
             onAddNode={handleAddNode}

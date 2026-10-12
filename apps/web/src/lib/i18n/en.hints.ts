@@ -42,4 +42,7 @@ export const en_hints: Catalog = {
   "Los vértices solo se mueven hacia afuera o adentro: quita ruido sin correr la textura. Apagado, también empareja los triángulos.": "Vertices only move outward or inward: removes noise without shifting the texture. Off, it also evens out triangle size.",
   "Malla nueva sin UV: al aplicar eliges si trasladar textura y pesos. Tarda ~20 s cada medio millón de triángulos.": "New mesh without UVs: when applying you choose whether to transfer texture and weights. Takes ~20 s per half million triangles.",
   "Llega a la cantidad pedida aunque junte partes o cierre agujeros chicos. Para reducir muchísimo cuando la forma exacta no importa.": "Reaches the requested count even if it merges nearby parts or closes small holes. For heavy reduction when exact shape doesn't matter.",
+  "Reemplazada por la retopología": "Replaced by the retopology",
+  "{n} quads": "{n} quads",
+  "Material {n}": "Material {n}",
 };

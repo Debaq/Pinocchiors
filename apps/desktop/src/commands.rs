@@ -3026,6 +3026,13 @@ pub async fn get_quad_mesh_data(app: AppHandle) -> Result<Response, String> {
         get_quad_mesh_data_impl(state).map(|d| {
             let mut out = pack_mesh(&d.positions, &d.normals, d.uvs.as_deref(), &d.indices, &d.quad_indices);
             append_groups(&mut out, &d.groups);
+            // El objeto de cada grupo es su material de la piel (como el nodo
+            // del archivo en la malla original): el visor los elige por él
+            if !d.groups.is_empty() {
+                for group in &d.groups {
+                    out.extend_from_slice(&group[2].to_le_bytes());
+                }
+            }
             out
         })
     })

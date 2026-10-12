@@ -43,3 +43,20 @@ que hacen). Cada cambio de texto actualiza el catálogo `en.*.ts`.
 6. [~] Esqueleto, Animar, Pose hechos; faltan Luces e Historial (párrafos con piezas sueltas).
 7. [ ] Revisión: ningún párrafo `leading-relaxed` suelto en los paneles
    laterales; `tsc` y pruebas de i18n.
+
+## C. Los objetos siguen existiendo después de la retopología (en este orden)
+
+Reporte (2026-10-12): tras retopologizar un modelo de varias piezas ya no se
+eligen sus piezas por separado, Materiales muestra un solo objeto, el Outliner
+no despliega y la malla original no aparece tachada.
+
+1. [x] Backend: los datos de la malla de quads llevan el objeto (material de la
+   piel) de cada grupo (`groupNodes`), como la malla original lleva su nodo.
+2. [x] Outliner: «Malla» tachada cuando hay retopología; «Quad Mesh» se
+   despliega con un hijo por objeto (nombre y quads).
+3. [x] App: en el visor de quads se eligen objetos (clic en el Outliner,
+   doble clic y recuadro en el visor); se resaltan; ocultar/mostrar por objeto.
+4. [x] Materiales: con objetos de quads elegidos muestra sus materiales (editar
+   color, textura…); asignar/quitar material no aplica a la piel.
+5. [ ] (falta probar en la app real, sin e2e hasta que se pida) Probar con el cráneo y con un modelo de una sola pieza (no cambia nada).
+6. [ ] Commit.

@@ -59,7 +59,7 @@ export const MaterialEditorPanel: Component<MaterialEditorPanelProps> = (props) 
   const listed = () => {
     const all = onSkin() ? props.skinMaterials : props.actions.materials;
     const entries = all.map((material, index) => ({ material, index }));
-    if (onSkin() || !props.onlySelected) return entries;
+    if (!props.onlySelected) return entries;
     const used = new Set(props.nodePrimitives.flatMap((p) => (p.material === null ? [] : [p.material])));
     return entries.filter((e) => used.has(e.index));
   };
