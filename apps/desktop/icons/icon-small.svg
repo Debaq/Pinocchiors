@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+<defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2a241e"/><stop offset="1" stop-color="#0d0b0a"/></linearGradient></defs>
+<clipPath id="tile"><rect x="16" y="16" width="480" height="480" rx="104"/></clipPath>
+<rect x="16" y="16" width="480" height="480" rx="104" fill="url(#bg)"/>
+<g transform="translate(-439.8 -130.0) scale(2.45)">
+<polygon points="343.2,202.3 330.4,224.9 306.8,235.7 281.3,230.6 263.8,211.4 260.8,185.7 273.6,163.1 297.2,152.3 322.7,157.4 340.2,176.6" fill="#c98f55" stroke-linejoin="round"/>
+<polygon points="268.0,180.0 268.0,206.0 212.0,196.0" fill="#e0aa70" stroke-linejoin="round"/>
+<polygon points="266.0,160.0 334.0,151.0 320.0,92.0" fill="#d08a2a" stroke-linejoin="round"/>
+<polygon points="250.0,164.0 350.0,151.0 354.0,166.0 254.0,180.0" fill="#b87622" stroke-linejoin="round"/>
+<polygon points="318.0,96.0 331.0,84.0 346.0,95.0 333.0,108.0" fill="#b5532e" stroke-linejoin="round"/>
+<circle cx="286" cy="186" r="8" fill="#F6F1E8"/>
+<circle cx="284" cy="186" r="4.2" fill="#16110C"/>
+</g>
+</svg>
