@@ -14,7 +14,7 @@ export interface RetopologyStepProps {
   onShowQuadMeshChange?: (show: boolean) => void;
   quality?: QuadQuality;
   objects?: RetopologyObject[];
-  /** Caras de la malla: tope de los quads objetivo */
+  /** Triángulos / 2: un quad son dos triángulos, más quads que eso no aportan nada */
   maxQuads?: number;
   /** Esqueleto y pesos usan la malla retopologizada */
   useForNextSteps?: boolean;

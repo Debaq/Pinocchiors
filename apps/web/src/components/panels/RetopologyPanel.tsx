@@ -70,7 +70,7 @@ export interface RetopologyPanelProps {
   onShowQuadMeshChange?: (show: boolean) => void;
   quality?: QuadQuality;
   objects?: RetopologyObject[];
-  /** Caras de la malla: más quads que eso no aportan nada */
+  /** Triángulos / 2 (un quad son dos): más quads que eso no aportan nada */
   maxQuads?: number;
 }
 
