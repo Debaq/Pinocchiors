@@ -76,7 +76,7 @@ import {
   type PlacementInfo,
 } from "./lib/placement";
 import type { SceneStructure, MaterialInfo } from "./components/steps/StructureStep";
-import { createPipelineStore, type PipelineStepId } from "./lib/pipeline";
+import { WORKSPACES, createPipelineStore, type PipelineStepId } from "./lib/pipeline";
 import { VIEW_AXES, fromView, toView, viewSize, type Axis } from "./lib/axes";
 import { buildSceneTree, type CadOutline, type CadOutlineItem, type ObjectRow, type SceneNode } from "./lib/scene-tree";
 import { addDrawing, drawingSheets, drawingTree, parseElementNode, removeDrawing, removeElement, toggleElement, updateDrawing } from "./lib/drawingDoc";
@@ -277,6 +277,7 @@ import { DesignStep, FeatureTree } from "./components/steps/DesignStep";
 import { createCadStore, partColor, partHidden, PLANE_LABELS, type PartId } from "./lib/cad";
 import { createCadUi } from "./lib/cadUi";
 import { createDesignActions } from "./lib/designActions";
+import { designOperations } from "./components/design/DesignToolbar";
 import { designHints } from "./lib/designHints";
 import { createScanCloud } from "./lib/scanCloud";
 import type { BodyPlan, BodyShape } from "./lib/bodyPlan";
@@ -1919,115 +1920,145 @@ export const App: Component = () => {
   // Shortcuts
   const shortcuts = createShortcutManager();
 
+  // Shift+tecla de las más usadas (las demás se asignan en Configuración)
+  const DESIGN_DEFAULT_KEYS: Record<string, string> = { Sketch: "s", "Extrusión": "e", "Revolución": "r", Agujero: "h" };
   const shortcutDefs: ShortcutDef[] = [
-    { key: "s", ctrl: true, action: () => handleSaveProject(), get description() { return t("Guardar proyecto"); } },
-    { key: "s", ctrl: true, shift: true, action: () => handleSaveProject(true), get description() { return t("Guardar proyecto como"); } },
-    { key: "n", ctrl: true, action: () => handleNewProject(), get description() { return t("Proyecto nuevo"); } },
-    { key: "o", ctrl: true, action: () => handleOpenProject(), get description() { return t("Abrir proyecto"); } },
-    { key: "i", ctrl: true, action: () => handleLoad(), get description() { return t("Importar modelo"); } },
-    { key: "z", ctrl: true, action: () => undo(), get description() { return t("Deshacer"); } },
-    { key: "z", ctrl: true, shift: true, action: () => redo(), get description() { return t("Rehacer"); } },
-    { key: "q", action: () => useTool("select"), get description() { return t("Seleccionar"); } },
+    { key: "s", ctrl: true, action: () => handleSaveProject(), area: "file", get description() { return t("Guardar proyecto"); } },
+    { key: "s", ctrl: true, shift: true, action: () => handleSaveProject(true), area: "file", get description() { return t("Guardar proyecto como"); } },
+    { key: "n", ctrl: true, action: () => handleNewProject(), area: "file", get description() { return t("Proyecto nuevo"); } },
+    { key: "o", ctrl: true, action: () => handleOpenProject(), area: "file", get description() { return t("Abrir proyecto"); } },
+    { key: "i", ctrl: true, action: () => handleLoad(), area: "file", get description() { return t("Importar modelo"); } },
+    { key: "z", ctrl: true, action: () => undo(), area: "file", get description() { return t("Deshacer"); } },
+    { key: "z", ctrl: true, shift: true, action: () => redo(), area: "file", get description() { return t("Rehacer"); } },
+    { key: "q", action: () => useTool("select"), area: "tools", get description() { return t("Seleccionar"); } },
     // Sobre el modelo, G/R/S eligen el gizmo. Sobre el esqueleto, como en
     // Blender, G y R son operaciones modales sobre la articulación
     // seleccionada (el mouse mueve, clic confirma, clic derecho/Esc cancela)
     {
       key: "g",
       action: () => (toolCtx() === "object" ? useTool("move") : viewerRef?.startModal("grab")),
-      get description() { return t("Mover (modelo o articulación)"); },
+      area: "tools", get description() { return t("Mover (modelo o articulación)"); },
     },
     {
       key: "r",
       action: () => (toolCtx() === "object" ? useTool("rotate") : viewerRef?.startModal("rotate")),
-      get description() { return t("Rotar (modelo, o pose de prueba)"); },
+      area: "tools", get description() { return t("Rotar (modelo, o pose de prueba)"); },
     },
-    { key: "s", action: () => useTool("scale"), get description() { return t("Escalar (modelo o esqueleto entero)"); } },
-    { key: "m", action: () => useTool("measure"), get description() { return t("Medir"); } },
-    { key: "Home", action: () => viewerRef?.resetView(), get description() { return t("Ver todo"); } },
+    { key: "s", action: () => useTool("scale"), area: "tools", get description() { return t("Escalar (modelo o esqueleto entero)"); } },
+    { key: "m", action: () => useTool("measure"), area: "tools", get description() { return t("Medir"); } },
+    { key: "Home", action: () => viewerRef?.resetView(), area: "view", get description() { return t("Ver todo"); } },
     {
       key: " ",
       action: () =>
         animating() ? setPlaying(!playing()) : showPlayback() ? togglePreview() : viewerRef?.resetView(),
-      get description() { return t("Reproducir / ver todo"); },
+      area: "rig", get description() { return t("Reproducir / ver todo"); },
     },
-    { key: "i", action: () => animating() && handleInsertKey(), get description() { return t("Insertar key"); } },
+    { key: "i", action: () => animating() && handleInsertKey(), area: "rig", get description() { return t("Insertar key"); } },
     {
       key: "x",
       action: () => (cloudEditing() ? scanCloud.deleteSelection() : animating() && handleDeleteKeys()),
-      get description() { return t("Borrar keys / puntos seleccionados"); },
+      area: "rig", get description() { return t("Borrar keys / puntos seleccionados"); },
     },
     {
       key: "Delete",
       action: () => (cloudEditing() ? scanCloud.deleteSelection() : animating() && handleDeleteKeys()),
-      get description() { return t("Borrar keys / puntos seleccionados"); },
+      area: "rig", get description() { return t("Borrar keys / puntos seleccionados"); },
     },
-    { key: "i", ctrl: true, action: () => cloudEditing() && scanCloud.select("invert"), get description() { return t("Invertir la selección de la nube"); } },
-    { key: "ArrowLeft", action: () => animating() && stepFrame(-1), get description() { return t("Cuadro anterior"); } },
-    { key: "ArrowRight", action: () => animating() && stepFrame(1), get description() { return t("Cuadro siguiente"); } },
-    { key: "ArrowLeft", shift: true, action: () => animating() && stepFrame(-Infinity), get description() { return t("Al inicio"); } },
-    { key: "ArrowRight", shift: true, action: () => animating() && stepFrame(Infinity), get description() { return t("Al final"); } },
-    { key: ".", action: () => viewerRef?.focusSelection(), get description() { return t("Centrar en la selección"); } },
+    { key: "i", ctrl: true, action: () => cloudEditing() && scanCloud.select("invert"), area: "scan", get description() { return t("Invertir la selección de la nube"); } },
+    { key: "ArrowLeft", action: () => animating() && stepFrame(-1), area: "rig", get description() { return t("Cuadro anterior"); } },
+    { key: "ArrowRight", action: () => animating() && stepFrame(1), area: "rig", get description() { return t("Cuadro siguiente"); } },
+    { key: "ArrowLeft", shift: true, action: () => animating() && stepFrame(-Infinity), area: "rig", get description() { return t("Al inicio"); } },
+    { key: "ArrowRight", shift: true, action: () => animating() && stepFrame(Infinity), area: "rig", get description() { return t("Al final"); } },
+    { key: ".", action: () => viewerRef?.focusSelection(), area: "tools", get description() { return t("Centrar en la selección"); } },
     {
       key: "f",
       action: () => (paintSettings() ? viewerRef?.startModal("radius") : viewerRef?.focusSelection()),
-      get description() { return t("Radio del pincel / centrar"); },
+      area: "rig", get description() { return t("Radio del pincel / centrar"); },
     },
-    { key: "f", shift: true, action: () => viewerRef?.startModal("strength"), get description() { return t("Intensidad del pincel"); } },
-    { key: "n", action: () => setShowContextPanel(!showContextPanel()), get description() { return t("Mostrar/ocultar panel"); } },
+    { key: "f", shift: true, action: () => viewerRef?.startModal("strength"), area: "rig", get description() { return t("Intensidad del pincel"); } },
+    { key: "n", action: () => setShowContextPanel(!showContextPanel()), area: "view", get description() { return t("Mostrar/ocultar panel"); } },
     {
       key: "z",
       alt: true,
       action: () => setViewSettings((prev) => ({ ...prev, xray: !prev.xray })),
-      get description() { return t("Rayos X"); },
+      area: "view", get description() { return t("Rayos X"); },
     },
-    { key: "1", action: () => viewerRef?.setView("front"), get description() { return t("Vista frontal"); } },
-    { key: "3", action: () => viewerRef?.setView("right"), get description() { return t("Vista derecha"); } },
-    { key: "7", action: () => viewerRef?.setView("top"), get description() { return t("Vista superior"); } },
-    { key: "1", ctrl: true, action: () => viewerRef?.setView("back"), get description() { return t("Vista trasera"); } },
-    { key: "3", ctrl: true, action: () => viewerRef?.setView("left"), get description() { return t("Vista izquierda"); } },
-    { key: "7", ctrl: true, action: () => viewerRef?.setView("bottom"), get description() { return t("Vista inferior"); } },
-    { key: "b", action: () => useTool("paint"), get description() { return t("Pintar pesos"); } },
+    { key: "1", action: () => viewerRef?.setView("front"), area: "view", get description() { return t("Vista frontal"); } },
+    { key: "3", action: () => viewerRef?.setView("right"), area: "view", get description() { return t("Vista derecha"); } },
+    { key: "7", action: () => viewerRef?.setView("top"), area: "view", get description() { return t("Vista superior"); } },
+    { key: "1", ctrl: true, action: () => viewerRef?.setView("back"), area: "view", get description() { return t("Vista trasera"); } },
+    { key: "3", ctrl: true, action: () => viewerRef?.setView("left"), area: "view", get description() { return t("Vista izquierda"); } },
+    { key: "7", ctrl: true, action: () => viewerRef?.setView("bottom"), area: "view", get description() { return t("Vista inferior"); } },
+    { key: "b", action: () => useTool("paint"), area: "rig", get description() { return t("Pintar pesos"); } },
     // Pose (Animar): selección, reiniciar, copiar y pegar
     {
       key: "a",
       action: () => (cloudEditing() ? scanCloud.select("all") : rigging() && handleSelectCommand("all")),
-      get description() { return t("Seleccionar todo"); },
+      area: "rig", get description() { return t("Seleccionar todo"); },
     },
     {
       key: "a",
       alt: true,
       action: () => (cloudEditing() ? scanCloud.select("none") : rigging() && handleSelectCommand("none")),
-      get description() { return t("No seleccionar nada"); },
+      area: "rig", get description() { return t("No seleccionar nada"); },
     },
-    { key: "[", action: () => rigging() && handleSelectCommand("parent"), get description() { return t("Seleccionar el padre"); } },
-    { key: "{", shift: true, action: () => rigging() && handleSelectCommand("parent", true), get description() { return t("Sumar el padre"); } },
-    { key: "]", action: () => rigging() && handleSelectCommand("children"), get description() { return t("Seleccionar los hijos"); } },
-    { key: "}", shift: true, action: () => rigging() && handleSelectCommand("children", true), get description() { return t("Sumar los descendientes"); } },
-    { key: "m", ctrl: true, shift: true, action: () => rigging() && handleSelectCommand("mirror"), get description() { return t("Seleccionar el espejo"); } },
-    { key: "g", shift: true, action: () => rigging() && handleSelectCommand("group"), get description() { return t("Seleccionar el grupo"); } },
-    { key: "r", alt: true, action: () => animating() && handleResetPose("rotation"), get description() { return t("Giro en reposo"); } },
-    { key: "g", alt: true, action: () => animating() && handleResetPose("translation"), get description() { return t("Posición de reposo"); } },
+    { key: "[", action: () => rigging() && handleSelectCommand("parent"), area: "rig", get description() { return t("Seleccionar el padre"); } },
+    { key: "{", shift: true, action: () => rigging() && handleSelectCommand("parent", true), area: "rig", get description() { return t("Sumar el padre"); } },
+    { key: "]", action: () => rigging() && handleSelectCommand("children"), area: "rig", get description() { return t("Seleccionar los hijos"); } },
+    { key: "}", shift: true, action: () => rigging() && handleSelectCommand("children", true), area: "rig", get description() { return t("Sumar los descendientes"); } },
+    { key: "m", ctrl: true, shift: true, action: () => rigging() && handleSelectCommand("mirror"), area: "rig", get description() { return t("Seleccionar el espejo"); } },
+    { key: "g", shift: true, action: () => rigging() && handleSelectCommand("group"), area: "rig", get description() { return t("Seleccionar el grupo"); } },
+    { key: "r", alt: true, action: () => animating() && handleResetPose("rotation"), area: "rig", get description() { return t("Giro en reposo"); } },
+    { key: "g", alt: true, action: () => animating() && handleResetPose("translation"), area: "rig", get description() { return t("Posición de reposo"); } },
     {
       key: "e",
       ctrl: true,
       action: () => (animating() ? toggleRigEditor() : inSkeletonStep() && toggleSkeletonEditor()),
-      get description() { return t("Editor de pose y rig, o constructor de cuerpo"); },
+      area: "rig", get description() { return t("Editor de pose y rig, o constructor de cuerpo"); },
     },
-    { key: "c", ctrl: true, action: () => animating() && handleCopyPose(), get description() { return t("Copiar pose"); } },
-    { key: "v", ctrl: true, action: () => animating() && handlePastePose(false), get description() { return t("Pegar pose"); } },
-    { key: "v", ctrl: true, shift: true, action: () => animating() && handlePastePose(true), get description() { return t("Pegar pose espejada"); } },
+    { key: "c", ctrl: true, action: () => animating() && handleCopyPose(), area: "rig", get description() { return t("Copiar pose"); } },
+    { key: "v", ctrl: true, action: () => animating() && handlePastePose(false), area: "rig", get description() { return t("Pegar pose"); } },
+    { key: "v", ctrl: true, shift: true, action: () => animating() && handlePastePose(true), area: "rig", get description() { return t("Pegar pose espejada"); } },
+    // Operaciones de Diseñar: casi todas sin tecla de fábrica (se asignan en Configuración)
+    ...designOperations(designActions, cadUi).map((op): ShortcutDef => {
+      const first = DESIGN_DEFAULT_KEYS[op.label];
+      return {
+        id: `design.${op.label}`,
+        key: first ?? "",
+        shift: first !== undefined,
+        area: "design",
+        action: () => showCad() && (!op.needsBody || hasDesignBody()) && op.run(),
+        get description() { return t(op.label); },
+      };
+    }),
+    // Espacios de trabajo (Alt+1…5), con el mismo criterio de la cabecera: sin modelo solo los que no lo piden
+    ...WORKSPACES.map((ws, i): ShortcutDef => ({
+      key: String(i + 1),
+      alt: true,
+      area: "workspace",
+      action: () => (meshLoaded() || hasDesignBody() || ws.withoutModel) && pipeline.openWorkspace(ws.id),
+      get description() { return t("Ir a {name}", { name: t(ws.label) }); },
+    })),
+    { key: ",", ctrl: true, area: "file", action: () => setSettingsOpen(true), get description() { return t("Abrir Configuración"); } },
+    { key: "e", ctrl: true, shift: true, area: "file", action: () => (hasWork() || hasDesignBody()) && openExport(), get description() { return t("Exportar"); } },
+    { key: "z", shift: true, area: "view", action: () => setViewSettings((prev) => ({ ...prev, showWireframe: !prev.showWireframe })), get description() { return t("Alambre"); } },
   ];
 
 
   // Para la pestaña de atajos del panel derecho
-  const shortcutHints = shortcutDefs.map((d) => ({
-    get keys() {
-      return formatBinding(bindingOf(d));
-    },
-    get description() {
-      return d.description;
-    },
-  }));
+  // Solo los que tienen tecla (la mayoría de las operaciones de Diseñar nacen sin ella)
+  const shortcutHints = createMemo(() =>
+    shortcutDefs
+      .filter((d) => bindingOf(d))
+      .map((d) => ({
+        get keys() {
+          return formatBinding(bindingOf(d));
+        },
+        get description() {
+          return d.description;
+        },
+      })),
+  );
 
   // Load presets on mount
   onMount(async () => {
@@ -7688,7 +7719,7 @@ export const App: Component = () => {
               quads: quadMeshLoaded() ? quadMeshInfo().quads : undefined,
               bones: skeletonData()?.bones.length,
             }}
-            shortcuts={shortcutHints}
+            shortcuts={shortcutHints()}
             onHide={() => setShowContextPanel(false)}
           />
           </Show>

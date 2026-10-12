@@ -96,11 +96,11 @@ const SideFamily: Component<{ name: string; tools: Tool[]; hasBody: boolean }> =
   );
 };
 
-/** Herramientas de Diseñar en la barra izquierda (sin sketch abierto) */
-export const DesignSideTools: Component<{ store: CadStore; ui: CadUi; actions: DesignActions }> = (props) => {
-  const a = props.actions;
-  const ui = props.ui;
-  const hasBody = () => !!props.store.result()?.body;
+/**
+ * Todas las herramientas de Diseñar por categoría. Las usan las barras y la
+ * lista de atajos de Configuración (cada una se puede ligar a una tecla)
+ */
+export function designToolSets(a: DesignActions, ui: CadUi) {
   const sketches: Tool[] = [
     { label: "Sketch", icon: D.Sketch, run: () => void a.startSketch(), tip: "En el plano o la cara elegida (o sobre otro sketch); si no hay nada elegido, se elige en el visor" },
     { label: "Sketch 3D", icon: D.Sketch3d, run: a.addSketch3d, tip: "Líneas, arcos y splines en el espacio (caminos de barrido): clic en un plano o en un vértice del sólido" },
@@ -113,89 +113,6 @@ export const DesignSideTools: Component<{ store: CadStore; ui: CadUi; actions: D
     { label: "Chaflán", icon: D.Chamfer, run: () => void a.startEdges("chamfer"), needsBody: true, tip: "Las aristas elegidas (o se eligen en el diálogo)" },
     { label: "Agujero", icon: D.Hole, run: a.addHole, needsBody: true, tip: "En los puntos (o círculos) del sketch elegido o el último: simple, con caja o avellanado" },
   ];
-  const button = (tool: Tool) => <SideButton label={tool.label} icon={tool.icon} tip={tool.tip} disabled={!!tool.needsBody && !hasBody()} onClick={tool.run} />;
-  return (
-    <Show when={!ui.assemblyMode()}>
-      <SideFamily name="Más sketches" tools={sketches} hasBody={hasBody()} />
-      <For each={main}>{button}</For>
-      <Show when={ui.sketchCopy()}>
-        {button({ label: "Pegar sketch", icon: D.Sketch, run: a.pasteSketch, tip: "El sketch copiado, como uno nuevo en el plano o la cara elegida" })}
-      </Show>
-      <SideSep />
-      {button({ label: "Plano 2D", icon: D.Drawing, run: () => ui.setDrawingOpen(true), needsBody: true, tip: "Vistas, líneas ocultas, cotas y cajetín" })}
-    </Show>
-  );
-};
-
-/** Menú desplegable: un botón con el nombre de la categoría y sus herramientas debajo */
-const ToolMenu: Component<{ label: string; tools: (Tool | "-")[]; hasBody: boolean }> = (props) => {
-  const [open, setOpen] = createSignal(false);
-  let root!: HTMLDivElement;
-  const close = (e: PointerEvent) => {
-    if (!root.contains(e.target as Node)) setOpen(false);
-  };
-  const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
-  document.addEventListener("pointerdown", close, true);
-  document.addEventListener("keydown", onKey);
-  onCleanup(() => {
-    document.removeEventListener("pointerdown", close, true);
-    document.removeEventListener("keydown", onKey);
-  });
-  return (
-    <div
-      ref={root}
-      class="relative"
-      data-toolbar-menu={props.label}
-      data-items={JSON.stringify(props.tools.flatMap((tool) => (tool === "-" ? [] : [tool.label])))}
-    >
-      <button
-        class={clsx(
-          "flex items-center gap-1 h-7 px-2 rounded text-xs whitespace-nowrap",
-          open() ? "bg-surface text-text" : "text-text-muted hover:text-text hover:bg-surface",
-        )}
-        aria-haspopup="menu"
-        aria-expanded={open()}
-        onClick={() => setOpen(!open())}
-      >
-        {t(props.label)}
-        <Icons.CaretDown size={10} />
-      </button>
-      <Show when={open()}>
-        <div role="menu" class="absolute left-0 top-full mt-1 z-20 min-w-44 rounded-md border border-border bg-bg-lighter py-1 shadow-lg">
-          <For each={props.tools}>
-            {(tool) =>
-              tool === "-" ? (
-                <div class="my-1 h-px bg-border" />
-              ) : (
-                <button
-                  class="flex w-full items-center gap-2 px-2.5 py-1.5 text-xs text-left text-text hover:bg-surface disabled:opacity-40 disabled:pointer-events-none"
-                  disabled={!!tool.needsBody && !props.hasBody}
-                  title={tool.tip ? t(tool.tip) : undefined}
-                  onClick={() => {
-                    setOpen(false);
-                    tool.run();
-                  }}
-                >
-                  <tool.icon size={16} />
-                  {t(tool.label)}
-                </button>
-              )
-            }
-          </For>
-        </div>
-      </Show>
-    </div>
-  );
-};
-
-const Sep = () => <div class="w-px h-5 bg-border mx-1 shrink-0" />;
-
-export const DesignToolbar: Component<{ store: CadStore; ui: CadUi; actions: DesignActions }> = (props) => {
-  const a = props.actions;
-  const ui = props.ui;
-  const store = props.store;
-  const hasBody = () => !!store.result()?.body;
-
   const solids: (Tool | "-")[] = [
     { label: "Barrido", icon: D.Sweep, run: a.addSweep, tip: "Un perfil a lo largo de un camino dibujado en otro sketch" },
     { label: "Tubo", icon: D.Sweep, run: a.addTube, tip: "Barrido circular: un círculo a lo largo del último sketch o hélice, sin dibujar el perfil" },
@@ -285,6 +202,120 @@ export const DesignToolbar: Component<{ store: CadStore; ui: CadUi; actions: Des
     { label: "Curva proyectada", icon: D.Helix, run: () => void a.addCurve("projected"), tip: "Las curvas del último sketch proyectadas sobre las caras elegidas" },
     { label: "Curva de cruce", icon: D.Helix, run: () => void a.addCurve("intersection"), tip: "Donde se cruzan la primera cara elegida con las demás" },
   ];
+  return { sketches, main, solids, modify, patterns, parts, sheet, surfaces, refs };
+}
+
+export interface DesignOperation {
+  label: string;
+  needsBody: boolean;
+  run: () => void;
+}
+
+/** Operaciones de Diseñar sin repetir (Engrosar está en dos menús), para registrar atajos */
+export function designOperations(a: DesignActions, ui: CadUi): DesignOperation[] {
+  const sets = designToolSets(a, ui);
+  const seen = new Set<string>();
+  const out: DesignOperation[] = [];
+  for (const list of Object.values(sets) as (Tool | "-")[][]) {
+    for (const tool of list) {
+      if (tool === "-" || seen.has(tool.label)) continue;
+      seen.add(tool.label);
+      out.push({ label: tool.label, needsBody: !!tool.needsBody, run: tool.run });
+    }
+  }
+  return out;
+}
+
+/** Herramientas de Diseñar en la barra izquierda (sin sketch abierto) */
+export const DesignSideTools: Component<{ store: CadStore; ui: CadUi; actions: DesignActions }> = (props) => {
+  const a = props.actions;
+  const ui = props.ui;
+  const hasBody = () => !!props.store.result()?.body;
+  const { sketches, main } = designToolSets(a, ui);
+  const button = (tool: Tool) => <SideButton label={tool.label} icon={tool.icon} tip={tool.tip} disabled={!!tool.needsBody && !hasBody()} onClick={tool.run} />;
+  return (
+    <Show when={!ui.assemblyMode()}>
+      <SideFamily name="Más sketches" tools={sketches} hasBody={hasBody()} />
+      <For each={main}>{button}</For>
+      <Show when={ui.sketchCopy()}>
+        {button({ label: "Pegar sketch", icon: D.Sketch, run: a.pasteSketch, tip: "El sketch copiado, como uno nuevo en el plano o la cara elegida" })}
+      </Show>
+      <SideSep />
+      {button({ label: "Plano 2D", icon: D.Drawing, run: () => ui.setDrawingOpen(true), needsBody: true, tip: "Vistas, líneas ocultas, cotas y cajetín" })}
+    </Show>
+  );
+};
+
+/** Menú desplegable: un botón con el nombre de la categoría y sus herramientas debajo */
+const ToolMenu: Component<{ label: string; tools: (Tool | "-")[]; hasBody: boolean }> = (props) => {
+  const [open, setOpen] = createSignal(false);
+  let root!: HTMLDivElement;
+  const close = (e: PointerEvent) => {
+    if (!root.contains(e.target as Node)) setOpen(false);
+  };
+  const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+  document.addEventListener("pointerdown", close, true);
+  document.addEventListener("keydown", onKey);
+  onCleanup(() => {
+    document.removeEventListener("pointerdown", close, true);
+    document.removeEventListener("keydown", onKey);
+  });
+  return (
+    <div
+      ref={root}
+      class="relative"
+      data-toolbar-menu={props.label}
+      data-items={JSON.stringify(props.tools.flatMap((tool) => (tool === "-" ? [] : [tool.label])))}
+    >
+      <button
+        class={clsx(
+          "flex items-center gap-1 h-7 px-2 rounded text-xs whitespace-nowrap",
+          open() ? "bg-surface text-text" : "text-text-muted hover:text-text hover:bg-surface",
+        )}
+        aria-haspopup="menu"
+        aria-expanded={open()}
+        onClick={() => setOpen(!open())}
+      >
+        {t(props.label)}
+        <Icons.CaretDown size={10} />
+      </button>
+      <Show when={open()}>
+        <div role="menu" class="absolute left-0 top-full mt-1 z-20 min-w-44 rounded-md border border-border bg-bg-lighter py-1 shadow-lg">
+          <For each={props.tools}>
+            {(tool) =>
+              tool === "-" ? (
+                <div class="my-1 h-px bg-border" />
+              ) : (
+                <button
+                  class="flex w-full items-center gap-2 px-2.5 py-1.5 text-xs text-left text-text hover:bg-surface disabled:opacity-40 disabled:pointer-events-none"
+                  disabled={!!tool.needsBody && !props.hasBody}
+                  title={tool.tip ? t(tool.tip) : undefined}
+                  onClick={() => {
+                    setOpen(false);
+                    tool.run();
+                  }}
+                >
+                  <tool.icon size={16} />
+                  {t(tool.label)}
+                </button>
+              )
+            }
+          </For>
+        </div>
+      </Show>
+    </div>
+  );
+};
+
+const Sep = () => <div class="w-px h-5 bg-border mx-1 shrink-0" />;
+
+export const DesignToolbar: Component<{ store: CadStore; ui: CadUi; actions: DesignActions }> = (props) => {
+  const a = props.actions;
+  const ui = props.ui;
+  const store = props.store;
+  const hasBody = () => !!store.result()?.body;
+
+  const { solids, modify, patterns, parts, sheet, surfaces, refs } = designToolSets(a, ui);
 
   return (
     <div class="flex items-center gap-0.5 rounded-md border border-border bg-bg-lighter/95 px-1.5 py-1 pointer-events-auto shadow-sm">

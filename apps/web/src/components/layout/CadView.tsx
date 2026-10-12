@@ -40,6 +40,7 @@ import * as Icons from "../icons";
 import * as SketchIcons from "../icons/sketch";
 // `t` se usa como nombre de variable en muchos lugares de este archivo: se importa como `tr`
 import { fmtNumber, t as tr, tx } from "../../lib/i18n";
+import { registerSketchKeys, sketchKey } from "../../lib/shortcuts";
 
 /** mm³ o cm³ según el tamaño */
 const formatVolume = (v: number) => (v >= 1000 ? `${fmtNumber(v / 1000, { maximumFractionDigits: 2 })} cm³` : `${fmtNumber(v, { maximumFractionDigits: 1 })} mm³`);
@@ -116,6 +117,10 @@ const TOOLS: ToolDef[] = [
   { id: "rotate", short: "Girar", label: "Girar lo elegido (centro, desde, hasta)", key: "H", icon: SketchIcons.Rotate, group: 3 },
   { id: "scale", short: "Escalar", label: "Escalar lo elegido (punto base, desde, hasta)", key: "Y", icon: SketchIcons.Scale, group: 3 },
 ];
+
+// Las teclas de las herramientas se reasignan en Configuración → Atajos
+registerSketchKeys(TOOLS.map((t) => ({ id: t.id, key: t.key, description: () => tr(t.short) })));
+
 
 /** Cursor de cada herramienta del sketch (las de dibujo, cruz) */
 const TOOL_CURSOR: Partial<Record<SketchTool, string>> = {
@@ -443,7 +448,8 @@ export const CadView: Component<CadViewProps> = (props) => {
   onCleanup(() => window.removeEventListener("pointerdown", closeFamily, true));
   /** Las herramientas a mano: sobre la hoja del plano «Usar» toma líneas de las vistas */
   const sheetTools = () =>
-    ui.session()?.sheet ? TOOLS.map((t) => (t.id === "use" ? { ...t, label: "Usar una línea de una vista (queda ligada: si el modelo cambia, se mueve con ella)" } : t)) : TOOLS;
+    (ui.session()?.sheet ? TOOLS.map((t) => (t.id === "use" ? { ...t, label: "Usar una línea de una vista (queda ligada: si el modelo cambia, se mueve con ella)" } : t)) : TOOLS
+    ).map((t) => ({ ...t, key: sketchKey(t.id, t.key)?.toUpperCase() }));
   /** Botones de la barra: una entrada por familia (con su lista) o por herramienta suelta */
   const toolSlots = () => {
     const out: { family?: string; group: number; tools: ToolDef[] }[] = [];

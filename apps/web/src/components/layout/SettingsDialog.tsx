@@ -15,6 +15,7 @@ import {
 } from "../../lib/settings";
 import { MOUSE_HINTS, type ShortcutHint } from "./ContextPanel";
 import {
+  AREAS,
   conflictFor,
   hasShortcutChanges,
   rebind,
@@ -107,6 +108,17 @@ export const SettingsDialog: Component<SettingsDialogProps> = (props) => {
   const [tab, setTab] = createSignal<TabId>("general");
   const [confirmReset, setConfirmReset] = createSignal(false);
   /** Atajo que espera su nueva combinación, y el aviso si chocó con otro */
+  const [query, setQuery] = createSignal("");
+  /** Sin tildes ni mayúsculas, para que "extrusion" encuentre "Extrusión" */
+  const plain = (text: string) => text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const rowsOf = (area: string) => {
+    const q = plain(query().trim());
+    const areaName = plain(AREAS.find((a) => a.id === area)?.label() ?? "");
+    return shortcutRows().filter(
+      (r) => r.area === area && (!q || plain(t(r.description)).includes(q) || plain(r.keys).includes(q) || areaName.includes(q)),
+    );
+  };
+  const anyRows = () => AREAS.some((a) => rowsOf(a.id).length > 0);
   const [capturing, setCapturing] = createSignal<string>();
   const [clash, setClash] = createSignal<{ id: string; with: string }>();
 
@@ -135,9 +147,13 @@ export const SettingsDialog: Component<SettingsDialogProps> = (props) => {
           shift: e.shiftKey,
           alt: e.altKey,
         };
+        if (shortcutRows().find((r) => r.id === id)?.plainKeyOnly && (binding.ctrl || binding.shift || binding.alt)) {
+          setClash({ id, with: "" });
+          return;
+        }
         const other = conflictFor(id, binding);
         if (other) {
-          setClash({ id, with: other.description });
+          setClash({ id, with: other });
           return;
         }
         rebind(id, binding);
@@ -342,9 +358,24 @@ export const SettingsDialog: Component<SettingsDialogProps> = (props) => {
 
             <Show when={tab() === "shortcuts"}>
               <Section title={t("Teclado")}>
+                <input
+                  type="search"
+                  class="w-full h-8 px-2.5 rounded-md border border-border bg-bg-lighter text-xs text-text placeholder:text-text-dim focus:outline-none focus:border-accent"
+                  placeholder={t("Buscar un atajo, una tecla o un área…")}
+                  aria-label={t("Buscar atajos")}
+                  value={query()}
+                  onInput={(e) => setQuery(e.currentTarget.value)}
+                />
                 <Hint>{t("Pulsa una combinación para cambiarla. Esc cancela; Supr deja el atajo sin tecla.")}</Hint>
-                <ul class="grid grid-cols-[1fr_auto] items-center gap-x-4 gap-y-1 text-xs">
-                  <For each={shortcutRows()}>
+                <Show when={!anyRows()}>
+                  <p class="text-xs text-text-muted">{t("Ningún atajo coincide con «{q}».", { q: query() })}</p>
+                </Show>
+                <For each={AREAS.filter((a) => rowsOf(a.id).length > 0)}>
+                  {(area) => (
+                    <div class="space-y-1.5">
+                      <h4 class="text-[11px] font-medium text-text pt-1">{area.label()}</h4>
+                      <ul class="grid grid-cols-[1fr_auto] items-center gap-x-4 gap-y-1 text-xs">
+                  <For each={rowsOf(area.id)}>
                     {(row) => (
                       <>
                         <li class="contents">
@@ -378,7 +409,9 @@ export const SettingsDialog: Component<SettingsDialogProps> = (props) => {
                           </span>
                           <Show when={clash()?.id === row.id}>
                             <span class="col-span-2 text-[11px] text-warning">
-                              {t("Ya la usa «{name}». Cámbiala o desactívala primero.", { name: t(clash()!.with) })}
+                              {clash()!.with
+                                ? t("Ya la usa «{name}». Cámbiala o desactívala primero.", { name: t(clash()!.with) })
+                                : t("Acá va una sola tecla, sin Ctrl, Shift ni Alt.")}
                             </span>
                           </Show>
                         </li>
@@ -386,6 +419,9 @@ export const SettingsDialog: Component<SettingsDialogProps> = (props) => {
                     )}
                   </For>
                 </ul>
+                    </div>
+                  )}
+                </For>
                 <Show when={hasShortcutChanges()}>
                   <button
                     class="h-8 px-3 rounded-md text-xs border border-border text-text hover:border-accent hover:text-accent"
@@ -401,7 +437,7 @@ export const SettingsDialog: Component<SettingsDialogProps> = (props) => {
               </Section>
               <Section title={t("Mouse en el visor")}>
                 <ShortcutTable rows={MOUSE_HINTS} />
-                <Hint>{t("Los gestos del mouse y las teclas dentro de cada herramienta (Sketch, pincel…) no se pueden cambiar.")}</Hint>
+                <Hint>{t("Los gestos del mouse y las teclas propias de cada herramienta (Esc, Enter, Supr, Q y A dentro del Sketch; las del pincel) no se pueden cambiar.")}</Hint>
               </Section>
             </Show>
 
