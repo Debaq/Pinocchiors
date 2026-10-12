@@ -334,7 +334,8 @@ pub fn render(scene: &RayScene, camera: &Camera, s: &Settings) -> Image {
             for _ in 0..s.samples {
                 let fx = (x as f32 + rng.next_f32()) / w as f32;
                 let fy = (y as f32 + rng.next_f32()) / h as f32;
-                let c = radiance(scene, s, camera.ray(fx, fy), &mut rng);
+                let ray = camera.sample_ray(fx, fy, &mut rng);
+                let c = radiance(scene, s, ray, &mut rng);
                 // Un NaN o infinito no debe contaminar el píxel
                 if c.is_finite() {
                     acc += c;

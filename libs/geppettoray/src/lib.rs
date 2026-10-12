@@ -18,7 +18,7 @@ mod texture;
 pub use bsdf::Bsdf;
 pub use rng::Rng;
 pub use bvh::{Aabb, Bvh, Hit, Ray};
-pub use camera::Camera;
+pub use camera::{Camera, Lens, SENSOR_FULL_FRAME_HEIGHT_MM};
 pub use image_out::{Image, SaveError, linear_to_srgb};
 pub use glass::{absorption_sigma, fresnel_dielectric, reflect, refract};
 pub use env::{EnvMap, Environment};
