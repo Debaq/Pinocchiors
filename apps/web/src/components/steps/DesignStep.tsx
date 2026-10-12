@@ -8148,6 +8148,8 @@ function ProblemList(props: { ui: CadUi; sketch: Sketch }) {
                 onClick={() => {
                   ui.setSelection(it.ids);
                   ui.viewer()?.focusSketch?.(it.at, 20);
+                  // Un conflicto que se había dejado vuelve a tener su aviso
+                  if (it.constraint !== undefined) ui.reviewConflict(it.constraint);
                 }}
               >
                 {it.text}

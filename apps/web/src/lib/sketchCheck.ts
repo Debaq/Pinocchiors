@@ -224,6 +224,8 @@ export interface SketchIssue {
   ids: number[];
   at: P2;
   mark?: boolean;
+  /** Restricción en conflicto que lo causa (índice) */
+  constraint?: number;
 }
 
 /**
@@ -263,7 +265,7 @@ export function sketchIssues(
     const c = s.constraints[i];
     if (!c) continue;
     const ids = constraintIds(c).filter((id) => s.entities.some((e) => e.id === id) || s.points.some((q) => q.id === id));
-    out.push({ kind: "error", text: `En conflicto: ${CONSTRAINT_LABELS[c.type]}${ids.length ? ` (${ids.map(name).join(", ")})` : ""}`, ids, at: center(ids) });
+    out.push({ kind: "error", text: `En conflicto: ${CONSTRAINT_LABELS[c.type]}${ids.length ? ` (${ids.map(name).join(", ")})` : ""}`, ids, at: center(ids), constraint: i });
   }
   // Las regiones toman uno solo de los tramos encimados: no impide nada, pero sobra
   for (const [a, b] of p.overlaps) out.push({ kind: "warning", text: `${name(a)} y ${name(b)} encimadas (cuenta una sola)`, ids: [a, b], at: center([a, b]) });

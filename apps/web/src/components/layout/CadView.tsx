@@ -575,6 +575,18 @@ export const CadView: Component<CadViewProps> = (props) => {
     setDimQueue(indices.slice(1));
     setEditingDim(indices[0]);
   };
+  let dimInput: HTMLInputElement | undefined;
+  /**
+   * Quita la cota en edición y pasa a la siguiente pedida. Una de la hoja que
+   * todavía no está en el sketch (índice ≤ −2) solo se salta
+   */
+  const removeEditingDim = (index: number) => {
+    if (dimInput) dimInput.dataset.done = "1";
+    // Las pedidas después de la quitada se corren un lugar
+    if (index >= 0) setDimQueue((q) => q.filter((i) => i !== index).map((i) => (i > index ? i - 1 : i)));
+    nextDim();
+    if (index >= 0) ui.removeConstraint(index);
+  };
   /** Pasa a la siguiente cota pedida (o termina) */
   const nextDim = () => {
     const q = dimQueue();
@@ -649,6 +661,33 @@ export const CadView: Component<CadViewProps> = (props) => {
     onCleanup(() => window.removeEventListener("pointerdown", away, true));
   });
   createEffect(on(() => ui.session()?.feature, closeClarify, { defer: true }));
+  // Con un aviso de conflicto a la vista, pasar a otra cosa (clic o tecla fuera
+  // del aviso, de los avisos de la barra y de la cota en conflicto) lo deja:
+  // se acepta y el aviso se va (vuelve eligiéndolo en los avisos)
+  createEffect(() => {
+    if (!ui.session() || !ui.freshConflicts().length) return;
+    const keep = () => {
+      const extra = ui.extraDimension();
+      return `[data-extra-dim], [data-conflicts], [data-sketch-issues], [data-problem-list], [data-dim-edit], [data-dim-remove]${extra === undefined ? "" : `, [data-dim="${extra}"]`}`;
+    };
+    const onPointer = (e: PointerEvent) => {
+      // Girar o mover la vista (otros botones) no es pasar a otra cosa
+      if (e.button !== 0 || (e.target as Element | null)?.closest?.(keep())) return;
+      ui.acceptConflicts();
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      // Esc lo quita (lo maneja onKey); las teclas sueltas de modificador no cuentan
+      if (e.key === "Escape" || ["Shift", "Control", "Alt", "Meta"].includes(e.key)) return;
+      if ((e.target as Element | null)?.closest?.(keep())) return;
+      ui.acceptConflicts();
+    };
+    window.addEventListener("pointerdown", onPointer, true);
+    window.addEventListener("keydown", onKeyDown, true);
+    onCleanup(() => {
+      window.removeEventListener("pointerdown", onPointer, true);
+      window.removeEventListener("keydown", onKeyDown, true);
+    });
+  });
   /** Lo recién dibujado que repite algo que ya estaba: [la que estaba, la nueva] (se pregunta si unirlas) */
   const [dupAsk, setDupAsk] = createSignal<[number, number][]>();
   createEffect(() => !issuesOpen() && setIssueHover(undefined));
@@ -2827,6 +2866,13 @@ export const CadView: Component<CadViewProps> = (props) => {
     ui.setSelection(additive ? [...new Set([...sketchBoxBefore, ...found])] : found);
   };
   /** Esc o clic derecho en el sketch: suelta la restricción que espera, corta lo que está a medias o vuelve a Elegir */
+  /** Con la cota que sobre-define a la vista, Esc la quita (como «Quitarla»). Si la quitó, true */
+  const dropExtraDimension = () => {
+    const i = ui.extraDimension();
+    if (i === undefined) return false;
+    ui.removeConstraint(i);
+    return true;
+  };
   const cancelStep = () => {
     // La spline se termina (abierta)
     if (pendingCon()) {
@@ -3103,7 +3149,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       const key = e.key.toLowerCase();
       if (e.key === "Escape") {
         if (clarify()) closeClarify();
-        else cancelStep();
+        else if (!dropExtraDimension()) cancelStep();
       } else if (e.key === "Tab" && cycle && ui.tool() === "select") {
         // Lo siguiente de lo encimado bajo el último clic
         cycle.i = (cycle.i + 1) % cycle.ids.length;
@@ -3626,7 +3672,7 @@ export const CadView: Component<CadViewProps> = (props) => {
               if (e.key === "Enter") applyTyped(e.currentTarget.value);
               else if (e.key === "Escape") {
                 e.currentTarget.blur();
-                cancelStep();
+                if (!dropExtraDimension()) cancelStep();
               }
             }}
           />
@@ -3896,14 +3942,16 @@ export const CadView: Component<CadViewProps> = (props) => {
             }
           >
             <input
-              ref={(el) =>
+              ref={(el) => {
+                dimInput = el;
                 setTimeout(() => {
                   el.focus();
                   el.select();
-                })
-              }
+                });
+              }}
               type="text"
               data-wheel-number=""
+              data-dim-edit
               // Solo al abrir: si el solver responde mientras se escribe, no pisa el texto
               value={untrack(() => {
                 const c = dimConstraint(d().index);
@@ -3919,6 +3967,7 @@ export const CadView: Component<CadViewProps> = (props) => {
                   setDimQueue([]);
                   setEditingDim(undefined);
                   resetTool();
+                  dropExtraDimension();
                   return;
                 }
                 if (e.key !== "Enter" && e.key !== "Tab") return;
@@ -3952,6 +4001,21 @@ export const CadView: Component<CadViewProps> = (props) => {
                 if (editingDim() === d().index) setEditingDim(undefined);
               }}
             />
+            {/* Quitar la cota (sin perder el foco: lo escrito no se aplica) */}
+            <button
+              class="absolute -translate-y-1/2 w-5 h-5 flex items-center justify-center rounded border border-border bg-bg-lighter text-text-muted hover:text-error hover:border-error"
+              style={{ left: `${d().x + 42}px`, top: `${d().y}px` }}
+              aria-label="Quitar la cota"
+              title="Quitar la cota"
+              data-dim-remove
+              onPointerDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+              onClick={() => removeEditingDim(d().index)}
+            >
+              <Icons.X size={11} />
+            </button>
           </Show>
         )}
       </Index>
@@ -4388,6 +4452,8 @@ export const CadView: Component<CadViewProps> = (props) => {
                             onClick={() => {
                               ui.setSelection(it.ids);
                               ui.viewer()?.focusSketch?.(it.at, 20);
+                              // Un conflicto que se había dejado vuelve a tener su aviso
+                              if (it.constraint !== undefined) ui.reviewConflict(it.constraint);
                             }}
                           >
                             <span class={clsx("mt-px shrink-0", ISSUE_COLOR[it.kind])}>
@@ -4540,7 +4606,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       {/* Cota que sobre-define el sketch: dejarla de referencia o quitarla */}
       <Show when={ui.extraDimension()}>
         {(i) => (
-          <div class="absolute top-24 left-1/2 -translate-x-1/2 flex items-center gap-2 rounded-md border border-error/60 bg-bg-lighter/95 px-3 py-1.5 text-xs text-text">
+          <div data-extra-dim class="absolute top-24 left-1/2 -translate-x-1/2 flex items-center gap-2 rounded-md border border-error/60 bg-bg-lighter/95 px-3 py-1.5 text-xs text-text">
             <Icons.Warning size={14} class="text-error" />
             Esta cota sobre-define el sketch
             <Button size="sm" variant="primary" onClick={() => ui.toggleReference(i())}>
@@ -4560,8 +4626,9 @@ export const CadView: Component<CadViewProps> = (props) => {
         </div>
       </Show>
 
-      {/* Restricciones en conflicto (sin una cota recién puesta): cuáles son y quitarlas desde acá */}
-      <Show when={!ui.extraDimension() && ui.session() && (ui.session()!.report?.conflicting.length ?? 0) > 0 && ui.session()!.report!.conflicting}>
+      {/* Restricciones en conflicto (sin una cota recién puesta): cuáles son y quitarlas desde acá.
+          Las que se dejaron (se siguió dibujando) ya no: siguen en los avisos de la barra */}
+      <Show when={!ui.extraDimension() && ui.session() && ui.freshConflicts().length > 0 && ui.freshConflicts()}>
         {(list) => (
           <div data-conflicts class="absolute top-24 left-1/2 -translate-x-1/2 max-w-[60%] flex flex-wrap items-center gap-1.5 rounded-md border border-error/60 bg-bg-lighter/95 px-3 py-1.5 text-xs text-text">
             <Icons.Warning size={14} class="text-error" />

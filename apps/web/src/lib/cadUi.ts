@@ -297,6 +297,9 @@ function changedCurves(prev: Sketch, next: Sketch): P2[][] {
     .filter((pts) => pts.length >= 2);
 }
 
+/** Una restricción por su forma, sin el valor (lo que se escribe no la cambia) */
+const conflictKey = (c: SketchConstraint) => JSON.stringify({ ...c, value: undefined, expr: undefined, degrees: undefined, reference: undefined });
+
 export function createCadUi(store: CadStore) {
   const [pick, setPick] = createSignal<PickMode>({ kind: "none" });
   const [highlight, setHighlight] = createSignal<{ faces: number[]; edges: number[] }>({ faces: [], edges: [] });
@@ -304,6 +307,46 @@ export function createCadUi(store: CadStore) {
   /** Corte del escaneo por el plano del sketch en edición (guía, anclajes y «Usar el corte») */
   const [scanOutline, setScanOutline] = createSignal<ScanOutline>();
   const [session, setSession] = createSignal<SketchSession>();
+  /**
+   * Restricciones en conflicto que se vieron y se dejaron (se siguió
+   * dibujando): ya sin aviso flotante ni Esc que las quite. Por su forma sin
+   * el valor (los índices se corren al quitar restricciones)
+   */
+  const [acceptedConflicts, setAcceptedConflicts] = createSignal<ReadonlySet<string>>(new Set());
+  /** La que se volvió a pedir desde los avisos: vuelve a tener su aviso */
+  const [reviewedConflict, setReviewedConflict] = createSignal<string>();
+  /** Lo en conflicto con aviso a la vista queda aceptado (se pasó a otra cosa) */
+  const acceptConflicts = () => {
+    const s = session();
+    const warned = freshConflicts().map((i) => conflictKey(s!.sketch.constraints[i]));
+    if (!warned.length) return;
+    batch(() => {
+      setAcceptedConflicts((a) => new Set([...a, ...warned]));
+      setReviewedConflict(undefined);
+    });
+  };
+  createEffect(
+    on(
+      () => session()?.feature,
+      () => {
+        setAcceptedConflicts(new Set<string>());
+        setReviewedConflict(undefined);
+      },
+      { defer: true },
+    ),
+  );
+  /** En conflicto y todavía sin dejar (o vuelta a pedir) */
+  const freshConflicts = (): number[] => {
+    const s = session();
+    const accepted = acceptedConflicts();
+    const reviewed = reviewedConflict();
+    return (s?.report?.conflicting ?? []).filter((i) => {
+      const c = s!.sketch.constraints[i];
+      if (!c) return false;
+      const k = conflictKey(c);
+      return k === reviewed || !accepted.has(k);
+    });
+  };
   const [tool, setTool] = createSignal<SketchTool>("line");
   const [selection, setSelection] = createSignal<number[]>([]);
   // Restricciones elegidas (por índice): con un ícono o desde el panel; Supr las borra
@@ -646,6 +689,8 @@ export function createCadUi(store: CadStore) {
       batch(() => {
         const before = new Set(s.sketch.entities.map((e) => e.id));
         mutate(next);
+        // Se siguió dibujando sin hacerle caso al aviso: el conflicto queda aceptado
+        if (next.entities.length > s.sketch.entities.length || next.points.length > s.sketch.points.length || next.constraints.length > s.sketch.constraints.length) acceptConflicts();
         if (constructionMode() && !NOT_DRAWING.has(tool())) for (const e of next.entities) if (!before.has(e.id)) e.construction = true;
         // Capa activa: lo nuevo cae en ella
         const layer = activeLayer();
@@ -848,11 +893,23 @@ export function createCadUi(store: CadStore) {
     extraDimension(): number | undefined {
       const s = session();
       if (s?.report?.status !== "over_constrained") return undefined;
-      const dims = s.report.conflicting.filter((i) => {
+      const dims = freshConflicts().filter((i) => {
         const c = s.sketch.constraints[i];
         return c && constraintValue(c) !== undefined && !isReference(c);
       });
-      return dims.length ? Math.max(...dims) : undefined;
+      const reviewed = reviewedConflict();
+      return dims.find((i) => conflictKey(s.sketch.constraints[i]) === reviewed) ?? (dims.length ? Math.max(...dims) : undefined);
+    },
+    /** Las restricciones en conflicto con aviso a la vista (sin las que se dejaron) */
+    freshConflicts,
+    acceptConflicts,
+    /** Vuelve a mostrar el aviso de la restricción `index` (elegida en los avisos) */
+    reviewConflict(index: number) {
+      const c = session()?.sketch.constraints[index];
+      if (!c) return;
+      const k = conflictKey(c);
+      setAcceptedConflicts((a) => new Set([...a].filter((x) => x !== k)));
+      setReviewedConflict(k);
     },
 
     removeConstraint(index: number) {
