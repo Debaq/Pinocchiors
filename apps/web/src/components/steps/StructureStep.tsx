@@ -1,7 +1,7 @@
 import { Component, For, Show } from "solid-js";
 import { Panel } from "../ui";
 import * as Icons from "../icons";
-import type { TextureSelection, TextureSlot } from "../layout/TextureEditor";
+import type { TextureSlot } from "../layout/TextureEditor";
 import { t } from "../../lib/i18n";
 
 // Tipos de `SceneStructure` (apps/desktop/src/structure.rs)
@@ -67,14 +67,10 @@ export interface StructureStepProps {
   structure?: SceneStructure;
   fileName?: string;
   format?: string;
-  /** URL (blob) de cada textura, para las miniaturas */
-  textureUrls?: string[];
-  /** Clic en una textura: abrirla en el editor de texturas */
-  onOpenTexture?: (selection: TextureSelection) => void;
 }
 
 /** Canales de un material con su índice de textura y su mapa en el visor */
-const materialChannels = (m: MaterialInfo): [string, number | null, TextureSlot][] => [
+export const materialChannels = (m: MaterialInfo): [string, number | null, TextureSlot][] => [
   [t("Color"), m.base_color_texture, "base"],
   [t("Metal / rugosidad"), m.metallic_roughness_texture, "metallicRoughness"],
   [t("Normal"), m.normal_texture, "normal"],
@@ -85,11 +81,11 @@ const materialChannels = (m: MaterialInfo): [string, number | null, TextureSlot]
 /** Formatos que se leen con Z arriba (STL; se pasan a la escena con Y arriba) */
 const Z_UP_FORMATS = ["STL", "PLY", "3MF"];
 
-const formatBytes = (n: number) =>
+export const formatBytes = (n: number) =>
   n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)} MB` : n >= 1024 ? `${Math.round(n / 1024)} KB` : `${n} B`;
 
 /** Color lineal de glTF a CSS (sRGB) */
-const cssColor = (c: [number, number, number, number] | [number, number, number]) => {
+export const cssColor = (c: [number, number, number, number] | [number, number, number]) => {
   const srgb = (x: number) => {
     const v = Math.min(1, Math.max(0, x));
     return Math.round(255 * (v <= 0.0031308 ? 12.92 * v : 1.055 * Math.pow(v, 1 / 2.4) - 0.055));
@@ -97,7 +93,7 @@ const cssColor = (c: [number, number, number, number] | [number, number, number]
   return `rgb(${srgb(c[0])}, ${srgb(c[1])}, ${srgb(c[2])})`;
 };
 
-const Row: Component<{ label: string; value: string | number }> = (props) => (
+export const Row: Component<{ label: string; value: string | number }> = (props) => (
   <div class="flex justify-between gap-3 text-xs">
     <span class="text-text-muted shrink-0">{props.label}</span>
     <span class="text-text text-right truncate">{props.value}</span>
@@ -110,7 +106,6 @@ const Chip: Component<{ text: string }> = (props) => (
 
 export const StructureStep: Component<StructureStepProps> = (props) => {
   const s = () => props.structure;
-  const thumb = (index: number | null) => (index === null ? undefined : props.textureUrls?.[index]);
 
   return (
     <div class="space-y-4">
@@ -179,101 +174,6 @@ export const StructureStep: Component<StructureStepProps> = (props) => {
                   </For>
                 </div>
               </Panel>
-
-              <Show when={structure().materials.length > 0}>
-                <Panel title={t("Materiales ({n})", { n: structure().materials.length })} icon={<Icons.Sliders size={14} />} defaultOpen>
-                  <div class="space-y-3 pt-1">
-                    <For each={structure().materials}>
-                      {(m, i) => {
-                        const channels = materialChannels(m);
-                        return (
-                          <div class="space-y-1.5">
-                            <div class="flex items-center gap-2">
-                              <span
-                                class="w-4 h-4 rounded border border-border shrink-0"
-                                style={{ background: cssColor(m.base_color) }}
-                              />
-                              <span class="text-xs text-text font-medium truncate">{m.name || t("material {i}", { i: i() })}</span>
-                            </div>
-                            <Row
-                              label="Metal / rugosidad"
-                              value={`${m.metallic.toFixed(2)} / ${m.roughness.toFixed(2)}`}
-                            />
-                            <Row
-                              label={t("Transparencia")}
-                              value={m.alpha_mode === "mask" ? t("recorte {c}", { c: m.alpha_cutoff }) : m.alpha_mode === "blend" ? t("mezcla") : t("opaco")}
-                            />
-                            <Show when={m.double_sided || m.unlit}>
-                              <div class="flex gap-1">
-                                <Show when={m.double_sided}>
-                                  <Chip text={t("doble cara")} />
-                                </Show>
-                                <Show when={m.unlit}>
-                                  <Chip text={t("sin iluminación")} />
-                                </Show>
-                              </div>
-                            </Show>
-                            <div class="grid grid-cols-3 gap-1.5">
-                              <For each={channels.filter(([, tex]) => tex !== null)}>
-                                {([label, tex, slot]) => (
-                                  <button
-                                    class="space-y-0.5 text-left group"
-                                    title={t("Abrir en el editor de texturas")}
-                                    onClick={() => props.onOpenTexture?.({ material: i(), slot })}
-                                  >
-                                    <Show
-                                      when={thumb(tex)}
-                                      fallback={<div class="aspect-square rounded bg-bg-lighter" />}
-                                    >
-                                      <img
-                                        src={thumb(tex)}
-                                        class="aspect-square w-full object-cover rounded border border-border group-hover:border-accent transition-colors"
-                                      />
-                                    </Show>
-                                    <div class="text-[10px] text-text-muted truncate group-hover:text-text">{label}</div>
-                                  </button>
-                                )}
-                              </For>
-                            </div>
-                          </div>
-                        );
-                      }}
-                    </For>
-                  </div>
-                </Panel>
-              </Show>
-
-              <Show when={structure().textures.length > 0}>
-                <Panel title={t("Texturas ({n})", { n: structure().textures.length })} icon={<Icons.Checkerboard size={14} />} defaultOpen={false}>
-                  <div class="space-y-2 pt-1">
-                    <For each={structure().textures}>
-                      {(tex, i) => (
-                        <button
-                          class="flex gap-2 items-center w-full text-left rounded hover:bg-surface/40 transition-colors"
-                          title={t("Abrir en el editor de texturas")}
-                          onClick={() => {
-                            // Primer material y mapa que usan esta textura
-                            for (const [material, m] of structure().materials.entries()) {
-                              const channel = materialChannels(m).find(([, index]) => index === i());
-                              if (channel) return props.onOpenTexture?.({ material, slot: channel[2] });
-                            }
-                          }}
-                        >
-                          <Show when={thumb(i())} fallback={<div class="w-10 h-10 rounded bg-bg-lighter shrink-0" />}>
-                            <img src={thumb(i())} class="w-10 h-10 object-cover rounded border border-border shrink-0" />
-                          </Show>
-                          <div class="min-w-0 flex-1">
-                            <div class="text-xs text-text truncate">{tex.name || t("textura {i}", { i: i() })}</div>
-                            <div class="text-[10px] text-text-muted">
-                              {tex.format} · {tex.width}×{tex.height} · {formatBytes(tex.bytes)}
-                            </div>
-                          </div>
-                        </button>
-                      )}
-                    </For>
-                  </div>
-                </Panel>
-              </Show>
 
               <Show when={structure().skeletons.length > 0}>
                 <Panel title={t("Esqueletos ({n})", { n: structure().skeletons.length })} icon={<Icons.Bone size={14} />} defaultOpen={false}>

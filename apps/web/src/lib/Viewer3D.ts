@@ -4,6 +4,7 @@
  */
 
 import * as THREE from "three";
+import { GlowHalo } from "./glowHalo";
 import { THEME_EVENT, themeHex } from "./theme";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { CameraRig, type CameraPose } from "./cameraRig";
@@ -184,6 +185,8 @@ export type PlacementPick =
 export interface ViewerCallbacks {
   /** Doble clic sobre la malla: el nodo del archivo de ese triángulo */
   onNodePicked?: (node: number) => void;
+  /** Clic o recuadro sobre las partes del archivo; `mode` dice cómo se combina con lo elegido */
+  onNodesPicked?: (nodes: number[], mode: "set" | "add" | "remove" | "toggle") => void;
   onWeightsPainted?: (stroke: PaintStroke) => void;
   /** La luz principal se movió arrastrando con L */
   onLightsChanged?: (lights: LightSettings) => void;
@@ -506,6 +509,10 @@ export class Viewer3D {
   // Materiales del archivo de origen y sus texturas (compartidas entre materiales)
   private sceneMaterials: SceneMaterial[] = [];
   private sceneTextureCache = new Map<ImageBitmap, THREE.Texture>();
+  /** Halo de los materiales con glow: su emisión sola, por grupo de la malla (null si ninguno brilla) */
+  private glowMaterials: THREE.Material[] | null = null;
+  private glowStrength = 0;
+  private glowHalo: GlowHalo | null = null;
 
   // Luces
   private lightRig!: LightRig;
@@ -846,7 +853,8 @@ export class Viewer3D {
     // Clic: modal, luz, pincel, gizmo o selección (en ese orden)
     this.canvas.addEventListener("pointerdown", (e) => this.onPointerDown(e), { signal });
     window.addEventListener("pointermove", (e) => this.onPointerMove(e), { signal });
-    window.addEventListener("pointerup", () => {
+    window.addEventListener("pointerup", (e) => {
+      this.onNodeUp(e);
       this.onCloudUp();
       this.onLightUp();
       this.finishStroke();
@@ -960,6 +968,11 @@ export class Viewer3D {
     }
     // Sobre el gizmo de las herramientas, lo maneja el gizmo
     if (this.transformControls?.dragging || this.transformControls?.axis) return;
+    // Partes del archivo: clic las elige y arrastrar dibuja un recuadro
+    if (this.nodePicking && this.callbacks.onNodesPicked && this.activeTool === "select" && this.pickJoint(e) < 0) {
+      this.nodeDrag = { start: this.canvasPoint(e), current: this.canvasPoint(e), moved: false };
+      return;
+    }
     // Una key de una trayectoria: la app va a ese cuadro y empieza a arrastrarla
     const pathKey = this.pickPathKey(e);
     if (pathKey) {
@@ -1069,6 +1082,7 @@ export class Viewer3D {
     }
     this.onLightMove(e);
     this.onCloudMove(e);
+    this.onNodeMove(e);
     if (e.target === this.canvas) this.onPaintMove(e);
   }
 
@@ -1729,6 +1743,7 @@ export class Viewer3D {
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height);
+    this.glowHalo?.setSize(width, height);
   }
 
   /** Pide un cuadro; varias peticiones antes del próximo se juntan en uno */
@@ -1750,6 +1765,7 @@ export class Viewer3D {
     // Si la cámara sigue amortiguando, su evento "change" pide el siguiente
     this.controls.update();
     this.renderer.render(this.scene, this.camera);
+    this.renderGlow();
     this.cameraRig.renderCube(this.renderer);
     this.frameCount++;
   };
@@ -1782,6 +1798,7 @@ export class Viewer3D {
     geometry.setIndex(new THREE.BufferAttribute(data.indices, 1));
 
     const material = this.buildMaterial(geometry);
+    this.updateGlow(material);
 
     this.currentMesh = new THREE.Mesh(geometry, material);
     this.currentMesh.visible = this.settings.showMesh && !this.settings.showWeights;
@@ -1823,6 +1840,11 @@ export class Viewer3D {
     this.attachGizmo();
     this.applyHiddenToOverlays();
     this.updateNodeHighlight();
+  }
+
+  /** La próxima malla que se cargue (el detalle que reemplaza a una vista previa) no mueve la cámara */
+  keepCameraOnNextLoad(): void {
+    this.keepCamera = true;
   }
 
   /** Vista previa de un remallado: hay una en alambre sobre el modelo (para las pruebas) */
@@ -1919,10 +1941,46 @@ export class Viewer3D {
 
   /** Materiales del archivo de origen (el índice es el de los grupos de la malla) */
   setSceneMaterials(materials: SceneMaterial[]): void {
-    for (const texture of this.sceneTextureCache.values()) texture.dispose();
-    this.sceneTextureCache.clear();
+    // Editar un color no debe volver a subir las imágenes: solo se sueltan las que ya no se usan
+    const used = new Set<ImageBitmap>(materials.flatMap((m) => Object.values(m.maps).filter((i): i is ImageBitmap => !!i)));
+    for (const [image, texture] of this.sceneTextureCache) {
+      if (used.has(image)) continue;
+      texture.dispose();
+      this.sceneTextureCache.delete(image);
+    }
     this.sceneMaterials = materials;
     this.refreshMeshMaterial();
+  }
+
+  private disposeGlowMaterials(): void {
+    this.glowMaterials?.forEach((m) => m.dispose());
+    this.glowMaterials = null;
+  }
+
+  /** Materiales de solo emisión para el halo de los que brillan (los demás, negros) */
+  private updateGlow(material: THREE.Material | THREE.Material[]): void {
+    this.disposeGlowMaterials();
+    this.glowStrength = 0;
+    if (!Array.isArray(material) || this.settings.showTextures === false) return;
+    const black = () => new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide });
+    const glow = material.map((m, i) => {
+      if (!m.visible) return m;
+      const source = this.sceneMaterials[i];
+      const standard = m as THREE.MeshStandardMaterial;
+      if (!source || !m.userData.sceneMaterial || !standard.emissive) return black();
+      const strength = Math.max(...source.emissive);
+      if (strength <= 0.01) return black();
+      this.glowStrength = Math.max(this.glowStrength, strength);
+      return new THREE.MeshBasicMaterial({ color: standard.emissive.clone().multiplyScalar(0.3), map: standard.emissiveMap, side: THREE.DoubleSide });
+    });
+    this.glowMaterials = this.glowStrength > 0 ? glow : null;
+  }
+
+  private renderGlow(): void {
+    const mesh = this.rig?.mesh ?? this.currentMesh;
+    if (!this.glowMaterials || !mesh?.visible) return;
+    this.glowHalo ??= new GlowHalo(this.renderer, this.canvas.clientWidth, this.canvas.clientHeight);
+    this.glowHalo.render(this.scene, this.camera, mesh, this.glowMaterials, this.glowStrength);
   }
 
   private refreshMeshMaterial(): void {
@@ -1930,6 +1988,7 @@ export class Viewer3D {
     if (!mesh) return;
     this.disposeMaterial(mesh.material);
     mesh.material = this.buildMaterial(mesh.geometry);
+    this.updateGlow(mesh.material);
     if (this.rig?.mesh) this.rig.mesh.material = mesh.material;
     this.applyXray();
   }
@@ -3101,6 +3160,8 @@ export class Viewer3D {
   dispose(): void {
     this.listeners.abort();
     this.resizeObserver?.disconnect();
+    this.glowHalo?.dispose();
+    this.disposeGlowMaterials();
     this.controls.dispose();
     if (this.moveFrame !== null) cancelAnimationFrame(this.moveFrame);
     if (this.dragFrame !== null) cancelAnimationFrame(this.dragFrame);
@@ -3119,6 +3180,7 @@ export class Viewer3D {
     this.clearSkeleton();
     this.clearCloud();
     this.cloudOverlay?.remove();
+    this.selectionBox?.remove();
     this.cameraRig.viewCube.dispose();
     this.renderer.dispose();
   }
@@ -4673,11 +4735,13 @@ export class Viewer3D {
 
   private clearMesh(): void {
     const meshGeometry = this.currentMesh?.geometry;
-    if (this.nodeHighlight) {
-      this.meshGroup.remove(this.nodeHighlight);
-      this.nodeHighlight.geometry.dispose();
-      (this.nodeHighlight.material as THREE.Material).dispose();
-      this.nodeHighlight = null;
+    for (const key of ["nodeHighlight", "nodeHover"] as const) {
+      const overlay = this[key];
+      if (!overlay) continue;
+      this.meshGroup.remove(overlay);
+      overlay.geometry.dispose();
+      (overlay.material as THREE.Material).dispose();
+      this[key] = null;
     }
     if (this.currentMesh) {
       this.meshGroup.remove(this.currentMesh);
@@ -4769,6 +4833,119 @@ export class Viewer3D {
     });
   }
 
+
+  // ─── Elegir partes del archivo con clic y recuadro ─────────────────────────
+
+  private nodePicking = false;
+  private nodeDrag: { start: [number, number]; current: [number, number]; moved: boolean } | null = null;
+  private selectionBox: HTMLDivElement | null = null;
+
+  /** Activa elegir partes del archivo con el clic izquierdo (y con recuadro al arrastrar) */
+  setNodePicking(on: boolean): void {
+    this.nodePicking = on;
+    if (!on) {
+      this.endNodeDrag();
+      this.setHoveredNodes([]);
+    }
+  }
+
+  private endNodeDrag(): void {
+    this.nodeDrag = null;
+    if (this.selectionBox) this.selectionBox.style.display = "none";
+  }
+
+  private onNodeMove(e: PointerEvent): void {
+    const drag = this.nodeDrag;
+    if (!drag) {
+      this.hoverNodeUnder(e);
+      return;
+    }
+    drag.current = this.canvasPoint(e);
+    if (!drag.moved && Math.hypot(drag.current[0] - drag.start[0], drag.current[1] - drag.start[1]) > 4) drag.moved = true;
+    if (!drag.moved) return;
+    if (!this.selectionBox) {
+      const box = document.createElement("div");
+      box.style.cssText = "position:absolute;pointer-events:none;border:1px solid var(--accent, #bd93f9);background:rgba(189,147,249,0.15);z-index:5";
+      this.canvas.parentElement?.appendChild(box);
+      this.selectionBox = box;
+    }
+    const [x0, y0] = [Math.min(drag.start[0], drag.current[0]), Math.min(drag.start[1], drag.current[1])];
+    const [x1, y1] = [Math.max(drag.start[0], drag.current[0]), Math.max(drag.start[1], drag.current[1])];
+    const style = this.selectionBox.style;
+    style.display = "block";
+    style.left = `${this.canvas.offsetLeft + x0}px`;
+    style.top = `${this.canvas.offsetTop + y0}px`;
+    style.width = `${x1 - x0}px`;
+    style.height = `${y1 - y0}px`;
+  }
+
+  /** Destaca la parte bajo el puntero (a lo más cada 70 ms: el rayo cuesta en mallas grandes) */
+  private hoverNodeUnder(e: PointerEvent): void {
+    if (!this.nodePicking || !this.callbacks.onNodesPicked || this.activeTool !== "select") return;
+    if (e.target !== this.canvas || e.buttons !== 0) {
+      if (e.target !== this.canvas) this.setHoveredNodes([]);
+      return;
+    }
+    const now = performance.now();
+    if (now - this.hoverTime < 70) return;
+    this.hoverTime = now;
+    const mesh = this.currentMesh;
+    if (!mesh?.visible || !this.meshData?.groupNodes) return;
+    this.raycaster.setFromCamera(this.getMousePosition(e), this.camera);
+    const hit = this.raycaster.intersectObject(mesh)[0];
+    const node = hit?.faceIndex != null ? this.nodeOfFace(hit.faceIndex) : null;
+    this.setHoveredNodes(node === null ? [] : [node]);
+  }
+
+  private onNodeUp(e: PointerEvent): void {
+    const drag = this.nodeDrag;
+    if (!drag) return;
+    this.endNodeDrag();
+    if (e.button !== 0) return;
+    const mode = e.ctrlKey || e.metaKey ? "remove" : e.shiftKey ? "add" : "set";
+    if (!drag.moved) {
+      // Clic: la parte bajo el puntero (nada = quitar la selección)
+      const mesh = this.currentMesh;
+      if (!mesh?.visible || !this.meshData?.groupNodes) return;
+      this.raycaster.setFromCamera(this.getMousePosition(e), this.camera);
+      const hit = this.raycaster.intersectObject(mesh)[0];
+      const node = hit?.faceIndex != null ? this.nodeOfFace(hit.faceIndex) : null;
+      this.callbacks.onNodesPicked?.(node === null ? [] : [node], node === null ? "set" : e.shiftKey ? "toggle" : e.ctrlKey || e.metaKey ? "remove" : "set");
+      return;
+    }
+    this.callbacks.onNodesPicked?.(this.nodesInRect(drag.start, drag.current), mode);
+  }
+
+  /** Partes con algún vértice dentro del recuadro (coordenadas del lienzo) */
+  private nodesInRect(a: [number, number], b: [number, number]): number[] {
+    const data = this.meshData;
+    const mesh = this.currentMesh;
+    if (!data?.groups || !data.groupNodes || !mesh) return [];
+    const rect = this.canvas.getBoundingClientRect();
+    const [x0, x1] = [Math.min(a[0], b[0]), Math.max(a[0], b[0])];
+    const [y0, y1] = [Math.min(a[1], b[1]), Math.max(a[1], b[1])];
+    const positions = data.positions;
+    const v = new THREE.Vector3();
+    const found = new Set<number>();
+    for (let g = 0; g * 3 + 2 < data.groups.length; g++) {
+      const node = data.groupNodes[g];
+      if (node === 0xffffffff || found.has(node) || this.hiddenNodes.has(node)) continue;
+      const end = data.groups[g * 3] + data.groups[g * 3 + 1];
+      for (let i = data.groups[g * 3]; i < end; i++) {
+        const k = data.indices[i] * 3;
+        v.set(positions[k], positions[k + 1], positions[k + 2]).applyMatrix4(mesh.matrixWorld).project(this.camera);
+        if (v.z < -1 || v.z > 1) continue;
+        const x = ((v.x + 1) / 2) * rect.width;
+        const y = ((1 - v.y) / 2) * rect.height;
+        if (x >= x0 && x <= x1 && y >= y0 && y <= y1) {
+          found.add(node);
+          break;
+        }
+      }
+    }
+    return [...found];
+  }
+
   /** Doble clic sobre la malla (no sobre una articulación): elige el nodo del archivo */
   private onCanvasDoubleClick(event: MouseEvent): void {
     const mesh = this.currentMesh;
@@ -4801,6 +4978,9 @@ export class Viewer3D {
   /** Nodos resaltados (el elegido en el Outliner y lo que cuelga de él) */
   private highlightedNodes = new Set<number>();
   private nodeHighlight: THREE.Mesh | null = null;
+  private nodeHover: THREE.Mesh | null = null;
+  private hoveredNodes = new Set<number>();
+  private hoverTime = 0;
 
   setHiddenNodes(nodes: number[]): void {
     const next = new Set(nodes);
@@ -4855,25 +5035,33 @@ export class Viewer3D {
     this.updateNodeHighlight();
   }
 
-  /** Capa translúcida sobre los triángulos de los nodos resaltados */
+  /** Capas translúcidas sobre los triángulos de los nodos elegidos y del que está bajo el puntero */
   private updateNodeHighlight(): void {
-    if (this.nodeHighlight) {
-      this.meshGroup.remove(this.nodeHighlight);
-      this.nodeHighlight.geometry.dispose();
-      (this.nodeHighlight.material as THREE.Material).dispose();
-      this.nodeHighlight = null;
+    for (const key of ["nodeHighlight", "nodeHover"] as const) {
+      const old = this[key];
+      if (!old) continue;
+      this.meshGroup.remove(old);
+      old.geometry.dispose();
+      (old.material as THREE.Material).dispose();
+      this[key] = null;
     }
+    this.nodeHighlight = this.nodeOverlay(this.highlightedNodes, 0.35);
+    // Lo que ya está elegido no se vuelve a pintar al pasar el puntero
+    this.nodeHover = this.nodeOverlay(new Set([...this.hoveredNodes].filter((n) => !this.highlightedNodes.has(n))), 0.2);
+  }
+
+  private nodeOverlay(nodes: Set<number>, opacity: number): THREE.Mesh | null {
     const data = this.meshData;
     const mesh = this.currentMesh;
-    if (!data?.groups || !data.groupNodes || !mesh || this.highlightedNodes.size === 0) return;
+    if (!data?.groups || !data.groupNodes || !mesh || nodes.size === 0) return null;
     const ranges: [number, number][] = [];
     let total = 0;
     for (let g = 0; g * 3 + 2 < data.groups.length; g++) {
-      if (!this.highlightedNodes.has(data.groupNodes[g]) || this.hiddenNodes.has(data.groupNodes[g])) continue;
+      if (!nodes.has(data.groupNodes[g]) || this.hiddenNodes.has(data.groupNodes[g])) continue;
       ranges.push([data.groups[g * 3], data.groups[g * 3 + 1]]);
       total += data.groups[g * 3 + 1];
     }
-    if (total === 0) return;
+    if (total === 0) return null;
     const index = new Uint32Array(total);
     let at = 0;
     for (const [start, count] of ranges) {
@@ -4886,16 +5074,25 @@ export class Viewer3D {
     const material = new THREE.MeshBasicMaterial({
       color: themeHex("accent"),
       transparent: true,
-      opacity: 0.35,
+      opacity,
       depthWrite: false,
       side: THREE.DoubleSide,
       polygonOffset: true,
       polygonOffsetFactor: -1,
       polygonOffsetUnits: -1,
     });
-    this.nodeHighlight = new THREE.Mesh(geometry, material);
-    this.nodeHighlight.renderOrder = 1;
-    this.meshGroup.add(this.nodeHighlight);
+    const overlay = new THREE.Mesh(geometry, material);
+    overlay.renderOrder = 1;
+    this.meshGroup.add(overlay);
+    return overlay;
+  }
+
+  /** Partes bajo el puntero (en el Outliner o en el visor): se destacan antes de elegirlas */
+  setHoveredNodes(nodes: number[]): void {
+    if (nodes.length === this.hoveredNodes.size && nodes.every((n) => this.hoveredNodes.has(n))) return;
+    this.hoveredNodes = new Set(nodes);
+    this.updateNodeHighlight();
+    this.requestRender();
   }
 
   /** Resalta el plano candidato bajo el cursor */

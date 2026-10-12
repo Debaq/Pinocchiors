@@ -2,6 +2,7 @@ import { Component, For, Show } from "solid-js";
 import * as THREE from "three";
 import { NumberInput } from "../ui";
 import { PlacementPanel, type PlacementPanelProps } from "./PlacementPanel";
+import { NodeMaterials, type MaterialActions, type NodePrimitive } from "./MaterialPanel";
 import { fmtNumber, t } from "../../lib/i18n";
 
 /** Nodo del archivo elegido en el Outliner: su transformación local */
@@ -25,6 +26,8 @@ export interface ObjectTabProps {
   node?: ObjectTabNode;
   onToggleNode?: () => void;
   onDeselectNode?: () => void;
+  /** Materiales de las primitivas del nodo elegido */
+  nodeMaterials?: { primitives: NodePrimitive[] } & MaterialActions;
   /** Cambio de la transformación local del nodo elegido */
   onNodeTransform?: (transform: NodeTransform) => void;
   /** Transformar el modelo: piso, frente, girar, espejar, escalar, mover, origen */
@@ -99,6 +102,14 @@ export const ObjectTab: Component<ObjectTabProps> = (props) => (
               </div>
             );
           }}
+        </Show>
+        <Show when={props.node && props.nodeMaterials && props.nodeMaterials.primitives.length > 0}>
+          <NodeMaterials {...props.nodeMaterials!} />
+        </Show>
+        <Show when={props.node === undefined}>
+          <p class="text-[11px] text-text-dim leading-relaxed">
+            {t("Doble clic sobre una parte del modelo para elegirla y cambiar su material.")}
+          </p>
         </Show>
         <Show when={props.placement}>{(placement) => <PlacementPanel {...placement()} />}</Show>
       </div>

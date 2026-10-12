@@ -12,6 +12,7 @@ export type PipelineStepId =
   | "repair"
   | "remesh"
   | "uv"
+  | "materials"
   | "skeleton"
   | "animate"
   | "print3d"
@@ -59,6 +60,11 @@ export const PIPELINE_STEPS: PipelineStep[] = [
     id: "uv",
     get label() { return t("UV / Piel"); },
     icon: Icons.Checkerboard,
+  },
+  {
+    id: "materials",
+    get label() { return t("Materiales"); },
+    icon: Icons.PaintBrush,
   },
   {
     id: "skeleton",
@@ -115,7 +121,7 @@ export const PIPELINE_STEPS: PipelineStep[] = [
 // (menú Archivo); transformar el modelo está siempre en la pestaña Objeto.
 // ═══════════════════════════════════════════════════════════════════════════
 
-export type WorkspaceId = "prepare" | "rig" | "print" | "scan" | "design";
+export type WorkspaceId = "prepare" | "materials" | "rig" | "print" | "scan" | "design";
 
 export interface Workspace {
   id: WorkspaceId;
@@ -127,6 +133,7 @@ export interface Workspace {
 
 export const WORKSPACES: Workspace[] = [
   { id: "prepare", get label() { return t("Preparar"); }, sections: ["structure", "repair", "remesh", "uv"] },
+  { id: "materials", get label() { return t("Materiales"); }, sections: ["materials"] },
   // Sin modelo se puede armar y animar un esqueleto solo, y exportarlo
   { id: "rig", get label() { return t("Rig y animación"); }, sections: ["skeleton", "animate"], withoutModel: true },
   { id: "print", get label() { return t("Fabricar"); }, sections: ["print3d"] },

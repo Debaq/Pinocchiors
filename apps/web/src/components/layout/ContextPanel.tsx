@@ -22,6 +22,7 @@ import { ExportStep, type ExportStepProps } from "../steps/ExportStep";
 import { RepairStep, type RepairStepProps } from "../steps/RepairStep";
 import { AnimateStep, type AnimateStepProps } from "../steps/AnimateStep";
 import { Print3DStep, type Print3DStepProps } from "../steps/Print3DStep";
+import { MaterialsStep, type MaterialsStepProps } from "../steps/MaterialsStep";
 import { ScanStep, type ScanStepProps } from "../steps/ScanStep";
 import { fmtNumber, t } from "../../lib/i18n";
 
@@ -35,6 +36,9 @@ export interface ContextPanelProps {
 
   // Estructura del archivo de origen
   structureProps: StructureStepProps;
+
+  // Materiales y texturas
+  materialsProps: MaterialsStepProps;
 
   // Repair
   repairProps: RepairStepProps;
@@ -75,6 +79,7 @@ export interface ContextPanelProps {
   onToggleVisibility?: (nodeId: string) => void;
   onSelectNode?: (nodeId: string, add?: boolean) => void;
   onDeleteNode?: (nodeId: string) => void;
+  onHoverNode?: (nodeId: string | null) => void;
   onAddNode?: (groupId: string) => void;
 
   // Pestaña de información
@@ -253,6 +258,7 @@ export const ContextPanel: Component<ContextPanelProps> = (props) => {
                 onToggleVisibility={props.onToggleVisibility}
                 onSelectNode={props.onSelectNode}
                 onDeleteNode={props.onDeleteNode}
+                onHoverNode={props.onHoverNode}
                 onAddNode={props.onAddNode}
               />
             </Show>
@@ -365,6 +371,9 @@ const StepContent: Component<ContextPanelProps> = (props) => (
   <Switch>
     <Match when={props.activeStep === "structure"}>
       <StructureStep {...props.structureProps} />
+    </Match>
+    <Match when={props.activeStep === "materials"}>
+      <MaterialsStep {...props.materialsProps} />
     </Match>
     <Match when={props.activeStep === "repair"}>
       <RepairStep {...props.repairProps} />

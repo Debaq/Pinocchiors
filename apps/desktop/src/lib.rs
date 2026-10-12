@@ -5,6 +5,7 @@ pub mod body_parts;
 pub mod cad;
 pub mod bvh;
 pub mod imported_rig;
+pub mod mesh_slot;
 #[cfg(target_os = "linux")]
 pub mod linux_desktop;
 pub mod commands;
@@ -55,12 +56,20 @@ pub fn run() {
             commands::import_model,
             commands::export_model,
             commands::get_mesh_data,
+            commands::get_mesh_preview,
+            commands::set_mesh_build,
+            commands::mesh_edit_ready,
             // Orientación: piso, frente, origen
             placement::get_placement_info,
             placement::apply_placement,
             // Estructura del archivo de origen
             structure::get_scene_structure,
             structure::get_scene_materials,
+            structure::set_scene_material,
+            structure::set_skin_material,
+            structure::add_scene_material,
+            structure::remove_scene_material,
+            structure::assign_scene_material,
             structure::get_scene_texture,
             // Editar texturas en otras aplicaciones
             textures::export_texture,

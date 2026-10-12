@@ -27,6 +27,9 @@ export interface ViewportProps {
   onPlacementPick?: (pick: PlacementPick) => void;
   /** Doble clic sobre la malla: su nodo del archivo */
   onNodePicked?: (node: number) => void;
+  onNodesPicked?: (nodes: number[], mode: "set" | "add" | "remove" | "toggle") => void;
+  /** Elegir partes del archivo con clic y recuadro */
+  nodePicking?: boolean;
   onBoneSelected?: (index: number) => void;
   onBoneMoved?: (index: number, position: [number, number, number]) => void;
   /** Modo animación: se confirmó un giro o desplazamiento de estas articulaciones */
@@ -130,11 +133,13 @@ export const Viewport: Component<ViewportProps> = (props) => {
   onMount(() => {
     if (canvasRef) {
       viewer = new Viewer3D(canvasRef);
+      viewer.setNodePicking(!!props.nodePicking);
 
       viewer.setCallbacks({
         onFpsUpdate: props.onFpsUpdate,
         onPlacementPick: (pick) => props.onPlacementPick?.(pick),
         onNodePicked: (node) => props.onNodePicked?.(node),
+        onNodesPicked: (nodes, mode) => props.onNodesPicked?.(nodes, mode),
         onBoneSelected: props.onBoneSelected,
         onBoneMoved: props.onBoneMoved,
         onBoneMoveCommitted: (index, from, to) => props.onBoneMoveCommitted?.(index, from, to),
@@ -179,6 +184,8 @@ export const Viewport: Component<ViewportProps> = (props) => {
       viewer.setTextures(props.textures ?? {});
     }
   });
+
+  createEffect(() => viewer?.setNodePicking(!!props.nodePicking));
 
   createEffect(() => {
     const materials = props.sceneMaterials ?? [];

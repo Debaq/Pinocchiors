@@ -13,6 +13,8 @@ export interface SceneOutlinerProps {
   /** `add`: con Ctrl, ⌘ o Mayús (suma o quita de la selección) */
   onSelectNode?: (nodeId: string, add?: boolean) => void;
   onDeleteNode?: (nodeId: string) => void;
+  /** El puntero entra en una fila (`null` al salir): se destaca en el visor lo que se va a elegir */
+  onHoverNode?: (nodeId: string | null) => void;
   /** «+» de un grupo (`addHint`) */
   onAddNode?: (groupId: string) => void;
 }
@@ -54,6 +56,7 @@ const OutlinerNode: Component<{
   /** `add`: con Ctrl, ⌘ o Mayús (suma o quita de la selección) */
   onSelectNode?: (nodeId: string, add?: boolean) => void;
   onDeleteNode?: (nodeId: string) => void;
+  onHoverNode?: (nodeId: string | null) => void;
   onAddNode?: (groupId: string) => void;
   isExpanded: (node: SceneNode) => boolean;
   onToggleExpanded: (node: SceneNode) => void;
@@ -89,6 +92,8 @@ const OutlinerNode: Component<{
         style={{ "padding-left": `${props.depth * 12 + 4}px` }}
         data-outliner-row={props.node.id}
         title={props.node.hint}
+        onPointerEnter={() => props.onHoverNode?.(props.node.id)}
+        onPointerLeave={() => props.onHoverNode?.(null)}
         onClick={(e) => (isGroup ? props.onToggleExpanded(props.node) : props.onSelectNode?.(props.node.id, e.ctrlKey || e.metaKey || e.shiftKey))}
       >
         {/* Expand arrow */}
@@ -196,6 +201,7 @@ const OutlinerNode: Component<{
               onToggleVisibility={props.onToggleVisibility}
               onSelectNode={props.onSelectNode}
               onDeleteNode={props.onDeleteNode}
+              onHoverNode={props.onHoverNode}
               onAddNode={props.onAddNode}
               isExpanded={props.isExpanded}
               onToggleExpanded={props.onToggleExpanded}
@@ -243,6 +249,7 @@ export const SceneOutliner: Component<SceneOutlinerProps> = (props) => {
             onToggleVisibility={props.onToggleVisibility}
             onSelectNode={props.onSelectNode}
             onDeleteNode={props.onDeleteNode}
+            onHoverNode={props.onHoverNode}
             onAddNode={props.onAddNode}
             isExpanded={expandedNow}
             onToggleExpanded={onToggleExpanded}

@@ -279,6 +279,122 @@ pub fn get_scene_materials(state: State<'_, AppState>) -> Result<Vec<MaterialInf
     Ok(scene.as_ref().ok_or("No hay escena cargada")?.materials.iter().map(material_info).collect())
 }
 
+/// Valores de un material que se editan en la app (sin tocar sus texturas)
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct MaterialEdit {
+    pub name: String,
+    pub base_color: [f32; 4],
+    pub metallic: f32,
+    pub roughness: f32,
+    pub emissive: [f32; 3],
+    /// "opaque", "mask" o "blend"
+    pub alpha_mode: String,
+    pub alpha_cutoff: f32,
+    pub double_sided: bool,
+    pub unlit: bool,
+}
+
+impl MaterialEdit {
+    fn apply(&self, m: &mut converter_scene::Material) {
+        m.name = self.name.clone();
+        m.base_color_factor = self.base_color.map(|c| c.clamp(0.0, 1.0));
+        m.metallic_factor = self.metallic.clamp(0.0, 1.0);
+        m.roughness_factor = self.roughness.clamp(0.0, 1.0);
+        m.emissive_factor = self.emissive.map(|c| c.clamp(0.0, 1.0));
+        m.alpha_mode = match self.alpha_mode.as_str() {
+            "blend" => AlphaMode::Blend,
+            "mask" => AlphaMode::Mask(self.alpha_cutoff.clamp(0.0, 1.0)),
+            _ => AlphaMode::Opaque,
+        };
+        m.double_sided = self.double_sided;
+        m.unlit = self.unlit;
+    }
+}
+
+/// Cambia los valores de un material de la escena
+#[tauri::command]
+pub fn set_scene_material(state: State<'_, AppState>, index: usize, edit: MaterialEdit) -> Result<(), String> {
+    let mut scene = state.scene.lock().unwrap();
+    let scene = scene.as_mut().ok_or("No hay escena cargada")?;
+    let material = scene.materials.get_mut(index).ok_or("No existe ese material")?;
+    edit.apply(material);
+    Ok(())
+}
+
+/// Cambia los valores de un material de la piel de la retopología
+#[tauri::command]
+pub fn set_skin_material(state: State<'_, AppState>, index: usize, edit: MaterialEdit) -> Result<(), String> {
+    let mut skin = state.quad_skin.lock().unwrap();
+    let skin = skin.as_mut().ok_or("La retopología todavía no tiene piel")?;
+    let material = skin.materials.get_mut(index).ok_or("No existe ese material")?;
+    edit.apply(material);
+    Ok(())
+}
+
+/// Agrega un material y devuelve su índice: copia de otro (con sus texturas) o
+/// uno liso gris algo brillante
+#[tauri::command]
+pub fn add_scene_material(state: State<'_, AppState>, name: String, copy_of: Option<usize>) -> Result<usize, String> {
+    let mut scene = state.scene.lock().unwrap();
+    let scene = scene.as_mut().ok_or("No hay escena cargada")?;
+    let mut material = match copy_of {
+        Some(i) => scene.materials.get(i).cloned().ok_or("No existe ese material")?,
+        None => converter_scene::Material {
+            base_color_factor: [0.6, 0.6, 0.65, 1.0],
+            metallic_factor: 0.0,
+            roughness_factor: 0.5,
+            double_sided: true,
+            ..Default::default()
+        },
+    };
+    material.name = name;
+    scene.materials.push(material);
+    Ok(scene.materials.len() - 1)
+}
+
+/// Quita un material: sus primitivas quedan sin material y los índices
+/// siguientes bajan uno
+#[tauri::command]
+pub fn remove_scene_material(state: State<'_, AppState>, index: usize) -> Result<(), String> {
+    let mut scene = state.scene.lock().unwrap();
+    let scene = scene.as_mut().ok_or("No hay escena cargada")?;
+    if index >= scene.materials.len() {
+        return Err("No existe ese material".into());
+    }
+    scene.materials.remove(index);
+    for prim in scene.meshes.iter_mut().flat_map(|m| m.primitives.iter_mut()) {
+        prim.material = match prim.material {
+            Some(m) if m == index => None,
+            Some(m) if m > index => Some(m - 1),
+            other => other,
+        };
+    }
+    Ok(())
+}
+
+/// Asigna un material (o ninguno) a una primitiva, o a todas si no se dice cuál
+#[tauri::command]
+pub fn assign_scene_material(
+    state: State<'_, AppState>,
+    material: Option<usize>,
+    mesh: Option<usize>,
+    primitive: Option<usize>,
+) -> Result<(), String> {
+    let mut scene = state.scene.lock().unwrap();
+    let scene = scene.as_mut().ok_or("No hay escena cargada")?;
+    if material.is_some_and(|m| m >= scene.materials.len()) {
+        return Err("No existe ese material".into());
+    }
+    for (mi, m) in scene.meshes.iter_mut().enumerate() {
+        for (pi, prim) in m.primitives.iter_mut().enumerate() {
+            if mesh.is_none_or(|x| x == mi) && primitive.is_none_or(|x| x == pi) {
+                prim.material = material;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Imagen de una textura de la escena, tal cual (PNG, JPEG o WebP)
 #[tauri::command]
 pub async fn get_scene_texture(app: AppHandle, index: usize) -> Result<Response, String> {
@@ -301,6 +417,25 @@ pub async fn get_scene_texture(app: AppHandle, index: usize) -> Result<Response,
 mod tests {
     use super::*;
     use converter_scene::{Animation, Channel, Interpolation, Material, Mesh, Node, Primitive, Texture, TextureRef};
+
+    #[test]
+    fn material_edit_clamps_and_sets_alpha() {
+        let mut m = Material::default();
+        let edit = MaterialEdit {
+            name: "vidrio".into(),
+            base_color: [2.0, 0.5, 0.0, 0.4],
+            metallic: -1.0,
+            roughness: 0.2,
+            emissive: [0.0, 3.0, 0.0],
+            alpha_mode: "blend".into(),
+            alpha_cutoff: 0.5,
+            double_sided: true,
+            unlit: false,
+        };
+        edit.apply(&mut m);
+        assert_eq!((m.base_color_factor, m.metallic_factor, m.emissive_factor), ([1.0, 0.5, 0.0, 0.4], 0.0, [0.0, 1.0, 0.0]));
+        assert_eq!(m.alpha_mode, AlphaMode::Blend);
+    }
 
     #[test]
     fn structure_lists_everything_in_the_file() {

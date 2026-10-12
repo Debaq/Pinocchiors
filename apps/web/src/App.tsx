@@ -1,5 +1,5 @@
 import { t, tn, tx, locale } from "./lib/i18n";
-import { defaultExportFormat, showFps } from "./lib/settings";
+import { defaultExportFormat, meshBuild, previewFirst, showFps } from "./lib/settings";
 import { followUiScale } from "./lib/uiScale";
 import { tBackend } from "./lib/i18nBackend";
 import { Component, createEffect, createMemo, createSignal, on, onMount, onCleanup, Show, untrack, type JSX } from "solid-js";
@@ -76,7 +76,12 @@ import {
   type PlacementInfo,
 } from "./lib/placement";
 import type { SceneStructure, MaterialInfo } from "./components/steps/StructureStep";
-import { WORKSPACES, createPipelineStore, type PipelineStepId } from "./lib/pipeline";
+import type { MaterialActions, MaterialPatch, NodePrimitive } from "./components/panels/MaterialPanel";
+import { WORKSPACES, createPipelineStore, type PipelineStepId, type WorkspaceId } from "./lib/pipeline";
+import { MaterialEditorPanel, type MaterialEditorTab } from "./components/layout/MaterialEditorPanel";
+
+/** Alt+número de cada espacio (fijo: agregar uno nuevo no cambia los demás) */
+const WORKSPACE_KEYS: Record<WorkspaceId, string> = { prepare: "1", rig: "2", print: "3", scan: "4", design: "5", materials: "6" };
 import { VIEW_AXES, fromView, toView, viewSize, type Axis } from "./lib/axes";
 import { buildSceneTree, type CadOutline, type CadOutlineItem, type ObjectRow, type SceneNode } from "./lib/scene-tree";
 import { addDrawing, drawingSheets, drawingTree, parseElementNode, removeDrawing, removeElement, toggleElement, updateDrawing } from "./lib/drawingDoc";
@@ -679,13 +684,52 @@ export const App: Component = () => {
   };
 
   /** Malla actual del backend, en binario (sin JSON), con la estructura y
-   * los materiales del archivo de origen */
-  const fetchMeshData = () =>
+   * los materiales del archivo de origen. Si el modelo es muy pesado y
+   * `onPreview` está, primero llega una versión liviana para mostrarla ya */
+  const fetchMeshData = (onPreview?: (preview: MeshData) => void) =>
     busy(t("Cargando en el visor..."), async () => {
+      // Estructura y texturas viajan mientras se arma la malla
+      const appearance = loadSceneAppearance();
+      if (onPreview && previewFirst()) {
+        const buffer = await invoke<ArrayBuffer>("get_mesh_preview").catch(() => undefined);
+        if (buffer && buffer.byteLength > 0) {
+          setProgress({ label: t("Mostrando la vista previa...") });
+          onPreview(decodeMesh(buffer));
+          // Un cuadro para que se pinte antes del trabajo pesado
+          await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)));
+          setProgress({ label: t("Cargando el detalle completo...") });
+          viewer()?.keepCameraOnNextLoad();
+        }
+      }
       const mesh = decodeMesh(await invoke<ArrayBuffer>("get_mesh_data"));
-      await loadSceneAppearance();
+      await appearance;
       return mesh;
     });
+
+  // La malla de edición de un modelo grande se arma después: se avisa en la barra de estado
+  createEffect(() => {
+    invoke("set_mesh_build", { mode: meshBuild() }).catch(() => {});
+  });
+  let meshWatch = 0;
+  const watchEditMesh = (base: string) => {
+    if (meshBuild() === "now") return;
+    const watch = ++meshWatch;
+    const tag = (suffix: string) => `${base} · ${suffix}`;
+    invoke<boolean>("mesh_edit_ready")
+      .then((ready) => {
+        if (ready || watch !== meshWatch) return;
+        setStatusMessage(tag(t("malla de edición en preparación (segundo plano)")));
+        const timer = setInterval(async () => {
+          const done = watch !== meshWatch || (await invoke<boolean>("mesh_edit_ready").catch(() => true));
+          if (!done) return;
+          clearInterval(timer);
+          if (watch === meshWatch && statusMessage() === tag(t("malla de edición en preparación (segundo plano)"))) {
+            setStatusMessage(tag(t("malla de edición lista")));
+          }
+        }, 500);
+      })
+      .catch(() => {});
+  };
 
   // Archivo de origen: estructura, materiales y texturas
   const [sceneStructure, setSceneStructure] = createSignal<SceneStructure | undefined>();
@@ -745,6 +789,134 @@ export const App: Component = () => {
       console.error("Scene structure error:", e);
     }
   };
+
+  // ─── Materiales del archivo: editar, añadir, asignar ───────────────────────
+
+  /** Edición de materiales en curso: los cambios seguidos (un slider) son un solo paso del historial */
+  let materialEdit: { ready: Promise<void>; finish: () => void; timer: number } | undefined;
+
+  /** Termina ya la edición en curso (antes de otra operación, o tras una pausa) */
+  const flushMaterialEdit = async () => {
+    const edit = materialEdit;
+    if (!edit) return;
+    clearTimeout(edit.timer);
+    edit.finish();
+    await edit.ready;
+  };
+
+  /** Corre `apply` dentro de la edición en curso, que empieza con una copia para deshacer */
+  const inMaterialEdit = (apply: () => Promise<unknown>) => {
+    if (!materialEdit) {
+      let finish: () => void = () => {};
+      let started: () => void = () => {};
+      const ready = new Promise<void>((resolve) => (started = resolve));
+      const edit = { ready, finish: () => finish(), timer: 0 };
+      materialEdit = edit;
+      void undoable(async (done) => {
+        started();
+        await new Promise<void>((resolve) => {
+          finish = () => {
+            if (materialEdit === edit) materialEdit = undefined;
+            done(t("Editar material"));
+            resolve();
+          };
+        });
+      });
+    }
+    const edit = materialEdit;
+    clearTimeout(edit.timer);
+    edit.timer = window.setTimeout(() => edit.finish(), 800);
+    void edit.ready.then(apply).catch((e) => setStatusMessage(tBackend(String(e))));
+  };
+
+  const materialEditArgs = (m: MaterialInfo) => ({
+    name: m.name,
+    base_color: m.base_color,
+    metallic: m.metallic,
+    roughness: m.roughness,
+    emissive: m.emissive,
+    alpha_mode: m.alpha_mode,
+    alpha_cutoff: m.alpha_cutoff,
+    double_sided: m.double_sided,
+    unlit: m.unlit,
+  });
+
+  const viewerMaterial = (m: SceneMaterial, next: MaterialInfo): SceneMaterial => ({
+    ...m,
+    name: next.name,
+    baseColor: next.base_color,
+    metallic: next.metallic,
+    roughness: next.roughness,
+    emissive: next.emissive,
+    alphaMode: next.alpha_mode,
+    unlit: next.unlit,
+  });
+
+  /** Cambia un material: el visor y la lista se actualizan al instante y el backend lo guarda */
+  const editMaterial: MaterialActions["onEdit"] = (index, patch) => {
+    const structure = sceneStructure();
+    const current = structure?.materials[index];
+    if (!structure || !current) return;
+    const next: MaterialInfo = { ...current, ...patch };
+    setSceneStructure({ ...structure, materials: structure.materials.map((m, i) => (i === index ? next : m)) });
+    setSceneMaterials(sceneMaterials().map((m, i) => (i === index ? viewerMaterial(m, next) : m)));
+    inMaterialEdit(() => invoke("set_scene_material", { index, edit: materialEditArgs(next) }));
+  };
+
+  /** Lo mismo para los materiales de la piel de la retopología */
+  const editSkinMaterial = (index: number, patch: MaterialPatch) => {
+    const current = skinMaterialInfos()[index];
+    if (!current) return;
+    const next: MaterialInfo = { ...current, ...patch };
+    setSkinMaterialInfos(skinMaterialInfos().map((m, i) => (i === index ? next : m)));
+    setSkinMaterials(skinMaterials().map((m, i) => (i === index ? viewerMaterial(m, next) : m)));
+    inMaterialEdit(() => invoke("set_skin_material", { index, edit: materialEditArgs(next) }));
+  };
+
+  /** Cambió qué material usa cada primitiva: la malla se agrupa distinto */
+  const reloadAfterMaterials = async () => setMeshData(await fetchMeshData());
+
+  /** Operación de materiales que cambia la asignación: un paso del historial */
+  const materialStep = (description: string, run: () => Promise<unknown>) =>
+    flushMaterialEdit().then(() =>
+      undoable(async (done) => {
+        try {
+          await run();
+          await reloadAfterMaterials();
+          done(description);
+        } catch (e) {
+          setStatusMessage(tBackend(String(e)));
+        }
+      })
+    );
+
+  const addMaterial: MaterialActions["onAdd"] = (target, copyOf) =>
+    void materialStep(t("Material nuevo"), async () => {
+      const count = sceneStructure()?.materials.length ?? 0;
+      const base = copyOf !== undefined ? sceneStructure()?.materials[copyOf]?.name || t("material {i}", { i: copyOf }) : t("Material");
+      const index = await invoke<number>("add_scene_material", { name: `${base} ${count + 1}`, copyOf: copyOf ?? null });
+      if (target) await invoke("assign_scene_material", { material: index, mesh: target.mesh, primitive: target.primitive });
+    });
+
+  const assignMaterial: MaterialActions["onAssign"] = (mesh, primitive, material) =>
+    void materialStep(t("Cambiar material"), () => invoke("assign_scene_material", { material, mesh, primitive }));
+
+  const assignMany: MaterialActions["onAssignMany"] = (targets, material) =>
+    void materialStep(t("Cambiar material"), async () => {
+      for (const target of targets) await invoke("assign_scene_material", { material, mesh: target.mesh, primitive: target.primitive });
+    });
+
+  /** Un material nuevo que comparten todas las partes elegidas */
+  const addMany: MaterialActions["onAddMany"] = (targets) =>
+    void materialStep(t("Material nuevo"), async () => {
+      const count = sceneStructure()?.materials.length ?? 0;
+      const index = await invoke<number>("add_scene_material", { name: `${t("Material")} ${count + 1}`, copyOf: null });
+      for (const target of targets) await invoke("assign_scene_material", { material: index, mesh: target.mesh, primitive: target.primitive });
+    });
+
+  const removeMaterial: MaterialActions["onRemove"] = (index) =>
+    void materialStep(t("Quitar material"), () => invoke("remove_scene_material", { index }));
+
   const [fileName, setFileName] = createSignal<string | undefined>();
 
   // Skeleton presets (loaded from Tauri)
@@ -891,6 +1063,7 @@ export const App: Component = () => {
   const [uvPreview, setUvPreview] = createSignal<UvPreview>("texture");
   /** Materiales de la piel (color, metal/rugosidad, normal, oclusión, emisión) */
   const [skinMaterials, setSkinMaterials] = createSignal<SceneMaterial[]>([]);
+  const [skinMaterialInfos, setSkinMaterialInfos] = createSignal<MaterialInfo[]>([]);
   const [checkerTexture, setCheckerTexture] = createSignal<ImageBitmap | undefined>();
 
   // Malla activa: tras retopologizar, UV, esqueleto y pesos trabajan sobre los
@@ -938,6 +1111,7 @@ export const App: Component = () => {
     setUvInfo(info ?? undefined);
     if (!info) {
       setSkinMaterials([]);
+      setSkinMaterialInfos([]);
       return;
     }
     const [materials, mesh] = await Promise.all([
@@ -966,6 +1140,7 @@ export const App: Component = () => {
       return;
     }
     setSkinMaterials(toSceneMaterials(materials, images));
+    setSkinMaterialInfos(materials);
     setQuadMeshData(decodeMesh(mesh));
     if (autorigComplete() && usesQuad()) await reloadWeights();
   };
@@ -1259,6 +1434,30 @@ export const App: Component = () => {
   const [hiddenFileNodes, setHiddenFileNodes] = createSignal<number[]>([]);
   const [selectedFileNode, setSelectedFileNode] = createSignal<number | undefined>();
   /** El nodo y todo lo que cuelga de él */
+  /** Partes elegidas además de la principal (clic con Shift o recuadro) */
+  const [extraFileNodes, setExtraFileNodes] = createSignal<number[]>([]);
+  const pickedNodes = (): number[] => {
+    const main = selectedFileNode();
+    return main === undefined ? [] : [main, ...extraFileNodes()];
+  };
+  const pickNodes = (nodes: number[], mode: "set" | "add" | "remove" | "toggle") => {
+    const current = pickedNodes();
+    const next =
+      mode === "set"
+        ? nodes
+        : mode === "add"
+          ? [...current, ...nodes.filter((n) => !current.includes(n))]
+          : mode === "remove"
+            ? current.filter((n) => !nodes.includes(n))
+            : [...current.filter((n) => !nodes.includes(n)), ...nodes.filter((n) => !current.includes(n))];
+    setSelectedFileNode(next[0]);
+    setExtraFileNodes(next.slice(1));
+    if (next.length === 1) {
+      const node = sceneStructure()?.nodes[next[0]];
+      setStatusMessage(t("Nodo del archivo: {name}", { name: node?.name || t("nodo {n}", { n: next[0] }) }));
+    } else if (next.length > 1) setStatusMessage(t("{n} partes elegidas", { n: next.length }));
+  };
+
   const nodeSubtree = (index: number): number[] => {
     const nodes = sceneStructure()?.nodes ?? [];
     const out: number[] = [];
@@ -1274,8 +1473,8 @@ export const App: Component = () => {
   createEffect(() => viewer()?.setHiddenNodes(hiddenFileNodes().flatMap(nodeSubtree)));
   // En Animar la malla se mueve con el rig y el resaltado quedaría quieto
   createEffect(() => {
-    const node = selectedFileNode();
-    viewer()?.setHighlightedNodes(node === undefined || animating() ? [] : nodeSubtree(node));
+    const nodes = pickedNodes();
+    viewer()?.setHighlightedNodes(animating() ? [] : [...new Set(nodes.flatMap(nodeSubtree))]);
   });
   // Otro archivo: los índices de nodo ya no son los mismos
   createEffect(
@@ -1499,7 +1698,7 @@ export const App: Component = () => {
   // ─── Objetos ──────────────────────────────────────────────────────────────
 
   /** Espacios que trabajan sobre la malla del objeto activo */
-  const meshWorkspace = () => ["prepare", "rig", "print"].includes(pipeline.workspace()?.id ?? "");
+  const meshWorkspace = () => ["prepare", "materials", "rig", "print"].includes(pipeline.workspace()?.id ?? "");
 
   /** Interfaz vacía: un objeto que todavía no tiene modelo */
   const EMPTY_OBJECT_UI = JSON.stringify({ model: false });
@@ -2039,8 +2238,8 @@ export const App: Component = () => {
       };
     }),
     // Espacios de trabajo (Alt+1…5), con el mismo criterio de la cabecera: sin modelo solo los que no lo piden
-    ...WORKSPACES.map((ws, i): ShortcutDef => ({
-      key: String(i + 1),
+    ...WORKSPACES.map((ws): ShortcutDef => ({
+      key: WORKSPACE_KEYS[ws.id],
       alt: true,
       area: "workspace",
       action: () => (meshLoaded() || hasDesignBody() || ws.withoutModel) && pipeline.openWorkspace(ws.id),
@@ -2179,7 +2378,9 @@ export const App: Component = () => {
         const parts = [];
         if (attached.length > 0) parts.push(`${attached.length === 1 ? t("1 textura puesta") : t("{n} texturas puestas", { n: attached.length })} (${attached.join("; ")})`);
         if (skipped.length > 0) parts.push(t("sin usar: {list}", { list: skipped.join("; ") }));
-        setStatusMessage(t("Modelo cargado: {parts}", { parts: parts.join(" · ") }));
+        const loaded = t("Modelo cargado: {parts}", { parts: parts.join(" · ") });
+        setStatusMessage(loaded);
+        watchEditMesh(loaded);
       }
       pipeline.setActiveStep(opts.then ?? "structure");
     } catch (e) {
@@ -2226,18 +2427,22 @@ export const App: Component = () => {
     resetHistory();
     history.milestone(milestone);
 
-    const data = await fetchMeshData();
+    // Un modelo pesado se ve ya con una versión liviana; el detalle la reemplaza al llegar
+    const data = await fetchMeshData((preview) => {
+      setMeshData(preview);
+      setMeshLoaded(true);
+    });
     setMeshData(data);
     setMeshLoaded(true);
     setMeshInfo({ vertices: info.num_vertices, faces: info.num_faces, format: info.format });
 
-    setStatusMessage(
-      t("Modelo cargado: {vertices} vertices, {faces} caras ({format})", {
-        vertices: info.num_vertices.toLocaleString(),
-        faces: info.num_faces.toLocaleString(),
-        format: info.format,
-      })
-    );
+    const loaded = t("Modelo cargado: {vertices} vertices, {faces} caras ({format})", {
+      vertices: info.num_vertices.toLocaleString(),
+      faces: info.num_faces.toLocaleString(),
+      format: info.format,
+    });
+    setStatusMessage(loaded);
+    watchEditMesh(loaded);
 
     // Reset other states
     setAutorigComplete(false);
@@ -4686,6 +4891,42 @@ export const App: Component = () => {
     const width = splitRef?.clientWidth ?? 1;
     startDrag(e, "col-resize", (dx) => setSkeletonEditorFraction(Math.min(0.75, Math.max(0.2, start + dx / width))));
   };
+  // Panel lateral de materiales (espacio Materiales)
+  const [materialEditorOpen, setMaterialEditorOpen] = createPersisted("materialEditor.open", true);
+  const [materialEditorTab, setMaterialEditorTab] = createPersisted<MaterialEditorTab>("materialEditor.tab", "object");
+  const [materialEditorFraction, setMaterialEditorFraction] = createPersisted("materialEditor.fraction", 0.32);
+  const inMaterialsWorkspace = () => pipeline.workspace()?.id === "materials";
+  const materialEditorVisible = () => inMaterialsWorkspace() && materialEditorOpen() && !textureEditor();
+  const resizeMaterialEditor = (e: PointerEvent) => {
+    const start = materialEditorFraction();
+    const width = splitRef?.clientWidth ?? 1;
+    startDrag(e, "col-resize", (dx) => setMaterialEditorFraction(Math.min(0.7, Math.max(0.2, start + dx / width))));
+  };
+  /** Acciones sobre los materiales del archivo, y las primitivas del nodo elegido */
+  const materialActions = (): MaterialActions => ({
+    materials: sceneStructure()?.materials ?? [],
+    onEdit: editMaterial,
+    onAdd: addMaterial,
+    onAssign: assignMaterial,
+    onRemove: removeMaterial,
+    onAssignMany: assignMany,
+    onAddMany: addMany,
+  });
+  const selectedNodePrimitives = (): NodePrimitive[] => {
+    const structure = sceneStructure();
+    if (!structure) return [];
+    const uses = structure.meshes.flatMap((m) => m.primitives).filter((p) => p.material !== null);
+    const meshes = [...new Set(pickedNodes().flatMap((n) => structure.nodes[n]?.mesh ?? []))];
+    return meshes.flatMap((meshIndex) =>
+      structure.meshes[meshIndex].primitives.map((p, j) => ({
+        mesh: meshIndex,
+        primitive: j,
+        material: p.material,
+        shared: uses.filter((u) => u.material === p.material).length,
+      }))
+    );
+  };
+
   // Panel lateral de Orizon3D (como los editores de pieles y de rig)
   const [scanEditorOpen, setScanEditorOpen] = createPersisted("scanEditor.open", true);
   const [scanEditorTab, setScanEditorTab] = createPersisted<ScanEditorTab>("scanEditor.tab", "capture");
@@ -7138,6 +7379,7 @@ export const App: Component = () => {
     }
     if (nodeId.startsWith("node-")) {
       const index = Number(nodeId.slice(5));
+      setExtraFileNodes([]);
       setSelectedFileNode(selectedFileNode() === index ? undefined : index);
       return;
     }
@@ -7210,6 +7452,30 @@ export const App: Component = () => {
             </div>
             <div class="shrink-0 w-1 cursor-col-resize bg-border hover:bg-accent/50 transition-colors" onPointerDown={resizeSkeletonEditor} />
           </Show>
+          {/* Materiales a la izquierda del visor */}
+          <Show when={materialEditorVisible()}>
+            <div class="shrink-0 min-w-0 border-r border-border" style={{ width: `${100 * materialEditorFraction()}%` }}>
+              <MaterialEditorPanel
+                tab={materialEditorTab()}
+                onTab={setMaterialEditorTab}
+                onClose={() => setMaterialEditorOpen(false)}
+                nodeName={(() => {
+                  const picked = pickedNodes();
+                  if (picked.length > 1) return t("{n} partes elegidas", { n: picked.length });
+                  const node = picked.length === 1 ? sceneStructure()?.nodes[picked[0]] : undefined;
+                  return node ? node.name || t("nodo {n}", { n: picked[0] }) : undefined;
+                })()}
+                nodePrimitives={selectedNodePrimitives()}
+                actions={materialActions()}
+                skinMaterials={skinMaterialInfos()}
+                onEditSkin={editSkinMaterial}
+                target={displayQuad() ? "quad" : "original"}
+                canChooseTarget={!!quadMeshData() && !quadForced()}
+                onTarget={(target) => setShowQuadMesh(target === "quad")}
+              />
+            </div>
+            <div class="shrink-0 w-1 cursor-col-resize bg-border hover:bg-accent/50 transition-colors" onPointerDown={resizeMaterialEditor} />
+          </Show>
           {/* Orizon3D a la izquierda del visor */}
           <Show when={scanEditorVisible()}>
             <div class="shrink-0 min-w-0 border-r border-border" style={{ width: `${100 * scanEditorFraction()}%` }}>
@@ -7258,7 +7524,10 @@ export const App: Component = () => {
               onViewerReady={handleViewerReady}
               onFpsUpdate={setFps}
               onPlacementPick={handlePlacementPick}
+              nodePicking={["prepare", "materials"].includes(pipeline.workspace()?.id ?? "") && !animating() && !displayQuad()}
+              onNodesPicked={pickNodes}
               onNodePicked={(node) => {
+                setExtraFileNodes([]);
                 setSelectedFileNode(node);
                 setStatusMessage(t("Nodo del archivo: {name}", { name: sceneStructure()?.nodes[node]?.name || t("nodo {n}", { n: node }) }));
               }}
@@ -7475,8 +7744,13 @@ export const App: Component = () => {
               structure: sceneStructure(),
               fileName: fileName(),
               format: meshInfo().format,
+            }}
+            materialsProps={{
+              structure: sceneStructure(),
               textureUrls: textureUrls(),
-              onOpenTexture: (selection) => openTextureEditor("original", selection),
+              onOpenTexture: (selection) => openTextureEditor(displayQuad() ? "quad" : "original", selection),
+              panelOpen: materialEditorOpen(),
+              onTogglePanel: () => setMaterialEditorOpen(!materialEditorOpen()),
             }}
             lights={lights()}
             onLightsChange={setLights}
@@ -7501,7 +7775,11 @@ export const App: Component = () => {
                 const index = selectedFileNode();
                 if (index !== undefined) toggleFileNode(index);
               },
-              onDeselectNode: () => setSelectedFileNode(undefined),
+              onDeselectNode: () => {
+                setExtraFileNodes([]);
+                setSelectedFileNode(undefined);
+              },
+              nodeMaterials: { primitives: selectedNodePrimitives(), ...materialActions() },
               onNodeTransform: (t) => {
                 const index = selectedFileNode();
                 if (index !== undefined) void transformFileNode(index, t);
@@ -7717,6 +7995,11 @@ export const App: Component = () => {
             onToggleVisibility={handleToggleVisibility}
             onSelectNode={handleSelectNode}
             onDeleteNode={handleDeleteNode}
+            onHoverNode={(id) => {
+              // Solo las partes del archivo ("node-N") se destacan en el visor
+              const hovered = id?.startsWith("node-") && !animating() ? nodeSubtree(Number(id.slice(5))) : [];
+              viewer()?.setHoveredNodes(hovered);
+            }}
             onAddNode={handleAddNode}
             history={history}
             stats={{
