@@ -471,7 +471,7 @@ fn capture_model(state: &AppState) -> ProjectState {
             scene: o.scene.clone(),
         }),
         scene: state.scene.lock().unwrap().clone(),
-        mesh: mesh(&state.mesh),
+        mesh: state.mesh.lock().unwrap().as_ref().map(MeshDto::from),
         skeleton: skeleton(&state.skeleton),
         original_skeleton: skeleton(&state.original_skeleton),
         skeleton_preset: skeleton(&state.skeleton_preset),

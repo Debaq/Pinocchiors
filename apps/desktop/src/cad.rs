@@ -1744,7 +1744,7 @@ fn part_to_model_impl(
     let mut scene = parts_scene(state, "Pieza", Some(part))?;
     weld_scene(&mut scene);
     let hash = format!("{:016x}", scene_hash(&scene));
-    if known.as_deref() == Some(hash.as_str()) && state.mesh.lock().unwrap().is_some() {
+    if known.as_deref() == Some(hash.as_str()) && state.mesh.is_loaded() {
         return Ok(PartModel { changed: false, hash, info: None });
     }
     let name = scene.meshes.first().map(|m| m.name.clone()).unwrap_or_else(|| "Pieza".into());

@@ -48,38 +48,44 @@ impl Mesh {
     /// Si algún índice es `>= positions.len()`; usar
     /// [`try_from_triangles`](Self::try_from_triangles) con datos no confiables.
     pub fn from_triangles(positions: &[Vector3], indices: &[[usize; 3]]) -> Self {
+        use rayon::prelude::*;
+
         let mut mesh = Self::new();
         mesh.vertices = positions.iter().map(|&pos| MeshVertex::new(pos)).collect();
-        mesh.edges.reserve(indices.len() * 3);
-        mesh.faces.reserve(indices.len());
 
         // Añadir caras y aristas: la arista `3·cara + i` va de triangle[i] a
         // triangle[i + 1]
-        for (face_idx, triangle) in indices.iter().enumerate() {
+        mesh.edges = vec![MeshEdge::default(); indices.len() * 3];
+        mesh.edges.par_chunks_mut(3).zip(indices.par_iter()).enumerate().for_each(|(face_idx, (edges, triangle))| {
             let base_edge = 3 * face_idx;
-            for i in 0..3 {
-                let mut edge = MeshEdge::new(triangle[(i + 1) % 3], base_edge + (i + 1) % 3);
+            for (i, edge) in edges.iter_mut().enumerate() {
+                *edge = MeshEdge::new(triangle[(i + 1) % 3], base_edge + (i + 1) % 3);
                 edge.face = Some(face_idx);
-                mesh.vertices[triangle[i]].edge = Some(base_edge + i);
-                mesh.edges.push(edge);
             }
-            mesh.faces.push(base_edge);
+        });
+        for (face_idx, triangle) in indices.iter().enumerate() {
+            for i in 0..3 {
+                mesh.vertices[triangle[i]].edge = Some(3 * face_idx + i);
+            }
         }
+        mesh.faces = (0..indices.len()).map(|f| 3 * f).collect();
 
         // Aristas gemelas: se ordenan las medias aristas por arista no dirigida
         // y en cada grupo se empareja una de cada sentido. Así los gemelos son
         // siempre recíprocos, aun en aristas con más de dos caras.
         debug_assert!(positions.len() <= u32::MAX as usize);
         let mut keyed: Vec<u128> = indices
-            .iter()
-            .flat_map(|t| (0..3).map(move |i| (t[i], t[(i + 1) % 3])))
+            .par_iter()
             .enumerate()
-            .map(|(e, (a, b))| {
-                let key = ((a.min(b) as u128) << 32) | b.max(a) as u128;
-                (key << 64) | ((u128::from(a < b)) << 63) | e as u128
+            .flat_map_iter(|(f, t)| {
+                (0..3).map(move |i| {
+                    let (a, b) = (t[i], t[(i + 1) % 3]);
+                    let key = ((a.min(b) as u128) << 32) | b.max(a) as u128;
+                    (key << 64) | ((u128::from(a < b)) << 63) | (3 * f + i) as u128
+                })
             })
             .collect();
-        keyed.sort_unstable();
+        keyed.par_sort_unstable();
         let edge_of = |k: u128| (k as u64 & (u64::MAX >> 1)) as usize;
         for group in keyed.chunk_by(|x, y| x >> 64 == y >> 64) {
             let forward = group.partition_point(|k| (k >> 63) & 1 == 0);
@@ -88,8 +94,27 @@ impl Mesh {
                 mesh.edges[edge_of(fwd)].twin = Some(edge_of(back));
             }
         }
+        drop(keyed);
 
-        mesh.compute_vertex_normals();
+        // Normales: las de cada cara en paralelo; se acumulan en orden de cara
+        // para que el resultado no dependa de los hilos
+        let face_normals: Vec<Vector3> = indices
+            .par_iter()
+            .map(|t| {
+                let p0 = positions[t[0]];
+                (positions[t[1]] - p0).cross(&(positions[t[2]] - p0))
+            })
+            .collect();
+        for (t, &normal) in indices.iter().zip(&face_normals) {
+            for &v in t {
+                mesh.vertices[v].normal += normal;
+            }
+        }
+        for v in &mut mesh.vertices {
+            if let Some(n) = v.normal.try_normalize() {
+                v.normal = n;
+            }
+        }
         mesh
     }
 

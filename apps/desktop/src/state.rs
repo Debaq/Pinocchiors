@@ -84,7 +84,10 @@ pub struct AppState {
     pub scene: Mutex<Option<Scene>>,
 
     /// Malla convertida para pinocchio
-    pub mesh: Mutex<Option<Mesh>>,
+    pub mesh: crate::mesh_slot::MeshSlot,
+
+    /// Cuándo se arma la malla de edición de un modelo grande (Configuración)
+    pub mesh_build: Mutex<crate::mesh_slot::MeshBuild>,
 
     /// Tipo de esqueleto seleccionado
     pub skeleton: Mutex<Option<SkeletonType>>,
@@ -191,7 +194,8 @@ impl AppState {
             last_saved_hash: Mutex::new(None),
             last_recovery_hash: Mutex::new(None),
             scene: Mutex::new(None),
-            mesh: Mutex::new(None),
+            mesh: Default::default(),
+            mesh_build: Mutex::new(Default::default()),
             skeleton: Mutex::new(None),
             original_skeleton: Mutex::new(None),
             skeleton_transform: Mutex::new(SkeletonTransformParams::default()),
@@ -233,7 +237,7 @@ impl AppState {
         *self.last_saved_hash.lock().unwrap() = None;
         *self.last_recovery_hash.lock().unwrap() = None;
         *self.scene.lock().unwrap() = None;
-        *self.mesh.lock().unwrap() = None;
+        self.mesh.clear();
         *self.skeleton.lock().unwrap() = None;
         *self.original_skeleton.lock().unwrap() = None;
         *self.skeleton_transform.lock().unwrap() = SkeletonTransformParams::default();
@@ -255,7 +259,7 @@ impl AppState {
     pub fn clear_model(&self) {
         *self.original_model.lock().unwrap() = None;
         *self.scene.lock().unwrap() = None;
-        *self.mesh.lock().unwrap() = None;
+        self.mesh.clear();
         *self.skeleton.lock().unwrap() = None;
         *self.original_skeleton.lock().unwrap() = None;
         *self.skeleton_transform.lock().unwrap() = SkeletonTransformParams::default();

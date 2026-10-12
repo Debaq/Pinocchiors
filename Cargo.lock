@@ -3479,6 +3479,7 @@ dependencies = [
  "converter-stl",
  "gltf",
  "pinocchio-math",
+ "rayon",
  "tempfile",
  "thiserror 2.0.18",
  "tobj",

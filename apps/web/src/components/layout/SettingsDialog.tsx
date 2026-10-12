@@ -6,12 +6,17 @@ import { LOCALES, localeSetting, setLocale, t, tn, type LocaleSetting } from "..
 import {
   UI_SCALES,
   defaultExportFormat,
+  meshBuild,
+  previewFirst,
   resetLayout,
   setDefaultExportFormat,
+  setMeshBuild,
+  setPreviewFirstModel,
   setShowFps,
   setUiScale,
   showFps,
   uiScale,
+  type MeshBuildMode,
 } from "../../lib/settings";
 import { MOUSE_HINTS, type ShortcutHint } from "./ContextPanel";
 import {
@@ -53,6 +58,12 @@ const MODEL_UNIT_OPTIONS = unitOptions(() => t("Según el archivo"));
 const LOCALE_OPTIONS = [
   { value: "system", get label() { return t("Según el sistema"); } },
   ...LOCALES.map((l) => ({ value: l.value, label: l.label })),
+];
+
+const MESH_BUILD_OPTIONS = () => [
+  { value: "background", label: t("En segundo plano (recomendado)") },
+  { value: "lazy", label: t("Al usar una herramienta") },
+  { value: "now", label: t("Al importar (espera a que termine)") },
 ];
 
 const EXPORT_FORMAT_OPTIONS = [
@@ -442,6 +453,21 @@ export const SettingsDialog: Component<SettingsDialogProps> = (props) => {
             </Show>
 
             <Show when={tab() === "files"}>
+              <Section title={t("Modelos pesados")}>
+                <Checkbox
+                  label={t("Mostrar primero una vista previa")}
+                  checked={previewFirst()}
+                  onChange={setPreviewFirstModel}
+                />
+                <Hint>{t("En modelos de cientos de miles de caras, el visor muestra una versión liviana al instante y la cambia por el detalle completo cuando llega.")}</Hint>
+                <Select
+                  label={t("Armar la malla de edición")}
+                  options={MESH_BUILD_OPTIONS()}
+                  value={meshBuild()}
+                  onChange={(mode) => setMeshBuild(mode as MeshBuildMode)}
+                />
+                <Hint>{t("La malla de edición es la que usan reparar, esqueleto, remallar y demás herramientas; verla en el visor no la necesita. En modelos grandes tarda segundos y ocupa mucha memoria.")}</Hint>
+              </Section>
               <Section title={t("Exportar")}>
                 <Select
                   label={t("Formato inicial")}

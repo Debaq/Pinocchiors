@@ -15,6 +15,7 @@ pinocchio-math = { workspace = true }
 tobj = { workspace = true }
 gltf = { workspace = true }
 thiserror = { workspace = true }
+rayon = { workspace = true }
 
 # Dependencias opcionales para feature "converter"
 converter-scene = { workspace = true, optional = true }

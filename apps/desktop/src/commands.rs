@@ -561,6 +561,7 @@ pub(crate) fn import_model_impl(path: String, extra: Vec<String>, progress: &Cha
     let mtl = extra.iter().find(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("mtl")));
     let images: Vec<PathBuf> = extra.iter().filter(|p| maps::is_image(p)).cloned().collect();
 
+    report(progress, "decoding", 10, "Decodificando la geometría...");
     // Import usando converter apropiado
     let mut scene = match ext.as_str() {
         "gltf" | "glb" => {
@@ -620,14 +621,35 @@ pub(crate) fn load_scene(
         textures_skipped: Vec::new(),
     };
 
-    // Convertir Scene a Mesh de pinocchio para autorig
-    report(progress, "converting", 60, "Preparando malla...");
-    let mesh = scene_to_pinocchio_mesh(&scene)?;
-    let rig = if scene.skeletons.is_empty() {
-        None
+    // La malla de edición (half-edge) de un modelo grande tarda segundos y
+    // pesa más de 1 GB; el visor no la necesita, así que según la
+    // configuración se arma después. Con esqueleto se arma ya: el rig la usa
+    let build = if scene.skeletons.is_empty() && num_faces >= crate::mesh_slot::DEFER_FROM_FACES {
+        *state.mesh_build.lock().unwrap()
     } else {
-        report(progress, "rig", 75, "Leyendo esqueleto y animaciones...");
-        crate::imported_rig::from_scene(&scene, mesh.num_vertices())
+        crate::mesh_slot::MeshBuild::Now
+    };
+    let mut eager = None;
+    let rig = match build {
+        crate::mesh_slot::MeshBuild::Now => {
+            report(progress, "converting", 60, "Preparando malla de edición...");
+            let mesh = scene_to_pinocchio_mesh(&scene)?;
+            let rig = if scene.skeletons.is_empty() {
+                None
+            } else {
+                report(progress, "rig", 75, "Leyendo esqueleto y animaciones...");
+                crate::imported_rig::from_scene(&scene, mesh.num_vertices())
+            };
+            eager = Some(mesh);
+            rig
+        }
+        _ => {
+            report(progress, "converting", 60, "Preparando el visor...");
+            if num_vertices == 0 || num_faces == 0 {
+                return Err("Escena vacía o sin geometría".to_string());
+            }
+            None
+        }
     };
     report(progress, "done", 90, "Modelo importado");
 
@@ -635,15 +657,23 @@ pub(crate) fn load_scene(
     *state.original_model.lock().unwrap() = Some(crate::state::OriginalModel { name, format, scene: scene.clone() });
     *state.last_saved_hash.lock().unwrap() = None;
     *state.last_recovery_hash.lock().unwrap() = None;
-    let mut scene_lock = state.scene.lock().unwrap();
-    *scene_lock = Some(scene);
-
-    let mut mesh_lock = state.mesh.lock().unwrap();
-    *mesh_lock = Some(mesh);
+    match (eager, build) {
+        (Some(mesh), _) => {
+            state.mesh.clear();
+            *state.mesh.lock().unwrap() = Some(mesh);
+            *state.scene.lock().unwrap() = Some(scene);
+        }
+        (None, crate::mesh_slot::MeshBuild::Lazy) => {
+            state.mesh.defer(scene.clone());
+            *state.scene.lock().unwrap() = Some(scene);
+        }
+        (None, _) => {
+            state.mesh.build_in_background(scene.clone());
+            *state.scene.lock().unwrap() = Some(scene);
+        }
+    }
 
     // Descartar resultados, backups y piezas del modelo anterior
-    drop(scene_lock);
-    drop(mesh_lock);
     state.reset_derived();
 
     // El rig del archivo reemplaza al esqueleto anterior; sin rig, el
@@ -666,6 +696,35 @@ pub(crate) fn load_scene(
     Ok(info)
 }
 
+/// Vista previa liviana del modelo (ver [`scene_mesh_preview`]); vacía si el
+/// modelo es chico y se carga entero de una vez
+#[tauri::command]
+pub async fn get_mesh_preview(app: AppHandle) -> Result<Response, String> {
+    let bytes = in_background(app, |state| {
+        let scene_lock = state.scene.lock().unwrap();
+        let scene = scene_lock.as_ref().ok_or("No hay escena cargada")?;
+        let (_, faces, _, _) = calculate_scene_stats(scene);
+        Ok(if faces >= PREVIEW_FROM_FACES { scene_mesh_preview(scene).to_bytes() } else { Vec::new() })
+    })
+    .await?;
+    Ok(Response::new(bytes))
+}
+
+/// Cuándo se arma la malla de edición de un modelo grande: `now`,
+/// `background` o `lazy` (Configuración)
+#[tauri::command]
+pub fn set_mesh_build(app: AppHandle, mode: String) -> Result<(), String> {
+    let mode = crate::mesh_slot::MeshBuild::parse(&mode).ok_or_else(|| format!("Modo desconocido: {mode}"))?;
+    *app.state::<AppState>().mesh_build.lock().unwrap() = mode;
+    Ok(())
+}
+
+/// La malla de edición del modelo ya está armada (si no, se arma en segundo plano)
+#[tauri::command]
+pub fn mesh_edit_ready(app: AppHandle) -> bool {
+    app.state::<AppState>().mesh.is_ready()
+}
+
 /// Obtiene los datos de la malla para renderizar en Three.js
 ///
 /// La geometría va en espacio mundo y en el mismo orden de vértices que la
@@ -683,39 +742,70 @@ pub(crate) fn get_mesh_data_impl(state: &AppState) -> Result<MeshData, String> {
 }
 
 pub(crate) fn scene_mesh_data(scene: &Scene) -> MeshData {
+    use rayon::prelude::*;
+
+    /// Lo del visor de una primitiva, con índices locales a ella
+    struct PrimData {
+        flag: bool,
+        creases: Vec<f32>,
+        normals: Vec<f32>,
+        quads: Vec<u32>,
+    }
+
     let prims = scene.world_primitives();
     let has_uvs = prims.iter().any(|p| p.uvs.is_some());
+    let has_quads = scene.has_quads();
 
-    let mut positions: Vec<f32> = Vec::new();
-    let mut normals: Vec<f32> = Vec::new();
-    let mut indices: Vec<u32> = Vec::new();
+    // Cada primitiva se prepara por separado (las aristas vivas y las normales
+    // son lo caro) y después se junta en orden
+    let per_prim: Vec<PrimData> = prims
+        .par_iter()
+        .map(|prim| {
+            // Normales calculadas, o aristas vivas con los vértices compartidos (un
+            // STL arma así sus normales): el visor les marca las aristas vivas
+            let sharp = sharp_edges(&prim.positions, &prim.triangles);
+            let flag = prim.normals.is_none() || sharp.welded;
+            let normals: Vec<f32> = match &prim.normals {
+                Some(n) => n.iter().flatten().copied().collect(),
+                None => compute_vertex_normals(&prim.positions, &prim.triangles).iter().flatten().copied().collect(),
+            };
+            let mut quads = Vec::new();
+            if has_quads {
+                for face in converter_scene::polygons(&prim.triangles, scene.quad_pairs(prim.mesh, prim.primitive)) {
+                    let v = face.vertices();
+                    quads.extend([v[0], v[1], v[2], v[v.len() - 1]]);
+                }
+            }
+            PrimData { flag, creases: if flag { sharp.vertices } else { Vec::new() }, normals, quads }
+        })
+        .collect();
+
+    let vertex_count: usize = prims.iter().map(|p| p.positions.len()).sum();
+    let index_count: usize = prims.iter().map(|p| p.triangles.len() * 3).sum();
+    let mut positions: Vec<f32> = Vec::with_capacity(vertex_count * 3);
+    let mut normals: Vec<f32> = Vec::with_capacity(vertex_count * 3);
+    let mut indices: Vec<u32> = Vec::with_capacity(index_count);
     let mut uvs: Vec<f32> = Vec::new();
     let mut groups: Vec<[u32; 3]> = Vec::new();
     let mut group_nodes: Vec<u32> = Vec::new();
     let mut quad_indices: Vec<u32> = Vec::new();
     let mut computed: Vec<u32> = Vec::new();
     let mut creases: Vec<f32> = Vec::new();
-    let has_quads = scene.has_quads();
+    if has_uvs {
+        uvs.reserve(vertex_count * 2);
+    }
 
-    for prim in &prims {
+    for (prim, data) in prims.iter().zip(per_prim) {
         let offset = (positions.len() / 3) as u32;
         groups.push([indices.len() as u32, (prim.triangles.len() * 3) as u32, prim.material.map_or(u32::MAX, |m| m as u32)]);
         group_nodes.push(prim.node.map_or(u32::MAX, |n| n as u32));
         positions.extend(prim.positions.iter().flatten());
-
-        // Normales calculadas, o aristas vivas con los vértices compartidos (un
-        // STL arma así sus normales): el visor les marca las aristas vivas
-        let sharp = sharp_edges(&prim.positions, &prim.triangles);
-        let flag = prim.normals.is_none() || sharp.welded;
-        computed.push(flag as u32);
-        if flag {
+        computed.push(data.flag as u32);
+        if data.flag {
             creases.resize(offset as usize, 0.0);
-            creases.extend(sharp.vertices);
+            creases.extend(data.creases);
         }
-        match &prim.normals {
-            Some(n) => normals.extend(n.iter().flatten()),
-            None => normals.extend(compute_vertex_normals(&prim.positions, &prim.triangles).iter().flatten()),
-        }
+        normals.extend(data.normals);
 
         // Si alguna primitiva tiene UVs, las demás se rellenan para mantener la alineación
         if has_uvs {
@@ -726,12 +816,7 @@ pub(crate) fn scene_mesh_data(scene: &Scene) -> MeshData {
         }
 
         indices.extend(prim.triangles.iter().flatten().map(|&i| i + offset));
-        if has_quads {
-            for face in converter_scene::polygons(&prim.triangles, scene.quad_pairs(prim.mesh, prim.primitive)) {
-                let v = face.vertices();
-                quad_indices.extend([v[0], v[1], v[2], v[v.len() - 1]].map(|i| i + offset));
-            }
-        }
+        quad_indices.extend(data.quads.into_iter().map(|i| i + offset));
     }
 
     if !creases.is_empty() {
@@ -748,6 +833,123 @@ pub(crate) fn scene_mesh_data(scene: &Scene) -> MeshData {
         group_computed_normals: computed,
         creases,
     }
+}
+
+/// Desde cuántas caras se muestra primero una vista previa liviana
+pub(crate) const PREVIEW_FROM_FACES: usize = 400_000;
+/// Celdas por lado de la grilla de la vista previa
+const PREVIEW_GRID: f32 = 320.0;
+
+/// Versión liviana del modelo para mostrarlo mientras llega el detalle:
+/// los vértices de cada primitiva se agrupan en una grilla y cada celda queda
+/// como un solo vértice. Conserva los grupos (material y nodo), así se ve con
+/// sus colores y el Outliner ya funciona; no lleva quads ni aristas vivas.
+pub(crate) fn scene_mesh_preview(scene: &Scene) -> MeshData {
+    use rayon::prelude::*;
+    use std::collections::HashMap;
+
+    let prims = scene.world_primitives();
+    let has_uvs = prims.iter().any(|p| p.uvs.is_some());
+    let (mut min, mut max) = ([f32::MAX; 3], [f32::MIN; 3]);
+    for p in prims.iter().flat_map(|p| p.positions.iter()) {
+        for k in 0..3 {
+            min[k] = min[k].min(p[k]);
+            max[k] = max[k].max(p[k]);
+        }
+    }
+    let extent = (0..3).map(|k| max[k] - min[k]).fold(0.0f32, f32::max).max(1e-12);
+    let cell = extent / PREVIEW_GRID;
+
+    struct Cluster {
+        sum: [f32; 3],
+        normal: [f32; 3],
+        uv: [f32; 2],
+        count: u32,
+    }
+    struct Out {
+        positions: Vec<f32>,
+        normals: Vec<f32>,
+        uvs: Vec<f32>,
+        indices: Vec<u32>,
+    }
+
+    let outs: Vec<Out> = prims
+        .par_iter()
+        .map(|prim| {
+            let normals = match &prim.normals {
+                Some(n) => n.clone(),
+                None => compute_vertex_normals(&prim.positions, &prim.triangles),
+            };
+            let mut ids: HashMap<(i32, i32, i32), u32> = HashMap::new();
+            let mut clusters: Vec<Cluster> = Vec::new();
+            let remap: Vec<u32> = prim
+                .positions
+                .iter()
+                .enumerate()
+                .map(|(i, p)| {
+                    let key = ((p[0] / cell).floor() as i32, (p[1] / cell).floor() as i32, (p[2] / cell).floor() as i32);
+                    let id = *ids.entry(key).or_insert_with(|| {
+                        clusters.push(Cluster { sum: [0.0; 3], normal: [0.0; 3], uv: [0.0; 2], count: 0 });
+                        (clusters.len() - 1) as u32
+                    });
+                    let c = &mut clusters[id as usize];
+                    for k in 0..3 {
+                        c.sum[k] += p[k];
+                        c.normal[k] += normals[i][k];
+                    }
+                    if let Some(uv) = prim.uvs.as_ref().and_then(|u| u.get(i)) {
+                        c.uv[0] += uv[0];
+                        c.uv[1] += uv[1];
+                    }
+                    c.count += 1;
+                    id
+                })
+                .collect();
+            let mut out = Out { positions: Vec::new(), normals: Vec::new(), uvs: Vec::new(), indices: Vec::new() };
+            for c in &clusters {
+                let n = c.count as f32;
+                out.positions.extend(c.sum.map(|v| v / n));
+                let l = (c.normal[0].powi(2) + c.normal[1].powi(2) + c.normal[2].powi(2)).sqrt().max(1e-20);
+                out.normals.extend(c.normal.map(|v| v / l));
+                out.uvs.extend(c.uv.map(|v| v / n));
+            }
+            for t in &prim.triangles {
+                let [a, b, c] = t.map(|i| remap[i as usize]);
+                if a != b && b != c && a != c {
+                    out.indices.extend([a, b, c]);
+                }
+            }
+            out
+        })
+        .collect();
+
+    let mut data = MeshData {
+        positions: Vec::new(),
+        normals: Vec::new(),
+        indices: Vec::new(),
+        uvs: None,
+        groups: Vec::new(),
+        group_nodes: Vec::new(),
+        quad_indices: Vec::new(),
+        group_computed_normals: Vec::new(),
+        creases: Vec::new(),
+    };
+    let mut uvs: Vec<f32> = Vec::new();
+    for (prim, out) in prims.iter().zip(outs) {
+        let offset = (data.positions.len() / 3) as u32;
+        data.groups.push([data.indices.len() as u32, out.indices.len() as u32, prim.material.map_or(u32::MAX, |m| m as u32)]);
+        data.group_nodes.push(prim.node.map_or(u32::MAX, |n| n as u32));
+        // Normales del archivo, o calculadas por el visor al suavizar
+        data.group_computed_normals.push(0);
+        data.positions.extend(out.positions);
+        data.normals.extend(out.normals);
+        if has_uvs {
+            uvs.extend(out.uvs);
+        }
+        data.indices.extend(out.indices.into_iter().map(|i| i + offset));
+    }
+    data.uvs = has_uvs.then_some(uvs);
+    data
 }
 
 /// Aristas vivas de una primitiva
@@ -4151,6 +4353,7 @@ fn calculate_quad_mesh_bounds(quad_mesh: &quadriflow_core::QuadMesh) -> Bounding
 
 #[cfg(test)]
 mod tests {
+
 
     #[test]
     fn retopology_config_maps_to_remesh_config() {

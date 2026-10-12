@@ -15,6 +15,16 @@ export const en_settings: Catalog = {
     "Two fingers (or the wheel) rotate the view and with Shift pan it; Ctrl or pinch zooms. Without this, the wheel zooms.",
   "Pantalla": "Display",
   "Mostrar los FPS en la cabecera": "Show FPS in the header",
+  "Modelos pesados": "Heavy models",
+  "Mostrar primero una vista previa": "Show a preview first",
+  "En modelos de cientos de miles de caras, el visor muestra una versión liviana al instante y la cambia por el detalle completo cuando llega.":
+    "With models of hundreds of thousands of faces, the viewer shows a light version right away and swaps in the full detail when it arrives.",
+  "Armar la malla de edición": "Build the editing mesh",
+  "La malla de edición es la que usan reparar, esqueleto, remallar y demás herramientas; verla en el visor no la necesita. En modelos grandes tarda segundos y ocupa mucha memoria.":
+    "The editing mesh is what repair, skeleton, remesh and the other tools use; viewing the model doesn't need it. On large models it takes seconds and a lot of memory.",
+  "En segundo plano (recomendado)": "In the background (recommended)",
+  "Al usar una herramienta": "When a tool needs it",
+  "Al importar (espera a que termine)": "On import (waits until done)",
   "Teclado": "Keyboard",
   "Mouse en el visor": "Mouse in the viewer",
   "Formato inicial": "Starting format",

@@ -143,13 +143,14 @@ pub fn import_gltf(path: impl AsRef<Path>) -> Result<Scene, GltfImportError> {
 /// Carga documento, buffers e imágenes. `gltf::import` rechaza toda extensión
 /// requerida que no conoce, Draco incluida: esos archivos se cargan sin
 /// validar y Draco se decodifica aquí. Las imágenes no se decodifican (pueden
-/// venir en WebP): las dimensiones se leen de los bytes.
+/// venir en WebP): las dimensiones se leen de los bytes. Los demás archivos
+/// también se cargan sin validación profunda, que en modelos grandes cuesta
+/// más que leer la geometría; `Scene::validate_geometry` revisa el resultado.
 fn load(path: &Path) -> Result<(gltf::Document, Vec<gltf::buffer::Data>, Vec<gltf::image::Data>), GltfImportError> {
     let bytes = std::fs::read(path)?;
     let gltf = gltf::Gltf::from_slice_without_validation(&bytes)?;
-    if !gltf.extensions_required().any(|e| e == draco::EXTENSION) {
-        return Ok(gltf::import(path)?);
-    }
+    // Sin `gltf::import`: su validación profunda y la decodificación de todas
+    // las imágenes costaban más que leer la geometría en modelos grandes
     let buffers = gltf::import_buffers(&gltf.document, path.parent(), gltf.blob.clone())?;
     Ok((gltf.document, buffers, Vec::new()))
 }

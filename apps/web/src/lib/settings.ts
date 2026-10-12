@@ -25,6 +25,18 @@ export const setShowFps = setFps;
 export const defaultExportFormat = format;
 export const setDefaultExportFormat = setFormat;
 
+/** Cuándo se arma la malla de edición de un modelo grande */
+export type MeshBuildMode = "now" | "background" | "lazy";
+const MESH_BUILD_MODES: MeshBuildMode[] = ["now", "background", "lazy"];
+const [meshBuildRaw, setMeshBuildRaw] = createPersisted<MeshBuildMode>("settings.meshBuild", "background");
+export const meshBuild = (): MeshBuildMode => (MESH_BUILD_MODES.includes(meshBuildRaw()) ? meshBuildRaw() : "background");
+export const setMeshBuild = setMeshBuildRaw;
+
+/** Mostrar primero una vista previa liviana de los modelos muy pesados */
+const [previewFirstRaw, setPreviewFirst] = createPersisted<boolean>("settings.previewFirst", true);
+export const previewFirst = previewFirstRaw;
+export const setPreviewFirstModel = setPreviewFirst;
+
 const PREFIX = "pinocchio.ui.";
 /** Lo que no es disposición de la interfaz: se conserva al restablecer */
 const KEEP = ["settings.", "templates."];
