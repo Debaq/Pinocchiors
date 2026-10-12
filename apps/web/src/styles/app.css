@@ -87,8 +87,10 @@
 }
 
 /* Tema claro: sobrescribe las mismas variables. Los colores de acento son más
-   oscuros para que el texto de color se lea sobre fondo claro */
-:root[data-theme="light"] {
+   oscuros para que el texto de color se lea sobre fondo claro. `data-palette="light"`
+   lo aplica solo a una parte (lo que va sobre la hoja blanca del plano) */
+:root[data-theme="light"],
+[data-palette="light"] {
   color-scheme: light;
 
   --color-bg: #f4f4f7;

@@ -42,8 +42,12 @@ peor resultado).
 *Hecha el 2026-10-10.* «Dibujar» en el plano abre el editor del sketch sobre la hoja
 (`cadUi.editSheet`, sesión con `feature = SHEET_SKETCH` y `sheet { width, height, backdrop }`,
 plano XY del visor en mm de hoja, Y hacia arriba desde la esquina de abajo a la izquierda). La
-hoja de fondo es el SVG del plano sin el papel, rasterizado (hasta 4096 px, invertido en el
-tema oscuro) y puesto como calco que no se guarda. Con la hoja abierta el visor oculta el
+hoja de fondo es el SVG del plano rasterizado (hasta 4096 px) y puesto como calco que no se
+guarda. Se ve igual que en el plano (usuario, 2026-10-11: el cambio a fondo oscuro «es un
+efecto feísimo»): papel blanco en los dos temas, sin tone mapping, el fondo de alrededor
+`bg-darker`, encuadrada justo debajo de la barra del sketch con 16 px de margen, sin cubo de
+vistas ni ejes, y lo dibujado, las cotas y los símbolos con la paleta clara
+(`data-palette="light"`, `themeHex(name, true)`). Con la hoja abierta el visor oculta el
 sólido, el escaneo, los planos, las referencias, los otros sketches y la rejilla, y no ancla a
 aristas del sólido; la barra no tiene «Usar» y el panel no tiene «Usar del modelo» ni corte u
 ocultar modelo. «Volver al plano» guarda en `doc.drawing.sketch` (las fórmulas quedan en sus

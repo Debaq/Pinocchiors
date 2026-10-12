@@ -388,6 +388,7 @@ function slotOutline(a: P2, b: P2, r: number): P2[] {
 
 export const CadView: Component<CadViewProps> = (props) => {
   let container!: HTMLDivElement;
+  let topBar: HTMLDivElement | undefined;
   let viewer: CadViewer | undefined;
   const [cursor, setCursor] = createSignal<P2>();
   // Estado de la herramienta en curso (clics ya dados)
@@ -922,7 +923,12 @@ export const CadView: Component<CadViewProps> = (props) => {
           viewer.saveView();
           // Un sketch con algo dibujado se encuadra entero (puede estar lejos del origen); la hoja del plano, entera
           const pts = s.sketch.points.filter((p) => p.id !== s.sketch.origin);
-          if (s.sheet) viewer.lookAtPlane(s.plane, { center: [s.sheet.width / 2, s.sheet.height / 2], size: Math.max(s.sheet.width, s.sheet.height) });
+          if (s.sheet) {
+            // Entera y lo más grande posible, como en el plano: 16 px de margen y debajo de la barra del sketch
+            const bar = topBar?.firstElementChild?.getBoundingClientRect();
+            const top = bar ? bar.bottom - container.getBoundingClientRect().top : 80;
+            viewer.lookAtPlane(s.plane, { center: [s.sheet.width / 2, s.sheet.height / 2], size: Math.max(s.sheet.width, s.sheet.height) }, { width: s.sheet.width, height: s.sheet.height, pad: [top + 16, 16, 16, 16] });
+          }
           else if (s.sketch.entities.length && pts.length) {
             const xs = pts.map((p) => p.x);
             const ys = pts.map((p) => p.y);
@@ -1140,6 +1146,7 @@ export const CadView: Component<CadViewProps> = (props) => {
     }
     viewer.setSketch({
       plane: s.plane,
+      paper: !!s.sheet,
       sketch: withoutLayers(s.sketch, false),
       regions: s.regions,
       grid,
@@ -3447,6 +3454,8 @@ export const CadView: Component<CadViewProps> = (props) => {
 
       <Show when={menu()}>{(m) => <ContextMenu x={m().x} y={m().y} items={m().items} onClose={() => setMenu(undefined)} />}</Show>
 
+      {/* Lo que va sobre el dibujo; sobre la hoja del plano, con la paleta clara (papel blanco) */}
+      <div class="contents" data-palette={onSheet() ? "light" : undefined}>
       {/* A qué se pega el cursor (anclaje) */}
       <Show when={typedField()}>
         {(f) => (
@@ -3672,6 +3681,7 @@ export const CadView: Component<CadViewProps> = (props) => {
           </Show>
         )}
       </Index>
+      </div>
 
       {/* Barra izquierda: lo más usado de Diseñar o, con un sketch abierto, sus herramientas de dibujo */}
       <Show when={props.toolsMount} keyed>
@@ -3770,7 +3780,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       </Show>
 
       {/* Barra superior: herramientas, vista y el diálogo de la operación abierta */}
-      <div class="absolute top-2 left-2 right-36 flex flex-col items-start gap-1.5 pointer-events-none">
+      <div ref={topBar} class="absolute top-2 left-2 right-36 flex flex-col items-start gap-1.5 pointer-events-none">
         <Show
           when={ui.session()}
           fallback={

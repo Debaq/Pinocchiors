@@ -69,9 +69,25 @@ export function followSystemTheme(setting: () => ThemeSetting): () => void {
   return () => media.removeEventListener("change", onChange);
 }
 
-/** Color de una variable del tema (`name` sin `--color-`), como texto CSS */
-export function themeColor(name: string): string {
-  return getComputedStyle(document.documentElement).getPropertyValue(`--color-${name}`).trim();
+let lightProbe: HTMLElement | undefined;
+
+/**
+ * Color de una variable del tema (`name` sin `--color-`), como texto CSS. Con
+ * `light`, el de la paleta clara aunque la app esté en oscuro (lo que se
+ * dibuja sobre la hoja blanca del plano)
+ */
+export function themeColor(name: string, light = false): string {
+  let el = document.documentElement;
+  if (light) {
+    if (!lightProbe?.isConnected) {
+      lightProbe = document.createElement("div");
+      lightProbe.dataset.palette = "light";
+      lightProbe.hidden = true;
+      document.body.append(lightProbe);
+    }
+    el = lightProbe;
+  }
+  return getComputedStyle(el).getPropertyValue(`--color-${name}`).trim();
 }
 
 let probe: CanvasRenderingContext2D | null | undefined;
@@ -104,8 +120,8 @@ export function parseCssColor(value: string): { hex: number; alpha: number } | n
 }
 
 /** Igual que `themeColor` pero como número 0xRRGGBB (ignora el alfa) */
-export function themeHex(name: string): number {
-  return parseCssColor(themeColor(name))?.hex ?? 0x808080;
+export function themeHex(name: string, light = false): number {
+  return parseCssColor(themeColor(name, light))?.hex ?? 0x808080;
 }
 
 /** Alfa (0–1) de una variable del tema; 1 si no trae */

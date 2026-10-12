@@ -103,6 +103,8 @@ export interface SketchOverlay {
   hiddenPoints?: number[];
   /** Cajas de los textos (se eligen enteros); la elegida, resaltada */
   textBoxes?: { min: P2; max: P2; selected: boolean }[];
+  /** Dibujando sobre la hoja del plano (papel blanco): colores de la paleta clara */
+  paper?: boolean;
 }
 
 /** Sketch 3D en edición: lo elegido, lo libre, lo que choca, el plano activo y lo que se está dibujando */
@@ -250,6 +252,8 @@ export class CadViewer {
   /** Corte del escaneo por el plano del sketch en edición (guía) */
   private scanSection?: THREE.LineSegments;
   private sketchGroup = new THREE.Group();
+  /** Dibujando sobre la hoja del plano: otro fondo y la paleta clara */
+  private paper = false;
   /** Sketch 3D en edición */
   private sketch3dGroup = new THREE.Group();
   private sketchesGroup = new THREE.Group();
@@ -362,7 +366,7 @@ export class CadViewer {
   };
 
   private applyTheme() {
-    this.scene.background = new THREE.Color(themeHex("viewport"));
+    this.scene.background = new THREE.Color(themeHex(this.paper ? "bg-darker" : "viewport"));
     buildGridLines(this.grid, this.gridExtent, this.mmPerUnit);
     if (this.bodyEdges) (this.bodyEdges.material as THREE.LineBasicMaterial).color.set(themeHex("bg-darker"));
   }
@@ -387,7 +391,8 @@ export class CadViewer {
       this.rig.step();
       this.scaleHandle();
       this.renderer.render(this.scene, this.camera);
-      this.rig.renderCube(this.renderer);
+      // Sobre la hoja del plano no hay cubo (es un dibujo plano y taparía la esquina del papel)
+      if (!this.paper) this.rig.renderCube(this.renderer);
       // Lo reemplazado se libera recién ahora: los materiales nuevos ya tomaron los
       // programas de WebGL (liberarlo antes los dejaba sin uso y se recompilaban: ~200 ms)
       for (const o of this.retired.splice(0)) {
@@ -1116,8 +1121,15 @@ export class CadViewer {
       this.sketchGroup.remove(child);
       this.retired.push(child as THREE.Mesh);
     }
+    // Sobre la hoja del plano: el fondo de alrededor como en el plano y los colores de la paleta clara (papel blanco)
+    const paper = !!overlay?.paper;
+    if (paper !== this.paper) {
+      this.paper = paper;
+      this.scene.background = new THREE.Color(themeHex(paper ? "bg-darker" : "viewport"));
+    }
     if (!overlay) return this.requestRender();
     const { plane, sketch } = overlay;
+    const hex = (name: string) => themeHex(name, paper);
     const w = (p: P2) => this.toView(planeToWorld(plane, p));
     const point = new Map(sketch.points.map((p) => [p.id, [p.x, p.y] as P2]));
     const selected = new Set(overlay.selected ?? []);
@@ -1137,7 +1149,7 @@ export class CadViewer {
         pos.setXYZ(i, v.x, v.y, v.z);
       }
       const m = new THREE.MeshBasicMaterial({
-        color: themeHex(picked ? "cyan" : "accent"),
+        color: hex(picked ? "cyan" : "accent"),
         transparent: true,
         opacity: picked ? 0.45 : choosing ? 0.08 : 0.12,
         side: THREE.DoubleSide,
@@ -1158,7 +1170,8 @@ export class CadViewer {
       const g = new THREE.BufferGeometry().setFromPoints([corner(0, 0), corner(im.width, 0), corner(im.width, im.height), corner(0, im.height)].map(w));
       g.setIndex([0, 1, 2, 0, 2, 3]);
       g.setAttribute("uv", new THREE.Float32BufferAttribute([0, 0, 1, 0, 1, 1, 0, 1], 2));
-      const m = new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: im.opacity ?? 0.6, side: THREE.DoubleSide, depthWrite: false, depthTest: false });
+      // Con sus colores tal cual (sin el tone mapping de la escena: el blanco de la hoja quedaba gris)
+      const m = new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: im.opacity ?? 0.6, side: THREE.DoubleSide, depthWrite: false, depthTest: false, toneMapped: false });
       const mesh = new THREE.Mesh(g, m);
       mesh.renderOrder = 4;
       mesh.userData.sketchImage = im.id;
@@ -1170,7 +1183,7 @@ export class CadViewer {
         const segs = overlay.grid.filter((g) => g.major === major);
         if (!segs.length) continue;
         const g = new THREE.BufferGeometry().setFromPoints(segs.flatMap((s) => [w(s.a), w(s.b)]));
-        const m = new THREE.LineBasicMaterial({ color: themeHex("comment"), transparent: true, opacity: major ? 0.45 : 0.2, depthTest: false });
+        const m = new THREE.LineBasicMaterial({ color: hex("comment"), transparent: true, opacity: major ? 0.45 : 0.2, depthTest: false });
         const l = new THREE.LineSegments(g, m);
         l.renderOrder = 5;
         l.userData.sketchGrid = true;
@@ -1207,9 +1220,9 @@ export class CadViewer {
       l.renderOrder = 7;
       this.sketchGroup.add(l);
     };
-    const normal = themeHex("fg");
-    const construction = themeHex("comment");
-    const sel = themeHex("orange");
+    const normal = hex("fg");
+    const construction = hex("comment");
+    const sel = hex("orange");
     const freeE = new Set(overlay.freeEntities ?? []);
     const conflictE = new Set([...(overlay.conflictEntities ?? []), ...(overlay.warnEntities ?? [])]);
     const linkedE = new Set(overlay.linkedEntities ?? []);
@@ -1220,15 +1233,15 @@ export class CadViewer {
       selected.has(id)
         ? sel
         : hover.has(id)
-          ? themeHex("cyan")
+          ? hex("cyan")
           : conflictE.has(id)
-            ? themeHex("error")
+            ? hex("error")
             : construct
               ? construction
               : linkedE.has(id)
-                ? themeHex("purple")
+                ? hex("purple")
                 : freeE.has(id)
-                  ? themeHex("sketch-free")
+                  ? hex("sketch-free")
                   : normal;
     // Las líneas infinitas llegan bien lejos del dibujo
     let reach = 1000;
@@ -1237,7 +1250,7 @@ export class CadViewer {
       const g = e.geometry;
       if (overlay.hideConstruction && e.construction && !selected.has(e.id) && !hover.has(e.id)) continue;
       // La línea central se distingue (es el eje que se toma sin elegirlo)
-      const color = e.axis && !selected.has(e.id) && !hover.has(e.id) ? themeHex("accent") : entityColor(e.id, !!e.construction);
+      const color = e.axis && !selected.has(e.id) && !hover.has(e.id) ? hex("accent") : entityColor(e.id, !!e.construction);
       let pts: P2[] = [];
       if (g.type === "line" && e.infinite) {
         const [a, b] = [point.get(g.start)!, point.get(g.end)!];
@@ -1285,13 +1298,13 @@ export class CadViewer {
       if (pts.length && pts.every(Boolean)) lines(pts, color, !!e.construction, width);
     }
     for (const pv of overlay.preview ?? []) lines(pv, sel);
-    for (const pv of overlay.removed ?? []) lines(pv, themeHex("error"), false, 3);
+    for (const pv of overlay.removed ?? []) lines(pv, hex("error"), false, 3);
     if (overlay.curvature) {
-      const combColor = themeHex("purple");
+      const combColor = hex("purple");
       for (const [a, b] of overlay.curvature.comb) lines([a, b], combColor);
       lines(overlay.curvature.comb.map((t) => t[1]), combColor);
     }
-    for (const g of overlay.guides ?? []) lines(g, themeHex("cyan"), true);
+    for (const g of overlay.guides ?? []) lines(g, hex("cyan"), true);
 
     // Textos: una caja punteada alrededor (se eligen enteros)
     for (const b of overlay.textBoxes ?? []) {
@@ -1316,7 +1329,7 @@ export class CadViewer {
     };
     for (const p of sketch.points) {
       if (p.id === sketch.origin) {
-        marker([p.x, p.y], selected.has(p.id) ? themeHex("orange") : hover.has(p.id) ? themeHex("cyan") : themeHex("purple"), 10);
+        marker([p.x, p.y], selected.has(p.id) ? hex("orange") : hover.has(p.id) ? hex("cyan") : hex("purple"), 10);
         continue;
       }
       if (overlay.hidePoints && !selected.has(p.id) && !hover.has(p.id)) continue;
@@ -1324,7 +1337,7 @@ export class CadViewer {
       const v = w([p.x, p.y]);
       pos.push(v.x, v.y, v.z);
       const c = new THREE.Color(
-        selected.has(p.id) ? themeHex("orange") : hover.has(p.id) ? themeHex("cyan") : free.has(p.id) ? themeHex("yellow") : themeHex("green"),
+        selected.has(p.id) ? hex("orange") : hover.has(p.id) ? hex("cyan") : free.has(p.id) ? hex("yellow") : hex("green"),
       );
       col.push(c.r, c.g, c.b);
     }
@@ -1335,21 +1348,29 @@ export class CadViewer {
     pts.renderOrder = 8;
     this.sketchGroup.add(pts);
     if (overlay.freedom) this.drawFreedom(overlay.freedom, sketch, lines);
-    if (overlay.snap) marker(overlay.snap, themeHex("cyan"), 12);
-    for (const p of overlay.problems ?? []) marker(p, themeHex("error"), 11);
+    if (overlay.snap) marker(overlay.snap, hex("cyan"), 12);
+    for (const p of overlay.problems ?? []) marker(p, hex("error"), 11);
     if (overlay.crossings?.length) {
       const k = this.pixelSizeMm() * 4;
       for (const [x, y] of overlay.crossings) {
-        lines([[x - k, y - k], [x + k, y + k]], themeHex("yellow"));
-        lines([[x - k, y + k], [x + k, y - k]], themeHex("yellow"));
+        lines([[x - k, y - k], [x + k, y + k]], hex("yellow"));
+        lines([[x - k, y + k], [x + k, y - k]], hex("yellow"));
       }
     }
-    for (const p of overlay.curvature?.inflections ?? []) marker(p, themeHex("purple"), 11);
+    for (const p of overlay.curvature?.inflections ?? []) marker(p, hex("purple"), 11);
 
-    // Ejes del plano
-    const axisLen = 20;
-    lines([[0, 0], [axisLen, 0]], themeHex("axis-x"));
-    lines([[0, 0], [0, axisLen]], themeHex("axis-y"));
+    // Ejes del plano (en la hoja no: su origen es la esquina del papel)
+    if (!paper) {
+      const axisLen = 20;
+      lines([[0, 0], [axisLen, 0]], hex("axis-x"));
+      lines([[0, 0], [0, axisLen]], hex("axis-y"));
+    }
+    // Todo en la pasada de lo transparente, donde vale `renderOrder`: si no, los calcos
+    // (transparentes, se dibujan después de lo opaco) tapaban las líneas y los puntos
+    for (const o of this.sketchGroup.children) {
+      const m = (o as THREE.Mesh).material as THREE.Material | undefined;
+      if (m) m.transparent = true;
+    }
     this.requestRender();
   }
 
@@ -1544,21 +1565,36 @@ export class CadViewer {
   // ─── Cámara ─────────────────────────────────────────────────────────────
 
   /** Mira el plano de frente (para dibujar) */
-  /** Mira el plano de frente; con `fit` (centro y tamaño en mm, en coordenadas del plano) encuadra eso */
-  lookAtPlane(plane: Plane, fit?: { center: [number, number]; size: number }) {
+  /**
+   * Mira el plano de frente; con `fit` (centro y tamaño en mm, en coordenadas del plano) encuadra eso.
+   * Con `rect` (ancho y alto en mm), lo encuadra justo dentro del visor menos `pad` (px arriba,
+   * derecha, abajo, izquierda), como la hoja en el plano
+   */
+  lookAtPlane(plane: Plane, fit?: { center: [number, number]; size: number }, rect?: { width: number; height: number; pad: [number, number, number, number] }) {
     const y = [
       plane.normal[1] * plane.x_dir[2] - plane.normal[2] * plane.x_dir[1],
       plane.normal[2] * plane.x_dir[0] - plane.normal[0] * plane.x_dir[2],
       plane.normal[0] * plane.x_dir[1] - plane.normal[1] * plane.x_dir[0],
     ];
-    const at = fit
-      ? ([0, 1, 2].map((i) => plane.origin[i] + plane.x_dir[i] * fit.center[0] + y[i] * fit.center[1]) as [number, number, number])
+    const tan = Math.tan((this.camera.fov * Math.PI) / 360);
+    const { width: cw, height: ch } = this.renderer.domElement.getBoundingClientRect();
+    let center = fit?.center;
+    let dist = fit ? (Math.max(fit.size, 10) / 2 / this.mmPerUnit / tan) * 1.4 : this.camera.position.distanceTo(this.controls.target) || 200 / this.mmPerUnit;
+    if (fit && rect && cw > 0 && ch > 0) {
+      const [t, r, b, l] = rect.pad;
+      const [aw, ah] = [cw - l - r, ch - t - b];
+      if (aw > 0 && ah > 0) {
+        // mm por píxel para que entre justo; el centro se corre al del lugar libre
+        const k = Math.max(rect.width / aw, rect.height / ah);
+        dist = (k * ch) / 2 / this.mmPerUnit / tan;
+        center = [fit.center[0] - ((l - r) / 2) * k, fit.center[1] + ((t - b) / 2) * k];
+      }
+    }
+    const at = center
+      ? ([0, 1, 2].map((i) => plane.origin[i] + plane.x_dir[i] * center[0] + y[i] * center[1]) as [number, number, number])
       : plane.origin;
     const target = this.toView(at);
     const n = this.dirToView(plane.normal);
-    const dist = fit
-      ? (Math.max(fit.size, 10) / 2 / this.mmPerUnit / Math.tan((this.camera.fov * Math.PI) / 360)) * 1.4
-      : this.camera.position.distanceTo(this.controls.target) || 200 / this.mmPerUnit;
     this.controls.target.copy(target);
     this.camera.position.copy(target).addScaledVector(n, dist);
     // Que la "y" del sketch quede hacia arriba en pantalla
@@ -1603,12 +1639,12 @@ export class CadViewer {
 
   /** Clic en el cubo de vistas: gira hacia esa cara, arista o vértice. `true` si lo usó */
   cubeDown(clientX: number, clientY: number): boolean {
-    return this.rig.cubeDown(clientX, clientY);
+    return !this.paper && this.rig.cubeDown(clientX, clientY);
   }
 
   /** Resalta la zona del cubo bajo el puntero; `true` si está sobre él (el cursor lo pone CadView) */
   cubeHover(clientX: number, clientY: number): boolean {
-    return this.rig.cubeHover(clientX, clientY, true, false);
+    return !this.paper && this.rig.cubeHover(clientX, clientY, true, false);
   }
 
   /**
@@ -1756,7 +1792,7 @@ export class CadViewer {
   /** Dibuja ya, sin esperar al cuadro (para leer píxeles en las pruebas) */
   renderNow() {
     this.renderer.render(this.scene, this.camera);
-    this.rig.renderCube(this.renderer);
+    if (!this.paper) this.rig.renderCube(this.renderer);
   }
 
   /** Primer impacto que no quedó cortado por la vista de corte */
@@ -2076,7 +2112,7 @@ export class CadViewer {
    * que solo deslizan, en cruz en los que van a cualquier lado y hacia afuera
    * en los círculos con el radio libre (tamaño fijo en pantalla al dibujar) */
   private drawFreedom(f: NonNullable<SketchOverlay["freedom"]>, sketch: Sketch, lines: (pts: P2[], color: number) => void) {
-    const color = themeHex("yellow");
+    const color = themeHex("yellow", this.paper);
     const len = this.pixelSizeMm() * 13;
     const head = len * 0.35;
     const at = new Map(sketch.points.map((p) => [p.id, [p.x, p.y] as P2]));

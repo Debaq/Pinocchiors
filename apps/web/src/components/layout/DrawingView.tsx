@@ -371,8 +371,7 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
 
   /**
    * Dibujar sobre la hoja: se abre el editor del sketch con la hoja de fondo
-   * (sin el papel blanco, en el color del texto del tema). Al terminar se
-   * vuelve acá.
+   * (blanca, igual que acá). Al terminar se vuelve acá.
    */
   const startDrawing = async () => {
     const s = d();
@@ -1460,14 +1459,14 @@ const ElementWindow: Component<{
 let lastBackdrop: string | undefined;
 
 /**
- * La hoja como imagen para dibujar encima: el SVG sin el papel blanco, con
- * las líneas en el color del texto del tema (claras en el oscuro). Devuelve
- * una URL de objeto (PNG), a lo sumo 4096 px de lado.
+ * La hoja como imagen para dibujar encima: el SVG tal cual, papel blanco
+ * incluido (en los dos temas, como se ve en el plano). Devuelve una URL de
+ * objeto (PNG), a lo sumo 4096 px de lado.
  */
 async function rasterSheet(svg: string, width: number, height: number): Promise<string> {
   const k = Math.min(12, 4096 / Math.max(width, height));
   const [w, h] = [Math.round(width * k), Math.round(height * k)];
-  const clean = svg.replace(/<rect width="[\d.]+" height="[\d.]+" fill="#fff"\/>/, "").replace(/width="[\d.]+mm" height="[\d.]+mm"/, `width="${w}" height="${h}"`);
+  const clean = svg.replace(/width="[\d.]+mm" height="[\d.]+mm"/, `width="${w}" height="${h}"`);
   const url = URL.createObjectURL(new Blob([clean], { type: "image/svg+xml" }));
   try {
     const img = new Image();
@@ -1477,7 +1476,6 @@ async function rasterSheet(svg: string, width: number, height: number): Promise<
     canvas.width = w;
     canvas.height = h;
     const ctx = canvas.getContext("2d")!;
-    if (document.documentElement.dataset.theme !== "light") ctx.filter = "invert(1)";
     ctx.drawImage(img, 0, 0, w, h);
     const blob = await new Promise<Blob | null>((ok) => canvas.toBlob(ok, "image/png"));
     if (!blob) throw new Error("No se pudo preparar la hoja para dibujar");
