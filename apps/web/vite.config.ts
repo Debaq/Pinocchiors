@@ -43,9 +43,20 @@ export default defineConfig({
     target: ["es2021", "chrome100", "safari13"],
     minify: !process.env.TAURI_DEBUG ? "esbuild" : false,
     sourcemap: !!process.env.TAURI_DEBUG,
+    // App de escritorio: los chunks se cargan del disco, no por red
+    chunkSizeWarningLimit: 2500,
     // splash.html: ventana chica que se ve mientras carga la principal
     rollupOptions: {
       input: { main: "index.html", splash: "splash.html" },
+      output: {
+        // Librerías pesadas aparte: cachean mejor y el chunk principal baja de 500 kB
+        manualChunks(id) {
+          if (!id.includes("node_modules")) return undefined;
+          if (id.includes("/three/")) return "three";
+          if (id.includes("/solid-js/")) return "solid";
+          return "vendor";
+        },
+      },
     },
   },
 });
