@@ -5,6 +5,8 @@ pub mod body_parts;
 pub mod cad;
 pub mod bvh;
 pub mod imported_rig;
+#[cfg(target_os = "linux")]
+pub mod linux_desktop;
 pub mod commands;
 pub mod placement;
 pub mod project;
@@ -22,6 +24,11 @@ use tauri::Manager;
 
 /// Ejecuta la aplicación Tauri
 pub fn run() {
+    #[cfg(target_os = "linux")]
+    {
+        linux_desktop::set_program_name();
+        linux_desktop::ensure_desktop_entry();
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
