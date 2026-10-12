@@ -70,6 +70,8 @@ export interface RetopologyPanelProps {
   onShowQuadMeshChange?: (show: boolean) => void;
   quality?: QuadQuality;
   objects?: RetopologyObject[];
+  /** Caras de la malla: más quads que eso no aportan nada */
+  maxQuads?: number;
 }
 
 /** Fila del informe de calidad; `warn` la resalta. */
@@ -94,8 +96,8 @@ export const RetopologyPanel: Component<RetopologyPanelProps> = (props) => {
           value={props.config.targetQuads}
           onChange={(value) => updateConfig({ targetQuads: Math.round(value) })}
           min={100}
-          max={50000}
-          step={100}
+          max={Math.max(1000, props.maxQuads ?? 50000)}
+          step={(props.maxQuads ?? 0) > 200000 ? 1000 : 100}
           formatValue={(v) => fmtNumber(v)}
         />
 

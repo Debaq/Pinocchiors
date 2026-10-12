@@ -14,6 +14,8 @@ export interface RetopologyStepProps {
   onShowQuadMeshChange?: (show: boolean) => void;
   quality?: QuadQuality;
   objects?: RetopologyObject[];
+  /** Caras de la malla: tope de los quads objetivo */
+  maxQuads?: number;
   /** Esqueleto y pesos usan la malla retopologizada */
   useForNextSteps?: boolean;
   onUseForNextStepsChange?: (use: boolean) => void;
@@ -33,6 +35,7 @@ export const RetopologyStep: Component<RetopologyStepProps> = (props) => {
         onShowQuadMeshChange={props.onShowQuadMeshChange}
         quality={props.quality}
         objects={props.objects}
+        maxQuads={props.maxQuads}
       />
       <Show when={props.hasResult}>
         <Checkbox

@@ -244,7 +244,7 @@ export const RemeshStep: Component<RemeshStepProps> = (props) => {
           )}
         </Show>
         <Show when={current().id === "retopology"}>
-          <RetopologyStep {...props.retopology} />
+          <RetopologyStep {...props.retopology} maxQuads={props.mesh.faces} />
           <Show when={props.retopology.hasResult && props.retopology.result}>
             {(r) => (
               <RemeshSummary
