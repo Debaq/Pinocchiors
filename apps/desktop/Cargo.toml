@@ -76,6 +76,7 @@ rayon = { workspace = true }
 # Cámara en el webview de Linux (captura de movimiento en vivo)
 [target.'cfg(target_os = "linux")'.dependencies]
 webkit2gtk = { version = "2.0", features = ["v2_4"] }
+gtk = "0.18"
 
 [dev-dependencies]
 nalgebra = { workspace = true }

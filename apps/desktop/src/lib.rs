@@ -41,6 +41,8 @@ pub fn run() {
             app.manage(scan_cloud::CloudEditor::default());
             #[cfg(target_os = "linux")]
             enable_camera(app);
+            #[cfg(target_os = "linux")]
+            lock_page_zoom(app);
             // Si la interfaz nunca avisa (error al cargar), igual se muestra
             let handle = app.handle().clone();
             std::thread::spawn(move || {
@@ -272,6 +274,53 @@ fn enable_camera(app: &tauri::App) {
                     true
                 } else {
                     false
+                }
+            });
+        });
+    }
+}
+
+/// El pellizco del touchpad y Ctrl + rueda hacen zoom de toda la página en
+/// WebKitGTK: se vuelve siempre a 100 %
+#[cfg(target_os = "linux")]
+#[allow(deprecated)]
+fn lock_page_zoom(app: &tauri::App) {
+    use gtk::prelude::WidgetExt;
+    use webkit2gtk::glib::prelude::*;
+    use webkit2gtk::WebViewExt;
+    for window in app.webview_windows().values() {
+        let _ = window.with_webview(|webview| {
+            let view = webview.inner();
+            // El pellizco del touchpad llega como evento de GDK y WebKit lo
+            // aplica a la escala de la página: se corta y se reenvía a la web
+            // como rueda con Ctrl, que es lo que entienden los visores
+            let last = std::rc::Rc::new(std::cell::Cell::new(1.0_f64));
+            view.connect_event(move |view, event| {
+                let Some(pinch) = event.downcast_ref::<gtk::gdk::EventTouchpadPinch>() else {
+                    return webkit2gtk::glib::Propagation::Proceed;
+                };
+                let raw: &gtk::gdk::ffi::GdkEventTouchpadPinch = pinch.as_ref();
+                // fase 0 = comienzo: la escala vuelve a partir de 1
+                if raw.phase == 0 {
+                    last.set(1.0);
+                }
+                let scale = pinch.scale();
+                if raw.phase == 1 && scale > 0.0 && last.get() > 0.0 {
+                    let delta = -(scale / last.get()).ln() * 1000.0;
+                    let (x, y) = pinch.position();
+                    let js = format!(
+                        "(()=>{{const t=document.elementFromPoint({x},{y})||document.body;\
+                         t.dispatchEvent(new WheelEvent('wheel',{{bubbles:true,cancelable:true,ctrlKey:true,\
+                         clientX:{x},clientY:{y},deltaY:{delta}}}));}})()"
+                    );
+                    view.run_javascript(&js, None::<&gtk::gio::Cancellable>, |_| {});
+                }
+                last.set(scale);
+                webkit2gtk::glib::Propagation::Stop
+            });
+            view.connect_notify_local(Some("zoom-level"), |view, _| {
+                if (view.zoom_level() - 1.0).abs() > f64::EPSILON {
+                    view.set_zoom_level(1.0);
                 }
             });
         });

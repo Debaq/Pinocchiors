@@ -25,6 +25,21 @@ document.addEventListener("contextmenu", (e) => {
   if (!target?.closest("input, textarea, [contenteditable='true']")) e.preventDefault();
 });
 
+// El pellizco del touchpad llega como rueda con Ctrl (o gesto de Safari) y el
+// webview lo usa para acercar toda la aplicación; las vistas lo manejan solas
+window.addEventListener("wheel", (e) => {
+  if (e.ctrlKey) e.preventDefault();
+}, { passive: false, capture: true });
+for (const type of ["gesturestart", "gesturechange", "gestureend"]) {
+  document.addEventListener(type, (e) => e.preventDefault(), { passive: false });
+}
+document.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && (e.key === "+" || e.key === "-" || e.key === "=" || e.key === "0") && !e.defaultPrevented) {
+    // Sin zoom de página por teclado; los atajos propios corren antes y ya lo marcan
+    e.preventDefault();
+  }
+});
+
 // Rueda del mouse sobre un campo numérico: sube o baja el valor
 installWheelNumbers();
 

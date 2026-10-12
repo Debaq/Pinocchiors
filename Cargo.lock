@@ -3370,6 +3370,7 @@ dependencies = [
  "converter-scene",
  "converter-stl",
  "converter-usda",
+ "gtk",
  "image",
  "nalgebra",
  "orizon3d-core",
