@@ -54,6 +54,7 @@ pub struct MaterialInfo {
     pub unlit: bool,
     pub transmission: f32,
     pub ior: f32,
+    pub thickness: f32,
     pub clearcoat: f32,
     pub clearcoat_roughness: f32,
     pub uv_scale: [f32; 2],
@@ -153,6 +154,7 @@ pub(crate) fn material_info(m: &converter_scene::Material) -> MaterialInfo {
         unlit: m.unlit,
         transmission: m.transmission_factor,
         ior: m.ior,
+        thickness: m.thickness_factor,
         clearcoat: m.clearcoat_factor,
         clearcoat_roughness: m.clearcoat_roughness_factor,
         uv_scale: m.uv_scale,
@@ -304,6 +306,7 @@ pub struct MaterialEdit {
     pub unlit: bool,
     pub transmission: f32,
     pub ior: f32,
+    pub thickness: f32,
     pub clearcoat: f32,
     pub clearcoat_roughness: f32,
     pub uv_scale: [f32; 2],
@@ -325,6 +328,7 @@ impl MaterialEdit {
         m.unlit = self.unlit;
         m.transmission_factor = self.transmission.clamp(0.0, 1.0);
         m.ior = self.ior.clamp(1.0, 2.5);
+        m.thickness_factor = self.thickness.max(0.0);
         m.clearcoat_factor = self.clearcoat.clamp(0.0, 1.0);
         m.clearcoat_roughness_factor = self.clearcoat_roughness.clamp(0.0, 1.0);
         m.uv_scale = self.uv_scale.map(|v| v.clamp(0.05, 100.0));
@@ -453,6 +457,7 @@ mod tests {
             unlit: false,
             transmission: 2.0,
             ior: 9.0,
+            thickness: -1.0,
             clearcoat: 0.5,
             clearcoat_roughness: 0.2,
             uv_scale: [0.0, 4.0],
@@ -461,6 +466,7 @@ mod tests {
         assert_eq!((m.base_color_factor, m.metallic_factor, m.emissive_factor), ([1.0, 0.5, 0.0, 0.4], 0.0, [0.0, 1.0, 0.0]));
         assert_eq!(m.alpha_mode, AlphaMode::Blend);
         assert_eq!((m.transmission_factor, m.ior, m.clearcoat_factor, m.uv_scale), (1.0, 2.5, 0.5, [0.05, 4.0]));
+        assert_eq!(m.thickness_factor, 0.0);
     }
 
     #[test]

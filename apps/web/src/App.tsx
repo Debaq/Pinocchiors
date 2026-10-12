@@ -2,7 +2,7 @@ import { t, tn, tx, locale } from "./lib/i18n";
 import { defaultExportFormat, meshBuild, previewFirst, showFps } from "./lib/settings";
 import { followUiScale } from "./lib/uiScale";
 import { tBackend } from "./lib/i18nBackend";
-import { Component, createEffect, createMemo, createSignal, on, onMount, onCleanup, Show, untrack, type JSX } from "solid-js";
+import { Component, batch, createEffect, createMemo, createSignal, on, onMount, onCleanup, Show, untrack, type JSX } from "solid-js";
 import { invoke as tauriInvoke, Channel, type InvokeArgs, type InvokeOptions } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -753,6 +753,7 @@ export const App: Component = () => {
       unlit: m.unlit,
       transmission: m.transmission,
       ior: m.ior,
+      thickness: m.thickness,
       clearcoat: m.clearcoat,
       clearcoatRoughness: m.clearcoat_roughness,
       uvScale: m.uv_scale,
@@ -846,6 +847,7 @@ export const App: Component = () => {
     unlit: m.unlit,
     transmission: m.transmission,
     ior: m.ior,
+    thickness: m.thickness,
     clearcoat: m.clearcoat,
     clearcoat_roughness: m.clearcoat_roughness,
     uv_scale: m.uv_scale,
@@ -862,6 +864,7 @@ export const App: Component = () => {
     unlit: next.unlit,
     transmission: next.transmission,
     ior: next.ior,
+    thickness: next.thickness,
     clearcoat: next.clearcoat,
     clearcoatRoughness: next.clearcoat_roughness,
     uvScale: next.uv_scale,
@@ -960,6 +963,22 @@ export const App: Component = () => {
   const [meshLoaded, setMeshLoaded] = createSignal(false);
   const [meshInfo, setMeshInfo] = createSignal({ vertices: 0, faces: 0, format: "" });
   const [meshData, setMeshData] = createSignal<MeshData | undefined>();
+  /** Diagonal de la caja del modelo: escala del grosor del vidrio */
+  const glassScale = createMemo(() => {
+    const positions = meshData()?.positions;
+    if (!positions || positions.length < 3) return 1;
+    const min = [Infinity, Infinity, Infinity];
+    const max = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i + 2 < positions.length; i += 3) {
+      for (let k = 0; k < 3; k++) {
+        const v = positions[i + k];
+        if (v < min[k]) min[k] = v;
+        if (v > max[k]) max[k] = v;
+      }
+    }
+    return Math.hypot(max[0] - min[0], max[1] - min[1], max[2] - min[2]) || 1;
+  });
+
   /** Sube cada vez que llega otra malla del activo */
   const meshRevision = createMemo((n: number) => (meshData(), n + 1), 0);
 
@@ -1194,6 +1213,11 @@ export const App: Component = () => {
   const openTextureEditor = (target: "original" | "quad", selection: TextureSelection) => {
     setShowQuadMesh(target === "quad");
     setTextureEditor(selection);
+    // En el espacio Materiales las texturas son una pestaña del mismo panel
+    if (pipeline.workspace()?.id === "materials") {
+      setMaterialEditorOpen(true);
+      setMaterialEditorTab("textures");
+    }
   };
 
   // Editar la textura en otras aplicaciones (ver apps/desktop/src/textures.rs)
@@ -4925,10 +4949,12 @@ export const App: Component = () => {
   };
   // Panel lateral de materiales (espacio Materiales)
   const [materialEditorOpen, setMaterialEditorOpen] = createPersisted("materialEditor.open", true);
-  const [materialEditorTab, setMaterialEditorTab] = createPersisted<MaterialEditorTab>("materialEditor.tab", "object");
+  const [materialEditorTab, setMaterialEditorTab] = createPersisted<MaterialEditorTab>("materialEditor.tab", "materials");
+  // Pestañas guardadas de antes: «Objeto» se fundió con «Materiales»
+  if ((materialEditorTab() as string) === "object") setMaterialEditorTab("materials");
   const [materialEditorFraction, setMaterialEditorFraction] = createPersisted("materialEditor.fraction", 0.32);
   const inMaterialsWorkspace = () => pipeline.workspace()?.id === "materials";
-  const materialEditorVisible = () => inMaterialsWorkspace() && materialEditorOpen() && !textureEditor();
+  const materialEditorVisible = () => inMaterialsWorkspace() && materialEditorOpen();
   const resizeMaterialEditor = (e: PointerEvent) => {
     const start = materialEditorFraction();
     const width = splitRef?.clientWidth ?? 1;
@@ -4943,9 +4969,11 @@ export const App: Component = () => {
     onRemove: removeMaterial,
     onAssignMany: assignMany,
     onAddMany: addMany,
+    modelSize: glassScale(),
     textureUrls: textureUrls(),
     onLoadMap: loadMap,
     onClearMap: clearMap,
+    onOpenTexture: (index, slot) => openTextureEditor(displayQuad() ? "quad" : "original", { material: index, slot }),
   });
   const selectedNodePrimitives = (): NodePrimitive[] => {
     const structure = sceneStructure();
@@ -4961,6 +4989,34 @@ export const App: Component = () => {
       }))
     );
   };
+
+  // El editor de texturas sigue a la parte elegida: pasa al material de esa parte
+  createEffect(
+    on(
+      () => [pickedNodes().join(","), selectedNodePrimitives().map((p) => p.material).join(",")],
+      () => {
+        const current = textureEditor();
+        if (!current || displayQuad()) return;
+        const materials = selectedNodePrimitives().flatMap((p) => (p.material === null ? [] : [p.material]));
+        if (!materials.length || materials.includes(current.material)) return;
+        setTextureEditor({ ...current, material: materials[0] });
+      },
+      { defer: true }
+    )
+  );
+  // Pestaña Texturas sin textura abierta (recién abierto el proyecto): la del color del primer material
+  createEffect(() => {
+    if (materialEditorVisible() && materialEditorTab() === "textures" && !textureEditor()) {
+      const first = untrack(selectedNodePrimitives).find((p) => p.material !== null)?.material;
+      setTextureEditor({ material: first ?? 0, slot: "base" });
+    }
+  });
+  /** Cierra el panel de materiales y, como comparten espacio, también el de texturas */
+  const closeMaterialArea = () =>
+    batch(() => {
+      setMaterialEditorOpen(false);
+      setTextureEditor(undefined);
+    });
 
   // Panel lateral de Orizon3D (como los editores de pieles y de rig)
   const [scanEditorOpen, setScanEditorOpen] = createPersisted("scanEditor.open", true);
@@ -7489,11 +7545,37 @@ export const App: Component = () => {
           </Show>
           {/* Materiales a la izquierda del visor */}
           <Show when={materialEditorVisible()}>
-            <div class="shrink-0 min-w-0 border-r border-border" style={{ width: `${100 * materialEditorFraction()}%` }}>
+            <div class="shrink-0 min-w-0 border-r border-border" style={{ width: `${100 * (materialEditorTab() === "textures" ? editorFraction() : materialEditorFraction())}%` }}>
               <MaterialEditorPanel
                 tab={materialEditorTab()}
-                onTab={setMaterialEditorTab}
-                onClose={() => setMaterialEditorOpen(false)}
+                onTab={(tab) => {
+                  if (tab === "textures" && !textureEditor()) {
+                    const first = selectedNodePrimitives().find((p) => p.material !== null)?.material;
+                    setTextureEditor({ material: first ?? 0, slot: "base" });
+                  }
+                  setMaterialEditorTab(tab);
+                }}
+                onClose={closeMaterialArea}
+                textures={
+                  <Show when={textureEditor()}>
+                    {(selection) => (
+                      <TextureEditor
+                        materials={editorMaterials()}
+                        mesh={displayQuad() ? quadMeshData() : meshData()}
+                        selection={selection()}
+                        onSelect={setTextureEditor}
+                        target={quadMeshData() && !quadForced() ? (displayQuad() ? "quad" : "original") : undefined}
+                        onTargetChange={(t) => setShowQuadMesh(t === "quad")}
+                        onClose={closeMaterialArea}
+                        onExport={handleTextureExport}
+                        onImport={handleTextureImport}
+                        onEditExternally={handleTextureEditExternally}
+                        external={externalEdit()}
+                        onStopExternal={stopExternalEdit}
+                      />
+                    )}
+                  </Show>
+                }
                 nodeName={(() => {
                   const picked = pickedNodes();
                   if (picked.length > 1) return t("{n} partes elegidas", { n: picked.length });
@@ -7510,7 +7592,7 @@ export const App: Component = () => {
                 onTarget={(target) => setShowQuadMesh(target === "quad")}
               />
             </div>
-            <div class="shrink-0 w-1 cursor-col-resize bg-border hover:bg-accent/50 transition-colors" onPointerDown={resizeMaterialEditor} />
+            <div class="shrink-0 w-1 cursor-col-resize bg-border hover:bg-accent/50 transition-colors" onPointerDown={(e) => (materialEditorTab() === "textures" ? resizeEditor(e) : resizeMaterialEditor(e))} />
           </Show>
           {/* Orizon3D a la izquierda del visor */}
           <Show when={scanEditorVisible()}>
@@ -7529,7 +7611,7 @@ export const App: Component = () => {
             <div class="shrink-0 w-1 cursor-col-resize bg-border hover:bg-accent/50 transition-colors" onPointerDown={resizeScanEditor} />
           </Show>
           {/* Editor de texturas a la izquierda del visor */}
-          <Show when={textureEditor()}>
+          <Show when={!inMaterialsWorkspace() ? textureEditor() : undefined}>
             {(selection) => (
               <>
                 <div class="shrink-0 min-w-0" style={{ width: `${100 * editorFraction()}%` }}>
@@ -7786,7 +7868,7 @@ export const App: Component = () => {
               textureUrls: textureUrls(),
               onOpenTexture: (selection) => openTextureEditor(displayQuad() ? "quad" : "original", selection),
               panelOpen: materialEditorOpen(),
-              onTogglePanel: () => setMaterialEditorOpen(!materialEditorOpen()),
+              onTogglePanel: () => (materialEditorOpen() || textureEditor() ? closeMaterialArea() : setMaterialEditorOpen(true)),
             }}
             lights={lights()}
             onLightsChange={setLights}

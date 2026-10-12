@@ -366,6 +366,7 @@ fn import_materials(doc: &gltf::Document, scene: &mut Scene) -> Vec<PendingUvTra
             unlit: mat.unlit(),
             transmission_factor: extension_f32(&mat, "KHR_materials_transmission", "transmissionFactor", 0.0),
             ior: extension_f32(&mat, "KHR_materials_ior", "ior", 1.5),
+            thickness_factor: extension_f32(&mat, "KHR_materials_volume", "thicknessFactor", 0.0),
             clearcoat_factor: extension_f32(&mat, "KHR_materials_clearcoat", "clearcoatFactor", 0.0),
             clearcoat_roughness_factor: extension_f32(&mat, "KHR_materials_clearcoat", "clearcoatRoughnessFactor", 0.0),
             ..Default::default()

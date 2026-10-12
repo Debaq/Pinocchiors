@@ -31,6 +31,8 @@ export interface MaterialPreset {
   /** Vidrio: cuánta luz atraviesa (0 a 1) y refracción */
   transmission?: number;
   ior?: number;
+  /** Grosor del vidrio: 0 a 1 de lo máximo (un quinto del tamaño del modelo) */
+  thickness?: number;
   /** Barniz húmedo o lacado */
   clearcoat?: number;
   clearcoatRoughness?: number;
@@ -38,18 +40,10 @@ export interface MaterialPreset {
 
 export const MATERIAL_PRESETS: MaterialPreset[] = [
   // Orgánico
-  { id: "skin-light", group: "organic", get label() { return t("Piel clara"); }, color: "#e8b9a0", metallic: 0, shine: 0.3, clearcoat: 0.15, clearcoatRoughness: 0.5 },
   { id: "skin", group: "organic", get label() { return t("Piel"); }, color: "#d19a7a", metallic: 0, shine: 0.35, clearcoat: 0.15, clearcoatRoughness: 0.5 },
-  { id: "skin-dark", group: "organic", get label() { return t("Piel oscura"); }, color: "#6e4330", metallic: 0, shine: 0.4, clearcoat: 0.2, clearcoatRoughness: 0.5 },
-  { id: "skin-green", group: "organic", get label() { return t("Piel verde"); }, color: "#6f9a4e", metallic: 0, shine: 0.35, clearcoat: 0.15, clearcoatRoughness: 0.5 },
-  { id: "skin-grey", group: "organic", get label() { return t("Piel gris rugosa"); }, color: "#8c8a86", metallic: 0, shine: 0.1 },
-  { id: "skin-blue", group: "organic", get label() { return t("Piel azul"); }, color: "#4f7fb8", metallic: 0, shine: 0.35, clearcoat: 0.15, clearcoatRoughness: 0.5 },
-  { id: "scales-green", group: "organic", get label() { return t("Escamas verdes"); }, color: "#3f7a3a", metallic: 0.1, shine: 0.6, clearcoat: 0.4, clearcoatRoughness: 0.3 },
-  { id: "scales-red", group: "organic", get label() { return t("Escamas rojas"); }, color: "#a3281f", metallic: 0.1, shine: 0.6, clearcoat: 0.4, clearcoatRoughness: 0.3 },
-  { id: "scales-gold", group: "organic", get label() { return t("Escamas doradas"); }, color: "#c79a32", metallic: 0.7, shine: 0.65, clearcoat: 0.3, clearcoatRoughness: 0.3 },
-  { id: "fur-brown", group: "organic", get label() { return t("Pelaje marrón"); }, color: "#6a4528", metallic: 0, shine: 0 },
-  { id: "fur-white", group: "organic", get label() { return t("Pelaje blanco"); }, color: "#ece8e0", metallic: 0, shine: 0 },
-  { id: "fur-black", group: "organic", get label() { return t("Pelaje negro"); }, color: "#1d1b1c", metallic: 0, shine: 0.05 },
+  { id: "skin-grey", group: "organic", get label() { return t("Piel rugosa"); }, color: "#8c8a86", metallic: 0, shine: 0.1 },
+  { id: "scales-green", group: "organic", get label() { return t("Escamas"); }, color: "#3f7a3a", metallic: 0.1, shine: 0.6, clearcoat: 0.4, clearcoatRoughness: 0.3 },
+  { id: "fur-brown", group: "organic", get label() { return t("Pelaje"); }, color: "#6a4528", metallic: 0, shine: 0 },
   { id: "feathers", group: "organic", get label() { return t("Plumas"); }, color: "#c9d6e3", metallic: 0, shine: 0.4, clearcoat: 0.2, clearcoatRoughness: 0.4 },
   { id: "flesh", group: "organic", get label() { return t("Carne"); }, color: "#b8473f", metallic: 0, shine: 0.45, clearcoat: 0.6, clearcoatRoughness: 0.25 },
   { id: "blood", group: "organic", get label() { return t("Sangre"); }, color: "#6e0a0f", metallic: 0, shine: 0.9, clearcoat: 1, clearcoatRoughness: 0.05 },
@@ -58,18 +52,19 @@ export const MATERIAL_PRESETS: MaterialPreset[] = [
   { id: "claw", group: "organic", get label() { return t("Garra"); }, color: "#d8d0bc", metallic: 0, shine: 0.55, clearcoat: 0.6, clearcoatRoughness: 0.2 },
   { id: "pearl", group: "organic", get label() { return t("Concha nácar"); }, color: "#efe6e8", metallic: 0.3, shine: 0.85, clearcoat: 1, clearcoatRoughness: 0.1 },
   { id: "eye", group: "organic", get label() { return t("Ojo húmedo"); }, color: "#f2efe8", metallic: 0, shine: 0.95, clearcoat: 1, clearcoatRoughness: 0 },
-  { id: "slime", group: "organic", get label() { return t("Baba"); }, color: "#7bd34a", opacity: 0.85, metallic: 0, shine: 0.95, transmission: 0.5, ior: 1.35, clearcoat: 1, clearcoatRoughness: 0 },
+  { id: "slime", group: "organic", get label() { return t("Baba"); }, color: "#7bd34a", opacity: 0.85, metallic: 0, shine: 0.95, transmission: 0.5, ior: 1.35, thickness: 0.3, clearcoat: 1, clearcoatRoughness: 0 },
   { id: "cloth", group: "organic", get label() { return t("Tela"); }, color: "#4a5f8a", metallic: 0, shine: 0 },
   { id: "leather", group: "organic", get label() { return t("Cuero"); }, color: "#6b3f26", metallic: 0, shine: 0.4, clearcoat: 0.2, clearcoatRoughness: 0.4 },
   // Transparente y luz
-  { id: "liquid", group: "clear", get label() { return t("Líquido transparente"); }, color: "#bfe4ff", metallic: 0, shine: 1, transmission: 1, ior: 1.33 },
+  { id: "ghost", group: "clear", get label() { return t("Transparente"); }, color: "#ffffff", opacity: 0.2, metallic: 0, shine: 0.5 },
+  { id: "ghost-faint", group: "clear", get label() { return t("Casi invisible"); }, color: "#ffffff", opacity: 0.06, metallic: 0, shine: 0.3 },
+  { id: "liquid", group: "clear", get label() { return t("Líquido transparente"); }, color: "#bfe4ff", metallic: 0, shine: 1, transmission: 1, ior: 1.33, thickness: 0.6 },
   { id: "glass", group: "clear", get label() { return t("Vidrio"); }, color: "#f2f8fa", metallic: 0, shine: 1, transmission: 1, ior: 1.5 },
-  { id: "ice", group: "clear", get label() { return t("Hielo"); }, color: "#d3ecf7", metallic: 0, shine: 0.8, transmission: 0.8, ior: 1.31 },
-  { id: "amber", group: "clear", get label() { return t("Ámbar y resina"); }, color: "#f0a030", metallic: 0, shine: 0.9, transmission: 0.85, ior: 1.55 },
-  { id: "jade", group: "clear", get label() { return t("Jade"); }, color: "#6fb58c", metallic: 0, shine: 0.8, transmission: 0.3, ior: 1.6, clearcoat: 0.5, clearcoatRoughness: 0.1 },
-  { id: "neon-green", group: "clear", get label() { return t("Luz neón verde"); }, color: "#0b1a10", metallic: 0, shine: 0.6, glow: { color: "#39ff7a", strength: 1 } },
-  { id: "neon-pink", group: "clear", get label() { return t("Luz neón rosa"); }, color: "#1a0b14", metallic: 0, shine: 0.6, glow: { color: "#ff3fa4", strength: 1 } },
-  { id: "neon-blue", group: "clear", get label() { return t("Luz neón azul"); }, color: "#0b101a", metallic: 0, shine: 0.6, glow: { color: "#3fa9ff", strength: 1 } },
+  { id: "glass-thick", group: "clear", get label() { return t("Vidrio grueso"); }, color: "#d6efe6", metallic: 0, shine: 1, transmission: 1, ior: 1.52, thickness: 0.8 },
+  { id: "ice", group: "clear", get label() { return t("Hielo"); }, color: "#d3ecf7", metallic: 0, shine: 0.8, transmission: 0.8, ior: 1.31, thickness: 0.7 },
+  { id: "amber", group: "clear", get label() { return t("Ámbar y resina"); }, color: "#f0a030", metallic: 0, shine: 0.9, transmission: 0.85, ior: 1.55, thickness: 0.6 },
+  { id: "jade", group: "clear", get label() { return t("Jade"); }, color: "#6fb58c", metallic: 0, shine: 0.8, transmission: 0.3, ior: 1.6, thickness: 0.4, clearcoat: 0.5, clearcoatRoughness: 0.1 },
+  { id: "neon-green", group: "clear", get label() { return t("Luz neón"); }, color: "#0b1a10", metallic: 0, shine: 0.6, glow: { color: "#39ff7a", strength: 1 } },
   { id: "lava", group: "clear", get label() { return t("Lava"); }, color: "#2a0c04", metallic: 0, shine: 0.3, glow: { color: "#ff5a14", strength: 0.8 } },
   // Metal
   { id: "chrome", group: "metal", get label() { return t("Metal pulido"); }, color: "#d9dce0", metallic: 1, shine: 0.92 },
@@ -97,10 +92,21 @@ export const MATERIAL_PRESETS: MaterialPreset[] = [
   { id: "flat", group: "things", get label() { return t("Color plano"); }, color: "#7aa2f7", metallic: 0, shine: 0, flat: true },
 ];
 
-/** Lo que cambia un preset en un material (formato de `MaterialInfo`) */
-export function presetPatch(preset: MaterialPreset, keepTexture: boolean) {
-  const [r, g, b] = keepTexture ? [1, 1, 1] : hexToLinear(preset.color);
-  const glow = preset.glow ? hexToLinear(preset.glow.color) : [0, 0, 0];
+/** Un quinto del tamaño del modelo: el grosor de vidrio máximo */
+export const MAX_THICKNESS = 0.2;
+
+/**
+ * Lo que cambia un preset en un material (formato de `MaterialInfo`).
+ * `keepColor`: el color del material (lineal) pasa por encima del del preset, y el
+ * del glow, si el preset brilla, también.
+ */
+export function presetPatch(
+  preset: MaterialPreset,
+  options: { keepTexture: boolean; keepColor?: [number, number, number]; modelSize: number }
+) {
+  const own = options.keepColor;
+  const [r, g, b] = options.keepTexture ? [1, 1, 1] : own ?? hexToLinear(preset.color);
+  const glow = preset.glow ? (own ?? hexToLinear(preset.glow.color)) : [0, 0, 0];
   const k = preset.glow?.strength ?? 0;
   const opacity = preset.opacity ?? 1;
   return {
@@ -112,6 +118,7 @@ export function presetPatch(preset: MaterialPreset, keepTexture: boolean) {
     unlit: !!preset.flat,
     transmission: preset.transmission ?? 0,
     ior: preset.ior ?? 1.5,
+    thickness: (preset.thickness ?? 0) * MAX_THICKNESS * options.modelSize,
     clearcoat: preset.clearcoat ?? 0,
     clearcoat_roughness: preset.clearcoatRoughness ?? 0.1,
   };
@@ -119,15 +126,16 @@ export function presetPatch(preset: MaterialPreset, keepTexture: boolean) {
 
 /** Bolita de un preset */
 export const presetPreview = (preset: MaterialPreset): PreviewMaterial => {
-  const p = presetPatch(preset, false);
-  return { color: [p.base_color[0], p.base_color[1], p.base_color[2]], opacity: p.base_color[3], metallic: p.metallic, roughness: p.roughness, emissive: p.emissive, flat: p.unlit, transmission: p.transmission, ior: p.ior, clearcoat: p.clearcoat, clearcoatRoughness: p.clearcoat_roughness };
+  const p = presetPatch(preset, { keepTexture: false, modelSize: 1 });
+  return { color: [p.base_color[0], p.base_color[1], p.base_color[2]], opacity: p.base_color[3], metallic: p.metallic, roughness: p.roughness, emissive: p.emissive, flat: p.unlit, transmission: p.transmission, ior: p.ior, thickness: p.thickness / MAX_THICKNESS, clearcoat: p.clearcoat, clearcoatRoughness: p.clearcoat_roughness };
 };
 
 /** Material de la escena a preset (para guardarlo en la biblioteca propia) */
 export function presetFromMaterial(
   id: string,
   label: string,
-  m: { base_color: number[]; metallic: number; roughness: number; emissive: number[]; alpha_mode: string; unlit: boolean; transmission: number; ior: number; clearcoat: number; clearcoat_roughness: number }
+  modelSize: number,
+  m: { base_color: number[]; metallic: number; roughness: number; emissive: number[]; alpha_mode: string; unlit: boolean; transmission: number; ior: number; thickness: number; clearcoat: number; clearcoat_roughness: number }
 ): MaterialPreset {
   const strength = Math.max(...m.emissive);
   return {
@@ -141,6 +149,7 @@ export function presetFromMaterial(
     flat: m.unlit || undefined,
     transmission: m.transmission || undefined,
     ior: m.ior !== 1.5 ? m.ior : undefined,
+    thickness: m.thickness > 0 ? Math.min(1, m.thickness / (MAX_THICKNESS * modelSize)) : undefined,
     clearcoat: m.clearcoat || undefined,
     clearcoatRoughness: m.clearcoat > 0 ? m.clearcoat_roughness : undefined,
   };

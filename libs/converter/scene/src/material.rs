@@ -48,6 +48,9 @@ pub struct Material {
     pub transmission_factor: f32,
     /// Índice de refracción (KHR_materials_ior): agua 1.33, vidrio 1.5, diamante 2.4
     pub ior: f32,
+    /// Grosor del volumen, en unidades de la malla (KHR_materials_volume): con él el
+    /// vidrio deforma y tiñe lo que hay detrás
+    pub thickness_factor: f32,
     /// Capa de barniz sobre el material, para lo húmedo o lacado (KHR_materials_clearcoat)
     pub clearcoat_factor: f32,
     pub clearcoat_roughness_factor: f32,
@@ -75,6 +78,7 @@ impl Default for Material {
             unlit: false,
             transmission_factor: 0.0,
             ior: 1.5,
+            thickness_factor: 0.0,
             clearcoat_factor: 0.0,
             clearcoat_roughness_factor: 0.0,
             uv_scale: [1.0, 1.0],

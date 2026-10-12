@@ -65,6 +65,8 @@ export interface SceneMaterial {
   /** Vidrio y líquidos (0 opaco, 1 transparente como el vidrio) */
   transmission?: number;
   ior?: number;
+  /** Grosor del vidrio, en unidades del modelo */
+  thickness?: number;
   /** Barniz sobre el material */
   clearcoat?: number;
   clearcoatRoughness?: number;
@@ -2130,6 +2132,8 @@ export class Viewer3D {
       opacity: m.baseColor[3],
       alphaTest: m.alphaMode === "mask" ? m.alphaCutoff : 0,
       side: THREE.DoubleSide,
+      // Lo translúcido no tapa lo que tiene detrás ni a sí mismo
+      depthWrite: m.alphaMode !== "blend",
     };
     let material: THREE.Material;
     if (m.unlit) {
@@ -2146,6 +2150,9 @@ export class Viewer3D {
           ? {
               transmission,
               ior: m.ior ?? 1.5,
+              thickness: m.thickness ?? 0,
+              // El vidrio grueso se tiñe con su color (como lo exporta el glTF)
+              ...((m.thickness ?? 0) > 0 ? { attenuationColor: color.clone(), attenuationDistance: m.thickness! * 1.5 } : {}),
               clearcoat,
               clearcoatRoughness: m.clearcoatRoughness ?? 0,
               // Lo que atraviesa la luz no se mezcla por transparencia: la transmisión ya lo resuelve

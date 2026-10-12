@@ -2,8 +2,9 @@ import { Component, For, Show, createMemo, createSignal } from "solid-js";
 import { Checkbox, Select, Slider } from "../ui";
 import type { MaterialInfo } from "../steps/StructureStep";
 import type { TextureSlot } from "../layout/TextureEditor";
-import { MATERIAL_PRESETS, PRESET_GROUPS, deleteUserPreset, presetFromMaterial, presetPatch, presetPreview, saveUserPreset, userPresets, type MaterialPreset } from "../../lib/materialPresets.ts";
+import { MATERIAL_PRESETS, MAX_THICKNESS, PRESET_GROUPS, deleteUserPreset, presetFromMaterial, presetPatch, presetPreview, saveUserPreset, userPresets, type MaterialPreset } from "../../lib/materialPresets.ts";
 import { hexToLinear, linearToHex } from "../../lib/materialColor.ts";
+import { createPersisted } from "../../lib/ui-state.ts";
 import { renderMaterialPreview, type PreviewMaterial } from "../../lib/materialPreview.ts";
 import { t } from "../../lib/i18n";
 
@@ -24,13 +25,18 @@ export interface MaterialMaps {
   urls: string[];
   onLoad: (slot: TextureSlot) => void;
   onClear: (slot: TextureSlot) => void;
+  /** Abre la imagen en el editor de texturas */
+  onOpen?: (slot: TextureSlot) => void;
 }
 
 export interface MaterialActions {
   /** Miniaturas de las imágenes del archivo, por índice */
+  /** Tamaño del modelo (diagonal): el grosor del vidrio se mide contra él */
+  modelSize?: number;
   textureUrls?: string[];
   onLoadMap?: (index: number, slot: TextureSlot) => void;
   onClearMap?: (index: number, slot: TextureSlot) => void;
+  onOpenTexture?: (index: number, slot: TextureSlot) => void;
   materials: MaterialInfo[];
   onEdit: (index: number, patch: MaterialPatch) => void;
   /** Material nuevo (copia de `copyOf` si se dice) para una primitiva, o suelto si no hay `target` */
@@ -69,6 +75,9 @@ const Bubble: Component<{ preview: PreviewMaterial; label: string; onClick: () =
   </div>
 );
 
+/** Al aplicar un preset se conserva el color que ya tiene el material */
+const [keepColor, setKeepColor] = createPersisted("materials.keepColor", false);
+
 /** Galería de presets: los propios y los de fábrica por grupo, con su bolita */
 const PresetGallery: Component<{ onPick: (preset: MaterialPreset) => void }> = (props) => (
   <div class="space-y-2 p-2 rounded-md bg-bg-lighter/40 border border-border max-h-80 overflow-y-auto">
@@ -104,16 +113,49 @@ const MAP_SLOTS: { slot: TextureSlot; label: () => string; index: (m: MaterialIn
 ];
 
 /** Imágenes de un material: cargar una desde un archivo o quitarla */
-const MapsSection: Component<{ material: MaterialInfo; maps: MaterialMaps }> = (props) => (
+const MapsSection: Component<{ material: MaterialInfo; maps: MaterialMaps; onChange: (patch: MaterialPatch) => void }> = (props) => {
+  // Color de la capa: sin imagen es el color mismo, con imagen es el tinte
+  const colorOf = (slot: TextureSlot): { value: number[]; set: (rgb: number[]) => void } | undefined => {
+    const m = props.material;
+    if (slot === "base") return { value: m.base_color, set: ([r, g, b]) => props.onChange({ base_color: [r, g, b, m.base_color[3]] }) };
+    if (slot === "emissive") {
+      const k = Math.max(...m.emissive);
+      const c = k > 0 ? m.emissive.map((x) => x / k) : [1, 1, 1];
+      return { value: c, set: ([r, g, b]) => props.onChange({ emissive: [r * (k > 0 ? k : 0.5), g * (k > 0 ? k : 0.5), b * (k > 0 ? k : 0.5)] }) };
+    }
+    return undefined;
+  };
+  return (
   <div class="space-y-1.5">
     <For each={MAP_SLOTS}>
       {(row) => {
         const index = () => row.index(props.material);
         const url = () => (index() === null ? undefined : props.maps.urls[index()!]);
+        const color = () => colorOf(row.slot);
+        const picker = (c: { value: number[]; set: (rgb: number[]) => void }) => (
+          <input
+            type="color"
+            title={index() === null ? t("Color") : t("Tinte del color")}
+            value={linearToHex(c.value)}
+            onInput={(e) => c.set(hexToLinear(e.currentTarget.value))}
+            class="w-6 h-6 p-0 rounded border border-border bg-transparent cursor-pointer shrink-0"
+          />
+        );
         return (
           <div class="flex items-center gap-2 text-xs">
-            <Show when={url()} fallback={<div class="w-6 h-6 rounded bg-bg-lighter border border-border shrink-0" />}>
-              <img src={url()} class="w-6 h-6 rounded object-cover border border-border shrink-0" alt="" />
+            <Show when={url()} fallback={
+              <Show when={color()} fallback={<div class="w-6 h-6 rounded bg-bg-lighter border border-border shrink-0" />}>
+                {(c) => picker(c())}
+              </Show>
+            }>
+              <button
+                class="shrink-0 cursor-pointer"
+                title={props.maps.onOpen ? t("Abrir en el editor de texturas") : undefined}
+                onClick={() => props.maps.onOpen?.(row.slot)}
+              >
+                <img src={url()} class="w-6 h-6 rounded object-cover border border-border hover:border-accent" alt="" />
+              </button>
+              <Show when={color()}>{(c) => picker(c())}</Show>
             </Show>
             <span class="text-text-muted flex-1 truncate">{row.label()}</span>
             <button class="text-accent hover:underline" onClick={() => props.maps.onLoad(row.slot)}>
@@ -129,7 +171,8 @@ const MapsSection: Component<{ material: MaterialInfo; maps: MaterialMaps }> = (
       }}
     </For>
   </div>
-);
+  );
+};
 
 /** Color, brillo, brillo propio (glow) y translucidez de un material */
 export const MaterialEditor: Component<{
@@ -137,6 +180,7 @@ export const MaterialEditor: Component<{
   onChange: (patch: MaterialPatch) => void;
   /** Imágenes del material (solo los del archivo, no los de la piel) */
   maps?: MaterialMaps;
+  modelSize?: number;
 }> = (props) => {
   const m = () => props.material;
   const glow = () => Math.max(...m().emissive);
@@ -160,11 +204,19 @@ export const MaterialEditor: Component<{
       112
     )
   );
-  const apply = (preset: MaterialPreset) => props.onChange(presetPatch(preset, hasMap()));
+  const size = () => props.modelSize ?? 1;
+  const apply = (preset: MaterialPreset) =>
+    props.onChange(
+      presetPatch(preset, {
+        keepTexture: hasMap(),
+        keepColor: keepColor() ? [m().base_color[0], m().base_color[1], m().base_color[2]] : undefined,
+        modelSize: size(),
+      })
+    );
   const save = () => {
     const name = saving()?.trim();
     if (!name) return;
-    saveUserPreset(presetFromMaterial(`user-${Date.now()}`, name, m()));
+    saveUserPreset(presetFromMaterial(`user-${Date.now()}`, name, size(), m()));
     setSaving(undefined);
     setGalleryOpen(true);
   };
@@ -200,6 +252,10 @@ export const MaterialEditor: Component<{
         </div>
       </Show>
       <Show when={galleryOpen()}>
+        <label class="flex items-center gap-2 text-xs text-text-muted">
+          <input type="checkbox" checked={keepColor()} onChange={(e) => setKeepColor(e.currentTarget.checked)} />
+          {t("Mantener mi color")}
+        </label>
         <PresetGallery onPick={apply} />
       </Show>
       <input
@@ -299,6 +355,18 @@ export const MaterialEditor: Component<{
           formatValue={(v) => v.toFixed(2)}
         />
       </Show>
+      <Show when={m().transmission > 0}>
+        <Slider
+          label={t("Grosor del vidrio")}
+          title={t("Con grosor el vidrio deforma y tiñe lo que hay detrás; sin él es una lámina fina")}
+          value={Math.min(1, m().thickness / (MAX_THICKNESS * size()))}
+          onChange={(v) => props.onChange({ thickness: v * MAX_THICKNESS * size() })}
+          min={0}
+          max={1}
+          step={0.01}
+          formatValue={pct}
+        />
+      </Show>
       <Slider
         label={t("Barniz")}
         title={t("Capa brillante encima: lo húmedo, lacado o encerado")}
@@ -327,7 +395,7 @@ export const MaterialEditor: Component<{
       <Show when={props.maps}>
         {(maps) => (
           <div class="space-y-2 pt-1">
-            <MapsSection material={m()} maps={maps()} />
+            <MapsSection material={m()} maps={maps()} onChange={props.onChange} />
             <Show when={MAP_SLOTS.some((row) => row.index(m()) !== null)}>
               <Slider
                 label={t("Repetición")}
@@ -352,7 +420,8 @@ const NONE = "none";
 /** Las imágenes de un material, si quien llama sabe cargarlas */
 export const mapsOf = (actions: MaterialActions, index: number): MaterialMaps | undefined =>
   actions.textureUrls && actions.onLoadMap && actions.onClearMap
-    ? { urls: actions.textureUrls, onLoad: (slot) => actions.onLoadMap!(index, slot), onClear: (slot) => actions.onClearMap!(index, slot) }
+    ? { urls: actions.textureUrls, onLoad: (slot) => actions.onLoadMap!(index, slot), onClear: (slot) => actions.onClearMap!(index, slot),
+        onOpen: actions.onOpenTexture && ((slot) => actions.onOpenTexture!(index, slot)) }
     : undefined;
 
 /** Materiales de las primitivas del nodo elegido: cambiar, editar, añadir */
@@ -402,7 +471,7 @@ export const NodeMaterials: Component<{ primitives: NodePrimitive[] } & Material
                         {t("Duplicar solo para este objeto")}
                       </button>
                     </Show>
-                    <MaterialEditor material={mat()} onChange={(patch) => props.onEdit(p.material!, patch)} maps={mapsOf(props, p.material!)} />
+                    <MaterialEditor material={mat()} onChange={(patch) => props.onEdit(p.material!, patch)} maps={mapsOf(props, p.material!)} modelSize={props.modelSize} />
                   </>
                 )}
               </Show>

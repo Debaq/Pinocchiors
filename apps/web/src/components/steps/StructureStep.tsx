@@ -37,6 +37,7 @@ export interface MaterialInfo {
   unlit: boolean;
   transmission: number;
   ior: number;
+  thickness: number;
   clearcoat: number;
   clearcoat_roughness: number;
   uv_scale: [number, number];

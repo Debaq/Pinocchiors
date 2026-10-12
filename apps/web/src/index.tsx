@@ -36,7 +36,7 @@ render(
       fallback={(error, reset) => (
         <div style={{ padding: "24px", "font-family": "sans-serif", color: "var(--color-text, #ddd)", background: "var(--color-bg, #1e1e1e)", height: "100vh" }}>
           <h2 style={{ "font-size": "16px", margin: "0 0 8px" }}>{t("La interfaz tuvo un error")}</h2>
-          <pre style={{ "white-space": "pre-wrap", "font-size": "12px", opacity: 0.8 }}>{String(error?.stack ?? error)}</pre>
+          <pre style={{ "white-space": "pre-wrap", "font-size": "12px", opacity: 0.8 }}>{`${error?.name ?? "Error"}: ${error?.message ?? error}\n\n${error?.stack ?? ""}`}</pre>
           <button style={{ "margin-top": "12px", padding: "6px 12px" }} onClick={reset}>
             {t("Reintentar")}
           </button>{" "}

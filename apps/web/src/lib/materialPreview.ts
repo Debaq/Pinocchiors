@@ -11,6 +11,8 @@ export interface PreviewMaterial {
   flat: boolean;
   transmission?: number;
   ior?: number;
+  /** 0 a 1: la bolita mide 2 de ancho */
+  thickness?: number;
   clearcoat?: number;
   clearcoatRoughness?: number;
 }
@@ -65,7 +67,7 @@ function setup(): Stage {
 
 /** Imagen (PNG en data URL) de un material sobre una esfera */
 export function renderMaterialPreview(m: PreviewMaterial, size = 64): string {
-  const key = `${size}|${m.color}|${m.opacity}|${m.metallic}|${m.roughness}|${m.emissive}|${m.flat}|${m.transmission}|${m.ior}|${m.clearcoat}|${m.clearcoatRoughness}`;
+  const key = `${size}|${m.color}|${m.opacity}|${m.metallic}|${m.roughness}|${m.emissive}|${m.flat}|${m.transmission}|${m.ior}|${m.thickness}|${m.clearcoat}|${m.clearcoatRoughness}`;
   const cached = cache.get(key);
   if (cached) return cached;
   stage ??= setup();
@@ -86,7 +88,8 @@ export function renderMaterialPreview(m: PreviewMaterial, size = 64): string {
         opacity: m.opacity,
         transmission: m.transmission ?? 0,
         ior: m.ior ?? 1.5,
-        thickness: 0.8,
+        thickness: (m.thickness ?? 0) * 1.2,
+        ...((m.thickness ?? 0) > 0 ? { attenuationColor: color.clone(), attenuationDistance: (m.thickness ?? 0) * 1.8 } : {}),
         clearcoat: m.clearcoat ?? 0,
         clearcoatRoughness: m.clearcoatRoughness ?? 0,
       });

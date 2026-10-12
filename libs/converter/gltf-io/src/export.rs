@@ -659,6 +659,18 @@ impl<'a> GlbBuilder<'a> {
             if (mat.ior - 1.5).abs() > 1e-4 {
                 extensions.insert("KHR_materials_ior".into(), json!({ "ior": mat.ior }));
             }
+            if mat.thickness_factor > 0.0 {
+                // El vidrio se tiñe con su color a medida que la luz lo atraviesa
+                let tint = &mat.base_color_factor[..3];
+                extensions.insert(
+                    "KHR_materials_volume".into(),
+                    json!({
+                        "thicknessFactor": mat.thickness_factor,
+                        "attenuationColor": tint,
+                        "attenuationDistance": mat.thickness_factor * 1.5,
+                    }),
+                );
+            }
             if mat.clearcoat_factor > 0.0 {
                 extensions.insert(
                     "KHR_materials_clearcoat".into(),
@@ -1443,6 +1455,7 @@ mod tests {
             name: "Vidrio".into(),
             transmission_factor: 0.8,
             ior: 1.33,
+            thickness_factor: 0.25,
             clearcoat_factor: 0.6,
             clearcoat_roughness_factor: 0.1,
             ..Material::default()
@@ -1452,7 +1465,7 @@ mod tests {
         let glb = export_glb_bytes(&scene, &GlbExportOptions::default()).unwrap();
         let root: Value = serde_json::from_str(&extract_glb_json(&glb)).unwrap();
         let used = root["extensionsUsed"].as_array().unwrap();
-        for name in ["KHR_materials_transmission", "KHR_materials_ior", "KHR_materials_clearcoat"] {
+        for name in ["KHR_materials_transmission", "KHR_materials_ior", "KHR_materials_clearcoat", "KHR_materials_volume"] {
             assert!(used.iter().any(|v| v == name), "falta {name}");
         }
 
@@ -1461,6 +1474,7 @@ mod tests {
         std::fs::write(&path, &glb).unwrap();
         let m = &crate::import_gltf(&path).unwrap().materials[0];
         assert_eq!((m.transmission_factor, m.ior, m.clearcoat_factor, m.clearcoat_roughness_factor), (0.8, 1.33, 0.6, 0.1));
+        assert_eq!(m.thickness_factor, 0.25);
     }
 
     #[test]

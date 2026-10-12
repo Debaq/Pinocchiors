@@ -1,4 +1,4 @@
-import { Component, For, Show } from "solid-js";
+import { Component, For, Show, type JSX } from "solid-js";
 import { clsx } from "clsx";
 import { IconButton, Select } from "../ui";
 import * as Icons from "../icons";
@@ -6,14 +6,16 @@ import { MaterialEditor, NodeMaterials, mapsOf, type MaterialActions, type Mater
 import { cssColor, type MaterialInfo } from "../steps/StructureStep";
 import { t } from "../../lib/i18n";
 
-export type MaterialEditorTab = "object" | "materials";
+export type MaterialEditorTab = "materials" | "textures";
 
 const TABS: { id: MaterialEditorTab; label: () => string; title: () => string }[] = [
-  { id: "object", label: () => t("Objeto"), title: () => t("Material de la parte del modelo elegida con doble clic") },
-  { id: "materials", label: () => t("Materiales"), title: () => t("Todos los materiales del modelo") },
+  { id: "materials", label: () => t("Materiales"), title: () => t("Materiales del modelo; con una parte elegida (doble clic), los de esa parte") },
+  { id: "textures", label: () => t("Texturas"), title: () => t("Editar las imágenes de los materiales") },
 ];
 
 export interface MaterialEditorPanelProps {
+  /** Editor de texturas: ocupa el panel cuando la pestaña es Texturas */
+  textures?: JSX.Element;
   tab: MaterialEditorTab;
   onTab: (tab: MaterialEditorTab) => void;
   onClose: () => void;
@@ -65,7 +67,7 @@ export const MaterialEditorPanel: Component<MaterialEditorPanelProps> = (props) 
           )}
         </For>
         <div class="flex-1" />
-        <Show when={props.canChooseTarget}>
+        <Show when={props.canChooseTarget && props.tab !== "textures"}>
           <div class="w-40">
             <Select
               options={[
@@ -81,28 +83,22 @@ export const MaterialEditorPanel: Component<MaterialEditorPanelProps> = (props) 
           <Icons.X size={14} />
         </IconButton>
       </header>
-      <div class="flex-1 min-h-0 overflow-y-auto px-3 py-2">
+      <Show when={props.tab === "textures"}>
+        <div class="flex-1 min-h-0">{props.textures}</div>
+      </Show>
+      <div class="flex-1 min-h-0 overflow-y-auto px-3 py-2" classList={{ hidden: props.tab === "textures" }}>
         <Show
-          when={props.tab === "materials" || onSkin()}
+          when={onSkin() || props.nodePrimitives.length === 0}
           fallback={
-            <Show
-              when={props.nodePrimitives.length > 0}
-              fallback={
-                <p class="text-xs text-text-muted leading-relaxed">
-                  {t("Doble clic sobre una parte del modelo para elegirla y cambiar su material.")}
-                </p>
-              }
-            >
-              <div class="space-y-2 max-w-sm">
-                <p class="text-xs text-text-muted">{props.nodeName}</p>
-                <NodeMaterials primitives={props.nodePrimitives} {...props.actions} />
-              </div>
-            </Show>
+            <div class="space-y-2 max-w-sm">
+              <p class="text-xs text-text-muted">{props.nodeName}</p>
+              <NodeMaterials primitives={props.nodePrimitives} {...props.actions} />
+            </div>
           }
         >
           <div class="[column-width:320px] [column-gap:1.25rem] space-y-0">
-            <Show when={props.onlySelected && !onSkin() && listed().length === 0}>
-              <p class="text-xs text-text-muted">{t("Las partes elegidas no tienen material: usa la pestaña Objeto para darles uno.")}</p>
+            <Show when={!onSkin()}>
+              <p class="text-xs text-text-muted mb-3">{t("Doble clic sobre una parte del modelo para ver y cambiar solo su material.")}</p>
             </Show>
             <For each={listed()}>
               {(entry) => (
@@ -115,6 +111,7 @@ export const MaterialEditorPanel: Component<MaterialEditorPanelProps> = (props) 
                     material={entry.material}
                     onChange={(patch) => (onSkin() ? props.onEditSkin(entry.index, patch) : props.actions.onEdit(entry.index, patch))}
                     maps={onSkin() ? undefined : mapsOf(props.actions, entry.index)}
+                    modelSize={props.actions.modelSize}
                   />
                   <Show when={!onSkin()}>
                     <button class="text-xs text-text-muted hover:text-text" onClick={() => props.actions.onRemove(entry.index)}>

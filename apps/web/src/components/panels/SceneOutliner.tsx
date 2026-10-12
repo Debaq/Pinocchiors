@@ -1,4 +1,4 @@
-import { Component, For, Show, createSignal, onCleanup } from "solid-js";
+import { Component, For, Show, createEffect, createSignal, on, onCleanup } from "solid-js";
 import { clsx } from "clsx";
 import type { SceneNode } from "../../lib/scene-tree";
 import { matchesOutliner, outlinerQuery } from "../../lib/outlinerFilter";
@@ -91,6 +91,7 @@ const OutlinerNode: Component<{
         )}
         style={{ "padding-left": `${props.depth * 12 + 4}px` }}
         data-outliner-row={props.node.id}
+        data-selected-row={props.node.selected && !isGroup ? "" : undefined}
         title={props.node.hint}
         onPointerEnter={() => props.onHoverNode?.(props.node.id)}
         onPointerLeave={() => props.onHoverNode?.(null)}
@@ -220,6 +221,36 @@ export const SceneOutliner: Component<SceneOutlinerProps> = (props) => {
   const isExpanded = (node: SceneNode) => openState()[node.id] ?? node.expanded;
   const onToggleExpanded = (node: SceneNode) =>
     setOpenState((prev) => ({ ...prev, [node.id]: !isExpanded(node) }));
+
+  // Al cambiar la selección (p. ej. clic en el visor) se abren los padres de
+  // lo seleccionado y se lo trae a la vista
+  const selectedPaths = (node: SceneNode, path: string[], out: string[][]) => {
+    if (node.selected && node.type !== "group") out.push(path);
+    for (const c of node.children) selectedPaths(c, [...path, node.id], out);
+  };
+  createEffect(
+    on(
+      () => {
+        const out: string[][] = [];
+        selectedPaths(props.tree, [], out);
+        return out;
+      },
+      (paths, prev) => {
+        const key = (ps: string[][]) => ps.map((p) => p.join("/")).join("|");
+        if (prev && key(paths) === key(prev)) return;
+        if (!paths.length) return;
+        const ids = new Set(paths.flat().filter((id) => id !== props.tree.id));
+        setOpenState((st) => {
+          const next = { ...st };
+          for (const id of ids) next[id] = true;
+          return next;
+        });
+        requestAnimationFrame(() =>
+          document.querySelector("[data-outliner] [data-selected-row]")?.scrollIntoView({ block: "nearest" })
+        );
+      }
+    )
+  );
 
   // Con búsqueda: quedan los que coinciden y sus padres, abiertos; los grupos
   // con contenido propio (operaciones) filtran adentro
