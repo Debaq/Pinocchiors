@@ -13,6 +13,18 @@ export const en_render: Catalog = {
   "Con «Vista actual» sale de lo que se ve ahora: misma posición, giro y zoom. El marco del visor muestra el área exacta; mueve la vista para encuadrar.":
     "«Current view» comes from what you see now: same position, rotation and zoom. The frame in the viewport shows the exact area; move the view to compose the shot.",
   "Cámaras": "Cameras",
+  "El visor muestra cómo saldrá: luces, fondo, sombras y suelo. Sin oclusión ambiental ni cuadros promediados.": "The viewport shows how it will look: lights, background, shadows and floor. Without ambient occlusion or averaged frames.",
+  "Degradado": "Gradient",
+  "Color de arriba": "Top color",
+  "Color de abajo": "Bottom color",
+  "Iluminación": "Lighting",
+  "Las del visor": "The viewport's",
+  "Estudio": "Studio",
+  "Suave": "Soft",
+  "Contraluz": "Backlight",
+  "Dramática": "Dramatic",
+  "Suelo con sombra": "Ground shadow",
+  "Un suelo invisible bajo el modelo recibe su sombra. Pide sombras suaves.": "An invisible floor under the model catches its shadow. Needs soft shadows.",
   "Mismo zoom en todas": "Same zoom on all",
   "Encuadran el modelo entero desde cada lado. El ojo lleva el visor a esa cámara para ver el encuadre.":
     "They frame the whole model from each side. The eye takes the viewport to that camera to see the framing.",

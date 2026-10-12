@@ -2,9 +2,10 @@ import * as THREE from "three";
 import { GTAOPass } from "three/addons/postprocessing/GTAOPass.js";
 import { GlowHalo } from "./glowHalo";
 import { t } from "./i18n.ts";
+import type { LightSettings } from "./lightRig";
 
 export type StillFormat = "png" | "jpeg" | "webp";
-export type StillBackground = "transparent" | "viewer" | "color";
+export type StillBackground = "transparent" | "viewer" | "color" | "gradient";
 
 /** Lo que pide el diálogo de Render */
 export interface RenderStillOptions {
@@ -13,6 +14,12 @@ export interface RenderStillOptions {
   background: StillBackground;
   /** Color del fondo cuando `background` es "color" (#rrggbb) */
   color: string;
+  /** Color de abajo cuando `background` es "gradient" (`color` es el de arriba) */
+  color2: string;
+  /** Luces que reemplazan a las del visor mientras se renderiza; null = las del visor */
+  lights: LightSettings | null;
+  /** Suelo invisible bajo el modelo que solo recibe su sombra (pide `shadows`) */
+  groundShadow: boolean;
   /** Cuadros sacudidos medio píxel que se promedian: 1, 4 o 16 */
   samples: number;
   format: StillFormat;
@@ -79,6 +86,100 @@ function jitter(samples: number): [number, number][] {
   return out;
 }
 
+/**
+ * Prende las sombras suaves de la luz principal: los sólidos las proyectan y todo las recibe.
+ * `radius` es el tamaño (diagonal) del modelo. Devuelve la función que deja todo como estaba.
+ */
+export function enableSoftShadows(
+  renderer: THREE.WebGLRenderer,
+  scene: THREE.Scene,
+  light: THREE.DirectionalLight,
+  radius: number,
+  maxMapSize = 4096,
+): () => void {
+  const saved = {
+    enabled: renderer.shadowMap.enabled,
+    type: renderer.shadowMap.type,
+    cast: light.castShadow,
+    mapSize: light.shadow.mapSize.clone(),
+    bias: light.shadow.bias,
+    normalBias: light.shadow.normalBias,
+    camera: { l: light.shadow.camera.left, r: light.shadow.camera.right, t: light.shadow.camera.top, b: light.shadow.camera.bottom, n: light.shadow.camera.near, f: light.shadow.camera.far },
+  };
+  const meshes: { mesh: THREE.Mesh; cast: boolean; receive: boolean }[] = [];
+  /** Los materiales recompilan al cambiar las sombras */
+  const refreshMaterials = () => {
+    for (const { mesh } of meshes) for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) m.needsUpdate = true;
+  };
+  scene.traverseVisible((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    meshes.push({ mesh, cast: mesh.castShadow, receive: mesh.receiveShadow });
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    // El vidrio y lo translúcido no tapan la luz
+    const solid = materials.every((m) => !m.transparent && !(m as THREE.MeshPhysicalMaterial).transmission);
+    mesh.castShadow = solid;
+    mesh.receiveShadow = true;
+  });
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  const frustum = light.shadow.camera;
+  Object.assign(frustum, { left: -radius, right: radius, top: radius, bottom: -radius, near: radius * 0.4, far: radius * 3.6 });
+  frustum.updateProjectionMatrix();
+  const size = Math.min(maxMapSize, renderer.capabilities.maxTextureSize);
+  light.shadow.mapSize.set(size, size);
+  light.shadow.map?.dispose();
+  light.shadow.map = null;
+  light.shadow.bias = -0.0003;
+  light.shadow.normalBias = radius * 0.004;
+  light.castShadow = true;
+  refreshMaterials();
+
+  return () => {
+    light.castShadow = saved.cast;
+    light.shadow.bias = saved.bias;
+    light.shadow.normalBias = saved.normalBias;
+    light.shadow.mapSize.copy(saved.mapSize);
+    const c = saved.camera;
+    Object.assign(light.shadow.camera, { left: c.l, right: c.r, top: c.t, bottom: c.b, near: c.n, far: c.f });
+    light.shadow.camera.updateProjectionMatrix();
+    light.shadow.map?.dispose();
+    light.shadow.map = null;
+    renderer.shadowMap.enabled = saved.enabled;
+    renderer.shadowMap.type = saved.type;
+    for (const m of meshes) {
+      m.mesh.castShadow = m.cast;
+      m.mesh.receiveShadow = m.receive;
+    }
+    refreshMaterials();
+  };
+}
+
+/** Suelo invisible bajo la caja que solo muestra las sombras que le caen */
+export function makeShadowGround(box: THREE.Box3): THREE.Mesh {
+  const reach = box.getSize(new THREE.Vector3()).length() * 8;
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(reach, reach), new THREE.ShadowMaterial({ opacity: 0.35 }));
+  ground.rotation.x = -Math.PI / 2;
+  ground.position.set((box.min.x + box.max.x) / 2, box.min.y, (box.min.z + box.max.z) / 2);
+  return ground;
+}
+
+/** Degradado vertical como fondo de la escena (arriba `top`, abajo `bottom`) */
+export function gradientBackground(top: string, bottom: string): THREE.CanvasTexture {
+  const canvas = document.createElement("canvas");
+  canvas.width = 2;
+  canvas.height = 256;
+  const ctx = canvas.getContext("2d")!;
+  const fill = ctx.createLinearGradient(0, 0, 0, 256);
+  fill.addColorStop(0, top);
+  fill.addColorStop(1, bottom);
+  ctx.fillStyle = fill;
+  ctx.fillRect(0, 0, 2, 256);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
 /** Luz principal desviada `angle` radianes en la dirección `turn`, a la misma distancia del centro */
 function tilted(base: THREE.Vector3, center: THREE.Vector3, angle: number, turn: number): THREE.Vector3 {
   const v = base.clone().sub(center);
@@ -124,7 +225,9 @@ export async function renderStillImage(
   const offsets = jitter(opts.samples);
   const total = tilesX * tilesY * offsets.length;
   // Sin canal alfa en JPEG: el fondo transparente sale blanco
-  const transparent = opts.background === "transparent" && opts.format !== "jpeg";
+  // El degradado se pinta al final, debajo de la imagen: se renderiza sobre transparente
+  const gradient = opts.background === "gradient";
+  const transparent = (opts.background === "transparent" && opts.format !== "jpeg") || gradient;
 
   const pixels = new Uint8ClampedArray(W * H * 4);
 
@@ -165,49 +268,11 @@ export async function renderStillImage(
 
   // Sombras: se prenden solo durante el render y se devuelven como estaban
   const light = src.key.light;
-  const savedShadow = {
-    enabled: renderer.shadowMap.enabled,
-    type: renderer.shadowMap.type,
-    cast: light.castShadow,
-    position: light.position.clone(),
-    mapSize: light.shadow.mapSize.clone(),
-    bias: light.shadow.bias,
-    normalBias: light.shadow.normalBias,
-    camera: { l: light.shadow.camera.left, r: light.shadow.camera.right, t: light.shadow.camera.top, b: light.shadow.camera.bottom, n: light.shadow.camera.near, f: light.shadow.camera.far },
-  };
-  const savedMeshes: { mesh: THREE.Mesh; cast: boolean; receive: boolean }[] = [];
-  /** Los materiales recompilan al cambiar las sombras */
-  const refreshMaterials = () => {
-    for (const { mesh } of savedMeshes) for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) m.needsUpdate = true;
-  };
+  const basePosition = light.position.clone();
+  let restoreShadows: (() => void) | null = null;
 
   try {
-    if (opts.shadows) {
-      scene.traverseVisible((o) => {
-        const mesh = o as THREE.Mesh;
-        if (!mesh.isMesh) return;
-        savedMeshes.push({ mesh, cast: mesh.castShadow, receive: mesh.receiveShadow });
-        const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-        // El vidrio y lo translúcido no tapan la luz
-        const solid = materials.every((m) => !m.transparent && !(m as THREE.MeshPhysicalMaterial).transmission);
-        mesh.castShadow = solid;
-        mesh.receiveShadow = true;
-      });
-      renderer.shadowMap.enabled = true;
-      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-      const reach = sceneRadius;
-      const camera3 = light.shadow.camera;
-      Object.assign(camera3, { left: -reach, right: reach, top: reach, bottom: -reach, near: reach * 0.4, far: reach * 3.6 });
-      camera3.updateProjectionMatrix();
-      const size = Math.min(4096, renderer.capabilities.maxTextureSize);
-      light.shadow.mapSize.set(size, size);
-      light.shadow.map?.dispose();
-      light.shadow.map = null;
-      light.shadow.bias = -0.0003;
-      light.shadow.normalBias = sceneRadius * 0.004;
-      light.castShadow = true;
-      refreshMaterials();
-    }
+    if (opts.shadows) restoreShadows = enableSoftShadows(renderer, scene, light, sceneRadius);
 
     // Recorte alrededor del centro: si la imagen es más ancha que la vista se conserva el ancho; si no, el alto
     const aspect = W / H;
@@ -242,7 +307,7 @@ export async function renderStillImage(
           if (opts.shadows && offsets.length > 1) {
             // Disco de Vogel: la luz recorre un cono de ~3° y las sombras ganan penumbra
             const angle = 0.05 * Math.sqrt((sampleIndex + 0.5) / offsets.length);
-            light.position.copy(tilted(savedShadow.position, src.key.center, angle, sampleIndex * 2.39996));
+            light.position.copy(tilted(basePosition, src.key.center, angle, sampleIndex * 2.39996));
           }
           renderer.render(scene, camera);
           let drawn = sample;
@@ -304,23 +369,8 @@ export async function renderStillImage(
     renderer.setClearColor(savedClear, savedClearAlpha);
     renderer.setRenderTarget(savedTarget);
     if (opts.shadows) {
-      light.position.copy(savedShadow.position);
-      light.castShadow = savedShadow.cast;
-      light.shadow.bias = savedShadow.bias;
-      light.shadow.normalBias = savedShadow.normalBias;
-      light.shadow.mapSize.copy(savedShadow.mapSize);
-      const c = savedShadow.camera;
-      Object.assign(light.shadow.camera, { left: c.l, right: c.r, top: c.t, bottom: c.b, near: c.n, far: c.f });
-      light.shadow.camera.updateProjectionMatrix();
-      light.shadow.map?.dispose();
-      light.shadow.map = null;
-      renderer.shadowMap.enabled = savedShadow.enabled;
-      renderer.shadowMap.type = savedShadow.type;
-      for (const m of savedMeshes) {
-        m.mesh.castShadow = m.cast;
-        m.mesh.receiveShadow = m.receive;
-      }
-      refreshMaterials();
+      light.position.copy(basePosition);
+      restoreShadows?.();
     }
     occlusion?.dispose();
     occluded?.dispose();
@@ -338,7 +388,22 @@ export async function renderStillImage(
   canvas.height = H;
   const context = canvas.getContext("2d");
   if (!context) throw new Error(t("No se pudo crear la imagen"));
-  context.putImageData(new ImageData(pixels, W, H), 0, 0);
+  if (gradient) {
+    // Degradado vertical debajo de la imagen (que lleva alfa recto)
+    const layer = document.createElement("canvas");
+    layer.width = W;
+    layer.height = H;
+    layer.getContext("2d")?.putImageData(new ImageData(pixels, W, H), 0, 0);
+    const fill = context.createLinearGradient(0, 0, 0, H);
+    fill.addColorStop(0, opts.color);
+    fill.addColorStop(1, opts.color2);
+    context.fillStyle = fill;
+    context.fillRect(0, 0, W, H);
+    context.drawImage(layer, 0, 0);
+    layer.width = layer.height = 0;
+  } else {
+    context.putImageData(new ImageData(pixels, W, H), 0, 0);
+  }
   const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, MIME[opts.format], opts.quality));
   canvas.width = canvas.height = 0;
   if (!blob || blob.type !== MIME[opts.format]) {

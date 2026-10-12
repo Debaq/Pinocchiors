@@ -4,6 +4,7 @@ import * as Icons from "../icons";
 import { t } from "../../lib/i18n";
 import { MAX_STILL_SIDE, type StillBackground, type StillFormat } from "../../lib/renderStill";
 import { RENDER_CAMERAS, sheetGrid } from "../../lib/renderCameras";
+import { RENDER_LIGHTS } from "../../lib/renderLights";
 
 export type RenderSize = "screen" | "hd" | "uhd" | "custom";
 /** Una imagen por cámara, o todas juntas en una hoja */
@@ -19,6 +20,12 @@ export interface RenderSettings {
   lockRatio: boolean;
   background: StillBackground;
   color: string;
+  /** Color de abajo del degradado (`color` es el de arriba) */
+  color2: string;
+  /** Iluminación (ver `RENDER_LIGHTS`): "viewer" = las luces del visor */
+  lightPreset: string;
+  /** Suelo invisible que recibe la sombra del modelo */
+  groundShadow: boolean;
   /** Cuadros promediados por píxel: 1, 4 o 16 */
   samples: number;
   format: StillFormat;
@@ -42,6 +49,8 @@ export interface RenderSettings {
   zoom: number;
   /** Zoom de cada cámara cuando no se comparte (por id; falta = 1) */
   zooms: Record<string, number>;
+  /** El visor muestra en vivo cómo saldrá el render */
+  preview: boolean;
 }
 
 /** Zoom con que sale una cámara (1 = el modelo entero con un margen) */
@@ -54,6 +63,9 @@ export const defaultRenderSettings: RenderSettings = {
   lockRatio: true,
   background: "viewer",
   color: "#ffffff",
+  color2: "#9aa4b5",
+  lightPreset: "viewer",
+  groundShadow: false,
   samples: 4,
   format: "png",
   quality: 92,
@@ -70,6 +82,7 @@ export const defaultRenderSettings: RenderSettings = {
   zoomShared: true,
   zoom: 1,
   zooms: {},
+  preview: false,
 };
 
 /** Medidas en píxeles que salen de las opciones; "Pantalla" toma las de la vista */
@@ -155,7 +168,9 @@ export const RenderOptions: Component<RenderOptionsProps> = (props) => {
     { value: "viewer", get label() { return t("El del visor"); } },
     { value: "transparent", get label() { return t("Transparente"); } },
     { value: "color", get label() { return t("Color"); } },
+    { value: "gradient", get label() { return t("Degradado"); } },
   ];
+  const lightOptions = RENDER_LIGHTS.map((l) => ({ value: l.id, get label() { return l.label(); } }));
   const sampleOptions = [
     { value: "1", get label() { return t("Borrador (1 cuadro)"); } },
     { value: "4", get label() { return t("Normal (4 cuadros)"); } },
@@ -233,14 +248,24 @@ export const RenderOptions: Component<RenderOptionsProps> = (props) => {
       {/* Fondo */}
       <div class="space-y-2 p-3 rounded-md bg-surface/30 border border-border break-inside-avoid mb-3">
         <Select label={t("Fondo de la imagen")} options={backgroundOptions} value={s().background} disabled={busy()} onChange={(v) => set({ background: v as StillBackground })} />
-        <Show when={s().background === "color"}>
+        <Show when={s().background === "color" || s().background === "gradient"}>
           <input
             type="color"
             value={s().color}
             disabled={busy()}
-            aria-label={t("Color del fondo")}
+            aria-label={s().background === "gradient" ? t("Color de arriba") : t("Color del fondo")}
             class="h-8 w-full rounded border border-border bg-surface/30 cursor-pointer"
             onInput={(e) => set({ color: e.currentTarget.value })}
+          />
+        </Show>
+        <Show when={s().background === "gradient"}>
+          <input
+            type="color"
+            value={s().color2}
+            disabled={busy()}
+            aria-label={t("Color de abajo")}
+            class="h-8 w-full rounded border border-border bg-surface/30 cursor-pointer"
+            onInput={(e) => set({ color2: e.currentTarget.value })}
           />
         </Show>
         <Show when={s().background === "transparent" && s().format === "jpeg"}>
@@ -260,8 +285,14 @@ export const RenderOptions: Component<RenderOptionsProps> = (props) => {
       {/* Luz */}
       <div class="flex flex-col items-start gap-2 p-3 rounded-md bg-surface/30 border border-border break-inside-avoid mb-3">
         <span class="text-xs font-medium text-text-muted">{t("Luz")}</span>
+        <div class="w-full">
+          <Select label={t("Iluminación")} options={lightOptions} value={s().lightPreset} disabled={busy()} onChange={(v) => set({ lightPreset: v })} />
+        </div>
         <Tooltip content={t("Salen de la luz principal y ganan penumbra con 4 o 16 cuadros.")} placement="left">
           <Checkbox label={t("Sombras suaves")} checked={s().shadows} disabled={busy()} onChange={(v) => set({ shadows: v })} />
+        </Tooltip>
+        <Tooltip content={t("Un suelo invisible bajo el modelo recibe su sombra. Pide sombras suaves.")} placement="left">
+          <Checkbox label={t("Suelo con sombra")} checked={s().groundShadow && s().shadows} disabled={busy() || !s().shadows} onChange={(v) => set({ groundShadow: v })} />
         </Tooltip>
         <Tooltip content={t("Oscurece rincones y contactos entre superficies.")} placement="left">
           <Checkbox label={t("Oclusión ambiental")} checked={s().ambientOcclusion} disabled={busy()} onChange={(v) => set({ ambientOcclusion: v })} />
@@ -288,6 +319,7 @@ export interface RenderStepProps {
   /** Hay algo que renderizar */
   canRender?: boolean;
   onRender: () => void;
+  onPreviewChange: (on: boolean) => void;
   /** Detiene el render en curso */
   onStop: () => void;
   /** Panel de opciones a la izquierda del visor */
@@ -328,10 +360,15 @@ export const RenderStep: Component<RenderStepProps> = (props) => {
           {px().width} × {px().height} · {((px().width * px().height) / 1e6).toFixed(1)} MP
         </span>
       </div>
+      <Tooltip content={t("El visor muestra cómo saldrá: luces, fondo, sombras y suelo. Sin oclusión ambiental ni cuadros promediados.")} placement="left">
+        <Button variant={props.settings.preview ? "primary" : "default"} fullWidth disabled={busy()} icon={<Icons.Eye size={16} />} onClick={() => props.onPreviewChange(!props.settings.preview)}>
+          {t("Vista previa")}
+        </Button>
+      </Tooltip>
       <Show
         when={busy()}
         fallback={
-          <Button variant="primary" fullWidth disabled={!props.canRender || layout().cameras.length === 0} icon={<Icons.FrameCorners size={16} />} onClick={props.onRender}>
+          <Button variant={props.settings.preview ? "default" : "primary"} fullWidth disabled={!props.canRender || layout().cameras.length === 0} icon={<Icons.FrameCorners size={16} />} onClick={props.onRender}>
             {t("Renderizar")}
           </Button>
         }

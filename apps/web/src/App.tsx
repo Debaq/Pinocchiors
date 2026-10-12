@@ -117,6 +117,7 @@ import { bvhMotion, parseBvh } from "./lib/bvh";
 import { autoMap, retargetClip, type RetargetMap, type SourceMotion } from "./lib/retarget";
 import { ConfirmDialog, type ConfirmChoice, type ConfirmRequest } from "./components/layout/ConfirmDialog";
 import { cameraFileSuffix, renderCameraById } from "./lib/renderCameras";
+import { renderLightById } from "./lib/renderLights";
 import { composeSheet, type SheetCell, type StillImage } from "./lib/renderStill";
 import { cameraZoom, defaultRenderSettings, renderLayout, type RenderSettings } from "./components/steps/RenderStep";
 import { RenderEditor } from "./components/layout/RenderEditor";
@@ -5481,6 +5482,21 @@ export const App: Component = () => {
     v.setRenderFrame(cell.width / cell.height);
     onCleanup(() => v.setRenderFrame(null));
   });
+  // Vista previa: el visor muestra en vivo luces, fondo, sombras y suelo del render
+  createEffect(() => {
+    const v = viewer();
+    const s = renderSettings();
+    if (!v || !inRender() || !s.preview) return;
+    v.setRenderPreview({
+      lights: renderLightById(s.lightPreset)?.lights ?? null,
+      shadows: s.shadows,
+      groundShadow: s.groundShadow,
+      background: s.background,
+      color: s.color,
+      color2: s.color2,
+    });
+    onCleanup(() => v.setRenderPreview(null));
+  });
   /** Lleva el visor a una cámara del render, encuadrada para la imagen que saldrá */
   const previewRenderCamera = (id: string, zoom?: number) => {
     const v = viewer();
@@ -5529,6 +5545,9 @@ export const App: Component = () => {
             height: layout.cell.height,
             background: s.background,
             color: s.color,
+            color2: s.color2,
+            lights: renderLightById(s.lightPreset)?.lights ?? null,
+            groundShadow: s.groundShadow,
             samples: s.samples,
             // En la hoja las celdas van sin pérdida y el formato es el de la hoja
             format: layout.sheet ? "png" : s.format,
@@ -8339,6 +8358,7 @@ export const App: Component = () => {
               progress: renderProgress(),
               canRender: hasWork() && !inDesign(),
               onRender: () => void handleRender(),
+              onPreviewChange: (on: boolean) => setRenderSettings({ ...renderSettings(), preview: on }),
               onStop: () => renderAbort?.abort(),
             }}
             viewSettings={viewSettings()}

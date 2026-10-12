@@ -45,19 +45,21 @@ Alcance: captura de calidad, no luz global. Es lo que ya dibuja Three, mejor con
 Verificación: render del mismo modelo a 1x y a 4x, ver que el encuadre coincide con el marco;
 fondo transparente con canal alfa real (abrir en GIMP); no queda ninguna guía.
 
-## Fase 2 — Cámaras, luces y mundo como objetos
+## Fase 2 — Cámaras, luces y mundo (HECHA, 2026-10-12, simplificada)
 
-Se necesitan antes del motor, porque el motor las usa y el render de fase 1 también mejora.
+El programa es para mostrar y explicar, no un editor visual de escenas: en vez de objetos del
+Outliner, todo son **opciones del panel Render** (espacio Render, Alt+7).
 
-- **Cámara**: objeto del Outliner (posición, hacia dónde mira, distancia focal en mm, sensor,
-  relación de aspecto, recorte). "Mirar por la cámara" y "Crear cámara desde la vista".
-  Se guarda en el proyecto (`.pinocchio`, DTOs con `serde(default)` para no romper viejos).
-- **Luces**: sol, puntual, foco, área (rectángulo). Hoy hay un solo rig (`lightRig.ts`);
-  pasan a objetos con color e intensidad en vatios/lux razonables.
-- **Mundo**: color de fondo o imagen HDR (equirectangular) para luz de entorno.
-- El render de fase 1 usa la cámara activa y las luces del proyecto en vez del rig fijo.
-- Se hacen en el `Scene` pivote de converter (nodos con cámara/luz) para que el motor Rust
-  lea lo mismo y glTF las exporte (`KHR_lights_punctual`, cámaras de glTF).
+- **Cámaras predefinidas** (`lib/renderCameras.ts`): vista actual, frente, atrás, izquierda,
+  derecha, arriba, abajo y 3/4. Encuadran el modelo entero para la relación de aspecto de la imagen.
+  Zoom compartido o por cámara; el ojo lleva el visor a esa cámara. Salida: una imagen por cámara
+  (sufijo = nombre en el idioma de la interfaz) u hoja de 2 a 4 columnas con rótulos.
+- **Iluminación** (`lib/renderLights.ts`): presets (visor, estudio, suave, contraluz, dramática)
+  que reemplazan las luces solo mientras se renderiza.
+- **Mundo**: fondo del visor / transparente / color / degradado vertical (se pinta al final bajo
+  la imagen) y suelo invisible que recibe la sombra (`ShadowMaterial`).
+- Descartado: cámaras/luces como nodos del `Scene` y HDR propio. Si el motor Rust (fase 3)
+  los necesita, salen de estos presets.
 
 ## Fase 3 — Motor de render propio en Rust
 

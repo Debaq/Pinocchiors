@@ -5,7 +5,7 @@
 
 import * as THREE from "three";
 import { GlowHalo } from "./glowHalo";
-import { renderFrameRect, renderStillImage, type RenderStillOptions, type StillImage } from "./renderStill";
+import { enableSoftShadows, gradientBackground, makeShadowGround, renderFrameRect, renderStillImage, type RenderStillOptions, type StillBackground, type StillImage } from "./renderStill";
 import { THEME_EVENT, themeHex } from "./theme";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { CameraRig, type CameraPose } from "./cameraRig";
@@ -85,6 +85,16 @@ export interface SceneMaterial {
 /** Luces del visor */
 // Las luces son las mismas en todos los visores (ver lightRig.ts)
 export { defaultLights, type LightSettings } from "./lightRig";
+
+/** Lo que pide la vista previa del render al visor */
+export interface RenderPreviewOptions {
+  lights: LightSettings | null;
+  shadows: boolean;
+  groundShadow: boolean;
+  background: StillBackground;
+  color: string;
+  color2: string;
+}
 
 export interface SkeletonData {
   bones: BoneData[];
@@ -3115,7 +3125,8 @@ export class Viewer3D {
   /** Unidades de la grilla: en qué está el modelo y en qué se muestra */
   /** Relee los colores del tema (cambió claro/oscuro) */
   applyTheme(): void {
-    (this.scene.background as THREE.Color).setHex(themeHex("viewport"));
+    const viewport = this.preview ? this.preview.background : this.scene.background;
+    if (viewport instanceof THREE.Color) viewport.setHex(themeHex("viewport"));
     this.rebuildGrid();
     this.cameraRig.viewCube.applyTheme();
     this.drawMeasure();
@@ -4742,6 +4753,65 @@ export class Viewer3D {
     return { width: Math.round(this.canvas.clientWidth * ratio), height: Math.round(this.canvas.clientHeight * ratio) };
   }
 
+  // ─── Vista previa del render (visor "renderizado", como en Blender) ───────
+
+  private renderPreviewOptions: RenderPreviewOptions | null = null;
+  private preview: {
+    lights: LightSettings;
+    background: THREE.Scene["background"];
+    restoreShadows: (() => void) | null;
+    ground: THREE.Mesh | null;
+    gradient: THREE.Texture | null;
+  } | null = null;
+
+  /**
+   * Muestra en el propio visor cómo saldrá el render: sus luces, fondo, sombras suaves y suelo.
+   * Sin oclusión ambiental ni cuadros promediados (esos solo están en la imagen final).
+   * `null` lo quita y deja el visor como estaba.
+   */
+  setRenderPreview(opts: RenderPreviewOptions | null): void {
+    const p = this.preview;
+    if (p) {
+      p.restoreShadows?.();
+      if (p.ground) {
+        this.scene.remove(p.ground);
+        p.ground.geometry.dispose();
+        (p.ground.material as THREE.Material).dispose();
+      }
+      p.gradient?.dispose();
+      this.scene.background = p.background;
+      this.lightRig.set(p.lights);
+      this.preview = null;
+      this.placeLights();
+    }
+    this.renderPreviewOptions = opts;
+    if (opts && !this.stillBusy) {
+      const lights = this.lightRig.get();
+      const background = this.scene.background;
+      if (opts.lights) {
+        this.lightRig.set(opts.lights);
+        this.placeLights();
+      }
+      let gradient: THREE.Texture | null = null;
+      if (opts.background === "color") this.scene.background = new THREE.Color(opts.color);
+      else if (opts.background === "gradient") this.scene.background = gradient = gradientBackground(opts.color, opts.color2);
+      const mesh = this.rig?.mesh ?? this.currentMesh;
+      let ground: THREE.Mesh | null = null;
+      let restoreShadows: (() => void) | null = null;
+      if (opts.shadows) {
+        const box = mesh ? new THREE.Box3().setFromObject(mesh) : null;
+        if (opts.groundShadow && box && !box.isEmpty()) {
+          ground = makeShadowGround(box);
+          this.scene.add(ground);
+        }
+        const radius = box && !box.isEmpty() ? Math.max(box.getSize(new THREE.Vector3()).length(), 1e-3) : 5;
+        restoreShadows = enableSoftShadows(this.renderer, this.scene, this.lightRig.key, radius, 2048);
+      }
+      this.preview = { lights, background, restoreShadows, ground, gradient };
+    }
+    this.requestRender();
+  }
+
   /** Muestra (o quita con `null`) el marco con el área exacta de la imagen a renderizar */
   setRenderFrame(aspect: number | null): void {
     this.renderFrameAspect = aspect;
@@ -4780,6 +4850,9 @@ export class Viewer3D {
    */
   async renderStill(opts: RenderStillOptions, onProgress?: (fraction: number) => void, signal?: AbortSignal): Promise<StillImage> {
     if (this.stillBusy) throw new Error(tr("Ya hay un render en curso"));
+    // La vista previa se pausa: el render pone y devuelve sus propias luces, fondo y sombras
+    const resumePreview = this.renderPreviewOptions;
+    this.setRenderPreview(null);
     const hidden: THREE.Object3D[] = [];
     if (opts.hideGrid) hidden.push(this.grid);
     if (opts.hideSkeleton) hidden.push(this.skeletonGroup, this.controlsGroup);
@@ -4800,6 +4873,18 @@ export class Viewer3D {
     const camera = this.camera;
     this.stillBusy = true;
     hidden.forEach((o) => (o.visible = false));
+    // Luces del render y suelo con sombra: solo durante la imagen
+    const savedLights = this.lightRig.get();
+    if (opts.lights) {
+      this.lightRig.set(opts.lights);
+      this.placeLights();
+    }
+    let ground: THREE.Mesh | null = null;
+    const groundBox = opts.groundShadow && opts.shadows && mesh ? new THREE.Box3().setFromObject(mesh) : null;
+    if (groundBox && !groundBox.isEmpty()) {
+      ground = makeShadowGround(groundBox);
+      this.scene.add(ground);
+    }
     try {
       return await renderStillImage(
         {
@@ -4822,9 +4907,19 @@ export class Viewer3D {
         signal,
       );
     } finally {
+      if (ground) {
+        this.scene.remove(ground);
+        ground.geometry.dispose();
+        (ground.material as THREE.Material).dispose();
+      }
+      if (opts.lights) {
+        this.lightRig.set(savedLights);
+        this.placeLights();
+      }
       hidden.forEach((o, i) => (o.visible = visible[i]));
       this.stillBusy = false;
       this.onResize();
+      this.setRenderPreview(resumePreview);
     }
   }
 
