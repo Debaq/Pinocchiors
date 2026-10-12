@@ -391,6 +391,11 @@ fn set_path(doc: &mut serde_json::Value, path: &str, v: f64) -> Result<(), Strin
             }
             serde_json::json!(v.round() as u64)
         }
+        // Ángulo de un sketch: el sentido va en el signo (la flecha), el
+        // parámetro da la medida; uno negativo lo da vuelta
+        serde_json::Value::Number(n) if path.contains(".constraints.") && path.ends_with(".degrees") => {
+            serde_json::json!(if n.as_f64().is_some_and(|o| o < 0.0) { -v.abs() } else { v })
+        }
         serde_json::Value::Number(_) => serde_json::json!(v),
         _ => return Err(format!("el campo «{path}» no es un número")),
     };

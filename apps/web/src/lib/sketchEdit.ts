@@ -248,6 +248,40 @@ export function joinEntities(s: Sketch, a: number, b: number): string | undefine
   return "Se unen dos líneas o dos arcos";
 }
 
+/**
+ * Un clic partió la línea en `point` (`pair`: los dos tramos) y la línea
+ * `drawn` que sale de ahí va encima de ellos: se vuelven a unir y el punto
+ * queda sobre la unida (en su medio si se había partido en dos iguales).
+ * Dice si las unió.
+ */
+export function rejoinSplit(s: Sketch, pair: [number, number], point: number, drawn: number): boolean {
+  const line = (id: number) => {
+    const g = s.entities.find((e) => e.id === id)?.geometry;
+    return g?.type === "line" ? g : undefined;
+  };
+  const [ga, gb, gd] = [line(pair[0]), line(pair[1]), line(drawn)];
+  if (!ga || !gb || !gd || ![ga.start, ga.end].includes(point) || ![gb.start, gb.end].includes(point)) return false;
+  // La dibujada va a lo largo de la partida
+  const da = sub(pos(s, ga.end), pos(s, ga.start));
+  const dd = sub(pos(s, gd.end), pos(s, gd.start));
+  const la = Math.hypot(...da);
+  const ld = Math.hypot(...dd);
+  if (la < 1e-12 || ld < 1e-12 || Math.abs(cross(da, dd)) / (la * ld) > 1e-7) return false;
+  const halves = s.constraints.some((k) => k.type === "equal" && [k.a, k.b].includes(pair[0]) && [k.a, k.b].includes(pair[1]));
+  if (joinEntities(s, pair[0], pair[1]) !== undefined) return false;
+  // Lo que el corte había copiado al tramo nuevo (horizontal, paralela) quedó repetido
+  const seen = new Set<string>();
+  s.constraints = s.constraints.filter((k) => {
+    const key = JSON.stringify(k);
+    return !seen.has(key) && !!seen.add(key);
+  });
+  if (halves) {
+    s.constraints = s.constraints.filter((k) => !(k.type === "point_on_line" && k.point === point && k.line === pair[0]));
+    s.constraints.push({ type: "midpoint", point, line: pair[0] });
+  }
+  return true;
+}
+
 function usedElsewhere(s: Sketch, point: number): boolean {
   return s.entities.some((e) => geometryPoints(e.geometry).includes(point));
 }
@@ -599,6 +633,33 @@ function sameCurve(s: Sketch, a: Geometry, b: Geometry, tol: number): boolean {
   return false;
 }
 
+/** Si `a` y `b` son la misma curva (dibujada dos veces) */
+export function sameEntities(s: Sketch, a: number, b: number): boolean {
+  const [ea, eb] = [s.entities.find((e) => e.id === a), s.entities.find((e) => e.id === b)];
+  return !!ea && !!eb && a !== b && sameCurve(s, ea.geometry, eb.geometry, span(s) * 1e-7);
+}
+
+/** `drop` (igual a `keep`) se va: lo que la nombraba y lo que usaba sus puntos pasa a `keep` */
+function mergeTwin(s: Sketch, keep: number, drop: number, tol: number): void {
+  const pa = geometryPoints(s.entities.find((e) => e.id === keep)!.geometry);
+  const pb = geometryPoints(s.entities.find((e) => e.id === drop)!.geometry);
+  replaceEntity(s, drop, keep);
+  // Sus puntos sueltos se juntan con los de la que queda
+  for (const p of pb) {
+    if (pa.includes(p) || !s.points.some((q) => q.id === p)) continue;
+    const twin = pa.find((q) => dist(pos(s, q), pos(s, p)) <= tol);
+    if (twin !== undefined) mergePoint(s, p, twin);
+  }
+}
+
+/** Junta dos entidades iguales en `keep` (ver `sameEntities`); dice si las juntó */
+export function mergeDuplicate(s: Sketch, keep: number, drop: number): boolean {
+  if (!sameEntities(s, keep, drop)) return false;
+  mergeTwin(s, keep, drop, span(s) * 1e-7);
+  dropLoose(s);
+  return true;
+}
+
 /**
  * Quita las entidades repetidas (la misma línea, círculo o arco dos veces).
  * Lo que nombraba a la repetida pasa a la que queda. Devuelve cuántas quitó.
@@ -610,15 +671,7 @@ export function removeDuplicates(s: Sketch): number {
     for (let j = i + 1; j < s.entities.length; j++) {
       const [a, b] = [s.entities[i], s.entities[j]];
       if (!!a.construction !== !!b.construction || !sameCurve(s, a.geometry, b.geometry, tol)) continue;
-      const pa = geometryPoints(a.geometry);
-      const pb = geometryPoints(b.geometry);
-      replaceEntity(s, b.id, a.id);
-      // Sus puntos sueltos se juntan con los de la que queda
-      for (const p of pb) {
-        if (pa.includes(p) || !s.points.some((q) => q.id === p)) continue;
-        const twin = pa.find((q) => dist(pos(s, q), pos(s, p)) <= tol);
-        if (twin !== undefined) mergePoint(s, p, twin);
-      }
+      mergeTwin(s, a.id, b.id, tol);
       removed++;
       j--;
     }

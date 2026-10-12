@@ -158,7 +158,7 @@ fn large_angle_change_goes_the_short_way() {
     let tip = s.add_point(9.8, 1.7);
     let arm = s.add_line(o, tip);
     s.constrain(SketchConstraint::Length { line: arm, value: 10.0, reference: false, opts: Default::default() });
-    let ang = s.constrain(SketchConstraint::Angle { a: base, b: arm, degrees: 10.0, supplementary: false, reference: false, opts: Default::default() });
+    let ang = s.constrain(SketchConstraint::Angle { a: base, b: arm, degrees: 10.0, supplementary: false, a_end: None, b_end: None, reference: false, opts: Default::default() });
     s.solve().unwrap();
     s.constraints[ang].set_value(150.0);
     let r = s.solve().unwrap();

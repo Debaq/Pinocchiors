@@ -317,8 +317,12 @@ export type SketchConstraint =
   | ({ type: "length"; line: number; value: number } & Dim)
   | ({ type: "radius"; entity: number; value: number } & Dim)
   | ({ type: "diameter"; entity: number; value: number } & Dim)
-  /** De `a` a `b`; con `supplementary`, de `a` a `b` invertida (180° − el ángulo) */
-  | ({ type: "angle"; a: number; b: number; degrees: number; supplementary?: boolean } & Dim)
+  /**
+   * De `a` (la referencia) a `b` (la que gira): + antihorario, − horario; con
+   * `supplementary`, hasta `b` invertida (180° − el ángulo). Arcos y curvas:
+   * su tangente en el extremo `a_end`/`b_end`; elipses: su eje mayor
+   */
+  | ({ type: "angle"; a: number; b: number; degrees: number; supplementary?: boolean; a_end?: AngleEnd; b_end?: AngleEnd } & Dim)
   /** Distancia de un punto a la recta de una línea (entre paralelas: un extremo de una y la otra) */
   | ({ type: "point_line_distance"; point: number; line: number; value: number } & Dim)
   /** Cota simétrica respecto de un eje: el doble de la distancia (diámetro en perfiles de revolución) */
@@ -2663,6 +2667,30 @@ export function removeEntity(s: Sketch, id: number): void {
   }
 }
 
+/**
+ * Punto que no usa ninguna entidad, texto ni patrón (el primer clic de una
+ * línea que se canceló): no se dibuja como entidad ni se puede elegir para borrar
+ */
+export function isLoosePoint(s: Sketch, id: number): boolean {
+  if (id === s.origin || !s.points.some((p) => p.id === id)) return false;
+  if ((s.texts ?? []).some((t) => t.anchor === id || t.points.includes(id))) return false;
+  if ((s.patterns ?? []).some((p) => p.spec.kind === "circular" && p.spec.center === id)) return false;
+  return !s.entities.some((e) => geometryPoints(e.geometry).includes(id));
+}
+
+/** Borra el punto (y lo que lo nombra) si quedó suelto; dice si lo borró */
+export function removeLoosePoint(s: Sketch, id: number): boolean {
+  if (!isLoosePoint(s, id)) return false;
+  s.points = s.points.filter((p) => p.id !== id);
+  s.constraints = s.constraints.filter((c) => !constraintMentions(c, [id]));
+  return true;
+}
+
+/** Borra todos los puntos sueltos */
+export function removeLoosePoints(s: Sketch): void {
+  for (const p of [...s.points]) removeLoosePoint(s, p.id);
+}
+
 /** Líneas que llegan a un punto (para redondear esquinas) */
 export function linesAt(s: Sketch, point: number): SketchEntity[] {
   return s.entities.filter((e) => e.geometry.type === "line" && (e.geometry.start === point || e.geometry.end === point));
@@ -3055,15 +3083,31 @@ export const isSolidPoint = (snap: Snap) => snap.kind === "solid_vertex" || snap
  * Sobre una línea: la parte (así cierra regiones). Sobre una curva: punto en
  * círculo. Vértice, centro o medio del sólido: fijo en esa posición (no sigue
  * al sólido si cambia). Sobre una arista del sólido: solo la posición.
+ * `from`: de dónde viene el tramo que se dibuja; si va a lo largo de la línea
+ * (encima de ella), no la parte: el punto queda en su medio o sobre ella.
  */
-export function placeSnap(s: Sketch, snap: Snap): number {
+export function placeSnap(s: Sketch, snap: Snap, from?: P2): number {
   if (snap.id !== undefined && s.points.some((q) => q.id === snap.id)) return snap.id;
+  /** El tramo de `from` al punto va encima de la línea `id` */
+  const along = (id: number | undefined) => {
+    const g = id === undefined || !from ? undefined : s.entities.find((x) => x.id === id)?.geometry;
+    if (g?.type !== "line" || !from) return false;
+    const [a, b] = [pointOf(s, g.start), pointOf(s, g.end)];
+    const l = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    if (l < 1e-12 || Math.hypot(snap.p[0] - from[0], snap.p[1] - from[1]) < 1e-12) return false;
+    const off = Math.abs((b[0] - a[0]) * (from[1] - a[1]) - (b[1] - a[1]) * (from[0] - a[0])) / l;
+    return off <= 1e-7 * Math.max(1, l, Math.hypot(from[0], from[1]));
+  };
   const id = addPoint(s, snap.p);
   if (snap.align?.h !== undefined) s.constraints.push({ type: "horizontal_points", a: snap.align.h, b: id });
   if (snap.align?.v !== undefined) s.constraints.push({ type: "vertical_points", a: snap.align.v, b: id });
   if (isSolidPoint(snap)) s.constraints.push({ type: "fixed", point: id, x: snap.p[0], y: snap.p[1] });
   const e = snap.entity;
   if (e === undefined) return id;
+  if (snap.kind === "midpoint" && along(e)) {
+    s.constraints.push({ type: "midpoint", point: id, line: e });
+    return id;
+  }
   if (snap.kind === "midpoint") {
     const g = s.entities.find((x) => x.id === e)?.geometry;
     // La línea pudo partirse con otro punto de la misma forma: entonces solo "sobre"
@@ -3089,11 +3133,13 @@ export function placeSnap(s: Sketch, snap: Snap): number {
     // Sobre las dos curvas: las líneas se parten ahí (cierra regiones)
     for (const c of [e, snap.other]) {
       const g = s.entities.find((x) => x.id === c)?.geometry;
-      if (c !== undefined && g) stickTo(s, id, { entity: c, kind: g.type === "line" ? "line" : "circle" });
+      if (c !== undefined && along(c)) s.constraints.push({ type: "point_on_line", point: id, line: c });
+      else if (c !== undefined && g) stickTo(s, id, { entity: c, kind: g.type === "line" ? "line" : "circle" });
     }
     return id;
   }
-  if (snap.kind === "on_line") stickTo(s, id, { entity: e, kind: "line" });
+  if (snap.kind === "on_line" && along(e)) s.constraints.push({ type: "point_on_line", point: id, line: e });
+  else if (snap.kind === "on_line") stickTo(s, id, { entity: e, kind: "line" });
   else if (snap.kind === "on_circle") s.constraints.push({ type: "point_on_circle", point: id, circle: e });
   return id;
 }
@@ -3502,9 +3548,13 @@ export function isReference(c: SketchConstraint): boolean {
 
 export function constraintValue(c: SketchConstraint): number | undefined {
   if ("value" in c) return c.value;
-  if (c.type === "angle") return c.degrees;
+  // El sentido del ángulo va aparte (la flecha): se muestra sin signo
+  if (c.type === "angle") return Math.abs(c.degrees);
   return undefined;
 }
+
+/** Extremo de un arco o curva donde se toma su tangente para un ángulo */
+export type AngleEnd = "start" | "end";
 
 export const CONSTRAINT_LABELS: Record<SketchConstraint["type"], string> = {
   coincident: "Coincidente",

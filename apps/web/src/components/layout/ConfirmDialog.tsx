@@ -7,6 +7,8 @@ export interface ConfirmRequest {
   message: string;
   /** Texto del botón que confirma (por defecto "Continuar") */
   confirmLabel?: string;
+  /** Texto del botón que no (por defecto "Cancelar") */
+  cancelLabel?: string;
   /** La acción descarta trabajo: el botón va en rojo */
   danger?: boolean;
   /** Casillas para elegir qué hacer (se devuelven al confirmar) */
@@ -95,7 +97,7 @@ export const ConfirmDialog: Component<ConfirmDialogProps> = (props) => {
         </Show>
         <div class="flex justify-end gap-2 px-4 pb-4">
           <Button size="sm" variant="ghost" onClick={props.onCancel}>
-            Cancelar
+            {props.cancelLabel ?? "Cancelar"}
           </Button>
           <Button
             data-confirm

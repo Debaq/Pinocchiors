@@ -29,7 +29,6 @@ import {
   filletCorner,
   removeEntity,
   ensureOrigin,
-  geometryPoints,
   addPoint,
   addEntity,
   fillPattern,
@@ -111,7 +110,8 @@ import { connectedChain } from "../../lib/sketchCheck";
 import { convertToBSpline, fitSplineToPoints, removeSplinePoint, simplifySpline, splineCurvature, toggleSplineHandle } from "../../lib/sketchSplines";
 import { bsplineToThrough } from "../../lib/sketchTrim";
 import { dropPattern, editPattern, makePattern, patternAt, patternLabel, toggleSkip, type PatternSpec, type SketchPatternRecord } from "../../lib/sketchPatterns";
-import { checkSketch, problemsText, selectByKind, type SelectKind } from "../../lib/sketchCheck";
+import { ENTITY_NAMES, selectByKind, sketchIssues, type SelectKind } from "../../lib/sketchCheck";
+import { copyText } from "../../lib/clipboard";
 import { chamferCorner, closeContour, joinEntities, mergeOverlaps, offsetChain, orderChain, removeDuplicates, repairSketch, splitEqual, type OffsetCaps } from "../../lib/sketchEdit";
 import { GLYPHS, isDimension } from "../../lib/sketchGlyphs";
 import { sampleCurve } from "../../lib/sketchFormula";
@@ -1512,6 +1512,22 @@ export const FeatureEditor: Component<{
                   </p>
                   <Button size="sm" variant="primary" fullWidth icon={<Icons.PaintBrush size={14} />} onClick={() => props.ui.editSketch(f().id)}>
                     Editar sketch
+                  </Button>
+                  {/* El sketch entero como JSON (puntos, entidades, restricciones, plano): para reportar un error y reproducirlo */}
+                  <Button
+                    size="sm"
+                    fullWidth
+                    icon={<Icons.Copy size={14} />}
+                    data-copy-sketch
+                    onClick={async () => {
+                      // Si se está editando, lo de la sesión (lo último que se hizo)
+                      const s = props.ui.session();
+                      const kind = s?.feature === f().id ? { ...k(), sketch: s.sketch } : k();
+                      const code = JSON.stringify({ pinocchio: "sketch", name: f().name, kind });
+                      props.ui.setMessage((await copyText(code)) ? `Sketch «${f().name}» copiado como código (${code.length} caracteres)` : "No se pudo copiar al portapapeles");
+                    }}
+                  >
+                    Copiar código
                   </Button>
                 </>
               );
@@ -6466,7 +6482,7 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
   /** Grados libres de una entidad (undefined: ya definida) */
   const entityDof = (id: number) => s().report?.entity_dof?.find((d) => d[0] === id)?.[1];
 
-  const suggestions = () => constraintSuggestions(sketch(), sel());
+  const suggestions = () => constraintSuggestions(sketch(), sel(), s().report?.free_points);
 
   return (
     <div
@@ -6547,7 +6563,6 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
           </Show>
         </div>
         <div class="space-y-1.5" aria-label="Revisar el contorno">
-          <Show when={problemsText(checkSketch(sketch()))}>{(t) => <p class="text-xs text-error">{t()}</p>}</Show>
           <ProblemList ui={ui} sketch={sketch()} />
           <Num label="Tolerancia" suffix="mm" step={0.01} min={0} value={repairTol()} onCommit={setRepairTol} />
           <div class="flex flex-wrap gap-1.5">
@@ -7336,17 +7351,6 @@ const SELECT_KINDS: { kind: SelectKind; label: string }[] = [
   { kind: "all", label: "Todo" },
 ];
 
-const ENTITY_NAMES: Record<Geometry["type"], string> = {
-  line: "Línea",
-  circle: "Círculo",
-  arc: "Arco",
-  spline: "Spline",
-  point: "Punto",
-  ellipse: "Elipse",
-  ellipse_arc: "Arco elíptico",
-  bspline: "B-spline",
-};
-
 /** Usar del modelo: silueta, intersección, otro sketch y romper el vínculo */
 const SketchModelRefs: Component<{ ui: CadUi; store: CadStore }> = (props) => {
   const ui = props.ui;
@@ -8130,22 +8134,7 @@ const SplineTools: Component<{ ui: CadUi }> = (props) => {
  */
 function ProblemList(props: { ui: CadUi; sketch: Sketch }) {
   const ui = props.ui;
-  const items = createMemo(() => {
-    const p = checkSketch(props.sketch);
-    const name = (id: number) => {
-      const e = props.sketch.entities.find((x) => x.id === id);
-      return e ? `${ENTITY_NAMES[e.geometry.type]} ${id}` : `${id}`;
-    };
-    const center = (ids: number[]): P2 => {
-      const pts = props.sketch.points.filter((q) => ids.some((id) => geometryPoints(props.sketch.entities.find((e) => e.id === id)?.geometry ?? { type: "point", point: -1 }).includes(q.id)));
-      return pts.length ? [pts.reduce((a, q) => a + q.x, 0) / pts.length, pts.reduce((a, q) => a + q.y, 0) / pts.length] : [0, 0];
-    };
-    return [
-      ...p.looseEnds.map((x) => ({ kind: "error" as const, text: `Extremo suelto de ${name(x.entity)}`, ids: [x.entity], at: x.p })),
-      ...p.overlaps.map(([a, b]) => ({ kind: "error" as const, text: `${name(a)} y ${name(b)} encimadas`, ids: [a, b], at: center([a, b]) })),
-      ...p.crossings.map((x) => ({ kind: "info" as const, text: `${name(x.a)} cruza ${name(x.b)} sin un punto común`, ids: [x.a, x.b], at: x.p })),
-    ];
-  });
+  const items = createMemo(() => sketchIssues(props.sketch, ui.session()?.report));
   return (
     <Show when={items().length}>
       <details class="text-xs" data-problem-list>
@@ -8154,7 +8143,7 @@ function ProblemList(props: { ui: CadUi; sketch: Sketch }) {
           <For each={items()}>
             {(it) => (
               <button
-                class={clsx("block w-full text-left px-1 py-0.5 rounded hover:bg-surface/60", it.kind === "error" ? "text-error" : "text-text-muted")}
+                class={clsx("block w-full text-left px-1 py-0.5 rounded hover:bg-surface/60", it.kind === "error" ? "text-error" : it.kind === "warning" ? "text-warning" : "text-text-muted")}
                 data-problem={it.kind}
                 onClick={() => {
                   ui.setSelection(it.ids);

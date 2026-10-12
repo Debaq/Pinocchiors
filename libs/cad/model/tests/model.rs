@@ -772,7 +772,7 @@ fn circular_pattern_copies_rotate_together() {
         s.entities.iter_mut().find(|e| e.id == id).unwrap().construction = true;
     }
     s.constrain(SketchConstraint::Equal { a: r0, b: r1 });
-    let ang = s.constrain(SketchConstraint::Angle { a: r0, b: r1, supplementary: false, degrees: 90.0, reference: false, opts: Default::default() });
+    let ang = s.constrain(SketchConstraint::Angle { a: r0, b: r1, supplementary: false, a_end: None, b_end: None, degrees: 90.0, reference: false, opts: Default::default() });
     s.constrain(SketchConstraint::EqualRotation { center: o, a1: p0, a2: q0, b1: p1, b2: q1 });
     let r = s.solve().unwrap();
     assert_eq!(r.status, SketchStatus::WellConstrained, "{r:?}");

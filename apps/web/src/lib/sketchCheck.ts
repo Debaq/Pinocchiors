@@ -7,7 +7,7 @@
 // curvas donde se cruzan y descartan las ramas sueltas: esto avisa de cada
 // caso que deja una rama sin cerrar.
 
-import { curvePolyline, ellipsePolyline, geometryPoints, splineOf, type Geometry, type P2, type Sketch, type SketchEntity } from "./cad.ts";
+import { CONSTRAINT_LABELS, constraintIds, curvePolyline, ellipsePolyline, geometryPoints, splineOf, type Geometry, type P2, type Sketch, type SketchEntity } from "./cad.ts";
 
 export interface SketchProblems {
   /** Extremos de una sola curva que no tocan otra: la rama no cierra (no forma región) */
@@ -192,21 +192,93 @@ export function checkSketch(s: Sketch): SketchProblems {
   return { looseEnds, crossings, overlaps };
 }
 
-/** Resumen corto para la barra ("2 extremos sueltos · 1 cruce"), o nada si está bien */
+/**
+ * Resumen corto para la barra ("1 entidad encimada"), o nada si está bien.
+ * Los extremos sueltos no se avisan mientras se dibuja (una línea a medio
+ * hacer o de referencia no es un error): solo al extruir sin regiones.
+ */
 export function problemsText(p: SketchProblems): string | undefined {
-  const parts: string[] = [];
-  const n = (k: number, one: string, many: string) => k && parts.push(`${k} ${k === 1 ? one : many}`);
-  n(p.looseEnds.length, "extremo suelto", "extremos sueltos");
-  n(p.overlaps.length, "entidad encimada", "entidades encimadas");
-  return parts.length ? parts.join(" · ") : undefined;
+  const k = p.overlaps.length;
+  return k ? `${k} ${k === 1 ? "entidad encimada" : "entidades encimadas"}` : undefined;
+}
+
+/** Nombre de cada tipo de entidad (para los avisos y la lista de entidades) */
+export const ENTITY_NAMES: Record<Geometry["type"], string> = {
+  line: "Línea",
+  circle: "Círculo",
+  arc: "Arco",
+  spline: "Spline",
+  point: "Punto",
+  ellipse: "Elipse",
+  ellipse_arc: "Arco elíptico",
+  bspline: "B-spline",
+};
+
+/**
+ * Un aviso del sketch: qué tan grave, qué dice, qué elegir y dónde centrar
+ * la vista (`mark`: `at` es el lugar exacto, se marca al pasar el mouse)
+ */
+export interface SketchIssue {
+  kind: "error" | "warning" | "info";
+  text: string;
+  ids: number[];
+  at: P2;
+  mark?: boolean;
+}
+
+/**
+ * Todos los avisos del sketch en un solo lugar (el desplegable de la barra y
+ * el panel): errores (restricciones en conflicto, sin resolver), advertencias
+ * (faltan restricciones; extremos sueltos: el contorno no cierra; encimadas)
+ * e información (cruces sin punto común).
+ */
+export function sketchIssues(
+  s: Sketch,
+  report?: { status: string; dof: number; conflicting: number[]; free_entities?: number[] },
+  p: SketchProblems = checkSketch(s),
+): SketchIssue[] {
+  const name = (id: number) => {
+    const e = s.entities.find((x) => x.id === id);
+    return e ? `${ENTITY_NAMES[e.geometry.type]} ${id}` : `${id}`;
+  };
+  const pos = (id: number): P2 | undefined => {
+    const q = s.points.find((x) => x.id === id);
+    return q && [q.x, q.y];
+  };
+  const center = (ids: number[]): P2 => {
+    const pts = ids.flatMap((id) => {
+      const e = s.entities.find((x) => x.id === id);
+      return (e ? geometryPoints(e.geometry) : [id]).map(pos).filter((q) => q !== undefined);
+    });
+    return pts.length ? [pts.reduce((a, q) => a + q[0], 0) / pts.length, pts.reduce((a, q) => a + q[1], 0) / pts.length] : [0, 0];
+  };
+  const out: SketchIssue[] = [];
+  if (report?.status === "failed") out.push({ kind: "error", text: "No se pudo resolver el sketch", ids: [], at: center(s.entities.map((e) => e.id)) });
+  if (report?.status === "over_constrained" && !report.conflicting.length) out.push({ kind: "error", text: "Restricciones en conflicto", ids: [], at: center(s.entities.map((e) => e.id)) });
+  if (report?.status === "under_constrained" && report.dof > 0) {
+    const ids = (report.free_entities ?? []).filter((id) => s.entities.some((e) => e.id === id));
+    out.push({ kind: "warning", text: `Faltan ${report.dof} ${report.dof === 1 ? "restricción" : "restricciones"} (en azul: lo que todavía se mueve)`, ids, at: center(ids) });
+  }
+  for (const i of report?.conflicting ?? []) {
+    const c = s.constraints[i];
+    if (!c) continue;
+    const ids = constraintIds(c).filter((id) => s.entities.some((e) => e.id === id) || s.points.some((q) => q.id === id));
+    out.push({ kind: "error", text: `En conflicto: ${CONSTRAINT_LABELS[c.type]}${ids.length ? ` (${ids.map(name).join(", ")})` : ""}`, ids, at: center(ids) });
+  }
+  // Las regiones toman uno solo de los tramos encimados: no impide nada, pero sobra
+  for (const [a, b] of p.overlaps) out.push({ kind: "warning", text: `${name(a)} y ${name(b)} encimadas (cuenta una sola)`, ids: [a, b], at: center([a, b]) });
+  for (const x of p.looseEnds) out.push({ kind: "warning", text: `Extremo suelto de ${name(x.entity)} (el contorno no cierra)`, ids: [x.entity], at: x.p, mark: true });
+  for (const x of p.crossings) out.push({ kind: "info", text: `${name(x.a)} cruza ${name(x.b)} sin un punto común`, ids: [x.a, x.b], at: x.p, mark: true });
+  return out;
 }
 
 /** Por qué un sketch no tiene regiones (para el aviso al extruir) */
 export function whyNoRegions(s: Sketch): string {
   const p = checkSketch(s);
   if (!s.entities.some(isCurve)) return "El sketch no tiene curvas (la construcción no cuenta)";
-  const t = problemsText(p);
-  return t ? `El sketch no tiene regiones cerradas: ${t} (se marcan en rojo al editarlo)` : "El sketch no tiene regiones cerradas";
+  const k = p.looseEnds.length;
+  const parts = [...(k ? [`el contorno no cierra (${k} ${k === 1 ? "extremo sin unir" : "extremos sin unir"})`] : []), ...(problemsText(p) ? [problemsText(p)!] : [])];
+  return parts.length ? `El sketch no tiene regiones cerradas: ${parts.join(" · ")}` : "El sketch no tiene regiones cerradas";
 }
 
 /** Cadena: las curvas unidas a `id` por sus extremos (con la misma marca de construcción) */

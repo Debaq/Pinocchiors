@@ -323,6 +323,54 @@ fn seg_cross(a: P2, b: P2, c: P2, d: P2, eps: f64) -> Option<(f64, f64)> {
     ((-et..=1.0 + et).contains(&t) && (-eu..=1.0 + eu).contains(&u)).then_some((t.clamp(0.0, 1.0), u.clamp(0.0, 1.0)))
 }
 
+/// Segmentos encimados (colineales): los extremos de cada uno que caen en el
+/// medio del otro, como (parámetro en ab, parámetro en cd, punto).
+fn seg_overlap(a: P2, b: P2, c: P2, d: P2, eps: f64) -> Vec<(f64, f64, P2)> {
+    let r = [b[0] - a[0], b[1] - a[1]];
+    let q = [d[0] - c[0], d[1] - c[1]];
+    let (lr2, lq2) = (r[0] * r[0] + r[1] * r[1], q[0] * q[0] + q[1] * q[1]);
+    if lr2 < 1e-300 || lq2 < 1e-300 {
+        return Vec::new();
+    }
+    let off = |p: P2| (r[0] * (p[1] - a[1]) - r[1] * (p[0] - a[0])).abs() / lr2.sqrt();
+    if off(c) > eps || off(d) > eps {
+        return Vec::new();
+    }
+    let on_ab = |p: P2| ((p[0] - a[0]) * r[0] + (p[1] - a[1]) * r[1]) / lr2;
+    let on_cd = |p: P2| ((p[0] - c[0]) * q[0] + (p[1] - c[1]) * q[1]) / lq2;
+    let (et, eu) = (eps / lr2.sqrt(), eps / lq2.sqrt());
+    let inside = |t: f64, e: f64| t > e && t < 1.0 - e;
+    let mut out = Vec::new();
+    for (u, p) in [(0.0, c), (1.0, d)] {
+        let t = on_ab(p);
+        if inside(t, et) {
+            out.push((t, u, p));
+        }
+    }
+    for (t, p) in [(0.0, a), (1.0, b)] {
+        let u = on_cd(p);
+        if inside(u, eu) {
+            out.push((t, u, p));
+        }
+    }
+    out
+}
+
+/// Punto a mitad de largo de una polilínea.
+fn half_way(pts: &[P2]) -> P2 {
+    let total: f64 = pts.windows(2).map(|w| dist2(w[0], w[1])).sum();
+    let mut left = total / 2.0;
+    for w in pts.windows(2) {
+        let l = dist2(w[0], w[1]);
+        if l >= left && l > 0.0 {
+            let t = left / l;
+            return [w[0][0] + t * (w[1][0] - w[0][0]), w[0][1] + t * (w[1][1] - w[0][1])];
+        }
+        left -= l;
+    }
+    pts[pts.len() - 1]
+}
+
 /// Una curva a partir: sus puntos (cerrada: el último repite el primero) y los
 /// cortes como (segmento + parámetro, punto).
 struct Cuttable {
@@ -354,21 +402,29 @@ fn cut_crossings(curves: &mut [Cuttable], tol: f64) {
                     if sb[0] > vb[2] + touch || vb[0] > sb[2] + touch || sb[1] > vb[3] + touch || vb[1] > sb[3] + touch {
                         continue;
                     }
-                    let Some((t, u)) = seg_cross(w[0], w[1], v[0], v[1], touch) else { continue };
-                    // Un extremo de una curva sobre la otra: el punto es ese extremo
-                    let x = if t == 0.0 || t == 1.0 {
-                        w[t as usize]
-                    } else if u == 0.0 || u == 1.0 {
-                        v[u as usize]
-                    } else {
-                        let p = [w[0][0] + t * (w[1][0] - w[0][0]), w[0][1] + t * (w[1][1] - w[0][1])];
-                        match (curves[i].exact, curves[j].exact) {
-                            (Some(ea), Some(eb)) => refine(ea, eb, p),
-                            _ => p,
+                    let hits = match seg_cross(w[0], w[1], v[0], v[1], touch) {
+                        Some((t, u)) => {
+                            // Un extremo de una curva sobre la otra: el punto es ese extremo
+                            let x = if t == 0.0 || t == 1.0 {
+                                w[t as usize]
+                            } else if u == 0.0 || u == 1.0 {
+                                v[u as usize]
+                            } else {
+                                let p = [w[0][0] + t * (w[1][0] - w[0][0]), w[0][1] + t * (w[1][1] - w[0][1])];
+                                match (curves[i].exact, curves[j].exact) {
+                                    (Some(ea), Some(eb)) => refine(ea, eb, p),
+                                    _ => p,
+                                }
+                            };
+                            vec![(t, u, x)]
                         }
+                        // Paralelos: si van encimados, se parten donde termina cada uno
+                        None => seg_overlap(w[0], w[1], v[0], v[1], touch),
                     };
-                    if !found.iter().any(|f| dist2(f.2, x) <= touch) {
-                        found.push((si as f64 + t, sj as f64 + u, x));
+                    for (t, u, x) in hits {
+                        if !found.iter().any(|f| dist2(f.2, x) <= touch) {
+                            found.push((si as f64 + t, sj as f64 + u, x));
+                        }
                     }
                 }
             }
@@ -522,6 +578,20 @@ pub fn find_regions(s: &Sketch) -> Result<Vec<Region>, SketchError> {
             edges.push(Edge { entity: c.entity, nodes: [a, b], pts, span });
         }
     }
+
+    // Tramos encimados (una línea sobre otra): queda uno solo, si no las caras
+    // no se arman (dos aristas iguales salen con el mismo ángulo de un nodo)
+    let mut kept: Vec<Edge> = Vec::new();
+    for e in edges {
+        let twin = kept.iter().any(|k| {
+            let same_ends = k.nodes == e.nodes || k.nodes == [e.nodes[1], e.nodes[0]];
+            same_ends && dist2(half_way(&k.pts), half_way(&e.pts)) <= tol * 1000.0
+        });
+        if !twin {
+            kept.push(e);
+        }
+    }
+    let edges = kept;
 
     // Podar ramas sueltas
     let mut alive = vec![true; edges.len()];

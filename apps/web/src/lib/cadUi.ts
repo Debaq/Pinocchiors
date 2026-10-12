@@ -28,6 +28,8 @@ import {
   ensureOrigin,
   emptySketch,
   removeEntity,
+  removeLoosePoint,
+  removeLoosePoints,
   removeText,
   type AxisSpec,
   type RefPick,
@@ -862,7 +864,8 @@ export function createCadUi(store: CadStore) {
         const c = s.constraints[index];
         if (!c) return;
         if ("value" in c) c.value = value;
-        else if (c.type === "angle") c.degrees = value;
+        // El sentido queda (la flecha lo da vuelta); uno negativo lo invierte
+        else if (c.type === "angle") c.degrees = (c.degrees < 0 ? -1 : 1) * value;
         if (expr) (c as { expr?: string }).expr = expr;
         else delete (c as { expr?: string }).expr;
       });
@@ -903,6 +906,8 @@ export function createCadUi(store: CadStore) {
         for (const t of [...(s.texts ?? [])]) if ([t.anchor, ...t.entities].some((x) => ids.has(x))) removeText(s, t);
         // Un punto suelto se elige por su punto
         for (const e of [...s.entities]) if (ids.has(e.id) || (e.geometry.type === "point" && ids.has(e.geometry.point))) removeEntity(s, e.id);
+        // Puntos sin entidad (de una línea empezada y cancelada)
+        for (const id of ids) removeLoosePoint(s, id);
       });
       setSelection([]);
     },
@@ -1077,6 +1082,8 @@ export function createCadUi(store: CadStore) {
       // Las fórmulas de las cotas pasan a ser vínculos del documento (por
       // índice: se rehacen todos los de este sketch)
       const sketch = clone(s.sketch);
+      // Sin puntos sueltos (primeros clics de líneas que no se terminaron)
+      removeLoosePoints(sketch);
       const exprs = sketch.constraints.map((c) => {
         const e = (c as { expr?: string }).expr;
         delete (c as { expr?: string }).expr;

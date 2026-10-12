@@ -2,7 +2,7 @@
 // portapapeles para copiar y pegar (dentro de un sketch o entre sketches).
 // Funciones puras sobre `Sketch`: se prueban con node (e2e/sketchTransform.test.mjs).
 
-import { addEntity, addPoint, constraintIds, geometryPoints, mapConstraintIds, mapGeometry, splitLineAt, type Geometry, type P2, type Sketch, type SketchConstraint, type SketchEntity, type SketchText } from "./cad.ts";
+import { addEntity, addPoint, type AngleEnd, constraintIds, geometryPoints, mapConstraintIds, mapGeometry, splitLineAt, type Geometry, type P2, type Sketch, type SketchConstraint, type SketchEntity, type SketchText } from "./cad.ts";
 
 /** Lleva un punto del plano del sketch a otro lugar */
 export type Xform = (p: P2) => P2;
@@ -147,6 +147,133 @@ function lineOf(s: Sketch, id: number): [P2, P2] | undefined {
   return a && b ? [a, b] : undefined;
 }
 
+/** Cómo entra una entidad a un ángulo (como `angle_side` en Rust): su dirección hacia adentro desde `at` */
+interface AngleSide {
+  v: P2;
+  at: P2;
+  /** La línea entera */
+  segment?: [P2, P2];
+  /** Largo aproximado (para el radio del arco) */
+  size: number;
+}
+
+const turned = (v: P2, deg: number): P2 => {
+  const [s, c] = [Math.sin((deg * Math.PI) / 180), Math.cos((deg * Math.PI) / 180)];
+  return [c * v[0] - s * v[1], s * v[0] + c * v[1]];
+};
+
+/** Entidades que pueden entrar a un ángulo: líneas, arcos, elipses y curvas abiertas con dirección en una punta */
+export function hasAngleDirection(s: Sketch, id: number): boolean {
+  return angleSide(s, id, "start") !== undefined || angleSide(s, id, "end") !== undefined;
+}
+
+function angleSide(s: Sketch, id: number, end: AngleEnd | undefined): AngleSide | undefined {
+  const g = s.entities.find((e) => e.id === id)?.geometry;
+  if (!g) return undefined;
+  const side = (from: number, to: number, turn: number, at: number): AngleSide | undefined => {
+    const [f, t, a] = [pos(s, from), pos(s, to), pos(s, at)];
+    return f && t && a ? { v: turned(sub(t, f), turn), at: a, size: len(sub(t, f)) } : undefined;
+  };
+  const atEnd = end === "end";
+  switch (g.type) {
+    case "line": {
+      const seg = lineOf(s, id);
+      return seg ? { v: sub(seg[1], seg[0]), at: seg[0], segment: seg, size: len(sub(seg[1], seg[0])) } : undefined;
+    }
+    case "arc":
+      return atEnd ? side(g.center, g.end, -90, g.end) : side(g.center, g.start, 90, g.start);
+    case "ellipse":
+    case "ellipse_arc":
+      return side(g.center, g.major, 0, g.center);
+    case "bspline": {
+      const n = g.poles.length;
+      if (g.closed || n < 2) return undefined;
+      return atEnd ? side(g.poles[n - 1], g.poles[n - 2], 0, g.poles[n - 1]) : side(g.poles[0], g.poles[1], 0, g.poles[0]);
+    }
+    case "spline": {
+      if (g.closed || !g.points.length) return undefined;
+      const [first, last] = [g.points[0], g.points[g.points.length - 1]];
+      if (atEnd) return g.end_handle !== undefined ? side(g.end_handle, last, 0, last) : undefined;
+      return g.start_handle !== undefined ? side(first, g.start_handle, 0, first) : undefined;
+    }
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Un ángulo como se dibuja: `x` donde se cruzan las dos direcciones, `u1` y
+ * `u2` hacia cada entidad (la misma cuenta que mide el solver, así el arco
+ * dibujado es el ángulo que vale) y `degrees` con signo (+ antihorario, de
+ * `a`, la referencia, a `b`, la que gira).
+ */
+export function angleView(s: Sketch, c: Extract<SketchConstraint, { type: "angle" }>): { x: P2; u1: P2; u2: P2; degrees: number; reach: number } | undefined {
+  const [sa, sb] = [angleSide(s, c.a, c.a_end), angleSide(s, c.b, c.b_end)];
+  if (!sa || !sb) return undefined;
+  const [la, lb] = [len(sa.v), len(sb.v)];
+  if (la < 1e-12 || lb < 1e-12) return undefined;
+  let d1: P2 = [sa.v[0] / la, sa.v[1] / la];
+  let d2: P2 = c.supplementary ? [-sb.v[0] / lb, -sb.v[1] / lb] : [sb.v[0] / lb, sb.v[1] / lb];
+  const degrees = (Math.atan2(cross(d1, d2), dot(d1, d2)) * 180) / Math.PI;
+  const den = cross(d1, d2);
+  // Paralelas: en la punta de la curva (las líneas no tienen una propia)
+  const x: P2 = Math.abs(den) > 1e-9 ? ((t) => [sa.at[0] + t * d1[0], sa.at[1] + t * d1[1]] as P2)(cross(sub(sb.at, sa.at), d2) / den) : !sa.segment || sb.segment ? sa.at : sb.at;
+  // Las dos al revés miden lo mismo: hacia donde está la línea de referencia, no su prolongación
+  if (sa.segment) {
+    const m: P2 = [(sa.segment[0][0] + sa.segment[1][0]) / 2 - x[0], (sa.segment[0][1] + sa.segment[1][1]) / 2 - x[1]];
+    if (dot(m, d1) < -1e-12) [d1, d2] = [[-d1[0], -d1[1]], [-d2[0], -d2[1]]];
+  }
+  const reachOf = (sd: AngleSide) => (sd.segment ? Math.max(len(sub(sd.segment[0], x)), len(sub(sd.segment[1], x))) : len(sub(sd.at, x)) + sd.size);
+  return { x, u1: d1, u2: d2, degrees, reach: Math.min(reachOf(sa), reachOf(sb)) };
+}
+
+/**
+ * Ángulo nuevo entre `a` y `b` como se ve: el rincón entre las partes
+ * visibles (hacia el medio de cada línea, hacia adentro de cada curva desde
+ * el extremo más cercano a la otra).
+ */
+export function angleBetweenEntities(s: Sketch, a: number, b: number): Extract<SketchConstraint, { type: "angle" }> | undefined {
+  const g = (id: number) => s.entities.find((e) => e.id === id)?.geometry;
+  const ends = (id: number): [number, number] | undefined => {
+    const k = g(id);
+    if (k?.type === "line" || k?.type === "arc") return [k.start, k.end];
+    if (k?.type === "bspline" && !k.closed && k.poles.length >= 2) return [k.poles[0], k.poles[k.poles.length - 1]];
+    if (k?.type === "spline" && !k.closed && k.points.length) return [k.points[0], k.points[k.points.length - 1]];
+    return undefined;
+  };
+  const near = (id: number): P2[] => {
+    const e = ends(id);
+    if (e) return e.map((p) => pos(s, p)).filter((p) => p !== undefined);
+    const k = g(id);
+    const c = k && "center" in k ? pos(s, k.center) : undefined;
+    return c ? [c] : [];
+  };
+  /** Extremo de una curva: el que comparte con la otra, si no el más cercano a ella */
+  const endFor = (id: number, other: number): AngleEnd | undefined => {
+    if (g(id)?.type === "line" || g(id)?.type === "ellipse" || g(id)?.type === "ellipse_arc") return undefined;
+    const e = ends(id);
+    if (!e) return undefined;
+    const usable = (["start", "end"] as AngleEnd[]).filter((k) => angleSide(s, id, k));
+    if (usable.length < 2) return usable[0];
+    const shared: number[] = ends(other) ?? [];
+    if (shared.includes(e[0])) return "start";
+    if (shared.includes(e[1])) return "end";
+    const theirs = near(other);
+    const gap = (p: number) => Math.min(...theirs.map((q) => len(sub(pos(s, p) ?? q, q))));
+    return gap(e[1]) < gap(e[0]) ? "end" : "start";
+  };
+  const [ae, be] = [endFor(a, b), endFor(b, a)];
+  const c: Extract<SketchConstraint, { type: "angle" }> = { type: "angle", a, b, degrees: 0, ...(ae ? { a_end: ae } : {}), ...(be ? { b_end: be } : {}) };
+  const view = angleView(s, c);
+  if (!view) return undefined;
+  // Si la segunda apunta a su prolongación (o hacia afuera de la curva), el ángulo es con su otra mitad
+  const sb = angleSide(s, b, be)!;
+  const toward: P2 = sb.segment ? [(sb.segment[0][0] + sb.segment[1][0]) / 2 - view.x[0], (sb.segment[0][1] + sb.segment[1][1]) / 2 - view.x[1]] : sb.v;
+  if (dot(toward, view.u2) < -1e-12) c.supplementary = true;
+  c.degrees = +(angleView(s, c)!.degrees).toFixed(3);
+  return c;
+}
+
 function centerOf(s: Sketch, id: number): P2 | undefined {
   const g = s.entities.find((e) => e.id === id)?.geometry;
   if (g?.type === "circle" || g?.type === "arc" || g?.type === "ellipse") return pos(s, g.center);
@@ -269,14 +396,8 @@ export function measureConstraint(s: Sketch, c: SketchConstraint): number | unde
     }
     case "circle_distance":
       return circleGap(s, c.a, c.b, !!c.max);
-    case "angle": {
-      const [l1, l2] = [lineOf(s, c.a), lineOf(s, c.b)];
-      if (!l1 || !l2) return undefined;
-      const d1 = sub(l1[1], l1[0]);
-      // Suplementario: hasta la segunda invertida
-      const d2 = c.supplementary ? sub(l2[0], l2[1]) : sub(l2[1], l2[0]);
-      return (Math.atan2(cross(d1, d2), dot(d1, d2)) * 180) / Math.PI;
-    }
+    case "angle":
+      return angleView(s, c)?.degrees;
     default:
       return undefined;
   }

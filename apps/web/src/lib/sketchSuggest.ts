@@ -2,16 +2,20 @@
 // ofrece el panel del sketch y la barra de restricciones de arriba). Cada una
 // con su texto y cómo se arma; las cotas toman lo que mide la geometría ahora.
 
-import type { Sketch, SketchConstraint } from "./cad";
-import { measureConstraint } from "./sketchTransform";
+import { geometryPoints, type Sketch, type SketchConstraint } from "./cad";
+import { angleBetweenEntities, hasAngleDirection, measureConstraint } from "./sketchTransform";
 
 export interface ConstraintSuggestion {
   label: string;
   make: () => SketchConstraint | SketchConstraint[];
 }
 
-/** Lo que se puede poner con `selection` (ids de puntos y entidades, en el orden en que se eligieron) */
-export function constraintSuggestions(sk: Sketch, selection: number[]): ConstraintSuggestion[] {
+/**
+ * Lo que se puede poner con `selection` (ids de puntos y entidades, en el
+ * orden en que se eligieron). `free`: puntos con grados libres (el ángulo
+ * toma de referencia la entidad que ya está quieta).
+ */
+export function constraintSuggestions(sk: Sketch, selection: number[], free?: number[]): ConstraintSuggestion[] {
   const sketch = (): Sketch => sk;
   const entity = (id: number) => sketch().entities.find((e) => e.id === id);
   const point = (id: number) => sketch().points.find((p) => p.id === id);
@@ -50,14 +54,6 @@ export function constraintSuggestions(sk: Sketch, selection: number[]): Constrai
       out.push({ label: "Perpendiculares", make: () => ({ type: "perpendicular", a: L[0], b: L[1] }) });
       out.push({ label: "Colineales", make: () => ({ type: "collinear", a: L[0], b: L[1] }) });
       out.push({ label: "Mismo largo", make: () => ({ type: "equal", a: L[0], b: L[1] }) });
-      // Con lo que mide ahora (no un valor fijo: arrancaba en 90° y movía las líneas)
-      out.push({
-        label: "Ángulo",
-        make: () => {
-          const c: SketchConstraint = { type: "angle", a: L[0], b: L[1], degrees: 0 };
-          return { ...c, degrees: measure(c) };
-        },
-      });
       // Entre paralelas: un extremo de la segunda hasta la recta de la primera (y paralelas si no lo eran)
       out.push({
         label: "Distancia entre paralelas",
@@ -117,9 +113,21 @@ export function constraintSuggestions(sk: Sketch, selection: number[]): Constrai
       const p = point(P[0])!;
       out.push({ label: "Fijar", make: () => ({ type: "fixed", point: P[0], x: p.x, y: p.y }) });
     }
-    if (L.length === 2) {
-      const c: SketchConstraint = { type: "angle", a: L[0], b: L[1], degrees: 0, supplementary: true };
-      out.push({ label: "Ángulo suplementario", make: () => ({ ...c, degrees: measure(c) }) });
+    // Ángulo entre dos entidades con dirección (líneas, arcos, elipses, puntas
+    // de curvas), con lo que mide ahora: de la referencia (la primera, o la
+    // que ya está quieta) a la que gira
+    const D = selEntities().filter((e) => hasAngleDirection(sketch(), e!.id));
+    if (D.length === 2 && D.length === selEntities().length && P.length === 0) {
+      let [a, b] = [D[0]!.id, D[1]!.id];
+      const moves = (id: number) => !!free && geometryPoints(entity(id)!.geometry).some((p) => free.includes(p));
+      if (moves(a) && !moves(b)) [a, b] = [b, a];
+      const c = angleBetweenEntities(sketch(), a, b);
+      if (c) {
+        out.push({ label: "Ángulo", make: () => ({ ...c }) });
+        const { supplementary, ...rest } = c;
+        const other: SketchConstraint = supplementary ? rest : { ...rest, supplementary: true };
+        out.push({ label: "Ángulo suplementario", make: () => ({ ...other, degrees: measure(other) }) });
+      }
     }
     // Cadena de líneas, arcos y círculos: su largo total
     const E = selEntities().map((e) => e!);
@@ -226,10 +234,16 @@ export const CONSTRAINT_TOOLS: ConstraintTool[] = [
     key: "dim",
     label: "Cota",
     glyph: "↔",
-    tip: "Una línea: su largo; dos líneas: el ángulo; un círculo: el diámetro; un arco: el radio; dos puntos: la distancia; un punto y una línea: la distancia a la línea",
+    tip: "Una línea: su largo; dos líneas (o arcos, elipses): el ángulo; un círculo: el diámetro; un arco: el radio; dos puntos: la distancia; un punto y una línea: la distancia a la línea",
     options: ["Largo", "Ángulo", "Diámetro", "Radio", "Distancia", "Distancia a la línea", "Largo del arco", "Distancia entre paralelas"],
   },
-  { key: "angle", label: "Ángulo", glyph: "∠", tip: "Dos líneas: el ángulo que tienen ahora, con su arco (Mayús+clic: el suplementario)", options: ["Ángulo"] },
+  {
+    key: "angle",
+    label: "Ángulo",
+    glyph: "∠",
+    tip: "Dos líneas, arcos, elipses o puntas de curvas: el ángulo que tienen ahora; la primera es la referencia y gira la otra (Mayús+clic: el suplementario)",
+    options: ["Ángulo"],
+  },
   { key: "coincident", label: "Coincidente", glyph: "◉", tip: "Dos puntos juntos, o un punto sobre una línea, un círculo o una curva", options: ["Coincidentes", "Punto en la línea", "Punto en el círculo", "Punto en la curva"] },
   { key: "horizontal", label: "Horizontal", glyph: "H", tip: "Una línea horizontal, o dos puntos a la misma altura", options: ["Horizontal", "Alineados horizontal"] },
   { key: "vertical", label: "Vertical", glyph: "V", tip: "Una línea vertical, o dos puntos uno sobre otro", options: ["Vertical", "Alineados vertical"] },
@@ -244,8 +258,8 @@ export const CONSTRAINT_TOOLS: ConstraintTool[] = [
 ];
 
 /** La opción de `tool` que vale para lo elegido (un arco solo: el radio antes que el diámetro) */
-export function pickSuggestion(sk: Sketch, selection: number[], tool: ConstraintTool): ConstraintSuggestion | undefined {
-  const list = constraintSuggestions(sk, selection);
+export function pickSuggestion(sk: Sketch, selection: number[], tool: ConstraintTool, free?: number[]): ConstraintSuggestion | undefined {
+  const list = constraintSuggestions(sk, selection, free);
   const only = selection.length === 1 ? sk.entities.find((e) => e.id === selection[0]) : undefined;
   const order = tool.key === "dim" && only?.geometry.type === "arc" ? ["Radio", ...tool.options.filter((o) => o !== "Radio")] : tool.options;
   for (const o of order) {

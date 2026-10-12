@@ -89,6 +89,13 @@ export interface SketchOverlay {
   problems?: P2[];
   /** Cruces sin punto común (una × chica) */
   crossings?: P2[];
+  /**
+   * Lo que late (aviso bajo el mouse, candidata del «¿cuál?»): sus entidades
+   * (o puntos), su lugar y puntos extra; color del tema (si no, el de la gravedad)
+   */
+  pulse?: { ids: number[]; at?: P2; kind: "error" | "warning" | "info"; color?: string; dots?: P2[] };
+  /** Vista separada del «¿cuál?»: cada entidad corrida (mm) y en su color */
+  spread?: { id: number; offset: P2; color: string }[];
   /** Entidades con problemas (encimadas): en rojo */
   warnEntities?: number[];
   /** Peine de curvatura de lo elegido: dientes, envolvente e inflexiones */
@@ -1116,7 +1123,64 @@ export class CadViewer {
     return tex;
   }
 
+  /** Latido del aviso bajo el mouse: sus materiales y cuándo empezó */
+  private pulse?: { lines: LineMaterial[]; dots: THREE.PointsMaterial[]; t0: number };
+  private pulseFrame = 0;
+
+  /** Arma lo que late (copias de las líneas y marcas encima del dibujo) y arranca la animación */
+  private startPulse(spec: SketchOverlay["pulse"], polylines: P2[][], points: P2[], hex: (name: string) => number, w: (p: P2) => THREE.Vector3) {
+    cancelAnimationFrame(this.pulseFrame);
+    this.pulseFrame = 0;
+    const t0 = this.pulse?.t0 ?? performance.now();
+    this.pulse = undefined;
+    if (!spec) return;
+    const color = hex(spec.color ?? (spec.kind === "info" ? "cyan" : spec.kind));
+    const lines = polylines.map((pts) => {
+      const m = new LineMaterial({ color, linewidth: 3, transparent: true, resolution: this.renderer.getSize(new THREE.Vector2()), depthTest: false });
+      const l = new Line2(new LineGeometry().setPositions(pts.flatMap((p) => w(p).toArray())), m);
+      l.renderOrder = 10;
+      this.sketchGroup.add(l);
+      return m;
+    });
+    const dots = [...points, ...(spec.at ? [spec.at] : []), ...(spec.dots ?? [])].map((p) => {
+      const m = new THREE.PointsMaterial({ color, size: 12, sizeAttenuation: false, transparent: true, depthTest: false });
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.Float32BufferAttribute(w(p).toArray(), 3));
+      const d = new THREE.Points(g, m);
+      d.renderOrder = 10;
+      this.sketchGroup.add(d);
+      return m;
+    });
+    this.pulse = { lines, dots, t0 };
+    this.pulseFrame = requestAnimationFrame(this.beat);
+  }
+
+  /** Un cuadro del latido: dos golpes por segundo (como un corazón) que se apagan */
+  private beat = () => {
+    this.pulseFrame = 0;
+    const p = this.pulse;
+    if (!p) return;
+    const ph = ((performance.now() - p.t0) / 1000) % 1;
+    const bump = (c: number) => Math.exp(-(((ph - c) / 0.07) ** 2)) + Math.exp(-(((ph - c - 1) / 0.07) ** 2));
+    const k = Math.min(1, bump(0.05) + 0.65 * bump(0.3));
+    for (const m of p.lines) {
+      m.linewidth = 2.5 + 5 * k;
+      m.opacity = 0.35 + 0.65 * k;
+    }
+    for (const m of p.dots) {
+      m.size = 10 + 16 * k;
+      m.opacity = 0.4 + 0.6 * k;
+    }
+    this.requestRender();
+    this.pulseFrame = requestAnimationFrame(this.beat);
+  };
+
   setSketch(overlay: SketchOverlay | null) {
+    if (!overlay?.pulse) {
+      cancelAnimationFrame(this.pulseFrame);
+      this.pulseFrame = 0;
+      this.pulse = undefined;
+    }
     for (const child of [...this.sketchGroup.children]) {
       this.sketchGroup.remove(child);
       this.retired.push(child as THREE.Mesh);
@@ -1243,6 +1307,9 @@ export class CadViewer {
                 : freeE.has(id)
                   ? hex("sketch-free")
                   : normal;
+    const pulseIds = new Set(overlay.pulse?.ids ?? []);
+    const spread = new Map((overlay.spread ?? []).map((x) => [x.id, x]));
+    const pulsePts: P2[][] = [];
     // Las líneas infinitas llegan bien lejos del dibujo
     let reach = 1000;
     for (const p of sketch.points) reach = Math.max(reach, 20 * Math.abs(p.x), 20 * Math.abs(p.y));
@@ -1293,9 +1360,13 @@ export class CadViewer {
         const poly = g.poles.map((id) => point.get(id));
         lines(g.closed ? [...poly, poly[0]] : poly, construction, true);
       } else if (g.type === "ellipse" || g.type === "ellipse_arc") pts = entityPolyline(g, point) ?? [];
+      // Vista separada: corrida a su costado, en su color
+      const sp = spread.get(e.id);
+      if (sp && pts.every(Boolean)) pts = pts.map((p) => [p[0] + sp.offset[0], p[1] + sp.offset[1]]);
+      if (pulseIds.has(e.id) && pts.length && pts.every(Boolean)) pulsePts.push(pts);
       // Elegida: gruesa (más aún bajo el mouse); preseleccionada: algo más gruesa
-      const width = selected.has(e.id) ? (hover.has(e.id) ? 5 : 3.5) : hover.has(e.id) ? 2.5 : 1;
-      if (pts.length && pts.every(Boolean)) lines(pts, color, !!e.construction, width);
+      const width = sp ? 2.5 : selected.has(e.id) ? (hover.has(e.id) ? 5 : 3.5) : hover.has(e.id) ? 2.5 : 1;
+      if (pts.length && pts.every(Boolean)) lines(pts, sp ? hex(sp.color) : color, !!e.construction, width);
     }
     for (const pv of overlay.preview ?? []) lines(pv, sel);
     for (const pv of overlay.removed ?? []) lines(pv, hex("error"), false, 3);
@@ -1350,6 +1421,7 @@ export class CadViewer {
     if (overlay.freedom) this.drawFreedom(overlay.freedom, sketch, lines);
     if (overlay.snap) marker(overlay.snap, hex("cyan"), 12);
     for (const p of overlay.problems ?? []) marker(p, hex("error"), 11);
+    this.startPulse(overlay.pulse, pulsePts, sketch.points.filter((p) => pulseIds.has(p.id)).map((p) => [p.x, p.y] as P2), hex, w);
     if (overlay.crossings?.length) {
       const k = this.pixelSizeMm() * 4;
       for (const [x, y] of overlay.crossings) {

@@ -73,6 +73,78 @@ export const escenarios = {
     if (await b.eval(`document.querySelector('[data-constraint-tool="horizontal"]').className.includes("bg-accent")`)) throw new Error("Esc no la soltó");
   },
 
+  async "ángulo: mide y dibuja lo que se ve, la referencia queda quieta, flecha al otro lado y cambiar referencia"(b) {
+    await begin(b);
+    const doc = await call("cad_get_document");
+    const P = (id, x, y) => ({ id, x, y });
+    // Dos líneas libres con un vértice común; la segunda dibujada hacia el vértice (antes medía 135 y dibujaba 45)
+    const c45 = 20 * Math.SQRT1_2;
+    const sketch = {
+      points: [P(0, 0, 0), P(1, 10, 10), P(2, 30, 10), P(3, 10 + c45, 10 + c45)],
+      entities: [
+        { id: 20, geometry: { type: "line", start: 1, end: 2 } },
+        { id: 21, geometry: { type: "line", start: 3, end: 1 } },
+      ],
+      constraints: [],
+      next_id: 40,
+      origin: 0,
+    };
+    doc.features.push({ id: doc.next_id, name: "Perfil", suppressed: false, kind: { type: "sketch", plane: { type: "xy" }, offset: 0, sketch } });
+    const id = doc.next_id;
+    doc.next_id += 1;
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    await b.eval(`window.__cadUi.editSketch(${id})`);
+    await sleep(1200);
+    const pt = (id) => b.eval(`(() => { const p = window.__cadUi.session().sketch.points.find((q) => q.id === ${id}); return [p.x, p.y]; })()`);
+    const dir = async (from, to) => {
+      const [p, q] = [await pt(from), await pt(to)];
+      return (Math.atan2(q[1] - p[1], q[0] - p[0]) * 180) / Math.PI;
+    };
+    const angle = () => b.eval(`JSON.parse(JSON.stringify(window.__cadUi.session().sketch.constraints.find((c) => c.type === "angle")))`);
+    const label = () => b.eval(`document.querySelector("[data-dim]")?.textContent.trim()`);
+    await b.eval(`window.__cadUi.setSelection([20, 21])`);
+    await sleep(300);
+    await b.clickText("Ángulo");
+    await sleep(1000);
+    let a = await angle();
+    near(a.degrees, 45, 1e-3, "el rincón que se ve, antihorario de la referencia a la otra");
+    if (a.a !== 20) throw new Error(`referencia: ${a.a}`);
+    if ((await label()) !== "45°") throw new Error(`etiqueta: ${await label()}`);
+    if (!(await b.eval(`!!document.querySelector("[data-angle-flip]")`))) throw new Error("sin la flecha del ángulo");
+    // 70°: la referencia no se mueve, gira la otra sobre el vértice
+    const msg = await b.eval(`window.__cadUi.setConstraintText(0, "70")`);
+    if (msg) throw new Error(msg);
+    await sleep(1200);
+    near(await dir(1, 2), 0, 1e-5, "la referencia quedó horizontal");
+    near((await pt(1))[0], 10, 1e-5, "el vértice no se movió");
+    near(await dir(1, 3), 70, 1e-5, "la otra a 70°");
+    if ((await label()) !== "70°") throw new Error(`etiqueta: ${await label()}`);
+    await b.shot("sketch_angulo_referencia");
+    // Flecha: al otro lado, la misma medida
+    const f = await b.eval(`(() => { const r = document.querySelector("[data-angle-flip] polygon").getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()`);
+    await b.click(f[0], f[1], { wait: 1200 });
+    near(await dir(1, 3), -70, 1e-5, "la otra del otro lado");
+    near(await dir(1, 2), 0, 1e-5, "la referencia sigue quieta");
+    if ((await label()) !== "70°") throw new Error(`etiqueta tras girar: ${await label()}`);
+    await b.shot("sketch_angulo_otro_lado");
+    // Cambiar referencia (menú de la cota): el dibujo no cambia; ahora gira la horizontal
+    await b.eval(`(() => { const e = document.querySelector("[data-dim]"); const r = e.getBoundingClientRect(); e.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: r.x + 4, clientY: r.y + 4 })); })()`);
+    await sleep(300);
+    const m = await b.eval(`(() => { const e = [...document.querySelectorAll("button, [role=menuitem]")].find((x) => x.textContent.trim() === "Cambiar referencia"); if (!e) return null; const r = e.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()`);
+    if (!m) throw new Error("sin «Cambiar referencia» en el menú");
+    await b.click(m[0], m[1], { wait: 1200 });
+    a = await angle();
+    if (a.a !== 21) throw new Error(`referencia tras cambiar: ${a.a}`);
+    near(await dir(1, 3), -70, 1e-5, "sin cambios al cambiar la referencia");
+    const msg2 = await b.eval(`window.__cadUi.setConstraintText(0, "30")`);
+    if (msg2) throw new Error(msg2);
+    await sleep(1200);
+    near(await dir(1, 3), -70, 1e-5, "la nueva referencia quedó quieta");
+    near(await dir(1, 2), -40, 1e-5, "gira la que era referencia");
+  },
+
   async "cota editada en el visor"(b) {
     await begin(b);
     await sketchOn(b);
@@ -228,8 +300,8 @@ export const escenarios = {
     };
     const pt = (id) => b.eval(`(() => { const p = window.__cadUi.session().sketch.points.find((q) => q.id === ${id}); return [p.x, p.y]; })()`);
     const radius = (id) => b.eval(`window.__cadUi.session().sketch.entities.find((e) => e.id === ${id}).geometry.radius`);
-    // Suplementario de −150°: la segunda línea queda a 30°
-    await suggest([20, 21], "Ángulo suplementario", -150);
+    // Suplementario de 150° (en el sentido que ya tenía): la segunda línea queda a 30°
+    await suggest([20, 21], "Ángulo suplementario", 150);
     const p3 = await pt(3);
     near((Math.atan2(p3[1], p3[0]) * 180) / Math.PI, 30, 1e-5, "línea a 30°");
     // Mínima entre círculos 10: el segundo pasa a radio 5
@@ -473,26 +545,59 @@ export const escenarios = {
     await b.eval(`window.__cadUi.setAssist({ section: false, hideModel: false })`);
   },
 
-  async "revisión del sketch: extremos sueltos y aviso al extruir"(b) {
+  async "revisión del sketch: línea sin terminar no deja punto, avisos en un desplegable y aviso al extruir"(b) {
     await begin(b);
     await sketchOn(b);
-    const problems = () => b.eval(`document.querySelector("[data-sketch-problems]")?.textContent ?? ""`);
-    // Una línea suelta: dos extremos sueltos
+    /** Contadores del botón de avisos: { error, warning, info } (✓ = ninguno) */
+    const counts = () =>
+      b.eval(`Object.fromEntries([...document.querySelectorAll("[data-issue-count]")].map((e) => [e.dataset.issueCount, +e.textContent.trim()]))`);
+    const points = () => b.eval(`window.__cadUi.session().sketch.points.length`);
+    if (Object.keys(await counts()).length) throw new Error(`sketch vacío con avisos: ${JSON.stringify(await counts())}`);
+    // Un clic de línea y Esc: no queda el punto del primer clic
+    const p0 = await points();
+    await b.clickText("Línea");
+    await b.click(430, 200, { wait: 500 });
+    await b.key("Escape", "Escape", 27);
+    await sleep(500);
+    if ((await points()) !== p0) throw new Error(`quedó el punto del primer clic: ${p0} → ${await points()}`);
+    // Una línea suelta: dos advertencias en el contador, nada en rojo en la barra
     await b.clickText("Línea");
     await b.click(400, 300);
     await b.click(560, 330, { wait: 800 });
     await b.key("Escape", "Escape", 27);
     await b.key("Escape", "Escape", 27);
-    if ((await problems()) !== "2 extremos sueltos") throw new Error(`una línea: "${await problems()}"`);
+    // (más «faltan restricciones»: la línea está libre)
+    let c = await counts();
+    if (c.warning !== 3 || c.error) throw new Error(`una línea: ${JSON.stringify(c)}`);
     // Otra que la cruza sin punto común (Mayús: sin anclajes, así no la parte)
     await b.clickText("Línea");
     await b.click(470, 250, { modifiers: 8 });
     await b.click(490, 400, { modifiers: 8, wait: 800 });
     await b.key("Escape", "Escape", 27);
     await b.key("Escape", "Escape", 27);
-    // El cruce no es un problema (las regiones se parten ahí): siguen los extremos sueltos
-    if ((await problems()) !== "4 extremos sueltos") throw new Error(`extremos: "${await problems()}"`);
-    await b.shot("revision_del_sketch");
+    c = await counts();
+    if (c.warning !== 5 || c.info !== 1) throw new Error(`extremos y cruce: ${JSON.stringify(c)}`);
+    // Clic en el botón: el estado del solver y el detalle
+    await b.eval(`document.querySelector('[aria-label="Avisos del sketch"]').click()`);
+    await sleep(300);
+    const status = await b.eval(`document.querySelector("[data-sketch-status]")?.textContent ?? ""`);
+    if (!/^Faltan \d+ restricciones$/.test(status)) throw new Error(`estado: "${status}"`);
+    const rows = await b.eval(`[...document.querySelectorAll("[data-issue-list] [data-issue]")].map((e) => e.dataset.issue)`);
+    if (rows.filter((k) => k === "warning").length !== 5 || rows.filter((k) => k === "info").length !== 1) throw new Error(`detalle: ${JSON.stringify(rows)}`);
+    const loose = `[...document.querySelectorAll('[data-issue-list] [data-issue="warning"]')].find((e) => e.textContent.includes("Extremo suelto"))`;
+    // Mouse encima: late en el visor (y deja de latir al salir)
+    await b.eval(`${loose}.dispatchEvent(new PointerEvent("pointerenter"))`);
+    await sleep(400);
+    const pulsing = await b.eval(`(() => { const p = window.__cadViewer.pulse; return p ? [p.lines.length, p.dots.length] : null; })()`);
+    if (!pulsing || pulsing[0] !== 1 || pulsing[1] !== 1) throw new Error(`latido: ${JSON.stringify(pulsing)}`);
+    await b.shot("avisos_del_sketch");
+    await b.eval(`${loose}.dispatchEvent(new PointerEvent("pointerleave"))`);
+    await sleep(300);
+    if (await b.eval(`!!window.__cadViewer.pulse`)) throw new Error("siguió latiendo al salir");
+    // Clic en un renglón elige lo que lo causa
+    await b.eval(`${loose}.click()`);
+    await sleep(300);
+    if ((await b.eval(`window.__cadUi.selection().length`)) !== 1) throw new Error("el renglón no eligió la línea");
     await b.clickText("Terminar sketch");
     await sleep(1500);
     // Extruir ese sketch: no se crea la operación y el aviso dice por qué
@@ -500,7 +605,7 @@ export const escenarios = {
     await b.clickText("Extrusión");
     await sleep(1000);
     const text = await b.eval(`document.body.innerText`);
-    if (!text.includes("El sketch no tiene regiones cerradas: 4 extremos sueltos")) throw new Error("falta el aviso de por qué no hay regiones");
+    if (!text.includes("El sketch no tiene regiones cerradas: el contorno no cierra (4 extremos sin unir)")) throw new Error("falta el aviso de por qué no hay regiones");
     if ((await b.eval(`window.__cadStore.doc().features.length`)) !== n) throw new Error("se creó la extrusión igual");
   },
 

@@ -6,10 +6,12 @@ import type { LightSettings } from "../../lib/lightRig";
 import type { CameraPose } from "../../lib/cameraRig";
 import { parse as parseFont, type Font } from "opentype.js";
 import { layoutText, type Contour } from "../../lib/sketchText";
-import { CONSTRAINT_LABELS, editsAsSketch, geometryPoints, type Report3d, type Sketch3d, type Plane, addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, curvePolyline, constraintValue, isReference, isSolidPoint, leavingDirection, placeSnap, tangentArc, type CadStore, designMass, dragByHandle, flipByHandle, handleField, handleValue, partColor, partHidden, samePart, type FeatureHandle, type FeatureKind, type MeasureItem, type Measurement, type P2, type P3, type ScanOutline, type Sketch, type SketchConstraint } from "../../lib/cad";
+import { CONSTRAINT_LABELS, editsAsSketch, geometryPoints, type Report3d, type Sketch3d, type Plane, addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, curvePolyline, constraintValue, isReference, isLoosePoint, isSolidPoint, removeLoosePoint, leavingDirection, placeSnap, tangentArc, type CadStore, designMass, dragByHandle, flipByHandle, handleField, handleValue, partColor, partHidden, samePart, type FeatureHandle, type FeatureKind, type MeasureItem, type Measurement, type P2, type P3, type ScanOutline, type Sketch, type SketchConstraint } from "../../lib/cad";
 import { infer, solidRefs, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
-import { applyFrame, clipCenter, invertFrame, measureConstraint, rotation, scaling, selectedEntities, splitEntityAt, transformSelection, translation, type Frame, type Xform } from "../../lib/sketchTransform";
-import { trimByStroke, trimRemoved } from "../../lib/sketchEdit";
+import { angleView, applyFrame, clipCenter, invertFrame, measureConstraint, rotation, scaling, selectedEntities, splitEntityAt, transformSelection, translation, type Frame, type Xform } from "../../lib/sketchTransform";
+import { mergeDuplicate, rejoinSplit, sameEntities, trimByStroke, trimRemoved } from "../../lib/sketchEdit";
+import { describeEntity, spreadCandidates } from "../../lib/sketchClarify";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { extendAny, trimAny } from "../../lib/sketchTrim";
 import { offsetChain } from "../../lib/sketchEdit";
 import { polylineOf } from "../../lib/sketchCheck";
@@ -19,7 +21,7 @@ import { CONSTRAINT_TOOLS, pickSuggestion, type ConstraintTool } from "../../lib
 import { viewPolylines } from "../../lib/sheetRefs";
 import { insertBlock, layerState } from "../../lib/sketchBlocks";
 import { gridSegments, parseCoords, snapToGrid } from "../../lib/sketchInput";
-import { checkSketch, connectedChain, problemsText, selectByKind } from "../../lib/sketchCheck";
+import { checkSketch, connectedChain, selectByKind, sketchIssues, type SketchIssue } from "../../lib/sketchCheck";
 import { constraintGlyphs } from "../../lib/sketchGlyphs";
 import { ellipseArcPolyline, ellipseParam, makeBSpline, rhoWeight, sample as sampleCurve } from "../../lib/sketchCurves";
 import { addParallelogram, insertSplinePoint, splineCurvature } from "../../lib/sketchSplines";
@@ -182,7 +184,12 @@ interface DimView {
   offset?: [number, number];
   /** Cota de ángulo: el arco entre las dos líneas (puntos en px del visor) */
   arc?: string;
+  /** Punta de flecha al final del arco (hacia la que gira) y el comienzo (la referencia), en px */
+  arrow?: { points: string; x: number; y: number; start: P2 };
 }
+
+/** Color de cada gravedad de aviso */
+const ISSUE_COLOR: Record<SketchIssue["kind"], string> = { error: "text-error", warning: "text-warning", info: "text-text-muted" };
 
 /** Lo que va antes del valor de cada tipo de cota */
 const DIM_PREFIX: Partial<Record<SketchConstraint["type"], (c: SketchConstraint) => string>> = {
@@ -393,7 +400,8 @@ export const CadView: Component<CadViewProps> = (props) => {
   const [cursor, setCursor] = createSignal<P2>();
   // Estado de la herramienta en curso (clics ya dados)
   // `lastSnapped`: el último punto ya existía (se ancló a él) al hacer clic
-  const [chain, setChain] = createSignal<{ first: number; last: number; lastSnapped: boolean; lastEntity?: number }>();
+  // `split`: la línea que partió el último clic (sus dos tramos), por si el tramo siguiente va encima
+  const [chain, setChain] = createSignal<{ first: number; last: number; lastSnapped: boolean; lastEntity?: number; split?: [number, number] }>();
   // Polilínea línea-arco: con A el próximo tramo de la línea sale como arco tangente
   const [chainArc, setChainArc] = createSignal(false);
   // Último punto puesto (las coordenadas relativas parten de ahí)
@@ -582,8 +590,86 @@ export const CadView: Component<CadViewProps> = (props) => {
     const s = ui.session();
     return s ? checkSketch(s.sketch) : undefined;
   });
+  /** Todos los avisos del sketch (el desplegable de la barra) */
+  const issues = createMemo(() => {
+    const s = ui.session();
+    const p = problems();
+    return s && p ? sketchIssues(s.sketch, s.report, p) : [];
+  });
+  const issueCount = (k: SketchIssue["kind"]) => issues().filter((x) => x.kind === k).length;
+  const [issuesOpen, setIssuesOpen] = createSignal(false);
+  const [issueHover, setIssueHover] = createSignal<SketchIssue>();
+  /**
+   * «¿Cuál?» (como KiCad): lo encimado bajo un clic para elegir, con la vista
+   * separada (`step`: mm entre una y otra, unos 12 px al abrir)
+   */
+  const [clarify, setClarify] = createSignal<{ x: number; y: number; at: P2; ids: number[]; add: boolean; step: number }>();
+  const [clarifyHover, setClarifyHover] = createSignal<number>();
+  const candidates = createMemo(() => {
+    const c = clarify();
+    const s = ui.session();
+    if (!c || !s) return [];
+    return spreadCandidates(s.sketch, c.ids.filter((id) => s.sketch.entities.some((e) => e.id === id)), c.at, c.step);
+  });
+  /** Pares iguales entre las candidatas (la primera se queda) */
+  const clarifyTwins = createMemo(() => {
+    const s = ui.session();
+    const ids = candidates().map((c) => c.id);
+    if (!s) return [];
+    const pairs: [number, number][] = [];
+    for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) if (sameEntities(s.sketch, ids[i], ids[j])) pairs.push([ids[i], ids[j]]);
+    return pairs;
+  });
+  const closeClarify = () => {
+    setClarify(undefined);
+    setClarifyHover(undefined);
+  };
+  const chooseCandidate = (id: number) => {
+    const c = clarify();
+    closeClarify();
+    if (c) ui.setSelection((sel) => (c.add ? (sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id]) : [id]));
+  };
+  /** Junta las iguales: se queda la que tiene más restricciones */
+  const joinTwins = (pairs: [number, number][]) => {
+    const s = ui.session();
+    if (!s || !pairs.length) return;
+    const count = (id: number) => s.sketch.constraints.filter((c) => constraintIds(c).includes(id)).length;
+    ui.change((sk) => {
+      for (const [a, b] of pairs) {
+        const [keep, drop] = count(b) > count(a) ? [b, a] : [a, b];
+        mergeDuplicate(sk, keep, drop);
+      }
+    });
+    ui.setMessage(pairs.length === 1 ? "Juntadas en una" : `Juntados ${pairs.length} pares en uno`);
+  };
+  createEffect(() => {
+    if (!clarify()) return;
+    const away = (e: PointerEvent) => !(e.target as Element | null)?.closest?.("[data-clarify]") && closeClarify();
+    window.addEventListener("pointerdown", away, true);
+    onCleanup(() => window.removeEventListener("pointerdown", away, true));
+  });
+  createEffect(on(() => ui.session()?.feature, closeClarify, { defer: true }));
+  /** Lo recién dibujado que repite algo que ya estaba: [la que estaba, la nueva] (se pregunta si unirlas) */
+  const [dupAsk, setDupAsk] = createSignal<[number, number][]>();
+  createEffect(() => !issuesOpen() && setIssueHover(undefined));
+  // Se cierra con un clic afuera o al salir del sketch
+  createEffect(() => {
+    if (!issuesOpen()) return;
+    const away = (e: PointerEvent) => !(e.target as Element | null)?.closest?.("[data-sketch-issues]") && setIssuesOpen(false);
+    window.addEventListener("pointerdown", away, true);
+    onCleanup(() => window.removeEventListener("pointerdown", away, true));
+  });
+  createEffect(on(() => ui.session()?.feature, () => setIssuesOpen(false), { defer: true }));
 
-  const resetTool = () => {
+  /**
+   * Suelta lo que la herramienta tenía a medias. Una línea con solo el primer
+   * clic deja su punto suelto: se borra (salvo `keepStart`: al deshacer o al
+   * cambiar de sketch, ese punto ya no es de este sketch o lo maneja la historia)
+   */
+  const resetTool = (keepStart = false) => {
+    const ch = chain();
+    const s = ui.session();
+    if (!keepStart && ch && ch.lastEntity === undefined && s && isLoosePoint(s.sketch, ch.first)) ui.change((sk) => void removeLoosePoint(sk, ch.first));
     setOffsetFrom(undefined);
     ui.clearPreview();
     setChain(undefined);
@@ -600,7 +686,7 @@ export const CadView: Component<CadViewProps> = (props) => {
     on(
       ui.sketchRestored,
       () => {
-        resetTool();
+        resetTool(true);
         setDimQueue([]);
         setEditingDim(undefined);
         setSheetPending([]);
@@ -916,7 +1002,7 @@ export const CadView: Component<CadViewProps> = (props) => {
     on(
       editingFeature,
       (feature) => {
-        resetTool();
+        resetTool(true);
         if (!viewer) return;
         const s = ui.session();
         if (feature !== undefined && s) {
@@ -1192,7 +1278,23 @@ export const CadView: Component<CadViewProps> = (props) => {
       linkedEntities: s.sketch.uses?.map((u) => u.entity),
       hideConstruction: !ui.sketchShow().construction,
       hidePoints: !ui.sketchShow().points,
-      problems: problems()?.looseEnds.map((x) => x.p) ?? [],
+      // Los extremos sueltos, marcados mientras se miran los avisos; el de bajo el mouse late
+      problems: issuesOpen() ? problems()?.looseEnds.map((x) => x.p) : undefined,
+      pulse: (() => {
+        const it = issueHover();
+        if (it) return { ids: it.ids, at: it.mark ? it.at : undefined, kind: it.kind };
+        // La candidata bajo el mouse del «¿cuál?»: late con sus extremos (corridos como ella)
+        const c = candidates().find((x) => x.id === clarifyHover());
+        if (!c) return undefined;
+        const g = s.sketch.entities.find((x) => x.id === c.id)?.geometry;
+        const ends = g && (g.type === "line" || g.type === "arc") ? [g.start, g.end] : [];
+        const dots = ends.flatMap((id) => {
+          const q = s.sketch.points.find((x) => x.id === id);
+          return q ? [[q.x + c.offset[0], q.y + c.offset[1]] as P2] : [];
+        });
+        return { ids: [c.id], kind: "info" as const, color: c.color, dots };
+      })(),
+      spread: candidates().length ? candidates().map((c) => ({ id: c.id, offset: c.offset, color: c.color })) : undefined,
       crossings: ui.sketchShow().crossings !== false ? problems()?.crossings.map((x) => x.p) : undefined,
       warnEntities: problems()?.overlaps.flat(),
       conflictEntities: (s.report?.conflicting ?? []).flatMap((i) => {
@@ -1348,7 +1450,7 @@ export const CadView: Component<CadViewProps> = (props) => {
   const applyConstraintTool = (t: ConstraintTool): boolean => {
     const s = ui.session();
     if (!s || !ui.selection().length) return false;
-    const sug = pickSuggestion(s.sketch, ui.selection(), t);
+    const sug = pickSuggestion(s.sketch, ui.selection(), t, s.report?.free_points);
     if (!sug) return false;
     const made = sug.make();
     ui.change((sk) => sk.constraints.push(...[made].flat()));
@@ -1377,7 +1479,22 @@ export const CadView: Component<CadViewProps> = (props) => {
     return Math.round(v / step) * step;
   };
 
+  /** Clic en el sketch; si lo que se dibujó repite algo que ya estaba, pregunta si unirlas */
   const sketchClick = (e: PointerEvent, forced?: Snap) => {
+    const before = new Set(ui.session()?.sketch.entities.map((x) => x.id) ?? []);
+    sketchClickTool(e, forced);
+    const s = ui.session();
+    if (!s || ui.tool() === "select" || !before.size) return;
+    const twins = s.sketch.entities
+      .filter((n) => !before.has(n.id))
+      .flatMap((n) => {
+        const old = s.sketch.entities.find((o) => before.has(o.id) && sameEntities(s.sketch, o.id, n.id));
+        return old ? [[old.id, n.id] as [number, number]] : [];
+      });
+    if (twins.length) setDupAsk(twins);
+  };
+
+  const sketchClickTool = (e: PointerEvent, forced?: Snap) => {
     const s = ui.session();
     const hit = forced ?? snapped(e);
     if (!s || !hit || !viewer) return;
@@ -1411,6 +1528,14 @@ export const CadView: Component<CadViewProps> = (props) => {
         dragging = text.anchor;
         if (add) ui.setSelection((sel) => (sel.includes(text.anchor) ? sel.filter((x) => x !== text.anchor) : [...sel, text.anchor]));
         else ui.setSelection([text.anchor]);
+        return;
+      }
+      // Encimadas bajo el clic (y ningún punto): «¿cuál?» con la vista separada
+      const close = hitAll(s.sketch, raw, viewer.pixelSizeMm() * 4, false).flatMap((x) => (x.entity !== undefined ? [x.entity] : []));
+      if (h.point === undefined && close.length > 1 && !(e.shiftKey && (e.ctrlKey || e.metaKey))) {
+        const r = container.getBoundingClientRect();
+        setClarifyHover(undefined);
+        setClarify({ x: e.clientX - r.left, y: e.clientY - r.top, at: raw, ids: close, add, step: viewer.pixelSizeMm() * 12 });
         return;
       }
       // Ctrl+Mayús+arrastrar: arrastre libre (se sueltan las restricciones de lo arrastrado)
@@ -1507,14 +1632,23 @@ export const CadView: Component<CadViewProps> = (props) => {
       let closed = false;
       const snappedToPoint = hit.id !== undefined || isSolidPoint(hit);
       ui.change((sk) => {
-        const id = placeSnap(sk, hit);
+        const prev = ch ? sk.points.find((q) => q.id === ch.last) : undefined;
+        const known = new Set(sk.entities.map((x) => x.id));
+        // Desde el punto anterior: si el tramo va encima de una línea, no la parte
+        const id = placeSnap(sk, hit, prev && [prev.x, prev.y]);
+        // La línea que este clic partió (sus dos tramos)
+        const rest = sk.entities.find((x) => !known.has(x.id) && x.geometry.type === "line");
+        const base = rest && sk.entities.find((x) => known.has(x.id) && x.geometry.type === "line" && (x.geometry.start === id || x.geometry.end === id));
+        const split: [number, number] | undefined = rest && base ? [base.id, rest.id] : undefined;
         if (!ch) {
-          setChain({ first: id, last: id, lastSnapped: snappedToPoint });
+          setChain({ first: id, last: id, lastSnapped: snappedToPoint, split });
           return;
         }
         if (id === ch.last) return;
         const a = sk.points.find((q) => q.id === ch.last)!;
         const line = ui.addEntity(sk, { type: "line", start: ch.last, end: id });
+        // El clic anterior partió una línea y este tramo va encima de ella: se vuelve a unir
+        if (ch.split) rejoinSplit(sk, ch.split, ch.last, line);
         // Entre dos puntos que ya estaban, la línea queda definida por ellos
         const between = snappedToPoint && ch.lastSnapped;
         // Lo que se vio al dibujar es lo que queda restringido
@@ -1525,7 +1659,7 @@ export const CadView: Component<CadViewProps> = (props) => {
         closed = id === ch.first;
         // El tramo que cierra queda determinado por los demás: sin cota propia
         if (!closed && !between) dims.push(dim(sk, { type: "length", line, value: round(dist([a.x, a.y], hit.p)) }));
-        setChain(closed ? undefined : { first: ch.first, last: id, lastSnapped: snappedToPoint, lastEntity: line });
+        setChain(closed ? undefined : { first: ch.first, last: id, lastSnapped: snappedToPoint, lastEntity: line, split });
       });
       askDims(dims);
       return;
@@ -2968,7 +3102,8 @@ export const CadView: Component<CadViewProps> = (props) => {
     if (ui.session()) {
       const key = e.key.toLowerCase();
       if (e.key === "Escape") {
-        cancelStep();
+        if (clarify()) closeClarify();
+        else cancelStep();
       } else if (e.key === "Tab" && cycle && ui.tool() === "select") {
         // Lo siguiente de lo encimado bajo el último clic
         cycle.i = (cycle.i + 1) % cycle.ids.length;
@@ -3137,34 +3272,15 @@ export const CadView: Component<CadViewProps> = (props) => {
       return "center" in g ? pt.get(g.center) : undefined;
     };
     /**
-     * Ángulo entre dos líneas: dónde se cruzan, hacia dónde va cada una (hacia
-     * su medio; la segunda al revés si es el suplementario) y el radio del arco
-     * (unos 45 px, menos si las líneas son cortas)
+     * Ángulo: dónde se cruzan las dos direcciones, hacia dónde va cada una (la
+     * misma cuenta del solver: el arco es el ángulo que vale) y el radio del
+     * arco (unos 45 px, menos si las entidades son cortas)
      */
     const angleGeom = (c: Extract<SketchConstraint, { type: "angle" }>) => {
-      const [ga, gb] = [ent.get(c.a), ent.get(c.b)];
-      if (ga?.type !== "line" || gb?.type !== "line") return undefined;
-      const [a0, a1, b0, b1] = [pt.get(ga.start), pt.get(ga.end), pt.get(gb.start), pt.get(gb.end)];
-      if (!a0 || !a1 || !b0 || !b1) return undefined;
-      const d1: P2 = [a1[0] - a0[0], a1[1] - a0[1]];
-      const d2: P2 = [b1[0] - b0[0], b1[1] - b0[1]];
-      const den = d1[0] * d2[1] - d1[1] * d2[0];
-      if (Math.abs(den) < 1e-12 * (Math.hypot(...d1) * Math.hypot(...d2) || 1)) return undefined;
-      const t = ((b0[0] - a0[0]) * d2[1] - (b0[1] - a0[1]) * d2[0]) / den;
-      const x: P2 = [a0[0] + t * d1[0], a0[1] + t * d1[1]];
-      const ray = (p: P2, q: P2): P2 => {
-        const m: P2 = [(p[0] + q[0]) / 2 - x[0], (p[1] + q[1]) / 2 - x[1]];
-        const far = dist(p, x) > dist(q, x) ? p : q;
-        const v: P2 = Math.hypot(...m) > 1e-9 ? m : [far[0] - x[0], far[1] - x[1]];
-        const l = Math.hypot(...v) || 1;
-        return [v[0] / l, v[1] / l];
-      };
-      const u1 = ray(a0, a1);
-      let u2 = ray(b0, b1);
-      if (c.supplementary) u2 = [-u2[0], -u2[1]];
-      const reach = Math.min(Math.max(dist(a0, x), dist(a1, x)), Math.max(dist(b0, x), dist(b1, x)));
-      const r = Math.min(45 * viewer!.pixelSizeMm(), 0.8 * reach) || 45 * viewer!.pixelSizeMm();
-      return { x, u1, u2, r };
+      const v = angleView(s.sketch, c);
+      if (!v) return undefined;
+      const r = Math.min(45 * viewer!.pixelSizeMm(), 0.8 * v.reach) || 45 * viewer!.pixelSizeMm();
+      return { ...v, r };
     };
     const anchor = (c: SketchConstraint): P2 | undefined => {
       switch (c.type) {
@@ -3176,7 +3292,7 @@ export const CadView: Component<CadViewProps> = (props) => {
           if (!g) return lineMid(c.a);
           let [bx, by] = [g.u1[0] + g.u2[0], g.u1[1] + g.u2[1]];
           const l = Math.hypot(bx, by);
-          if (l < 1e-9) [bx, by] = [-g.u1[1], g.u1[0]];
+          if (l < 1e-9) [bx, by] = g.degrees < 0 ? [g.u1[1], -g.u1[0]] : [-g.u1[1], g.u1[0]];
           else [bx, by] = [bx / l, by / l];
           return [g.x[0] + bx * g.r * 1.35, g.x[1] + by * g.r * 1.35];
         }
@@ -3252,18 +3368,30 @@ export const CadView: Component<CadViewProps> = (props) => {
       const e2 = ends(c);
       // Ángulo: el arco entre las dos líneas (la etiqueta ya va sobre la bisectriz)
       let arc: string | undefined;
+      let arrow: DimView["arrow"];
       if (c.type === "angle") {
         const g = angleGeom(c);
         if (g) {
+          // De la referencia a la que gira, en el sentido del signo
           const t0 = Math.atan2(g.u1[1], g.u1[0]);
-          let sweep = Math.atan2(g.u2[1], g.u2[0]) - t0;
-          while (sweep > Math.PI) sweep -= 2 * Math.PI;
-          while (sweep < -Math.PI) sweep += 2 * Math.PI;
-          arc = Array.from({ length: 25 }, (_, i) => {
-            const t = t0 + (sweep * i) / 24;
-            const [sx, sy] = viewer!.screenOf(planeToWorld(s.plane, [g.x[0] + g.r * Math.cos(t), g.x[1] + g.r * Math.sin(t)]));
-            return `${(sx - rect.left).toFixed(1)},${(sy - rect.top).toFixed(1)}`;
-          }).join(" ");
+          const sweep = (g.degrees * Math.PI) / 180;
+          const screen = (t: number, r = g.r): P2 => {
+            const [sx, sy] = viewer!.screenOf(planeToWorld(s.plane, [g.x[0] + r * Math.cos(t), g.x[1] + r * Math.sin(t)]));
+            return [sx - rect.left, sy - rect.top];
+          };
+          const ps = Array.from({ length: 25 }, (_, i) => screen(t0 + (sweep * i) / 24));
+          arc = ps.map(([px, py]) => `${px.toFixed(1)},${py.toFixed(1)}`).join(" ");
+          // Punta de flecha al final del arco (clic: gira al otro lado)
+          const tip = ps[24];
+          const back = screen(t0 + sweep - Math.sign(sweep || 1) * Math.min(Math.abs(sweep) / 2, (9 * viewer!.pixelSizeMm()) / g.r));
+          const d: P2 = [tip[0] - back[0], tip[1] - back[1]];
+          const l = Math.hypot(...d);
+          if (l > 1e-6) {
+            const [ux, uy] = [d[0] / l, d[1] / l];
+            const base: P2 = [tip[0] - ux * 9, tip[1] - uy * 9];
+            const wing = (k: number) => `${(base[0] - uy * 4 * k).toFixed(1)},${(base[1] + ux * 4 * k).toFixed(1)}`;
+            arrow = { points: `${tip[0].toFixed(1)},${tip[1].toFixed(1)} ${wing(1)} ${wing(-1)}`, x: tip[0], y: tip[1], start: ps[0] };
+          }
         }
       }
       if (offset) {
@@ -3305,6 +3433,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       out.push({
         index,
         arc,
+        arrow,
         x: x - rect.left,
         y: y - rect.top,
         // Las de referencia entre paréntesis, como Onshape
@@ -3381,6 +3510,26 @@ export const CadView: Component<CadViewProps> = (props) => {
     window.addEventListener("pointerup", up);
   };
 
+  /** Ángulo al otro lado de la referencia, con la misma medida */
+  const flipAngle = (index: number) =>
+    ui.change((sk) => {
+      const k = sk.constraints[index];
+      if (k?.type === "angle") k.degrees = -k.degrees || 0;
+    });
+  /** La que gira pasa a ser la referencia (el dibujo no cambia) */
+  const swapAngleReference = (index: number) =>
+    ui.change((sk) => {
+      const k = sk.constraints[index];
+      if (k?.type !== "angle") return;
+      [k.a, k.b] = [k.b, k.a];
+      const [ae, be] = [k.a_end, k.b_end];
+      delete k.a_end;
+      delete k.b_end;
+      if (be) k.a_end = be;
+      if (ae) k.b_end = ae;
+      k.degrees = -k.degrees || 0;
+    });
+
   /** Clic derecho en una cota: bloquear, devolver el texto, impulsora o de referencia, quitar */
   const dimMenu = (x: number, y: number, d: DimView) => {
     const c = ui.session()?.sketch.constraints[d.index];
@@ -3396,6 +3545,8 @@ export const CadView: Component<CadViewProps> = (props) => {
         ...(d.offset ? [{ label: "Devolver el texto a su lugar", onSelect: () => ui.setDimOpts(d.index, { offset: undefined }) }] : []),
         ...(flippable
           ? [
+              { label: "Girar al otro lado", onSelect: () => flipAngle(d.index) },
+              { label: "Cambiar referencia", onSelect: () => swapAngleReference(d.index) },
               {
                 label: c.supplementary ? "Ángulo (no suplementario)" : "Ángulo suplementario",
                 onSelect: () =>
@@ -3541,6 +3692,103 @@ export const CadView: Component<CadViewProps> = (props) => {
         }}
       </Show>
 
+      {/* «¿Cuál?»: etiquetas de la vista separada (en el color de cada una) y el menú junto al clic */}
+      <Show when={candidates().length > 0 && ui.session()}>
+        {(sess) => {
+          const tag = (p: P2) => {
+            viewTick();
+            const r = container.getBoundingClientRect();
+            const [x, y] = viewer!.screenOf(planeToWorld(sess().plane, p));
+            return { left: `${x - r.left}px`, top: `${y - r.top}px` };
+          };
+          return (
+            <>
+              <For each={candidates()}>
+                {(c) => (
+                  <span
+                    class={clsx(
+                      "absolute z-10 -translate-x-1/2 -translate-y-1/2 px-1 rounded text-[11px] font-medium bg-bg-lighter/90 border pointer-events-none",
+                      clarifyHover() === c.id ? "border-text" : "border-border",
+                    )}
+                    style={{ ...tag(c.label), color: `var(--color-${c.color})` }}
+                    data-clarify-tag={c.id}
+                  >
+                    {c.name}
+                  </span>
+                )}
+              </For>
+              <div
+                class="absolute z-20 w-72 rounded border border-border bg-bg-lighter shadow-lg p-1 text-xs"
+                style={{ left: `${clarify()!.x + 12}px`, top: `${clarify()!.y + 12}px` }}
+                data-clarify
+                role="menu"
+                aria-label="¿Cuál?"
+              >
+                <p class="px-1.5 py-1 font-medium text-text-muted border-b border-border/60 mb-0.5">¿Cuál? Hay {candidates().length} encimadas</p>
+                <Show when={clarifyTwins().length}>
+                  <button
+                    class="flex items-center gap-1.5 w-full text-left px-1.5 py-1 mb-0.5 rounded text-warning hover:bg-surface/60"
+                    data-clarify-join
+                    onClick={() => {
+                      joinTwins(clarifyTwins());
+                      closeClarify();
+                    }}
+                  >
+                    <Icons.Warning size={12} />
+                    {clarifyTwins().length === 1 ? "Son iguales: juntarlas en una" : "Hay iguales: juntarlas"}
+                  </button>
+                </Show>
+                <For each={candidates()}>
+                  {(c) => (
+                    <button
+                      class={clsx("flex items-start gap-1.5 w-full text-left px-1.5 py-1 rounded", clarifyHover() === c.id ? "bg-surface/60" : "hover:bg-surface/60")}
+                      role="menuitem"
+                      data-clarify-item={c.id}
+                      onPointerEnter={() => setClarifyHover(c.id)}
+                      onPointerLeave={() => setClarifyHover((h) => (h === c.id ? undefined : h))}
+                      onClick={() => chooseCandidate(c.id)}
+                    >
+                      <span class="mt-0.5 w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: `var(--color-${c.color})` }} />
+                      <span class="min-w-0">
+                        <span class="block text-text font-medium">{c.name}</span>
+                        <Show when={c.detail}>
+                          <span class="block text-text-muted">{c.detail}</span>
+                        </Show>
+                        <span class="block text-text-dim">{c.constraints.length ? c.constraints.join(" · ") : "Sin restricciones"}</span>
+                      </span>
+                    </button>
+                  )}
+                </For>
+              </div>
+            </>
+          );
+        }}
+      </Show>
+
+      {/* Lo dibujado repite algo que ya estaba: unirlas o dejar las dos */}
+      <Show when={dupAsk()} keyed>
+        {(pairs) => {
+          const s = ui.session();
+          const names = (ids: number[]) => ids.map((id) => (s ? describeEntity(s.sketch, id).name : `${id}`)).join(", ");
+          return (
+            <ConfirmDialog
+              title="Quedó repetida"
+              message={`${names(pairs.map((p) => p[1]))} quedó exactamente encima de ${names(pairs.map((p) => p[0]))}.\n\n¿Unirlas en una? La que ya estaba se queda y recibe las restricciones de la nueva. Si no, quedan las dos.`}
+              confirmLabel="Unirlas"
+              cancelLabel="Dejar las dos"
+              onConfirm={() => {
+                setDupAsk(undefined);
+                // Lo que la herramienta tenía a medias puede usar puntos de la nueva
+                resetTool(true);
+                ui.change((sk) => pairs.forEach(([keep, drop]) => mergeDuplicate(sk, keep, drop)));
+                ui.setMessage(pairs.length === 1 ? "Unidas en una" : `Unidos ${pairs.length} pares`);
+              }}
+              onCancel={() => setDupAsk(undefined)}
+            />
+          );
+        }}
+      </Show>
+
       {/* Guías de las cotas con el texto movido a mano */}
       <svg class="absolute inset-0 w-full h-full pointer-events-none" data-dim-leaders>
         <For each={dimensions().filter((d) => d.leader)}>
@@ -3549,6 +3797,32 @@ export const CadView: Component<CadViewProps> = (props) => {
         {/* El arco de las cotas de ángulo */}
         <For each={dimensions().filter((d) => d.arc)}>
           {(d) => <polyline data-angle-arc={d.index} points={d.arc} fill="none" class={d.conflict ? "stroke-red" : "stroke-text-muted"} stroke-width="1.2" />}
+        </For>
+        {/* Ángulo: un punto en la referencia y la flecha en la que gira (clic: al otro lado) */}
+        <For each={dimensions().filter((d) => d.arrow)}>
+          {(d) => (
+            <g>
+              <circle cx={d.arrow!.start[0]} cy={d.arrow!.start[1]} r="2.5" class={d.conflict ? "fill-red" : "fill-text-muted"} />
+              <Show when={!d.reference && !d.locked}>
+                <g
+                  data-angle-flip={d.index}
+                  class="pointer-events-auto cursor-pointer"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    flipAngle(d.index);
+                  }}
+                >
+                  <title>Girar al otro lado</title>
+                  <circle cx={d.arrow!.x} cy={d.arrow!.y} r="9" fill="transparent" />
+                  <polygon points={d.arrow!.points} class={d.conflict ? "fill-red" : "fill-text-muted hover:fill-accent"} />
+                </g>
+              </Show>
+              <Show when={d.reference || d.locked}>
+                <polygon points={d.arrow!.points} class="fill-text-muted" />
+              </Show>
+            </g>
+          )}
         </For>
       </svg>
 
@@ -4070,27 +4344,69 @@ export const CadView: Component<CadViewProps> = (props) => {
                 </IconButton>
               </Tooltip>
               <div class="w-px h-5 bg-border mx-1" />
-              <span
-                class={clsx(
-                  "text-xs px-1",
-                  s().report?.status === "well_constrained" ? "text-success" : s().report?.status === "under_constrained" ? "text-text-muted" : "text-error",
-                )}
-              >
-                {statusText()}
-              </span>
-              <Show when={problems() && problemsText(problems()!)}>
-                {(t) => (
-                  <span class="text-xs px-1 text-error" data-sketch-problems title="Marcados en rojo en el visor: así no se cierran las regiones (no se puede extruir esa parte)">
-                    {t()}
-                  </span>
-                )}
-              </Show>
+              {/* Avisos: contadores (✕ errores, ⚠ advertencias, ⓘ información; ✓ sin nada); clic despliega el detalle */}
+              <div class="relative" data-sketch-issues>
+                <button
+                  class="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded hover:bg-surface/60"
+                  aria-label="Avisos del sketch"
+                  aria-expanded={issuesOpen()}
+                  title={`${statusText() || "Avisos del sketch"} (clic: el detalle)`}
+                  onClick={() => setIssuesOpen(!issuesOpen())}
+                >
+                  <Show when={issues().length} fallback={<Icons.Check size={14} class="text-success" />}>
+                    <For each={(["error", "warning", "info"] as const).filter((k) => issueCount(k))}>
+                      {(k) => (
+                        <span class={clsx("flex items-center gap-0.5", ISSUE_COLOR[k])} data-issue-count={k}>
+                          {k === "error" ? <Icons.X size={13} /> : k === "warning" ? <Icons.Warning size={13} /> : <Icons.Info size={13} />}
+                          {issueCount(k)}
+                        </span>
+                      )}
+                    </For>
+                  </Show>
+                </button>
+                <Show when={issuesOpen()}>
+                  <div class="absolute top-full left-0 mt-1 z-20 w-80 max-h-72 overflow-auto rounded border border-border bg-bg-lighter shadow-lg p-1 text-xs" data-issue-list>
+                    {/* El estado del solver arriba */}
+                    <p
+                      class={clsx(
+                        "px-1.5 py-1 font-medium border-b border-border/60 mb-0.5",
+                        s().report?.status === "well_constrained" ? "text-success" : s().report?.status === "under_constrained" ? "text-text-muted" : "text-error",
+                      )}
+                      data-sketch-status
+                    >
+                      {statusText()}
+                    </p>
+                    <Show when={issues().length} fallback={<p class="px-1.5 py-1 text-success">Sin avisos</p>}>
+                      <For each={issues()}>
+                        {(it) => (
+                          <button
+                            class="flex items-start gap-1.5 w-full text-left px-1.5 py-1 rounded hover:bg-surface/60"
+                            data-issue={it.kind}
+                            // Bajo el mouse: lo que lo causa late en el visor
+                            onPointerEnter={() => setIssueHover(it)}
+                            onPointerLeave={() => setIssueHover(undefined)}
+                            onClick={() => {
+                              ui.setSelection(it.ids);
+                              ui.viewer()?.focusSketch?.(it.at, 20);
+                            }}
+                          >
+                            <span class={clsx("mt-px shrink-0", ISSUE_COLOR[it.kind])}>
+                              {it.kind === "error" ? <Icons.X size={12} /> : it.kind === "warning" ? <Icons.Warning size={12} /> : <Icons.Info size={12} />}
+                            </span>
+                            <span class="text-text">{it.text}</span>
+                          </button>
+                        )}
+                      </For>
+                    </Show>
+                  </div>
+                </Show>
+              </div>
               <div class="w-px h-5 bg-border mx-1" />
               {/* Restricciones y cota: con lo elegido se ponen al apretar; sin nada elegido el botón queda activo y se ponen al elegir (hasta Esc) */}
               <div class="flex items-center gap-0.5" role="toolbar" aria-label="Restricciones">
                 <For each={CONSTRAINT_TOOLS}>
                   {(t) => {
-                    const fits = () => !!ui.session() && ui.selection().length > 0 && !!pickSuggestion(ui.session()!.sketch, ui.selection(), t);
+                    const fits = () => !!ui.session() && ui.selection().length > 0 && !!pickSuggestion(ui.session()!.sketch, ui.selection(), t, ui.session()!.report?.free_points);
                     return (
                       <Tooltip content={`${t.label}: ${t.tip}`}>
                         <button

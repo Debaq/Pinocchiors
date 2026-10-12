@@ -42,7 +42,7 @@ fn supplementary_angle() {
     let l = s.add_line(a, other);
     s.constrain(SketchConstraint::Length { line: l, value: 10.0, reference: false, opts: no_opts() });
     // Suplementario de −120° (con signo, como el ángulo) = 60° entre las dos
-    let c = s.constrain(SketchConstraint::Angle { a: base, b: l, degrees: -120.0, supplementary: true, reference: false, opts: no_opts() });
+    let c = s.constrain(SketchConstraint::Angle { a: base, b: l, degrees: -120.0, supplementary: true, a_end: None, b_end: None, reference: false, opts: no_opts() });
     let r = s.solve().unwrap();
     assert_eq!(r.status, SketchStatus::WellConstrained, "{r:?}");
     let p = pt(&s, other);

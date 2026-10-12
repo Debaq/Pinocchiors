@@ -160,13 +160,20 @@ pub enum SketchConstraint {
     Length { line: u32, value: f64, #[serde(default, skip_serializing_if = "is_false")] reference: bool, #[serde(default, skip_serializing_if = "DimOpts::is_default")] opts: DimOpts },
     Radius { entity: u32, value: f64, #[serde(default, skip_serializing_if = "is_false")] reference: bool, #[serde(default, skip_serializing_if = "DimOpts::is_default")] opts: DimOpts },
     Diameter { entity: u32, value: f64, #[serde(default, skip_serializing_if = "is_false")] reference: bool, #[serde(default, skip_serializing_if = "DimOpts::is_default")] opts: DimOpts },
-    /// Ángulo de `a` a `b`; con `supplementary`, de `a` a `b` invertida (180° − el ángulo).
+    /// Ángulo de `a` (la referencia) a `b` (la que gira): positivo
+    /// antihorario, negativo horario. Con `supplementary`, hasta `b`
+    /// invertida (180° − el ángulo). Líneas, elipses (su eje mayor) y la
+    /// tangente de arcos y curvas en el extremo `a_end`/`b_end`.
     Angle {
         a: u32,
         b: u32,
         degrees: f64,
         #[serde(default, skip_serializing_if = "is_false")]
         supplementary: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        a_end: Option<AngleEnd>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        b_end: Option<AngleEnd>,
         #[serde(default, skip_serializing_if = "is_false")] reference: bool,
         #[serde(default, skip_serializing_if = "DimOpts::is_default")] opts: DimOpts,
     },
@@ -383,6 +390,26 @@ pub(crate) struct Built {
     pub implicit: usize,
     /// Restricción del sketch de cada ecuación desde `implicit`
     pub origin: Vec<usize>,
+}
+
+/// Extremo de un arco o curva donde se toma su tangente para un ángulo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AngleEnd {
+    Start,
+    End,
+}
+
+/// Cómo entra una entidad a un ángulo: el vector de `from` a `to` girado
+/// `turn` grados (hacia adentro de la curva desde el extremo `at`).
+#[derive(Debug, Clone, Copy)]
+struct AngleSide {
+    from: u32,
+    to: u32,
+    turn: f64,
+    at: u32,
+    /// La línea entera (para la bisagra del giro)
+    segment: Option<(u32, u32)>,
 }
 
 /// Ángulo en grados llevado a (−180, 180].
@@ -692,6 +719,118 @@ impl Sketch {
         }
     }
 
+    /// Dirección con la que `id` entra a un ángulo (la tangente de arcos y
+    /// curvas en `end`, hacia adentro de la curva).
+    fn angle_side(&self, id: u32, end: Option<AngleEnd>) -> Result<AngleSide, SketchError> {
+        let at_end = end == Some(AngleEnd::End);
+        let side = |from: u32, to: u32, turn: f64, at: u32| AngleSide { from, to, turn, at, segment: None };
+        let found = match &self.entity(id)?.geometry {
+            Geometry::Line { start, end } => Some(AngleSide { segment: Some((*start, *end)), ..side(*start, *end, 0.0, *start) }),
+            // Antihorario: la tangente es el radio girado 90°
+            Geometry::Arc { center, start, end } => Some(if at_end { side(*center, *end, -90.0, *end) } else { side(*center, *start, 90.0, *start) }),
+            Geometry::Ellipse { center, major, .. } | Geometry::EllipseArc { center, major, .. } => Some(side(*center, *major, 0.0, *center)),
+            // Abierta: pasa por el primer polo con la tangente hacia el segundo
+            Geometry::BSpline { poles, closed: false, .. } if poles.len() >= 2 => {
+                let n = poles.len();
+                Some(if at_end { side(poles[n - 1], poles[n - 2], 0.0, poles[n - 1]) } else { side(poles[0], poles[1], 0.0, poles[0]) })
+            }
+            Geometry::Spline { points, closed: false, start_handle, end_handle, .. } if !points.is_empty() => {
+                let (first, last) = (points[0], points[points.len() - 1]);
+                if at_end { end_handle.map(|h| side(h, last, 0.0, last)) } else { start_handle.map(|h| side(first, h, 0.0, first)) }
+            }
+            _ => None,
+        };
+        found.ok_or(SketchError::WrongKind(id, "una línea, un arco, una elipse o el extremo de una curva con dirección"))
+    }
+
+    /// Ángulo con signo (grados) de una restricción de ángulo en la geometría actual.
+    fn angle_now(&self, c: &SketchConstraint) -> Option<f64> {
+        let SketchConstraint::Angle { a, b, supplementary, a_end, b_end, .. } = *c else { return None };
+        let (sa, sb) = (self.angle_side(a, a_end).ok()?, self.angle_side(b, b_end).ok()?);
+        let v = |s: AngleSide| -> Option<P2> {
+            let (p, q) = (self.point(s.from).ok()?, self.point(s.to).ok()?);
+            Some([q[0] - p[0], q[1] - p[1]])
+        };
+        let (d1, mut d2) = (v(sa)?, v(sb)?);
+        if supplementary {
+            d2 = [-d2[0], -d2[1]];
+        }
+        let raw = (d1[0] * d2[1] - d1[1] * d2[0]).atan2(d1[0] * d2[0] + d1[1] * d2[1]).to_degrees();
+        Some(wrap_degrees(raw + sb.turn - sa.turn))
+    }
+
+    /// Antes de resolver, cada ángulo que no se cumple gira la entidad que
+    /// rota (`b`; `a` si `b` está sujeta) sobre la bisagra: así la
+    /// referencia queda donde está y el solver parte de la respuesta.
+    fn turn_angles(&mut self) {
+        let held_points: std::collections::HashSet<u32> = self
+            .constraints
+            .iter()
+            .filter_map(|c| match c {
+                SketchConstraint::Fixed { point, .. } => Some(*point),
+                _ => None,
+            })
+            .chain(self.origin)
+            .collect();
+        for i in 0..self.constraints.len() {
+            let c = &self.constraints[i];
+            let SketchConstraint::Angle { a, b, degrees, a_end, b_end, reference: false, .. } = *c else { continue };
+            let Some(now) = self.angle_now(c) else { continue };
+            let delta = wrap_degrees(degrees - now);
+            if delta.abs() < 1e-9 {
+                continue;
+            }
+            // Sujeta: fija, bloqueada, horizontal o vertical
+            let held = |id: u32| {
+                self.entity(id).is_ok_and(|e| e.geometry.point_ids().iter().any(|p| held_points.contains(p)))
+                    || self.constraints.iter().any(|k| {
+                        matches!(k, SketchConstraint::Lock { entity } | SketchConstraint::Horizontal { line: entity } | SketchConstraint::Vertical { line: entity } if *entity == id)
+                    })
+            };
+            let (moving, end, other, other_end, turn) = if !held(b) {
+                (b, b_end, a, a_end, delta)
+            } else if !held(a) {
+                (a, a_end, b, b_end, -delta)
+            } else {
+                continue;
+            };
+            let (Ok(sm), Ok(so)) = (self.angle_side(moving, end), self.angle_side(other, other_end)) else { continue };
+            let Some(hinge) = self.angle_hinge(sm, so) else { continue };
+            let Ok(other_points) = self.entity(other).map(|e| e.geometry.point_ids()) else { continue };
+            let Ok(points) = self.entity(moving).map(|e| e.geometry.point_ids()) else { continue };
+            let (sin, cos) = turn.to_radians().sin_cos();
+            for p in self.points.iter_mut().filter(|p| points.contains(&p.id) && !other_points.contains(&p.id) && !held_points.contains(&p.id)) {
+                let (x, y) = (p.x - hinge[0], p.y - hinge[1]);
+                (p.x, p.y) = (hinge[0] + cos * x - sin * y, hinge[1] + sin * x + cos * y);
+            }
+        }
+    }
+
+    /// Punto de `m` sobre el que gira: el más cercano al cruce de las dos
+    /// direcciones (el extremo elegido si es una curva).
+    fn angle_hinge(&self, m: AngleSide, o: AngleSide) -> Option<P2> {
+        let (mf, mt, of, ot, mat, oat) =
+            (self.point(m.from).ok()?, self.point(m.to).ok()?, self.point(o.from).ok()?, self.point(o.to).ok()?, self.point(m.at).ok()?, self.point(o.at).ok()?);
+        let rot = |v: P2, deg: f64| {
+            let (s, c) = deg.to_radians().sin_cos();
+            [c * v[0] - s * v[1], s * v[0] + c * v[1]]
+        };
+        let (dm, d_o) = (rot([mt[0] - mf[0], mt[1] - mf[1]], m.turn), rot([ot[0] - of[0], ot[1] - of[1]], o.turn));
+        let den = dm[0] * d_o[1] - dm[1] * d_o[0];
+        let cross = if den.abs() > 1e-12 * (dm[0].hypot(dm[1]) * d_o[0].hypot(d_o[1])).max(1e-300) {
+            let t = ((oat[0] - mat[0]) * d_o[1] - (oat[1] - mat[1]) * d_o[0]) / den;
+            [mat[0] + t * dm[0], mat[1] + t * dm[1]]
+        } else {
+            oat
+        };
+        let Some((s, e)) = m.segment else { return Some(mat) };
+        let (s, e) = (self.point(s).ok()?, self.point(e).ok()?);
+        let d = [e[0] - s[0], e[1] - s[1]];
+        let l2 = d[0] * d[0] + d[1] * d[1];
+        let t = if l2 > 1e-24 { (((cross[0] - s[0]) * d[0] + (cross[1] - s[1]) * d[1]) / l2).clamp(0.0, 1.0) } else { 0.0 };
+        Some([s[0] + t * d[0], s[1] + t * d[1]])
+    }
+
     /// Radio actual de un círculo o arco.
     pub fn radius(&self, id: u32) -> Result<f64, SketchError> {
         match self.entity(id)?.geometry {
@@ -893,14 +1032,22 @@ impl Sketch {
 
     /// Resuelve sin diagnóstico; deja la geometría solo si cumple todo.
     pub(crate) fn solve_quiet(&mut self) -> bool {
-        let Ok(Built { mut sys, index, rims, .. }) = self.build() else { return false };
-        match cad_solver::solve(&mut sys, &cad_solver::SolverParams::default()) {
-            Ok(r) if r.residual < 1e-6 && matches!(r.status, SolveStatus::Converged | SolveStatus::UnderConstrained) => {
-                self.write_back(&index, &rims, &r.points);
-                true
-            }
-            _ => false,
+        let before = self.points.clone();
+        self.turn_angles();
+        let solved = match self.build() {
+            Ok(Built { mut sys, index, rims, .. }) => match cad_solver::solve(&mut sys, &cad_solver::SolverParams::default()) {
+                Ok(r) if r.residual < 1e-6 && matches!(r.status, SolveStatus::Converged | SolveStatus::UnderConstrained) => {
+                    self.write_back(&index, &rims, &r.points);
+                    true
+                }
+                _ => false,
+            },
+            Err(_) => false,
+        };
+        if !solved {
+            self.points = before;
         }
+        solved
     }
 
     /// Cambio grande de una cota (más de un 25 %, o de 15°): se llega en pasos,
@@ -968,6 +1115,7 @@ impl Sketch {
     fn solve_system(&mut self, drag: Option<(u32, P2)>) -> Result<SolveReport, SketchError> {
         if drag.is_none() {
             self.ease_large_changes();
+            self.turn_angles();
         }
         let Built { mut sys, index, rims, implicit, origin } = self.build()?;
         let ix = |id: u32| index.get(&id).copied().ok_or(SketchError::NoPoint(id));
@@ -1105,13 +1253,7 @@ impl Sketch {
             }
             S::Radius { entity, .. } => self.radius(entity).ok()?,
             S::Diameter { entity, .. } => 2.0 * self.radius(entity).ok()?,
-            S::Angle { a, b, supplementary, .. } => {
-                let (d1, mut d2) = (dir(a)?, dir(b)?);
-                if supplementary {
-                    d2 = [-d2[0], -d2[1]];
-                }
-                (d1[0] * d2[1] - d1[1] * d2[0]).atan2(d1[0] * d2[0] + d1[1] * d2[1]).to_degrees()
-            }
+            S::Angle { .. } => self.angle_now(c)?,
             S::PointLineDistance { point, line, .. } | S::AxisDiameter { point, line, .. } => {
                 let (a, _) = self.line_points(line).ok()?;
                 let (d, a, q) = (dir(line)?, p(a)?, p(point)?);
@@ -1352,12 +1494,14 @@ impl Sketch {
                 let ((a1, a2), (b1, b2)) = (line(a)?, line(b)?);
                 vec![Constraint::Perpendicular { l1_p1: a1, l1_p2: a2, l2_p1: b1, l2_p2: b2 }]
             }
-            S::Angle { a, b, degrees, supplementary, .. } => {
-                let ((a1, a2), (mut b1, mut b2)) = (line(a)?, line(b)?);
+            S::Angle { a, b, degrees, supplementary, a_end, b_end, .. } => {
+                let (sa, sb) = (self.angle_side(a, a_end)?, self.angle_side(b, b_end)?);
+                let (mut b1, mut b2) = (ix(sb.from)?, ix(sb.to)?);
                 if supplementary {
                     std::mem::swap(&mut b1, &mut b2);
                 }
-                vec![Constraint::Angle { l1_p1: a1, l1_p2: a2, l2_p1: b1, l2_p2: b2, angle_rad: degrees.to_radians() }]
+                let angle_rad = wrap_degrees(degrees + sa.turn - sb.turn).to_radians();
+                vec![Constraint::Angle { l1_p1: ix(sa.from)?, l1_p2: ix(sa.to)?, l2_p1: b1, l2_p2: b2, angle_rad }]
             }
             S::Equal { a, b } => match (&self.entity(a)?.geometry, &self.entity(b)?.geometry) {
                 (Geometry::Line { start: a1, end: a2 }, Geometry::Line { start: b1, end: b2 }) => {

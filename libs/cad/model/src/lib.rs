@@ -35,4 +35,4 @@ pub use regions::{Loop, LoopPiece, Region, find_regions};
 pub use threads::ThreadAxis;
 pub use sketch_assist::Suggestion;
 pub use sketch3d::{Constraint3d, Entity3d, Geometry3d, Point3d, Report3d, Sketch3d, WorldAxis};
-pub use sketch::{DimOpts, Geometry, Sketch, SketchConstraint, SketchEntity, SketchError, SketchPoint, SketchStatus, SketchText, SketchUse, TextStyle, SolveReport, UseSource};
+pub use sketch::{AngleEnd, DimOpts, Geometry, Sketch, SketchConstraint, SketchEntity, SketchError, SketchPoint, SketchStatus, SketchText, SketchUse, TextStyle, SolveReport, UseSource};

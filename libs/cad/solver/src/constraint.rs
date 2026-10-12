@@ -723,8 +723,9 @@ impl Constraint {
                 let d2 = points[*l2_p2].co - points[*l2_p1].co;
                 let dot = d1.dot(&d2);
                 let cross = d1.x * d2.y - d1.y * d2.x;
-                // atan2(cross, dot) = angle
-                vec![cross.atan2(dot) - angle_rad]
+                // atan2(cross, dot) = angle, por el lado corto (sin el salto de ±180°)
+                let d = (cross.atan2(dot) - angle_rad).rem_euclid(std::f64::consts::TAU);
+                vec![if d > std::f64::consts::PI { d - std::f64::consts::TAU } else { d }]
             }
 
             Constraint::TangentLineCircle {

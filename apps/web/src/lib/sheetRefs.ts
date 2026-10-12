@@ -5,7 +5,8 @@
 // Funciones puras: se prueban con node (e2e/sheetRefs.test.mjs).
 
 import { constraintIds, geometryPoints, type Geometry, type Projected, type Sketch, type SketchConstraint } from "./cad.ts";
-import { angleBetween, isPictorial, asArc, asCircle, asSegment, bounds, lineNear, sheetBox, type AnyDimension, type DrawingLine, type P2, type Placed } from "./drawing.ts";
+import { angleView } from "./sketchTransform.ts";
+import { isPictorial, asArc, asCircle, asSegment, bounds, lineNear, sheetBox, type AnyDimension, type DrawingLine, type P2, type Placed } from "./drawing.ts";
 
 /** Una entidad del dibujo ligada a una línea de una vista (`at`: un punto de la línea, en mm de la pieza) */
 export interface SheetLink {
@@ -334,13 +335,10 @@ export function sheetSketchDims(s: Sketch | null | undefined, height: number): A
       const u: P2 = at && far > 1e-9 ? [(at[0] - c.c[0]) / far, (at[1] - c.c[1]) / far] : [1, 0];
       linear([c.c[0] - c.r * u[0], c.c[1] - c.r * u[1]], [c.c[0] + c.r * u[0], c.c[1] + c.r * u[1]], 2 * c.r, at, [0, 0], "Ø");
     } else if (k.type === "angle") {
-      const [s1, s2] = [ends(k.a), ends(k.b)];
-      if (!s1 || !s2) continue;
-      const mid = (e: [P2, P2]): P2 => [(e[0][0] + e[1][0]) / 2, (e[0][1] + e[1][1]) / 2];
-      const a0 = angleBetween(s1, s2, mid(s1), mid(s2));
-      // Suplementario: hacia el otro lado de la segunda recta
-      const a = a0 && k.supplementary ? angleBetween(s1, s2, mid(s1), [2 * a0.x[0] - mid(s2)[0], 2 * a0.x[1] - mid(s2)[1]]) : a0;
-      if (!a) continue;
+      // La misma cuenta que el editor y el solver (líneas, arcos, elipses)
+      const v = angleView(s, k);
+      if (!v) continue;
+      const a = { x: v.x, t0: Math.atan2(v.u1[1], v.u1[0]), t1: Math.atan2(v.u2[1], v.u2[0]), reach: v.reach };
       let r = Math.max(8, a.reach * 0.6);
       // El editor pone el texto sobre la bisectriz, un poco afuera del arco
       const bis: P2 = [Math.cos(a.t0) + Math.cos(a.t1), Math.sin(a.t0) + Math.sin(a.t1)];
@@ -348,7 +346,8 @@ export function sheetSketchDims(s: Sketch | null | undefined, height: number): A
       const arcR = Math.min(12, 0.8 * a.reach);
       const at = textAt(k, [a.x[0] + (bis[0] / bl) * arcR * 1.35, a.x[1] + (bis[1] / bl) * arcR * 1.35]);
       if (at) r = Math.max(3, Math.hypot(...sub(at, a.x)) - 3);
-      out.push({ kind: "angle", c: svg(a.x), r, a0: -a.t0, a1: -a.t1, value: a.degrees, ends: [svg(a.far0), svg(a.far1)], ...(at ? { placed: true } : {}) });
+      const far = (u: P2): P2 => [a.x[0] + u[0] * a.reach, a.x[1] + u[1] * a.reach];
+      out.push({ kind: "angle", c: svg(a.x), r, a0: -a.t0, a1: -a.t1, value: Math.abs(v.degrees), ends: [svg(far(v.u1)), svg(far(v.u2))], ...(at ? { placed: true } : {}) });
     }
   }
   return out;
