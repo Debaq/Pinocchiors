@@ -1436,6 +1436,8 @@ export class CadViewer {
       const axisLen = 20;
       lines([[0, 0], [axisLen, 0]], hex("axis-x"));
       lines([[0, 0], [0, axisLen]], hex("axis-y"));
+      // Debajo de lo dibujado: con el mismo orden iban después y tapaban las líneas sobre el eje
+      for (const l of this.sketchGroup.children.slice(-2)) l.renderOrder = 6;
     }
     // Todo en la pasada de lo transparente, donde vale `renderOrder`: si no, los calcos
     // (transparentes, se dibujan después de lo opaco) tapaban las líneas y los puntos
