@@ -373,6 +373,26 @@ fn set_texture(state: &AppState, key: TextureKey, texture: Texture) -> Result<()
     Ok(())
 }
 
+/// Quita el mapa de un material (la imagen queda en la escena hasta exportar
+/// con "quitar lo que no se usa"). El factor vuelve a un valor neutro visible:
+/// sin mapa, metal/rugosidad y emisión no deben quedar en 1.
+#[tauri::command]
+pub fn clear_texture(state: tauri::State<'_, AppState>, key: TextureKey) -> Result<(), String> {
+    with_store(&state, key.target, |store| {
+        let material = store.materials.get_mut(key.material).ok_or("No existe ese material")?;
+        *key.slot.reference(material) = None;
+        match key.slot {
+            TextureSlot::MetallicRoughness => {
+                material.metallic_factor = 0.0;
+                material.roughness_factor = 0.5;
+            }
+            TextureSlot::Emissive => material.emissive_factor = [0.0; 3],
+            _ => {}
+        }
+        Ok(())
+    })
+}
+
 #[tauri::command]
 pub async fn export_texture(app: AppHandle, key: TextureKey, path: String, layout_only: bool) -> Result<(), String> {
     in_background(app, move |state| export_to(state, key, Path::new(&path), layout_only)).await

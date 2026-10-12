@@ -92,7 +92,7 @@ import { bindingOf, createShortcutManager, formatBinding, type ShortcutDef } fro
 import { decodeMesh, decodeWeights } from "./lib/buffers";
 import { createPersisted, startDrag } from "./lib/ui-state";
 import { PlaybackBar, type PlaybackSegment } from "./components/layout/PlaybackBar";
-import { TextureEditor, TEXTURE_SLOTS, type TextureExportKind, type TextureSelection } from "./components/layout/TextureEditor";
+import { TextureEditor, TEXTURE_SLOTS, type TextureExportKind, type TextureSelection, type TextureSlot } from "./components/layout/TextureEditor";
 import { applyTheme, followSystemTheme, type ThemeSetting } from "./lib/theme";
 import type { MenuEntry } from "./components/ui/ContextMenu";
 import {
@@ -751,6 +751,11 @@ export const App: Component = () => {
       alphaMode: m.alpha_mode,
       alphaCutoff: m.alpha_cutoff,
       unlit: m.unlit,
+      transmission: m.transmission,
+      ior: m.ior,
+      clearcoat: m.clearcoat,
+      clearcoatRoughness: m.clearcoat_roughness,
+      uvScale: m.uv_scale,
       maps: {
         base: image(m.base_color_texture),
         metallicRoughness: image(m.metallic_roughness_texture),
@@ -839,6 +844,11 @@ export const App: Component = () => {
     alpha_cutoff: m.alpha_cutoff,
     double_sided: m.double_sided,
     unlit: m.unlit,
+    transmission: m.transmission,
+    ior: m.ior,
+    clearcoat: m.clearcoat,
+    clearcoat_roughness: m.clearcoat_roughness,
+    uv_scale: m.uv_scale,
   });
 
   const viewerMaterial = (m: SceneMaterial, next: MaterialInfo): SceneMaterial => ({
@@ -850,6 +860,11 @@ export const App: Component = () => {
     emissive: next.emissive,
     alphaMode: next.alpha_mode,
     unlit: next.unlit,
+    transmission: next.transmission,
+    ior: next.ior,
+    clearcoat: next.clearcoat,
+    clearcoatRoughness: next.clearcoat_roughness,
+    uvScale: next.uv_scale,
   });
 
   /** Cambia un material: el visor y la lista se actualizan al instante y el backend lo guarda */
@@ -913,6 +928,23 @@ export const App: Component = () => {
       const index = await invoke<number>("add_scene_material", { name: `${t("Material")} ${count + 1}`, copyOf: null });
       for (const target of targets) await invoke("assign_scene_material", { material: index, mesh: target.mesh, primitive: target.primitive });
     });
+
+  /** Cargar una imagen de un archivo como mapa del material (con UV; sin ellas no se ve) */
+  const loadMap = async (index: number, slot: TextureSlot) => {
+    const path = await open({
+      multiple: false,
+      filters: [{ name: t("Imágenes"), extensions: ["png", "jpg", "jpeg", "webp"] }],
+    });
+    if (!path || Array.isArray(path)) return;
+    void materialStep(t("Cargar imagen"), async () => {
+      await invoke("import_texture", { key: { target: "original", material: index, slot }, path });
+    }).then(() => {
+      if (meshData() && !meshData()!.uvs) setStatusMessage(t("Este modelo no tiene UV: la imagen no se ve hasta desplegarlo en UV / Piel"));
+    });
+  };
+
+  const clearMap = (index: number, slot: TextureSlot) =>
+    void materialStep(t("Quitar imagen"), () => invoke("clear_texture", { key: { target: "original", material: index, slot } }));
 
   const removeMaterial: MaterialActions["onRemove"] = (index) =>
     void materialStep(t("Quitar material"), () => invoke("remove_scene_material", { index }));
@@ -4911,6 +4943,9 @@ export const App: Component = () => {
     onRemove: removeMaterial,
     onAssignMany: assignMany,
     onAddMany: addMany,
+    textureUrls: textureUrls(),
+    onLoadMap: loadMap,
+    onClearMap: clearMap,
   });
   const selectedNodePrimitives = (): NodePrimitive[] => {
     const structure = sceneStructure();

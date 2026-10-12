@@ -52,6 +52,11 @@ pub struct MaterialInfo {
     pub alpha_cutoff: f32,
     pub double_sided: bool,
     pub unlit: bool,
+    pub transmission: f32,
+    pub ior: f32,
+    pub clearcoat: f32,
+    pub clearcoat_roughness: f32,
+    pub uv_scale: [f32; 2],
     /// Índices en `textures` de cada canal
     pub base_color_texture: Option<usize>,
     pub metallic_roughness_texture: Option<usize>,
@@ -146,6 +151,11 @@ pub(crate) fn material_info(m: &converter_scene::Material) -> MaterialInfo {
         alpha_cutoff,
         double_sided: m.double_sided,
         unlit: m.unlit,
+        transmission: m.transmission_factor,
+        ior: m.ior,
+        clearcoat: m.clearcoat_factor,
+        clearcoat_roughness: m.clearcoat_roughness_factor,
+        uv_scale: m.uv_scale,
         base_color_texture: texture(&m.base_color_texture),
         metallic_roughness_texture: texture(&m.metallic_roughness_texture),
         normal_texture: texture(&m.normal_texture),
@@ -292,6 +302,11 @@ pub struct MaterialEdit {
     pub alpha_cutoff: f32,
     pub double_sided: bool,
     pub unlit: bool,
+    pub transmission: f32,
+    pub ior: f32,
+    pub clearcoat: f32,
+    pub clearcoat_roughness: f32,
+    pub uv_scale: [f32; 2],
 }
 
 impl MaterialEdit {
@@ -308,6 +323,11 @@ impl MaterialEdit {
         };
         m.double_sided = self.double_sided;
         m.unlit = self.unlit;
+        m.transmission_factor = self.transmission.clamp(0.0, 1.0);
+        m.ior = self.ior.clamp(1.0, 2.5);
+        m.clearcoat_factor = self.clearcoat.clamp(0.0, 1.0);
+        m.clearcoat_roughness_factor = self.clearcoat_roughness.clamp(0.0, 1.0);
+        m.uv_scale = self.uv_scale.map(|v| v.clamp(0.05, 100.0));
     }
 }
 
@@ -431,10 +451,16 @@ mod tests {
             alpha_cutoff: 0.5,
             double_sided: true,
             unlit: false,
+            transmission: 2.0,
+            ior: 9.0,
+            clearcoat: 0.5,
+            clearcoat_roughness: 0.2,
+            uv_scale: [0.0, 4.0],
         };
         edit.apply(&mut m);
         assert_eq!((m.base_color_factor, m.metallic_factor, m.emissive_factor), ([1.0, 0.5, 0.0, 0.4], 0.0, [0.0, 1.0, 0.0]));
         assert_eq!(m.alpha_mode, AlphaMode::Blend);
+        assert_eq!((m.transmission_factor, m.ior, m.clearcoat_factor, m.uv_scale), (1.0, 2.5, 0.5, [0.05, 4.0]));
     }
 
     #[test]

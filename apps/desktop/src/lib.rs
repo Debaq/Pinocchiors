@@ -74,6 +74,7 @@ pub fn run() {
             // Editar texturas en otras aplicaciones
             textures::export_texture,
             textures::import_texture,
+            textures::clear_texture,
             textures::edit_texture_externally,
             textures::stop_texture_watch,
             // Esqueletos

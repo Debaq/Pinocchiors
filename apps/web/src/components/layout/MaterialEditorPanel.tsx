@@ -2,7 +2,7 @@ import { Component, For, Show } from "solid-js";
 import { clsx } from "clsx";
 import { IconButton, Select } from "../ui";
 import * as Icons from "../icons";
-import { MaterialEditor, NodeMaterials, type MaterialActions, type MaterialPatch, type NodePrimitive } from "../panels/MaterialPanel";
+import { MaterialEditor, NodeMaterials, mapsOf, type MaterialActions, type MaterialPatch, type NodePrimitive } from "../panels/MaterialPanel";
 import { cssColor, type MaterialInfo } from "../steps/StructureStep";
 import { t } from "../../lib/i18n";
 
@@ -114,6 +114,7 @@ export const MaterialEditorPanel: Component<MaterialEditorPanelProps> = (props) 
                   <MaterialEditor
                     material={entry.material}
                     onChange={(patch) => (onSkin() ? props.onEditSkin(entry.index, patch) : props.actions.onEdit(entry.index, patch))}
+                    maps={onSkin() ? undefined : mapsOf(props.actions, entry.index)}
                   />
                   <Show when={!onSkin()}>
                     <button class="text-xs text-text-muted hover:text-text" onClick={() => props.actions.onRemove(entry.index)}>

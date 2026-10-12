@@ -12,6 +12,7 @@ pub enum AlphaMode {
 /// Material PBR metallic-roughness (compatible glTF y UsdPreviewSurface).
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(default))]
 pub struct Material {
     pub name: String,
 
@@ -42,6 +43,16 @@ pub struct Material {
 
     // Unlit (KHR_materials_unlit)
     pub unlit: bool,
+
+    /// Vidrio y líquidos: cuánta luz atraviesa el material (KHR_materials_transmission)
+    pub transmission_factor: f32,
+    /// Índice de refracción (KHR_materials_ior): agua 1.33, vidrio 1.5, diamante 2.4
+    pub ior: f32,
+    /// Capa de barniz sobre el material, para lo húmedo o lacado (KHR_materials_clearcoat)
+    pub clearcoat_factor: f32,
+    pub clearcoat_roughness_factor: f32,
+    /// Repetición de las texturas (escala UV, KHR_texture_transform)
+    pub uv_scale: [f32; 2],
 }
 
 impl Default for Material {
@@ -62,6 +73,11 @@ impl Default for Material {
             alpha_mode: AlphaMode::Opaque,
             double_sided: false,
             unlit: false,
+            transmission_factor: 0.0,
+            ior: 1.5,
+            clearcoat_factor: 0.0,
+            clearcoat_roughness_factor: 0.0,
+            uv_scale: [1.0, 1.0],
         }
     }
 }

@@ -62,6 +62,14 @@ export interface SceneMaterial {
   alphaMode: "opaque" | "mask" | "blend";
   alphaCutoff: number;
   unlit: boolean;
+  /** Vidrio y líquidos (0 opaco, 1 transparente como el vidrio) */
+  transmission?: number;
+  ior?: number;
+  /** Barniz sobre el material */
+  clearcoat?: number;
+  clearcoatRoughness?: number;
+  /** Repetición de las texturas */
+  uvScale?: [number, number];
   maps: {
     base?: ImageBitmap;
     metallicRoughness?: ImageBitmap;
@@ -2105,7 +2113,14 @@ export class Viewer3D {
 
   /** Material de Three para un material PBR de glTF */
   private threeMaterial(m: SceneMaterial, hasUv: boolean): THREE.Material {
-    const map = (image: ImageBitmap | undefined, srgb: boolean) => (hasUv && image ? this.sharedTexture(image, srgb) : null);
+    const [repeatX, repeatY] = m.uvScale ?? [1, 1];
+    const map = (image: ImageBitmap | undefined, srgb: boolean) => {
+      if (!hasUv || !image) return null;
+      const texture = this.sharedTexture(image, srgb);
+      // Las imágenes se comparten entre materiales: vale la repetición del último que la pide
+      texture.repeat.set(repeatX, repeatY);
+      return texture;
+    };
     // Los factores de glTF son lineales, como el espacio de trabajo de Three
     const color = new THREE.Color().setRGB(m.baseColor[0], m.baseColor[1], m.baseColor[2]);
     const common = {
@@ -2121,8 +2136,22 @@ export class Viewer3D {
       material = new THREE.MeshBasicMaterial(common);
     } else {
       const metalRough = map(m.maps.metallicRoughness, false);
-      material = new THREE.MeshStandardMaterial({
+      const transmission = m.transmission ?? 0;
+      const clearcoat = m.clearcoat ?? 0;
+      const physical = transmission > 0 || clearcoat > 0 || (m.ior ?? 1.5) !== 1.5;
+      const Standard = physical ? THREE.MeshPhysicalMaterial : THREE.MeshStandardMaterial;
+      material = new Standard({
         ...common,
+        ...(physical
+          ? {
+              transmission,
+              ior: m.ior ?? 1.5,
+              clearcoat,
+              clearcoatRoughness: m.clearcoatRoughness ?? 0,
+              // Lo que atraviesa la luz no se mezcla por transparencia: la transmisión ya lo resuelve
+              transparent: m.alphaMode === "blend" && transmission === 0,
+            }
+          : {}),
         metalness: m.metallic,
         roughness: m.roughness,
         // glTF guarda rugosidad en G y metal en B, como lee Three

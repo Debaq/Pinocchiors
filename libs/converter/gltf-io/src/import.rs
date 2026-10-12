@@ -272,6 +272,14 @@ fn convert_spec_gloss(
     (diffuse, metallic, roughness)
 }
 
+/// Un número de una extensión de material (`default` si falta)
+fn extension_f32(mat: &gltf::Material, extension: &str, key: &str, default: f32) -> f32 {
+    mat.extension_value(extension)
+        .and_then(|e| e.get(key))
+        .and_then(|v| v.as_f64())
+        .map_or(default, |v| v as f32)
+}
+
 fn import_materials(doc: &gltf::Document, scene: &mut Scene) -> Vec<PendingUvTransform> {
     let mut pending_transforms = Vec::new();
 
@@ -356,6 +364,11 @@ fn import_materials(doc: &gltf::Document, scene: &mut Scene) -> Vec<PendingUvTra
             },
             double_sided: mat.double_sided(),
             unlit: mat.unlit(),
+            transmission_factor: extension_f32(&mat, "KHR_materials_transmission", "transmissionFactor", 0.0),
+            ior: extension_f32(&mat, "KHR_materials_ior", "ior", 1.5),
+            clearcoat_factor: extension_f32(&mat, "KHR_materials_clearcoat", "clearcoatFactor", 0.0),
+            clearcoat_roughness_factor: extension_f32(&mat, "KHR_materials_clearcoat", "clearcoatRoughnessFactor", 0.0),
+            ..Default::default()
         });
     }
 

@@ -35,6 +35,11 @@ export interface MaterialInfo {
   alpha_cutoff: number;
   double_sided: boolean;
   unlit: boolean;
+  transmission: number;
+  ior: number;
+  clearcoat: number;
+  clearcoat_roughness: number;
+  uv_scale: [number, number];
   base_color_texture: number | null;
   metallic_roughness_texture: number | null;
   normal_texture: number | null;

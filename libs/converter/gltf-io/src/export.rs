@@ -597,10 +597,10 @@ impl<'a> GlbBuilder<'a> {
             });
 
             if let Some(ref tex_ref) = mat.base_color_texture {
-                pbr["baseColorTexture"] = texture_info_json(tex_ref);
+                pbr["baseColorTexture"] = texture_info_scaled(tex_ref, mat.uv_scale);
             }
             if let Some(ref tex_ref) = mat.metallic_roughness_texture {
-                pbr["metallicRoughnessTexture"] = texture_info_json(tex_ref);
+                pbr["metallicRoughnessTexture"] = texture_info_scaled(tex_ref, mat.uv_scale);
             }
 
             let mut mat_json = json!({
@@ -612,7 +612,7 @@ impl<'a> GlbBuilder<'a> {
             }
 
             if let Some(ref tex_ref) = mat.normal_texture {
-                let mut info = texture_info_json(tex_ref);
+                let mut info = texture_info_scaled(tex_ref, mat.uv_scale);
                 if (mat.normal_scale - 1.0).abs() > f32::EPSILON {
                     info["scale"] = json!(mat.normal_scale);
                 }
@@ -620,7 +620,7 @@ impl<'a> GlbBuilder<'a> {
             }
 
             if let Some(ref tex_ref) = mat.occlusion_texture {
-                let mut info = texture_info_json(tex_ref);
+                let mut info = texture_info_scaled(tex_ref, mat.uv_scale);
                 if (mat.occlusion_strength - 1.0).abs() > f32::EPSILON {
                     info["strength"] = json!(mat.occlusion_strength);
                 }
@@ -631,7 +631,7 @@ impl<'a> GlbBuilder<'a> {
                 mat_json["emissiveFactor"] = json!(mat.emissive_factor);
             }
             if let Some(ref tex_ref) = mat.emissive_texture {
-                mat_json["emissiveTexture"] = texture_info_json(tex_ref);
+                mat_json["emissiveTexture"] = texture_info_scaled(tex_ref, mat.uv_scale);
             }
 
             match mat.alpha_mode {
@@ -649,11 +649,30 @@ impl<'a> GlbBuilder<'a> {
                 mat_json["doubleSided"] = json!(true);
             }
 
+            let mut extensions = serde_json::Map::new();
             if mat.unlit {
-                mat_json["extensions"] = json!({
-                    "KHR_materials_unlit": {}
-                });
-                self.use_extension("KHR_materials_unlit", false);
+                extensions.insert("KHR_materials_unlit".into(), json!({}));
+            }
+            if mat.transmission_factor > 0.0 {
+                extensions.insert("KHR_materials_transmission".into(), json!({ "transmissionFactor": mat.transmission_factor }));
+            }
+            if (mat.ior - 1.5).abs() > 1e-4 {
+                extensions.insert("KHR_materials_ior".into(), json!({ "ior": mat.ior }));
+            }
+            if mat.clearcoat_factor > 0.0 {
+                extensions.insert(
+                    "KHR_materials_clearcoat".into(),
+                    json!({ "clearcoatFactor": mat.clearcoat_factor, "clearcoatRoughnessFactor": mat.clearcoat_roughness_factor }),
+                );
+            }
+            if mat.uv_scale != [1.0, 1.0] {
+                self.use_extension("KHR_texture_transform", false);
+            }
+            for name in extensions.keys() {
+                self.use_extension(name, false);
+            }
+            if !extensions.is_empty() {
+                mat_json["extensions"] = Value::Object(extensions);
             }
 
             self.materials.push(mat_json);
@@ -1072,6 +1091,15 @@ fn texture_info_json(tex_ref: &TextureRef) -> Value {
     info
 }
 
+/// Como `texture_info_json`, con la repetición del material (KHR_texture_transform)
+fn texture_info_scaled(tex_ref: &TextureRef, scale: [f32; 2]) -> Value {
+    let mut info = texture_info_json(tex_ref);
+    if scale != [1.0, 1.0] {
+        info["extensions"] = json!({ "KHR_texture_transform": { "scale": scale } });
+    }
+    info
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1406,6 +1434,33 @@ mod tests {
 
         let mat = &root["materials"][0];
         assert!(mat["extensions"]["KHR_materials_unlit"].is_object());
+    }
+
+    #[test]
+    fn glass_and_varnish_survive_a_roundtrip() {
+        let mut scene = triangle_scene();
+        scene.materials.push(Material {
+            name: "Vidrio".into(),
+            transmission_factor: 0.8,
+            ior: 1.33,
+            clearcoat_factor: 0.6,
+            clearcoat_roughness_factor: 0.1,
+            ..Material::default()
+        });
+        scene.meshes[0].primitives[0].material = Some(0);
+
+        let glb = export_glb_bytes(&scene, &GlbExportOptions::default()).unwrap();
+        let root: Value = serde_json::from_str(&extract_glb_json(&glb)).unwrap();
+        let used = root["extensionsUsed"].as_array().unwrap();
+        for name in ["KHR_materials_transmission", "KHR_materials_ior", "KHR_materials_clearcoat"] {
+            assert!(used.iter().any(|v| v == name), "falta {name}");
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("glass.glb");
+        std::fs::write(&path, &glb).unwrap();
+        let m = &crate::import_gltf(&path).unwrap().materials[0];
+        assert_eq!((m.transmission_factor, m.ior, m.clearcoat_factor, m.clearcoat_roughness_factor), (0.8, 1.33, 0.6, 0.1));
     }
 
     #[test]
