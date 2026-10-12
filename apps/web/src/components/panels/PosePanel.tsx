@@ -1,6 +1,6 @@
 import { Component, For, Show, createSignal } from "solid-js";
 import { clsx } from "clsx";
-import { Button, Panel, Select } from "../ui";
+import { Button, Panel, Select, Hint } from "../ui";
 import * as Icons from "../icons";
 import type { TransformSpace } from "../../lib/Viewer3D";
 import type { FactoryPoseId } from "../../lib/presetAnimations";
@@ -190,9 +190,7 @@ export const PosePanel: Component<PosePanelProps> = (props) => {
 
       <Panel title="Ragdoll" icon={<Icons.Person size={14} />}>
         <div class="space-y-2">
-          <p class="text-xs text-text-muted leading-relaxed">
-            {t("El cuerpo cae como un muñeco desde la pose del cuadro actual, con el impulso que traía la animación. Queda en una animación nueva; los límites de giro recortan lo imposible.")}
-          </p>
+          <Hint label={t("Cómo funciona")} text={t("El cuerpo cae como un muñeco desde la pose del cuadro actual, con el impulso que traía la animación. Queda en una animación nueva; los límites de giro recortan lo imposible.")} />
           <div class="grid grid-cols-3 gap-1">
             <For each={[1, 2, 3]}>
               {(seconds) => (

@@ -1,5 +1,5 @@
 import { Component, Show } from "solid-js";
-import { Checkbox, Slider } from "../ui";
+import { Checkbox, Slider, Hint } from "../ui";
 import { RemeshActions, type RemeshActionsProps } from "./RemeshActions";
 import { t } from "../../lib/i18n";
 
@@ -79,10 +79,8 @@ export const SmoothPanel: Component<SmoothPanelProps> = (props) => {
             max={120}
             step={5}
             formatValue={(v) => t("{v}° entre caras", { v })}
+            title={t("Las aristas vivas se suavizan solo a lo largo y sus esquinas quedan quietas. En un escaneo con mucho ruido, un ángulo bajo marca el ruido como arista.")}
           />
-          <p class="text-xs text-text-muted leading-relaxed">
-            {t("Las aristas vivas se suavizan solo a lo largo y sus esquinas quedan quietas. En un escaneo con mucho ruido, un ángulo bajo marca el ruido como arista.")}
-          </p>
         </Show>
       </div>
 
@@ -92,15 +90,11 @@ export const SmoothPanel: Component<SmoothPanelProps> = (props) => {
           label={t("Sin deslizar por la superficie")}
           checked={props.config.normalOnly}
           onChange={(normalOnly) => update({ normalOnly })}
+          hint={t("Los vértices solo se mueven hacia afuera o adentro: quita ruido sin correr la textura. Apagado, también empareja los triángulos.")}
         />
-        <p class="text-xs text-text-muted leading-relaxed">
-          {t("Los vértices solo se mueven hacia afuera o hacia adentro: quita el ruido sin que la textura se corra. Apagado, además empareja el tamaño de los triángulos.")}
-        </p>
       </div>
 
-      <p class="text-xs text-text-dim leading-relaxed">
-        {t("No encoge el modelo. Los triángulos, las UV y los pesos no cambian; las normales se rehacen.")}
-      </p>
+      <Hint label={t("Cómo funciona")} text={t("No encoge el modelo. Los triángulos, las UV y los pesos no cambian; las normales se rehacen.")} />
 
       <RemeshActions {...props} />
     </div>

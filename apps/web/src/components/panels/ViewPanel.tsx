@@ -92,10 +92,8 @@ export const ViewPanel: Component<ViewPanelProps> = (props) => {
             label={t("Navegación con touchpad o TrackPoint")}
             checked={props.settings.trackpadNavigation === true}
             onChange={(checked) => updateSettings({ trackpadNavigation: checked })}
+            hint={t("El desplazamiento gira la cámara: dos dedos en el touchpad, o botón central + TrackPoint. Con Shift desplaza la vista; con Ctrl o pellizcando, acerca. Alt + clic izquierdo arrastrando también gira.")}
           />
-          <p class="text-xs text-text-muted leading-relaxed">
-            {t("El desplazamiento gira la cámara: dos dedos en el touchpad, o botón central + TrackPoint. Con Shift desplaza la vista; con Ctrl o pellizcando, acerca. Alt + clic izquierdo arrastrando también gira.")}
-          </p>
         </div>
 
         {/* Bone Selector */}

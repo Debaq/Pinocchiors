@@ -1,5 +1,5 @@
 import { Component, For, Show } from "solid-js";
-import { Button, Panel } from "../ui";
+import { Button, Panel, Hint } from "../ui";
 import * as Icons from "../icons";
 import type { TextureSelection } from "../layout/TextureEditor";
 import { cssColor, formatBytes, materialChannels, Row, type SceneStructure } from "./StructureStep";
@@ -29,9 +29,7 @@ export const MaterialsStep: Component<MaterialsStepProps> = (props) => {
       >
         {(structure) => (
           <>
-            <p class="text-xs text-text-muted leading-relaxed">
-              {t("Color, brillo, glow y opacidad se editan en el panel lateral. Doble clic sobre una parte del modelo para cambiar solo su material. Aquí están las texturas: un clic abre el editor 2D/3D.")}
-            </p>
+            <Hint label={t("Cómo funciona")} text={t("Color, brillo, glow y opacidad se editan en el panel lateral. Doble clic sobre una parte del modelo para cambiar solo su material. Aquí están las texturas: un clic abre el editor 2D/3D.")} />
             <Button class="w-full" onClick={() => props.onTogglePanel?.()}>
               {props.panelOpen ? t("Cerrar el panel de materiales") : t("Abrir el panel de materiales")}
             </Button>

@@ -1,5 +1,5 @@
 import { Component, Show } from "solid-js";
-import { Button, Checkbox, NumberInput, Slider } from "../ui";
+import { Button, Checkbox, NumberInput, Slider, Hint } from "../ui";
 import { RemeshActions, type RemeshActionsProps } from "./RemeshActions";
 import { fmtNumber, t } from "../../lib/i18n";
 
@@ -150,15 +150,11 @@ export const IsotropicPanel: Component<IsotropicPanelProps> = (props) => {
           label={t("Más fino en las partes delgadas")}
           checked={props.config.thinFeatures}
           onChange={(thinFeatures) => update({ thinFeatures })}
+          hint={t("Paredes, puntas y ranuras más angostas que un triángulo reciben triángulos más chicos, con la misma cantidad total.")}
         />
-        <p class="text-xs text-text-muted leading-relaxed">
-          {t("Paredes, puntas y ranuras más angostas que un triángulo reciben triángulos más chicos, con la misma cantidad total.")}
-        </p>
       </div>
 
-      <p class="text-xs text-text-dim leading-relaxed">
-        {t("Es una malla nueva, sin UV: al aplicar se elige si trasladar la textura (se hornea sobre un mapa nuevo) y los pesos. En mallas grandes tarda: unos 20 s cada medio millón de triángulos.")}
-      </p>
+      <Hint label={t("Cómo funciona")} text={t("Malla nueva sin UV: al aplicar eliges si trasladar textura y pesos. Tarda ~20 s cada medio millón de triángulos.")} />
 
       <RemeshActions {...props} canExecute={props.canExecute && !broken() && !tooDense()} />
     </div>

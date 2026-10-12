@@ -1,5 +1,5 @@
 import { Component, Show } from "solid-js";
-import { Button } from "../ui";
+import { Button, Hint } from "../ui";
 import type { CloudInfo } from "../../lib/scanCloud";
 import * as Icons from "../icons";
 import { t } from "../../lib/i18n";
@@ -20,10 +20,10 @@ export interface ScanStepProps {
  */
 export const ScanStep: Component<ScanStepProps> = (props) => (
   <div class="space-y-4">
-    <h3 class="text-sm font-semibold text-text">Orizon3D</h3>
-    <p class="text-xs text-text-muted leading-relaxed">
-      {t("Escáneres 3D Revopoint POP 2 / POP 3 por USB. Captura, limpieza de la nube y creación del modelo están en el panel lateral, junto al visor, en pestañas: Captura, Nube, Malla y Calibración.")}
-    </p>
+    <div class="flex items-center justify-between">
+      <h3 class="text-sm font-semibold text-text">Orizon3D</h3>
+      <Hint text={t("Escáneres 3D Revopoint POP 2 / POP 3 por USB. Captura, limpieza de la nube y creación del modelo están en el panel lateral, junto al visor, en pestañas: Captura, Nube, Malla y Calibración.")} />
+    </div>
     <Show when={props.cloud}>
       {(cloud) => (
         <div class="space-y-1 text-xs">

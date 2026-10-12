@@ -1,5 +1,5 @@
 import { Component, Show } from "solid-js";
-import { Checkbox, Slider } from "../ui";
+import { Checkbox, Slider, Hint } from "../ui";
 import { RemeshActions, type RemeshActionsProps } from "./RemeshActions";
 import { fmtNumber, t } from "../../lib/i18n";
 
@@ -106,15 +106,11 @@ export const SimplifyPanel: Component<SimplifyPanelProps> = (props) => {
           label={t("Agresivo")}
           checked={props.config.aggressive}
           onChange={(aggressive) => update({ aggressive })}
+          hint={t("Llega a la cantidad pedida aunque junte partes o cierre agujeros chicos. Para reducir muchísimo cuando la forma exacta no importa.")}
         />
-        <p class="text-xs text-text-muted leading-relaxed">
-          {t("Llega a la cantidad pedida aunque junte partes cercanas o cierre agujeros chicos. Para reducir muchísimo cuando la forma exacta no importa (vistas lejanas, colisiones).")}
-        </p>
       </div>
 
-      <p class="text-xs text-text-dim leading-relaxed">
-        {t("Las UV, la textura y los pesos se conservan: cada vértice que queda es uno del original.")}
-      </p>
+      <Hint label={t("Cómo funciona")} text={t("Las UV, la textura y los pesos se conservan: cada vértice que queda es uno del original.")} />
 
       <RemeshActions {...props} />
     </div>

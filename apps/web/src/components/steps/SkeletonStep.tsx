@@ -1,5 +1,5 @@
 import { Component, For, Show, type JSX } from "solid-js";
-import { Button, Checkbox, Panel, Select, Slider } from "../ui";
+import { Button, Checkbox, Hint, Panel, Select, Slider } from "../ui";
 import type { PaintSettings } from "../../lib/Viewer3D";
 import { SkeletonPanel, type SkeletonPreset } from "../panels/SkeletonPanel";
 import { ConfigPanel, type AutorigConfig } from "../panels/ConfigPanel";
@@ -89,10 +89,10 @@ export const SkeletonStep: Component<SkeletonStepProps> = (props) => {
 
   return (
     <div class="space-y-5">
-      <h3 class="text-sm font-semibold text-text">{t("Esqueleto y pesos")}</h3>
-      <p class="text-xs text-text-muted leading-relaxed">
-        {t("Crea el esqueleto, ajústalo al modelo y calcula los pesos en el editor al costado del visor (Ctrl+E).")}
-      </p>
+      <div class="flex items-center justify-between">
+        <h3 class="text-sm font-semibold text-text">{t("Esqueleto y pesos")}</h3>
+        <Hint text={t("Crea el esqueleto, ajústalo al modelo y calcula los pesos en el editor al costado del visor (Ctrl+E).")} />
+      </div>
 
       <div class="space-y-1">
         <Button
@@ -100,12 +100,10 @@ export const SkeletonStep: Component<SkeletonStepProps> = (props) => {
           fullWidth
           variant={props.editorOpen ? "default" : "primary"}
           onClick={() => props.onToggleEditor?.()}
+          hint={t("Crear, ajustar al modelo, pesos y controles, al costado del visor (Ctrl+E). El borde se arrastra para ensancharlo.")}
         >
           {props.editorOpen ? t("Cerrar el editor de esqueleto") : t("Abrir el editor de esqueleto")}
         </Button>
-        <p class="text-xs text-text-dim leading-relaxed">
-          {t("Crear, ajustar al modelo, pesos y controles, al costado del visor (Ctrl+E). El borde se arrastra para darle más ancho.")}
-        </p>
       </div>
 
       {/* Avance */}
@@ -131,17 +129,15 @@ export const SkeletonStep: Component<SkeletonStepProps> = (props) => {
               <span class="text-text-muted ml-auto font-mono">{tn(props.skeletonBones!, "{n} hueso", "{n} huesos")}</span>
             </Show>
           </div>
-          <p class="text-xs text-text-muted leading-relaxed">
-            {t("Ya está colocado sobre el modelo y se usa tal cual. Elegir una plantilla lo reemplaza.")}
-          </p>
+          <Hint text={t("Ya está colocado sobre el modelo y se usa tal cual. Elegir una plantilla lo reemplaza.")} />
         </div>
       </Show>
 
       <SkeletonPanel presets={props.presets} selectedPreset={props.selectedPreset} onPresetChange={props.onPresetChange} />
 
       <Show when={hasSkeleton() && props.hasModel === false}>
-        <p class="text-xs text-text-muted leading-relaxed p-3 rounded-md bg-surface/30 border border-border">
-          {t("Sin modelo: mueve las articulaciones o transforma el esqueleto y anímalo en Animar. Se exporta solo (GLB, glTF o BVH). Si después importas un modelo, el esqueleto y sus animaciones se conservan: ajústalo y calcula los pesos.")}
+        <p class="text-xs text-text-muted p-2 rounded-md bg-surface/30 border border-border">
+          {t("Sin modelo: se exporta solo el esqueleto (GLB, glTF o BVH). Al importar un modelo se conserva.")}
         </p>
       </Show>
     </div>
@@ -158,10 +154,13 @@ export const SkeletonFitTab: Component<SkeletonStepProps> = (props) => (
       <Show when={props.hasModel !== false}>
         <Panel title={t("Ajuste automático")} id="skeleton.autofit" icon={<Icons.MagicWand size={14} />} defaultOpen>
           <div class="space-y-3 pb-3">
-            <p class="text-xs text-text-muted leading-relaxed">
-              {t("Detecta las extremidades del modelo (patas, cabeza, cola) y su orientación, y lleva cada punta a la suya.")}
-            </p>
-            <Button onClick={props.onAutoFit} disabled={props.isProcessing} variant="primary" fullWidth>
+            <Button
+              onClick={props.onAutoFit}
+              disabled={props.isProcessing}
+              variant="primary"
+              fullWidth
+              hint={t("Detecta las extremidades del modelo (patas, cabeza, cola) y su orientación, y lleva cada punta a la suya.")}
+            >
               <span class="flex items-center gap-1.5">
                 <Icons.MagicWand size={14} />
                 {t("Ajustar automáticamente")}
@@ -196,9 +195,7 @@ export const SkeletonFitTab: Component<SkeletonStepProps> = (props) => (
       </Show>
       <Panel title={t("Con el mouse")} id="skeleton.manual" icon={<Icons.ArrowsOutCardinal size={14} />} defaultOpen>
         <div class="space-y-3 pb-3">
-          <p class="text-xs text-text-muted leading-relaxed">
-            {t("Clic cerca de una articulación la selecciona y")} <span class="text-text">G</span> {t("la mueve con el mouse (X/Y/Z la limita a un eje; clic confirma, clic derecho o Esc cancela). La herramienta Mover también tiene gizmo;")} <span class="text-text">{t("Escalar")}</span> {t("(S) agranda o achica el esqueleto entero desde su centro.")}
-          </p>
+          <Hint label={t("Atajos")} text={t("Clic en una articulación la selecciona; G la mueve (X/Y/Z fija el eje; clic confirma, Esc cancela). S escala todo el esqueleto.")} />
           <Button onClick={props.onEdit} disabled={props.isProcessing} variant={props.editing ? "primary" : "default"} fullWidth>
             <span class="flex items-center gap-1.5">
               <Icons.ArrowsOutCardinal size={14} />
@@ -277,9 +274,7 @@ export const SkeletonWeightsTab: Component<SkeletonStepProps> = (props) => (
               return (
                 <Panel title={t("Pintar pesos")} id="skeleton.paint" icon={<Icons.PaintBrush size={14} />} defaultOpen>
                   <div class="space-y-4 pt-1">
-                    <p class="text-xs text-text-muted leading-relaxed">
-                      {t("Con")} <span class="text-text">{t("Pintar (B)")}</span> {t("arrastra sobre la malla: el mapa de calor muestra el hueso activo (rojo = todo su peso). Ctrl invierte el modo, Shift suaviza,")} <span class="text-text">F</span> {t("cambia el radio y Shift+F la intensidad. Recalcular los pesos descarta lo pintado.")}
-                    </p>
+                    <Hint label={t("Atajos")} text={t("Pintar (B) sobre la malla: el mapa de calor muestra el hueso activo. Ctrl invierte, Shift suaviza, F cambia el radio y Shift+F la intensidad. Recalcular descarta lo pintado.")} />
                     <Select
                       label={t("Hueso")}
                       options={(props.boneNames ?? []).map((name, i) => ({ value: String(i), label: name }))}
@@ -329,9 +324,7 @@ export const SkeletonWeightsTab: Component<SkeletonStepProps> = (props) => (
           </Show>
           <Panel title={t("Probar la pose")} id="skeleton.pose" icon={<Icons.ArrowsClockwise size={14} />} defaultOpen>
             <div class="space-y-3 pt-1">
-              <p class="text-xs text-text-muted leading-relaxed">
-                {t("Selecciona una articulación y pulsa")} <span class="text-text">R</span>{t(": gira con el mouse (X/Y/Z para un eje) y la malla se dobla con los pesos. Los giros se suman: gira el hombro y después el codo para ver la cadena entera. Esc deshace solo el último giro. Si se estira o arrastra partes que no corresponden, mueve esa articulación y vuelve a calcular.")}
-              </p>
+              <Hint label={t("Cómo se usa")} text={t("Selecciona una articulación y pulsa R para girarla (X/Y/Z fija el eje). Los giros se suman; Esc deshace el último. Si se deforma mal, mueve esa articulación y recalcula.")} />
               <div class="flex gap-2">
                 <Button onClick={props.onPose} variant={props.posing ? "primary" : "default"} fullWidth>
                   {props.posing ? t("Girando articulaciones") : t("Girar articulaciones")}

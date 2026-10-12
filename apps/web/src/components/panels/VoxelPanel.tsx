@@ -1,5 +1,5 @@
 import { Component, Show } from "solid-js";
-import { Checkbox, Slider } from "../ui";
+import { Checkbox, Slider, Hint } from "../ui";
 import { RemeshActions, type RemeshActionsProps } from "./RemeshActions";
 import { formatMm, type RemeshInfo } from "./IsotropicPanel";
 import { fmtNumber, t, tn } from "../../lib/i18n";
@@ -90,15 +90,12 @@ export const VoxelPanel: Component<VoxelPanelProps> = (props) => {
         formatValue={(v) => (v === 0 ? t("no") : tn(v, "{n} pasada", "{n} pasadas"))}
       />
       <div class="space-y-1">
-        <Checkbox label={t("Triángulos parejos después")} checked={props.config.even} onChange={(even) => update({ even })} />
-        <p class="text-xs text-text-muted leading-relaxed">
-          {t("La grilla deja muchos triángulos de tamaños dispares; emparejarlos los reduce a una cuarta parte o menos (tarda un poco más).")}
-        </p>
+        <Checkbox label={t("Triángulos parejos después")} checked={props.config.even} onChange={(even) => update({ even })}
+          hint={t("Empareja los triángulos de la grilla: quedan una cuarta parte o menos (tarda un poco más).")}
+        />
       </div>
 
-      <p class="text-xs text-text-dim leading-relaxed">
-        {t("Cierra los agujeros, une las piezas que se cruzan y quita las caras internas: el resultado siempre es cerrado, listo para imprimir. Las aristas vivas quedan redondeadas a la escala del vóxel. Es una malla nueva, sin UV: al aplicar se elige si trasladar la textura (horneada) y los pesos.")}
-      </p>
+      <Hint label={t("Cómo funciona")} text={t("Cierra agujeros, une piezas y quita caras internas: queda cerrada, lista para imprimir. Redondea las aristas vivas. Malla nueva sin UV: al aplicar eliges si trasladar textura y pesos.")} />
 
       <RemeshActions {...props} />
     </div>

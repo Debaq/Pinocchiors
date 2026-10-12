@@ -1,5 +1,5 @@
 import { Component, For, Show, createEffect, createSignal } from "solid-js";
-import { Button, Panel } from "../ui";
+import { Button, Panel, Hint } from "../ui";
 import * as Icons from "../icons";
 import { t } from "../../lib/i18n";
 
@@ -33,9 +33,7 @@ export const SkeletonEditPanel: Component<SkeletonEditPanelProps> = (props) => {
   return (
     <Panel title={t("Estructura")} icon={<Icons.TreeStructure size={14} />}>
       <div class="space-y-3">
-        <p class="text-xs text-text-muted leading-relaxed">
-          {t("Agrega o borra huesos donde la plantilla no alcanza (una cola más larga, un cuerno). Cambiar la estructura descarta los pesos; las animaciones siguen por nombre.")}
-        </p>
+        <Hint label={t("Cómo funciona")} text={t("Agrega o borra huesos donde la plantilla no alcanza (una cola más larga, un cuerno). Cambiar la estructura descarta los pesos; las animaciones siguen por nombre.")} />
         <Show when={props.selectedName} fallback={<p class="text-xs text-text-dim">{t("Elige una articulación en el visor.")}</p>}>
           <div class="flex gap-1">
             <input

@@ -37,9 +37,9 @@ que hacen). Cada cambio de texto actualiza el catálogo `en.*.ts`.
 1. [x] `Button` y `Checkbox`/`Slider`: prop `hint` que envuelve en `Tooltip`.
 2. [x] Retopología (`RetopologyStep`, `RetopologyPanel`) — se ve en A.4.
 3. [x] UV (`UvStep`, 7 párrafos).
-4. [ ] Remallar (`RemeshStep`, `SimplifyPanel`, `SmoothPanel`, `IsotropicPanel`,
+4. [x] Remallar (`RemeshStep`, `SimplifyPanel`, `SmoothPanel`, `IsotropicPanel`,
    `VoxelPanel`, `QuadsPanel`).
-5. [ ] Reparar, Escanear, Fabricar, Materiales, Vista.
-6. [ ] Esqueleto (8 párrafos), Animar, Pose, Luces, Historial.
+5. [x] Reparar, Escanear, Fabricar, Materiales, Vista.
+6. [~] Esqueleto, Animar, Pose hechos; faltan Luces e Historial (párrafos con piezas sueltas).
 7. [ ] Revisión: ningún párrafo `leading-relaxed` suelto en los paneles
    laterales; `tsc` y pruebas de i18n.

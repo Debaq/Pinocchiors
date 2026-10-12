@@ -1,6 +1,6 @@
 import { Component, For, Show } from "solid-js";
 import { clsx } from "clsx";
-import { Button, Checkbox, NumberInput, Panel, Select } from "../ui";
+import { Button, Checkbox, NumberInput, Panel, Select, Hint } from "../ui";
 import * as Icons from "../icons";
 import { createPersisted } from "../../lib/ui-state";
 import type { Vec3 } from "../../lib/axes";
@@ -172,9 +172,7 @@ export const JointTunePanel: Component<JointTunePanelProps> = (props) => {
 
       <Panel title={t("Girar el miembro")} id="skeleton.tune.rotate" icon={<Icons.ArrowsClockwise size={14} />} defaultOpen>
         <div class="space-y-2 pb-3">
-          <p class="text-xs text-text-muted leading-relaxed">
-            {t("Gira todo lo que cuelga de la articulación alrededor de ella, como un bloque: una pierna entera desde la cadera, una mano desde la muñeca.")}
-          </p>
+          <Hint label={t("Cómo funciona")} text={t("Gira todo lo que cuelga de la articulación alrededor de ella, como un bloque: una pierna entera desde la cadera, una mano desde la muñeca.")} />
           <Select label={t("Ángulo")} options={ANGLES} value={angle()} onChange={setAngle} />
           <Pair
             label="Adelante / atrás"
@@ -213,9 +211,7 @@ export const JointTunePanel: Component<JointTunePanelProps> = (props) => {
               {t("Centrar en el miembro")}
             </Button>
           </Show>
-          <p class="text-xs text-text-muted leading-relaxed">
-            {t("Corrige una mitad y copia: el otro lado queda en el reflejo. Centrar lleva la articulación al medio del volumen de la malla.")}
-          </p>
+          <Hint label={t("Cómo funciona")} text={t("Corrige una mitad y copia: el otro lado queda en el reflejo. Centrar lleva la articulación al medio del volumen de la malla.")} />
         </div>
       </Panel>
     </div>

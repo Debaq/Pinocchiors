@@ -1,5 +1,5 @@
 import { Component } from "solid-js";
-import { Checkbox, Slider } from "../ui";
+import { Checkbox, Slider, Hint } from "../ui";
 import { RemeshActions, type RemeshActionsProps } from "./RemeshActions";
 import { t } from "../../lib/i18n";
 
@@ -52,20 +52,15 @@ export const QuadsPanel: Component<QuadsPanelProps> = (props) => {
         formatValue={(v) => t("esquinas a ±{v}° de 90°", { v })}
         title={t("Cuánto puede alejarse el quad de un rectángulo")}
       />
-      <p class="text-xs text-text-muted leading-relaxed">
-        {t("Se juntan primero los pares que forman los quads más rectos y planos. No se cruzan las costuras de UV ni las aristas con normales partidas; los triángulos que quedan sin pareja siguen siendo triángulos.")}
-      </p>
+      <Hint label={t("Cómo funciona")} text={t("Junta primero los pares que dan los quads más rectos y planos, sin cruzar costuras de UV ni normales partidas. Los triángulos sin pareja quedan.")} />
 
       <div class="space-y-1">
-        <Checkbox label={t("Todo quads")} checked={props.config.allQuads} onChange={(allQuads) => update({ allQuads })} />
-        <p class="text-xs text-text-muted leading-relaxed">
-          {t("Además subdivide un paso sin cambiar la forma: cada quad da cuatro y cada triángulo suelto tres. Cuatro veces más caras, pero ninguna de tres lados.")}
-        </p>
+        <Checkbox label={t("Todo quads")} checked={props.config.allQuads} onChange={(allQuads) => update({ allQuads })}
+          hint={t("Subdivide un paso sin cambiar la forma: cuatro veces más caras, ninguna de tres lados.")}
+        />
       </div>
 
-      <p class="text-xs text-text-dim leading-relaxed">
-        {t("Los vértices no se mueven: UV, textura y pesos se conservan. Los quads se exportan como tales en OBJ y USD; GLB, STL y los demás formatos los triangulan.")}
-      </p>
+      <Hint label={t("Cómo funciona")} text={t("Los vértices no se mueven. Los quads se exportan como tales en OBJ y USD; los demás formatos los triangulan.")} />
 
       <RemeshActions {...props} />
     </div>

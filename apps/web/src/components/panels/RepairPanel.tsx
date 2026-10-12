@@ -1,6 +1,6 @@
 import { Component, Show, For } from "solid-js";
 import { clsx } from "clsx";
-import { Button, Checkbox, NumberInput } from "../ui";
+import { Button, Checkbox, NumberInput, Hint } from "../ui";
 import * as Icons from "../icons";
 import { fmtNumber, t } from "../../lib/i18n";
 
@@ -244,9 +244,7 @@ export const RepairPanel: Component<RepairPanelProps> = (props) => {
               </div>
             </Show>
             <Show when={d()!.self_intersections > 0}>
-              <p class="text-xs text-text-muted leading-relaxed pt-1">
-                {t("Para corregir las auto-intersecciones, activa «Unir cuerpos solapados». La mayoría de los laminadores las toleran.")}
-              </p>
+              <Hint label={t("Cómo funciona")} text={t("Para corregir las auto-intersecciones, activa «Unir cuerpos solapados». La mayoría de los laminadores las toleran.")} />
             </Show>
           </div>
         </div>

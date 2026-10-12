@@ -1,6 +1,6 @@
 import { Component, For, Show } from "solid-js";
 import { clsx } from "clsx";
-import { Button } from "../ui";
+import { Button, Hint } from "../ui";
 import * as Icons from "../icons";
 import type { AnimationClip } from "../../lib/animation";
 import { t } from "../../lib/i18n";
@@ -81,9 +81,7 @@ export const AnimateStep: Component<AnimateStepProps> = (props) => {
           </div>
         }
       >
-        <p class="text-xs text-text-muted leading-relaxed">
-          {t("Elige una articulación, gírala con R (o desplázala con G) e inserta keys en la línea de tiempo. Con auto-key, cada cambio confirmado crea su key.")}
-        </p>
+        <Hint label={t("Cómo funciona")} text={t("Elige una articulación, gírala con R (o desplázala con G) e inserta keys en la línea de tiempo. Con auto-key, cada cambio confirmado crea su key.")} />
 
         {/* Animaciones */}
         <div class="space-y-2">
@@ -140,9 +138,7 @@ export const AnimateStep: Component<AnimateStepProps> = (props) => {
               <Icons.PersonArmsSpread size={12} /> {props.puppeteering ? t("Apagar la cámara") : t("Mover con la cámara en vivo")}
             </span>
           </Button>
-          <p class="text-xs text-text-dim leading-relaxed">
-            {t("El esqueleto copia tus movimientos frente a la cámara; graba para guardarlos como animación.")}
-          </p>
+          <Hint label={t("Cómo funciona")} text={t("El esqueleto copia tus movimientos frente a la cámara; graba para guardarlos como animación.")} />
           <div class="grid grid-cols-2 gap-1">
             <Button size="sm" variant="ghost" onClick={props.onCaptureVideo} title={t("Detecta los movimientos de una persona en un video grabado")}>
               {t("Desde un video…")}
@@ -172,9 +168,7 @@ export const AnimateStep: Component<AnimateStepProps> = (props) => {
           <Button size="sm" fullWidth variant={props.editorOpen ? "default" : "primary"} onClick={props.onToggleEditor}>
             {props.editorOpen ? t("Cerrar el editor de pose y rig") : t("Abrir el editor de pose y rig")}
           </Button>
-          <p class="text-xs text-text-dim leading-relaxed">
-            {t("Articulación y límites, herramientas de pose, IK y rig, al costado del visor (Ctrl+E). El borde se arrastra para darle más ancho.")}
-          </p>
+          <Hint label={t("Cómo funciona")} text={t("Articulación y límites, herramientas de pose, IK y rig, al costado del visor (Ctrl+E). El borde se arrastra para darle más ancho.")} />
         </div>
 
 

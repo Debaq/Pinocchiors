@@ -1,5 +1,6 @@
 import { Component, For, Show } from "solid-js";
 import { clsx } from "clsx";
+import { Hint } from "../ui";
 import { RetopologyStep, type RetopologyStepProps } from "./RetopologyStep";
 import { SimplifyPanel, type SimplifyPanelProps } from "../panels/SimplifyPanel";
 import { SmoothPanel, type SmoothPanelProps } from "../panels/SmoothPanel";
@@ -181,8 +182,10 @@ export const RemeshStep: Component<RemeshStepProps> = (props) => {
   return (
     <div class="space-y-4">
       <div>
-        <h3 class="text-sm font-semibold text-text">{t("Remallar")}</h3>
-        <p class="text-xs text-text-muted leading-relaxed">{t("Ordenar la malla según para qué se va a usar.")}</p>
+        <div class="flex items-center justify-between">
+          <h3 class="text-sm font-semibold text-text">{t("Remallar")}</h3>
+          <Hint text={t("Ordenar la malla según para qué se va a usar.")} />
+        </div>
       </div>
       <div role="radiogroup" aria-label={t("Modo de remallado")} class="grid grid-cols-2 gap-1">
         <For each={REMESH_MODES}>
@@ -211,9 +214,9 @@ export const RemeshStep: Component<RemeshStepProps> = (props) => {
           {t(current().what)} <span class="text-text-dim">{t(current().use)}</span>
         </p>
         <Show when={!current().ready}>
-          <p data-remesh-pending class="text-xs text-text-dim leading-relaxed">
-            {t("Este modo todavía no está: llega en las próximas etapas. Mientras, la retopología y la reparación siguen disponibles.")}
-          </p>
+          <div data-remesh-pending>
+            <Hint label={t("Cómo funciona")} text={t("Este modo todavía no está: llega en las próximas etapas. Mientras, la retopología y la reparación siguen disponibles.")} />
+          </div>
         </Show>
         <Show when={current().id === "simplify"}>
           <SimplifyPanel {...props.simplify} triangles={props.mesh.faces} hasPreview={hasPreview()} />
