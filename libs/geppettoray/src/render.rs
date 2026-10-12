@@ -40,6 +40,8 @@ pub struct Settings {
     pub seed: u64,
     pub environment: Environment,
     pub lights: Vec<Light>,
+    /// Los píxeles donde la cámara ve directo el entorno salen transparentes (alfa 0)
+    pub transparent_background: bool,
 }
 
 impl Default for Settings {
@@ -52,6 +54,7 @@ impl Default for Settings {
             seed: 1,
             environment: Environment::uniform(Vec3::splat(0.5)),
             lights: Vec::new(),
+            transparent_background: false,
         }
     }
 }
@@ -98,7 +101,7 @@ fn power(a: f32, b: f32) -> f32 {
 /// Luz directa por muestreo de luces (sol/puntual/foco exactos; área y HDRI por
 /// importancia) combinada con el muestreo del BSDF mediante MIS (heurística de
 /// potencia). `max_depth` cuenta rebotes: el último vértice solo recoge emisión.
-fn radiance(scene: &RayScene, s: &Settings, mut ray: Ray, rng: &mut Rng) -> Vec3 {
+pub(crate) fn radiance(scene: &RayScene, s: &Settings, mut ray: Ray, rng: &mut Rng) -> (Vec3, f32) {
     let eps = 1e-4 * scene.extent;
     let mut throughput = Vec3::ONE;
     let mut sum = Vec3::ZERO;
@@ -109,12 +112,17 @@ fn radiance(scene: &RayScene, s: &Settings, mut ray: Ray, rng: &mut Rng) -> Vec3
     let mut depth = 0u32;
     // Extinción del volumen en el que está el rayo (dentro de un vidrio o líquido cerrado)
     let mut medium: Option<Vec3> = None;
+    // Mientras el rayo no haya rebotado ni cruzado vidrio, el fondo que ve es el de la imagen
+    let mut camera_visible = true;
     // Cada iteración es un vértice; los cruces descartados (cara trasera) y los eventos
     // de vidrio no cuentan como rebote, pero el total se acota
     let mut guard = 0;
     while guard < 64 + 4 * s.max_depth {
         guard += 1;
         let Some(hit) = scene.closest_alpha(&ray, f32::INFINITY, rng) else {
+            if camera_visible && s.transparent_background {
+                return (Vec3::ZERO, 0.0);
+            }
             let mut le = s.environment.eval(ray.dir);
             if let (Some(map), true) = (env_map, prev_pdf > 0.0) {
                 le *= power(prev_pdf, map.pdf(ray.dir));
@@ -218,6 +226,7 @@ fn radiance(scene: &RayScene, s: &Settings, mut ray: Ray, rng: &mut Rng) -> Vec3
             }
             ray = Ray { origin: p + gn * (eps * side), dir };
             prev_pdf = 0.0;
+            camera_visible = false;
             continue;
         }
 
@@ -308,6 +317,7 @@ fn radiance(scene: &RayScene, s: &Settings, mut ray: Ray, rng: &mut Rng) -> Vec3
         prev_pdf = pdf;
         prev_p = p;
         depth += 1;
+        camera_visible = false;
 
         // Ruleta rusa (sin sesgo) desde el tercer rebote
         if depth >= 3 {
@@ -320,7 +330,7 @@ fn radiance(scene: &RayScene, s: &Settings, mut ray: Ray, rng: &mut Rng) -> Vec3
 
         ray = Ray { origin, dir: wi };
     }
-    sum
+    (sum, 1.0)
 }
 
 /// Renderiza la escena en RGB lineal.
@@ -335,7 +345,7 @@ pub fn render(scene: &RayScene, camera: &Camera, s: &Settings) -> Image {
                 let fx = (x as f32 + rng.next_f32()) / w as f32;
                 let fy = (y as f32 + rng.next_f32()) / h as f32;
                 let ray = camera.sample_ray(fx, fy, &mut rng);
-                let c = radiance(scene, s, ray, &mut rng);
+                let (c, _) = radiance(scene, s, ray, &mut rng);
                 // Un NaN o infinito no debe contaminar el píxel
                 if c.is_finite() {
                     acc += c;
@@ -368,12 +378,12 @@ pub struct Aov {
     pub pixel_angle: f32,
 }
 
-fn lum(c: Vec3) -> f32 {
+pub(crate) fn lum(c: Vec3) -> f32 {
     c.dot(Vec3::new(0.2126, 0.7152, 0.0722))
 }
 
 /// Primer cruce visible: (albedo, normal, posición, distancia)
-fn first_hit(scene: &RayScene, env: &Environment, ray: Ray, rng: &mut Rng) -> (Vec3, Vec3, Vec3, f32) {
+pub(crate) fn first_hit(scene: &RayScene, env: &Environment, ray: Ray, rng: &mut Rng) -> (Vec3, Vec3, Vec3, f32) {
     let Some(hit) = scene.closest_alpha(&ray, f32::INFINITY, rng) else {
         return (env.eval(ray.dir).clamp(Vec3::ZERO, Vec3::ONE), Vec3::ZERO, Vec3::ZERO, f32::INFINITY);
     };
@@ -443,7 +453,7 @@ pub fn render_aov(scene: &RayScene, camera: &Camera, s: &Settings) -> Aov {
                 let fx = (x as f32 + rng.next_f32()) / w as f32;
                 let fy = (y as f32 + rng.next_f32()) / h as f32;
                 let ray = camera.sample_ray(fx, fy, &mut rng);
-                let c = radiance(scene, s, ray, &mut rng);
+                let (c, _) = radiance(scene, s, ray, &mut rng);
                 if c.is_finite() {
                     acc += c;
                     let l = lum(c);
