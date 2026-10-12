@@ -81,7 +81,7 @@ import { WORKSPACES, createPipelineStore, type PipelineStepId, type WorkspaceId 
 import { MaterialEditorPanel, type MaterialEditorTab } from "./components/layout/MaterialEditorPanel";
 
 /** Alt+número de cada espacio (fijo: agregar uno nuevo no cambia los demás) */
-const WORKSPACE_KEYS: Record<WorkspaceId, string> = { prepare: "1", rig: "2", print: "3", scan: "4", design: "5", materials: "6" };
+const WORKSPACE_KEYS: Record<WorkspaceId, string> = { prepare: "1", rig: "2", print: "3", scan: "4", design: "5", materials: "6", render: "7" };
 import { VIEW_AXES, fromView, toView, viewSize, type Axis } from "./lib/axes";
 import { buildSceneTree, type CadOutline, type CadOutlineItem, type ObjectRow, type SceneNode } from "./lib/scene-tree";
 import { addDrawing, drawingSheets, drawingTree, parseElementNode, removeDrawing, removeElement, toggleElement, updateDrawing } from "./lib/drawingDoc";
@@ -116,7 +116,8 @@ type SceneEdit =
 import { bvhMotion, parseBvh } from "./lib/bvh";
 import { autoMap, retargetClip, type RetargetMap, type SourceMotion } from "./lib/retarget";
 import { ConfirmDialog, type ConfirmChoice, type ConfirmRequest } from "./components/layout/ConfirmDialog";
-import { RenderDialog, defaultRenderSettings, renderPixels, type RenderSettings } from "./components/layout/RenderDialog";
+import { defaultRenderSettings, renderPixels, type RenderSettings } from "./components/steps/RenderStep";
+import { RenderEditor } from "./components/layout/RenderEditor";
 
 interface ProjectSaved {
   written: boolean;
@@ -267,7 +268,7 @@ import {
 import type { SkeletonTransform } from "./components/panels/SkeletonTransformPanel";
 import type { MeshDiagnostics, RepairResult, RepairAnalysisConfig, RepairOptions } from "./components/panels/RepairPanel";
 import type { MeshAnalysis, SubdivideResult, ScaleParams, SubdivideConfig } from "./components/panels/Print3DPanel";
-import { DESIGN_FORMATS, SKELETON_FORMATS, defaultExportOptions, formatBytes, type ExportOptions } from "./components/steps/ExportStep";
+import { DESIGN_FORMATS, IMAGE_FORMATS, SKELETON_FORMATS, defaultExportOptions, formatBytes, type ExportOptions } from "./components/steps/ExportStep";
 import { defaultUvConfig, type UvConfig, type UvInfo, type UvPreview } from "./components/steps/UvStep";
 import type { SkeletonFitInfo } from "./components/steps/SkeletonStep";
 import { REMESH_MODES, type RemeshMode, type RemeshStats } from "./components/steps/RemeshStep";
@@ -933,7 +934,6 @@ export const App: Component = () => {
       for (const target of targets) await invoke("assign_scene_material", { material: index, mesh: target.mesh, primitive: target.primitive });
     });
 
-  /** Cargar una imagen de un archivo como mapa del material (con UV; sin ellas no se ve) */
   // Material por triángulos: elegir caras en el visor y asignarles un material
   const [faceMode, setFaceMode] = createSignal(false);
   const [pickedFaces, setPickedFaces] = createSignal<number[]>([]);
@@ -977,6 +977,7 @@ export const App: Component = () => {
       })
     );
 
+  /** Cargar una imagen de un archivo como mapa del material (con UV; sin ellas no se ve) */
   const loadMap = async (index: number, slot: TextureSlot) => {
     const path = await open({
       multiple: false,
@@ -1007,9 +1008,9 @@ export const App: Component = () => {
   const [meshLoaded, setMeshLoaded] = createSignal(false);
   const [meshInfo, setMeshInfo] = createSignal({ vertices: 0, faces: 0, format: "" });
   const [meshData, setMeshData] = createSignal<MeshData | undefined>();
-  /** Diagonal de la caja del modelo: escala del grosor del vidrio */
   // Otra malla: los índices de triángulo ya no son los mismos
   createEffect(on(meshData, () => setPickedFaces([]), { defer: true }));
+  /** Diagonal de la caja del modelo: escala del grosor del vidrio */
   const glassScale = createMemo(() => {
     const positions = meshData()?.positions;
     if (!positions || positions.length < 3) return 1;
@@ -1111,7 +1112,6 @@ export const App: Component = () => {
   const [lastExport, setLastExport] = createSignal<{ bytes: number; files: string[] } | undefined>();
 
   // ── Render de una imagen ──
-  const [renderOpen, setRenderOpen] = createSignal(false);
   const [renderSettingsRaw, setRenderSettings] = createPersisted<RenderSettings>("render.settings", defaultRenderSettings);
   // Con opciones nuevas, las guardadas de antes se completan con las de fábrica
   const renderSettings = () => ({ ...defaultRenderSettings, ...renderSettingsRaw() });
@@ -1810,7 +1810,7 @@ export const App: Component = () => {
   // ─── Objetos ──────────────────────────────────────────────────────────────
 
   /** Espacios que trabajan sobre la malla del objeto activo */
-  const meshWorkspace = () => ["prepare", "materials", "rig", "print"].includes(pipeline.workspace()?.id ?? "");
+  const meshWorkspace = () => ["prepare", "materials", "rig", "print", "render"].includes(pipeline.workspace()?.id ?? "");
 
   /** Interfaz vacía: un objeto que todavía no tiene modelo */
   const EMPTY_OBJECT_UI = JSON.stringify({ model: false });
@@ -5377,6 +5377,8 @@ export const App: Component = () => {
       const formats = supportedFormats();
       if (!formats) return;
       const opts = exportOptions();
+      // Las imágenes no pasan por el exportador: se hacen en el espacio Render
+      if (IMAGE_FORMATS.includes(opts.format)) return openRender(opts.format as RenderSettings["format"]);
       const format = formats.export.find((f) => f.id === opts.format);
       if (!format) return;
 
@@ -5441,30 +5443,38 @@ export const App: Component = () => {
   // ── Render de una imagen ──
   // Sin cámaras todavía: sale de la vista, recortada al aspecto elegido (PLAN_RENDER.md, fase 1)
 
-  const openRender = () => {
-    const v = viewer();
-    if (!v || !hasWork() || inDesign()) return;
-    setRenderViewSize(v.getViewSize());
-    setRenderOpen(true);
+  const inRender = () => pipeline.workspace()?.id === "render";
+  // Panel de opciones a la izquierda del visor (como Orizon3D y los demás editores)
+  const [renderEditorOpen, setRenderEditorOpen] = createPersisted("renderEditor.open", true);
+  const [renderEditorFraction, setRenderEditorFraction] = createPersisted("renderEditor.fraction", 0.3);
+  const renderEditorVisible = () => inRender() && renderEditorOpen() && !textureEditor();
+  const resizeRenderEditor = (e: PointerEvent) => {
+    const start = renderEditorFraction();
+    const width = splitRef?.clientWidth ?? 1;
+    startDrag(e, "col-resize", (dx) => setRenderEditorFraction(Math.min(0.6, Math.max(0.2, start + dx / width))));
   };
-  const closeRender = () => {
-    renderAbort?.abort();
-    setRenderOpen(false);
+  /** Abre el espacio Render; con `format`, ya con ese formato de imagen elegido */
+  const openRender = (format?: RenderSettings["format"]) => {
+    if (!viewer() || !hasWork() || inDesign()) return;
+    if (format) setRenderSettings({ ...renderSettings(), format });
+    setRenderEditorOpen(true);
+    pipeline.openWorkspace("render");
   };
   // El tamaño de la vista cambia con la ventana y los paneles
   createEffect(() => {
-    if (!renderOpen()) return;
+    if (!inRender()) return;
     const update = () => {
       const v = viewer();
       if (v) setRenderViewSize(v.getViewSize());
     };
+    update();
     const id = window.setInterval(update, 400);
     onCleanup(() => clearInterval(id));
   });
   // Marco con el área exacta que saldrá, mientras el diálogo está abierto
   createEffect(() => {
     const v = viewer();
-    if (!v || !renderOpen()) return;
+    if (!v || !inRender()) return;
     const { width, height } = renderPixels(renderSettings(), renderViewSize());
     v.setRenderFrame(width / height);
     onCleanup(() => v.setRenderFrame(null));
@@ -7722,6 +7732,15 @@ export const App: Component = () => {
                   const node = picked.length === 1 ? sceneStructure()?.nodes[picked[0]] : undefined;
                   return node ? node.name || t("nodo {n}", { n: picked[0] }) : undefined;
                 })()}
+                faces={{
+                  active: faceMode(),
+                  count: pickedFaces().length,
+                  onToggle: () => setFaceMode((on) => !on),
+                  onClear: () => setPickedFaces([]),
+                  onAll: allFaces,
+                  onInvert: invertFaces,
+                  onAssign: assignFaces,
+                }}
                 nodePrimitives={selectedNodePrimitives()}
                 onlySelected={pickedNodes().length > 0}
                 actions={materialActions()}
@@ -7732,15 +7751,6 @@ export const App: Component = () => {
                 onTarget={(target) => setShowQuadMesh(target === "quad")}
               />
             </div>
-                faces={{
-                  active: faceMode(),
-                  count: pickedFaces().length,
-                  onToggle: () => setFaceMode((on) => !on),
-                  onClear: () => setPickedFaces([]),
-                  onAll: allFaces,
-                  onInvert: invertFaces,
-                  onAssign: assignFaces,
-                }}
             <div class="shrink-0 w-1 cursor-col-resize bg-border hover:bg-accent/50 transition-colors" onPointerDown={(e) => (materialEditorTab() === "textures" ? resizeEditor(e) : resizeMaterialEditor(e))} />
           </Show>
           {/* Orizon3D a la izquierda del visor */}
@@ -7758,6 +7768,19 @@ export const App: Component = () => {
               />
             </div>
             <div class="shrink-0 w-1 cursor-col-resize bg-border hover:bg-accent/50 transition-colors" onPointerDown={resizeScanEditor} />
+          </Show>
+          {/* Opciones del render a la izquierda del visor */}
+          <Show when={renderEditorVisible()}>
+            <div class="shrink-0 min-w-0 border-r border-border" style={{ width: `${100 * renderEditorFraction()}%` }}>
+              <RenderEditor
+                settings={renderSettings()}
+                onSettingsChange={setRenderSettings}
+                viewSize={renderViewSize()}
+                busy={renderProgress() !== undefined}
+                onClose={() => setRenderEditorOpen(false)}
+              />
+            </div>
+            <div class="shrink-0 w-1 cursor-col-resize bg-border hover:bg-accent/50 transition-colors" onPointerDown={resizeRenderEditor} />
           </Show>
           {/* Editor de texturas a la izquierda del visor */}
           <Show when={!inMaterialsWorkspace() ? textureEditor() : undefined}>
@@ -7793,6 +7816,9 @@ export const App: Component = () => {
               onPlacementPick={handlePlacementPick}
               nodePicking={["prepare", "materials"].includes(pipeline.workspace()?.id ?? "") && !animating() && !displayQuad()}
               onNodesPicked={pickNodes}
+              facePicking={faceMode() && materialEditorVisible() && materialEditorTab() === "materials" && !animating() && !displayQuad()}
+              pickedFaces={pickedFaces()}
+              onFacesPicked={pickFaces}
               onNodePicked={(node) => {
                 setExtraFileNodes([]);
                 setSelectedFileNode(node);
@@ -7816,9 +7842,6 @@ export const App: Component = () => {
               paintSettings={paintSettings()}
               meshData={showsPreview() ? remeshPreviewData() : displayQuad() ? quadMeshData() : meshData()}
               sceneMaterials={viewerMaterials()}
-              facePicking={faceMode() && materialEditorVisible() && materialEditorTab() === "materials" && !animating() && !displayQuad()}
-              pickedFaces={pickedFaces()}
-              onFacesPicked={pickFaces}
               lights={lights()}
               onLightsChanged={setLights}
               textures={viewerTextures()}
@@ -8252,9 +8275,17 @@ export const App: Component = () => {
               onCompactUvChange: setExportCompactUv,
               options: exportOptions(),
               onOptionsChange: setExportOptions,
-              onRender: openRender,
-              renderOpen: renderOpen(),
               lastExport: lastExport(),
+            }}
+            renderProps={{
+              settings: renderSettings(),
+              viewSize: renderViewSize(),
+              panelOpen: renderEditorOpen(),
+              onTogglePanel: () => setRenderEditorOpen(!renderEditorOpen()),
+              progress: renderProgress(),
+              canRender: hasWork() && !inDesign(),
+              onRender: () => void handleRender(),
+              onStop: () => renderAbort?.abort(),
             }}
             viewSettings={viewSettings()}
             onViewSettingsChange={(settings) => {
@@ -8327,18 +8358,6 @@ export const App: Component = () => {
 
       <Show when={retargeting()}>
         {(request) => <RetargetDialog {...request()} onConfirm={(r) => void confirmRetarget(r)} onCancel={() => setRetargeting(undefined)} />}
-      </Show>
-
-      <Show when={renderOpen()}>
-        <RenderDialog
-          settings={renderSettings()}
-          onSettingsChange={setRenderSettings}
-          viewSize={renderViewSize()}
-          progress={renderProgress()}
-          onRender={() => void handleRender()}
-          onStop={() => renderAbort?.abort()}
-          onClose={closeRender}
-        />
       </Show>
 
       {/* Con clave: cada pregunta nueva arma el diálogo de cero (sus casillas) */}

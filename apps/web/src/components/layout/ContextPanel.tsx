@@ -19,6 +19,7 @@ import { RemeshStep, type RemeshStepProps } from "../steps/RemeshStep";
 import { SkeletonStep, type SkeletonStepProps } from "../steps/SkeletonStep";
 import { UvStep, type UvStepProps } from "../steps/UvStep";
 import { ExportStep, type ExportStepProps } from "../steps/ExportStep";
+import { RenderStep, type RenderStepProps } from "../steps/RenderStep";
 import { RepairStep, type RepairStepProps } from "../steps/RepairStep";
 import { AnimateStep, type AnimateStepProps } from "../steps/AnimateStep";
 import { Print3DStep, type Print3DStepProps } from "../steps/Print3DStep";
@@ -62,6 +63,7 @@ export interface ContextPanelProps {
 
   // Export
   exportProps: ExportStepProps;
+  renderProps: RenderStepProps;
   animateProps: AnimateStepProps;
 
   // View
@@ -402,6 +404,9 @@ const StepContent: Component<ContextPanelProps> = (props) => (
       }
     >
       {(section) => props.designPanel?.(section)}
+    </Match>
+    <Match when={props.activeStep === "render"}>
+      <RenderStep {...props.renderProps} />
     </Match>
     <Match when={props.activeStep === "export"}>
       <ExportStep {...props.exportProps} />

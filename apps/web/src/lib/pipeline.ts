@@ -16,6 +16,7 @@ export type PipelineStepId =
   | "skeleton"
   | "animate"
   | "print3d"
+  | "render"
   | "scan"
   | "design"
   | "design_part"
@@ -82,6 +83,11 @@ export const PIPELINE_STEPS: PipelineStep[] = [
     icon: Icons.Hammer,
   },
   {
+    id: "render",
+    get label() { return t("Render"); },
+    icon: Icons.FrameCorners,
+  },
+  {
     id: "scan",
     get label() { return t("Escáner 3D"); },
     icon: Icons.Scan,
@@ -121,7 +127,7 @@ export const PIPELINE_STEPS: PipelineStep[] = [
 // (menú Archivo); transformar el modelo está siempre en la pestaña Objeto.
 // ═══════════════════════════════════════════════════════════════════════════
 
-export type WorkspaceId = "prepare" | "materials" | "rig" | "print" | "scan" | "design";
+export type WorkspaceId = "prepare" | "materials" | "rig" | "print" | "render" | "scan" | "design";
 
 export interface Workspace {
   id: WorkspaceId;
@@ -137,6 +143,7 @@ export const WORKSPACES: Workspace[] = [
   // Sin modelo se puede armar y animar un esqueleto solo, y exportarlo
   { id: "rig", get label() { return t("Rig y animación"); }, sections: ["skeleton", "animate"], withoutModel: true },
   { id: "print", get label() { return t("Fabricar"); }, sections: ["print3d"] },
+  { id: "render", get label() { return t("Render"); }, sections: ["render"] },
   { id: "scan", label: "Orizon3D", sections: ["scan"], withoutModel: true },
   // CAD paramétrico: se diseña desde cero o calcando el modelo cargado
   { id: "design", get label() { return t("Diseñar"); }, sections: ["design", "design_part", "design_inspect", "design_scan"], withoutModel: true },

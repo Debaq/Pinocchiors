@@ -6,6 +6,8 @@ export interface TooltipProps {
   content: string;
   placement?: "top" | "bottom" | "left" | "right";
   delay?: number;
+  /** Clases del contenedor que envuelve al hijo (por defecto "inline-flex") */
+  class?: string;
 }
 
 export const Tooltip: ParentComponent<TooltipProps> = (props) => {
@@ -15,7 +17,7 @@ export const Tooltip: ParentComponent<TooltipProps> = (props) => {
       openDelay={props.delay ?? 400}
       closeDelay={100}
     >
-      <KobalteTooltip.Trigger as="span" class="inline-flex">
+      <KobalteTooltip.Trigger as="span" class={props.class ?? "inline-flex"}>
         {props.children}
       </KobalteTooltip.Trigger>
 

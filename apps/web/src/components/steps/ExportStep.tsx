@@ -1,9 +1,9 @@
 import { Component, For, Show } from "solid-js";
-import { Button, Checkbox, Select, Slider } from "../ui";
+import { Button, Checkbox, Hint, Select, Slider, Tooltip } from "../ui";
 import * as Icons from "../icons";
 import { t } from "../../lib/i18n";
 
-export type ExportFormat = "step" | "glb" | "gltf" | "obj" | "stl" | "3mf" | "ply" | "usdz" | "bvh" | "json";
+export type ExportFormat = "png" | "jpeg" | "webp" | "step" | "glb" | "gltf" | "obj" | "stl" | "3mf" | "ply" | "usdz" | "bvh" | "json";
 
 /** Formatos que llevan el esqueleto sin modelo */
 export const SKELETON_FORMATS: ExportFormat[] = ["glb", "gltf", "bvh"];
@@ -79,6 +79,9 @@ const FORMATS: FormatEntry[] = [
   { id: "stl", name: "STL", hint: "Impresión 3D clásica. Solo geometría, en milímetros." },
   { id: "ply", name: "PLY", hint: "Geometría con color por vértice (escaneo, MeshLab)." },
   { id: "bvh", name: "BVH", hint: "Esqueleto y la animación activa (captura de movimiento): Blender, MotionBuilder, three.js." },
+  { id: "png", name: "PNG", hint: "Imagen de lo que se ve, con transparencia. Abre el espacio Render." },
+  { id: "jpeg", name: "JPG", hint: "Imagen de lo que se ve, liviana y sin transparencia. Abre el espacio Render." },
+  { id: "webp", name: "WebP", hint: "Imagen de lo que se ve, liviana, para la web. Abre el espacio Render." },
   { id: "json", name: "Pesos", hint: "Pesos de skinning del autorig en JSON." },
 ];
 
@@ -96,6 +99,10 @@ const PRESET_OPTIONS = [
   { value: "light", get label() { return t("Web ligero"); }, get description() { return t("Para móviles: mitad de triángulos, texturas 1024 px"); } },
   { value: "custom", get label() { return t("Personalizado"); } },
 ];
+
+/** Imágenes: no salen del exportador sino del espacio Render */
+export const IMAGE_FORMATS: ExportFormat[] = ["png", "jpeg", "webp"];
+const isImage = (format: ExportFormat) => IMAGE_FORMATS.includes(format);
 
 /** Formatos que pasan por el exportador glTF (Draco, reducción, texturas) */
 const isGltf = (format: ExportFormat) => format === "glb" || format === "gltf";
@@ -132,9 +139,6 @@ export interface ExportStepProps {
   onCompactUvChange?: (value: boolean) => void;
   options: ExportOptions;
   onOptionsChange?: (options: ExportOptions) => void;
-  /** Abre el diálogo de Render (imagen de lo que se ve) */
-  onRender?: () => void;
-  renderOpen?: boolean;
   /** Tamaño y archivos de la última exportación */
   lastExport?: { bytes: number; files: string[] };
 }
@@ -170,22 +174,23 @@ export const ExportStep: Component<ExportStepProps> = (props) => {
         <div class="grid grid-cols-4 gap-1.5">
           <For each={FORMATS}>
             {(f) => (
-              <button
-                type="button"
-                disabled={formatDisabled(f.id)}
-                onClick={() => set({ format: f.id })}
-                class={`px-2 py-1.5 rounded-md text-xs font-medium border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
-                  opts().format === f.id
-                    ? "bg-accent/20 border-accent text-text"
-                    : "bg-surface/30 border-border text-text-muted hover:text-text"
-                }`}
-              >
-                {t(f.name)}
-              </button>
+              <Tooltip content={t(f.hint)} class="flex" placement="bottom">
+                <button
+                  type="button"
+                  disabled={formatDisabled(f.id)}
+                  onClick={() => set({ format: f.id })}
+                  class={`w-full px-2 py-1.5 rounded-md text-xs font-medium border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                    opts().format === f.id
+                      ? "bg-accent/20 border-accent text-text"
+                      : "bg-surface/30 border-border text-text-muted hover:text-text"
+                  }`}
+                >
+                  {t(f.name)}
+                </button>
+              </Tooltip>
             )}
           </For>
         </div>
-        <p class="text-[10px] text-text-dim leading-relaxed">{t(current().hint)}</p>
       </div>
 
       <Show when={props.design}>
@@ -198,63 +203,73 @@ export const ExportStep: Component<ExportStepProps> = (props) => {
               onChange={(v) => props.onDesignPartChange?.(v === "all" ? undefined : v)}
             />
           </Show>
-          <p class="text-[10px] text-text-dim leading-relaxed">
-            {t("Se exporta el sólido de Diseñar en milímetros. STEP lo guarda exacto (caras y aristas reales), con cada pieza con su nombre y color; 3MF lleva un objeto por pieza; los demás formatos, una malla fina.")}
-          </p>
+          <Hint
+            label={t("Sólido de Diseñar, en milímetros")}
+            text={t("Se exporta el sólido de Diseñar en milímetros. STEP lo guarda exacto (caras y aristas reales), con cada pieza con su nombre y color; 3MF lleva un objeto por pieza; los demás formatos, una malla fina.")}
+          />
         </div>
       </Show>
 
       {/* Esqueleto solo */}
       <Show when={model() && props.skeletonOnly && opts().format !== "bvh"}>
         <div class="space-y-3 p-3 rounded-md bg-surface/30 border border-border">
-          <Checkbox
-            label={t("Figura visible de los huesos")}
-            checked={props.boneShapes}
-            onChange={props.onBoneShapesChange}
-          />
-          <p class="text-[10px] text-text-dim leading-relaxed">
-            {t("Sin modelo se exportan el esqueleto y todas sus animaciones. La figura agrega un octaedro por hueso para verlo en visores que no dibujan esqueletos; para usarlo en otro programa conviene sin figura.")}
-          </p>
+          <div class="flex items-center justify-between gap-2">
+            <Checkbox
+              label={t("Figura visible de los huesos")}
+              checked={props.boneShapes}
+              onChange={props.onBoneShapesChange}
+            />
+            <Hint text={t("Sin modelo se exportan el esqueleto y todas sus animaciones. La figura agrega un octaedro por hueso para verlo en visores que no dibujan esqueletos; para usarlo en otro programa conviene sin figura.")} />
+          </div>
         </div>
       </Show>
       <Show when={opts().format === "bvh"}>
-        <p class="text-[10px] text-text-dim leading-relaxed p-3 rounded-md bg-surface/30 border border-border">
-          {t("BVH guarda una sola animación: se exporta la activa, en su rango de cuadros. Sin animaciones queda la pose de reposo.")}
-        </p>
+        <div class="p-3 rounded-md bg-surface/30 border border-border">
+          <Hint
+            label={t("Una sola animación: la activa")}
+            text={t("BVH guarda una sola animación: se exporta la activa, en su rango de cuadros. Sin animaciones queda la pose de reposo.")}
+          />
+        </div>
       </Show>
 
       {/* Contenido */}
-      <Show when={model() && !props.skeletonOnly && opts().format !== "json" && opts().format !== "bvh"}>
+      <Show when={model() && !props.skeletonOnly && opts().format !== "json" && opts().format !== "bvh" && !isImage(opts().format)}>
         <div class="space-y-3 p-3 rounded-md bg-surface/30 border border-border">
-          <Checkbox
-            label={t("Incluir esqueleto y pesos")}
-            checked={props.includeRig && props.autorigComplete && keepsRig()}
-            disabled={!props.autorigComplete || !keepsRig()}
-            onChange={props.onIncludeRigChange}
-          />
-          <Checkbox
-            label={t("Usar malla retopologizada")}
-            checked={props.useRetopology && props.hasQuadMesh}
-            disabled={!props.hasQuadMesh}
-            onChange={props.onUseRetopologyChange}
-          />
-          <Checkbox
-            label={t("Compactar el mapa UV")}
-            checked={props.compactUv === true}
-            onChange={props.onCompactUvChange}
-          />
-          <p class="text-[10px] text-text-dim leading-relaxed">
-            {t("Reacomoda las islas lo más juntas posible y vuelve a hornear las texturas (lo pintado incluido): se pinta sobre el mapa legible y se exporta el que aprovecha la textura.")}
-          </p>
-          <p class="text-[10px] text-text-dim leading-relaxed">
-            {props.autorigComplete ? "" : t("Ejecuta el autorig para exportar el rig.") + " "}
-            {props.hasQuadMesh ? "" : t("Ejecuta la retopología para exportar la malla de quads.")}
-          </p>
+          <div class="flex items-center justify-between gap-2">
+            <Checkbox
+              label={t("Incluir esqueleto y pesos")}
+              checked={props.includeRig && props.autorigComplete && keepsRig()}
+              disabled={!props.autorigComplete || !keepsRig()}
+              onChange={props.onIncludeRigChange}
+            />
+            <Show when={!props.autorigComplete || !keepsRig()}>
+              <Hint text={!props.autorigComplete ? t("Ejecuta el autorig para exportar el rig.") : t("Solo GLB, glTF y USDZ llevan el rig.")} />
+            </Show>
+          </div>
+          <div class="flex items-center justify-between gap-2">
+            <Checkbox
+              label={t("Usar malla retopologizada")}
+              checked={props.useRetopology && props.hasQuadMesh}
+              disabled={!props.hasQuadMesh}
+              onChange={props.onUseRetopologyChange}
+            />
+            <Show when={!props.hasQuadMesh}>
+              <Hint text={t("Ejecuta la retopología para exportar la malla de quads.")} />
+            </Show>
+          </div>
+          <div class="flex items-center justify-between gap-2">
+            <Checkbox
+              label={t("Compactar el mapa UV")}
+              checked={props.compactUv === true}
+              onChange={props.onCompactUvChange}
+            />
+            <Hint text={t("Reacomoda las islas lo más juntas posible y vuelve a hornear las texturas (lo pintado incluido): se pinta sobre el mapa legible y se exporta el que aprovecha la textura.")} />
+          </div>
         </div>
       </Show>
 
       {/* Optimización web */}
-      <Show when={model() && isGltf(opts().format) && !props.skeletonOnly}>
+      <Show when={model() && isGltf(opts().format) && !props.skeletonOnly && !isImage(opts().format)}>
         <div class="space-y-3 p-3 rounded-md bg-surface/30 border border-border">
           <Select
             label={t("Optimización web")}
@@ -263,11 +278,14 @@ export const ExportStep: Component<ExportStepProps> = (props) => {
             onChange={applyPreset}
           />
 
-          <Checkbox
-            label={t("Comprimir geometría (Draco)")}
-            checked={opts().draco}
-            onChange={(v) => tweak({ draco: v })}
-          />
+          <div class="flex items-center justify-between gap-2">
+            <Checkbox
+              label={t("Comprimir geometría (Draco)")}
+              checked={opts().draco}
+              onChange={(v) => tweak({ draco: v })}
+            />
+            <Hint text={t("Draco reduce la geometría ~10 veces. Con 14 bits pueden verse manchas donde hay superficies muy juntas; el visor necesita el decodificador Draco (three.js, Babylon y model-viewer lo traen).")} />
+          </div>
           <Show when={opts().draco}>
             <div class="pl-6 space-y-3">
               <Slider
@@ -284,9 +302,6 @@ export const ExportStep: Component<ExportStepProps> = (props) => {
                 checked={opts().highPrecision}
                 onChange={(v) => tweak({ highPrecision: v })}
               />
-              <p class="text-[10px] text-text-dim leading-relaxed">
-                {t("Draco reduce la geometría ~10 veces. Con 14 bits pueden verse manchas donde hay superficies muy juntas; el visor necesita el decodificador Draco (three.js, Babylon y model-viewer lo traen).")}
-              </p>
             </div>
           </Show>
 
@@ -317,14 +332,14 @@ export const ExportStep: Component<ExportStepProps> = (props) => {
             showValue
             formatValue={(v) => (v === 0 ? t("Original") : `${v}`)}
           />
-          <Checkbox
-            label={t("Limpiar geometría y materiales sin uso")}
-            checked={opts().cleanGeometry}
-            onChange={(v) => tweak({ cleanGeometry: v })}
-          />
-          <p class="text-[10px] text-text-dim leading-relaxed">
-            {t("Las texturas con transparencia quedan en PNG. Las texturas suelen pesar más que la geometría: bajar su tamaño es lo que más reduce el archivo.")}
-          </p>
+          <div class="flex items-center justify-between gap-2">
+            <Checkbox
+              label={t("Limpiar geometría y materiales sin uso")}
+              checked={opts().cleanGeometry}
+              onChange={(v) => tweak({ cleanGeometry: v })}
+            />
+            <Hint text={t("Las texturas con transparencia quedan en PNG. Las texturas suelen pesar más que la geometría: bajar su tamaño es lo que más reduce el archivo.")} />
+          </div>
         </div>
       </Show>
 
@@ -335,21 +350,8 @@ export const ExportStep: Component<ExportStepProps> = (props) => {
         fullWidth
         icon={<Icons.Export size={16} />}
       >
-        {t("Exportar {f}", { f: current().name })}
+        {isImage(opts().format) ? t("Abrir Render") : t("Exportar {f}", { f: current().name })}
       </Button>
-
-      <Show when={!props.design && !props.skeletonOnly}>
-        <Button
-          onClick={props.onRender}
-          disabled={!props.canExport || props.renderOpen}
-          variant="default"
-          fullWidth
-          icon={<Icons.FrameCorners size={16} />}
-        >
-          {t("Render")}
-        </Button>
-        <p class="-mt-3 text-[10px] text-text-dim leading-relaxed">{t("Guarda una imagen de lo que se ve, en alta calidad.")}</p>
-      </Show>
 
       <Show when={props.lastExport}>
         {(last) => (
