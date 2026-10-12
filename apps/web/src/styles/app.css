@@ -2,8 +2,9 @@
 
 /* ═══════════════════════════════════════════════════════════════════════════
    TEMAS — Todos los colores de la app viven acá (también los del visor 3D,
-   que los lee con getComputedStyle en lib/theme.ts). Oscuro = Dracula,
-   claro = variante Alucard. `data-theme` en <html> elige cuál.
+   que los lee con getComputedStyle en lib/theme.ts). Por defecto = Drácula;
+   los demás (lib/theme.ts → THEMES) sobrescriben las mismas variables.
+   `data-theme` en <html> elige cuál.
    ═══════════════════════════════════════════════════════════════════════════ */
 
 @theme static {
@@ -86,10 +87,8 @@
   --transition-slow: 300ms;
 }
 
-/* Tema claro: sobrescribe las mismas variables. Los colores de acento son más
-   oscuros para que el texto de color se lea sobre fondo claro. `data-palette="light"`
-   lo aplica solo a una parte (lo que va sobre la hoja blanca del plano) */
-:root[data-theme="light"],
+/* Paleta para la hoja blanca del plano (`data-palette="light"`): lo que se
+   dibuja sobre papel, sea cual sea el tema. Acentos oscuros para leerse sobre blanco */
 [data-palette="light"] {
   color-scheme: light;
 
@@ -142,6 +141,248 @@
 
 :root {
   color-scheme: dark;
+}
+
+/* Los temas para trabajar horas: nada de blanco ni negro puros, contraste
+   del texto alto pero no al máximo y acentos poco saturados */
+
+/* Claro: gris suave en vez de blanco (el visor un poco más oscuro que los paneles) */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --color-bg: #e3e5e9;
+  --color-bg-darker: #d7dadf;
+  --color-bg-lighter: #eceef1;
+  --color-surface: #c9cdd4;
+  --color-fg: #2a2e37;
+  --color-comment: #646b7c;
+
+  --color-cyan: #0e6a84;
+  --color-green: #2a7a3b;
+  --color-orange: #a8550f;
+  --color-pink: #a8306a;
+  --color-purple: #6447bf;
+  --color-red: #bb3333;
+  --color-yellow: #7f6a06;
+
+  --color-accent: #5d48bd;
+  --color-accent-hover: #4e3aa8;
+  --color-accent-dim: #8676cf;
+
+  --color-success: #2a7a3b;
+  --color-warning: #a8550f;
+  --color-error: #bb3333;
+  --color-info: #0e6a84;
+  --color-sketch-free: #2858b8;
+  --color-preselect: #c98700;
+
+  --color-text: #2a2e37;
+  --color-text-muted: #555c6b;
+  --color-text-dim: #7a8191;
+
+  --color-border: #c3c7cf;
+  --color-border-hover: #959cab;
+
+  --color-viewport: #cfd3d9;
+  --color-grid-minor: #b9bec7;
+  --color-grid-major: #8e95a3;
+  --color-axis-x: #c63d3d;
+  --color-axis-y: #2f8a45;
+  --color-axis-z: #23779a;
+  --color-cube-face: #e3e5e9;
+  --color-cube-border: #8e95a3;
+  --color-cube-text: #2a2e37;
+  --color-uv-edge: #2a7a3bcc;
+}
+
+/* Papel: claro cálido, con menos luz azul */
+:root[data-theme="sepia"] {
+  color-scheme: light;
+
+  --color-bg: #e6dfd1;
+  --color-bg-darker: #dbd3c3;
+  --color-bg-lighter: #ede7db;
+  --color-surface: #d0c6b2;
+  --color-fg: #3b342a;
+  --color-comment: #7a6e5c;
+
+  --color-cyan: #2a7272;
+  --color-green: #4f7526;
+  --color-orange: #a65a14;
+  --color-pink: #a13d66;
+  --color-purple: #6c4f9c;
+  --color-red: #ae3a2e;
+  --color-yellow: #7f640a;
+
+  --color-accent: #3d6c8c;
+  --color-accent-hover: #305a76;
+  --color-accent-dim: #6a8ea8;
+
+  --color-success: #4f7526;
+  --color-warning: #a65a14;
+  --color-error: #ae3a2e;
+  --color-info: #2a7272;
+  --color-sketch-free: #2f5db0;
+  --color-preselect: #b97f00;
+
+  --color-text: #3b342a;
+  --color-text-muted: #665c4d;
+  --color-text-dim: #8b7f6d;
+
+  --color-border: #cbc1ac;
+  --color-border-hover: #a09480;
+
+  --color-viewport: #d8d0bf;
+  --color-grid-minor: #c3b9a5;
+  --color-grid-major: #9b8f7a;
+  --color-axis-x: #b03f32;
+  --color-axis-y: #4f7a28;
+  --color-axis-z: #2e6e96;
+  --color-cube-face: #e6dfd1;
+  --color-cube-border: #9b8f7a;
+  --color-cube-text: #3b342a;
+  --color-uv-edge: #4f7526cc;
+}
+
+/* Grafito: gris neutro, sin tinte (no altera cómo se ven los colores del modelo) */
+:root[data-theme="graphite"] {
+  --color-bg: #1f2124;
+  --color-bg-darker: #18191c;
+  --color-bg-lighter: #27292d;
+  --color-surface: #35383d;
+  --color-fg: #d5d8dc;
+  --color-comment: #6c727c;
+
+  --color-cyan: #67bfca;
+  --color-green: #8fc06b;
+  --color-orange: #dfa462;
+  --color-pink: #d48bbf;
+  --color-purple: #a993ee;
+  --color-red: #e0707a;
+  --color-yellow: #d8c26c;
+
+  --color-accent: #5fb3a8;
+  --color-accent-hover: #76c4ba;
+  --color-accent-dim: #4a948b;
+
+  --color-success: #8fc06b;
+  --color-warning: #dfa462;
+  --color-error: #e0707a;
+  --color-info: #67bfca;
+  --color-sketch-free: #7ea6f5;
+  --color-preselect: #e8c46a;
+
+  --color-text: #d5d8dc;
+  --color-text-muted: #989ea8;
+  --color-text-dim: #6c727c;
+
+  --color-border: #313439;
+  --color-border-hover: #4b5058;
+
+  --color-viewport: #232528;
+  --color-grid-minor: #33363b;
+  --color-grid-major: #4b5058;
+  --color-axis-x: #e0707a;
+  --color-axis-y: #8fc06b;
+  --color-axis-z: #67a8e0;
+  --color-cube-face: #35383d;
+  --color-cube-border: #4b5058;
+  --color-cube-text: #d5d8dc;
+  --color-uv-edge: #8fc06bb3;
+}
+
+/* Ártico: azul grisáceo apagado, tonos fríos y suaves */
+:root[data-theme="nord"] {
+  --color-bg: #2e3440;
+  --color-bg-darker: #272c36;
+  --color-bg-lighter: #353c4a;
+  --color-surface: #434c5e;
+  --color-fg: #d8dee9;
+  --color-comment: #6b7891;
+
+  --color-cyan: #88c0d0;
+  --color-green: #a3be8c;
+  --color-orange: #d08770;
+  --color-pink: #c890b4;
+  --color-purple: #b48ead;
+  --color-red: #bf616a;
+  --color-yellow: #ebcb8b;
+
+  --color-accent: #88c0d0;
+  --color-accent-hover: #9fd0de;
+  --color-accent-dim: #6fa2b2;
+
+  --color-success: #a3be8c;
+  --color-warning: #d08770;
+  --color-error: #bf616a;
+  --color-info: #88c0d0;
+  --color-sketch-free: #8aa8e6;
+  --color-preselect: #ebcb8b;
+
+  --color-text: #d8dee9;
+  --color-text-muted: #a0aabb;
+  --color-text-dim: #6b7891;
+
+  --color-border: #3b4252;
+  --color-border-hover: #4c566a;
+
+  --color-viewport: #2e3440;
+  --color-grid-minor: #3b4252;
+  --color-grid-major: #4c566a;
+  --color-axis-x: #bf616a;
+  --color-axis-y: #a3be8c;
+  --color-axis-z: #81a1c1;
+  --color-cube-face: #3b4252;
+  --color-cube-border: #4c566a;
+  --color-cube-text: #d8dee9;
+  --color-uv-edge: #a3be8cb3;
+}
+
+/* Brasa: oscuro cálido, poca luz azul (para la noche) */
+:root[data-theme="warm"] {
+  --color-bg: #282623;
+  --color-bg-darker: #201f1c;
+  --color-bg-lighter: #31302c;
+  --color-surface: #44403a;
+  --color-fg: #e2d6c0;
+  --color-comment: #7f7668;
+
+  --color-cyan: #7daea3;
+  --color-green: #a9b665;
+  --color-orange: #e78a4e;
+  --color-pink: #d3869b;
+  --color-purple: #c09fcf;
+  --color-red: #ea6962;
+  --color-yellow: #d8a657;
+
+  --color-accent: #89b482;
+  --color-accent-hover: #9cc395;
+  --color-accent-dim: #6f9668;
+
+  --color-success: #a9b665;
+  --color-warning: #e78a4e;
+  --color-error: #ea6962;
+  --color-info: #7daea3;
+  --color-sketch-free: #85a5dc;
+  --color-preselect: #e2b45c;
+
+  --color-text: #e2d6c0;
+  --color-text-muted: #ab9f8b;
+  --color-text-dim: #7f7668;
+
+  --color-border: #3b3833;
+  --color-border-hover: #5a544a;
+
+  --color-viewport: #282623;
+  --color-grid-minor: #3b3833;
+  --color-grid-major: #5a544a;
+  --color-axis-x: #ea6962;
+  --color-axis-y: #a9b665;
+  --color-axis-z: #7daea3;
+  --color-cube-face: #3b3833;
+  --color-cube-border: #5a544a;
+  --color-cube-text: #e2d6c0;
+  --color-uv-edge: #a9b665b3;
 }
 
 .theme-switching,

@@ -6,14 +6,25 @@
 
 import { createSignal } from "solid-js";
 
-export type ThemeSetting = "dark" | "light" | "system";
-export type Theme = "dark" | "light";
+export type Theme = "dark" | "graphite" | "nord" | "warm" | "light" | "sepia";
+export type ThemeSetting = Theme | "system";
+
+/** Temas, con sus colores en styles/app.css (`:root[data-theme="…"]`) */
+export const THEMES: { value: Theme; label: string }[] = [
+  { value: "dark", label: "Drácula (oscuro)" },
+  { value: "graphite", label: "Grafito (oscuro neutro)" },
+  { value: "nord", label: "Ártico (oscuro frío)" },
+  { value: "warm", label: "Brasa (oscuro cálido)" },
+  { value: "light", label: "Claro" },
+  { value: "sepia", label: "Papel (claro cálido)" },
+];
 
 export const THEME_OPTIONS: { value: ThemeSetting; label: string }[] = [
-  { value: "dark", label: "Oscuro" },
-  { value: "light", label: "Claro" },
+  ...THEMES,
   { value: "system", label: "Según el sistema" },
 ];
+
+const isSetting = (v: unknown): v is ThemeSetting => v === "system" || THEMES.some((t) => t.value === v);
 
 /** Misma clave que usa `createPersisted("settings.theme")` */
 const STORAGE_KEY = "pinocchio.ui.settings.theme";
@@ -28,7 +39,8 @@ const systemLight = () => window.matchMedia?.("(prefers-color-scheme: light)").m
 
 export function resolveTheme(setting: ThemeSetting): Theme {
   if (setting === "system") return systemLight() ? "light" : "dark";
-  return setting;
+  // Uno guardado que ya no existe: el de por defecto
+  return isSetting(setting) ? setting : "dark";
 }
 
 /** Aplica el tema y avisa a quien pinta fuera del CSS */
@@ -52,7 +64,7 @@ export function storedTheme(): ThemeSetting {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw !== null) {
       const value = JSON.parse(raw);
-      if (value === "dark" || value === "light" || value === "system") return value;
+      if (isSetting(value)) return value;
     }
   } catch {
     // Sin almacenamiento: vale el oscuro
