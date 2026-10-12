@@ -5519,6 +5519,13 @@ export const App: Component = () => {
     setRenderEditorOpen(true);
     pipeline.openWorkspace("render");
   };
+  // El editor de texturas queda abierto al costado al cambiar de espacio y tapa las opciones del
+  // render (comparten el lugar a la izquierda del visor): al entrar a Render se cierra
+  createEffect(
+    on(inRender, (now) => {
+      if (now) setTextureEditor(undefined);
+    }, { defer: true })
+  );
   // El tamaño de la vista cambia con la ventana y los paneles
   createEffect(() => {
     if (!inRender()) return;
