@@ -7,6 +7,7 @@
 mod bsdf;
 mod bvh;
 mod camera;
+mod env;
 mod image_out;
 mod render;
 mod rng;
@@ -18,6 +19,7 @@ pub use rng::Rng;
 pub use bvh::{Aabb, Bvh, Hit, Ray};
 pub use camera::Camera;
 pub use image_out::{Image, SaveError, linear_to_srgb};
-pub use render::{Environment, Settings, Sun, render};
-pub use scene::{RayAlpha, RayMaterial, RayScene, Triangle};
+pub use env::{EnvMap, Environment};
+pub use render::{Light, Settings, Sun, render};
+pub use scene::{AreaLights, RayAlpha, RayMaterial, RayScene, Triangle, quad};
 pub use texture::Texture;

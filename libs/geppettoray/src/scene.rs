@@ -158,8 +158,77 @@ impl Triangle {
     }
 }
 
+/// Triángulos emisivos que se muestrean como luces de área (emisión sin textura)
+#[derive(Debug, Default)]
+pub struct AreaLights {
+    /// Índices de triángulo
+    pub tris: Vec<u32>,
+    /// CDF por potencia (luminancia × área), normalizada a 1
+    pub cdf: Vec<f32>,
+    /// Posición en `tris` de cada triángulo de la escena (`u32::MAX` si no es luz)
+    pub slot: Vec<u32>,
+}
+
+impl AreaLights {
+    fn build(tris: &[Triangle], materials: &[RayMaterial]) -> AreaLights {
+        let mut slot = vec![u32::MAX; tris.len()];
+        let mut list = Vec::new();
+        let mut weights = Vec::new();
+        for (i, t) in tris.iter().enumerate() {
+            let m = &materials[(t.material as usize).min(materials.len() - 1)];
+            let area = 0.5 * t.e1.cross(t.e2).length();
+            let power = m.emission.dot(Vec3::new(0.2126, 0.7152, 0.0722)) * area;
+            if m.emissive_texture.is_none() && !m.unlit && power > 0.0 {
+                slot[i] = list.len() as u32;
+                list.push(i as u32);
+                weights.push(power);
+            }
+        }
+        let total: f32 = weights.iter().sum();
+        let mut acc = 0.0;
+        let cdf = weights
+            .iter()
+            .map(|w| {
+                acc += w / total;
+                acc
+            })
+            .collect();
+        AreaLights { tris: list, cdf, slot }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.tris.is_empty()
+    }
+
+    /// Elige una luz: (índice de triángulo, probabilidad de elegirla)
+    pub fn pick(&self, u: f32) -> (u32, f32) {
+        let k = self.cdf.partition_point(|&c| c <= u).min(self.tris.len() - 1);
+        let prev = if k == 0 { 0.0 } else { self.cdf[k - 1] };
+        (self.tris[k], self.cdf[k] - prev)
+    }
+
+    /// Probabilidad de elegir el triángulo (0 si no es luz)
+    pub fn select_prob(&self, tri: u32) -> f32 {
+        match self.slot[tri as usize] {
+            u32::MAX => 0.0,
+            k => self.cdf[k as usize] - if k == 0 { 0.0 } else { self.cdf[k as usize - 1] },
+        }
+    }
+}
+
+/// Rectángulo de `corner` con aristas `u` y `v`; la cara frontal mira hacia `u × v`.
+/// Con un material emisivo es una luz de área.
+pub fn quad(corner: Vec3, u: Vec3, v: Vec3, material: u32) -> [Triangle; 2] {
+    let (a, b, c, d) = (corner, corner + u, corner + u + v, corner + v);
+    [
+        Triangle::new([a, b, c], None, Some([Vec2::ZERO, Vec2::X, Vec2::ONE]), material),
+        Triangle::new([a, c, d], None, Some([Vec2::ZERO, Vec2::ONE, Vec2::Y]), material),
+    ]
+}
+
 pub struct RayScene {
     pub triangles: Vec<Triangle>,
+    pub area_lights: AreaLights,
     pub materials: Vec<RayMaterial>,
     /// Una por textura de la escena; `None` si no se pudo decodificar
     pub textures: Vec<Option<Texture>>,
@@ -188,7 +257,8 @@ impl RayScene {
         let bvh = Bvh::build(&triangles);
         let b = bvh.bounds();
         let extent = if triangles.is_empty() { 1.0 } else { (b.max - b.min).length().max(1e-6) };
-        RayScene { triangles, materials, textures, bvh, extent }
+        let area_lights = AreaLights::build(&triangles, &materials);
+        RayScene { triangles, area_lights, materials, textures, bvh, extent }
     }
 
     /// Aplana un `Scene` de converter a triángulos en mundo.

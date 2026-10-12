@@ -6,15 +6,10 @@ use crate::camera::Camera;
 use crate::image_out::Image;
 use crate::rng::Rng;
 use crate::bsdf::Bsdf;
+use crate::env::Environment;
 use crate::scene::{RayMaterial, RayScene, Triangle};
 use glam::{Vec2, Vec3};
 use rayon::prelude::*;
-
-/// Luz de entorno uniforme (el "cielo")
-#[derive(Debug, Clone, Copy)]
-pub struct Environment {
-    pub color: Vec3,
-}
 
 /// Luz direccional. `direction` apunta desde la escena hacia el sol.
 #[derive(Debug, Clone, Copy)]
@@ -24,15 +19,26 @@ pub struct Sun {
     pub color: Vec3,
 }
 
+/// Luces delta (sin tamaño). Las luces de área son triángulos emisivos de la escena.
 #[derive(Debug, Clone, Copy)]
+pub enum Light {
+    Sun(Sun),
+    /// `intensity` en W/sr: la irradiancia cae con 1/d²
+    Point { position: Vec3, intensity: Vec3 },
+    /// Foco: `direction` hacia donde apunta; transición suave entre `inner` y `outer` (radianes)
+    Spot { position: Vec3, direction: Vec3, intensity: Vec3, inner: f32, outer: f32 },
+}
+
+#[derive(Debug, Clone)]
 pub struct Settings {
     pub width: u32,
     pub height: u32,
     pub samples: u32,
+    /// Rebotes máximos (0 = solo emisión visible; 1 = luz directa + un rebote)
     pub max_depth: u32,
     pub seed: u64,
     pub environment: Environment,
-    pub sun: Option<Sun>,
+    pub lights: Vec<Light>,
 }
 
 impl Default for Settings {
@@ -43,8 +49,8 @@ impl Default for Settings {
             samples: 64,
             max_depth: 6,
             seed: 1,
-            environment: Environment { color: Vec3::splat(0.5) },
-            sun: None,
+            environment: Environment::uniform(Vec3::splat(0.5)),
+            lights: Vec::new(),
         }
     }
 }
@@ -80,14 +86,36 @@ fn apply_normal_map(scene: &RayScene, mat: &RayMaterial, tri: &Triangle, uv: Vec
     if out == Vec3::ZERO { n } else { out }
 }
 
-/// Radiancia que llega por un rayo de cámara
+#[inline]
+fn power(a: f32, b: f32) -> f32 {
+    let (a2, b2) = (a * a, b * b);
+    if a2 + b2 > 0.0 { a2 / (a2 + b2) } else { 0.0 }
+}
+
+/// Radiancia que llega por un rayo de cámara.
+///
+/// Luz directa por muestreo de luces (sol/puntual/foco exactos; área y HDRI por
+/// importancia) combinada con el muestreo del BSDF mediante MIS (heurística de
+/// potencia). `max_depth` cuenta rebotes: el último vértice solo recoge emisión.
 fn radiance(scene: &RayScene, s: &Settings, mut ray: Ray, rng: &mut Rng) -> Vec3 {
     let eps = 1e-4 * scene.extent;
     let mut throughput = Vec3::ONE;
     let mut sum = Vec3::ZERO;
-    for depth in 0..s.max_depth {
+    // pdf del último rebote del BSDF y su punto; 0 = viene de la cámara (sin MIS)
+    let mut prev_pdf = 0.0f32;
+    let mut prev_p = Vec3::ZERO;
+    let env_map = s.environment.map.as_deref();
+    let mut depth = 0u32;
+    // Cada iteración es un vértice; los cruces descartados (cara trasera) no cuentan
+    let mut guard = 0;
+    while guard < 4 * (s.max_depth + 2) {
+        guard += 1;
         let Some(hit) = scene.closest_alpha(&ray, f32::INFINITY, rng) else {
-            sum += throughput * s.environment.color;
+            let mut le = s.environment.eval(ray.dir);
+            if let (Some(map), true) = (env_map, prev_pdf > 0.0) {
+                le *= power(prev_pdf, map.pdf(ray.dir));
+            }
+            sum += throughput * le;
             break;
         };
         let tri = &scene.triangles[hit.tri as usize];
@@ -129,7 +157,21 @@ fn radiance(scene: &RayScene, s: &Settings, mut ray: Ray, rng: &mut Rng) -> Vec3
             sum += throughput * base;
             break;
         }
-        sum += throughput * emission;
+        // Emisión; si el triángulo también se muestrea como luz, pesa contra ese muestreo
+        let mut e_weight = 1.0;
+        if prev_pdf > 0.0 {
+            let p_sel = scene.area_lights.select_prob(hit.tri);
+            if p_sel > 0.0 {
+                let area = 0.5 * tri.e1.cross(tri.e2).length();
+                let d2 = (p - prev_p).length_squared();
+                let cos_l = gn.dot(-ray.dir).abs().max(1e-6);
+                e_weight = power(prev_pdf, p_sel * d2 / (cos_l * area));
+            }
+        }
+        sum += throughput * emission * e_weight;
+        if depth >= s.max_depth {
+            break;
+        }
 
         let (mut metallic, mut roughness) = (mat.metallic, mat.roughness);
         if let Some(Some(tex)) = mat.metal_rough_texture.map(|i| &scene.textures[i]) {
@@ -144,18 +186,73 @@ fn radiance(scene: &RayScene, s: &Settings, mut ray: Ray, rng: &mut Rng) -> Vec3
             Bsdf::new(base, metallic, roughness, mat.clearcoat, mat.clearcoat_roughness)
         };
         let (t, b) = onb(n);
-        let wo_world = -ray.dir;
         let to_local = |v: Vec3| Vec3::new(v.dot(t), v.dot(b), v.dot(n));
-        let wo = to_local(wo_world);
+        let wo = to_local(-ray.dir);
+        let origin = p + gn * eps;
 
-        // Luz directa del sol (luz delta: solo se muestrea aquí)
-        if let Some(sun) = s.sun {
-            let l = sun.direction.normalize_or_zero();
-            if l.dot(gn) > 0.0 && l.dot(n) > 0.0 {
-                let shadow = Ray { origin: p + gn * eps, dir: l };
-                if !scene.occluded_alpha(&shadow, f32::INFINITY, rng) {
-                    let (f, _) = bsdf.eval(wo, to_local(l));
-                    sum += throughput * f * sun.color * l.dot(n);
+        // Luces delta: se evalúan exactas, sin MIS
+        for light in &s.lights {
+            let (l, dist, li) = match *light {
+                Light::Sun(sun) => (sun.direction.normalize_or_zero(), f32::INFINITY, sun.color),
+                Light::Point { position, intensity } => {
+                    let d = position - origin;
+                    let d2 = d.length_squared().max(1e-12);
+                    (d / d2.sqrt(), d2.sqrt(), intensity / d2)
+                }
+                Light::Spot { position, direction, intensity, inner, outer } => {
+                    let d = position - origin;
+                    let d2 = d.length_squared().max(1e-12);
+                    let l = d / d2.sqrt();
+                    let cos_a = (-l).dot(direction.normalize_or_zero());
+                    let (c_in, c_out) = (inner.cos(), outer.cos());
+                    let t = ((cos_a - c_out) / (c_in - c_out).max(1e-6)).clamp(0.0, 1.0);
+                    (l, d2.sqrt(), intensity * (t * t * (3.0 - 2.0 * t)) / d2)
+                }
+            };
+            if li == Vec3::ZERO || l.dot(gn) <= 0.0 || l.dot(n) <= 0.0 {
+                continue;
+            }
+            let t_max = if dist.is_finite() { dist - eps } else { f32::INFINITY };
+            if !scene.occluded_alpha(&Ray { origin, dir: l }, t_max, rng) {
+                let (f, _) = bsdf.eval(wo, to_local(l));
+                sum += throughput * f * li * l.dot(n);
+            }
+        }
+
+        // Luces de área: un triángulo emisivo por vértice, elegido por potencia
+        if !scene.area_lights.is_empty() {
+            let (lt, p_sel) = scene.area_lights.pick(rng.next_f32());
+            let ltri = &scene.triangles[lt as usize];
+            let lmat = scene.material(ltri);
+            let su = rng.next_f32().sqrt();
+            let (bu, bv) = (1.0 - su, rng.next_f32() * su);
+            let q = ltri.v0 + ltri.e1 * bu + ltri.e2 * bv;
+            let ln = ltri.geometric_normal();
+            let d = q - origin;
+            let d2 = d.length_squared();
+            if d2 > 1e-12 {
+                let dist = d2.sqrt();
+                let wi = d / dist;
+                let cos_l_signed = ln.dot(-wi);
+                if (lmat.double_sided || cos_l_signed > 0.0) && wi.dot(gn) > 0.0 && wi.dot(n) > 0.0 {
+                    let cos_l = cos_l_signed.abs().max(1e-6);
+                    let area = 0.5 * ltri.e1.cross(ltri.e2).length();
+                    let pdf_l = p_sel * d2 / (cos_l * area);
+                    let shadow = Ray { origin, dir: wi };
+                    if !scene.occluded_alpha(&shadow, dist * (1.0 - 1e-3) - eps, rng) {
+                        let (f, pdf_b) = bsdf.eval(wo, to_local(wi));
+                        sum += throughput * f * lmat.emission * (wi.dot(n) * power(pdf_l, pdf_b) / pdf_l);
+                    }
+                }
+            }
+        }
+
+        // Entorno con mapa: muestreo por importancia
+        if let Some(map) = env_map {
+            if let Some((wi, le, pdf_e)) = map.sample(rng) {
+                if wi.dot(gn) > 0.0 && wi.dot(n) > 0.0 && !scene.occluded_alpha(&Ray { origin, dir: wi }, f32::INFINITY, rng) {
+                    let (f, pdf_b) = bsdf.eval(wo, to_local(wi));
+                    sum += throughput * f * le * (wi.dot(n) * power(pdf_e, pdf_b) / pdf_e);
                 }
             }
         }
@@ -167,9 +264,12 @@ fn radiance(scene: &RayScene, s: &Settings, mut ray: Ray, rng: &mut Rng) -> Vec3
             break;
         }
         throughput *= f * (wi_local.z / pdf);
+        prev_pdf = pdf;
+        prev_p = p;
+        depth += 1;
 
         // Ruleta rusa (sin sesgo) desde el tercer rebote
-        if depth >= 2 {
+        if depth >= 3 {
             let q = throughput.max_element().clamp(0.05, 0.95);
             if rng.next_f32() > q {
                 break;
@@ -177,7 +277,7 @@ fn radiance(scene: &RayScene, s: &Settings, mut ray: Ray, rng: &mut Rng) -> Vec3
             throughput /= q;
         }
 
-        ray = Ray { origin: p + gn * eps, dir: wi };
+        ray = Ray { origin, dir: wi };
     }
     sum
 }

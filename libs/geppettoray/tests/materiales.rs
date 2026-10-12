@@ -102,7 +102,7 @@ fn settings(env: Vec3) -> Settings {
         height: 8,
         samples: 32,
         max_depth: 3,
-        environment: Environment { color: env },
+        environment: Environment::uniform(env),
         ..Default::default()
     }
 }

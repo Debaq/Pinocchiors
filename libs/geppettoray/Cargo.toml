@@ -9,5 +9,5 @@ description = "GeppettoRay: motor de render propio (path tracing en CPU) de Pino
 converter-scene = { workspace = true }
 glam = { workspace = true }
 rayon = { workspace = true }
-image = { workspace = true }
+image = { workspace = true, features = ["hdr"] }
 thiserror = { workspace = true }
