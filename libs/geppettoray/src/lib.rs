@@ -7,6 +7,7 @@
 mod bsdf;
 mod bvh;
 mod camera;
+mod denoise;
 mod env;
 mod glass;
 mod image_out;
@@ -22,6 +23,7 @@ pub use camera::{Camera, Lens, SENSOR_FULL_FRAME_HEIGHT_MM};
 pub use image_out::{Image, SaveError, linear_to_srgb};
 pub use glass::{absorption_sigma, fresnel_dielectric, reflect, refract};
 pub use env::{EnvMap, Environment};
-pub use render::{Light, Settings, Sun, render};
+pub use denoise::{DenoiseSettings, denoise};
+pub use render::{Aov, Light, Settings, Sun, render, render_aov};
 pub use scene::{AreaLights, RayAlpha, RayMaterial, RayScene, Triangle, quad};
 pub use texture::Texture;

@@ -188,6 +188,10 @@ opt-level = 2
 [profile.dev.package.zune-jpeg]
 opt-level = 2
 
+# Path tracer: sin optimizar sus pruebas tardan minutos
+[profile.dev.package.geppettoray]
+opt-level = 2
+
 [profile.release]
 lto = true
 codegen-units = 1

@@ -346,3 +346,142 @@ pub fn render(scene: &RayScene, camera: &Camera, s: &Settings) -> Image {
     });
     Image { width: s.width, height: s.height, pixels }
 }
+
+/// Imagen con las capas auxiliares que guían el denoise
+#[derive(Debug, Clone)]
+pub struct Aov {
+    pub width: u32,
+    pub height: u32,
+    /// RGB lineal con ruido
+    pub color: Vec<Vec3>,
+    /// Color de la superficie sin iluminar (textura × base); el fondo, el del entorno
+    pub albedo: Vec<Vec3>,
+    /// Normal de sombreado hacia el rayo; (0,0,0) donde no hay geometría
+    pub normal: Vec<Vec3>,
+    /// Posición en el mundo del primer cruce
+    pub position: Vec<Vec3>,
+    /// Distancia de la cámara al primer cruce (infinito sin geometría)
+    pub depth: Vec<f32>,
+    /// Varianza de la luminancia del promedio del píxel (ruido que queda)
+    pub variance: Vec<f32>,
+    /// Ángulo (rad) que abarca un píxel: sirve para medir el tamaño de píxel a cada profundidad
+    pub pixel_angle: f32,
+}
+
+fn lum(c: Vec3) -> f32 {
+    c.dot(Vec3::new(0.2126, 0.7152, 0.0722))
+}
+
+/// Primer cruce visible: (albedo, normal, posición, distancia)
+fn first_hit(scene: &RayScene, env: &Environment, ray: Ray, rng: &mut Rng) -> (Vec3, Vec3, Vec3, f32) {
+    let Some(hit) = scene.closest_alpha(&ray, f32::INFINITY, rng) else {
+        return (env.eval(ray.dir).clamp(Vec3::ZERO, Vec3::ONE), Vec3::ZERO, Vec3::ZERO, f32::INFINITY);
+    };
+    let tri = &scene.triangles[hit.tri as usize];
+    let mat = scene.material(tri);
+    let w = 1.0 - hit.u - hit.v;
+    let g = tri.geometric_normal();
+    let back = g.dot(ray.dir) > 0.0;
+    let gn = if back { -g } else { g };
+    let mut n = (tri.n[0] * w + tri.n[1] * hit.u + tri.n[2] * hit.v).normalize_or_zero();
+    if n == Vec3::ZERO {
+        n = gn;
+    } else if back {
+        n = -n;
+    }
+    if n.dot(gn) < 0.0 {
+        n = gn;
+    }
+    let tuv = tri.interp_uv(hit.u, hit.v) * mat.uv_scale;
+    let mut base = mat.base_color.truncate() * tri.interp_color(hit.u, hit.v).truncate();
+    if let Some(Some(tex)) = mat.base_texture.map(|i| &scene.textures[i]) {
+        base *= tex.sample(tuv, true).truncate();
+    }
+    let albedo = if mat.transmission > 0.5 {
+        Vec3::ONE
+    } else {
+        // Un emisor casi negro se modula por su emisión para que el denoise no divida por ~0
+        base.max(mat.emission.clamp(Vec3::ZERO, Vec3::ONE)).clamp(Vec3::ZERO, Vec3::ONE)
+    };
+    (albedo, n, tri.v0 + tri.e1 * hit.u + tri.e2 * hit.v, hit.t)
+}
+
+/// Renderiza el color y las capas que necesita [`crate::denoise`]. El color es idéntico
+/// al de [`render`]; las capas se promedian con hasta 8 muestras por píxel (cámara sin lente).
+pub fn render_aov(scene: &RayScene, camera: &Camera, s: &Settings) -> Aov {
+    let (w, h) = (s.width as usize, s.height as usize);
+    let n = w * h;
+    let mut color = vec![Vec3::ZERO; n];
+    let mut albedo = vec![Vec3::ZERO; n];
+    let mut normal = vec![Vec3::ZERO; n];
+    let mut position = vec![Vec3::ZERO; n];
+    let mut depth = vec![f32::INFINITY; n];
+    let mut variance = vec![0.0f32; n];
+    let aov_n = s.samples.clamp(1, 8);
+    let a = camera.ray(0.5, 0.5).dir;
+    let b = camera.ray(0.5, 0.5 + 1.0 / h as f32).dir;
+    let pixel_angle = a.dot(b).clamp(-1.0, 1.0).acos();
+
+    type Row<'a> = (&'a mut [Vec3], &'a mut [Vec3], &'a mut [Vec3], &'a mut [Vec3], &'a mut [f32], &'a mut [f32]);
+    let rows: Vec<Row> = color
+        .chunks_mut(w)
+        .zip(albedo.chunks_mut(w))
+        .zip(normal.chunks_mut(w))
+        .zip(position.chunks_mut(w))
+        .zip(depth.chunks_mut(w))
+        .zip(variance.chunks_mut(w))
+        .map(|(((((c, a), nr), p), d), v)| (c, a, nr, p, d, v))
+        .collect();
+    rows.into_par_iter().enumerate().for_each(|(y, (crow, arow, nrow, prow, drow, vrow))| {
+        for x in 0..w {
+            let mut rng = Rng::new(s.seed, (y * w + x) as u64);
+            let mut aov_rng = Rng::new(s.seed ^ 0x5DEE_CE66, (y * w + x) as u64);
+            let (mut acc, mut sum_l, mut sum_l2, mut valid) = (Vec3::ZERO, 0.0f32, 0.0f32, 0u32);
+            let (mut a_acc, mut n_acc, mut p_acc, mut d_acc, mut hits) = (Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, 0.0f32, 0u32);
+            let mut a_bg = Vec3::ZERO;
+            for i in 0..s.samples {
+                let fx = (x as f32 + rng.next_f32()) / w as f32;
+                let fy = (y as f32 + rng.next_f32()) / h as f32;
+                let ray = camera.sample_ray(fx, fy, &mut rng);
+                let c = radiance(scene, s, ray, &mut rng);
+                if c.is_finite() {
+                    acc += c;
+                    let l = lum(c);
+                    sum_l += l;
+                    sum_l2 += l * l;
+                    valid += 1;
+                }
+                if i < aov_n {
+                    let (al, nr, ps, t) = first_hit(scene, &s.environment, camera.ray(fx, fy), &mut aov_rng);
+                    if t.is_finite() {
+                        a_acc += al;
+                        n_acc += nr;
+                        p_acc += ps;
+                        d_acc += t;
+                        hits += 1;
+                    } else {
+                        a_bg += al;
+                    }
+                }
+            }
+            let ns = s.samples.max(1) as f32;
+            crow[x] = acc / ns;
+            if hits > 0 {
+                let hf = hits as f32;
+                // Borde del objeto: mezcla de geometría y fondo; el albedo se promedia con los dos
+                arow[x] = (a_acc + a_bg) / aov_n.min(s.samples.max(1)) as f32;
+                nrow[x] = n_acc.normalize_or_zero();
+                prow[x] = p_acc / hf;
+                drow[x] = d_acc / hf;
+            } else {
+                arow[x] = a_bg / aov_n.min(s.samples.max(1)) as f32;
+            }
+            if valid > 1 {
+                let v = valid as f32;
+                let mean = sum_l / v;
+                vrow[x] = ((sum_l2 / v - mean * mean).max(0.0) * v / (v - 1.0)) / v;
+            }
+        }
+    });
+    Aov { width: s.width, height: s.height, color, albedo, normal, position, depth, variance, pixel_angle }
+}
