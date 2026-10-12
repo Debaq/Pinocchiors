@@ -84,3 +84,15 @@ pub fn original_regions<const N: usize>(surface: &UvSurface, positions: &[[f64; 
         })
         .collect()
 }
+
+/// Grupo (material + 1) de la superficie bajo el centro de cada cara.
+pub fn face_groups<const N: usize>(surface: &UvSurface, positions: &[[f64; 3]], faces: &[[usize; N]]) -> Vec<usize> {
+    faces
+        .par_iter()
+        .map(|face| {
+            let center = face.iter().fold(Vector3::zero(), |acc, &v| acc + Vector3::new(positions[v][0], positions[v][1], positions[v][2]))
+                * (1.0 / N as f64);
+            surface.group(surface.closest(&center).triangle)
+        })
+        .collect()
+}

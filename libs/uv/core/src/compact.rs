@@ -48,7 +48,83 @@ fn uv_charts<const N: usize>(faces: &[[usize; N]], corners: &[[[f32; 2]; N]]) ->
 /// `texture_size` px con `padding` px entre cartas, y todos sus canales
 /// re-horneados en un material. Las caras sin UV (todas en cero) quedan como
 /// una carta más.
+///
+/// Con varios materiales (un objeto por material) cada uno se compacta en su
+/// propio atlas; sus materiales quedan en el orden de los índices de origen
+/// (sin material primero).
 pub fn compact_skin<const N: usize>(
+    skin: &Skin<N>,
+    positions: &[[f64; 3]],
+    faces: &[[usize; N]],
+    texture_size: u32,
+    padding: u32,
+) -> Skin<N> {
+    let mut distinct = skin.face_material.clone();
+    distinct.sort_unstable();
+    distinct.dedup();
+    if distinct.len() < 2 || skin.face_material.len() != faces.len() {
+        return compact_one(skin, positions, faces, texture_size, padding);
+    }
+
+    let mut out = Skin {
+        corners: skin.corners.clone(),
+        face_material: vec![None; faces.len()],
+        materials: Vec::new(),
+        textures: Vec::new(),
+        info: skin.info,
+        parts: None,
+    };
+    let (mut charts, mut coverage_sum, mut weight, mut tex_size) = (0usize, 0.0, 0.0, 0u32);
+    for material in distinct {
+        let ids: Vec<usize> = (0..faces.len()).filter(|&f| skin.face_material[f] == material).collect();
+        let sub = Skin {
+            corners: ids.iter().map(|&f| skin.corners[f]).collect(),
+            face_material: vec![material.map(|_| 0); ids.len()],
+            materials: material.and_then(|m| skin.materials.get(m)).cloned().into_iter().collect(),
+            textures: skin.textures.clone(),
+            info: skin.info,
+            parts: None,
+        };
+        let sub_faces: Vec<[usize; N]> = ids.iter().map(|&f| faces[f]).collect();
+        let done = compact_one(&sub, positions, &sub_faces, texture_size, padding);
+
+        let index = out.materials.len();
+        let offset = out.textures.len();
+        let mut m = done.materials.into_iter().next().unwrap_or_default();
+        for r in [
+            &mut m.base_color_texture,
+            &mut m.metallic_roughness_texture,
+            &mut m.occlusion_texture,
+            &mut m.emissive_texture,
+            &mut m.normal_texture,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            r.texture_index += offset;
+        }
+        out.materials.push(m);
+        out.textures.extend(done.textures);
+        for (k, &f) in ids.iter().enumerate() {
+            out.corners[f] = done.corners[k];
+            out.face_material[f] = Some(index);
+        }
+        if let SkinInfo::Unwrapped { num_charts, coverage, texture_size, .. } = done.info {
+            charts += num_charts;
+            coverage_sum += coverage * ids.len() as f64;
+            weight += ids.len() as f64;
+            tex_size = tex_size.max(texture_size);
+        }
+    }
+    let stretch = match skin.info {
+        SkinInfo::Unwrapped { stretch, .. } => stretch,
+        SkinInfo::Transferred { .. } => 1.0,
+    };
+    out.info = SkinInfo::Unwrapped { num_charts: charts, stretch, coverage: coverage_sum / weight.max(1.0), texture_size: tex_size };
+    out
+}
+
+fn compact_one<const N: usize>(
     skin: &Skin<N>,
     positions: &[[f64; 3]],
     faces: &[[usize; N]],
@@ -128,9 +204,11 @@ pub fn compacted_scene(scene: &Scene, texture_size: u32, padding: u32) -> Option
     let mut corners: Vec<[[f32; 2]; 3]> = Vec::new();
     let mut face_material = Vec::new();
     let mut offsets = Vec::new();
+    let mut first_face = Vec::new();
     for p in &prims {
         let offset = positions.len();
         offsets.push(offset);
+        first_face.push(faces.len());
         positions.extend(p.positions.iter().map(|q| q.map(|c| c as f64)));
         let uvs = p.uvs.as_deref().unwrap_or(&[]);
         for t in &p.triangles {
@@ -160,7 +238,7 @@ pub fn compacted_scene(scene: &Scene, texture_size: u32, padding: u32) -> Option
         }
     }
     let mut out = scene.clone();
-    for (p, &offset) in prims.iter().zip(&offsets) {
+    for ((p, &offset), &first) in prims.iter().zip(&offsets).zip(&first_face) {
         let primitive = &mut out.meshes[p.mesh].primitives[p.primitive];
         let uvs = new_uvs[offset..offset + p.positions.len()].to_vec();
         for attribute in &mut primitive.attributes {
@@ -168,7 +246,7 @@ pub fn compacted_scene(scene: &Scene, texture_size: u32, padding: u32) -> Option
                 *t = uvs.clone();
             }
         }
-        primitive.material = Some(0);
+        primitive.material = compact.face_material.get(first).copied().flatten().or(Some(0));
     }
     out.materials = compact.materials;
     out.textures = compact.textures;

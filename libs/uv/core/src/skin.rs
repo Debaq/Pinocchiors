@@ -2,7 +2,7 @@
 //! esquina de cara más los materiales y texturas que usan.
 
 use crate::{
-    bake, corner_frames, original_regions, transfer_uvs, unwrap_by_parts, unwrap_with_regions, BakeChannel, CornerFrames, TexelContext,
+    bake, corner_frames, face_groups, original_regions, transfer_uvs, unwrap_by_parts, unwrap_with_regions, BakeChannel, CornerFrames, TexelContext,
     UnwrapOptions, UvPart, UvSurface,
 };
 use converter_scene::{AlphaMode, Material, Scene, Texture, TextureFormat, TextureRef, WorldPrimitive};
@@ -145,6 +145,157 @@ pub fn unwrapped_skin_by_parts<const N: usize>(
     parts: Option<&SkinParts>,
     options: &BakeOptions,
 ) -> Skin<N> {
+    // Varios objetos con material propio: cada uno se despliega y hornea
+    // aparte, con su atlas
+    let geometry = if surface.is_none() { material_surface(scene) } else { None };
+    if let Some(reference) = surface.or(geometry.as_ref()) {
+        let groups = face_groups(reference, positions, faces);
+        let mut distinct = groups.clone();
+        distinct.sort_unstable();
+        distinct.dedup();
+        if distinct.len() > 1 {
+            return unwrapped_skin_per_object(scene, positions, faces, parts, options, &groups, &distinct);
+        }
+    }
+    unwrapped_skin_single(scene, surface, positions, faces, parts, options)
+}
+
+/// Una piel por grupo de caras (material de origen), reunidas en una sola.
+fn unwrapped_skin_per_object<const N: usize>(
+    scene: &Scene,
+    positions: &[[f64; 3]],
+    faces: &[[usize; N]],
+    parts: Option<&SkinParts>,
+    options: &BakeOptions,
+    groups: &[usize],
+    distinct: &[usize],
+) -> Skin<N> {
+    let prims = scene.world_primitives();
+    let mut corners = vec![[[0.0f32; 2]; N]; faces.len()];
+    let mut face_material = vec![None; faces.len()];
+    let mut materials = Vec::new();
+    let mut textures: Vec<Texture> = Vec::new();
+    let (mut charts, mut stretch_sum, mut coverage_sum, mut weight, mut tex_size) = (0usize, 0.0, 0.0, 0.0, 0u32);
+
+    for &group in distinct {
+        let ids: Vec<usize> = (0..faces.len()).filter(|&f| groups[f] == group).collect();
+        // Vértices del grupo, renumerados
+        let mut remap: HashMap<usize, usize> = HashMap::new();
+        let mut sub_positions = Vec::new();
+        let sub_faces: Vec<[usize; N]> = ids
+            .iter()
+            .map(|&f| {
+                faces[f].map(|v| {
+                    *remap.entry(v).or_insert_with(|| {
+                        sub_positions.push(positions[v]);
+                        sub_positions.len() - 1
+                    })
+                })
+            })
+            .collect();
+        let sub_parts = parts.filter(|p| p.face_part.len() == faces.len()).map(|p| SkinParts {
+            names: p.names.clone(),
+            face_part: ids.iter().map(|&f| p.face_part[f]).collect(),
+        });
+
+        // Escena del grupo: solo su material (grupo 1) y solo sus primitivas
+        let material = group.checked_sub(1).and_then(|m| scene.materials.get(m)).cloned();
+        let mut sub_scene = scene.clone();
+        sub_scene.materials = material.iter().cloned().collect();
+        let own: Vec<WorldPrimitive> = prims
+            .iter()
+            .filter(|p| p.material.map_or(0, |m| m + 1) == group)
+            .cloned()
+            .map(|mut p| {
+                p.material = material.as_ref().map(|_| 0);
+                p
+            })
+            .collect();
+        let has_uv = own.iter().any(|p| p.uvs.is_some());
+        let sub_surface = if has_uv { primitives_surface(&own) } else { None };
+        let sub = unwrapped_skin_single_in(&sub_scene, sub_surface.as_ref(), &own, &sub_positions, &sub_faces, sub_parts.as_ref(), options);
+
+        let material_index = materials.len();
+        let offset = textures.len();
+        let mut m = sub.materials.into_iter().next().unwrap_or_default();
+        for r in [
+            &mut m.base_color_texture,
+            &mut m.metallic_roughness_texture,
+            &mut m.occlusion_texture,
+            &mut m.emissive_texture,
+            &mut m.normal_texture,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            r.texture_index += offset;
+        }
+        if let Some(name) = material.as_ref().map(|m| m.name.clone()).filter(|n| !n.is_empty()) {
+            m.name = name;
+        }
+        materials.push(m);
+        textures.extend(sub.textures);
+        for (k, &f) in ids.iter().enumerate() {
+            corners[f] = sub.corners[k];
+            face_material[f] = Some(material_index);
+        }
+        if let SkinInfo::Unwrapped { num_charts, stretch, coverage, texture_size } = sub.info {
+            charts += num_charts;
+            let w = ids.len() as f64;
+            stretch_sum += stretch * w;
+            coverage_sum += coverage * w;
+            weight += w;
+            tex_size = tex_size.max(texture_size);
+        }
+    }
+    let w = weight.max(1.0);
+    Skin {
+        corners,
+        face_material,
+        materials,
+        textures,
+        info: SkinInfo::Unwrapped { num_charts: charts, stretch: stretch_sum / w, coverage: coverage_sum / w, texture_size: tex_size },
+        // Cada objeto tiene su mapa: las guías por parte no tienen un mapa único
+        parts: None,
+    }
+}
+
+fn unwrapped_skin_single<const N: usize>(
+    scene: &Scene,
+    surface: Option<&UvSurface>,
+    positions: &[[f64; 3]],
+    faces: &[[usize; N]],
+    parts: Option<&SkinParts>,
+    options: &BakeOptions,
+) -> Skin<N> {
+    let geometry = if surface.is_none() { material_surface(scene) } else { None };
+    unwrapped_skin_core(scene, surface, geometry, positions, faces, parts, options)
+}
+
+/// Como `unwrapped_skin_single` con la geometría de material ya calculada
+/// desde `own` (sin UV de origen).
+fn unwrapped_skin_single_in<const N: usize>(
+    scene: &Scene,
+    surface: Option<&UvSurface>,
+    own: &[WorldPrimitive],
+    positions: &[[f64; 3]],
+    faces: &[[usize; N]],
+    parts: Option<&SkinParts>,
+    options: &BakeOptions,
+) -> Skin<N> {
+    let geometry = if surface.is_none() { primitives_surface(own) } else { None };
+    unwrapped_skin_core(scene, surface, geometry, positions, faces, parts, options)
+}
+
+fn unwrapped_skin_core<const N: usize>(
+    scene: &Scene,
+    surface: Option<&UvSurface>,
+    geometry: Option<UvSurface>,
+    positions: &[[f64; 3]],
+    faces: &[[usize; N]],
+    parts: Option<&SkinParts>,
+    options: &BakeOptions,
+) -> Skin<N> {
     let size = options.texture_size.max(1);
     let unwrap_options = UnwrapOptions { texture_size: size, ..options.unwrap };
     // Con UV de origen, las cartas nuevas prefieren cortar por sus costuras
@@ -160,7 +311,6 @@ pub fn unwrapped_skin_by_parts<const N: usize>(
         None => unwrap_with_regions(positions, faces, regions.as_deref(), &unwrap_options),
     };
 
-    let geometry = if surface.is_none() { material_surface(scene) } else { None };
     let (material, textures) = match surface.or(geometry.as_ref()) {
         Some(surface) => {
             let frames = corner_frames(positions, faces, &layout.corners);

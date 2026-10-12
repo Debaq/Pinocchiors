@@ -140,3 +140,46 @@ fn bakes_vertex_colors_and_relief_without_source_uvs() {
         assert!(n[2] > 230, "normal {n:?} en la cara {f}");
     }
 }
+
+#[test]
+fn unwraps_each_material_into_its_own_atlas() {
+    use converter_scene::{IndexData, Material, Mesh, Primitive, Scene, VertexAttribute};
+
+    // Dos esferas separadas, cada una con su material de color liso
+    let (sphere, quads) = cube_sphere(12);
+    let indices: Vec<u32> = quads.iter().flat_map(|q| [q[0], q[1], q[2], q[0], q[2], q[3]]).map(|i| i as u32).collect();
+    let mut scene = Scene::new();
+    let colors = [[1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]];
+    let mut primitives = Vec::new();
+    for (k, color) in colors.iter().enumerate() {
+        scene.materials.push(Material { base_color_factor: *color, ..Material::default() });
+        let positions: Vec<[f32; 3]> = sphere.iter().map(|p| [p[0] as f32 + 5.0 * k as f32, p[1] as f32, p[2] as f32]).collect();
+        primitives.push(Primitive {
+            attributes: vec![VertexAttribute::Positions(positions)],
+            indices: Some(IndexData::U32(indices.clone())),
+            material: Some(k),
+        });
+    }
+    scene.meshes.push(Mesh { name: "dos".into(), primitives });
+
+    // Malla liviana con las dos esferas
+    let (light, light_faces) = cube_sphere(4);
+    let mut points = light.clone();
+    points.extend(light.iter().map(|p| [p[0] + 5.0, p[1], p[2]]));
+    let mut faces = light_faces.clone();
+    faces.extend(light_faces.iter().map(|f| f.map(|v| v + light.len())));
+
+    let options = uv_core::BakeOptions { texture_size: 128, ..Default::default() };
+    let skin = uv_core::unwrapped_skin(&scene, None, &points, &faces, &options);
+    assert_eq!(skin.materials.len(), 2);
+    for (f, uvs) in skin.corners.iter().enumerate() {
+        let m = skin.face_material[f].expect("material");
+        assert_eq!(m, usize::from(f >= light_faces.len()), "cara {f}");
+        assert!(uvs.iter().flatten().all(|c| (0.0..=1.0).contains(c)), "cara {f}: {uvs:?}");
+    }
+    // Cada objeto conserva su color y tiene su propio normal map
+    assert_eq!(skin.materials[0].base_color_factor, [1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(skin.materials[1].base_color_factor, [0.0, 0.0, 1.0, 1.0]);
+    let normals: Vec<usize> = skin.materials.iter().map(|m| m.normal_texture.clone().expect("normal").texture_index).collect();
+    assert_ne!(normals[0], normals[1]);
+}
