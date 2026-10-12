@@ -23,7 +23,7 @@ Ctrl+Shift+R), `RenderDialog` (panel flotante sin velo), marco de render en el v
 fondo transparente/color/visor, PNG/JPG/WebP, qué se oculta), halo del glow incluido, guardado por
 el comando `write_render_image` (cuerpo crudo, sin JSON), opciones y carpeta recordadas, i18n.
 Verificado en Chromium headless (tamaño, color exacto, alfa, mosaicos sin costuras, cancelar).
-Falta: sombras suaves, GTAO, atajo en `shortcutDefs` ya está pero no se ha probado en Tauri real,
+Verificado a ojo en Chromium headless (2026-10-12): sombras suaves (penumbra con 4 cuadros), GTAO (contacto esfera/losa) y suelo con sombra (a la altura de la base del modelo) funcionan y se activan/desactivan por separado. Falta: el atajo en `shortcutDefs` ya está pero no se ha probado en Tauri real,
 y probar el flujo completo (guardar archivo) en la app de escritorio.
 
 Alcance: captura de calidad, no luz global. Es lo que ya dibuja Three, mejor configurado.
