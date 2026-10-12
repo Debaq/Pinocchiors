@@ -5000,6 +5000,14 @@ export class Viewer3D {
     this.placeLights();
   }
 
+  /** La vista de al abrir un archivo: tres cuartos (2, 1,5, 2), el modelo entero */
+  private homeView(): void {
+    const box = this.cloudBox() ?? (this.currentMesh ? new THREE.Box3().setFromObject(this.currentMesh) : this.skeletonBox());
+    if (!box) return;
+    this.cameraRig.frameFrom(new THREE.Vector3(2, 1.5, 2), box.getBoundingSphere(new THREE.Sphere()), this.camera.aspect);
+    this.placeLights();
+  }
+
   private fitCamera(): void {
     const box = this.cloudBox() ?? (this.currentMesh ? new THREE.Box3().setFromObject(this.currentMesh) : this.skeletonBox());
     if (!box) return;
@@ -5287,6 +5295,15 @@ export class Viewer3D {
 
   /** Doble clic sobre la malla (no sobre una articulación): elige el nodo del archivo */
   private onCanvasDoubleClick(event: MouseEvent): void {
+    if (event.button !== 0 || this.modal || this.placementMode) return;
+    // Doble clic en el vacío: la vista vuelve a la de al abrir un archivo
+    this.mouse = this.getMousePosition(event);
+    this.raycaster.setFromCamera(this.mouse, this.camera);
+    const solids = [...this.scene.children].filter((o) => o.visible && (o as THREE.Mesh).isMesh);
+    if (!this.raycaster.intersectObjects(solids, true)[0]) {
+      this.homeView();
+      return;
+    }
     const mesh = this.currentMesh;
     if (!this.callbacks.onNodePicked || !mesh?.visible || !this.meshData?.groupNodes || this.placementMode) return;
     this.mouse = this.getMousePosition(event);
