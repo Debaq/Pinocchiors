@@ -4745,9 +4745,6 @@ export const CadView: Component<CadViewProps> = (props) => {
             </button>
           </div>
         </Show>
-        <Show when={store.busy()}>
-          <span class="text-xs text-text-muted bg-bg-lighter/90 rounded px-2 py-0.5">{tr("Recalculando...")}</span>
-        </Show>
         <Show when={ui.message()}>
           <span class="text-xs text-text bg-bg-lighter/90 rounded px-2 py-0.5">{tr(ui.message()!)}</span>
         </Show>

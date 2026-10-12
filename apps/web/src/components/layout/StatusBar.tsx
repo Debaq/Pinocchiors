@@ -1,16 +1,10 @@
 import { Component, For, Show } from "solid-js";
 import { clsx } from "clsx";
-import { ProgressBar } from "../ui";
 import { t, tx } from "../../lib/i18n";
 import type { KeyHint } from "../../lib/designHints";
 
 export interface StatusBarProps {
   message?: string;
-  progress?: {
-    /** Sin valor: indeterminado */
-    value?: number;
-    label?: string;
-  };
   showMemory?: boolean;
   memory?: string;
   /** Resumen a la derecha (articulación activa al posar) */
@@ -30,22 +24,6 @@ export const StatusBar: Component<StatusBarProps> = (props) => {
     >
       {/* Left - Status Message */}
       <div class="flex items-center gap-3 flex-1 min-w-0">
-        {/* Progress Bar */}
-        <Show when={props.progress}>
-          <div class="w-48 flex items-center gap-2">
-            <ProgressBar
-              value={props.progress!.value}
-              size="sm"
-              class="flex-1"
-            />
-            <Show when={props.progress!.value !== undefined}>
-              <span class="text-xs text-text-muted whitespace-nowrap">
-                {props.progress!.value}%
-              </span>
-            </Show>
-          </div>
-        </Show>
-
         <Show
           when={props.hints}
           fallback={<span class="text-xs text-text-muted truncate">{props.message ?? tx("estado", "Listo")}</span>}

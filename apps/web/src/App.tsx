@@ -544,6 +544,13 @@ export const App: Component = () => {
     pipeline.setActiveStep("export");
   };
   /** Visor del diseño: en Diseñar y mientras se exporta el diseño */
+  // El recálculo del CAD muestra la barra solo si tarda: los rápidos no hacen parpadear la tarjeta
+  const [cadSlow, setCadSlow] = createSignal(false);
+  createEffect(() => {
+    if (!cad.busy()) return setCadSlow(false);
+    const id = setTimeout(() => setCadSlow(true), 250);
+    onCleanup(() => clearTimeout(id));
+  });
   const showCad = () => inDesign() || (exportDesign() && pipeline.activeStep() === "export");
   /** Dónde pone Diseñar sus herramientas: la barra izquierda */
   const [cadToolsMount, setCadToolsMount] = createSignal<HTMLDivElement>();
@@ -7356,7 +7363,8 @@ export const App: Component = () => {
               />
             </Show>
 
-            <ProgressOverlay progress={progress()} />
+            {/* Una sola barra, flotante: la del trabajo en curso o, en Diseñar, la del recálculo */}
+            <ProgressOverlay progress={progress() ?? (cadSlow() ? { label: t("Recalculando...") } : undefined)} />
 
             {/* Con el panel derecho oculto, una pestaña para traerlo de vuelta */}
             <Show when={!showContextPanel()}>
@@ -7728,7 +7736,6 @@ export const App: Component = () => {
         {/* Status Bar */}
         <StatusBar
           message={showCad() && !freshStatus() ? undefined : statusMessage()}
-          progress={progress()}
           info={animating() ? poseInfo() : undefined}
           hints={showCad() ? designHints(cad, cadUi) : undefined}
         />
