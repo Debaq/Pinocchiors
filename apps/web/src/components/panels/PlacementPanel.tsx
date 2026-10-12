@@ -1,4 +1,4 @@
-import { Component, For, JSX, createSignal } from "solid-js";
+import { Component, For, JSX, Show, createSignal } from "solid-js";
 import { clsx } from "clsx";
 import { Panel, Button, Select } from "../ui";
 import * as Icons from "../icons";
@@ -25,12 +25,21 @@ export interface PlacementPanelProps {
   size?: [number, number, number];
   /** Unidad en que se muestran las medidas (la de la grilla) */
   unit?: { label: string; perSceneUnit: number };
+  /** Posición de la referencia al mover, en los ejes que se muestran y unidades de la escena */
+  reference?: [number, number, number];
   /** Centro del gizmo: `spin` para girar y escalar, `move` para mover */
   pivots?: { spin: PivotChoice; move: PivotChoice };
   /** "point" no pasa por aquí: se elige con un clic (`onPickMode`) */
   onPivot?: (kind: "spin" | "move", choice: PivotChoice) => void;
   disabled?: boolean;
 }
+
+const TABS = [
+  { id: "place" as const, get label() { return t("Colocar"); } },
+  { id: "move" as const, get label() { return t("Mover"); } },
+  { id: "rotate" as const, get label() { return t("Girar"); } },
+  { id: "scale" as const, get label() { return t("Escala"); } },
+];
 
 const PIVOT_OPTIONS = [
   { value: "auto", get label() { return t("Automático"); } },
@@ -140,6 +149,7 @@ export const PlacementPanel: Component<PlacementPanelProps> = (props) => {
   const [rotDegrees, setRotDegrees] = createSignal(45);
   const [factor, setFactor] = createSignal(2);
   const [move, setMove] = createSignal<[number, number, number]>([0, 0, 0]);
+  const [tab, setTab] = createSignal<"place" | "move" | "rotate" | "scale">("place");
   const toggle = (mode: PlacementMode) => props.onPickMode?.(props.mode === mode ? undefined : mode);
 
   const perUnit = () => props.unit?.perSceneUnit ?? 1;
@@ -155,187 +165,247 @@ export const PlacementPanel: Component<PlacementPanelProps> = (props) => {
     props.onScale?.(value / current, t("Escalar: {eje} {valor} {unidad}", { eje: names[axis], valor: fmt(value), unidad: unitLabel() }));
   };
 
+  /** Selector del centro del gizmo; "Punto con clic" se elige en el visor */
+  const PivotSelect = (p: { kind: "spin" | "move"; pick: "pivotSpin" | "pivotMove"; label: string }) => (
+    <div class="space-y-1.5">
+      <Select
+        label={p.label}
+        options={PIVOT_OPTIONS}
+        value={props.pivots?.[p.kind].mode ?? "auto"}
+        onChange={(value) => {
+          if (value === "point") props.onPickMode?.(p.pick);
+          else props.onPivot?.(p.kind, { mode: value as PivotMode });
+        }}
+        disabled={props.disabled}
+      />
+      {props.mode === p.pick && (
+        <Button size="sm" variant="danger" fullWidth onClick={() => props.onPickMode?.(undefined)}>
+          {t("Cancelar")}
+        </Button>
+      )}
+    </div>
+  );
+
+  /** Mover la referencia a la coordenada escrita: el modelo se desplaza la diferencia */
+  const moveReferenceTo = (axis: number, value: number) => {
+    const ref = props.reference;
+    if (!ref) return;
+    const offset: [number, number, number] = [0, 0, 0];
+    offset[axis] = value / perUnit() - ref[axis];
+    props.onMove?.(offset);
+  };
+
   return (
-    <Panel title={t("Orientación")} icon={<Icons.CubeFocus size={14} />} defaultOpen>
+    <Panel title={t("Posicionar modelo")} icon={<Icons.CubeFocus size={14} />} defaultOpen>
       <div class="space-y-4">
-        <div class="space-y-2">
-          <Button
-            onClick={() => toggle("floor")}
-            variant={props.mode === "floor" ? "danger" : "primary"}
-            fullWidth
-            disabled={props.disabled}
-          >
-            {props.mode === "floor" ? t("Cancelar") : t("Elegir piso")}
-          </Button>
-          <Button
-            onClick={() => toggle("front")}
-            variant={props.mode === "front" ? "danger" : "default"}
-            fullWidth
-            disabled={props.disabled}
-          >
-            {props.mode === "front" ? t("Cancelar") : t("Elegir frente")}
-          </Button>
-          <p class="text-[11px] text-text-muted leading-snug">
-            {t("Todo esto transforma el modelo. Si ya hay esqueleto, retopología o pesos, se transforman con él para seguir calzando.")}
-          </p>
-        </div>
-
-        <Section title={t("Girar")}>
-          <div class="grid grid-cols-3 gap-1.5">
-            <For each={[-90, 90]}>
-              {(degrees) => (
-                <For each={AXES}>
-                  {(axis) => (
-                    <Button size="sm" onClick={() => props.onRotate?.(axis, degrees)} disabled={props.disabled}>
-                      {axis.toUpperCase()} {degrees > 0 ? "+90" : "−90"}
-                    </Button>
-                  )}
-                </For>
-              )}
-            </For>
-          </div>
-          <div class="flex items-center gap-1.5">
-            <AxisPicker value={rotAxis()} onChange={setRotAxis} />
-            <CommitInput value={rotDegrees()} onCommit={setRotDegrees} wheelStep={1} suffix="°" disabled={props.disabled} />
-            <Button size="sm" onClick={() => props.onRotate?.(rotAxis(), rotDegrees())} disabled={props.disabled}>
-              {t("Girar")}
-            </Button>
-          </div>
-          {/* STL, PLY y 3MF se leen con Z arriba; GLB y OBJ con Y arriba. Si el archivo no seguía la costumbre, queda acostado */}
-          <div class="grid grid-cols-2 gap-1.5">
-            <Button size="sm" onClick={() => props.onRotate?.("x", -90)} disabled={props.disabled}>
-              <span title={t("Para un GLB u OBJ que quedó acostado: su programa usaba Z arriba")}>{t("Venía con Z arriba")}</span>
-            </Button>
-            <Button size="sm" onClick={() => props.onRotate?.("x", 90)} disabled={props.disabled}>
-              <span title={t("Para un STL, PLY o 3MF que quedó acostado: su programa usaba Y arriba")}>{t("Venía con Y arriba")}</span>
-            </Button>
-          </div>
-        </Section>
-
-        <Section title={t("Espejar")}>
-          <div class="grid grid-cols-3 gap-1.5">
-            <For each={AXES}>
-              {(axis) => (
-                <Button size="sm" onClick={() => props.onMirror?.(axis)} disabled={props.disabled}>
-                  {axis.toUpperCase()}
-                </Button>
-              )}
-            </For>
-          </div>
-        </Section>
-
-        <Section title={`${t("Tamaño")}${unitLabel() ? ` (${unitLabel()})` : ""}`}>
-          <div class="grid grid-cols-3 gap-1.5">
-            <For each={[t("Ancho"), t("Fondo"), t("Alto")]}>
-              {(name, i) => (
-                <div class="space-y-0.5">
-                  <span class="text-[10px] text-text-muted">
-                    {name} ({AXES[i()].toUpperCase()})
-                  </span>
-                  <CommitInput
-                    value={dims()[i()]}
-                    onCommit={(v) => setDimension(i(), v)}
-                    disabled={props.disabled || !props.size}
-                    title={t("Escribe una medida: el modelo se escala en proporción")}
-                  />
-                </div>
-              )}
-            </For>
-          </div>
-          <div class="flex items-center gap-1.5">
-            <CommitInput value={factor()} onCommit={setFactor} wheelStep={0.1} label="×" disabled={props.disabled} />
-            <Button
-              size="sm"
-              onClick={() => factor() > 0 && props.onScale?.(factor(), t("Escalar ×{f}", { f: fmt(factor()) }))}
-              disabled={props.disabled || !(factor() > 0)}
-            >
-              {t("Escalar")}
-            </Button>
-          </div>
-          <div class="grid grid-cols-2 gap-1.5">
-            <For each={CONVERSIONS}>
-              {(c) => (
-                <Button size="sm" onClick={() => props.onScale?.(c.factor, t("Convertir {c}", { c: c.label }))} disabled={props.disabled}>
-                  <span title={t(c.title)}>{t(c.label)}</span>
-                </Button>
-              )}
-            </For>
-          </div>
-          <p class="text-[11px] text-text-muted leading-snug">
-            {t("La escala es igual en los tres ejes y se hace desde el centro de la base, así el modelo sigue apoyado.")}
-          </p>
-        </Section>
-
-        <Section title={t("Centro del gizmo")}>
-          <For each={[{ kind: "spin" as const, label: t("Girar y escalar"), pick: "pivotSpin" as const }, { kind: "move" as const, label: t("Referencia al mover"), pick: "pivotMove" as const }]}>
-            {(row) => (
-              <div class="space-y-1.5">
-                <Select
-                  label={row.label}
-                  options={PIVOT_OPTIONS}
-                  value={props.pivots?.[row.kind].mode ?? "auto"}
-                  onChange={(value) => {
-                    if (value === "point") props.onPickMode?.(row.pick);
-                    else props.onPivot?.(row.kind, { mode: value as PivotMode });
-                  }}
-                  disabled={props.disabled}
-                />
-                {props.mode === row.pick && (
-                  <Button size="sm" variant="danger" fullWidth onClick={() => props.onPickMode?.(undefined)}>
-                    {t("Cancelar")}
-                  </Button>
+        <div class="grid grid-cols-4 rounded-md border border-border overflow-hidden">
+          <For each={TABS}>
+            {(item) => (
+              <button
+                class={clsx(
+                  "h-7 text-xs font-medium",
+                  tab() === item.id ? "bg-accent/20 text-accent" : "text-text-muted hover:text-text hover:bg-surface/40"
                 )}
-              </div>
+                onClick={() => setTab(item.id)}
+              >
+                {item.label}
+              </button>
             )}
           </For>
-          <p class="text-[11px] text-text-muted leading-snug">
-            {t("Dónde queda el gizmo de Mover, Rotar y Escalar (G, R, S). Girar y escalar usan ese punto como centro; la referencia al mover es el punto que agarras. No cambia el origen del modelo.")}
-          </p>
-        </Section>
+        </div>
 
-        <Section title={`${t("Mover")}${unitLabel() ? ` (${unitLabel()})` : ""}`}>
-          <div class="grid grid-cols-3 gap-1.5">
-            <For each={AXES}>
-              {(axis, i) => (
-                <CommitInput
-                  label={axis.toUpperCase()}
-                  value={move()[i()]}
-                  onCommit={(v) => setMove((m) => m.map((x, j) => (j === i() ? v : x)) as [number, number, number])}
-                  wheelStep={1}
-                  disabled={props.disabled}
-                />
-              )}
-            </For>
-          </div>
-          <Button
-            size="sm"
-            fullWidth
-            onClick={() => props.onMove?.(move().map((v) => v / perUnit()) as [number, number, number])}
-            disabled={props.disabled || move().every((v) => v === 0)}
-          >
-            {t("Mover")}
-          </Button>
-          <Select
-            label={t("Origen")}
-            options={ORIGIN_OPTIONS}
-            value={origin()}
-            onChange={(value) => setOrigin(value as OriginMode)}
-            disabled={props.disabled}
-          />
-          <div class="grid grid-cols-2 gap-1.5">
+        <Show when={tab() === "place"}>
+          <Section title={t("Apoyar según una cara")}>
+            <Button
+              onClick={() => toggle("floor")}
+              variant={props.mode === "floor" ? "danger" : "primary"}
+              fullWidth
+              disabled={props.disabled}
+            >
+              {props.mode === "floor" ? t("Cancelar") : t("Elegir piso")}
+            </Button>
+            <Button
+              onClick={() => toggle("front")}
+              variant={props.mode === "front" ? "danger" : "default"}
+              fullWidth
+              disabled={props.disabled}
+            >
+              {props.mode === "front" ? t("Cancelar") : t("Elegir frente")}
+            </Button>
+            <Button size="sm" fullWidth onClick={() => props.onDrop?.()} disabled={props.disabled}>
+              {t("Apoyar en el piso")}
+            </Button>
+            <p class="text-[11px] text-text-muted leading-snug">
+              {t("Todo esto transforma el modelo. Si ya hay esqueleto, retopología o pesos, se transforman con él para seguir calzando.")}
+            </p>
+          </Section>
+
+          <Section title={t("Eje vertical del archivo")}>
+            {/* STL, PLY y 3MF se leen con Z arriba; GLB y OBJ con Y arriba. Si el archivo no seguía la costumbre, queda acostado */}
+            <div class="grid grid-cols-2 gap-1.5">
+              <Button size="sm" onClick={() => props.onRotate?.("x", -90)} disabled={props.disabled}>
+                <span title={t("Para un GLB u OBJ que quedó acostado: su programa usaba Z arriba")}>{t("Venía con Z arriba")}</span>
+              </Button>
+              <Button size="sm" onClick={() => props.onRotate?.("x", 90)} disabled={props.disabled}>
+                <span title={t("Para un STL, PLY o 3MF que quedó acostado: su programa usaba Y arriba")}>{t("Venía con Y arriba")}</span>
+              </Button>
+            </div>
+          </Section>
+
+          <Section title={t("Origen del modelo")}>
+            <Select
+              label={t("Origen")}
+              options={ORIGIN_OPTIONS}
+              value={origin()}
+              onChange={(value) => setOrigin(value as OriginMode)}
+              disabled={props.disabled}
+            />
             <Button
               size="sm"
+              fullWidth
               variant={props.mode === "point" ? "danger" : "default"}
               onClick={() => (props.mode === "point" ? props.onPickMode?.(undefined) : props.onOrigin?.(origin()))}
               disabled={props.disabled}
             >
               {props.mode === "point" ? t("Cancelar") : t("Fijar origen")}
             </Button>
-            <Button size="sm" onClick={() => props.onDrop?.()} disabled={props.disabled}>
-              {t("Apoyar en el piso")}
+          </Section>
+        </Show>
+
+        <Show when={tab() === "move"}>
+          <Section title={t("Referencia")}>
+            <PivotSelect kind="move" pick="pivotMove" label={t("Punto que agarras")} />
+            <div class="grid grid-cols-3 gap-1.5">
+              <For each={AXES}>
+                {(axis, i) => (
+                  <CommitInput
+                    label={axis.toUpperCase()}
+                    value={(props.reference?.[i()] ?? 0) * perUnit()}
+                    onCommit={(v) => moveReferenceTo(i(), v)}
+                    wheelStep={1}
+                    disabled={props.disabled || !props.reference}
+                    title={t("Escribe dónde debe quedar la referencia: el modelo se mueve hasta ahí")}
+                  />
+                )}
+              </For>
+            </div>
+            <p class="text-[11px] text-text-muted leading-snug">
+              {t("Posición de la referencia en la grilla")}{unitLabel() ? ` (${unitLabel()})` : ""}. {t("Escribe otra y el modelo se mueve hasta ahí. No cambia el origen del modelo.")}
+            </p>
+          </Section>
+
+          <Section title={`${t("Desplazar")}${unitLabel() ? ` (${unitLabel()})` : ""}`}>
+            <div class="grid grid-cols-3 gap-1.5">
+              <For each={AXES}>
+                {(axis, i) => (
+                  <CommitInput
+                    label={axis.toUpperCase()}
+                    value={move()[i()]}
+                    onCommit={(v) => setMove((m) => m.map((x, j) => (j === i() ? v : x)) as [number, number, number])}
+                    wheelStep={1}
+                    disabled={props.disabled}
+                  />
+                )}
+              </For>
+            </div>
+            <Button
+              size="sm"
+              fullWidth
+              onClick={() => props.onMove?.(move().map((v) => v / perUnit()) as [number, number, number])}
+              disabled={props.disabled || move().every((v) => v === 0)}
+            >
+              {t("Mover")}
             </Button>
-          </div>
-        </Section>
+          </Section>
+        </Show>
+
+        <Show when={tab() === "rotate"}>
+          <Section title={t("Centro de giro")}>
+            <PivotSelect kind="spin" pick="pivotSpin" label={t("Girar, espejar y escalar sobre")} />
+            <p class="text-[11px] text-text-muted leading-snug">
+              {t("Es también donde queda el gizmo de Rotar y Escalar (R, S). Automático: centro de la caja al girar, centro de la base al escalar.")}
+            </p>
+          </Section>
+
+          <Section title={t("Girar")}>
+            <div class="grid grid-cols-3 gap-1.5">
+              <For each={[-90, 90]}>
+                {(degrees) => (
+                  <For each={AXES}>
+                    {(axis) => (
+                      <Button size="sm" onClick={() => props.onRotate?.(axis, degrees)} disabled={props.disabled}>
+                        {axis.toUpperCase()} {degrees > 0 ? "+90" : "−90"}
+                      </Button>
+                    )}
+                  </For>
+                )}
+              </For>
+            </div>
+            <div class="flex items-center gap-1.5">
+              <AxisPicker value={rotAxis()} onChange={setRotAxis} />
+              <CommitInput value={rotDegrees()} onCommit={setRotDegrees} wheelStep={1} suffix="°" disabled={props.disabled} />
+              <Button size="sm" onClick={() => props.onRotate?.(rotAxis(), rotDegrees())} disabled={props.disabled}>
+                {t("Girar")}
+              </Button>
+            </div>
+          </Section>
+
+          <Section title={t("Espejar")}>
+            <div class="grid grid-cols-3 gap-1.5">
+              <For each={AXES}>
+                {(axis) => (
+                  <Button size="sm" onClick={() => props.onMirror?.(axis)} disabled={props.disabled}>
+                    {axis.toUpperCase()}
+                  </Button>
+                )}
+              </For>
+            </div>
+          </Section>
+        </Show>
+
+        <Show when={tab() === "scale"}>
+          <Section title={`${t("Tamaño")}${unitLabel() ? ` (${unitLabel()})` : ""}`}>
+            <div class="grid grid-cols-3 gap-1.5">
+              <For each={[t("Ancho"), t("Fondo"), t("Alto")]}>
+                {(name, i) => (
+                  <div class="space-y-0.5">
+                    <span class="text-[10px] text-text-muted">
+                      {name} ({AXES[i()].toUpperCase()})
+                    </span>
+                    <CommitInput
+                      value={dims()[i()]}
+                      onCommit={(v) => setDimension(i(), v)}
+                      disabled={props.disabled || !props.size}
+                      title={t("Escribe una medida: el modelo se escala en proporción")}
+                    />
+                  </div>
+                )}
+              </For>
+            </div>
+            <div class="flex items-center gap-1.5">
+              <CommitInput value={factor()} onCommit={setFactor} wheelStep={0.1} label="×" disabled={props.disabled} />
+              <Button
+                size="sm"
+                onClick={() => factor() > 0 && props.onScale?.(factor(), t("Escalar ×{f}", { f: fmt(factor()) }))}
+                disabled={props.disabled || !(factor() > 0)}
+              >
+                {t("Escalar")}
+              </Button>
+            </div>
+            <div class="grid grid-cols-2 gap-1.5">
+              <For each={CONVERSIONS}>
+                {(c) => (
+                  <Button size="sm" onClick={() => props.onScale?.(c.factor, t("Convertir {c}", { c: c.label }))} disabled={props.disabled}>
+                    <span title={t(c.title)}>{t(c.label)}</span>
+                  </Button>
+                )}
+              </For>
+            </div>
+            <p class="text-[11px] text-text-muted leading-snug">
+              {t("La escala es igual en los tres ejes. Se hace desde el centro de giro (pestaña Girar); en automático, desde el centro de la base, así el modelo sigue apoyado.")}
+            </p>
+          </Section>
+        </Show>
       </div>
     </Panel>
   );

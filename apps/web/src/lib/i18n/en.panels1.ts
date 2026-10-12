@@ -427,11 +427,23 @@ export const en_panels1: Catalog = {
     "Scaling is the same on all three axes and is done from the base center, so the model stays resting on the ground.",
   "Origen": "Origin",
   "Fijar origen": "Set origin",
-  "Centro del gizmo": "Gizmo center",
-  "Girar y escalar": "Rotate and scale",
-  "Referencia al mover": "Move reference",
-  "Dónde queda el gizmo de Mover, Rotar y Escalar (G, R, S). Girar y escalar usan ese punto como centro; la referencia al mover es el punto que agarras. No cambia el origen del modelo.":
-    "Where the Move, Rotate and Scale gizmo (G, R, S) sits. Rotating and scaling use that point as their center; the move reference is the point you grab. It does not change the model origin.",
+  "Posicionar modelo": "Position model",
+  "Colocar": "Place",
+  "Apoyar según una cara": "Rest on a face",
+  "Eje vertical del archivo": "File vertical axis",
+  "Origen del modelo": "Model origin",
+  "Referencia": "Reference",
+  "Punto que agarras": "Point you grab",
+  "Escribe dónde debe quedar la referencia: el modelo se mueve hasta ahí": "Type where the reference should end up: the model moves there",
+  "Posición de la referencia en la grilla": "Reference position on the grid",
+  "Escribe otra y el modelo se mueve hasta ahí. No cambia el origen del modelo.": "Type another and the model moves there. It does not change the model origin.",
+  "Desplazar": "Offset",
+  "Centro de giro": "Center of rotation",
+  "Girar, espejar y escalar sobre": "Rotate, mirror and scale around",
+  "Es también donde queda el gizmo de Rotar y Escalar (R, S). Automático: centro de la caja al girar, centro de la base al escalar.":
+    "It is also where the Rotate and Scale gizmo sits (R, S). Automatic: box center when rotating, base center when scaling.",
+  "La escala es igual en los tres ejes. Se hace desde el centro de giro (pestaña Girar); en automático, desde el centro de la base, así el modelo sigue apoyado.":
+    "Scaling is the same on all three axes. It is done from the center of rotation (Rotate tab); in automatic mode, from the base center, so the model stays resting on the ground.",
   "Apoyar en el piso": "Drop to the floor",
 
   // PosePanel

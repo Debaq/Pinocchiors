@@ -5824,6 +5824,17 @@ export const App: Component = () => {
     };
   });
 
+  /** Posición actual de la referencia al mover (ejes que se muestran, unidades de la escena) */
+  const moveReference = createMemo((): [number, number, number] | undefined => {
+    const data = meshData();
+    if (!data) return undefined;
+    const custom = objectPivots().move;
+    if (custom) return toView(custom);
+    const box = boundsAfter(data.positions);
+    const c = box.getCenter(new THREE.Vector3());
+    return toView([c.x, box.min.y, c.z]);
+  });
+
   /**
    * Alinear el escaneo desde Diseñar: la matriz viene en coordenadas del CAD.
    * El escaneo pasa a ser el objeto activo (la orientación se aplica al
@@ -5901,17 +5912,20 @@ export const App: Component = () => {
   const handleRotate = (axis: Axis, degrees: number) => {
     const data = meshData();
     const { axis: inner, sign } = VIEW_AXES[axis];
-    if (data) applyPlacement(rotationMatrix(data.positions, inner, sign * degrees), t("Giro de {degrees}° en {axis}", { degrees, axis: axis.toUpperCase() }));
+    const pivot = objectPivots().spin;
+    if (data) applyPlacement(rotationMatrix(data.positions, inner, sign * degrees, pivot ? new THREE.Vector3(...pivot) : undefined), t("Giro de {degrees}° en {axis}", { degrees, axis: axis.toUpperCase() }));
   };
 
   const handleMirror = (axis: Axis) => {
     const data = meshData();
-    if (data) applyPlacement(mirrorMatrix(data.positions, VIEW_AXES[axis].axis), t("Espejado en {axis}", { axis: axis.toUpperCase() }));
+    const pivot = objectPivots().spin;
+    if (data) applyPlacement(mirrorMatrix(data.positions, VIEW_AXES[axis].axis, pivot ? new THREE.Vector3(...pivot) : undefined), t("Espejado en {axis}", { axis: axis.toUpperCase() }));
   };
 
   const handleScaleModel = (factor: number, description: string) => {
     const data = meshData();
-    if (data && factor > 0 && factor !== 1) applyPlacement(scaleMatrix(data.positions, factor), description);
+    const pivot = objectPivots().spin;
+    if (data && factor > 0 && factor !== 1) applyPlacement(scaleMatrix(data.positions, factor, pivot ? new THREE.Vector3(...pivot) : undefined), description);
   };
 
   /** Traslación en los ejes que se muestran (Z arriba) */
@@ -8405,6 +8419,7 @@ export const App: Component = () => {
                 onOrigin: handleOrigin,
                 onScale: handleScaleModel,
                 onMove: handleMoveModel,
+                reference: moveReference(),
                 pivots: pivotChoice(),
                 onPivot: (kind: "spin" | "move", choice: PivotChoice) => setPivotChoice((c) => ({ ...c, [kind]: choice })),
                 size: modelSize() && viewSize(modelSize()!),

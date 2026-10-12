@@ -62,9 +62,9 @@ function seated(positions: Float32Array, m: THREE.Matrix4, center: boolean): THR
   return new THREE.Matrix4().makeTranslation(offset.x, offset.y, offset.z).multiply(m);
 }
 
-/** `r` aplicada en torno al centro de la caja actual */
-function aboutCenter(positions: Float32Array, r: THREE.Matrix4): THREE.Matrix4 {
-  const c = boundsAfter(positions).getCenter(new THREE.Vector3());
+/** `r` aplicada en torno al centro de la caja actual (o a `pivot`, si se eligió otro) */
+function aboutCenter(positions: Float32Array, r: THREE.Matrix4, pivot?: THREE.Vector3): THREE.Matrix4 {
+  const c = pivot ?? boundsAfter(positions).getCenter(new THREE.Vector3());
   return new THREE.Matrix4()
     .makeTranslation(c.x, c.y, c.z)
     .multiply(r)
@@ -88,26 +88,29 @@ export function frontMatrix(positions: Float32Array, normal: THREE.Vector3): THR
   return aboutCenter(positions, new THREE.Matrix4().makeRotationY(angle));
 }
 
-/** Giro de `degrees` en torno a `axis` (regla de la mano derecha); queda apoyado */
-export function rotationMatrix(positions: Float32Array, axis: Axis, degrees: number): THREE.Matrix4 {
+/**
+ * Giro de `degrees` en torno a `axis` (regla de la mano derecha); queda apoyado.
+ * Con un `pivot` elegido gira sobre ese punto y no se vuelve a apoyar.
+ */
+export function rotationMatrix(positions: Float32Array, axis: Axis, degrees: number, pivot?: THREE.Vector3): THREE.Matrix4 {
   const r = new THREE.Matrix4().makeRotationAxis(AXES[axis], THREE.MathUtils.degToRad(degrees));
-  return seated(positions, aboutCenter(positions, r), false);
+  return pivot ? aboutCenter(positions, r, pivot) : seated(positions, aboutCenter(positions, r), false);
 }
 
 /** Espejo que invierte `axis`, en torno al centro de la caja */
-export function mirrorMatrix(positions: Float32Array, axis: Axis): THREE.Matrix4 {
+export function mirrorMatrix(positions: Float32Array, axis: Axis, pivot?: THREE.Vector3): THREE.Matrix4 {
   const s = new THREE.Vector3(1, 1, 1).setComponent(["x", "y", "z"].indexOf(axis), -1);
-  return aboutCenter(positions, new THREE.Matrix4().makeScale(s.x, s.y, s.z));
+  return aboutCenter(positions, new THREE.Matrix4().makeScale(s.x, s.y, s.z), pivot);
 }
 
 /**
- * Escala uniforme por `factor` en torno al centro de la base: si estaba
- * apoyado en la grilla, sigue apoyado
+ * Escala uniforme por `factor` en torno al centro de la base (o al centro
+ * elegido): con la base, si estaba apoyado en la grilla, sigue apoyado
  */
-export function scaleMatrix(positions: Float32Array, factor: number): THREE.Matrix4 {
+export function scaleMatrix(positions: Float32Array, factor: number, custom?: THREE.Vector3): THREE.Matrix4 {
   const box = boundsAfter(positions);
   const c = box.getCenter(new THREE.Vector3());
-  const pivot = new THREE.Vector3(c.x, box.min.y, c.z);
+  const pivot = custom ?? new THREE.Vector3(c.x, box.min.y, c.z);
   return new THREE.Matrix4()
     .makeTranslation(pivot.x, pivot.y, pivot.z)
     .multiply(new THREE.Matrix4().makeScale(factor, factor, factor))
