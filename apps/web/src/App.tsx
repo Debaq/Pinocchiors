@@ -36,6 +36,7 @@ import { bakeMixer, emptyMixer, loadMixer, mixKeys, mixerRange, type AnimationLa
 import { WelcomeScreen } from "./components/layout/WelcomeScreen";
 import { ContextPanel } from "./components/layout/ContextPanel";
 import * as Icons from "./components/icons";
+import { CameraPad } from "./components/layout/CameraPad";
 import {
   type SkeletonPreset,
   type AutorigConfig,
@@ -1119,6 +1120,7 @@ export const App: Component = () => {
   // Con opciones nuevas, las guardadas de antes se completan con las de fábrica
   const renderSettings = () => ({ ...defaultRenderSettings, ...renderSettingsRaw() });
   const [renderDir, setRenderDir] = createPersisted<string>("render.dir", "");
+  const [renderPreview, setRenderPreview] = createSignal<{ url: string; x: number; y: number; w: number; h: number } | undefined>();
   const [renderProgress, setRenderProgress] = createSignal<number | undefined>();
   const [renderViewSize, setRenderViewSize] = createSignal({ width: 1280, height: 720 });
   let renderAbort: AbortController | undefined;
@@ -2286,6 +2288,13 @@ export const App: Component = () => {
       area: "rig", get description() { return t("Borrar keys / puntos seleccionados"); },
     },
     { key: "i", ctrl: true, action: () => cloudEditing() && scanCloud.select("invert"), area: "scan", get description() { return t("Invertir la selección de la nube"); } },
+    // Cámara del espacio Render: flechas mueven en el plano, Ctrl+arriba/abajo hacen zoom
+    { id: "render.pan.up", key: "ArrowUp", when: () => inRender(), looseMods: true, action: (e) => panRenderCamera(0, 1, e), area: "view", get description() { return t("Cámara: mover arriba (Alt fino, Shift grande)"); } },
+    { id: "render.pan.down", key: "ArrowDown", when: () => inRender(), looseMods: true, action: (e) => panRenderCamera(0, -1, e), area: "view", get description() { return t("Cámara: mover abajo (Alt fino, Shift grande)"); } },
+    { id: "render.pan.left", key: "ArrowLeft", when: () => inRender(), looseMods: true, action: (e) => panRenderCamera(-1, 0, e), area: "view", get description() { return t("Cámara: mover a la izquierda (Alt fino, Shift grande)"); } },
+    { id: "render.pan.right", key: "ArrowRight", when: () => inRender(), looseMods: true, action: (e) => panRenderCamera(1, 0, e), area: "view", get description() { return t("Cámara: mover a la derecha (Alt fino, Shift grande)"); } },
+    { id: "render.zoom.in", key: "ArrowUp", ctrl: true, when: () => inRender(), action: () => viewerRef?.zoomCamera(0.9), area: "view", get description() { return t("Cámara: acercar (zoom)"); } },
+    { id: "render.zoom.out", key: "ArrowDown", ctrl: true, when: () => inRender(), action: () => viewerRef?.zoomCamera(1 / 0.9), area: "view", get description() { return t("Cámara: alejar (zoom)"); } },
     { key: "ArrowLeft", action: () => animating() && stepFrame(-1), area: "rig", get description() { return t("Cuadro anterior"); } },
     { key: "ArrowRight", action: () => animating() && stepFrame(1), area: "rig", get description() { return t("Cuadro siguiente"); } },
     { key: "ArrowLeft", shift: true, action: () => animating() && stepFrame(-Infinity), area: "rig", get description() { return t("Al inicio"); } },
@@ -5482,21 +5491,6 @@ export const App: Component = () => {
     v.setRenderFrame(cell.width / cell.height);
     onCleanup(() => v.setRenderFrame(null));
   });
-  // Vista previa: el visor muestra en vivo luces, fondo, sombras y suelo del render
-  createEffect(() => {
-    const v = viewer();
-    const s = renderSettings();
-    if (!v || !inRender() || !s.preview) return;
-    v.setRenderPreview({
-      lights: renderLightById(s.lightPreset)?.lights ?? null,
-      shadows: s.shadows,
-      groundShadow: s.groundShadow,
-      background: s.background,
-      color: s.color,
-      color2: s.color2,
-    });
-    onCleanup(() => v.setRenderPreview(null));
-  });
   /** Lleva el visor a una cámara del render, encuadrada para la imagen que saldrá */
   const previewRenderCamera = (id: string, zoom?: number) => {
     const v = viewer();
@@ -5504,6 +5498,63 @@ export const App: Component = () => {
     if (!v || !camera?.direction) return;
     const { cell } = renderLayout(renderSettings(), v.getViewSize());
     v.setRenderCamera(camera.direction, cell.width / cell.height, zoom ?? cameraZoom(renderSettings(), id));
+  };
+
+  /** Flechas de la cámara del render, como en Inkscape: 2 px, Alt 1 px y Shift 10 veces más */
+  const panRenderCamera = (dx: number, dy: number, mods?: { shiftKey: boolean; altKey: boolean }) => {
+    viewerRef?.panCamera(dx, dy, mods?.altKey ? 1 : mods?.shiftKey ? 20 : 2);
+  };
+  const closeRenderPreview = () => {
+    const old = renderPreview();
+    if (old) URL.revokeObjectURL(old.url);
+    setRenderPreview(undefined);
+  };
+  /** Render de verdad de la vista actual, del tamaño del marco, para ver cómo va saliendo */
+  const handleRenderPreview = async () => {
+    const v = viewer();
+    if (!v || renderProgress() !== undefined) return;
+    const s = renderSettings();
+    const layout = renderLayout(s, v.getViewSize());
+    // Del tamaño del marco en el visor, así la imagen lo cubre exacto
+    const frame = v.getRenderFrameRect(layout.cell.width / layout.cell.height);
+    const scale = Math.min(1, 2048 / Math.max(frame.pixels.width, frame.pixels.height));
+    const width = Math.max(16, Math.round(frame.pixels.width * scale));
+    const height = Math.max(16, Math.round(frame.pixels.height * scale));
+    const controller = new AbortController();
+    renderAbort = controller;
+    setRenderProgress(0);
+    try {
+      const image = await v.renderStill(
+        {
+          width,
+          height,
+          background: s.background,
+          color: s.color,
+          color2: s.color2,
+          lights: renderLightById(s.lightPreset)?.lights ?? null,
+          groundShadow: s.groundShadow,
+          samples: s.samples,
+          format: "png",
+          quality: 1,
+          hideGrid: s.hideGrid,
+          hideSkeleton: s.hideSkeleton,
+          hideGizmos: s.hideGizmos,
+          hideSelection: s.hideSelection,
+          shadows: s.shadows,
+          ambientOcclusion: s.ambientOcclusion,
+        },
+        setRenderProgress,
+        controller.signal,
+      );
+      closeRenderPreview();
+      setRenderPreview({ url: URL.createObjectURL(new Blob([image.bytes as BlobPart], { type: "image/png" })), ...frame.css });
+    } catch (e) {
+      const cancelled = e instanceof DOMException && e.name === "AbortError";
+      setStatusMessage(cancelled ? t("Render cancelado") : t("Error: {e}", { e: tBackend(String(e instanceof Error ? e.message : e)) }));
+    } finally {
+      renderAbort = undefined;
+      setRenderProgress(undefined);
+    }
   };
 
   const handleRender = async () => {
@@ -7883,6 +7934,38 @@ export const App: Component = () => {
             )}
           </Show>
           <div class="relative flex-1 min-w-0 min-h-0">
+            {/* Vista previa del render encima del visor, justo sobre el marco (como la ventana de render de Blender) */}
+            <Show when={inRender() ? renderPreview() : undefined}>
+              {(preview) => (
+                <div
+                  class="absolute z-20"
+                  style={{
+                    left: `${preview().x}px`,
+                    top: `${preview().y}px`,
+                    width: `${preview().w}px`,
+                    height: `${preview().h}px`,
+                    "box-shadow": "0 0 0 9999px rgba(0,0,0,0.4)",
+                    "background-color": "#fff",
+                    "background-image": "conic-gradient(#ccc 25%, #fff 0 50%, #ccc 0 75%, #fff 0)",
+                    "background-size": "16px 16px",
+                  }}
+                >
+                  <img src={preview().url} alt={t("Vista previa")} class="block w-full h-full" />
+                  <button
+                    type="button"
+                    aria-label={t("Cerrar la vista previa")}
+                    title={t("Cerrar")}
+                    class="absolute top-2 right-2 flex items-center justify-center w-7 h-7 rounded-full bg-red-600 text-white shadow-lg hover:bg-red-500 cursor-pointer"
+                    onClick={closeRenderPreview}
+                  >
+                    <Icons.X size={16} />
+                  </button>
+                </div>
+              )}
+            </Show>
+            <Show when={inRender()}>
+              <CameraPad onMove={panRenderCamera} />
+            </Show>
             <Viewport
               onViewerReady={handleViewerReady}
               onFpsUpdate={setFps}
@@ -8358,7 +8441,7 @@ export const App: Component = () => {
               progress: renderProgress(),
               canRender: hasWork() && !inDesign(),
               onRender: () => void handleRender(),
-              onPreviewChange: (on: boolean) => setRenderSettings({ ...renderSettings(), preview: on }),
+              onPreview: () => void handleRenderPreview(),
               onStop: () => renderAbort?.abort(),
             }}
             viewSettings={viewSettings()}

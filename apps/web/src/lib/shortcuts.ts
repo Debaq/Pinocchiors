@@ -10,10 +10,14 @@ export interface ShortcutDef {
   ctrl?: boolean;
   shift?: boolean;
   alt?: boolean;
-  action: () => void;
+  action: (e: KeyboardEvent) => void;
   description: string;
   /** Dónde se muestra en Configuración (por defecto "general") */
   area?: AreaId;
+  /** Solo vale cuando esto es verdadero; si no, la tecla sigue a los demás atajos (y al navegador) */
+  when?: () => boolean;
+  /** Shift y Alt no cuentan para reconocer la tecla: la acción los lee del evento (pasos grandes y finos) */
+  looseMods?: boolean;
 }
 
 /** Áreas de la lista de atajos, en el orden en que se muestran */
@@ -168,15 +172,15 @@ export function createShortcutManager(): ShortcutManager {
 
     for (const shortcut of shortcuts) {
       const b = bindingOf(shortcut);
-      if (!b) continue;
+      if (!b || (shortcut.when && !shortcut.when())) continue;
       const keyMatch = e.key.toLowerCase() === b.key.toLowerCase();
       const ctrlMatch = (b.ctrl ?? false) === (e.ctrlKey || e.metaKey);
-      const shiftMatch = (b.shift ?? false) === e.shiftKey;
-      const altMatch = (b.alt ?? false) === e.altKey;
+      const shiftMatch = shortcut.looseMods || (b.shift ?? false) === e.shiftKey;
+      const altMatch = shortcut.looseMods || (b.alt ?? false) === e.altKey;
 
       if (keyMatch && ctrlMatch && shiftMatch && altMatch) {
         e.preventDefault();
-        shortcut.action();
+        shortcut.action(e);
         return;
       }
     }

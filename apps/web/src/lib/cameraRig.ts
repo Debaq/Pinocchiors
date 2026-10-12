@@ -96,6 +96,37 @@ export class CameraRig {
     this.onChange();
   }
 
+  /**
+   * Mueve la cámara y su centro en el plano de la pantalla. `dx` y `dy` son
+   * fracciones de lo que se ve de alto a la distancia del centro (derecha y arriba, positivos).
+   */
+  pan(dx: number, dy: number) {
+    this.stop();
+    const dist = this.camera.position.distanceTo(this.controls.target);
+    const visible = 2 * dist * Math.tan((this.camera.fov * Math.PI) / 360);
+    this.camera.updateMatrixWorld();
+    const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0);
+    const up = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 1);
+    const offset = right.multiplyScalar(dx * visible).add(up.multiplyScalar(dy * visible));
+    this.camera.position.add(offset);
+    this.controls.target.add(offset);
+    this.controls.update();
+    this.onChange();
+  }
+
+  /** Acerca (factor < 1) o aleja (> 1) la cámara del centro de giro */
+  dolly(factor: number) {
+    this.stop();
+    const offset = this.camera.position.clone().sub(this.controls.target).multiplyScalar(factor);
+    this.camera.position.copy(this.controls.target).add(offset);
+    const dist = Math.max(offset.length(), 1e-9);
+    this.camera.near = dist / 1000;
+    this.camera.far = dist * 100;
+    this.camera.updateProjectionMatrix();
+    this.controls.update();
+    this.onChange();
+  }
+
   /** Corta el giro en curso (encuadrar, cargar otro modelo…) */
   stop() {
     this.transition = null;

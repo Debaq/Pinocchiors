@@ -49,8 +49,6 @@ export interface RenderSettings {
   zoom: number;
   /** Zoom de cada cámara cuando no se comparte (por id; falta = 1) */
   zooms: Record<string, number>;
-  /** El visor muestra en vivo cómo saldrá el render */
-  preview: boolean;
 }
 
 /** Zoom con que sale una cámara (1 = el modelo entero con un margen) */
@@ -82,7 +80,6 @@ export const defaultRenderSettings: RenderSettings = {
   zoomShared: true,
   zoom: 1,
   zooms: {},
-  preview: false,
 };
 
 /** Medidas en píxeles que salen de las opciones; "Pantalla" toma las de la vista */
@@ -319,7 +316,8 @@ export interface RenderStepProps {
   /** Hay algo que renderizar */
   canRender?: boolean;
   onRender: () => void;
-  onPreviewChange: (on: boolean) => void;
+  /** Render chico de la vista actual; la imagen se muestra encima del visor */
+  onPreview: () => void;
   /** Detiene el render en curso */
   onStop: () => void;
   /** Panel de opciones a la izquierda del visor */
@@ -360,15 +358,15 @@ export const RenderStep: Component<RenderStepProps> = (props) => {
           {px().width} × {px().height} · {((px().width * px().height) / 1e6).toFixed(1)} MP
         </span>
       </div>
-      <Tooltip content={t("El visor muestra cómo saldrá: luces, fondo, sombras y suelo. Sin oclusión ambiental ni cuadros promediados.")} placement="left">
-        <Button variant={props.settings.preview ? "primary" : "default"} fullWidth disabled={busy()} icon={<Icons.Eye size={16} />} onClick={() => props.onPreviewChange(!props.settings.preview)}>
+      <Tooltip content={t("Hace un render de la vista actual, del tamaño del marco, con estas mismas opciones y lo muestra encima del visor.")} placement="left">
+        <Button fullWidth disabled={busy() || !props.canRender} icon={<Icons.Eye size={16} />} onClick={props.onPreview}>
           {t("Vista previa")}
         </Button>
       </Tooltip>
       <Show
         when={busy()}
         fallback={
-          <Button variant={props.settings.preview ? "default" : "primary"} fullWidth disabled={!props.canRender || layout().cameras.length === 0} icon={<Icons.FrameCorners size={16} />} onClick={props.onRender}>
+          <Button variant="primary" fullWidth disabled={!props.canRender || layout().cameras.length === 0} icon={<Icons.FrameCorners size={16} />} onClick={props.onRender}>
             {t("Renderizar")}
           </Button>
         }
