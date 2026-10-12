@@ -5,7 +5,8 @@ facetas con trazo oscuro, fondo de puntos y esquinas de visor naranjas.
 
 También genera una lámina por cada forma de empezar de la pantalla de inicio
 (abrir, escanear, animar, diseñar, fabricar): la misma marioneta haciendo esa
-tarea. La pantalla de inicio elige una distinta en cada arranque.
+tarea. La pantalla de inicio muestra el logo y cambia a la lámina de la
+opción que tiene el mouse encima.
 
     python3 scripts/logo.py   # escribe apps/web/src/assets/logo.svg y splash/*.svg
 """

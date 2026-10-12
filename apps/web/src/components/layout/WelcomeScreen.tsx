@@ -1,30 +1,17 @@
-import { Component, For, Show, type JSX } from "solid-js";
+import { Component, createSignal, For, Index, Show, type JSX } from "solid-js";
 import { clsx } from "clsx";
 import * as Icons from "../icons";
+import logo from "../../assets/logo.svg";
 import splashOpen from "../../assets/splash/open.svg";
 import splashScan from "../../assets/splash/scan.svg";
 import splashAnimate from "../../assets/splash/animate.svg";
 import splashDesign from "../../assets/splash/design.svg";
 import splashFabricate from "../../assets/splash/fabricate.svg";
 
-/** Una lámina por forma de empezar (scripts/logo.py) */
-const SPLASHES = [splashOpen, splashScan, splashAnimate, splashDesign, splashFabricate];
-const SPLASH_KEY = "pinocchio.splash";
-
-/** Lámina de este arranque: al azar, sin repetir la del arranque anterior */
-function pickSplash(): string {
-  let last = -1;
-  try {
-    last = Number(localStorage.getItem(SPLASH_KEY) ?? -1);
-  } catch {}
-  let i = Math.floor(Math.random() * (SPLASHES.length - 1));
-  if (i >= last && last >= 0) i++;
-  try {
-    localStorage.setItem(SPLASH_KEY, String(i));
-  } catch {}
-  return SPLASHES[i];
-}
-const splash = pickSplash();
+/** Una lámina por forma de empezar (scripts/logo.py), en el orden de las
+ * opciones; al final el logo, que se ve sin el mouse sobre ninguna */
+const SPLASHES = [splashOpen, splashScan, splashAnimate, splashDesign, splashFabricate, logo];
+const BASE = SPLASHES.length - 1;
 
 export interface WelcomeScreenProps {
   /** Un solo diálogo para proyectos .pinocchio y modelos 3D */
@@ -53,11 +40,15 @@ interface Choice {
 }
 
 /**
- * Inicio sin trabajo abierto: la marioneta haciendo una de las formas de empezar
- * en una lámina a la izquierda (cambia en cada arranque) y las formas de empezar
- * a la derecha. También se puede soltar un modelo sobre el visor
+ * Inicio sin trabajo abierto: el logo en una lámina a la izquierda y las formas
+ * de empezar a la derecha; al pasar el mouse por una opción, la lámina muestra a
+ * la marioneta haciéndola.
+ * También se puede soltar un modelo sobre el visor
  */
 export const WelcomeScreen: Component<WelcomeScreenProps> = (props) => {
+  // Con el mouse sobre una opción, la lámina muestra a la marioneta haciéndola
+  const [hovered, setHovered] = createSignal<number>();
+  const shown = () => hovered() ?? BASE;
   const formats = () => (props.formats?.length ? props.formats.map((f) => f.toUpperCase()).join(", ") : "GLB, GLTF, OBJ, STL");
   const choices = (): Choice[] => [
     {
@@ -104,7 +95,21 @@ export const WelcomeScreen: Component<WelcomeScreenProps> = (props) => {
         )}
       >
         <div class="sm:w-[44%] shrink-0 bg-splash flex flex-col items-center justify-center px-6 pt-6 pb-5">
-          <img src={splash} alt="" class="w-full max-w-60 select-none" draggable={false} />
+          <div class="grid w-full max-w-60">
+            <Index each={SPLASHES}>
+              {(src, i) => (
+                <img
+                  src={src()}
+                  alt=""
+                  class={clsx(
+                    "col-start-1 row-start-1 w-full select-none transition-opacity duration-200",
+                    shown() === i ? "opacity-100" : "opacity-0"
+                  )}
+                  draggable={false}
+                />
+              )}
+            </Index>
+          </div>
           <div class="text-center mt-3">
             <div class="text-2xl font-bold tracking-tight text-splash-text">Pinocchio</div>
             <div class="text-[11px] text-splash-muted">Escanear, reparar, animar y fabricar modelos 3D</div>
@@ -117,9 +122,9 @@ export const WelcomeScreen: Component<WelcomeScreenProps> = (props) => {
             <p class="text-xs text-text-muted">También puedes arrastrar un modelo 3D sobre el visor</p>
           </div>
 
-          <div class="flex flex-col gap-1.5">
+          <div class="flex flex-col gap-1.5" onMouseLeave={() => setHovered(undefined)}>
             <For each={choices()}>
-              {(choice) => (
+              {(choice, i) => (
                 <button
                   class={clsx(
                     "flex items-center gap-3 px-3 py-2.5 rounded-xl border text-left transition-colors",
@@ -129,6 +134,8 @@ export const WelcomeScreen: Component<WelcomeScreenProps> = (props) => {
                       : "border-transparent hover:bg-bg-lighter hover:border-border"
                   )}
                   disabled={!choice.action}
+                  onMouseEnter={() => setHovered(i())}
+                  onFocus={() => setHovered(i())}
                   onClick={() => choice.action?.()}
                 >
                   <span
