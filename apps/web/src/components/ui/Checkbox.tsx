@@ -1,5 +1,6 @@
 import { Checkbox as KobalteCheckbox } from "@kobalte/core/checkbox";
 import { clsx } from "clsx";
+import { Tooltip } from "./Tooltip";
 
 export interface CheckboxProps {
   checked?: boolean;
@@ -8,17 +9,19 @@ export interface CheckboxProps {
   label?: string;
   /** Etiqueta chica, para paneles densos */
   small?: boolean;
+  /** Globito con la explicación (reemplaza los párrafos de ayuda) */
+  hint?: string;
   class?: string;
 }
 
 export const Checkbox = (props: CheckboxProps) => {
-  return (
+  const box = (
     <KobalteCheckbox
       checked={props.checked}
       onChange={props.onChange}
       disabled={props.disabled}
       class={clsx(
-        "inline-flex items-center gap-2 cursor-pointer",
+        "relative inline-flex items-center gap-2 cursor-pointer",
         "data-[disabled]:opacity-50 data-[disabled]:pointer-events-none",
         props.class
       )}
@@ -48,5 +51,13 @@ export const Checkbox = (props: CheckboxProps) => {
         </KobalteCheckbox.Label>
       )}
     </KobalteCheckbox>
+  );
+
+  return props.hint ? (
+    <Tooltip content={props.hint} placement="left" class="relative inline-flex">
+      {box}
+    </Tooltip>
+  ) : (
+    box
   );
 };

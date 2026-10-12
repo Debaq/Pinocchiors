@@ -1,5 +1,5 @@
-import { Component, Show } from "solid-js";
-import { Panel, Slider, Checkbox, Button, Select } from "../ui";
+import { Component, For, Show } from "solid-js";
+import { Panel, Slider, Checkbox, Button, Select, Tooltip } from "../ui";
 import * as Icons from "../icons";
 import { fmtNumber, t, tx } from "../../lib/i18n";
 
@@ -21,6 +21,18 @@ export interface RetopologyConfig {
   symmetry: SymmetryAxis;
   /** Los quads siguen las costuras de UV: la textura original se traslada limpia */
   followSeams: boolean;
+  /** Cada objeto (material) se retopologiza aparte; proyectos viejos no lo traen (sí) */
+  perObject?: boolean;
+}
+
+/** Resultado de un objeto retopologizado por separado */
+export interface RetopologyObject {
+  name: string;
+  faces_in: number;
+  target: number;
+  quads: number;
+  /** Por qué el objeto no quedó en la malla nueva */
+  error: string | null;
 }
 
 /** Calidad de la malla de quads resultante */
@@ -57,6 +69,7 @@ export interface RetopologyPanelProps {
   showQuadMesh?: boolean;
   onShowQuadMeshChange?: (show: boolean) => void;
   quality?: QuadQuality;
+  objects?: RetopologyObject[];
 }
 
 /** Fila del informe de calidad; `warn` la resalta. */
@@ -106,25 +119,33 @@ export const RetopologyPanel: Component<RetopologyPanelProps> = (props) => {
           />
         </Show>
 
-        {/* UV seams */}
-        <div class="space-y-1">
-          <Checkbox
-            label={t("Seguir las costuras de UV")}
-            checked={props.config.followSeams}
-            onChange={(checked) => updateConfig({ followSeams: checked })}
-          />
-          <p class="text-xs text-text-muted leading-relaxed">
-            {t("Cada quad queda dentro de una isla del mapa original y la textura se traslada sin estirarse en las costuras. Desmárcalo si vas a desplegar y hornear en UV / Piel: los quads salen más parejos.")}
-          </p>
-        </div>
+        <Checkbox
+          label={t("Seguir las costuras de UV")}
+          hint={t("Los quads respetan las islas del mapa original. Desmárcalo si vas a desplegar de nuevo en UV / Piel: salen más parejos.")}
+          checked={props.config.followSeams}
+          onChange={(checked) => updateConfig({ followSeams: checked })}
+        />
+
+        <Checkbox
+          label={t("Por objeto")}
+          hint={t("Cada material se retopologiza aparte con su parte de los quads (según su área): no se funden ni se pierden piezas. Ignora la simetría.")}
+          checked={props.config.perObject !== false}
+          onChange={(checked) => updateConfig({ perObject: checked })}
+        />
 
         {/* Mirror symmetry */}
-        <Select
-          label={tx("simetría", "Simetría")}
-          options={SYMMETRY_OPTIONS}
-          value={props.config.symmetry}
-          onChange={(value) => updateConfig({ symmetry: value as SymmetryAxis })}
-        />
+        <Tooltip
+          content={t("La simetría deja un loop de aristas en la línea media, útil para el rig.")}
+          placement="left"
+          class="block w-full"
+        >
+          <Select
+            label={tx("simetría", "Simetría")}
+            options={SYMMETRY_OPTIONS}
+            value={props.config.symmetry}
+            onChange={(value) => updateConfig({ symmetry: value as SymmetryAxis })}
+          />
+        </Tooltip>
 
         {/* Advanced options */}
         <Panel title={t("Avanzado")} defaultOpen={false}>
@@ -141,14 +162,10 @@ export const RetopologyPanel: Component<RetopologyPanelProps> = (props) => {
 
             <Checkbox
               label={t("Densidad adaptativa (rasgos delgados)")}
+              hint={t("Conserva puntas, dedos y paredes finas con quads más chicos, a cambio de algunos vértices irregulares más.")}
               checked={props.config.adaptiveDensity}
               onChange={(checked) => updateConfig({ adaptiveDensity: checked })}
             />
-            <Show when={props.config.adaptiveDensity}>
-              <p class="text-xs text-text-muted leading-relaxed">
-                {t("Conserva puntas, dedos y paredes finas con quads más chicos, a cambio de algunos vértices irregulares más.")}
-              </p>
-            </Show>
 
             <Select
               label={t("Reparar malla rota")}
@@ -175,6 +192,7 @@ export const RetopologyPanel: Component<RetopologyPanelProps> = (props) => {
           disabled={!props.canExecute || props.isProcessing}
           variant="primary"
           class="w-full"
+          hint={t("Convierte la malla en quads con estos ajustes")}
         >
           <Show when={!props.isProcessing} fallback={
             <span class="flex items-center gap-2">
@@ -228,6 +246,21 @@ export const RetopologyPanel: Component<RetopologyPanelProps> = (props) => {
                   </Show>
                 </div>
               )}
+            </Show>
+
+            <Show when={(props.objects?.length ?? 0) > 1}>
+              <div class="space-y-1 rounded bg-surface/20 p-2">
+                <For each={props.objects}>
+                  {(o) => (
+                    <div class="flex justify-between gap-2 text-xs" title={o.error ?? undefined}>
+                      <span class="text-text-muted truncate">{o.name}</span>
+                      <span class={o.error ? "text-warning" : "text-text"}>
+                        {o.error ? t("falló") : fmtNumber(o.quads)}
+                      </span>
+                    </div>
+                  )}
+                </For>
+              </div>
             </Show>
 
             <Checkbox

@@ -49,6 +49,7 @@ mod features;
 mod field;
 mod hierarchy;
 mod isotropic;
+mod objects;
 mod integer;
 mod quad;
 pub mod quality;
@@ -60,6 +61,7 @@ mod symmetry;
 mod surface;
 
 pub use config::{Rebuild, RemeshConfig, Symmetry};
+pub use objects::{remesh_groups, split_budget, ObjectReport, ObjectsRemesh, MIN_OBJECT_QUADS};
 pub use quad::{QuadFace, QuadMesh, QuadTopology};
 pub use quality::QualityReport;
 

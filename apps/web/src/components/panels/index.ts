@@ -10,7 +10,7 @@ export { ViewPanel } from "./ViewPanel";
 export type { ViewPanelProps, ViewSettings } from "./ViewPanel";
 
 export { RetopologyPanel } from "./RetopologyPanel";
-export type { RetopologyPanelProps, RetopologyConfig, QuadQuality } from "./RetopologyPanel";
+export type { RetopologyPanelProps, RetopologyConfig, QuadQuality, RetopologyObject } from "./RetopologyPanel";
 
 
 export { PlacementPanel } from "./PlacementPanel";

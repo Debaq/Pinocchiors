@@ -333,6 +333,9 @@ pub struct RetopologyConfig {
     /// Los quads siguen las costuras de UV (por defecto sí; solo si el
     /// modelo tiene UV)
     pub follow_seams: Option<bool>,
+    /// Retopologizar cada objeto (material) por separado, con su parte de los
+    /// quads (por defecto sí cuando hay más de uno)
+    pub per_object: Option<bool>,
 }
 
 impl RetopologyConfig {
@@ -407,6 +410,19 @@ pub struct QuadMeshInfo {
     pub uv_seam_faces: Option<usize>,
     /// Había rig y pasó a la malla nueva (mismo esqueleto, pesos trasladados)
     pub rig_kept: bool,
+    /// Un renglón por objeto si se retopologizó por objeto
+    pub objects: Vec<RetopologyObject>,
+}
+
+/// Resultado de retopologizar un objeto
+#[derive(Debug, Clone, Serialize)]
+pub struct RetopologyObject {
+    pub name: String,
+    pub faces_in: usize,
+    pub target: usize,
+    pub quads: usize,
+    /// Por qué el objeto no está en la malla nueva
+    pub error: Option<String>,
 }
 
 /// Datos de la malla de quads para Three.js
@@ -2883,14 +2899,53 @@ pub async fn run_retopology(
     remesh_config.preserve_seams &= has_uvs;
 
     let progress = on_progress.clone();
-    let (quad_mesh, quality, skin) = tauri::async_runtime::spawn_blocking(move || {
-        let quads = remesh_with_callback(&mesh, &remesh_config, |stage, message| {
+    let per_object = config.per_object.unwrap_or(true);
+    let (quad_mesh, quality, skin, objects) = tauri::async_runtime::spawn_blocking(move || {
+        let report = |stage: quadriflow_core::RemeshStage, message: &str| {
             let _ = progress.send(Progress {
                 stage: stage.name().to_string(),
                 percent: stage.progress(),
                 message: message.to_string(),
             });
-        })?;
+        };
+        // Un objeto por material de origen (el mismo criterio que al desplegar)
+        let groups = per_object
+            .then(|| {
+                let scene = scene.as_ref()?;
+                let surface = uv_core::scene_surface(scene).or_else(|| uv_core::material_surface(scene))?;
+                let positions: Vec<[f64; 3]> =
+                    mesh.vertices.iter().map(|v| [v.position.x(), v.position.y(), v.position.z()]).collect();
+                let faces: Vec<[usize; 3]> = (0..mesh.num_faces()).map(|i| mesh.get_face_vertices(i)).collect();
+                let groups = uv_core::face_groups(&surface, &positions, &faces);
+                let first = *groups.first()?;
+                groups.iter().any(|&g| g != first).then_some(groups)
+            })
+            .flatten();
+        let (quads, objects) = match groups {
+            Some(groups) => {
+                let result = quadriflow_core::remesh_groups(&mesh, &groups, &remesh_config, report)?;
+                let names = |g: usize| {
+                    g.checked_sub(1)
+                        .and_then(|m| scene.as_ref()?.materials.get(m))
+                        .map(|m| m.name.clone())
+                        .filter(|n| !n.is_empty())
+                        .unwrap_or_else(|| if g == 0 { "Sin material".to_string() } else { format!("Material {g}") })
+                };
+                let objects = result
+                    .reports
+                    .iter()
+                    .map(|r| RetopologyObject {
+                        name: names(r.group),
+                        faces_in: r.faces_in,
+                        target: r.target,
+                        quads: r.quads_out,
+                        error: r.error.clone(),
+                    })
+                    .collect();
+                (result.mesh, objects)
+            }
+            None => (remesh_with_callback(&mesh, &remesh_config, report)?, Vec::new()),
+        };
         let quality = quadriflow_core::quality::analyze(&quads, Some(&mesh));
         let skin = scene.as_ref().and_then(|scene| {
             let surface = uv_core::scene_surface(scene)?;
@@ -2902,7 +2957,7 @@ pub async fn run_retopology(
             let (positions, faces) = quad_arrays(&quads);
             Some(uv_core::transferred_skin(scene, &surface, &positions, &faces))
         });
-        Ok::<_, quadriflow_core::RemeshError>((quads, quality, skin))
+        Ok::<_, quadriflow_core::RemeshError>((quads, quality, skin, objects))
     })
     .await
     .map_err(|e| format!("La retopología terminó inesperadamente: {e}"))?
@@ -2943,6 +2998,7 @@ pub async fn run_retopology(
             uv_core::SkinInfo::Unwrapped { .. } => None,
         }),
         rig_kept: rig.is_some(),
+        objects,
     };
 
     let _ = on_progress.send(Progress {
@@ -4391,6 +4447,7 @@ mod tests {
             adaptive_density: Some(true),
             symmetry: Some("x".into()),
             follow_seams: Some(false),
+            per_object: None,
         };
         let r = config.to_remesh_config().unwrap();
         assert_eq!(r.target_faces, 3000);

@@ -563,3 +563,25 @@ fn quads_follow_uv_seams() {
     let edge = (4.0 * PI / 600.0).sqrt();
     assert_eq!(quads_crossing(&q, z0, 0.05 * edge), 0);
 }
+
+/// Una esfera grande y una chica que se cruzan: juntas se funden; por objeto
+/// quedan las dos.
+#[test]
+fn groups_keep_each_object_even_when_they_overlap() {
+    let (mut p, mut t) = sphere_triangles(1.0);
+    let n = p.len();
+    let faces_big = t.len();
+    p.extend(sphere_triangles(0.3).0.iter().map(|q| Vector3(q.0 + V3::new(0.9, 0.0, 0.0))));
+    t.extend(sphere_triangles(0.3).1.iter().map(|f| f.map(|i| i + n)));
+    let mesh = Mesh::from_triangles(&p, &t);
+    let groups: Vec<usize> = (0..t.len()).map(|f| usize::from(f >= faces_big)).collect();
+
+    let result = quadriflow_core::remesh_groups(&mesh, &groups, &config(1200), |_, _| {}).unwrap();
+    assert_eq!(result.reports.len(), 2);
+    assert!(result.reports.iter().all(|r| r.error.is_none() && r.quads_out > 0), "{:?}", result.reports);
+    assert_eq!(result.face_group.len(), result.mesh.faces.len());
+    assert_eq!(component_count(&result.mesh), 2, "las dos esferas siguen separadas");
+    // El área reparte: la grande se lleva casi todo, la chica el piso o poco más
+    assert!(result.reports[0].quads_out > 10 * result.reports[1].quads_out / 2);
+    assert!(result.reports[1].quads_out >= 12, "{:?}", result.reports[1]);
+}

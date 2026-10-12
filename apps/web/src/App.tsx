@@ -43,6 +43,7 @@ import {
   type ViewSettings,
   type RetopologyConfig,
   type QuadQuality,
+  type RetopologyObject,
 } from "./components/panels";
 import {
   Viewer3D,
@@ -413,6 +414,8 @@ interface TauriQuadMeshInfo {
   uv_seam_faces: number | null;
   /** Había rig y pasó a la malla nueva (mismo esqueleto, pesos trasladados) */
   rig_kept: boolean;
+  /** Un renglón por objeto si se retopologizó por objeto */
+  objects: RetopologyObject[];
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1072,7 +1075,9 @@ export const App: Component = () => {
     adaptiveDensity: false,
     symmetry: "none",
     followSeams: true,
+    perObject: true,
   });
+  const [quadObjects, setQuadObjects] = createSignal<RetopologyObject[]>([]);
   const [quadQuality, setQuadQuality] = createSignal<QuadQuality | undefined>();
   const [quadMeshData, setQuadMeshData] = createSignal<MeshData | undefined>();
   const [quadMeshLoaded, setQuadMeshLoaded] = createSignal(false);
@@ -1432,6 +1437,7 @@ export const App: Component = () => {
     setQuadMeshLoaded(false);
     setQuadMeshInfo({ vertices: 0, quads: 0 });
     setQuadQuality(undefined);
+    setQuadObjects([]);
     setShowQuadMesh(false);
     setExportUseRetopology(false);
     setActiveQuad(false);
@@ -5964,6 +5970,7 @@ export const App: Component = () => {
             adaptive_density: config.adaptiveDensity,
             symmetry: config.symmetry,
             follow_seams: config.followSeams,
+            per_object: config.perObject !== false,
           },
           onProgress,
         });
@@ -5971,6 +5978,7 @@ export const App: Component = () => {
 
         setQuadMeshInfo({ vertices: info.num_vertices, quads: info.num_quads });
         setQuadQuality(info.quality);
+        setQuadObjects(info.objects ?? []);
 
         setProgress({ value: 100, label: t("Cargando en el visor...") });
         const quadData = decodeMesh(await invoke<ArrayBuffer>("get_quad_mesh_data"));
@@ -8279,6 +8287,7 @@ export const App: Component = () => {
               useForNextSteps: activeQuad(),
               onUseForNextStepsChange: handleActiveMesh,
               quality: quadQuality(),
+              objects: quadObjects(),
               },
               remeshStats: remeshStats(),
               simplify: {

@@ -1,5 +1,5 @@
 import { Component, Show } from "solid-js";
-import { Panel, Slider, Button, Select, Checkbox } from "../ui";
+import { Panel, Slider, Button, Select, Checkbox, Hint, Tooltip } from "../ui";
 import * as Icons from "../icons";
 import { t } from "../../lib/i18n";
 
@@ -69,41 +69,55 @@ const PREVIEW_OPTIONS = [
   { value: "none", get label() { return t("Sin textura"); } },
 ];
 
-const Row: Component<{ label: string; value: string; warn?: boolean }> = (props) => (
-  <div class="flex justify-between text-xs">
-    <span class="text-text-muted">{props.label}</span>
-    <span class={props.warn ? "text-warning" : "text-text"}>{props.value}</span>
-  </div>
-);
+const Row: Component<{ label: string; value: string; warn?: boolean; hint?: string }> = (props) => {
+  const row = (
+    <div class="flex justify-between text-xs">
+      <span class="text-text-muted">{props.label}</span>
+      <span class={props.warn ? "text-warning" : "text-text"}>{props.value}</span>
+    </div>
+  );
+  return props.hint ? (
+    <Tooltip content={props.hint} placement="left" class="block w-full">
+      {row}
+    </Tooltip>
+  ) : (
+    row
+  );
+};
 
 /** Tamaño de textura, margen y curvatura: comunes a los dos desplegados */
 const UnwrapOptions: Component<{ config: UvConfig; onChange: (partial: Partial<UvConfig>) => void; hasRig?: boolean }> = (
   props
 ) => (
   <>
-    <Select
-      label={t("Distribución")}
-      options={LAYOUT_OPTIONS}
-      value={props.config.layout ?? "paintable"}
-      onChange={(v) => props.onChange({ layout: v as UvConfig["layout"] })}
-    />
-    <p class="text-xs text-text-muted leading-relaxed">
-      {(props.config.layout ?? "paintable") === "paintable"
-        ? t("Islas grandes y derechas, ubicadas como en el modelo: un lado arriba y el otro abajo, como una hoja de vistas.")
-        : t("Islas acomodadas para aprovechar al máximo la textura. Difícil de pintar a mano.")}
-    </p>
+    <Tooltip
+      content={
+        (props.config.layout ?? "paintable") === "paintable"
+          ? t("Islas grandes y derechas, ubicadas como en el modelo (una hoja de vistas).")
+          : t("Islas apretadas para aprovechar la textura. Difícil de pintar a mano.")
+      }
+      placement="left"
+      class="block w-full"
+    >
+      <Select
+        label={t("Distribución")}
+        options={LAYOUT_OPTIONS}
+        value={props.config.layout ?? "paintable"}
+        onChange={(v) => props.onChange({ layout: v as UvConfig["layout"] })}
+      />
+    </Tooltip>
     <Show when={(props.config.layout ?? "paintable") === "paintable"}>
       <Checkbox
         label={t("Una isla por parte del cuerpo")}
+        hint={
+          props.hasRig
+            ? t("Cabeza, torso, patas y cola según el rig. No aplica con varios objetos.")
+            : t("Calcula los pesos del rig para cortar por partes del cuerpo.")
+        }
         checked={props.config.byParts === true && props.hasRig === true}
         disabled={!props.hasRig}
         onChange={(v) => props.onChange({ byParts: v })}
       />
-      <p class="text-xs text-text-muted leading-relaxed">
-        {props.hasRig
-          ? t("Cabeza, torso, cada pata y la cola según el rig, abiertas por el lado que no se ve (cara interna, panza). Los nombres van en la guía al exportar la textura.")
-          : t("Calcula los pesos del rig para cortar el mapa por partes del cuerpo.")}
-      </p>
     </Show>
     <Select
       label={t("Tamaño de textura")}
@@ -122,6 +136,7 @@ const UnwrapOptions: Component<{ config: UvConfig; onChange: (partial: Partial<U
     />
     <Slider
       label={t("Curvatura por isla")}
+      title={t("Menos grados: más islas con menos distorsión. Más grados: menos costuras.")}
       value={props.config.maxAngle}
       onChange={(v) => props.onChange({ maxAngle: v })}
       min={25}
@@ -129,9 +144,6 @@ const UnwrapOptions: Component<{ config: UvConfig; onChange: (partial: Partial<U
       step={5}
       formatValue={(v) => `${v}°`}
     />
-    <p class="text-xs text-text-muted leading-relaxed">
-      {t("Menos grados: más islas con menos distorsión. Más grados: menos costuras.")}
-    </p>
   </>
 );
 
@@ -141,10 +153,12 @@ export const UvStep: Component<UvStepProps> = (props) => {
 
   return (
     <div class="space-y-5">
-      <h3 class="text-sm font-semibold text-text">{t("UV / Piel")}</h3>
-      <p class="text-xs text-text-muted leading-relaxed">
-        {t("El mapa UV extiende la superficie en un plano para pintarla. Si el modelo traía UV, la retopología ya las trasladó; desplegar corta islas nuevas por las aristas de los quads y hornea encima las texturas originales (color, rugosidad y el relieve de la malla original como normal map), sin costuras. Sin UV de origen (un escaneo en STL) se hornean igual el relieve y los colores de vértice.")}
-      </p>
+      <div class="flex items-center justify-between">
+        <h3 class="text-sm font-semibold text-text">{t("UV / Piel")}</h3>
+        <Hint
+          text={t("Extiende la superficie en un plano para pintarla. Desplegar corta islas nuevas y hornea encima las texturas y el relieve originales. Con varios materiales, cada objeto tiene su propio mapa.")}
+        />
+      </div>
 
       <Show
         when={props.hasRetopology}
@@ -155,24 +169,22 @@ export const UvStep: Component<UvStepProps> = (props) => {
           >
             <Panel title={t("Desplegar la malla original")} icon={<Icons.Checkerboard size={14} />} defaultOpen>
               <div class="space-y-5 pt-1">
-                <p class="text-xs text-text-muted leading-relaxed">
-                  {t("Sin retopología: despliega los triángulos del modelo tal cual. La forma no cambia; los vértices se parten en las costuras y el rig los sigue.")}{" "}
-                  {props.modelHasUvs
-                    ? t("Reemplaza las UV que traía y hornea sus texturas sobre el mapa nuevo.")
-                    : t("Queda listo para pintarlo en el editor de texturas.")}{" "}
-                  {t("Para una malla liviana con quads, haz primero la retopología.")}
-                </p>
                 <UnwrapOptions config={props.config} onChange={update} hasRig={props.hasRig} />
                 <Button
                   variant="primary"
                   class="w-full"
                   onClick={() => props.onUnwrapOriginal?.()}
                   disabled={props.isProcessing}
+                  hint={
+                    t("Despliega los triángulos del modelo tal cual: la forma no cambia y el rig sigue.") +
+                    " " +
+                    (props.modelHasUvs ? t("Reemplaza sus UV y hornea sus texturas.") : t("Queda listo para pintar."))
+                  }
                 >
                   {props.isProcessing ? t("Procesando...") : t("Desplegar la malla original")}
                 </Button>
                 <Show when={props.canUndoOriginal}>
-                  <Button class="w-full" onClick={() => props.onUndoOriginal?.()} disabled={props.isProcessing}>
+                  <Button class="w-full" onClick={() => props.onUndoOriginal?.()} disabled={props.isProcessing} hint={t("Deshace el desplegado de la malla original")}>
                     {t("Volver a la malla anterior")}
                   </Button>
                 </Show>
@@ -191,12 +203,8 @@ export const UvStep: Component<UvStepProps> = (props) => {
                     label={t("Caras que cruzan costuras")}
                     value={(info().seam_faces ?? 0).toLocaleString()}
                     warn={(info().seam_faces ?? 0) > 0}
+                    hint={(info().seam_faces ?? 0) > 0 ? t("La textura puede verse estirada ahí. Desplegar y hornear lo corrige.") : undefined}
                   />
-                  <Show when={(info().seam_faces ?? 0) > 0}>
-                    <p class="text-xs text-text-muted leading-relaxed pt-1">
-                      {t("En esas caras la textura puede verse estirada. Desplegar y hornear lo corrige.")}
-                    </p>
-                  </Show>
                 </Show>
                 <Show when={info().mode === "unwrapped"}>
                   <Row label={t("Islas")} value={(info().num_charts ?? 0).toLocaleString()} />
@@ -224,11 +232,12 @@ export const UvStep: Component<UvStepProps> = (props) => {
               class="w-full"
               onClick={() => props.onUnwrap?.()}
               disabled={props.isProcessing}
+              hint={t("Corta islas, despliega y hornea las texturas originales sobre el mapa nuevo")}
             >
               {props.isProcessing ? t("Procesando...") : t("Desplegar y hornear")}
             </Button>
             <Show when={props.info?.can_restore && props.info?.mode === "unwrapped"}>
-              <Button class="w-full" onClick={() => props.onRestore?.()} disabled={props.isProcessing}>
+              <Button class="w-full" onClick={() => props.onRestore?.()} disabled={props.isProcessing} hint={t("Vuelve al mapa del modelo original")}>
                 {t("Volver a las UV trasladadas")}
               </Button>
             </Show>

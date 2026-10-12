@@ -1,5 +1,6 @@
 import { JSX, ParentComponent, splitProps } from "solid-js";
 import { clsx } from "clsx";
+import { Tooltip } from "./Tooltip";
 
 export type ButtonVariant = "default" | "primary" | "ghost" | "danger";
 export type ButtonSize = "sm" | "md" | "lg";
@@ -11,6 +12,8 @@ export interface ButtonProps extends JSX.ButtonHTMLAttributes<HTMLButtonElement>
   iconRight?: JSX.Element;
   loading?: boolean;
   fullWidth?: boolean;
+  /** Globito con lo que hace el botón (reemplaza los párrafos de ayuda) */
+  hint?: string;
 }
 
 const variantClasses: Record<ButtonVariant, string> = {
@@ -53,9 +56,10 @@ export const Button: ParentComponent<ButtonProps> = (props) => {
     "class",
     "children",
     "disabled",
+    "hint",
   ]);
 
-  return (
+  const button = (
     <button
       class={clsx(
         // Base
@@ -99,5 +103,17 @@ export const Button: ParentComponent<ButtonProps> = (props) => {
       {local.children}
       {local.iconRight && <span class="shrink-0">{local.iconRight}</span>}
     </button>
+  );
+
+  return local.hint ? (
+    <Tooltip
+      content={local.hint}
+      placement="left"
+      class={local.fullWidth || local.class?.includes("w-full") ? "flex w-full" : "inline-flex"}
+    >
+      {button}
+    </Tooltip>
+  ) : (
+    button
   );
 };
