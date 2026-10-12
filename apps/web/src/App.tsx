@@ -75,6 +75,8 @@ import {
   boundsAfter,
   type FloorCandidate,
   type OriginMode,
+  type PivotChoice,
+  pivotPosition,
   type PlacementInfo,
 } from "./lib/placement";
 import type { SceneStructure, MaterialInfo } from "./components/steps/StructureStep";
@@ -120,7 +122,8 @@ import { autoMap, retargetClip, type RetargetMap, type SourceMotion } from "./li
 import { ConfirmDialog, type ConfirmChoice, type ConfirmRequest } from "./components/layout/ConfirmDialog";
 import { cameraFileSuffix, renderCameraById } from "./lib/renderCameras";
 import { renderLightById } from "./lib/renderLights";
-import { composeSheet, type SheetCell, type StillImage } from "./lib/renderStill";
+import { composeSheet, type RenderStillOptions, type SheetCell, type StillImage } from "./lib/renderStill";
+import { formatEta, renderRay, type RayProgress } from "./lib/rayRender";
 import { cameraZoom, defaultRenderSettings, renderLayout, type RenderSettings } from "./components/steps/RenderStep";
 import { RenderEditor } from "./components/layout/RenderEditor";
 
@@ -1063,6 +1066,11 @@ export const App: Component = () => {
   const [placementMode, setPlacementMode] = createSignal<PlacementMode | undefined>();
   const [floorCandidates, setFloorCandidates] = createSignal<FloorCandidate[]>([]);
   const [centerOfMass, setCenterOfMass] = createSignal<THREE.Vector3 | undefined>();
+  // Centro del gizmo del modelo: para girar/escalar y para mover
+  const [pivotChoice, setPivotChoice] = createSignal<{ spin: PivotChoice; move: PivotChoice }>({
+    spin: { mode: "auto" },
+    move: { mode: "auto" },
+  });
 
   // Retopology state
   const [retopologyConfig, setRetopologyConfig] = createSignal<RetopologyConfig>({
@@ -1127,6 +1135,7 @@ export const App: Component = () => {
   const [renderDir, setRenderDir] = createPersisted<string>("render.dir", "");
   const [renderPreview, setRenderPreview] = createSignal<{ url: string; x: number; y: number; w: number; h: number } | undefined>();
   const [renderProgress, setRenderProgress] = createSignal<number | undefined>();
+  const [renderDetail, setRenderDetail] = createSignal<string | undefined>();
   const [renderViewSize, setRenderViewSize] = createSignal({ width: 1280, height: 720 });
   let renderAbort: AbortController | undefined;
   const [canUndoPrintScale, setCanUndoPrintScale] = createSignal(false);
@@ -5558,6 +5567,40 @@ export const App: Component = () => {
   const panRenderCamera = (dx: number, dy: number, mods?: { shiftKey: boolean; altKey: boolean }) => {
     viewerRef?.panCamera(dx, dy, mods?.altKey ? 1 : mods?.shiftKey ? 20 : 2);
   };
+  /**
+   * Una imagen con el motor elegido: el del visor o GeppettoRay (Rust, en segundo plano).
+   * Con GeppettoRay el avance trae pasada y tiempo estimado, y `onPreview` recibe la
+   * imagen que se va afinando.
+   */
+  const renderImage = async (
+    v: Viewer3D,
+    opts: RenderStillOptions,
+    s: RenderSettings,
+    onProgress: (fraction: number) => void,
+    signal: AbortSignal,
+    onPreview?: (png: Uint8Array) => void,
+  ): Promise<StillImage> => {
+    if (s.engine !== "geppettoray") return v.renderStill(opts, onProgress, signal);
+    const view = v.getRayView();
+    if (opts.lights) view.lights = opts.lights;
+    const show = (p: RayProgress) => {
+      onProgress(p.fraction);
+      setRenderDetail(
+        t("Pasada {pass} de {passes} · {samples} de {total} muestras{eta}", {
+          pass: p.pass,
+          passes: p.passes,
+          samples: p.samples,
+          total: p.totalSamples,
+          eta: p.etaSecs > 0 ? t(" · faltan {time}", { time: formatEta(p.etaSecs) }) : "",
+        }),
+      );
+    };
+    try {
+      return await renderRay(invoke as never, view, opts, { samples: s.raySamples, denoise: s.rayDenoise }, show, signal, onPreview);
+    } finally {
+      setRenderDetail(undefined);
+    }
+  };
   const closeRenderPreview = () => {
     const old = renderPreview();
     if (old) URL.revokeObjectURL(old.url);
@@ -5578,7 +5621,8 @@ export const App: Component = () => {
     renderAbort = controller;
     setRenderProgress(0);
     try {
-      const image = await v.renderStill(
+      const image = await renderImage(
+        v,
         {
           width,
           height,
@@ -5597,8 +5641,14 @@ export const App: Component = () => {
           shadows: s.shadows,
           ambientOcclusion: s.ambientOcclusion,
         },
+        s,
         setRenderProgress,
         controller.signal,
+        // La imagen se ve mientras se afina
+        (png) => {
+          closeRenderPreview();
+          setRenderPreview({ url: URL.createObjectURL(new Blob([png as BlobPart], { type: "image/png" })), ...frame.css });
+        },
       );
       closeRenderPreview();
       setRenderPreview({ url: URL.createObjectURL(new Blob([image.bytes as BlobPart], { type: "image/png" })), ...frame.css });
@@ -5639,12 +5689,15 @@ export const App: Component = () => {
     try {
       const cells: SheetCell[] = [];
       let size = 0;
+      // Dónde se muestra la imagen mientras GeppettoRay la afina
+      const liveFrame = v.getRenderFrameRect(layout.cell.width / layout.cell.height);
       const count = layout.cameras.length;
       for (let i = 0; i < count; i++) {
         const camera = layout.cameras[i];
         if (camera.direction) v.setRenderCamera(camera.direction, layout.cell.width / layout.cell.height, cameraZoom(s, camera.id));
         else v.restoreCameraPose(pose);
-        const image = await v.renderStill(
+        const image = await renderImage(
+          v,
           {
             width: layout.cell.width,
             height: layout.cell.height,
@@ -5664,8 +5717,13 @@ export const App: Component = () => {
             shadows: s.shadows,
             ambientOcclusion: s.ambientOcclusion,
           },
+          s,
           (fraction) => setRenderProgress((i + fraction) / count),
           controller.signal,
+          (png) => {
+            closeRenderPreview();
+            setRenderPreview({ url: URL.createObjectURL(new Blob([png as BlobPart], { type: "image/png" })), ...liveFrame.css });
+          },
         );
         if (layout.sheet) {
           cells.push({ image, label: camera.label() });
@@ -5703,6 +5761,7 @@ export const App: Component = () => {
       setStatusMessage(cancelled ? t("Render cancelado") : t("Error: {e}", { e: tBackend(String(e instanceof Error ? e.message : e)) }));
     } finally {
       v.restoreCameraPose(pose);
+      if (s.engine === "geppettoray") closeRenderPreview();
       renderAbort = undefined;
       setRenderProgress(undefined);
     }
@@ -5737,8 +5796,33 @@ export const App: Component = () => {
 
   const sendPlacement = async (matrix: THREE.Matrix4) => {
     const result = await invoke<{ skeleton_reset: boolean }>("apply_placement", { matrix: matrix.elements });
+    // El punto elegido con un clic viaja con el modelo
+    setPivotChoice((c) => {
+      const move = (p: PivotChoice): PivotChoice =>
+        p.point ? { ...p, point: new THREE.Vector3(...p.point).applyMatrix4(matrix).toArray() as [number, number, number] } : p;
+      return { spin: move(c.spin), move: move(c.move) };
+    });
     await refreshAfterPlacement(result.skeleton_reset);
   };
+
+  /** Centro de masa solo si algún pivote lo pide (se recalcula tras cada cambio de la malla) */
+  createEffect(() => {
+    const wantsMass = pivotChoice().spin.mode === "mass" || pivotChoice().move.mode === "mass";
+    if (!wantsMass || !meshData() || centerOfMass()) return;
+    invoke<PlacementInfo>("get_placement_info")
+      .then((info) => setCenterOfMass(new THREE.Vector3(...info.center_of_mass)))
+      .catch((e) => setStatusMessage(t("No se pudo calcular el centro de masa: {e}", { e: tBackend(String(e)) })));
+  });
+
+  const objectPivots = createMemo(() => {
+    const data = meshData();
+    if (!data) return { spin: null, move: null };
+    const choice = pivotChoice();
+    return {
+      spin: pivotPosition(data.positions, choice.spin, centerOfMass()),
+      move: pivotPosition(data.positions, choice.move, centerOfMass()),
+    };
+  });
 
   /**
    * Alinear el escaneo desde Diseñar: la matriz viene en coordenadas del CAD.
@@ -5805,6 +5889,9 @@ export const App: Component = () => {
         return;
       }
       await applyPlacement(matrix, t("Frente elegido: el modelo mira hacia −Y (vista frontal)"));
+    } else if (pick.kind === "surface" && (mode === "pivotSpin" || mode === "pivotMove")) {
+      const kind = mode === "pivotSpin" ? "spin" : "move";
+      setPivotChoice((c) => ({ ...c, [kind]: { mode: "point", point: pick.point } }));
     } else if (pick.kind === "surface" && mode === "point") {
       await applyPlacement(originMatrix(positions, "point", undefined, new THREE.Vector3(...pick.point)), t("Origen en el punto elegido"));
     }
@@ -8102,6 +8189,7 @@ export const App: Component = () => {
               boneEditMode={boneEditMode()}
               activeTool={activeTool()}
               objectTools={toolCtx() === "object"}
+              objectPivots={objectPivots()}
               toolHint={toolDisabledReason(activeTool()) ? undefined : tools().find((t) => t.id === activeTool())?.hint}
               onObjectTransformed={handleObjectGizmo}
               contextMenuItems={viewportMenuItems}
@@ -8317,6 +8405,8 @@ export const App: Component = () => {
                 onOrigin: handleOrigin,
                 onScale: handleScaleModel,
                 onMove: handleMoveModel,
+                pivots: pivotChoice(),
+                onPivot: (kind: "spin" | "move", choice: PivotChoice) => setPivotChoice((c) => ({ ...c, [kind]: choice })),
                 size: modelSize() && viewSize(modelSize()!),
                 unit: { label: gridUnits().unitLabel, perSceneUnit: gridUnits().metersPerUnit / gridUnits().unitMeters },
                 disabled: isProcessing(),
@@ -8515,6 +8605,7 @@ export const App: Component = () => {
               panelOpen: renderEditorOpen(),
               onTogglePanel: () => setRenderEditorOpen(!renderEditorOpen()),
               progress: renderProgress(),
+              progressDetail: renderDetail(),
               canRender: hasWork() && !inDesign(),
               onRender: () => void handleRender(),
               onPreview: () => void handleRenderPreview(),

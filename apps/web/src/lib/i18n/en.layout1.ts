@@ -220,6 +220,8 @@ export const en_layout1: Catalog = {
   "Clic en un plano: pasa a ser el piso (verde = estable) · Shift+clic: la superficie bajo el cursor": "Click a plane: it becomes the floor (green = stable) · Shift+click: the surface under the cursor",
   "Clic en la cara que debe mirar al frente (hacia −Y, la vista frontal)": "Click the face that should look to the front (toward −Y, the front view)",
   "Clic en el punto que será el origen": "Click the point that will be the origin",
+  "Clic en el punto sobre el que gira y se escala el modelo": "Click the point the model rotates and scales around",
+  "Clic en el punto de referencia para mover el modelo": "Click the reference point for moving the model",
   "Outliner": "Outliner",
   "Buscar en el Outliner": "Search in the Outliner",
   "Buscar": "Search",

@@ -3381,6 +3381,8 @@ dependencies = [
  "converter-scene",
  "converter-stl",
  "converter-usda",
+ "geppettoray",
+ "glam",
  "gtk",
  "image",
  "nalgebra",

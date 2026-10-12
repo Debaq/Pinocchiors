@@ -88,6 +88,8 @@ export interface ViewportProps {
   activeTool?: string;
   /** Las herramientas actúan sobre el modelo entero en vez del esqueleto */
   objectTools?: boolean;
+  /** Centro del gizmo del modelo: para girar/escalar y para mover (`null`: automático) */
+  objectPivots?: { spin: [number, number, number] | null; move: [number, number, number] | null };
   /** Ayuda de la herramienta activa (cuando no hay otra operación en curso) */
   toolHint?: string;
 
@@ -104,6 +106,8 @@ const PLACEMENT_HINTS: Record<PlacementMode, string> = {
   floor: "Clic en un plano: pasa a ser el piso (verde = estable) · Shift+clic: la superficie bajo el cursor",
   front: "Clic en la cara que debe mirar al frente (hacia −Y, la vista frontal)",
   point: "Clic en el punto que será el origen",
+  pivotSpin: "Clic en el punto sobre el que gira y se escala el modelo",
+  pivotMove: "Clic en el punto de referencia para mover el modelo",
 };
 
 export const Viewport: Component<ViewportProps> = (props) => {
@@ -245,6 +249,11 @@ export const Viewport: Component<ViewportProps> = (props) => {
 
   createEffect(() => {
     viewer?.setObjectTools(props.objectTools ?? false);
+  });
+
+  createEffect(() => {
+    const pivots = props.objectPivots;
+    viewer?.setObjectPivots(pivots?.spin ?? null, pivots?.move ?? null);
   });
 
   createEffect(() => {

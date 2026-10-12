@@ -11,6 +11,7 @@ pub mod linux_desktop;
 pub mod commands;
 pub mod placement;
 pub mod project;
+pub mod ray_render;
 pub mod remesh;
 pub mod scan_cloud;
 pub mod scanner;
@@ -38,6 +39,7 @@ pub fn run() {
             app.manage(AppState::new());
             app.manage(textures::TextureWatch::default());
             app.manage(scanner::ScannerHandle::default());
+            app.manage(ray_render::RayRender::default());
             app.manage(scan_cloud::CloudEditor::default());
             #[cfg(target_os = "linux")]
             enable_camera(app);
@@ -58,6 +60,10 @@ pub fn run() {
             commands::import_model,
             commands::export_model,
             commands::write_render_image,
+            ray_render::ray_render_start,
+            ray_render::ray_render_status,
+            ray_render::ray_render_image,
+            ray_render::ray_render_cancel,
             commands::get_mesh_data,
             commands::get_mesh_preview,
             commands::set_mesh_build,

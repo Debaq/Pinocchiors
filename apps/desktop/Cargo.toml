@@ -44,6 +44,10 @@ uv-core = { workspace = true }
 converter-layers = { workspace = true }
 image = { workspace = true }
 
+# GeppettoRay: motor de render propio
+geppettoray = { workspace = true }
+glam = { workspace = true }
+
 # Escáneres 3D (Orizon3D)
 orizon3d-core = { workspace = true }
 

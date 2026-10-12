@@ -3,7 +3,7 @@ import { clsx } from "clsx";
 import { Panel, Button, Select } from "../ui";
 import * as Icons from "../icons";
 import type { PlacementMode } from "../../lib/Viewer3D";
-import type { OriginMode } from "../../lib/placement";
+import type { OriginMode, PivotChoice, PivotMode } from "../../lib/placement";
 import { AXES, type Axis } from "../../lib/axes";
 import { t } from "../../lib/i18n";
 
@@ -25,8 +25,20 @@ export interface PlacementPanelProps {
   size?: [number, number, number];
   /** Unidad en que se muestran las medidas (la de la grilla) */
   unit?: { label: string; perSceneUnit: number };
+  /** Centro del gizmo: `spin` para girar y escalar, `move` para mover */
+  pivots?: { spin: PivotChoice; move: PivotChoice };
+  /** "point" no pasa por aquí: se elige con un clic (`onPickMode`) */
+  onPivot?: (kind: "spin" | "move", choice: PivotChoice) => void;
   disabled?: boolean;
 }
+
+const PIVOT_OPTIONS = [
+  { value: "auto", get label() { return t("Automático"); } },
+  { value: "base", get label() { return t("Centro de la base"); } },
+  { value: "box", get label() { return t("Centro de la caja"); } },
+  { value: "mass", get label() { return t("Centro de masa"); } },
+  { value: "point", get label() { return t("Punto con clic"); } },
+];
 
 const ORIGIN_OPTIONS = [
   { value: "base", get label() { return t("Centro de la base"); } },
@@ -251,6 +263,33 @@ export const PlacementPanel: Component<PlacementPanelProps> = (props) => {
           </div>
           <p class="text-[11px] text-text-muted leading-snug">
             {t("La escala es igual en los tres ejes y se hace desde el centro de la base, así el modelo sigue apoyado.")}
+          </p>
+        </Section>
+
+        <Section title={t("Centro del gizmo")}>
+          <For each={[{ kind: "spin" as const, label: t("Girar y escalar"), pick: "pivotSpin" as const }, { kind: "move" as const, label: t("Referencia al mover"), pick: "pivotMove" as const }]}>
+            {(row) => (
+              <div class="space-y-1.5">
+                <Select
+                  label={row.label}
+                  options={PIVOT_OPTIONS}
+                  value={props.pivots?.[row.kind].mode ?? "auto"}
+                  onChange={(value) => {
+                    if (value === "point") props.onPickMode?.(row.pick);
+                    else props.onPivot?.(row.kind, { mode: value as PivotMode });
+                  }}
+                  disabled={props.disabled}
+                />
+                {props.mode === row.pick && (
+                  <Button size="sm" variant="danger" fullWidth onClick={() => props.onPickMode?.(undefined)}>
+                    {t("Cancelar")}
+                  </Button>
+                )}
+              </div>
+            )}
+          </For>
+          <p class="text-[11px] text-text-muted leading-snug">
+            {t("Dónde queda el gizmo de Mover, Rotar y Escalar (G, R, S). Girar y escalar usan ese punto como centro; la referencia al mover es el punto que agarras. No cambia el origen del modelo.")}
           </p>
         </Section>
 

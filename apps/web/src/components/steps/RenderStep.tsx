@@ -11,6 +11,8 @@ export type RenderSize = "screen" | "hd" | "uhd" | "custom";
 export type RenderOutput = "files" | "sheet";
 
 /** Lo que recuerda el diálogo de Render entre sesiones */
+export type RenderEngine = "viewer" | "geppettoray";
+
 export interface RenderSettings {
   size: RenderSize;
   /** Medidas del tamaño personalizado */
@@ -26,6 +28,12 @@ export interface RenderSettings {
   lightPreset: string;
   /** Suelo invisible que recibe la sombra del modelo */
   groundShadow: boolean;
+  /** Motor: el del visor (rápido) o GeppettoRay (path tracing, luz global) */
+  engine: RenderEngine;
+  /** Muestras por píxel de GeppettoRay */
+  raySamples: number;
+  /** GeppettoRay: quita el ruido que queda al final */
+  rayDenoise: boolean;
   /** Cuadros promediados por píxel: 1, 4 o 16 */
   samples: number;
   format: StillFormat;
@@ -64,6 +72,9 @@ export const defaultRenderSettings: RenderSettings = {
   color2: "#9aa4b5",
   lightPreset: "viewer",
   groundShadow: false,
+  engine: "viewer",
+  raySamples: 128,
+  rayDenoise: true,
   samples: 4,
   format: "png",
   quality: 92,
@@ -173,6 +184,17 @@ export const RenderOptions: Component<RenderOptionsProps> = (props) => {
     { value: "4", get label() { return t("Normal (4 cuadros)"); } },
     { value: "16", get label() { return t("Alta (16 cuadros)"); } },
   ];
+  const engineOptions = [
+    { value: "viewer", get label() { return t("Rápido (visor)"); } },
+    { value: "geppettoray", label: "GeppettoRay" },
+  ];
+  const raySampleOptions = [
+    { value: "32", get label() { return t("Borrador (32 muestras)"); } },
+    { value: "128", get label() { return t("Normal (128 muestras)"); } },
+    { value: "512", get label() { return t("Alta (512 muestras)"); } },
+    { value: "2048", get label() { return t("Máxima (2048 muestras)"); } },
+  ];
+  const ray = () => s().engine === "geppettoray";
   const formatOptions = [
     { value: "png", label: "PNG" },
     { value: "jpeg", label: "JPG" },
@@ -272,7 +294,17 @@ export const RenderOptions: Component<RenderOptionsProps> = (props) => {
 
       {/* Calidad y formato */}
       <div class="space-y-2 p-3 rounded-md bg-surface/30 border border-border break-inside-avoid mb-3">
-        <Select label={t("Calidad")} options={sampleOptions} value={String(s().samples)} disabled={busy()} onChange={(v) => set({ samples: Number(v) })} />
+        <Select label={t("Motor")} options={engineOptions} value={s().engine} disabled={busy()} onChange={(v) => set({ engine: v as RenderEngine })} />
+        <Show
+          when={ray()}
+          fallback={<Select label={t("Calidad")} options={sampleOptions} value={String(s().samples)} disabled={busy()} onChange={(v) => set({ samples: Number(v) })} />}
+        >
+          <Select label={t("Calidad")} options={raySampleOptions} value={String(s().raySamples)} disabled={busy()} onChange={(v) => set({ raySamples: Number(v) })} />
+          <Tooltip content={t("Quita el ruido al terminar, sin borrar el detalle de las texturas ni los bordes.")} placement="left">
+            <Checkbox label={t("Quitar ruido")} checked={s().rayDenoise} disabled={busy()} onChange={(v) => set({ rayDenoise: v })} />
+          </Tooltip>
+          <Hint text={t("Simula la luz de verdad (rebotes, vidrio, reflejos): tarda más, pero la imagen se ve mientras se afina. Las sombras suaves, el suelo con sombra y la oclusión ambiental del visor no se usan: la luz ya las produce.")} />
+        </Show>
         <Select label={t("Formato")} options={formatOptions} value={s().format} disabled={busy()} onChange={(v) => set({ format: v as StillFormat })} />
         <Show when={s().format !== "png"}>
           <Slider label={t("Calidad de compresión")} min={50} max={100} step={1} value={s().quality} onChange={(v) => set({ quality: v })} showValue />
@@ -286,13 +318,13 @@ export const RenderOptions: Component<RenderOptionsProps> = (props) => {
           <Select label={t("Iluminación")} options={lightOptions} value={s().lightPreset} disabled={busy()} onChange={(v) => set({ lightPreset: v })} />
         </div>
         <Tooltip content={t("Salen de la luz principal y ganan penumbra con 4 o 16 cuadros.")} placement="left">
-          <Checkbox label={t("Sombras suaves")} checked={s().shadows} disabled={busy()} onChange={(v) => set({ shadows: v })} />
+          <Checkbox label={t("Sombras suaves")} checked={s().shadows} disabled={busy() || ray()} onChange={(v) => set({ shadows: v })} />
         </Tooltip>
         <Tooltip content={t("Un suelo invisible bajo el modelo recibe su sombra. Pide sombras suaves.")} placement="left">
-          <Checkbox label={t("Suelo con sombra")} checked={s().groundShadow && s().shadows} disabled={busy() || !s().shadows} onChange={(v) => set({ groundShadow: v })} />
+          <Checkbox label={t("Suelo con sombra")} checked={s().groundShadow && s().shadows} disabled={busy() || ray() || !s().shadows} onChange={(v) => set({ groundShadow: v })} />
         </Tooltip>
         <Tooltip content={t("Oscurece rincones y contactos entre superficies.")} placement="left">
-          <Checkbox label={t("Oclusión ambiental")} checked={s().ambientOcclusion} disabled={busy()} onChange={(v) => set({ ambientOcclusion: v })} />
+          <Checkbox label={t("Oclusión ambiental")} checked={s().ambientOcclusion} disabled={busy() || ray()} onChange={(v) => set({ ambientOcclusion: v })} />
         </Tooltip>
       </div>
 
@@ -313,6 +345,8 @@ export interface RenderStepProps {
   viewSize: { width: number; height: number };
   /** Avance de 0 a 1 mientras se renderiza; undefined si no hay render en curso */
   progress?: number;
+  /** Texto bajo la barra: pasada, muestras y tiempo que falta (GeppettoRay) */
+  progressDetail?: string;
   /** Hay algo que renderizar */
   canRender?: boolean;
   onRender: () => void;
@@ -373,6 +407,9 @@ export const RenderStep: Component<RenderStepProps> = (props) => {
       >
         <div class="space-y-2">
           <ProgressBar value={Math.round((props.progress ?? 0) * 100)} showValue label={t("Renderizando...")} />
+          <Show when={props.progressDetail}>
+            <p class="text-[10px] text-text-dim text-center">{props.progressDetail}</p>
+          </Show>
           <Button variant="danger" fullWidth onClick={props.onStop}>
             {t("Cancelar")}
           </Button>

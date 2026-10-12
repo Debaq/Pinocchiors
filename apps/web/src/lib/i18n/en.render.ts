@@ -2,6 +2,19 @@ import type { Catalog } from "../i18n";
 
 /** RenderDialog.tsx, renderStill.ts y el botón Render de Exportar */
 export const en_render: Catalog = {
+  "Motor": "Engine",
+  "Rápido (visor)": "Fast (viewport)",
+  "Borrador (32 muestras)": "Draft (32 samples)",
+  "Normal (128 muestras)": "Normal (128 samples)",
+  "Alta (512 muestras)": "High (512 samples)",
+  "Máxima (2048 muestras)": "Maximum (2048 samples)",
+  "Quita el ruido al terminar, sin borrar el detalle de las texturas ni los bordes.":
+    "Removes the noise at the end without erasing texture detail or edges.",
+  "Simula la luz de verdad (rebotes, vidrio, reflejos): tarda más, pero la imagen se ve mientras se afina. Las sombras suaves, el suelo con sombra y la oclusión ambiental del visor no se usan: la luz ya las produce.":
+    "Simulates light for real (bounces, glass, reflections): it takes longer, but you can watch the image refine. The viewport's soft shadows, shadow floor and ambient occlusion are not used: the light already produces them.",
+  "Pasada {pass} de {passes} · {samples} de {total} muestras{eta}": "Pass {pass} of {passes} · {samples} of {total} samples{eta}",
+  " · faltan {time}": " · {time} left",
+  "El render se detuvo sin terminar": "The render stopped before finishing",
   "Render": "Render",
   "Renderizar": "Render",
   "Renderizando...": "Rendering...",

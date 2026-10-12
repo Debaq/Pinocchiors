@@ -427,6 +427,11 @@ export const en_panels1: Catalog = {
     "Scaling is the same on all three axes and is done from the base center, so the model stays resting on the ground.",
   "Origen": "Origin",
   "Fijar origen": "Set origin",
+  "Centro del gizmo": "Gizmo center",
+  "Girar y escalar": "Rotate and scale",
+  "Referencia al mover": "Move reference",
+  "Dónde queda el gizmo de Mover, Rotar y Escalar (G, R, S). Girar y escalar usan ese punto como centro; la referencia al mover es el punto que agarras. No cambia el origen del modelo.":
+    "Where the Move, Rotate and Scale gizmo (G, R, S) sits. Rotating and scaling use that point as their center; the move reference is the point you grab. It does not change the model origin.",
   "Apoyar en el piso": "Drop to the floor",
 
   // PosePanel

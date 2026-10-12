@@ -5,6 +5,7 @@
 
 import * as THREE from "three";
 import { GlowHalo } from "./glowHalo";
+import type { RayView } from "./rayRender";
 import { makeShadowGround, renderFrameRect, renderStillImage, type RenderStillOptions, type StillImage } from "./renderStill";
 import { THEME_EVENT, themeHex } from "./theme";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
@@ -186,7 +187,7 @@ export interface PaintStroke {
 }
 
 /** Qué se elige al orientar: el piso, el frente o un punto (origen) */
-export type PlacementMode = "floor" | "front" | "point";
+export type PlacementMode = "floor" | "front" | "point" | "pivotSpin" | "pivotMove";
 
 /** Lo elegido con un clic al orientar */
 export type PlacementPick =
@@ -571,6 +572,9 @@ export class Viewer3D {
   /** Pivote del gizmo del modelo: la malla lo sigue como vista previa */
   private objectPivot = new THREE.Object3D();
   private objectDragStart: THREE.Matrix4 | null = null;
+  /** Centros del gizmo elegidos por el usuario (`null`: el automático) */
+  private pivotSpin: THREE.Vector3 | null = null;
+  private pivotMove: THREE.Vector3 | null = null;
   /** Tras soltar el gizmo del modelo, la malla nueva llega sin mover la cámara */
   private keepCamera = false;
   /** Pose recién traída de Diseñar: la próxima malla que llegue la conserva (no reencuadra) */
@@ -2689,6 +2693,13 @@ export class Viewer3D {
     this.attachGizmo();
   }
 
+  /** Centro del gizmo para girar y escalar (`spin`) y para mover (`move`); `null` = automático */
+  setObjectPivots(spin: [number, number, number] | null, move: [number, number, number] | null): void {
+    this.pivotSpin = spin && new THREE.Vector3(...spin);
+    this.pivotMove = move && new THREE.Vector3(...move);
+    this.attachGizmo();
+  }
+
   /** Herramientas sobre el modelo entero (Preparar, Fabricar) o sobre el esqueleto */
   setObjectTools(enabled: boolean): void {
     if (enabled === this.objectTools) return;
@@ -2890,14 +2901,18 @@ export class Viewer3D {
     return new THREE.Matrix4().compose(object.position, object.quaternion, object.scale);
   }
 
-  /** Pivote del modelo: centro de la caja para girar, centro de la base para mover y escalar */
+  /** Pivote del modelo: el elegido o, si no, centro de la caja para girar y de la base para mover y escalar */
   private placeObjectPivot(): void {
     const geometry = this.currentMesh!.geometry;
     if (!geometry.boundingBox) geometry.computeBoundingBox();
     const box = geometry.boundingBox!;
     const pivot = this.objectPivot;
-    box.getCenter(pivot.position);
-    if (this.activeTool !== "rotate") pivot.position.y = box.min.y;
+    const custom = this.activeTool === "move" ? this.pivotMove : this.pivotSpin;
+    if (custom) pivot.position.copy(custom);
+    else {
+      box.getCenter(pivot.position);
+      if (this.activeTool !== "rotate") pivot.position.y = box.min.y;
+    }
     pivot.quaternion.identity();
     pivot.scale.setScalar(1);
     if (pivot.parent !== this.scene) this.scene.add(pivot);
@@ -4784,6 +4799,23 @@ export class Viewer3D {
     style.top = `${this.canvas.offsetTop + rect.y}px`;
     style.width = `${rect.w}px`;
     style.height = `${rect.h}px`;
+  }
+
+  /** La cámara tal como se ve y las luces del visor, para renderizar con GeppettoRay */
+  getRayView(): RayView {
+    const cam = this.camera;
+    const position = cam.getWorldPosition(new THREE.Vector3());
+    const forward = cam.getWorldDirection(new THREE.Vector3());
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(cam.getWorldQuaternion(new THREE.Quaternion()));
+    const tuple = (v: THREE.Vector3): [number, number, number] => [v.x, v.y, v.z];
+    return {
+      position: tuple(position),
+      target: tuple(position.clone().add(forward)),
+      up: tuple(up),
+      fov: cam.fov,
+      viewAspect: this.canvas.clientWidth / Math.max(1, this.canvas.clientHeight),
+      lights: this.lightRig.get(),
+    };
   }
 
   /**

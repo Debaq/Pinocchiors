@@ -42,6 +42,8 @@ pub struct Settings {
     pub lights: Vec<Light>,
     /// Los píxeles donde la cámara ve directo el entorno salen transparentes (alfa 0)
     pub transparent_background: bool,
+    /// Color con que se ve el fondo directo (la cámara); no ilumina. `None` = el del entorno
+    pub background: Option<Vec3>,
 }
 
 impl Default for Settings {
@@ -55,6 +57,7 @@ impl Default for Settings {
             environment: Environment::uniform(Vec3::splat(0.5)),
             lights: Vec::new(),
             transparent_background: false,
+            background: None,
         }
     }
 }
@@ -122,6 +125,10 @@ pub(crate) fn radiance(scene: &RayScene, s: &Settings, mut ray: Ray, rng: &mut R
         let Some(hit) = scene.closest_alpha(&ray, f32::INFINITY, rng) else {
             if camera_visible && s.transparent_background {
                 return (Vec3::ZERO, 0.0);
+            }
+            if let (true, Some(bg)) = (camera_visible, s.background) {
+                sum += throughput * bg;
+                break;
             }
             let mut le = s.environment.eval(ray.dir);
             if let (Some(map), true) = (env_map, prev_pdf > 0.0) {

@@ -25,6 +25,17 @@ export interface PlacementInfo {
 export type OriginMode = "base" | "box" | "mass" | "point";
 export type Axis = "x" | "y" | "z";
 
+/**
+ * Dónde se pone el centro del gizmo del modelo. "auto" es el de siempre:
+ * centro de la caja al girar, centro de la base al mover y escalar.
+ */
+export type PivotMode = "auto" | "base" | "box" | "mass" | "point";
+export interface PivotChoice {
+  mode: PivotMode;
+  /** Punto elegido con un clic (modo "point") */
+  point?: [number, number, number];
+}
+
 const AXES: Record<Axis, THREE.Vector3> = {
   x: new THREE.Vector3(1, 0, 0),
   y: new THREE.Vector3(0, 1, 0),
@@ -126,6 +137,20 @@ export function originMatrix(
     mode === "base" ? new THREE.Vector3(c.x, box.min.y, c.z) : mode === "box" ? c : mode === "mass" ? centerOfMass : point;
   if (!target) return null;
   return new THREE.Matrix4().makeTranslation(-target.x, -target.y, -target.z);
+}
+
+/** Posición del pivote elegido (`null`: el automático del visor, o aún sin dato) */
+export function pivotPosition(
+  positions: Float32Array,
+  choice: PivotChoice,
+  centerOfMass?: THREE.Vector3
+): [number, number, number] | null {
+  if (choice.mode === "auto") return null;
+  if (choice.mode === "point") return choice.point ?? null;
+  if (choice.mode === "mass") return centerOfMass ? [centerOfMass.x, centerOfMass.y, centerOfMass.z] : null;
+  const box = boundsAfter(positions);
+  const c = box.getCenter(new THREE.Vector3());
+  return choice.mode === "base" ? [c.x, box.min.y, c.z] : [c.x, c.y, c.z];
 }
 
 /**
