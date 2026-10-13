@@ -125,21 +125,12 @@ pub fn translate(mesh: &mut Mesh, offset: Vector3) {
     }
 }
 
-/// Orienta la malla para que la cara más plana quede en Z=0
+/// Orienta la malla para minimizar voladizos y la asienta en la cama (Z = 0)
 ///
-/// Útil para minimizar soportes en impresión FDM.
-/// Por ahora es un placeholder - implementación completa requiere
-/// análisis de caras y rotación.
-pub fn orient_flat_on_bed(_mesh: &mut Mesh) {
-    // TODO: Encontrar la cara/grupo de caras más plano
-    // y rotar para que quede paralelo al plano XY
-    //
-    // Algoritmo:
-    // 1. Calcular área de cada cara
-    // 2. Agrupar caras coplanares (dentro de tolerancia)
-    // 3. Encontrar el grupo más grande
-    // 4. Calcular rotación para alinear normal del grupo con -Z
-    // 5. Aplicar rotación
+/// Atajo de [`orient_for_print`](crate::orient_for_print) con los valores por
+/// defecto; no hace nada si la malla está vacía.
+pub fn orient_flat_on_bed(mesh: &mut Mesh) {
+    let _ = crate::orientation::orient_for_print(mesh, &crate::printability::PrintabilityConfig::default());
 }
 
 /// Calcula el factor de escala necesario para alcanzar dimensiones específicas
