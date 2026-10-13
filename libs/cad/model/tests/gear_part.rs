@@ -326,7 +326,26 @@ fn perfil_del_engrane_como_bloque_del_sketch() {
     // La cremallera y el sin fin
     let rack = GearPart { spec: GearSpec { kind: GearKind::Rack, teeth: 4, module: 2.0, ..Default::default() }, outer: 6.0, ..Default::default() };
     assert!(cad_model::gear_part::sketch_block(&rack).unwrap().entities.iter().all(|e| matches!(e.geometry, Geometry::Line { .. })));
-    assert!(cad_model::gear_part::sketch_block(&worm(1, false)).is_err());
+    // El sin fin: su sección axial (filetes arriba y abajo corridos medio avance) cierra un solo contorno
+    for (starts, left) in [(1u32, false), (2, true)] {
+        let w = worm(starts, left);
+        let (r_root, r_tip, hw_in, hw_out) = w.spec.worm_profile().unwrap();
+        let block = cad_model::gear_part::sketch_block(&w).unwrap();
+        assert!(block.entities.iter().all(|e| matches!(e.geometry, Geometry::Line { .. })));
+        let s = Sketch { points: block.points.clone(), entities: block.entities.clone(), constraints: vec![], next_id: 100_000, ..Default::default() };
+        let regions = find_regions(&s).unwrap();
+        assert_eq!(regions.len(), 1);
+        let area = poly_area(&regions[0].outer.polygon).abs();
+        // Entre el núcleo solo y la cresta completa; cada filete suma su trapecio
+        let tooth = (hw_in + hw_out) * (r_tip - r_root);
+        let teeth = ((area - 2.0 * r_root * w.width) / tooth).round();
+        assert!((12.0..=16.0).contains(&teeth), "{starts} entradas: {teeth} filetes en la sección axial");
+    }
+    // Con vástago y agujero
+    let with_shank = GearPart { bore: 6.0, hub_diameter: 14.0, hub_length: 8.0, ..worm(1, false) };
+    let block = cad_model::gear_part::sketch_block(&with_shank).unwrap();
+    let xs = block.points.iter().map(|p| p.x).fold((f64::MAX, f64::MIN), |a, x| (a.0.min(x), a.1.max(x)));
+    assert_relative_eq!(xs.1 - xs.0, 45.0 + 8.0, epsilon = 1e-9);
 }
 
 #[test]
@@ -576,4 +595,83 @@ fn conico_con_extremos_conicos() {
     let steep = GearPart { cone_ends: true, ..bevel(18, 60.0) };
     assert!(info(&steep).error.is_none());
     assert!(build(steep).is_err());
+}
+
+/// Cota sobre bolas medida en el perfil de verdad: el centro de la bola en el centro de un hueco, a la distancia
+/// del eje a la que toca los dos flancos (distancia al contorno = radio de la bola). `inner`: bola dentro del
+/// hueco de una corona (el contorno es la cavidad). Devuelve el radio del centro.
+fn ball_center_radius(spec: &GearSpec, d_pin: f64, inner: bool) -> f64 {
+    let prof = spec.profile().unwrap();
+    let pts = &prof.points;
+    let c = &prof.circles;
+    // Centro de un hueco: el ángulo de la punta de un diente más medio paso (en una corona, los huecos
+    // están en las puntas de la cavidad: el mismo cálculo con el radio mínimo)
+    let tip_angle = {
+        let target = if inner { pts.iter().map(|p| p[0].hypot(p[1])).fold(f64::MAX, f64::min) } else { pts.iter().map(|p| p[0].hypot(p[1])).fold(0.0, f64::max) };
+        let near: Vec<f64> = pts.iter().filter(|p| (p[0].hypot(p[1]) - target).abs() < 1e-6).map(|p| p[1].atan2(p[0])).collect();
+        // Una punta cerca del ángulo 0 (el primer diente): promedio de los puntos con ángulo cercano al menor |ángulo|
+        let a0 = near.iter().copied().min_by(|a, b| a.abs().total_cmp(&b.abs())).unwrap();
+        let group: Vec<f64> = near.iter().copied().filter(|a| (a - a0).abs() < 0.5 * TAU_T / spec.teeth as f64).collect();
+        group.iter().sum::<f64>() / group.len() as f64
+    };
+    let gap = tip_angle + TAU_T / (2.0 * spec.teeth as f64);
+    let (ux, uy) = (gap.cos(), gap.sin());
+    let dist = |r: f64| {
+        let (cx, cy) = (r * ux, r * uy);
+        // Solo flancos: los segmentos que están sobre el círculo de pie (más el redondeo) y bajo la cabeza
+        let lo = c.root.min(c.tip) + 0.05 * spec.module;
+        let hi = c.root.max(c.tip) - 0.05 * spec.module;
+        let mut best = f64::MAX;
+        for i in 0..pts.len() {
+            let (a, b) = (pts[i], pts[(i + 1) % pts.len()]);
+            let (ra, rb) = (a[0].hypot(a[1]), b[0].hypot(b[1]));
+            if ra < lo || rb < lo || ra > hi || rb > hi {
+                continue;
+            }
+            let (abx, aby) = (b[0] - a[0], b[1] - a[1]);
+            let t = (((cx - a[0]) * abx + (cy - a[1]) * aby) / (abx * abx + aby * aby)).clamp(0.0, 1.0);
+            best = best.min((cx - a[0] - t * abx).hypot(cy - a[1] - t * aby));
+        }
+        best
+    };
+    // Cruce de dist(r) con el radio de la bola: barrido y bisección
+    let (r0, r1) = (c.root.min(c.tip), c.root.max(c.tip));
+    let g = |r: f64| dist(r) - d_pin / 2.0;
+    let n = 400;
+    let mut prev = (r0, g(r0));
+    for i in 1..=n {
+        let r = r0 + (r1 - r0) * i as f64 / n as f64;
+        let v = g(r);
+        if prev.1.signum() != v.signum() {
+            let (mut lo, mut hi) = (prev.0, r);
+            for _ in 0..60 {
+                let mid = 0.5 * (lo + hi);
+                if g(mid).signum() == g(lo).signum() { lo = mid } else { hi = mid }
+            }
+            return 0.5 * (lo + hi);
+        }
+        prev = (r, v);
+    }
+    panic!("la bola no toca los dos flancos");
+}
+
+const TAU_T: f64 = 2.0 * PI;
+
+#[test]
+fn cotas_sobre_bolas_coinciden_con_el_perfil_real() {
+    use cad_model::gear_part::{measurement_between_pins, measurements};
+    // Con corrección de perfil y juego, que es donde las fórmulas se podían equivocar
+    for (x, backlash) in [(0.0, 0.0), (0.4, 0.0), (0.0, 0.2), (-0.3, 0.3)] {
+        let spec = GearSpec { teeth: 24, module: 2.0, shift: x, backlash, ..Default::default() };
+        let (_, _, d_pin, m_over) = measurements(&spec).unwrap();
+        let r_c = ball_center_radius(&spec, d_pin, false);
+        // Z par: las dos bolas opuestas
+        eprintln!("x={x} j={backlash}: externo fórmula {m_over:.4} perfil {:.4}", 2.0 * r_c + d_pin);
+        assert_relative_eq!(m_over, 2.0 * r_c + d_pin, epsilon = 6e-3);
+        let ring = GearSpec { kind: GearKind::Internal, teeth: 48, module: 2.0, shift: x, backlash, ..Default::default() };
+        let (d_pin, between) = measurement_between_pins(&ring).unwrap();
+        let r_c = ball_center_radius(&ring, d_pin, true);
+        eprintln!("x={x} j={backlash}: corona fórmula {between:.4} perfil {:.4} (centro r={r_c:.4})", 2.0 * r_c - d_pin);
+        assert_relative_eq!(between, 2.0 * r_c - d_pin, epsilon = 6e-3);
+    }
 }

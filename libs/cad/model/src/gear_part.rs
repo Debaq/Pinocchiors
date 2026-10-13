@@ -663,7 +663,8 @@ pub fn measurement_between_pins(spec: &GearSpec) -> Option<(f64, f64)> {
     let inv = |a: f64| a.tan() - a;
     let d_pin = 1.7 * m;
     // Medio hueco en el primitivo: la corona tiene el hueco de un diente exterior con la misma corrección
-    let half_space = PI / (2.0 * z) - 2.0 * spec.shift * an.tan() / z;
+    // (su diente pierde la mitad del juego, el hueco la gana)
+    let half_space = PI / (2.0 * z) + 2.0 * spec.shift * an.tan() / z + spec.backlash / 2.0 / (m * z);
     let inv_m = inv(at) + half_space - d_pin / (2.0 * c.base);
     let mut am = at;
     for _ in 0..60 {
@@ -713,9 +714,11 @@ pub fn measurements(spec: &GearSpec) -> Option<(u32, f64, f64, f64)> {
     // Dientes a medir: los que abraza el calibre con el ángulo de presión
     let z_eq = z * inv(at) / inv(an);
     let k = ((z_eq * an / PI + 0.5).round() as i64).max(2) as u32;
-    let w = m * an.cos() * (PI * (k as f64 - 0.5) + z * inv(at)) + 2.0 * x * m * an.sin() - spec.backlash * an.cos();
+    // Cada diente pierde la mitad del juego (`backlash/2`, normal) y la cota lo hace cos α_n veces eso
+    let half_j = spec.backlash / 2.0;
+    let w = m * an.cos() * (PI * (k as f64 - 0.5) + z * inv(at)) + 2.0 * x * m * an.sin() - half_j * an.cos();
     let d_pin = 1.7 * m;
-    let inv_m = inv(at) + d_pin / (m * z * an.cos()) - PI / (2.0 * z) + 2.0 * x * an.tan() / z;
+    let inv_m = inv(at) + d_pin / (m * z * an.cos()) - PI / (2.0 * z) + 2.0 * x * an.tan() / z - half_j / (m * z);
     // Resolver inv(α_M) = inv_m por Newton
     let mut am = at;
     for _ in 0..60 {
@@ -1284,6 +1287,48 @@ fn worm_efficiency_note(gamma: f64, pressure_angle: f64) -> Option<String> {
     Some(if locks { format!("{base}; autobloqueante: la rueda no mueve al sin fin") } else { base })
 }
 
+/// Sección axial del sin fin como contorno de líneas (plano XY: X a lo largo del eje, con el origen en el
+/// medio del filete; Y el radio): los filetes trapeciales de arriba, los de abajo corridos medio avance
+/// (`entradas·paso/2`, lo que ya giró la hélice) y, si hay, el vástago y el agujero del eje.
+fn worm_axial_outline(g: &GearPart, spec: &GearSpec) -> R<Vec<Curve>> {
+    let (r_root, r_tip, hw_in, hw_out) = spec.worm_profile().map_err(|e| e.to_string())?;
+    let pitch = PI * spec.module;
+    let (w, x0) = (g.width, g.width / 2.0);
+    let line = |a: (f64, f64), b: (f64, f64)| Curve::Line([a.0 - x0, a.1, 0.0], [b.0 - x0, b.1, 0.0]);
+    // Un lado: puntos (z, r) del filete; `shift` corre los centros de los dientes
+    let side = |shift: f64| -> Vec<(f64, f64)> {
+        let mut out = vec![(0.0, r_root)];
+        let mut c = (pitch / 2.0 + shift).rem_euclid(pitch);
+        if c < hw_in {
+            c += pitch;
+        }
+        while c + hw_in <= w + 1e-9 {
+            out.extend([(c - hw_in, r_root), (c - hw_out, r_tip), (c + hw_out, r_tip), (c + hw_in, r_root)]);
+            c += pitch;
+        }
+        out.push((w, r_root));
+        out.dedup_by(|a, b| (a.0 - b.0).abs() < 1e-9 && (a.1 - b.1).abs() < 1e-9);
+        out
+    };
+    let top = side(0.0);
+    let bottom: Vec<(f64, f64)> = side(spec.teeth as f64 * pitch / 2.0).into_iter().map(|(z, r)| (z, -r)).collect();
+    let mut outline = top;
+    let end = w + g.hub_length;
+    if g.hub_length > 0.0 {
+        let hr = g.hub_diameter / 2.0;
+        outline.extend([(w, hr), (end, hr), (end, -hr), (w, -hr)]);
+    }
+    outline.extend(bottom.into_iter().rev());
+    let n = outline.len();
+    let mut curves: Vec<Curve> = (0..n).map(|i| line(outline[i], outline[(i + 1) % n])).collect();
+    if g.bore > 0.0 {
+        let b = bore_fit(g) / 2.0;
+        let pts = [(0.0, b), (end, b), (end, -b), (0.0, -b)];
+        curves.extend((0..4).map(|i| line(pts[i], pts[(i + 1) % 4])));
+    }
+    Ok(curves)
+}
+
 /// El perfil del engrane como bloque del sketch (origen = centro del engrane,
 /// rígido): arcos de pie y de cabeza, splines de flancos con sus tangentes
 /// exactas; la cremallera, su contorno de líneas. Se inserta con las copias
@@ -1293,7 +1338,7 @@ pub fn sketch_block(g: &GearPart) -> Result<crate::sketch::SketchBlock, String> 
     use std::collections::HashMap;
     let spec = g.effective_spec();
     let curves: Vec<Curve> = match spec.kind {
-        GearKind::Worm => return Err("el sin fin no tiene perfil circular de dientes".into()),
+        GearKind::Worm => worm_axial_outline(g, &spec)?,
         GearKind::Rack => {
             let body = if g.outer > 0.0 { g.outer } else { 3.0 * spec.module };
             let pts = spec.rack_outline(spec.teeth, body).map_err(|e| e.to_string())?;
