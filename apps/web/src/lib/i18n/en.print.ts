@@ -81,4 +81,5 @@ export const en_print: Catalog = {
   "Pieza {label}: {e}": "Part {label}: {e}",
   "la malla no está cerrada, no se puede calcular volumen": "the mesh isn't closed, volume can't be computed",
   "la pared es demasiado gruesa: no queda hueco": "the wall is too thick: no cavity is left",
+  "No se pudieron rehacer las uniones: {e}": "Couldn't redo the joints: {e}",
 };

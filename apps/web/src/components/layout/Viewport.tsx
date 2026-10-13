@@ -80,6 +80,8 @@ export interface ViewportProps {
   placementMode?: PlacementMode;
   /** Planos candidatos a piso (modo "floor") */
   floorCandidates?: FloorCandidate[];
+  /** Puntos de la malla a marcar (paredes finas de la verificación de impresión) */
+  printMarkers?: [number, number, number][];
 
   // Bone editing
   boneEditMode?: boolean;
@@ -233,6 +235,11 @@ export const Viewport: Component<ViewportProps> = (props) => {
   // Orientación: planos candidatos o clic en la superficie
   createEffect(() => {
     viewer?.setPlacementMode(props.placementMode ?? null, props.floorCandidates ?? []);
+  });
+
+  // Verificación de impresión: paredes finas
+  createEffect(() => {
+    viewer?.setPrintMarkers(props.printMarkers ?? null);
   });
 
   // React to bone edit mode

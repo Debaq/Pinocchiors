@@ -555,6 +555,8 @@ export class Viewer3D {
   private mouse: THREE.Vector2;
   private placementMode: PlacementMode | null = null;
   private placementGroup = new THREE.Group();
+  /** Puntos marcados por la verificación de impresión (paredes finas); siguen a la malla */
+  private printMarkers: THREE.Object3D | null = null;
   private placementPlanes: THREE.Mesh[] = [];
   private hoveredPlane = -1;
 
@@ -2673,6 +2675,34 @@ export class Viewer3D {
       );
       this.placementGroup.add(outline);
     }
+  }
+
+  /** Marca puntos de la malla (coordenadas de la malla) con esferas rojas visibles a través de ella; `null` las quita */
+  setPrintMarkers(points: [number, number, number][] | null): void {
+    if (this.printMarkers) {
+      this.meshGroup.remove(this.printMarkers);
+      this.printMarkers.traverse((o) => {
+        if (o instanceof THREE.Mesh) {
+          o.geometry.dispose();
+          (o.material as THREE.Material).dispose();
+        }
+      });
+      this.printMarkers = null;
+    }
+    if (!points?.length || !this.meshData) return;
+    const size = boundsAfter(this.meshData.positions).getSize(new THREE.Vector3()).length();
+    const radius = Math.max(size * 0.006, 1e-6);
+    const geometry = new THREE.SphereGeometry(radius, 10, 8);
+    const material = new THREE.MeshBasicMaterial({ color: 0xff5555, transparent: true, opacity: 0.85, depthTest: false });
+    const group = new THREE.Group();
+    for (const p of points) {
+      const dot = new THREE.Mesh(geometry, material);
+      dot.position.set(...p);
+      dot.renderOrder = 999;
+      group.add(dot);
+    }
+    this.printMarkers = group;
+    this.meshGroup.add(group);
   }
 
   private planeOpacity(stable: boolean, hovered: boolean): number {

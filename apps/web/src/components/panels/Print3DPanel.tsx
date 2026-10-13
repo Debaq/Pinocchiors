@@ -4,6 +4,8 @@ import * as Icons from "../icons";
 import { fmtNumber, t } from "../../lib/i18n";
 import {
   JointsSection,
+  defaultPrep,
+  type PrepSettings,
   MaterialSection,
   OrientationSection,
   PlatesSection,
@@ -22,6 +24,7 @@ import {
 } from "./PrintPrepPanel";
 
 export type {
+  PrepSettings,
   JointSettings,
   JointsReport,
   MaterialEstimate,
@@ -75,6 +78,9 @@ export interface Print3DPanelProps {
   isProcessing?: boolean;
   /** Impresoras y materiales de fábrica */
   presets?: PrintPresets;
+  /** Lo elegido (impresora, material, uniones...): si falta, el panel lo guarda él */
+  prep?: PrepSettings;
+  onPrep?: (s: PrepSettings) => void;
   readiness?: Readiness;
   onCheck?: (printer: PrinterProfile, material: MaterialProfile) => void;
   orientations?: OrientationOption[];
@@ -128,24 +134,34 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
   const [scaleFactor, setScaleFactor] = createSignal(1.0);
   const [targetSize, setTargetSize] = createSignal<[number, number, number]>([100, 100, 100]);
 
-  // Impresora y material
-  const [printerChoice, setPrinterChoice] = createSignal<PrinterProfile | undefined>();
-  const [materialChoice, setMaterialChoice] = createSignal<MaterialProfile | undefined>();
+  // Impresora y material, y lo demás de la preparación (viven en el proyecto)
+  const [localPrep, setLocalPrep] = createSignal<PrepSettings>(defaultPrep);
+  const prep = () => props.prep ?? localPrep();
+  const patch = (p: Partial<PrepSettings>) => {
+    const next = { ...prep(), ...p };
+    setLocalPrep(next);
+    props.onPrep?.(next);
+  };
   const printer = (): PrinterProfile =>
-    printerChoice() ?? props.presets?.printers[0] ?? { name: "Creality Ender 3", build_volume: [220, 220, 250], nozzle: 0.4, layer_height: 0.2 };
+    prep().printer ?? props.presets?.printers[0] ?? { name: "Creality Ender 3", build_volume: [220, 220, 250], nozzle: 0.4, layer_height: 0.2 };
   const material = (): MaterialProfile =>
-    materialChoice() ?? props.presets?.materials[0] ?? { name: "PLA", density: 1.24, max_overhang_deg: 50 };
+    prep().material ?? props.presets?.materials[0] ?? { name: "PLA", density: 1.24, max_overhang_deg: 50 };
+  const setPrinterChoice = (printer: PrinterProfile) => patch({ printer });
+  const setMaterialChoice = (material: MaterialProfile) => patch({ material });
+  const joint = () => prep().joint;
+  const setJoint = (joint: JointSettings) => patch({ joint });
+  const infill = () => prep().infill;
+  const setInfill = (infill: number) => patch({ infill });
+  const hollow = () => prep().hollow;
+  const setHollow = (hollow: boolean) => patch({ hollow });
+  const wall = () => prep().wall;
+  const setWall = (wall: number) => patch({ wall });
+  const plate = () => prep().plate;
+  const setPlate = (plate: PlateSettings) => patch({ plate });
 
   // Subdivide state
   const [strategy, setStrategy] = createSignal("grid");
   const [margin, setMargin] = createSignal(2.0);
-
-  // Preparación
-  const [joint, setJoint] = createSignal<JointSettings>({ shape: "round", size: 6, depth: 10, tolerance: -0.4, count: 2 });
-  const [infill, setInfill] = createSignal(1);
-  const [hollow, setHollow] = createSignal(false);
-  const [wall, setWall] = createSignal(2);
-  const [plate, setPlate] = createSignal<PlateSettings>({ format: "stl", spacing: 5, orient: true, hollowWall: null });
 
   return (
     <div class="space-y-4">

@@ -291,8 +291,9 @@ import type {
   MaterialEstimate,
   PlateSettings,
   PlateResult,
+  PrepSettings,
 } from "./components/panels/Print3DPanel";
-import { jointShapeConfig } from "./components/panels/PrintPrepPanel";
+import { defaultPrep, jointShapeConfig } from "./components/panels/PrintPrepPanel";
 import { DESIGN_FORMATS, IMAGE_FORMATS, SKELETON_FORMATS, defaultExportOptions, formatBytes, type ExportOptions } from "./components/steps/ExportStep";
 import { defaultUvConfig, type UvConfig, type UvInfo, type UvPreview } from "./components/steps/UvStep";
 import type { SkeletonFitInfo } from "./components/steps/SkeletonStep";
@@ -1569,6 +1570,7 @@ export const App: Component = () => {
   const [meshAnalysis, setMeshAnalysis] = createSignal<MeshAnalysis | undefined>();
   const [subdivideResult, setSubdivideResult] = createSignal<SubdivideResult | undefined>();
   const [printPresets, setPrintPresets] = createSignal<PrintPresets | undefined>();
+  const [printPrep, setPrintPrep] = createSignal<PrepSettings>(defaultPrep);
   const [printReadiness, setPrintReadiness] = createSignal<Readiness | undefined>();
   const [printOrientations, setPrintOrientations] = createSignal<OrientationOption[] | undefined>();
   const [jointsReport, setJointsReport] = createSignal<JointsReport | undefined>();
@@ -2029,6 +2031,15 @@ export const App: Component = () => {
               if (op.cmd === "subdivide_mesh") subdivided = result as TauriSubdivideResult;
               count++;
             }
+          }
+        }
+        // Las uniones eran de las piezas viejas: se ponen de nuevo en las regeneradas
+        if (subdivided && lastJointConfig && jointsReport()) {
+          try {
+            setJointsReport(await rawInvoke("add_print_joints", { config: lastJointConfig }) as JointsReport);
+          } catch (e) {
+            setJointsReport(undefined);
+            setStatusMessage(t("No se pudieron rehacer las uniones: {e}", { e: tBackend(String(e)) }));
           }
         }
         if (hadWeights) {
@@ -6904,6 +6915,9 @@ export const App: Component = () => {
     }
   };
 
+  /** Las últimas uniones puestas: se rehacen cuando el diseño cambia y se regeneran las piezas */
+  let lastJointConfig: object | undefined;
+
   const handleAddJoints = async (s: JointSettings) => {
     const config = {
       shape: jointShapeConfig(s),
@@ -6917,6 +6931,7 @@ export const App: Component = () => {
     };
     const result = await printTask(t("Poniendo uniones..."), () => invoke<JointsReport>("add_print_joints", { config }));
     if (!result) return;
+    lastJointConfig = config;
     setJointsReport(result);
     setStatusMessage(result.joints_placed === 1 ? t("1 unión puesta") : t("{n} uniones puestas", { n: result.joints_placed }));
   };
@@ -7587,7 +7602,7 @@ export const App: Component = () => {
         result: repairResult(),
         canUndo: canUndoRepair(),
       },
-      print3d: { analysis: meshAnalysis(), subdivide: subdivideResult(), canUndoScale: canUndoPrintScale() },
+      print3d: { analysis: meshAnalysis(), subdivide: subdivideResult(), canUndoScale: canUndoPrintScale(), prep: printPrep() },
       export: { includeRig: exportIncludeRig(), useRetopology: exportUseRetopology(), options: exportOptions() },
       animation: { clips: clips(), activeClipId: activeClipId(), frame: frame(), autoKey: autoKey(), interpolation: keyInterpolation() },
       rig: rigSettings(),
@@ -7690,6 +7705,7 @@ export const App: Component = () => {
     setMeshAnalysis(ui.print3d?.analysis);
     setSubdivideResult(ui.print3d?.subdivide);
     setCanUndoPrintScale(ui.print3d?.canUndoScale === true);
+    setPrintPrep(ui.print3d?.prep ? { ...defaultPrep, ...ui.print3d.prep } : defaultPrep);
     if (ui.export) {
       setExportIncludeRig(ui.export.includeRig !== false);
       setExportUseRetopology(ui.export.useRetopology === true);
@@ -8471,6 +8487,7 @@ export const App: Component = () => {
               }
               placementMode={placementMode()}
               floorCandidates={floorCandidates()}
+              printMarkers={printReadiness()?.thin_points}
               boneEditMode={boneEditMode()}
               activeTool={activeTool()}
               objectTools={toolCtx() === "object"}
@@ -8819,6 +8836,8 @@ export const App: Component = () => {
               onSubdivide: handleSubdivide,
               onExportPiece: handleExportPiece,
               presets: printPresets(),
+              prep: printPrep(),
+              onPrep: setPrintPrep,
               readiness: printReadiness(),
               onCheck: handleCheckPrint,
               orientations: printOrientations(),

@@ -42,6 +42,8 @@ export interface Readiness {
   bed_contact_area: number;
   min_thickness: number | null;
   thin_fraction: number;
+  /** Puntos de pared fina, en la malla (se marcan en el visor) */
+  thin_points: [number, number, number][];
   fit: { fits: boolean; fits_rotated: boolean; excess: [number, number, number]; pieces_needed: [number, number, number] };
   issues: PrintIssue[];
 }
@@ -94,6 +96,25 @@ export interface PlateResult {
   too_tall: string[];
   total_bytes: number;
 }
+
+/** Todo lo que se elige en la preparación (va al proyecto) */
+export interface PrepSettings {
+  printer?: PrinterProfile;
+  material?: MaterialProfile;
+  joint: JointSettings;
+  infill: number;
+  hollow: boolean;
+  wall: number;
+  plate: PlateSettings;
+}
+
+export const defaultPrep: PrepSettings = {
+  joint: { shape: "round", size: 6, depth: 10, tolerance: -0.4, count: 2 },
+  infill: 1,
+  hollow: false,
+  wall: 2,
+  plate: { format: "stl", spacing: 5, orient: true, hollowWall: null },
+};
 
 /** La forma del backend (`PlanarShape`) a partir de lo que se elige en el panel */
 export function jointShapeConfig(s: JointSettings) {
