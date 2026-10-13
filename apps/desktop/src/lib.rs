@@ -179,6 +179,7 @@ pub fn run() {
             print_skin::skin_zone_invert,
             print_skin::skin_zone_clear,
             print_skin::apply_print_skin,
+            print_skin::skin_estimate,
             print_prep::solve_print_calibration,
             print_prep::check_print_readiness,
             print_prep::suggest_print_orientation,

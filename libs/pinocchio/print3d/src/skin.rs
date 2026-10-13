@@ -149,7 +149,7 @@ pub fn apply_skin(mesh: &Mesh, uvs: &[[f32; 2]], zone: &[usize], map: &HeightMap
     if !(edge_mm > 0.0) {
         return Err(Print3dError::InvalidConfig("el lado de los triángulos tiene que ser positivo".into()));
     }
-    let estimate = (zone_area_mm2 / (0.433 * edge_mm * edge_mm)) as usize;
+    let estimate = (zone_area_mm2 / (0.19 * edge_mm * edge_mm)) as usize;
     if estimate + faces.iter().filter(|f| !f.sel).count() > cfg.max_triangles {
         return Err(Print3dError::InvalidConfig(format!(
             "la piel pediría unos {estimate} triángulos (tope {}): sube el tamaño del detalle, achica la zona o la baldosa",

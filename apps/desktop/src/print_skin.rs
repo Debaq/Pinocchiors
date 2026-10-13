@@ -290,6 +290,47 @@ pub struct SkinApplied {
     pub warnings: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct SkinEstimate {
+    /// La escena trae UV de todas sus primitivas
+    pub has_uv: bool,
+    pub edge_mm: f64,
+    /// Triángulos aproximados de la malla resultante
+    pub triangles: usize,
+    pub zone_area_mm2: f64,
+    pub warnings: Vec<String>,
+}
+
+/// Cuánto pesaría la piel con estos valores, sin aplicarla
+#[tauri::command]
+pub fn skin_estimate(params: SkinParams, state: tauri::State<'_, AppState>) -> Result<SkinEstimate, String> {
+    estimate(&state, &params)
+}
+
+pub(crate) fn estimate(state: &AppState, params: &SkinParams) -> Result<SkinEstimate, String> {
+    let zone = zone_info(state)?;
+    let has_uv = state.scene.lock().unwrap().as_ref().is_some_and(|s| scene_uvs(s).is_ok());
+    let map = height_map(state, &params.image, &params.ops)?;
+    let pixel_mm = params.tile_mm.max(0.01) / map.width.max(map.height) as f64;
+    let edge_mm = params.edge_mm.unwrap_or_else(|| pixel_mm.max(0.2));
+    let outside = zone.total.saturating_sub(zone.faces.len());
+    let triangles = outside + (zone.area_mm2 / (0.19 * edge_mm * edge_mm)) as usize;
+    let mut warnings = Vec::new();
+    if params.amplitude > 0.0 && params.amplitude < 0.1 {
+        warnings.push("Un relieve de menos de 0,1 mm es menos que una capa: casi no se va a notar".to_string());
+    }
+    if params.amplitude > 2.0 {
+        warnings.push("Un relieve de más de 2 mm necesita paredes gruesas y puede crear voladizos".to_string());
+    }
+    if params.tile_mm / 16.0 < 0.4 {
+        warnings.push("La baldosa es tan chica que el detalle queda por debajo de una boquilla de 0,4 mm".to_string());
+    }
+    if triangles > 1_500_000 {
+        warnings.push(format!("Saldrían unos {triangles} triángulos: la malla se pone muy pesada"));
+    }
+    Ok(SkinEstimate { has_uv, edge_mm, triangles, zone_area_mm2: zone.area_mm2, warnings })
+}
+
 /// Un UV por vértice de la malla activa, en el orden de la escena (el de `scene_to_mesh`)
 fn scene_uvs(scene: &converter_scene::Scene) -> Result<Vec<[f32; 2]>, String> {
     let mut out = Vec::new();
@@ -421,6 +462,34 @@ mod tests {
         scene.root_nodes.push(0);
         scene.meters_per_unit = 0.001;
         scene
+    }
+
+    #[test]
+    fn la_estimacion_avisa_antes_de_aplicar() {
+        let state = AppState::new();
+        let scene = box_scene();
+        *state.mesh.lock().unwrap() = Some(crate::commands::scene_to_pinocchio_mesh(&scene).unwrap());
+        *state.scene.lock().unwrap() = Some(scene);
+        edit_zone(&state, &[2, 3], ZoneMode::Set).unwrap();
+        let params = |tile: f64, amplitude: f64| SkinParams {
+            image: "dots".into(),
+            ops: SkinOps::default(),
+            tile_mm: tile,
+            amplitude,
+            offset: p3d::SkinOffset::Outward,
+            rotation_deg: 0.0,
+            edge_mm: Some(1.0),
+            feather_mm: None,
+        };
+        let e = estimate(&state, &params(10.0, 0.6)).unwrap();
+        assert!(e.has_uv && e.warnings.is_empty());
+        // 1600 mm² de tapa; al partir por bisección, cada triángulo ronda 0,19 · lado² + los 10 de afuera
+        assert!((e.triangles as f64 - (1600.0 / 0.19 + 10.0)).abs() < 5.0, "{}", e.triangles);
+        assert_eq!(estimate(&state, &params(10.0, 0.05)).unwrap().warnings.len(), 1);
+        assert_eq!(estimate(&state, &params(3.0, 3.0)).unwrap().warnings.len(), 2);
+        // El orden coincide con el que aplica: la estimación no se aleja mucho de la realidad
+        let real = apply_skin_impl(&state, &params(10.0, 0.6)).unwrap();
+        assert!((real.triangles_after as f64 / e.triangles as f64 - 1.0).abs() < 0.5, "{} vs {}", real.triangles_after, e.triangles);
     }
 
     #[test]
