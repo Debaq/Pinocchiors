@@ -346,3 +346,37 @@ fn design_teeth_by_ratio_and_distance() {
     assert!(design_teeth(&pinion, GearKind::External, None, None).is_err());
     assert!(design_teeth(&pinion, GearKind::Rack, Some(2.0), None).is_err());
 }
+
+#[test]
+fn rayos_vacian_las_ventanas_entre_cubo_y_aro() {
+    if !occt::available() {
+        return;
+    }
+    let solid = GearPart { bore: 8.0, hub_diameter: 16.0, hub_length: 6.0, ..spur(50) };
+    let spoked = GearPart { spokes: 5, spoke_width: 6.0, rim: 5.0, ..solid.clone() };
+    let (a, b) = (part(solid.clone()), part(spoked.clone()));
+    // Ventana: anillo de r_in = 9 a r_out = pie − 5, menos 5 rayos de 6 mm
+    let root = info(&spoked).root_diameter / 2.0;
+    let (r_in, r_out) = (9.0, root - 5.0);
+    let ring = PI * (r_out * r_out - r_in * r_in) * spoked.width;
+    let removed = vol(&a) - vol(&b);
+    assert!(removed > 0.6 * ring && removed < ring, "quitó {removed} de un anillo de {ring}");
+    // Error si los rayos no caben o se mezclan con agujeros
+    assert!(build(GearPart { spokes: 5, spoke_width: 6.0, rim: root, ..solid.clone() }).is_err());
+    assert!(build(GearPart { hole_count: 3, hole_diameter: 4.0, hole_circle: 30.0, ..spoked }).is_err());
+}
+
+#[test]
+fn prisionero_hace_un_agujero_radial_en_el_cubo() {
+    if !occt::available() {
+        return;
+    }
+    let hub = GearPart { bore: 8.0, hub_diameter: 18.0, hub_length: 10.0, ..spur(30) };
+    let screwed = GearPart { set_screw: 3.0, ..hub.clone() };
+    let removed = vol(&part(hub.clone())) - vol(&part(screwed));
+    // Cilindro de Ø3 desde el eje hasta la superficie del cubo, sin lo que ya era el agujero
+    let expect = PI * 1.5 * 1.5 * (9.0 - 4.0);
+    assert!((removed - expect).abs() < 0.1 * expect, "quitó {removed}, esperado ≈ {expect}");
+    assert!(build(GearPart { set_screw: 3.0, ..spur(30) }).is_err());
+    assert!(build(GearPart { set_screw: 20.0, ..hub }).is_err());
+}

@@ -592,6 +592,12 @@ export interface GearPart {
   hole_count: number;
   hole_diameter: number;
   hole_circle: number;
+  /** Rayos en vez de agujeros: cantidad, ancho de cada uno y grosor del aro bajo el pie */
+  spokes?: number;
+  spoke_width?: number;
+  rim?: number;
+  /** Prisionero: Ø del agujero radial en el cubo (0: sin él) */
+  set_screw?: number;
   print_clearance: number;
   /** La holgura de impresión sale de la impresora del diseño (ajuste justo) y se ignora la de arriba */
   auto_clearance?: boolean;
@@ -655,6 +661,10 @@ export const defaultGear = (kind: GearKind = "external"): GearPart => ({
   hole_count: 0,
   hole_diameter: 0,
   hole_circle: 0,
+  spokes: 0,
+  spoke_width: 0,
+  rim: 0,
+  set_screw: 0,
   print_clearance: 0,
   herringbone: false,
   groove: 0,

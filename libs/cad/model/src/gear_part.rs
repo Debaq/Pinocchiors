@@ -35,6 +35,12 @@ pub struct GearPart {
     pub hole_count: u32,
     pub hole_diameter: f64,
     pub hole_circle: f64,
+    /// Aligeramiento con rayos: cantidad, ancho de cada rayo y grosor del aro bajo el pie (mm)
+    pub spokes: u32,
+    pub spoke_width: f64,
+    pub rim: f64,
+    /// Prisionero: diámetro del agujero radial en el cubo (0: sin él), a 90° del chavetero
+    pub set_screw: f64,
     /// Holgura para impresión 3D: juego extra y cabeza más baja (mm)
     pub print_clearance: f64,
     /// La holgura de impresión la da la impresora del documento (ajuste justo); `print_clearance` se ignora
@@ -101,6 +107,10 @@ impl Default for GearPart {
             auto_clearance: false,
             herringbone: false,
             groove: 0.0,
+            spokes: 0,
+            spoke_width: 0.0,
+            rim: 0.0,
+            set_screw: 0.0,
             throat: 0.0,
             link: None,
         }
@@ -219,6 +229,26 @@ impl GearPart {
 }
 
 fn world_point(l: &Local, p: P3) -> P3 {
+        if self.spokes > 0 {
+            if s.kind != GearKind::External || self.hole_count > 0 {
+                return Err("los rayos van en engranes exteriores y no se combinan con los agujeros de aligeramiento".into());
+            }
+            if self.spokes < 2 || self.spoke_width <= 0.0 || self.rim <= 0.0 {
+                return Err("los rayos piden al menos 2, un ancho de rayo y un grosor de aro".into());
+            }
+            let hub_r = (self.bore / 2.0).max(self.hub_diameter / 2.0) + 1.0;
+            if hub_r + 1.0 >= c.root - self.rim || self.spoke_width * self.spokes as f64 >= TAU * hub_r {
+                return Err("los rayos no caben: baja el aro o el ancho, o agranda el engrane".into());
+            }
+        }
+        if self.set_screw > 0.0 {
+            if s.kind != GearKind::External || self.hub_length <= 0.0 || self.bore <= 0.0 {
+                return Err("el prisionero va en el cubo de un engrane exterior con agujero".into());
+            }
+            if self.set_screw >= (self.hub_diameter - self.bore) / 2.0 || self.set_screw >= self.hub_length {
+                return Err("el prisionero es más grande que la pared o el largo del cubo".into());
+            }
+        }
     l.p(p[0], p[1], p[2])
 }
 
@@ -411,6 +441,26 @@ pub struct GearInfo {
     pub pitch_diameter: f64,
     pub base_diameter: f64,
     pub tip_diameter: f64,
+        if g.spokes > 0 {
+            // Ventanas entre rayos: el anillo entre el cubo y el aro, menos los rayos
+            let r_in = (g.bore / 2.0).max(g.hub_diameter / 2.0) + 1.0;
+            let r_out = spec.circles().map_err(|e| e.to_string())?.root - g.rim;
+            let ring = cyl(&l, 2.0 * r_out, -MARGIN, g.width + MARGIN)?.cut(&cyl(&l, 2.0 * r_in, -2.0 * MARGIN, g.width + 2.0 * MARGIN)?).map_err(e)?;
+            let mut bars = Vec::new();
+            for k in 0..g.spokes {
+                let a = TAU * k as f64 / g.spokes as f64;
+                let f = Frame { origin: l.p(0.0, 0.0, -2.0 * MARGIN), z: l.z, x: add(crate::geom::scale(l.x, a.cos()), crate::geom::scale(l.y, a.sin())) };
+                bars.push(Shape::make_box(Frame { origin: add(f.origin, crate::geom::scale(cross(f.z, f.x), -g.spoke_width / 2.0)), ..f }, r_out + 1.0, g.spoke_width, g.width + 4.0 * MARGIN).map_err(e)?);
+            }
+            let windows = ring.cut(&Shape::fuse_all(&bars).map_err(e)?).map_err(e)?;
+            body = body.cut(&windows).map_err(e)?;
+        }
+        if g.set_screw > 0.0 {
+            // Agujero radial por el cubo hasta el eje, hacia +Y
+            let mid = g.width + g.hub_length / 2.0;
+            let f = Frame { origin: l.p(0.0, 0.0, mid), z: l.y, x: l.x };
+            body = body.cut(&Shape::cylinder(f, g.set_screw / 2.0, g.hub_diameter / 2.0 + MARGIN).map_err(e)?).map_err(e)?;
+        }
     pub root_diameter: f64,
     pub module_t: f64,
     pub pressure_angle_t: f64,

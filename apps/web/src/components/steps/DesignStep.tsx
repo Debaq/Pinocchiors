@@ -5119,6 +5119,12 @@ const GearFields: Component<{
         />
       </Row>
       {spec(tl("Módulo"), "module", "mm")}
+      <Row label={tl("Paso diametral (dientes/pulgada)")}>
+        <NumberInput
+          value={+(25.4 / props.shape.spec.module).toFixed(4)}
+          onChange={(v) => v > 0 && props.update((x) => { const s = g(x); if (s) s.spec.module = +(25.4 / v).toFixed(6); })}
+        />
+      </Row>
       {spec(kind() === "worm" ? tl("Entradas") : tl("Dientes"), "teeth", "")}
       <Show when={kind() === "worm"}>
         {spec(tl("Diámetro primitivo (0: 10·módulo)"), "worm_diameter", "mm")}
@@ -5177,6 +5183,14 @@ const GearFields: Component<{
             {num(tl("Ø de cada agujero"), "hole_diameter")}
             {num(tl("Ø del círculo de agujeros"), "hole_circle")}
           </Show>
+          <Show when={props.shape.hole_count === 0}>
+            {num(tl("Rayos (cantidad)"), "spokes", "")}
+            <Show when={(props.shape.spokes ?? 0) > 0}>
+              {num(tl("Ancho de cada rayo"), "spoke_width")}
+              {num(tl("Grosor del aro"), "rim")}
+            </Show>
+          </Show>
+          <Show when={props.shape.hub_length > 0 && props.shape.bore > 0}>{num(tl("Prisionero (Ø del agujero radial)"), "set_screw")}</Show>
         </Show>
       </Show>
       <Show when={info()}>
