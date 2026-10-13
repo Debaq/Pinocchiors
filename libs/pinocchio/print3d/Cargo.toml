@@ -11,6 +11,7 @@ description = "3D printing preparation: measure, scale, slice, subdivide, and as
 pinocchio-mesh = { workspace = true }
 pinocchio-math = { workspace = true }
 pinocchio-spatial = { workspace = true }
+quadriflow-core = { workspace = true }
 nalgebra = { workspace = true, features = ["serde-serialize"] }
 thiserror = { workspace = true }
 serde = { workspace = true }
