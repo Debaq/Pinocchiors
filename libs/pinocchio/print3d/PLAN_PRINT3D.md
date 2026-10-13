@@ -85,3 +85,46 @@ Pendiente: pruebas e2e de la sincronía impresora ↔ diseño (hoy solo hay prue
 Comandos `export_calibration_model` y `solve_print_calibration`; asistente `CalibrationWizard.tsx` (en Fabricar,
 «Calibrar con piezas de prueba»). Los materiales propios (con contracción por eje y factor de holgura) y las
 impresoras propias se recuerdan entre sesiones. Los resultados se pueden guardar como perfiles nuevos.
+
+## Fase 8: pieles y texturas imprimibles (por hacer)
+
+Idea (del usuario): aplicar a las piezas una imagen en blanco y negro como **mapa de altura** (blanco = relieve
+alto, negro = bajo) que **desplaza la malla de verdad**, para que el patrón salga impreso: agarre, cuero, líneas,
+rejillas, logos, braille.
+
+Decisiones tomadas (2026-10-13):
+
+- **Solo en zonas seleccionadas**, no en toda la pieza. Las uniones, las caras de corte, los agujeros y las roscas
+  nunca llevan textura (ahí mandan las holguras).
+- **Mapeo por UV**: la app ya tiene UV completo (`uv-core`), así que la textura pasa antes por esa sección (la
+  pieza necesita UV; si no tiene, se le ofrece desplegarla). Triplanar y caja quedan para después, solo si hacen falta.
+- **Imágenes de fábrica**, pocas y sin costuras (se generan por código, sin archivos): grano de cuero, líneas,
+  rejilla, puntos, rombos, panal. Más las que el usuario importe (PNG/JPG a grises, con invertir, contraste y desenfoque).
+
+Fases:
+
+1. **Zonas**: elegir caras (pincel / por clic y crecer por ángulo, como el pincel de pesos) y guardarlas en el
+   proyecto como máscara por cara. Las caras de corte y de uniones se excluyen solas.
+2. **Imagen**: biblioteca de fábrica (`texture.rs`: patrones procedurales de altura, sin costuras, 256–512 px) e
+   importar; muestreo bilineal con repetición.
+3. **Desplazamiento** (`skin.rs`): subdividir solo las caras de la zona hasta que el lado sea ≤ la mitad del píxel en mm;
+   altura muestreada en el UV; se desplaza a lo largo de la normal suave del vértice con `amplitud` (mm) y `desfase`
+   (hacia afuera / centrado / hacia adentro). Los vértices del borde de la zona quedan fijos y la altura se funde
+   hacia ahí (para no abrir grietas). Los vértices que comparten posición pero no UV (costuras) toman la misma altura,
+   para que la malla siga cerrada.
+4. **Escala en mm**: tamaño de la baldosa en mm (la relación UV→mm sale del área de la zona), rotación e inversión.
+5. **Revisión**: el límite físico lo da la boquilla (relieve útil de 0,2 a 1 mm; detalle mínimo ≈ una boquilla). Avisar
+   si la imagen pide más detalle del que se imprime, si aparecen voladizos o paredes finas (se vuelve a pasar
+   `check_printability`), y cuántos triángulos salen (decimar al final si pasa de un tope).
+6. **Interfaz**: panel «Texturas imprimibles» con zona, imagen, tamaño, amplitud, desfase, rotación y una vista previa
+   (sombreado con la altura) antes de generar la geometría.
+
+Preguntas abiertas:
+
+- **Cortar antes o después**: el cortador (`slicer`) hoy solo conserva posiciones, así que la pieza cortada pierde los
+  UV y la máscara. Opciones: (a) texturizar el modelo entero y cortar después (las tapas de corte salen planas, pero la
+  malla es enorme al cortar) o (b) hacer que el cortador lleve UV y máscara por los cortes (más trabajo, mejor
+  resultado). Recomendado: (b).
+- **Amplitud y compensación**: el relieve debe quedar dentro de la medida de la pieza (desfase hacia adentro o centrado)
+  para no romper ajustes; la compensación de contracción se aplica después, al exportar.
+- **Texturas con color**: esta fase solo usa la altura (grises); el color de la imagen se ignora.
