@@ -383,6 +383,7 @@ dependencies = [
  "cad-occt",
  "cad-solver",
  "nalgebra",
+ "pinocchio-print3d",
  "serde",
  "serde_bytes",
  "serde_json",

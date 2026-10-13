@@ -129,6 +129,27 @@ fn cremallera_con_piñon() {
 }
 
 #[test]
+fn cremallera_helicoidal_con_piñon_de_las_dos_manos() {
+    if !occt::available() {
+        return;
+    }
+    let rack = GearPart { spec: GearSpec { kind: GearKind::Rack, teeth: 9, module: 2.0, ..Default::default() }, width: 10.0, outer: 6.0, ..Default::default() };
+    for helix in [20.0, -20.0] {
+        let mut pinion = gear(GearKind::External, 20);
+        pinion.spec.helix_angle = helix;
+        let (_, g) = pair(pinion, rack.clone(), link(-30.0));
+        assert_relative_eq!(g[1].part.spec.helix_angle, -helix, epsilon = 1e-9);
+        let (p, r) = (solid(&g[0]), solid(&g[1]));
+        let tooth = p.mass().unwrap().volume / 20.0;
+        assert!(overlap(&p, &r) < 1e-3 * tooth, "hélice {helix}°: choque {}", overlap(&p, &r));
+        // Control: la cremallera inclinada al otro lado choca
+        let mut wrong = g[1].clone();
+        wrong.part.spec.helix_angle = helix;
+        assert!(overlap(&p, &solid(&wrong)) > 0.05 * tooth, "el control debe chocar");
+    }
+}
+
+#[test]
 fn errores_de_enlace() {
     let mut doc = Document::new();
     let ia = doc.add(prim(gear(GearKind::Internal, 50), BodyOp::New));

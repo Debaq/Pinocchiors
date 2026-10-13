@@ -434,6 +434,39 @@ pub fn interferences(shapes: &[(u32, Shape)]) -> Vec<(u32, u32, f64)> {
     out
 }
 
+/// Pares de instancias que no se pisan pero quedan a menos de `min_gap` mm (la holgura que pide la
+/// impresora): con ese juego se funden o no se arman. También sale el contacto sin juego (0 mm).
+/// Los engranes que engranan se saltan: ahí el juego lo da el backlash.
+pub fn tight_gaps(ev: &Evaluation, asm: &Assembly, shapes: &[(u32, Shape)], min_gap: f64) -> Vec<(u32, u32, f64)> {
+    let linked = |a: u32, b: u32| {
+        let feat = |id: u32| asm.instances.iter().find(|i| i.id == id).map(|i| i.part.feature);
+        let (Some(fa), Some(fb)) = (feat(a), feat(b)) else { return false };
+        let l = |x, y| ev.gears.iter().any(|g| g.feature == x && g.part.link.is_some_and(|l| l.feature == y));
+        l(fa, fb) || l(fb, fa)
+    };
+    let boxes: Vec<_> = shapes.iter().map(|(_, s)| s.mass().ok().map(|m| (m.bbox_min, m.bbox_max))).collect();
+    let mut out = Vec::new();
+    for i in 0..shapes.len() {
+        for j in i + 1..shapes.len() {
+            let (Some((a0, a1)), Some((b0, b1))) = (boxes[i], boxes[j]) else { continue };
+            if (0..3).any(|k| a0[k] > b1[k] + min_gap || b0[k] > a1[k] + min_gap) || linked(shapes[i].0, shapes[j].0) {
+                continue;
+            }
+            // Si se pisan, ya salen en los choques
+            let overlap = shapes[i].1.intersect(&shapes[j].1).ok().and_then(|c| c.mass().ok()).is_some_and(|m| m.volume > 1e-9);
+            if overlap {
+                continue;
+            }
+            if let Some((d, _, _)) = shapes[i].1.min_distance(&shapes[j].1)
+                && d < min_gap
+            {
+                out.push((shapes[i].0, shapes[j].0, d));
+            }
+        }
+    }
+    out
+}
+
 /// Medida actual de una unión en la solución: (ángulo en grados, distancia en mm)
 pub fn measure(asm: &Assembly, sol: &AssemblySolution, mate: u32) -> Option<(f64, f64)> {
     let m = asm.mates.iter().find(|m| m.id == mate)?;

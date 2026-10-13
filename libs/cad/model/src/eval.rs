@@ -362,6 +362,19 @@ impl EvalCache {
 /// Huella de una operación encadenada con la anterior: todo lo que el cálculo
 /// lee (la operación ya resuelta, si está suprimida o detrás de la barra). El
 /// nombre no entra: renombrar no recalcula.
+/// Semilla de la caché: la impresora y el material cuando existen
+fn fabrication_key(doc: &Document) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let Some(fab) = &doc.fabrication else { return 0 };
+    let t = fab.tolerances();
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for v in [t.clearance, t.hole_comp, t.min_wall].into_iter().chain(t.shrink) {
+        v.to_bits().hash(&mut h);
+    }
+    (fab.fit as u8).hash(&mut h);
+    h.finish() | 1
+}
+
 fn fingerprint(prev: u64, f: &Feature, rolled_back: bool) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -728,7 +741,8 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
         mesh_distance: Default::default(),
     };
     let limit = doc.rollback.unwrap_or(usize::MAX);
-    let mut key = 0u64;
+    // Las holguras de la impresora cambian la geometría de varias operaciones: entran en la clave
+    let mut key = fabrication_key(doc);
     for (i, f) in doc.features.iter().enumerate() {
         key = fingerprint(key, f, i >= limit);
         if let Some(e) = cache.get(key) {
@@ -1805,6 +1819,21 @@ impl Ctx<'_> {
     /// girado para calzar; también devuelve el paso y la mano de la rosca.
     fn place_standard(&self, p: &Primitive) -> R<(Frame, PrimitiveShape, Threading)> {
         let frame = Frame { origin: p.origin, z: p.z, x: p.x };
+        let fitted;
+        let p = if let PrimitiveShape::Gear(g) = &p.shape
+            && g.auto_clearance
+        {
+            // La holgura de impresión sale de la impresora del documento (ajuste justo: 0,5 de la base)
+            let mut g = g.clone();
+            match &self.doc.fabrication {
+                Some(fab) => g.print_clearance = fab.tolerances().fit_clearance(pinocchio_print3d::Fit::Tight),
+                None => self.warn("«holgura según la impresora»: elige una impresora en Fabricar o en Diseñar".into()),
+            }
+            fitted = Primitive { shape: PrimitiveShape::Gear(g), ..p.clone() };
+            &fitted
+        } else {
+            p
+        };
         if let PrimitiveShape::Gear(g) = &p.shape
             && let Some(gl) = &g.link
         {
@@ -1814,7 +1843,7 @@ impl Ctx<'_> {
             })?;
             let (frame, part, info) = crate::gear_part::mesh(src, g, gl)?;
             if let Some(note) = info.note {
-                self.warn(note.into());
+                self.warn(note);
             }
             if info.interference {
                 self.warn("los dientes interfieren al engranar: sube los dientes del piñón o agrega corrección de perfil".into());
@@ -3609,6 +3638,12 @@ impl Ctx<'_> {
                 // Asociado a otra rosca: su medida (la holgura es la propia)
                 let src = h.link.as_ref().map(|l| self.thread_source(l)).transpose()?;
                 let mut h = h.clone();
+                if h.compensate {
+                    match &self.doc.fabrication {
+                        Some(fab) => h.diameter = fab.tolerances().compensated_hole(h.diameter),
+                        None => self.warn("«compensar para imprimir»: elige una impresora en Fabricar o en Diseñar".into()),
+                    }
+                }
                 if let Some(t) = &src {
                     let spec = ThreadSpec { clearance: h.modeled.map_or(0.0, |m| m.clearance), ..t.spec };
                     if h.modeled.is_some() {

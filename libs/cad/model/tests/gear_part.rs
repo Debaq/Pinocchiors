@@ -313,3 +313,13 @@ fn perfil_del_engrane_como_bloque_del_sketch() {
     assert!(cad_model::gear_part::sketch_block(&rack).unwrap().entities.iter().all(|e| matches!(e.geometry, Geometry::Line { .. })));
     assert!(cad_model::gear_part::sketch_block(&worm(1, false)).is_err());
 }
+
+#[test]
+fn worm_efficiency_locks_at_small_lead_angle() {
+    use cad_model::gear_part::worm_efficiency;
+    let a = 20f64.to_radians();
+    let (eta, locks) = worm_efficiency(2f64.to_radians(), a);
+    assert!(locks && eta < 0.4, "{eta}");
+    let (eta, locks) = worm_efficiency(25f64.to_radians(), a);
+    assert!(!locks && eta > 0.7, "{eta}");
+}

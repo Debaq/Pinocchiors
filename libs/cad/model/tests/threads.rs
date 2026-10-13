@@ -136,6 +136,7 @@ fn bolt_follows_a_threaded_hole() {
         modeled: Some(t),
         link: None,
         reverse: None,
+        compensate: false,
     }));
     // Un M8 cualquiera en el origen: el vínculo lo lleva al agujero de x = 10
     // como M6, con la cabeza medio milímetro afuera
@@ -191,6 +192,7 @@ fn thread_in_a_hole_follows_an_existing_bolt() {
         modeled: None,
         link: None,
         reverse: None,
+        compensate: false,
     }));
     doc.get_mut(hid).unwrap().scope = vec![PartId { feature: p, index: 0 }];
     let ev = doc.evaluate();

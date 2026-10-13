@@ -60,6 +60,10 @@ pub struct Document {
     /// Material del sólido (para la masa); no cambia la geometría.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub material: Option<Material>,
+    /// Impresora y material de impresión: de aquí salen las holguras de las operaciones que lo piden
+    /// (engranes y agujeros «según la impresora»). Sí cambia la geometría de esas operaciones.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fabrication: Option<Fabrication>,
     /// Carpetas del árbol: solo presentación, no cambian el recálculo.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub folders: Vec<Folder>,
@@ -135,6 +139,23 @@ pub struct Folder {
     pub last: FeatureId,
     #[serde(default)]
     pub collapsed: bool,
+}
+
+/// Cómo se va a fabricar: la impresora, el material y qué tan justos son los ajustes
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Fabrication {
+    pub printer: pinocchio_print3d::PrinterProfile,
+    pub material: pinocchio_print3d::MaterialProfile,
+    /// Ajuste por defecto entre piezas
+    #[serde(default)]
+    pub fit: pinocchio_print3d::Fit,
+}
+
+impl Fabrication {
+    /// Holguras y compensaciones de esta impresora con este material
+    pub fn tolerances(&self) -> pinocchio_print3d::FabTolerances {
+        pinocchio_print3d::FabTolerances::derive(&self.printer, &self.material)
+    }
 }
 
 /// Material con su densidad en kg/m³.

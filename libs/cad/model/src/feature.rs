@@ -1151,6 +1151,10 @@ pub struct Hole {
     /// el lado donde hay material (contra la normal si hay de los dos).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reverse: Option<bool>,
+    /// El diámetro es el que se quiere medir al imprimir: se agranda lo que la impresora
+    /// de `Document.fabrication` achica los agujeros
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub compensate: bool,
 }
 
 /// Rosca métrica ISO (perfil de 60°).

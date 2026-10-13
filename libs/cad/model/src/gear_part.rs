@@ -37,6 +37,8 @@ pub struct GearPart {
     pub hole_circle: f64,
     /// Holgura para impresión 3D: juego extra y cabeza más baja (mm)
     pub print_clearance: f64,
+    /// La holgura de impresión la da la impresora del documento (ajuste justo); `print_clearance` se ignora
+    pub auto_clearance: bool,
     /// Doble helicoidal (espina de pescado): dos mitades de mano contraria
     pub herringbone: bool,
     /// Canal central de la espina de pescado (mm; 0: sin canal)
@@ -96,6 +98,7 @@ impl Default for GearPart {
             hole_diameter: 0.0,
             hole_circle: 0.0,
             print_clearance: 0.0,
+            auto_clearance: false,
             herringbone: false,
             groove: 0.0,
             throat: 0.0,
@@ -141,9 +144,6 @@ impl GearPart {
         let s = &self.spec;
         if !(self.width > 0.0) {
             return Err("el ancho del engrane debe ser positivo".into());
-        }
-        if s.helix_angle != 0.0 && s.kind == GearKind::Rack {
-            return Err("la cremallera helicoidal todavía no está: deja el ángulo de hélice en 0".into());
         }
         if self.herringbone && (s.helix_angle == 0.0 || self.groove < 0.0 || self.groove >= self.width) {
             return Err("la espina de pescado pide ángulo de hélice y un canal menor que el ancho".into());
@@ -367,7 +367,18 @@ pub fn gear(frame: Frame, g: &GearPart) -> R<Shape> {
             let pts = spec.rack_outline(spec.teeth, g.outer).map_err(|e| e.to_string())?;
             let n = pts.len();
             let lines: Vec<Curve> = (0..n).map(|i| Curve::Line([pts[i][0], pts[i][1], 0.0], [pts[(i + 1) % n][0], pts[(i + 1) % n][1], 0.0])).collect();
-            prism(&lines, &l, 0.0, g.width)?
+            if spec.helix_angle == 0.0 {
+                prism(&lines, &l, 0.0, g.width)?
+            } else {
+                // Dientes oblicuos: la sección transversal corrida en X por z·tanβ
+                // (con el signo que engrana con el piñón de la hélice contraria)
+                let dx = -spec.helix_angle.to_radians().tan() * g.width;
+                let section = |dx: f64, dz: f64| {
+                    let curves: Vec<Curve> = lines.iter().map(|c| shift(&to_world(&l, c), add(crate::geom::scale(l.x, dx), crate::geom::scale(l.z, dz)))).collect();
+                    Shape::wire(&curves).map_err(e)
+                };
+                Shape::loft(&[section(0.0, 0.0)?, section(dx, g.width)?], true, false).map_err(e)?
+            }
         }
     };
     if spec.kind == GearKind::External && g.hub_length > 0.0 {
@@ -490,13 +501,13 @@ pub fn describe(g: &GearPart) -> String {
 }
 
 /// Resultado de engranar un engrane con otro
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MeshInfo {
     pub center_distance: f64,
     pub contact_ratio: f64,
     pub interference: bool,
     /// Aviso de medidas (p. ej. el cono del cónico no es el que da la relación)
-    pub note: Option<&'static str>,
+    pub note: Option<String>,
 }
 
 fn inv(a: f64) -> f64 {
@@ -655,7 +666,9 @@ fn mesh_bevel(src: &GearAxis, mut b: GearPart, link: &GearLink, [z, xa, ya, u]: 
     let (ca, cb) = (ea.circles().map_err(|e| e.to_string())?, eb.circles().map_err(|e| e.to_string())?);
     let (za, zb) = (ea.teeth as f64, eb.teeth as f64);
     let ideal = sigma.sin().atan2(zb / za + sigma.cos()).to_degrees();
-    let note = ((ideal - ea.cone_angle).abs() > 0.5).then_some("el cono del primer cónico no es el que da esta relación de dientes: los conos primitivos no ruedan juntos");
+    let note = ((ideal - ea.cone_angle).abs() > 0.5).then(|| {
+        format!("el cono del primer cónico no es el que da esta relación de dientes ({:.1}° en vez de {:.1}°): los conos primitivos no ruedan juntos", ea.cone_angle, ideal)
+    });
     // Ejes que salen del vértice: w_a (hacia atrás), w_b a Σ del lado de u
     let wa = scale(z, -1.0);
     let wb = add(scale(wa, sigma.cos()), scale(u, sigma.sin()));
@@ -731,8 +744,27 @@ fn mesh_worm(src: &GearAxis, mut b: GearPart, link: &GearLink, [z, _xa, _ya, u]:
     let y_b = cross(z_b, x_center);
     let x_face = add(scale(x_center, turn.cos()), scale(y_b, -turn.sin()));
     let origin = sub(c_b, scale(z_b, b.width / 2.0));
-    let info = MeshInfo { center_distance: center, contact_ratio: 0.0, interference: false, note: None };
+    let note = worm_efficiency_note(gamma, ea.pressure_angle.to_radians());
+    let info = MeshInfo { center_distance: center, contact_ratio: 0.0, interference: false, note };
     Ok((Frame { origin, z: z_b, x: x_face }, b, info))
+}
+
+/// Rendimiento del sin fin moviendo la rueda y si se autobloquea (la rueda no
+/// lo mueve a él), con rozamiento μ = 0,1 típico de bronce sobre acero lubricado.
+pub fn worm_efficiency(gamma: f64, pressure_angle: f64) -> (f64, bool) {
+    const MU: f64 = 0.1;
+    let phi = (MU / pressure_angle.cos()).atan();
+    (gamma.tan() / (gamma + phi).tan(), gamma <= phi)
+}
+
+/// Aviso solo si se autobloquea o rinde menos de la mitad
+fn worm_efficiency_note(gamma: f64, pressure_angle: f64) -> Option<String> {
+    let (eta, locks) = worm_efficiency(gamma, pressure_angle);
+    if !locks && eta >= 0.5 {
+        return None;
+    }
+    let base = format!("sin fin: ángulo de avance {:.1}°, rendimiento ≈ {:.0} % (μ = 0,1)", gamma.to_degrees(), eta * 100.0);
+    Some(if locks { format!("{base}; autobloqueante: la rueda no mueve al sin fin") } else { base })
 }
 
 /// El perfil del engrane como bloque del sketch (origen = centro del engrane,

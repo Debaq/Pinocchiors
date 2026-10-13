@@ -726,6 +726,28 @@ fn assembly_interference_impl(state: &AppState) -> Result<Vec<(u32, u32, f64)>, 
     Ok(cad_model::assembly::interferences_for(ev, &asm, &shapes))
 }
 
+/// Pares de instancias que quedan más cerca que la holgura de la impresora (mm). Sin `min_gap`
+/// toma el ajuste normal de la impresora del diseño.
+#[tauri::command]
+pub async fn cad_assembly_clearance(app: AppHandle, min_gap: Option<f64>) -> Result<Vec<(u32, u32, f64)>, String> {
+    in_background(app, move |state| assembly_clearance_impl(state, min_gap)).await
+}
+
+fn assembly_clearance_impl(state: &AppState, min_gap: Option<f64>) -> Result<Vec<(u32, u32, f64)>, String> {
+    let gap = match min_gap {
+        Some(g) => g,
+        None => {
+            let doc = state.cad_document.lock().unwrap();
+            let fab = doc.as_ref().and_then(|d| d.fabrication.as_ref()).ok_or("Elige una impresora en Fabricar o en Diseñar para saber qué holgura pedir")?;
+            fab.tolerances().fit_clearance(fab.fit)
+        }
+    };
+    let (asm, shapes) = assembly_shapes(state)?;
+    let cache = state.cad_cache.lock().unwrap();
+    let ev = &cache.as_ref().ok_or("El diseño todavía no tiene un sólido")?.eval;
+    Ok(cad_model::assembly::tight_gaps(ev, &asm, &shapes, gap))
+}
+
 /// Acoplamientos que piden los engranes enlazados que están en el ensamble.
 #[tauri::command]
 pub async fn cad_assembly_suggest(app: AppHandle) -> Result<Vec<cad_model::Relation>, String> {

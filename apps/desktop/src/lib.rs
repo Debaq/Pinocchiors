@@ -231,6 +231,7 @@ pub fn run() {
             cad::cad_assembly_faces,
             cad::cad_assembly_connector,
             cad::cad_assembly_interference,
+            cad::cad_assembly_clearance,
             cad::cad_assembly_suggest,
             cad::cad_deviation,
             cad::cad_write_text,

@@ -28,7 +28,7 @@ pub mod threads;
 
 pub use cad_occt::{self as occt, Shape};
 pub use assembly::{Assembly, AssemblySolution, Connector, Instance, Mate, MateKind, Relation};
-pub use document::{Configuration, Document, Folder, Material, NamedVersion, PartProps, ModelError, Parameter, Resolution, ResolvedValue};
+pub use document::{Configuration, Document, Fabrication, Folder, Material, NamedVersion, PartProps, ModelError, Parameter, Resolution, ResolvedValue};
 pub use eval::{Sketch3dResult, EvalCache, Evaluation, FeatureState, FeatureStatus, Handle, HandleKind, MissingRef, Part, RefGeom, Replaced, SketchResult};
 pub use feature::*;
 pub use geom::{P2, P3, Plane};

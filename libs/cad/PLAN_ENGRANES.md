@@ -191,7 +191,7 @@ Lo que quedó fuera de cada fase, por área. Nada de esto impide usar lo hecho.
 - Avisar de ejes no paralelos y de helicoidales cruzados.
 
 **Helicoidales (F4)**
-- Cremallera helicoidal (da error).
+- (Cremallera helicoidal: hecha 2026-10-13, sección transversal corrida por z·tanβ; probada con choque en las dos manos.)
 - Espina de pescado: canal central solo en exteriores.
 
 **Ensamble (F5)**
@@ -210,7 +210,7 @@ Lo que quedó fuera de cada fase, por área. Nada de esto impide usar lo hecho.
 **Sin fin y rueda (F7)**
 - La rueda no puede ser la fuente (el sin fin va primero).
 - Tallado exacto de la rueda por simulación del sin fin (hoy: helicoidal con garganta).
-- Aviso de autobloqueo y rendimiento; sin fin globoide (doble envolvente).
+- Sin fin globoide (doble envolvente). (Autobloqueo y rendimiento: hecho, aviso en el árbol con μ = 0,1.)
 
 **Sketch y hoja (F8)**
 - Cota entre bolas de la corona; cotas ISO exactas con juego y helicoidales (hoy: nominales, bola de 1,7·m).

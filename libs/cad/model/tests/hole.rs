@@ -32,7 +32,7 @@ fn plate() -> (Document, FeatureId) {
 }
 
 fn hole(sketch: FeatureId, diameter: f64, depth: HoleDepth, style: HoleStyle) -> FeatureKind {
-    FeatureKind::Hole(Hole { sketch, points: vec![], diameter, depth, style, tip_angle: 0.0, thread: None, modeled: None, link: None, reverse: None })
+    FeatureKind::Hole(Hole { sketch, points: vec![], diameter, depth, style, tip_angle: 0.0, thread: None, modeled: None, link: None, reverse: None, compensate: false })
 }
 
 fn vol(doc: &Document) -> f64 {
@@ -83,6 +83,7 @@ fn blind_with_tip_and_no_points() {
         modeled: None,
         link: None,
         reverse: None,
+        compensate: false,
     }));
     let tip = 2.5 / (59.0f64).to_radians().tan();
     let one = PI * 6.25 * 6.0 + PI * 6.25 * tip / 3.0;
@@ -114,7 +115,7 @@ fn modeled_thread_through_hole() {
         return;
     }
     let (mut doc, sk) = plate();
-    let mut h = Hole { sketch: sk, points: vec![], diameter: 5.0, depth: HoleDepth::ThroughAll, style: HoleStyle::Simple, tip_angle: 0.0, thread: Some("M6".into()), modeled: None, link: None, reverse: None };
+    let mut h = Hole { sketch: sk, points: vec![], diameter: 5.0, depth: HoleDepth::ThroughAll, style: HoleStyle::Simple, tip_angle: 0.0, thread: Some("M6".into()), modeled: None, link: None, reverse: None, compensate: false };
     h.modeled = Some(ThreadSpec { nominal: 6.0, pitch: 1.0, clearance: 0.0, left: false });
     doc.add(FeatureKind::Hole(h));
     let ev = doc.evaluate();
@@ -174,7 +175,7 @@ fn internal_thread_on_a_hole() {
     // Placa con un agujero al diámetro menor de M6: la rosca lo talla
     let (mut doc, sk) = plate();
     let d1 = 6.0 - 1.082_532;
-    doc.add(FeatureKind::Hole(Hole { sketch: sk, points: vec![], diameter: d1, depth: HoleDepth::ThroughAll, style: HoleStyle::Simple, tip_angle: 0.0, thread: None, modeled: None, link: None, reverse: None }));
+    doc.add(FeatureKind::Hole(Hole { sketch: sk, points: vec![], diameter: d1, depth: HoleDepth::ThroughAll, style: HoleStyle::Simple, tip_angle: 0.0, thread: None, modeled: None, link: None, reverse: None, compensate: false }));
     let face = side_face(&doc, [-10.0 + d1 / 2.0, 0.0, 5.0], [-1.0, 0.0, 0.0]);
     doc.add(FeatureKind::Thread { face, pitch: 1.0, length: 0.0, flip: false, left: false, clearance: 0.0, link: None });
     let ev = doc.evaluate();
