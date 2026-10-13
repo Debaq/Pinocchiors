@@ -212,10 +212,8 @@ Lo que quedó fuera de cada fase, por área. Nada de esto impide usar lo hecho.
 - Sin fin globoide (doble envolvente). (Autobloqueo y rendimiento: hecho, aviso en el árbol con μ = 0,1.)
 
 **Sketch y hoja (F8)**
-- Cota entre bolas de la corona; cotas ISO exactas con juego y helicoidales (hoy: nominales, bola de 1,7·m).
-- Rotular los círculos de pie, base y cabeza en las vistas.
+- (Hechos 2026-10-13: cota entre bolas de la corona —`measurement_between_pins`, verificada solo contra el cálculo a mano—, círculos da/df/db rotulados y aviso de engranes borrados.) Falta: cotas ISO exactas con juego y helicoidales (hoy: nominales, bola de 1,7·m).
 - Bloque de sketch de la rueda de sin fin (hoy sale como helicoidal normal) y del sin fin (sección axial).
-- La tabla de la hoja usa la vista del diseño actual: no hay aviso si el engrane cambió y el plano quedó viejo.
 
 ## Más adelante
 
