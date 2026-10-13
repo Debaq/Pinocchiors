@@ -273,7 +273,9 @@ fn sin_fin_es_un_solido_valido_con_el_volumen_del_perfil() {
     let con = vol(&part(g));
     assert!(con < vol(&part(worm(1, false))));
     assert!(build(GearPart { width: 10.0, ..worm(2, false) }).is_err());
-    assert!(build(GearPart { hub_length: 4.0, hub_diameter: 12.0, ..worm(1, false) }).is_err());
+    // El vástago liso no puede ser más ancho que el núcleo
+    assert!(build(GearPart { hub_length: 4.0, hub_diameter: 20.0, ..worm(1, false) }).is_err());
+    assert!(build(GearPart { hub_length: 4.0, hub_diameter: 12.0, ..worm(1, false) }).is_ok());
 }
 
 #[test]
@@ -488,4 +490,90 @@ fn la_referencia_a_una_cara_sobrevive_al_cambiar_los_dientes() {
     let after = eval(31);
     let found = after.resolve_face(&r).unwrap();
     assert_eq!(after.face_tags[found][0].name, "agujero");
+}
+
+#[test]
+fn cono_del_primer_conico_segun_los_dientes() {
+    use cad_model::gear_part::bevel_cone;
+    // A 90°: tan δ₁ = z₁/z₂
+    assert_relative_eq!(bevel_cone(16.0, 32.0, 90.0), (0.5f64).atan().to_degrees(), epsilon = 1e-9);
+    // Los dos conos suman Σ: δ₁ + δ₂ = Σ
+    let (d1, d2) = (bevel_cone(18.0, 27.0, 75.0), bevel_cone(27.0, 18.0, 75.0));
+    assert_relative_eq!(d1 + d2, 75.0, epsilon = 1e-9);
+    // Iguales a 90° son 45°
+    assert_relative_eq!(bevel_cone(20.0, 20.0, 90.0), 45.0, epsilon = 1e-9);
+}
+
+#[test]
+fn conico_con_agujeros_rayos_y_prisionero() {
+    if !occt::available() {
+        return;
+    }
+    let base = GearPart { bore: 8.0, hub_diameter: 16.0, hub_length: 6.0, ..bevel(30, 45.0) };
+    let plain = vol(&part(base.clone()));
+    // Agujeros de aligeramiento: salen 3 × (Ø4 por el espesor, ancho·cos δ ≈ 5,66)
+    let holes = GearPart { hole_count: 3, hole_diameter: 4.0, hole_circle: 34.0, ..base.clone() };
+    let r = roles(holes.clone());
+    assert_eq!(r.get("aligeramiento"), Some(&3), "{r:?}");
+    let v = vol(&part(holes));
+    assert!(v < plain - 3.0 * PI * 4.0 * 5.0 && v > plain - 3.0 * PI * 4.0 * 6.5, "{v} contra {plain}");
+    // Rayos: ventanas entre el cubo y el aro
+    let spokes = GearPart { spokes: 4, spoke_width: 4.0, rim: 2.0, ..base.clone() };
+    assert!(vol(&part(spokes)) < plain * 0.8);
+    // Prisionero en el cubo: un agujero radial más
+    let screw = GearPart { set_screw: 3.0, ..base.clone() };
+    let r = roles(screw.clone());
+    assert_eq!(r.get("prisionero"), Some(&1), "{r:?}");
+    assert!(vol(&part(screw)) < plain);
+    // Si no caben, avisa con el mensaje
+    let bad = GearPart { hole_count: 3, hole_diameter: 4.0, hole_circle: 50.0, ..base };
+    assert!(info(&bad).error.is_some_and(|e| e.contains("aligeramiento")));
+}
+
+#[test]
+fn sin_fin_con_vastago_y_prisionero() {
+    if !occt::available() {
+        return;
+    }
+    let worm = |hub: f64, screw: f64| GearPart {
+        spec: GearSpec { kind: GearKind::Worm, teeth: 1, module: 2.0, ..Default::default() },
+        width: 45.0,
+        bore: 6.0,
+        hub_diameter: 14.0,
+        hub_length: hub,
+        set_screw: screw,
+        ..Default::default()
+    };
+    let bare = vol(&part(worm(0.0, 0.0)));
+    let shank = vol(&part(worm(12.0, 0.0)));
+    // El vástago suma un cilindro hueco de Ø14 por Ø6 y 12 mm
+    assert_relative_eq!(shank - bare, PI * (49.0 - 9.0) * 12.0, max_relative = 0.02);
+    let r = roles(worm(12.0, 3.0));
+    assert_eq!(r.get("prisionero"), Some(&1), "{r:?}");
+    assert_eq!(r.get("cara del cubo"), Some(&1), "{r:?}");
+    // Sin vástago no hay dónde poner el prisionero
+    assert!(info(&worm(0.0, 3.0)).error.is_some());
+}
+
+#[test]
+fn conico_con_extremos_conicos() {
+    if !occt::available() {
+        return;
+    }
+    for cone in [20.0, 45.0] {
+        let flat = GearPart { bore: 8.0, hub_diameter: 16.0, hub_length: 5.0, ..bevel(18, cone) };
+        let conic = GearPart { cone_ends: true, ..flat.clone() };
+        let v_flat = vol(&part(flat));
+        let v_conic = vol(&part(conic.clone()));
+        // Mismo orden de volumen: solo cambian las caras de los extremos y el alma
+        assert!(v_conic > 0.6 * v_flat && v_conic < 2.5 * v_flat, "cono {cone}: {v_conic} contra {v_flat}");
+        let r = roles(conic);
+        assert!(r.get("cono de atrás").copied().unwrap_or(0) >= 1, "{r:?}");
+        assert!(r.get("cono de adelante").copied().unwrap_or(0) >= 1, "{r:?}");
+        assert!(r.get("flanco").copied().unwrap_or(0) > 30, "{r:?}");
+    }
+    // Más allá de 50° la booleana falla: avisa en vez de dar un sólido que no vale
+    let steep = GearPart { cone_ends: true, ..bevel(18, 60.0) };
+    assert!(info(&steep).error.is_none());
+    assert!(build(steep).is_err());
 }

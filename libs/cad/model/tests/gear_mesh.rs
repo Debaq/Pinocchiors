@@ -416,3 +416,31 @@ fn par_con_modulo_transversal_se_ubica_por_el_primitivo_transversal() {
     // Distancia entre centros = mt·(z1+z2)/2 = 2·50/2
     assert_relative_eq!(g[1].center_distance, 50.0, epsilon = 1e-6);
 }
+
+#[test]
+fn conicos_espirales_calzan_con_mano_contraria() {
+    if !occt::available() {
+        return;
+    }
+    for (za, zb, sigma, spiral) in [(18u32, 18u32, 90.0f64, 35.0f64), (16, 32, 90.0, -30.0)] {
+        let ideal = f64::to_degrees(f64::atan2(f64::sin(sigma.to_radians()), zb as f64 / za as f64 + f64::cos(sigma.to_radians())));
+        let mut first = bevel(za, ideal, 90.0);
+        first.spec.spiral_angle = spiral;
+        let (_, g) = pair(first, bevel(zb, 45.0, sigma), link(0.0));
+        let (a, b) = (&g[0], &g[1]);
+        // El segundo toma la espiral contraria
+        assert_relative_eq!(b.part.spec.spiral_angle, -spiral, epsilon = 1e-12);
+        let (sa, sb) = (solid(a), solid(b));
+        let tooth = sa.mass().unwrap().volume / za as f64;
+        let hit = overlap(&sa, &sb);
+        // La espiral logarítmica con secciones planas es una aproximación: queda un resto de contacto de
+        // pocos % del diente (con el juego entre dientes se va)
+        assert!(hit < 8e-2 * tooth, "{za}/{zb} espiral {spiral}°: choque de {hit} (diente {tooth})");
+        // Control: el segundo girado medio paso choca
+        let mut off = b.clone();
+        let h = PI / zb as f64;
+        let y = [b.z[1] * b.x[2] - b.z[2] * b.x[1], b.z[2] * b.x[0] - b.z[0] * b.x[2], b.z[0] * b.x[1] - b.z[1] * b.x[0]];
+        off.x = [b.x[0] * h.cos() + y[0] * h.sin(), b.x[1] * h.cos() + y[1] * h.sin(), b.x[2] * h.cos() + y[2] * h.sin()];
+        assert!(overlap(&sa, &solid(&off)) > 0.15 * tooth, "el control debe chocar");
+    }
+}

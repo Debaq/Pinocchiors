@@ -91,6 +91,7 @@ export function gearTable(gear: GearAxis, info: GearInfo, name: string): GearTab
     if (spec.kind === "bevel") {
       add("Ángulo del cono (δ)", `${num(spec.cone_angle, 2)}°`);
       add("Ángulo entre ejes (Σ)", `${num(spec.shaft_angle, 2)}°`);
+      if (spec.spiral_angle) add("Ángulo de espiral (β)", `${num(spec.spiral_angle, 2)}°`);
     }
     if (spec.shift) add("Corrección (x)", num(spec.shift, 3));
     add("Ø primitivo", num(info.pitch_diameter));

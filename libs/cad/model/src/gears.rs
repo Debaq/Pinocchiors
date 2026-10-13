@@ -65,6 +65,9 @@ pub struct GearSpec {
     pub cone_angle: f64,
     /// Cónico: ángulo entre los ejes del par (°); lo usa el engrane que engrana
     pub shaft_angle: f64,
+    /// Cónico espiral: ángulo de espiral (°) de la traza del diente en el cono primitivo (constante, espiral
+    /// logarítmica); + mano derecha, − izquierda. El segundo del par toma el contrario. 0: cónico recto.
+    pub spiral_angle: f64,
     /// Sin fin: diámetro primitivo (mm; 0: 10·módulo) y mano izquierda
     pub worm_diameter: f64,
     pub left_hand: bool,
@@ -85,6 +88,7 @@ impl Default for GearSpec {
             root_fillet: 0.25,
             cone_angle: 45.0,
             shaft_angle: 90.0,
+            spiral_angle: 0.0,
             worm_diameter: 0.0,
             left_hand: false,
         }
@@ -149,7 +153,10 @@ impl GearSpec {
         }
         if self.kind == GearKind::Bevel {
             if self.helix_angle != 0.0 {
-                return bad("el cónico recto no lleva ángulo de hélice");
+                return bad("el cónico no lleva ángulo de hélice: el espiral usa el ángulo de espiral");
+            }
+            if self.spiral_angle.abs() >= 60.0 {
+                return bad("el ángulo de espiral debe ser menor que 60°");
             }
             if !(5.0..=85.0).contains(&self.cone_angle) || !(10.0..=170.0).contains(&self.shaft_angle) {
                 return bad("el ángulo del cono va de 5° a 85° y el de los ejes de 10° a 170°");

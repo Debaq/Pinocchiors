@@ -178,6 +178,7 @@ typedef struct {
     double origin[3];
     double dir[3];
     double radius;
+    double angle;  // conos: semiángulo (la generatriz con el eje); el radio crece como tan(ángulo) a lo largo de dir
 } CadFaceClass;
 
 int32_t cad_face_classes(const CadShape* s, CadFaceClass* out, int32_t n);

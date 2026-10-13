@@ -574,6 +574,8 @@ export interface GearSpec {
   /** Cónico: semiángulo del cono primitivo y ángulo entre los ejes del par (°) */
   cone_angle: number;
   shaft_angle: number;
+  /** Cónico espiral: ángulo de espiral (°; + mano derecha, − izquierda; 0: recto). El segundo del par toma el contrario */
+  spiral_angle: number;
   /** Sin fin: diámetro primitivo (0: 10·módulo), mano izquierda; «dientes» son las entradas */
   worm_diameter: number;
   left_hand: boolean;
@@ -606,6 +608,8 @@ export interface GearPart {
   groove?: number;
   /** El módulo de la receta es el transversal, no el normal (con hélice) */
   transverse_module?: boolean;
+  /** Cónico: caras de atrás y de adelante cónicas (perpendiculares al cono primitivo), no planas */
+  cone_ends?: boolean;
   /** Rueda de sin fin: distancia entre centros (la pone el engrane enlazado) */
   throat?: number;
   /** Engranar con otro engrane anterior */
@@ -655,7 +659,7 @@ export interface GearInfo {
 }
 
 export const defaultGear = (kind: GearKind = "external"): GearPart => ({
-  spec: { kind, module: 2, teeth: kind === "rack" ? 6 : kind === "worm" ? 1 : 20, pressure_angle: 20, helix_angle: 0, shift: 0, backlash: 0, addendum: 1, dedendum: 1.25, root_fillet: 0.25, cone_angle: 45, shaft_angle: 90, worm_diameter: 0, left_hand: false },
+  spec: { kind, module: 2, teeth: kind === "rack" ? 6 : kind === "worm" ? 1 : 20, pressure_angle: 20, helix_angle: 0, shift: 0, backlash: 0, addendum: 1, dedendum: 1.25, root_fillet: 0.25, cone_angle: 45, shaft_angle: 90, spiral_angle: 0, worm_diameter: 0, left_hand: false },
   width: kind === "bevel" ? 6 : kind === "worm" ? 40 : 10,
   bore: kind === "external" || kind === "bevel" || kind === "worm" ? 8 : 0,
   hub_diameter: 0,

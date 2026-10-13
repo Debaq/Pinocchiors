@@ -56,6 +56,9 @@ pub struct GearPart {
     /// El módulo de la receta es el transversal (el del plano de giro), no el normal: el normal
     /// sale de `mt·cos β`. Solo importa con hélice; cónico y sin fin lo ignoran.
     pub transverse_module: bool,
+    /// Cónico: las caras de atrás y de adelante son conos perpendiculares al cono primitivo (como en un
+    /// cónico de verdad) en vez de planos perpendiculares al eje. Sale de una booleana con el cuerpo.
+    pub cone_ends: bool,
     /// Rueda de sin fin: distancia entre centros con el sin fin (0: sin garganta).
     /// La rueda es cóncava para abrazar el filete; la pone `mesh` sola.
     pub throat: f64,
@@ -127,6 +130,7 @@ impl Default for GearPart {
             herringbone: false,
             groove: 0.0,
             transverse_module: false,
+            cone_ends: false,
             throat: 0.0,
             link: None,
         }
@@ -201,10 +205,11 @@ impl GearPart {
                 }
             }
             GearKind::Worm => {
-                if self.hub_length > 0.0 {
-                    return Err("el sin fin no lleva cubo: usa el agujero del eje".into());
-                }
                 let (r_root, ..) = s.worm_profile().map_err(|e| e.to_string())?;
+                // El «cubo» del sin fin es un vástago liso después del filete
+                if self.hub_length > 0.0 && (self.hub_diameter <= self.bore || self.hub_diameter > 2.0 * r_root) {
+                    return Err(format!("el vástago tiene que ser más ancho que el agujero y no pasar del núcleo del sin fin (Ø{:.2})", 2.0 * r_root));
+                }
                 if self.bore > 0.0 && self.bore >= 2.0 * r_root - 1.0 {
                     return Err(format!("el agujero ({}) no cabe bajo el núcleo del sin fin (Ø{:.2})", self.bore, 2.0 * r_root));
                 }
@@ -230,31 +235,33 @@ impl GearPart {
         if self.keyway && (!matches!(s.kind, GearKind::External | GearKind::Bevel | GearKind::Worm) || keyway_for(self.bore).is_none()) {
             return Err("el chavetero pide un agujero de eje de más de 6 mm hasta 75 mm".into());
         }
+        // Radio de pie donde el cuerpo es más angosto (el cónico se achica hacia el vértice)
+        let narrow = if s.kind == GearKind::Bevel { c.root * (1.0 - self.width / s.cone_distance()) } else { c.root };
         if self.hole_count > 0 {
-            if s.kind != GearKind::External {
-                return Err("los aligeramientos van en engranes exteriores".into());
+            if !matches!(s.kind, GearKind::External | GearKind::Bevel) {
+                return Err("los aligeramientos van en engranes exteriores y cónicos".into());
             }
             let (r_in, r_out) = (self.hole_circle / 2.0 - self.hole_diameter / 2.0, self.hole_circle / 2.0 + self.hole_diameter / 2.0);
             let hub_r = (self.bore / 2.0).max(self.hub_diameter / 2.0);
-            if self.hole_diameter <= 0.0 || r_in <= hub_r || r_out >= c.root - 0.5 {
+            if self.hole_diameter <= 0.0 || r_in <= hub_r || r_out >= narrow - 0.5 {
                 return Err("los agujeros de aligeramiento tienen que quedar entre el cubo y el pie del diente".into());
             }
         }
         if self.spokes > 0 {
-            if s.kind != GearKind::External || self.hole_count > 0 {
-                return Err("los rayos van en engranes exteriores y no se combinan con los agujeros de aligeramiento".into());
+            if !matches!(s.kind, GearKind::External | GearKind::Bevel) || self.hole_count > 0 {
+                return Err("los rayos van en engranes exteriores y cónicos, y no se combinan con los agujeros de aligeramiento".into());
             }
             if self.spokes < 2 || self.spoke_width <= 0.0 || self.rim <= 0.0 {
                 return Err("los rayos piden al menos 2, un ancho de rayo y un grosor de aro".into());
             }
             let hub_r = (self.bore / 2.0).max(self.hub_diameter / 2.0) + 1.0;
-            if hub_r + 1.0 >= c.root - self.rim || self.spoke_width * self.spokes as f64 >= TAU * hub_r {
+            if hub_r + 1.0 >= narrow - self.rim || self.spoke_width * self.spokes as f64 >= TAU * hub_r {
                 return Err("los rayos no caben: baja el aro o el ancho, o agranda el engrane".into());
             }
         }
         if self.set_screw > 0.0 {
-            if s.kind != GearKind::External || self.hub_length <= 0.0 || self.bore <= 0.0 {
-                return Err("el prisionero va en el cubo de un engrane exterior con agujero".into());
+            if !matches!(s.kind, GearKind::External | GearKind::Bevel | GearKind::Worm) || self.hub_length <= 0.0 || self.bore <= 0.0 {
+                return Err("el prisionero va en el cubo (o el vástago del sin fin) de un engrane con agujero".into());
             }
             if self.set_screw >= (self.hub_diameter - self.bore) / 2.0 || self.set_screw >= self.hub_length {
                 return Err("el prisionero es más grande que la pared o el largo del cubo".into());
@@ -396,6 +403,38 @@ fn keyway_fit(g: &GearPart) -> (f64, f64) {
     (b + 2.0 * g.hole_comp, t2 + g.hole_comp)
 }
 
+/// Rayos y agujeros de aligeramiento que atraviesan de la altura `z0` a la `z1`, con el aro que queda
+/// bajo el pie del extremo más chico (`root`: radio de pie ahí).
+fn lighten(mut body: Shape, l: &Local, g: &GearPart, root: f64, z0: f64, z1: f64) -> R<Shape> {
+    if g.spokes > 0 {
+        // Ventanas entre rayos: el anillo entre el cubo y el aro, menos los rayos
+        let r_in = (g.bore / 2.0).max(g.hub_diameter / 2.0) + 1.0;
+        let r_out = root - g.rim;
+        let ring = cyl(l, 2.0 * r_out, z0 - MARGIN, z1 + MARGIN)?.cut(&cyl(l, 2.0 * r_in, z0 - 2.0 * MARGIN, z1 + 2.0 * MARGIN)?).map_err(e)?;
+        let mut bars = Vec::new();
+        for k in 0..g.spokes {
+            let a = TAU * k as f64 / g.spokes as f64;
+            let f = Frame { origin: l.p(0.0, 0.0, z0 - 2.0 * MARGIN), z: l.z, x: add(crate::geom::scale(l.x, a.cos()), crate::geom::scale(l.y, a.sin())) };
+            bars.push(Shape::make_box(Frame { origin: add(f.origin, crate::geom::scale(cross(f.z, f.x), -g.spoke_width / 2.0)), ..f }, r_out + 1.0, g.spoke_width, z1 - z0 + 4.0 * MARGIN).map_err(e)?);
+        }
+        let windows = ring.cut(&Shape::fuse_all(&bars).map_err(e)?).map_err(e)?;
+        body = body.cut(&windows).map_err(e)?;
+    }
+    for k in 0..g.hole_count {
+        let a = TAU * k as f64 / g.hole_count as f64;
+        let f = Frame { origin: l.p(g.hole_circle / 2.0 * a.cos(), g.hole_circle / 2.0 * a.sin(), z0 - MARGIN), z: l.z, x: l.x };
+        let hole = Shape::cylinder(f, (g.hole_diameter + 2.0 * g.hole_comp) / 2.0, z1 - z0 + 2.0 * MARGIN).map_err(e)?;
+        body = body.cut(&hole).map_err(e)?;
+    }
+    Ok(body)
+}
+
+/// Prisionero: agujero radial por el cubo (o el vástago) hasta el eje, hacia +Y, a la altura `mid`.
+fn set_screw_hole(body: Shape, l: &Local, g: &GearPart, mid: f64) -> R<Shape> {
+    let f = Frame { origin: l.p(0.0, 0.0, mid), z: l.y, x: l.x };
+    body.cut(&Shape::cylinder(f, g.set_screw / 2.0, g.hub_diameter / 2.0 + MARGIN).map_err(e)?).map_err(e)
+}
+
 fn cyl(l: &Local, d: f64, z0: f64, z1: f64) -> R<Shape> {
     Shape::cylinder(l.at(z0, false), d / 2.0, z1 - z0).map_err(e)
 }
@@ -473,31 +512,9 @@ pub fn gear(frame: Frame, g: &GearPart) -> R<Shape> {
             let slot = Shape::make_box(f, bore_fit(g) / 2.0 + t2, b, total + 2.0 * MARGIN).map_err(e)?;
             body = body.cut(&slot).map_err(e)?;
         }
-        if g.spokes > 0 {
-            // Ventanas entre rayos: el anillo entre el cubo y el aro, menos los rayos
-            let r_in = (g.bore / 2.0).max(g.hub_diameter / 2.0) + 1.0;
-            let r_out = spec.circles().map_err(|e| e.to_string())?.root - g.rim;
-            let ring = cyl(&l, 2.0 * r_out, -MARGIN, g.width + MARGIN)?.cut(&cyl(&l, 2.0 * r_in, -2.0 * MARGIN, g.width + 2.0 * MARGIN)?).map_err(e)?;
-            let mut bars = Vec::new();
-            for k in 0..g.spokes {
-                let a = TAU * k as f64 / g.spokes as f64;
-                let f = Frame { origin: l.p(0.0, 0.0, -2.0 * MARGIN), z: l.z, x: add(crate::geom::scale(l.x, a.cos()), crate::geom::scale(l.y, a.sin())) };
-                bars.push(Shape::make_box(Frame { origin: add(f.origin, crate::geom::scale(cross(f.z, f.x), -g.spoke_width / 2.0)), ..f }, r_out + 1.0, g.spoke_width, g.width + 4.0 * MARGIN).map_err(e)?);
-            }
-            let windows = ring.cut(&Shape::fuse_all(&bars).map_err(e)?).map_err(e)?;
-            body = body.cut(&windows).map_err(e)?;
-        }
+        body = lighten(body, &l, g, spec.circles().map_err(|e| e.to_string())?.root, 0.0, g.width)?;
         if g.set_screw > 0.0 {
-            // Agujero radial por el cubo hasta el eje, hacia +Y
-            let mid = g.width + g.hub_length / 2.0;
-            let f = Frame { origin: l.p(0.0, 0.0, mid), z: l.y, x: l.x };
-            body = body.cut(&Shape::cylinder(f, g.set_screw / 2.0, g.hub_diameter / 2.0 + MARGIN).map_err(e)?).map_err(e)?;
-        }
-        for k in 0..g.hole_count {
-            let a = TAU * k as f64 / g.hole_count as f64;
-            let f = Frame { origin: l.p(g.hole_circle / 2.0 * a.cos(), g.hole_circle / 2.0 * a.sin(), -MARGIN), z: l.z, x: l.x };
-            let hole = Shape::cylinder(f, (g.hole_diameter + 2.0 * g.hole_comp) / 2.0, g.width + 2.0 * MARGIN).map_err(e)?;
-            body = body.cut(&hole).map_err(e)?;
+            body = set_screw_hole(body, &l, g, g.width + g.hub_length / 2.0)?;
         }
     }
     Ok(body)
@@ -522,7 +539,14 @@ pub fn face_roles(frame: Frame, g: &GearPart, classes: &[cad_occt::FaceClass]) -
     let (tol, c) = (0.01, spec.circles().ok());
     let (tip, root) = c.map_or((0.0, 0.0), |c| (c.tip, c.root));
     let hub = if spec.kind == GearKind::External || spec.kind == GearKind::Bevel || spec.kind == GearKind::Worm { g.hub_length } else { 0.0 };
-    let top = if spec.kind == GearKind::Bevel { g.width * spec.cone_angle.to_radians().cos() } else { g.width };
+    // Cónico: alturas del fondo y la cara de arriba (planos, o las del alma si los extremos son cónicos)
+    let ends = (spec.kind == GearKind::Bevel && g.cone_ends).then(|| bevel_ends(&spec, g, spec.apex_height())).and_then(Result::ok);
+    let bottom = ends.as_ref().map_or(0.0, |b| b.web_back);
+    let top = match &ends {
+        Some(b) => b.web_front,
+        None if spec.kind == GearKind::Bevel => g.width * spec.cone_angle.to_radians().cos(),
+        None => g.width,
+    };
     let r_out = root - g.rim;
     let r_in = (g.bore / 2.0).max(g.hub_diameter / 2.0) + 1.0;
     // Cremallera: niveles (en Y) de las caras planas paralelas al eje, para separar cabeza y pie
@@ -537,11 +561,11 @@ pub fn face_roles(frame: Frame, g: &GearPart, classes: &[cad_occt::FaceClass]) -
             let name = match k.surface {
                 Plane if dot(k.dir, z).abs() > 0.999 => {
                     let (d, s) = (axial(k.origin), dot(k.dir, z));
-                    if s < 0.0 && d.abs() < tol {
+                    if s < 0.0 && (d - bottom).abs() < tol {
                         "cara de abajo"
                     } else if s > 0.0 && (d - top).abs() < tol {
                         "cara de arriba"
-                    } else if (s > 0.0 && hub > 0.0 && (d - g.width - hub).abs() < tol) || (s < 0.0 && spec.kind == GearKind::Bevel && hub > 0.0 && (d + hub).abs() < tol) {
+                    } else if (s > 0.0 && hub > 0.0 && (d - g.width - hub).abs() < tol) || (s < 0.0 && spec.kind == GearKind::Bevel && hub > 0.0 && (d - bottom + hub).abs() < tol) {
                         "cara del cubo"
                     } else {
                         "canal"
@@ -597,6 +621,26 @@ pub fn face_roles(frame: Frame, g: &GearPart, classes: &[cad_occt::FaceClass]) -
                     }
                 }
                 Cylinder if g.set_screw > 0.0 && dot(k.dir, z).abs() < 1e-3 => "prisionero",
+                // Conos: los de los extremos son perpendiculares al cono primitivo (pasan por el punto primitivo
+                // atrás, o `ancho/cos δ` más arriba adelante); el signo del semiángulo de OCCT no dice hacia
+                // dónde crece, así que se prueban los dos
+                Cone if dot(k.dir, z).abs() > 0.999 => {
+                    let t = k.angle.tan().abs();
+                    let r0 = |slope: f64| k.radius - axial(k.origin) * slope;
+                    let at_pitch = |slope: f64| axial(k.origin) + (c.map_or(0.0, |c| c.pitch) - k.radius) / slope;
+                    let front_z = g.width / spec.cone_angle.to_radians().cos();
+                    if ends.is_some() && t > 1e-6 && [t, -t].iter().any(|&m| at_pitch(m).abs() < 0.05) {
+                        "cono de atrás"
+                    } else if ends.is_some() && t > 1e-6 && [t, -t].iter().any(|&m| (at_pitch(m) - front_z).abs() < 0.05) {
+                        "cono de adelante"
+                    } else if [t, -t].iter().any(|&m| (r0(m) - tip).abs() < 0.05) {
+                        "cabeza de diente"
+                    } else if [t, -t].iter().any(|&m| (r0(m) - root).abs() < 0.05) {
+                        "pie de diente"
+                    } else {
+                        "flanco"
+                    }
+                }
                 Torus if g.throat > 0.0 => "garganta",
                 BSpline | Revolution | Extrusion | Offset | Other if spec.kind == GearKind::Worm => "filete",
                 _ => "flanco",
@@ -886,25 +930,61 @@ fn mesh_from_rack(src: &GearAxis, mut b: GearPart, link: &GearLink, [z, xa, ya]:
 /// los extremos quedan planos (perpendiculares al eje) en vez de cónicos, lo
 /// que evita booleanas con superficies libres (fallaban según el ángulo).
 fn bevel(l: &Local, g: &GearPart, spec: &GearSpec) -> R<Shape> {
-    if g.hole_count > 0 {
-        return Err("los aligeramientos no van en engranes cónicos".into());
-    }
     let profile = spec.profile().map_err(|e| e.to_string())?;
     let delta = spec.cone_angle.to_radians();
     let (cd, td) = (delta.cos(), delta.tan());
     let apex_h = spec.module * spec.teeth as f64 / 2.0 / td;
     let z_top = g.width * cd;
     let k = (apex_h - z_top) / apex_h;
-    let section = |scale: f64, z: f64| {
-        let curves: Vec<Curve> = profile.curves.iter().map(|c| shift(&to_world(l, &scale_curve(c, scale)), crate::geom::scale(l.z, z))).collect();
+    // Sección del diente a la altura z: escalada hacia el vértice y, en el espiral, girada por su espiral logarítmica
+    // (φ = −sen δ · tan β · ln(s/s_medio): sale del ángulo de espiral constante sobre el cono desarrollado)
+    let spiral = spec.spiral_angle.to_radians().tan() * delta.sin();
+    // El giro es cero en la sección del medio de la cara: ahí vale la fase del cónico recto con la X del marco
+    let s_mid = (apex_h - 0.5 * z_top) / apex_h;
+    let section = |z: f64| {
+        let s = (apex_h - z) / apex_h;
+        let turn = -spiral * (s / s_mid).ln();
+        let curves: Vec<Curve> = profile
+            .curves
+            .iter()
+            .map(|c| {
+                let c = scale_curve(c, s);
+                let c = if turn != 0.0 { gears::rotate_curve(&c, turn) } else { c };
+                shift(&to_world(l, &c), crate::geom::scale(l.z, z))
+            })
+            .collect();
         Shape::wire(&curves).map_err(e)
     };
-    let mut body = Shape::loft(&[section(1.0, 0.0)?, section(k, z_top)?], true, true).map_err(e)?;
+    // Cuerpo del diente entre dos alturas: recto (dos secciones) o espiral (una cada ~4° de giro)
+    let tooth_between = |z0: f64, z1: f64| -> R<Shape> {
+        if spiral == 0.0 {
+            return Shape::loft(&[section(z0)?, section(z1)?], true, true).map_err(e);
+        }
+        let s_of = |z: f64| (apex_h - z) / apex_h;
+        let steps = ((spiral * (s_of(z0).ln() - s_of(z1).ln()).abs() / (PI / 45.0)).ceil() as usize + 1).max(3);
+        let sections = (0..=steps).map(|i| section(z0 + (z1 - z0) * i as f64 / steps as f64)).collect::<R<Vec<_>>>()?;
+        Shape::loft(&sections, true, false).map_err(e)
+    };
+    // Extremos: planos (z = 0 y z = ancho·cos δ) o conos perpendiculares al cono primitivo
+    let ends = if g.cone_ends { Some(bevel_ends(spec, g, apex_h)?) } else { None };
+    let (z_back, z_front) = ends.as_ref().map_or((0.0, z_top), |b| (b.web_back, b.web_front));
+    let mut body = match &ends {
+        None => tooth_between(0.0, z_top)?,
+        Some(b) => {
+            let tooth = tooth_between(b.z_lo, b.z_hi)?;
+            let pts: Vec<P3> = b.profile.iter().map(|&(r, z)| l.p(r, 0.0, z)).collect();
+            let blank = Shape::polygon(&pts).map_err(e)?.revolve(cad_occt::Axis { origin: l.o, dir: l.z }, TAU).map_err(e)?;
+            tooth.intersect(&blank).map_err(|x| format!("los extremos cónicos fallaron con este cono ({x}): usa extremos planos"))?
+        }
+    };
+    if body.mass().map_or(true, |m| m.volume < 1e-6) {
+        return Err("los extremos cónicos dejaron el cuerpo vacío con este cono: usa extremos planos".into());
+    }
     if g.hub_length > 0.0 {
-        let hub = cyl(l, g.hub_diameter, -g.hub_length, 0.5 * z_top)?;
+        let hub = cyl(l, g.hub_diameter, z_back - g.hub_length, z_back + 0.5 * (z_front - z_back))?;
         body = Shape::fuse_all(&[body, hub]).map_err(e)?;
     }
-    let (zb, zt) = (-g.hub_length - MARGIN, z_top + MARGIN);
+    let (zb, zt) = (z_back - g.hub_length - MARGIN, ends.as_ref().map_or(z_top, |b| b.z_top_max) + MARGIN);
     if g.bore > 0.0 {
         body = body.cut(&cyl(l, bore_fit(g), zb, zt)?).map_err(e)?;
     }
@@ -914,7 +994,65 @@ fn bevel(l: &Local, g: &GearPart, spec: &GearSpec) -> R<Shape> {
         let slot = Shape::make_box(f, bore_fit(g) / 2.0 + t2, kw, zt - zb).map_err(e)?;
         body = body.cut(&slot).map_err(e)?;
     }
+    // Rayos y agujeros: el aro se mide en el extremo chico, que es donde el cuerpo es más angosto
+    let root_small = spec.circles().map_err(|e| e.to_string())?.root * k;
+    body = lighten(body, l, g, root_small, z_back, ends.as_ref().map_or(z_top, |b| b.z_top_max))?;
+    if g.set_screw > 0.0 {
+        body = set_screw_hole(body, l, g, z_back - g.hub_length / 2.0)?;
+    }
     Ok(body)
+}
+
+/// Lo que pide un cónico de extremos cónicos: el contorno de revolución del cuerpo en (r, z) y las
+/// alturas entre las que se talla el diente (con holgura) y de las bandas planas del centro.
+struct BevelEnds {
+    profile: Vec<(f64, f64)>,
+    z_lo: f64,
+    z_hi: f64,
+    web_back: f64,
+    web_front: f64,
+    z_top_max: f64,
+}
+
+/// Cono de atrás: la recta por el punto primitivo perpendicular a la generatriz, z = (r − r_p)·tan δ; el
+/// de adelante es el mismo corrido `ancho/cos δ`. Cada cono vale solo en el anillo de los dientes (desde
+/// el pie del extremo que le toca hacia afuera) y hacia el centro el cuerpo sigue plano.
+fn bevel_ends(spec: &GearSpec, g: &GearPart, apex_h: f64) -> R<BevelEnds> {
+    let c = spec.circles().map_err(|e| e.to_string())?;
+    let delta = spec.cone_angle.to_radians();
+    let (cd, td) = (delta.cos(), delta.tan());
+    if spec.cone_angle > 50.0 {
+        return Err("los extremos cónicos llegan hasta un cono de 50° (con más, la booleana con los dientes falla): usa extremos planos".into());
+    }
+    let (r_p, w) = (c.pitch, g.width);
+    let cone = spec.cone_distance();
+    // Atrás (extremo grande) el cono empieza bajo el pie grande; adelante, bajo el pie chico
+    let r_cb = c.root - 1.0;
+    let r_cf = c.root * (1.0 - w / cone) - 1.0;
+    if r_cf <= g.bore / 2.0 + 1.0 {
+        return Err("el cuerpo del cónico es muy chico para los extremos cónicos: usa extremos planos".into());
+    }
+    let r_max = c.tip + 2.0;
+    let back = |r: f64| (r - r_p) * td;
+    let front = |r: f64| back(r) + w / cd;
+    // El alma plana mide ancho·cos δ, sin pasar donde empieza el cono de adelante
+    let web_back = back(r_cb);
+    let web_front = (web_back + w * cd).min(front(r_cf) - 0.2 * w * cd);
+    let z_hi_star = (w / cd + (c.tip - r_p) * td) / (1.0 + c.tip * td / apex_h);
+    Ok(BevelEnds {
+        profile: vec![(0.0, web_back), (r_cb, web_back), (r_max, back(r_max)), (r_max, front(r_max)), (r_cf, front(r_cf)), (r_cf, web_front), (0.0, web_front)],
+        z_lo: web_back - 1.0,
+        z_hi: z_hi_star + 1.0,
+        web_back,
+        web_front,
+        z_top_max: front(r_max),
+    })
+}
+
+/// Semiángulo del cono primitivo del primer cónico para que ruede con el segundo: tan δ₁ = senΣ / (z₂/z₁ + cosΣ).
+pub fn bevel_cone(z1: f64, z2: f64, shaft_deg: f64) -> f64 {
+    let sigma = shaft_deg.to_radians();
+    sigma.sin().atan2(z2 / z1 + sigma.cos()).to_degrees()
 }
 
 /// Cónico con cónico: los vértices coinciden y los ejes forman el ángulo entre
@@ -932,10 +1070,12 @@ fn mesh_bevel(src: &GearAxis, mut b: GearPart, link: &GearLink, [z, xa, ya, u]: 
         return Err(format!("el cono del primero ({}°) y el ángulo entre ejes ({}°) no dejan un cono válido para el segundo", ea.cone_angle, sigma_deg));
     }
     b.spec.cone_angle = delta_b;
+    // Espiral de la mano contraria (como las hélices de los helicoidales)
+    b.spec.spiral_angle = -a.spec.spiral_angle;
     let eb = b.effective_spec();
     let (ca, cb) = (ea.circles().map_err(|e| e.to_string())?, eb.circles().map_err(|e| e.to_string())?);
     let (za, zb) = (ea.teeth as f64, eb.teeth as f64);
-    let ideal = sigma.sin().atan2(zb / za + sigma.cos()).to_degrees();
+    let ideal = bevel_cone(za, zb, sigma_deg);
     let note = ((ideal - ea.cone_angle).abs() > 0.5).then(|| {
         format!("el cono del primer cónico no es el que da esta relación de dientes ({:.1}° en vez de {:.1}°): los conos primitivos no ruedan juntos", ea.cone_angle, ideal)
     });
@@ -963,7 +1103,11 @@ fn worm(l: &Local, g: &GearPart, spec: &GearSpec) -> R<Shape> {
     let (_, _, lead) = spec.worm_dims();
     let frame = Frame { origin: l.o, z: l.z, x: l.x };
     let mut body = Shape::thread_trapezoid(frame, r_root, r_tip, lead, spec.teeth, hw_in, hw_out, g.width, spec.left_hand).map_err(e)?;
-    let (zb, zt) = (-MARGIN, g.width + MARGIN);
+    // Vástago liso después del filete (para el prisionero)
+    if g.hub_length > 0.0 {
+        body = Shape::fuse_all(&[body, cyl(l, g.hub_diameter, g.width - MARGIN, g.width + g.hub_length)?]).map_err(e)?;
+    }
+    let (zb, zt) = (-MARGIN, g.width + g.hub_length + MARGIN);
     if g.bore > 0.0 {
         body = body.cut(&cyl(l, bore_fit(g), zb, zt)?).map_err(e)?;
     }
@@ -972,6 +1116,9 @@ fn worm(l: &Local, g: &GearPart, spec: &GearSpec) -> R<Shape> {
         let f = Frame { origin: l.p(0.0, -kw / 2.0, zb), z: l.z, x: l.x };
         let slot = Shape::make_box(f, bore_fit(g) / 2.0 + t2, kw, zt - zb).map_err(e)?;
         body = body.cut(&slot).map_err(e)?;
+    }
+    if g.set_screw > 0.0 {
+        body = set_screw_hole(body, l, g, g.width + g.hub_length / 2.0)?;
     }
     Ok(body)
 }

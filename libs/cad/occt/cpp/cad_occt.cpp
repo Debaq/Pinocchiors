@@ -2419,6 +2419,7 @@ int32_t cad_face_classes(const CadShape* s, CadFaceClass* out, int32_t n) {
                     put(o.origin, co.Axis().Location().XYZ());
                     put(o.dir, co.Axis().Direction().XYZ());
                     o.radius = co.RefRadius();
+                    o.angle = co.SemiAngle();
                     break;
                 }
                 case GeomAbs_Sphere: o.surface = 3; break;

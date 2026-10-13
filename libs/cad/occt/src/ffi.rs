@@ -28,6 +28,7 @@ pub struct CadFaceClass {
     pub origin: [f64; 3],
     pub dir: [f64; 3],
     pub radius: f64,
+    pub angle: f64,
 }
 
 #[repr(C)]

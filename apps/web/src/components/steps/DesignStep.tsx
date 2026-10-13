@@ -5088,6 +5088,29 @@ const GearLinkBox: Component<{
                 onChange={(v) => design(v, null)}
               />
             </Row>
+            <Show when={source()?.part.spec.kind === "bevel" && props.shape.spec.kind === "bevel"}>
+              {(_) => {
+                const src = () => source()!;
+                const sigma = () => (props.shape.spec.shaft_angle * Math.PI) / 180;
+                // tan δ₁ = senΣ / (z₂/z₁ + cosΣ)
+                const ideal = () => (Math.atan2(Math.sin(sigma()), props.shape.spec.teeth / src().part.spec.teeth + Math.cos(sigma())) * 180) / Math.PI;
+                const fix = () =>
+                  void props.store.commit((d) => {
+                    const f = d.features.find((x) => x.id === src().feature);
+                    if (f?.kind.type === "primitive" && f.kind.shape.type === "gear") f.kind.shape.spec.cone_angle = +ideal().toFixed(3);
+                  });
+                return (
+                  <>
+                    <Row label={tl("Cono del primero que da esta relación")}>
+                      <span class="font-mono text-xs text-text">{ideal().toFixed(2)}°</span>
+                    </Row>
+                    <Show when={Math.abs(ideal() - src().part.spec.cone_angle) > 0.05}>
+                      <Button onClick={fix}>{tl("Poner ese cono en el primero")}</Button>
+                    </Show>
+                  </>
+                );
+              }}
+            </Show>
             <Show when={l().distance != null}>
               <Button onClick={() => design(null, l().distance!)}>{tl("Calcular los dientes para esta distancia")}</Button>
             </Show>
@@ -5157,7 +5180,7 @@ const GearFields: Component<{
               s.spec.kind = v as GearKind;
               if (v === "internal" && s.outer <= 0) s.outer = Math.ceil(s.spec.module * (s.spec.teeth + 6) + 4);
               if (v === "rack" && s.outer <= 0) s.outer = 8;
-              if (v !== "external") s.hole_count = 0;
+              if (v !== "external" && v !== "bevel") [s.hole_count, s.spokes] = [0, 0];
               if (v !== "external" && v !== "bevel" && v !== "worm") [s.hub_length, s.hub_diameter, s.bore] = [0, 0, 0];
               if (v === "worm") [s.spec.teeth, s.width, s.hub_length, s.hub_diameter, s.spec.helix_angle] = [Math.min(s.spec.teeth, 4), Math.max(s.width, 6 * s.spec.module * Math.PI), 0, 0, 0];
               if (v === "bevel") [s.spec.helix_angle, s.herringbone] = [0, false];
@@ -5187,7 +5210,15 @@ const GearFields: Component<{
       {spec(tl("Ángulo de presión"), "pressure_angle", "°")}
       <Show when={kind() === "bevel"}>
         {spec(tl("Ángulo del cono primitivo"), "cone_angle", "°")}
+        <Checkbox
+          small
+          label={tl("Extremos cónicos")}
+          checked={!!props.shape.cone_ends}
+          onChange={(c) => props.update((x) => { const s = g(x); if (s) s.cone_ends = c; })}
+          hint={tl("Las caras de atrás y de adelante son conos perpendiculares al cono primitivo, como en un cónico de verdad (en vez de planos). Tarda unos segundos más y llega hasta un cono de 50°.")}
+        />
         <Show when={props.shape.link}>{spec(tl("Ángulo entre ejes"), "shaft_angle", "°")}</Show>
+        {spec(tl("Ángulo de espiral (+ derecha, − izquierda, 0: recto)"), "spiral_angle", "°")}
       </Show>
       <Show when={kind() !== "rack" && kind() !== "bevel" && kind() !== "worm"}>
         {spec(tl("Ángulo de hélice (+ derecha, − izquierda)"), "helix_angle", "°")}
@@ -5225,17 +5256,15 @@ const GearFields: Component<{
       <Show when={kind() === "rack"}>{num(tl("Alto del cuerpo"), "outer")}</Show>
       <Show when={kind() === "external" || kind() === "bevel" || kind() === "worm"}>
         {num(tl("Agujero del eje"), "bore")}
-        <Show when={kind() !== "worm"}>
-          {num(tl("Diámetro del cubo"), "hub_diameter")}
-          {num(tl("Largo del cubo"), "hub_length")}
-        </Show>
+        {num(kind() === "worm" ? tl("Diámetro del vástago") : tl("Diámetro del cubo"), "hub_diameter")}
+        {num(kind() === "worm" ? tl("Largo del vástago") : tl("Largo del cubo"), "hub_length")}
         <Checkbox
           small
           label={tl("Chavetero (DIN 6885)")}
           checked={props.shape.keyway}
           onChange={(c) => props.update((x) => { const s = g(x); if (s) s.keyway = c; })}
         />
-        <Show when={kind() === "external"}>
+        <Show when={kind() === "external" || kind() === "bevel"}>
           {num(tl("Aligeramientos (cantidad)"), "hole_count", "")}
           <Show when={props.shape.hole_count > 0}>
             {num(tl("Ø de cada agujero"), "hole_diameter")}
@@ -5248,8 +5277,8 @@ const GearFields: Component<{
               {num(tl("Grosor del aro"), "rim")}
             </Show>
           </Show>
-          <Show when={props.shape.hub_length > 0 && props.shape.bore > 0}>{num(tl("Prisionero (Ø del agujero radial)"), "set_screw")}</Show>
         </Show>
+        <Show when={props.shape.hub_length > 0 && props.shape.bore > 0}>{num(tl("Prisionero (Ø del agujero radial)"), "set_screw")}</Show>
       </Show>
       <Show when={info()}>
         {(i) => (

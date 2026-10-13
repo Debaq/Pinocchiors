@@ -276,6 +276,8 @@ pub struct FaceClass {
     pub origin: P3,
     pub dir: P3,
     pub radius: f64,
+    /// Conos: semiángulo; el radio crece como tan(ángulo) a lo largo de `dir`
+    pub angle: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -814,6 +816,7 @@ impl Shape {
                 origin: r.origin,
                 dir: r.dir,
                 radius: r.radius,
+                angle: r.angle,
             })
             .collect())
     }
