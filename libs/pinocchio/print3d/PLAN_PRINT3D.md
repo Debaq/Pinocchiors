@@ -52,15 +52,16 @@ holguras y compensaciones: holgura de base (parte de la boquilla × factor del m
 Las uniones toman su holgura de ahí (selector «Ajuste») y las placas se agrandan por la contracción
 al exportar (el diseño queda en medidas nominales). Comando `get_fab_tolerances`.
 
-Por hacer (lado CAD; se hace cuando el trabajo de engranes esté commiteado):
+Hecho (lado CAD, 2026-10-13):
 
-1. **Perfil de fabricación en el documento de CAD** (`Document.fabrication`: impresora, material, ajuste
-   por defecto), guardado en el `.pinocchio` y compartido con Fabricar: elegirlo en un lado lo elige en el otro.
-2. **Operaciones que lo leen**: la holgura de impresión de `GearPart` (`print_clearance`) parte de
-   `fit_clearance(Fit)`; agujeros, chaveteros y roscas ofrecen «Ajustar a la impresora» (`compensated_hole`);
-   `Shell`/paredes avisan al bajar de `min_wall`.
-3. **Ensambles**: `interferences` pasa a medir también la holgura (pares más cerca que `fit_clearance`
-   se marcan, no solo los que chocan) y sugiere el ajuste entre piezas conectadas.
-4. **Exportar desde Diseñar** con la misma compensación de contracción que las placas.
-5. La compensación de **agujeros** al exportar solo es posible en el CAD (cara cilíndrica conocida); en una
-   malla suelta no se detectan agujeros, por eso allí solo se aplica la contracción.
+1. `Document.fabrication` (impresora, material y ajuste), guardado en el `.pinocchio`; Fabricar y Diseñar
+   comparten la misma elección (la de Fabricar manda; al abrir un diseño con impresora, esa pasa a Fabricar).
+   Entra en la clave de la caché del recálculo.
+2. `GearPart.auto_clearance` («Holgura según la impresora»: ajuste justo) y `Hole.compensate`
+   («Compensar para imprimir»: el diámetro es el que se quiere medir impreso). Sin impresora avisan.
+3. `assembly::tight_gaps` y «Revisar holguras» en el ensamble: pares que no se pisan pero quedan más cerca
+   que la holgura de la impresora (se saltan los engranes que engranan).
+4. Exportar desde Diseñar con «Compensar la contracción del material» (solo mallas; STEP queda exacto).
+
+Pendiente: roscas y chaveteros con «Ajustar a la impresora»; compensación de agujeros en el STEP; pruebas
+e2e de la sincronía impresora ↔ diseño (hoy solo hay pruebas de Rust).
