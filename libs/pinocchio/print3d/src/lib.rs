@@ -53,7 +53,9 @@ mod planar_joints;
 mod printability;
 mod profile;
 mod slicer;
+mod texture;
 mod transform;
+mod zones;
 
 pub use analysis::*;
 pub use calibration::*;
@@ -70,4 +72,6 @@ pub use planar_joints::*;
 pub use printability::*;
 pub use profile::*;
 pub use slicer::*;
+pub use texture::*;
 pub use transform::*;
+pub use zones::*;
