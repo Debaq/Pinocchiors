@@ -6,6 +6,7 @@
 
 use crate::commands::{in_background, mesh_reoriented, mesh_to_scene, mm_per_unit};
 use crate::state::AppState;
+use pinocchio_math::Vector3;
 use pinocchio_mesh::Mesh;
 use pinocchio_print3d::{
     self as p3d, FabTolerances, Fit, HollowConfig, JointsReport, MaterialProfile, NestItem, OrientationCandidate, PlanarJointConfig, PrintabilityConfig, PrintabilityReport, PrinterProfile,
@@ -87,6 +88,75 @@ pub struct FabInfo {
 pub fn get_fab_tolerances(printer: PrinterProfile, material: MaterialProfile) -> FabInfo {
     let t = FabTolerances::derive(&printer, &material);
     FabInfo { tight: t.fit_clearance(Fit::Tight), normal: t.fit_clearance(Fit::Normal), loose: t.fit_clearance(Fit::Loose), tolerances: t }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PIEZAS EN EL VISOR
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Color de la pieza `i` entre `n`: tonos repartidos por la proporción áurea
+fn piece_color(i: usize) -> [f32; 4] {
+    let h = (i as f32 * 0.618_034).fract();
+    let (s, l) = (0.55f32, 0.58f32);
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let x = c * (1.0 - ((h * 6.0) % 2.0 - 1.0).abs());
+    let m = l - c / 2.0;
+    let (r, g, b) = match (h * 6.0) as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    [r + m, g + m, b + m, 1.0]
+}
+
+/// Las piezas del corte, cada una de su color y separadas del centro `explode` veces la distancia de su centro
+/// al del modelo (0 = juntas). Sale en el formato de los datos de malla del visor
+#[tauri::command]
+pub async fn print_pieces_view(app: AppHandle, explode: f64) -> Result<tauri::ipc::Response, String> {
+    in_background(app, move |state| pieces_view(state, explode).map(tauri::ipc::Response::new)).await
+}
+
+pub(crate) fn pieces_view(state: &AppState, explode: f64) -> Result<Vec<u8>, String> {
+    let pieces = state.print3d_pieces.lock().unwrap();
+    let pieces = pieces.as_ref().ok_or("Primero divide el modelo en piezas")?;
+    let base = state.scene.lock().unwrap().clone();
+    let boxes: Vec<(Vector3, Vector3)> = pieces
+        .iter()
+        .map(|p| {
+            let (mut lo, mut hi) = (p.mesh.vertices[0].position, p.mesh.vertices[0].position);
+            for v in &p.mesh.vertices {
+                lo = lo.min(&v.position);
+                hi = hi.max(&v.position);
+            }
+            (lo, hi)
+        })
+        .collect();
+    let (lo, hi) = boxes.iter().fold((boxes[0].0, boxes[0].1), |(l, h), (a, b)| (l.min(a), h.max(b)));
+    let model_center = (lo + hi) * 0.5;
+    let mut scene = converter_scene::Scene::new();
+    if let Some(b) = &base {
+        scene.meters_per_unit = b.meters_per_unit;
+        scene.y_up = b.y_up;
+    }
+    for (i, (piece, (a, b))) in pieces.iter().zip(&boxes).enumerate() {
+        let offset = ((*a + *b) * 0.5 - model_center) * explode.max(0.0);
+        let mut mesh = piece.mesh.clone();
+        for v in &mut mesh.vertices {
+            v.position += offset;
+        }
+        let mut part = mesh_to_scene(&mesh, &format!("pieza_{}", piece.label), None);
+        for m in &mut part.meshes {
+            for p in &mut m.primitives {
+                p.material = Some(i);
+            }
+        }
+        scene.materials.push(converter_scene::Material { name: format!("pieza_{}", piece.label), base_color_factor: piece_color(i), ..Default::default() });
+        scene.merge(part);
+    }
+    Ok(crate::commands::scene_mesh_data(&scene).to_bytes())
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -704,6 +774,27 @@ mod tests {
         assert!(export_calibration_impl(&CalibrationModel::Block(p3d::CalibrationBlock { holes: vec![], ..Default::default() }), "stl", path.to_str().unwrap()).is_err());
         std::fs::remove_file(dir.join("bloque.stl")).ok();
         std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn la_vista_de_piezas_separa_y_colorea() {
+        let state = AppState::new();
+        assert!(pieces_view(&state, 0.5).is_err(), "sin piezas no hay vista");
+        // Dos cubos de 10 pegados por una cara
+        let mk = |x: f64, label: &str, id: usize| {
+            let mut m = cube(10.0);
+            for v in &mut m.vertices {
+                v.position += Vector3::new(x, 0.0, 0.0);
+            }
+            pinocchio_print3d::LabeledPiece { mesh: m, id, label: label.into(), ..Default::default() }
+        };
+        *state.print3d_pieces.lock().unwrap() = Some(vec![mk(0.0, "1", 0), mk(10.0, "2", 1)]);
+        let joined = pieces_view(&state, 0.0).unwrap();
+        let apart = pieces_view(&state, 1.0).unwrap();
+        assert_eq!(joined.len(), apart.len(), "la misma cantidad de datos");
+        assert_ne!(joined, apart, "separadas cambia las posiciones");
+        assert_ne!(piece_color(0), piece_color(1));
+        assert!(piece_color(5).iter().all(|c| (0.0..=1.0).contains(c)));
     }
 
     #[test]

@@ -3692,6 +3692,19 @@ pub struct SubdivideConfigInput {
     pub build_volume: [f64; 3],
     pub strategy: Option<String>,
     pub margin: Option<f64>,
+    /// Con la estrategia `manual`: los planos elegidos (eje de la vista Z arriba, mm desde el borde del modelo)
+    #[serde(default)]
+    pub planes: Vec<CutPlaneInput>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CutPlaneInput {
+    /// 0 = X, 1 = Y, 2 = Z (ejes como se muestran, Z arriba)
+    pub axis: usize,
+    /// Distancia desde el borde mínimo del modelo (mm)
+    pub position: f64,
+    #[serde(default)]
+    pub tilt_deg: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -4084,6 +4097,7 @@ pub(crate) fn subdivide_mesh_impl(config: SubdivideConfigInput, state: &AppState
     let strategy = match config.strategy.as_deref() {
         Some("optimal") => SubdivideStrategy::Optimal,
         Some("zlayers") => SubdivideStrategy::ZLayers,
+        Some("manual") => SubdivideStrategy::Manual,
         _ => SubdivideStrategy::Grid,
     };
 
@@ -4095,6 +4109,7 @@ pub(crate) fn subdivide_mesh_impl(config: SubdivideConfigInput, state: &AppState
         overlap: 0.0,
         strategy,
         margin: config.margin.unwrap_or(2.0) / k,
+        manual: config.planes.iter().map(|p| pinocchio_print3d::CutPlane { axis: p.axis, position: p.position / k, tilt_deg: p.tilt_deg }).collect(),
     };
 
     // El volumen de impresión y las capas son con Z arriba (la plataforma)

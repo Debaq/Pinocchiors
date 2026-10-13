@@ -169,6 +169,7 @@ pub fn run() {
             print_prep::get_print_presets,
             print_prep::get_fab_tolerances,
             print_prep::export_calibration_model,
+            print_prep::print_pieces_view,
             print_skin::skin_library,
             print_skin::skin_preview,
             print_skin::skin_import_image,
