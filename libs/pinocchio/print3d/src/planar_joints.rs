@@ -684,4 +684,45 @@ mod tests {
             assert!(compute_volume(&p.mesh) > 0.0);
         }
     }
+
+    /// Toro con el eje en Z: radio mayor `big`, radio del tubo `small`
+    fn torus(big: Real, small: Real, around: usize, tube: usize) -> Mesh {
+        let mut pos = Vec::new();
+        for i in 0..around {
+            let a = std::f64::consts::TAU * i as Real / around as Real;
+            for j in 0..tube {
+                let b = std::f64::consts::TAU * (j as Real + 0.5) / tube as Real;
+                let r = big + small * b.cos();
+                pos.push(Vector3::new(r * a.cos(), r * a.sin(), small * b.sin()));
+            }
+        }
+        let at = |i: usize, j: usize| (i % around) * tube + j % tube;
+        let mut tris = Vec::new();
+        for i in 0..around {
+            for j in 0..tube {
+                tris.push([at(i, j), at(i + 1, j), at(i + 1, j + 1)]);
+                tris.push([at(i, j), at(i + 1, j + 1), at(i, j + 1)]);
+            }
+        }
+        Mesh::from_triangles(&pos, &tris)
+    }
+
+    #[test]
+    fn toro_cortado_por_el_plano_medio_tiene_tapa_anular() {
+        let t = torus(30.0, 10.0, 96, 48);
+        assert!(t.is_closed());
+        assert!(compute_volume(&t) > 0.0);
+        let meshes = crate::slicer::slice_by_planes(&t, &[Plane::xy_at_z(0.5)]).unwrap();
+        let mut pieces: Vec<LabeledPiece> = meshes.into_iter().enumerate().map(|(id, mesh)| LabeledPiece { mesh, id, ..Default::default() }).collect();
+        for p in &pieces {
+            assert!(p.mesh.is_closed(), "tapa anular abierta");
+        }
+        let vol: Real = pieces.iter().map(|p| compute_volume(&p.mesh)).sum();
+        assert!((vol - compute_volume(&t)).abs() < 1e-6 * vol);
+        let report = apply_joints(&mut pieces, &PlanarJointConfig { count: 2, depth: 6.0, min_depth: 2.0, ..Default::default() }).unwrap();
+        assert_eq!(report.joints_placed, 2, "{report:?}");
+        for p in &pieces {
+            assert!(p.mesh.is_closed());
+        }
+    }
 }

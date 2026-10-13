@@ -151,4 +151,37 @@ mod tests {
         assert!((half.volume_mm3 - 500.0).abs() < 1e-6);
         assert!(e.filament_m > 0.4 && e.filament_m < 0.5);
     }
+
+    #[test]
+    fn esfera_hueca() {
+        // Esfera UV de radio 20
+        let (rings, segs, r) = (40usize, 64usize, 20.0);
+        let mut pos = vec![Vector3::new(0.0, 0.0, r)];
+        for i in 1..rings {
+            let th = std::f64::consts::PI * i as Real / rings as Real;
+            for j in 0..segs {
+                let ph = std::f64::consts::TAU * j as Real / segs as Real;
+                pos.push(Vector3::new(r * th.sin() * ph.cos(), r * th.sin() * ph.sin(), r * th.cos()));
+            }
+        }
+        pos.push(Vector3::new(0.0, 0.0, -r));
+        let bottom = pos.len() - 1;
+        let at = |i: usize, j: usize| 1 + (i - 1) * segs + j % segs;
+        let mut tris = Vec::new();
+        for j in 0..segs {
+            tris.push([0, at(1, j), at(1, j + 1)]);
+            tris.push([bottom, at(rings - 1, j + 1), at(rings - 1, j)]);
+        }
+        for i in 1..rings - 1 {
+            for j in 0..segs {
+                tris.push([at(i, j), at(i + 1, j), at(i + 1, j + 1)]);
+                tris.push([at(i, j), at(i + 1, j + 1), at(i, j + 1)]);
+            }
+        }
+        let sphere = Mesh::from_triangles(&pos, &tris);
+        let res = hollow(&sphere, &HollowConfig { wall: 2.0, voxel_size: Some(0.8) }).unwrap();
+        let expected = 4.0 / 3.0 * std::f64::consts::PI * 18f64.powi(3);
+        assert!((res.cavity_volume - expected).abs() / expected < 0.06, "{} vs {}", res.cavity_volume, expected);
+        assert!(res.mesh.is_closed());
+    }
 }
