@@ -30,20 +30,6 @@ planos reales entre piezas.
 - Cola de milano deslizante (`PlanarShape::Rail`, `groove::subtract_trench`): riel en una pieza y ranura en la otra, de pared a pared; la ranura se resta de cualquier pared (también curva) con un recorte de triángulos y cierre de las caras de la zanja.
 - Cierre de cuarto de vuelta (`PlanarShape::Bayonet`): perno con cabeza de barra que entra por una ranura y se traba al girar 90°.
 
-## Límites conocidos
-
-- Las uniones solo van en caras de corte **planas** y dentro de la cara (redonda, cuadrada, trapecio
-  cuarto de vuelta) y el riel deslizante, que corre una línea recta de pared a pared (la cuerda tiene que
-  caber en la cara sin huecos). No hay puzzles. El riel no tiene tope: se desliza por los dos extremos.
-- El drenaje pide una cara plana abajo (al exportar, tras apoyar la pieza) y un solo agujero; sin venteo.
-- La verificación mide paredes con rayos desde una muestra de caras.
-
-## Ideas siguientes
-
-- Venteo (segundo agujero) y drenaje sin cara plana.
-- Orientación por pieza visible antes de exportar.
-- Tope en la ranura (un extremo ciego) y puzzles.
-
 ## Tolerancias de fabricación y su conexión con Diseñar (CAD)
 
 Hecho (lado impresión): `FabTolerances::derive(impresora, material)` en `fab.rs` es la única fuente de
@@ -86,7 +72,7 @@ Comandos `export_calibration_model` y `solve_print_calibration`; asistente `Cali
 «Calibrar con piezas de prueba»). Los materiales propios (con contracción por eje y factor de holgura) y las
 impresoras propias se recuerdan entre sesiones. Los resultados se pueden guardar como perfiles nuevos.
 
-## Fase 8: pieles y texturas imprimibles (por hacer)
+## Fase 8: pieles y texturas imprimibles (hecha)
 
 Idea (del usuario): aplicar a las piezas una imagen en blanco y negro como **mapa de altura** (blanco = relieve
 alto, negro = bajo) que **desplaza la malla de verdad**, para que el patrón salga impreso: agarre, cuero, líneas,
@@ -152,3 +138,79 @@ Cortar antes o después (resuelto): se texturiza el modelo entero y se corta des
 de 33 000 triángulos tarda ~17 ms (release), las piezas salen cerradas y las tapas de corte planas; así no hace falta
 que el cortador lleve UV ni máscara. De paso se arregló el cortador con planos que pasan justo por vértices de la malla
 (dejaba piezas abiertas): ahora esos vértices cuentan como del lado de adelante.
+
+## Pendientes y límites (2026-10-13)
+
+Leyenda: ⬜ falta · 🧪 falta probarlo de verdad · ⚠ límite conocido (funciona así a propósito).
+
+### Sin probar
+
+- 🧪 Nada de esto se ha probado en la app abierta ni con una impresora: solo pruebas de Rust (lib y escritorio),
+  `tsc` y `vite build`. Falta recorrer con un modelo real: dividir, uniones, vaciar con drenaje, exportar placas,
+  elegir zona y ver el relieve, y el asistente de calibración.
+- 🧪 Sin e2e de la sincronía impresora ↔ diseño, de la selección de zona ni del asistente de calibración.
+- 🧪 Los modelos de calibración y las uniones (clavija, cuarto de vuelta, riel) son geometría correcta y cerrada,
+  pero no se ha verificado cómo los corta un slicer ni cómo ajustan impresos. Los presets de holgura y de
+  contracción son valores típicos, no medidos.
+- 🧪 El sombreado del relieve en el visor no se vio con una malla real (solo se probó que el dato sale bien).
+
+### Verificación, orientación y soporte
+
+- ⚠ La pared fina se mide con rayos desde una muestra de 1 500 caras; puede perder una zona chica.
+- ⚠ El soporte estimado son columnas verticales hasta lo primero que hay debajo; no simula soporte en árbol ni
+  ángulos de voladizo del slicer. Con muchas caras se muestrea.
+- ⚠ La orientación sugerida es para el modelo entero. Al exportar las placas cada pieza se orienta sola, pero no
+  se ve antes. ⬜ Orientación por pieza visible antes de exportar.
+- ⬜ `SubdivideStrategy::Optimal` («menos cortes») sigue usando la grilla.
+- ⬜ Cortes manuales (planos elegidos por el usuario), vista de los planos y las piezas en el visor, y candado de
+  proporción por eje al escalar.
+
+### Uniones
+
+- ⚠ Las uniones solo van en caras de corte **planas**. La huella es redonda, cuadrada, trapecio, cuarto de vuelta
+  o riel deslizante; el riel corre en línea recta de pared a pared y la cuerda tiene que caber en la cara sin huecos.
+- ⬜ El riel no tiene tope (un extremo ciego): se desliza por los dos lados. ⬜ No hay puzzles ni terraza.
+- ⚠ Si la cara de corte tiene un hueco en el medio (un anillo), el riel no se pone (lo avisa).
+
+### Vaciado, material y placas
+
+- ⚠ El vaciado deja un hueco cerrado (partes más finas que el doble de la pared quedan macizas). El drenaje pide
+  una cara plana abajo, es un solo agujero y no hay venteo. ⬜ Venteo y drenaje sin cara plana.
+- ⚠ La estimación de material no cuenta perímetros ni capas superiores: es una cota aproximada.
+- ⚠ La distribución por contorno va por celdas (la separación real es la pedida más, como mucho, una celda) y
+  solo gira de 90 en 90°.
+
+### Tolerancias y Diseñar
+
+- ⚠ La compensación de agujeros solo se puede hacer en el CAD (la cara cilíndrica es conocida); en una malla suelta
+  solo se aplica la contracción.
+- ⚠ Las roscas exteriores (tornillos y ejes) no llevan holgura: la lleva el hueco, para que el ajuste no quede el
+  doble de flojo. Los engranes no compensan los dientes (eso es la «holgura según la impresora»).
+- ⚠ La contracción se aplica desde el origen: en un archivo con varias piezas la distancia entre ellas crece lo
+  mismo (0,3 % en PLA).
+- ⬜ Contracción distinta por eje solo está en el modelo y el asistente; el material de la interfaz admite los tres
+  ejes pero los presets los traen iguales.
+- 🧪 Dos pruebas de `cad-model` fallan desde antes (`gear_part::avisos_y_errores` y
+  `corona_helicoidal_y_cremallera`): esperan error con cremallera helicoidal, que el commit `80f7a83` permite.
+
+### Calibración (asistente)
+
+- ⚠ Asume que el bloque y la placa se imprimieron sin ninguna compensación; con la compensación activada los
+  números salen mal.
+- ⚠ Los números de la placa son de siete segmentos en relieve (sin tipografía); los agujeros del bloque (Ø4, 6, 8 y
+  10) y su tamaño (53 × 30 × 20) son fijos, no se editan desde la interfaz.
+- ⚠ La holgura se guarda en la impresora como `holgura / factor del material`; si cambias el factor después, el
+  ajuste normal cambia.
+
+### Pieles y texturas imprimibles
+
+- ⚠ Una sola escala de UV por zona: si las islas están estiradas distinto, la baldosa cambia de tamaño entre ellas.
+- ⚠ Aplicar la piel deja el modelo como geometría sola (sin UV, texturas ni rig) y borra la zona. Se deshace con el
+  historial; si el diseño cambia y se rehace, la piel no se vuelve a poner.
+- ⚠ Necesita UV: sin ellos el botón se desactiva y pide desplegar el modelo. Solo usa la altura (grises); el color
+  de la imagen se ignora. Las imágenes importadas se guardan en 8 bits y hasta 1 024 px; los patrones de fábrica
+  son de 256 px.
+- ⚠ La vista previa tiene menos detalle (hasta 250 000 triángulos) y se calcula sobre el modelo entero.
+- ⬜ Mapeo triplanar o en caja (sin UV), máscara de borde suave pintada, y decimar la malla después de aplicar.
+- ⬜ Comprobar que la piel no invade uniones, agujeros ni roscas: hoy depende de que la zona elegida no los toque.
+

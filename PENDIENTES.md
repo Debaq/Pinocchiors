@@ -13,20 +13,13 @@ Leyenda: 🐞 error comprobado · ⬜ falta · 🟨 a medias · 🧪 falta proba
 
 ## 1. Errores comprobados
 
-- 🐞 **Impresión 3D, vecinos de las piezas.** Después de `subdivide`, la app
-  llama a `find_neighbors` (`apps/desktop/src/commands.rs`, `subdivide_mesh`),
-  un stub que marca vecinas las piezas ±1 por índice, y pisa los vecinos que
-  `subdivide` ya calculó bien por caja (`detect_neighbors` en
-  `print3d/src/slicer.rs`).
 - 🐞 **"Optimal (menos cortes)"** se ofrece en `Print3DPanel.tsx` pero
   `SubdivideStrategy::Optimal` usa la grilla (`slicer.rs`).
-- 🐞 **Cierre de los cortes**: solo se cierra un contorno por corte
-  (`slicer.rs`, "Por ahora solo manejamos un loop"); piezas con varias islas
-  o agujeros en el corte quedan abiertas.
 - 🟨 `SubdivideConfig::max_dimension` y `overlap` no se leen; `cut_faces`
   siempre vacío; `LabelingScheme::Coordinate` genera `P{n}`;
-  `orient_flat_on_bed` está vacío; `calculate_connections` deja área, normal
-  y centro en 0; `AssemblyInfo.total_volume` es 0.
+  `AssemblyInfo.total_volume` es 0. (Resueltos desde 2026-10-13: los vecinos y
+  `calculate_connections` miden contactos planos reales, el cierre de cortes admite
+  varios contornos y huecos, y `orient_flat_on_bed` orienta de verdad.)
 
 ## 2. Esqueleto
 
@@ -129,9 +122,11 @@ Pendiente:
   información antes de importar.
 - ⬜ Exportar USDA en texto; opciones USD en la interfaz (escala, eje arriba,
   separar ORM).
-- ⬜ Impresión 3D: cortes manuales, conectores (la lib genera dowel,
-  dovetail y pirámide; puzzle y terraza no; aplicarlos requiere CSG), vista
-  de piezas y planos en el visor, candado de proporción por eje.
+- ⬜ Impresión 3D: cortes manuales, vista de piezas y planos en el visor,
+  candado de proporción por eje; puzzles y terraza (las uniones planas, el
+  cuarto de vuelta y el riel deslizante ya están). Todo el detalle de lo que
+  falta y lo que está sin probar: `libs/pinocchio/print3d/PLAN_PRINT3D.md`,
+  sección «Pendientes y límites».
 - ⬜ Cuatro vistas, ajuste a grilla/vértices, atajos configurables, menús
   Editar/Vista/Malla.
 - ⬜ Tags y categorías en la biblioteca de poses.
@@ -187,7 +182,8 @@ Pendiente:
 - ⬜ Validación: comparar con el Pinocchio C++, suite estándar de mallas,
   métricas de skinning, benchmarks con `criterion`.
 - ⬜ API WASM propia (la feature `wasm` no tiene código), GPU (`wgpu`), FBX.
-- ⬜ Tests de volumen, área y centro de masa en `print3d`; `prepare_for_printing`.
+- ⬜ `prepare_for_printing` (un solo paso que encadene verificar, orientar, cortar, unir y exportar); la lib
+  ya tiene pruebas de volumen, área y centro de masa.
 
 ### Render (`libs/geppettoray`, plan en `libs/PLAN_RENDER.md`)
 Hechas las fases 3a–3g (motor, BSDF glTF, luces y HDRI con MIS, vidrio, cámara
