@@ -273,6 +273,9 @@ pub struct PlateInput {
     pub spacing: f64,
     /// Girar cada pieza a su mejor posición de apoyo
     pub orient: bool,
+    /// Acomodar por el contorno de cada pieza y no por su caja
+    #[serde(default)]
+    pub contour: bool,
     /// Vaciar con este espesor de pared (mm)
     pub hollow_wall: Option<f64>,
     /// Agujero de drenaje de este diámetro en la cara de abajo (mm), al vaciar
@@ -324,8 +327,15 @@ pub(crate) fn plan_plates(list: Vec<(String, Mesh)>, input: &PlateInput) -> Resu
         prepared.push((label, mesh));
     }
     let bed = [input.printer.build_volume[0], input.printer.build_volume[1]];
-    let items: Vec<NestItem> = prepared.iter().enumerate().map(|(id, (_, m))| NestItem { id, size: p3d::footprint(m) }).collect();
-    let result = p3d::nest(&items, bed, input.spacing.max(0.0), true);
+    let spacing = input.spacing.max(0.0);
+    let result = if input.contour {
+        let cell = (bed[0].max(bed[1]) / 200.0).max(0.5);
+        let refs: Vec<&Mesh> = prepared.iter().map(|(_, m)| m).collect();
+        p3d::nest_contour(&refs, bed, spacing, true, cell)
+    } else {
+        let items: Vec<NestItem> = prepared.iter().enumerate().map(|(id, (_, m))| NestItem { id, size: p3d::footprint(m) }).collect();
+        p3d::nest(&items, bed, spacing, true)
+    };
     let mut meshes: Vec<Mesh> = prepared.iter().map(|(_, m)| m.clone()).collect();
     p3d::apply_nesting(&mut meshes, &result);
     let too_tall = prepared
@@ -470,6 +480,7 @@ mod tests {
             format: "stl".into(),
             spacing,
             orient: true,
+            contour: false,
             hollow_wall: None,
             drain: None,
             path: "x.stl".into(),
@@ -506,6 +517,23 @@ mod tests {
             for (_, m) in &plate.meshes {
                 let bb = p3d::compute_bounding_box(m);
                 assert!(bb.max[0] <= 100.0 + 1e-6 && bb.max[1] <= 100.0 + 1e-6 && bb.min[2].abs() < 1e-9);
+            }
+        }
+    }
+
+    #[test]
+    fn reparte_por_contorno() {
+        let list: Vec<(String, Mesh)> = (0..3).map(|i| (format!("{i}"), cube(60.0))).collect();
+        let mut inp = input(2.0);
+        inp.contour = true;
+        let plan = plan_plates(list, &inp).unwrap();
+        assert!(plan.unplaced.is_empty());
+        let total: usize = plan.plates.iter().map(|p| p.meshes.len()).sum();
+        assert_eq!(total, 3);
+        for plate in &plan.plates {
+            for (_, m) in &plate.meshes {
+                let bb = p3d::compute_bounding_box(m);
+                assert!(bb.min[0] >= -1e-6 && bb.max[0] <= 100.0 + 1e-6 && bb.max[1] <= 100.0 + 1e-6);
             }
         }
     }

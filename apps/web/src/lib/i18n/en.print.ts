@@ -91,5 +91,7 @@ export const en_print: Catalog = {
   "Abre un agujero en la cara plana de abajo para que salga la resina del hueco. Pide una cara plana apoyada en la cama.": "Opens a hole in the flat bottom face so the resin can drain from the cavity. Needs a flat face resting on the bed.",
   "para el drenaje hace falta una cara plana abajo: apoya el modelo en una cara plana": "the drain needs a flat face underneath: rest the model on a flat face",
   "error en joint: para el drenaje hace falta una cara plana abajo: apoya el modelo en una cara plana": "joint error: the drain needs a flat face underneath: rest the model on a flat face",
+  "Acomodar por el contorno": "Arrange by outline",
+  "Usa la forma de cada pieza vista desde arriba y no su caja: caben más piezas por cama, pero tarda un poco más.": "Uses each part's shape seen from above instead of its box: more parts fit per bed, but it takes a bit longer.",
   "No se pudieron rehacer las uniones: {e}": "Couldn't redo the joints: {e}",
 };

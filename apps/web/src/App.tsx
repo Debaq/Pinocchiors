@@ -6948,7 +6948,7 @@ export const App: Component = () => {
   };
 
   const handlePreviewPlates = async (printer: PrinterProfile, material: MaterialProfile, settings: PlateSettings) => {
-    const input = { printer, material, format: settings.format, spacing: settings.spacing, orient: settings.orient, hollow_wall: null, path: "" };
+    const input = { printer, material, format: settings.format, spacing: settings.spacing, orient: settings.orient, contour: settings.contour !== false, hollow_wall: null, path: "" };
     const result = await printTask(t("Acomodando las piezas..."), () => invoke<PlatePreview>("preview_print_plates", { input }));
     if (result) setPlatePreview(result);
   };
@@ -6960,7 +6960,7 @@ export const App: Component = () => {
         filters: [{ name: settings.format.toUpperCase(), extensions: [settings.format] }],
       });
       if (!path) return;
-      const input = { printer, material, format: settings.format, spacing: settings.spacing, orient: settings.orient, hollow_wall: settings.hollowWall, drain: settings.drain, path };
+      const input = { printer, material, format: settings.format, spacing: settings.spacing, orient: settings.orient, contour: settings.contour !== false, hollow_wall: settings.hollowWall, drain: settings.drain, path };
       const result = await printTask(t("Preparando las placas..."), () => invoke<PlateResult>("export_print_plates", { input }));
       if (!result) return;
       setPlateResult(result);

@@ -87,6 +87,8 @@ export interface PlateSettings {
   format: string;
   spacing: number;
   orient: boolean;
+  /** Acomodar por el contorno de cada pieza y no por su caja */
+  contour: boolean;
   hollowWall: number | null;
   /** Diámetro del agujero de drenaje (mm) al vaciar; null: sin agujero */
   drain: number | null;
@@ -123,7 +125,7 @@ export const defaultPrep: PrepSettings = {
   wall: 2,
   drain: false,
   drainDiameter: 4,
-  plate: { format: "stl", spacing: 5, orient: true, hollowWall: null, drain: null },
+  plate: { format: "stl", spacing: 5, orient: true, contour: true, hollowWall: null, drain: null },
 };
 
 export interface PlatePreview {
@@ -481,6 +483,13 @@ export const PlatesSection: Component<{
           checked={props.settings.orient}
           onChange={(v) => set({ orient: v })}
           hint={t("Gira cada pieza para que tenga la menor cantidad de voladizos antes de acomodarla en la cama.")}
+        />
+        <Checkbox
+          small
+          label={t("Acomodar por el contorno")}
+          checked={props.settings.contour !== false}
+          onChange={(v) => set({ contour: v })}
+          hint={t("Usa la forma de cada pieza vista desde arriba y no su caja: caben más piezas por cama, pero tarda un poco más.")}
         />
         <Button onClick={props.onPreview} disabled={props.disabled || props.busy} fullWidth size="sm" icon={<Icons.Cube size={14} />}>
           {t("Ver cómo quedan en la cama")}
