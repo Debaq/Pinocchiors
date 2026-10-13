@@ -1,9 +1,10 @@
 import { Component, Show, For, createEffect, createSignal } from "solid-js";
 import { Button, Checkbox, Select, NumberInput } from "../ui";
 import * as Icons from "../icons";
-import { fmtNumber, t } from "../../lib/i18n";
+import { fmtNumber, t, tx } from "../../lib/i18n";
 import { CalibrationWizard, type CalibrationApply } from "../layout/CalibrationWizard";
 import { SkinPanel, type SkinPanelProps } from "./SkinPanel";
+import type { CutPlane } from "../../lib/printCuts.ts";
 import { saveCustomMaterial, saveCustomPrinter } from "../../lib/settings.ts";
 import {
   JointsSection,
@@ -91,6 +92,8 @@ export interface Print3DPanelProps {
   /** Lo elegido (impresora, material, uniones...): si falta, el panel lo guarda él */
   /** Pieles y texturas imprimibles (zona e imagen) */
   skin?: SkinPanelProps;
+  /** Ver las piezas separadas y de colores en el visor */
+  piecesView?: { on: boolean; explode: number; busy?: boolean; onToggle: () => void; onExplode: (v: number) => void };
   prep?: PrepSettings;
   onPrep?: (s: PrepSettings) => void;
   readiness?: Readiness;
@@ -119,6 +122,8 @@ export interface SubdivideConfig {
   build_volume: [number, number, number];
   strategy?: string;
   margin?: number;
+  /** Con la estrategia manual: los planos elegidos */
+  planes?: CutPlane[];
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -187,7 +192,11 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
   };
 
   // Subdivide state
-  const [strategy, setStrategy] = createSignal("grid");
+  const strategy = () => prep().cutStrategy ?? "grid";
+  const setStrategy = (cutStrategy: string) => patch({ cutStrategy });
+  const cuts = () => prep().cuts ?? [];
+  const setCuts = (next: CutPlane[]) => patch({ cuts: next });
+  const modelSize = () => props.analysis?.dimensions ?? [100, 100, 100];
   const [margin, setMargin] = createSignal(2.0);
 
   return (
@@ -347,10 +356,66 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
               { value: "grid", label: t("Grid (regular)") },
               { value: "optimal", label: t("Optimal (menos cortes)") },
               { value: "zlayers", label: t("Capas Z") },
+              { value: "manual", label: t("A mano (tus planos)") },
             ]}
             value={strategy()}
             onChange={setStrategy}
           />
+          <Show when={strategy() === "optimal"}>
+            <p class="text-[10px] text-text-dim leading-snug">{t("Reparte el modelo con el menor número de piezas (pueden girarse para caber) y corta por donde es más angosto.")}</p>
+          </Show>
+          <Show when={strategy() === "manual"}>
+            <div class="space-y-2">
+              <p class="text-[10px] text-text-dim leading-snug">{t("Cada plano corta perpendicular a un eje, a la distancia que pongas desde el borde del modelo. Se ven en el visor.")}</p>
+              <For each={cuts()}>
+                {(plane, i) => (
+                  <div class="grid grid-cols-[3.2rem_1fr_1fr_auto] gap-1 items-end p-1.5 rounded bg-surface/20 border border-border">
+                    <Select
+                      options={[{ value: "0", label: "X" }, { value: "1", label: "Y" }, { value: "2", label: "Z" }]}
+                      value={String(plane.axis)}
+                      onChange={(v) => {
+                        const axis = Number(v) as 0 | 1 | 2;
+                        setCuts(cuts().map((c, k) => (k === i() ? { ...c, axis, position: Math.min(c.position, modelSize()[axis] * 0.95) } : c)));
+                      }}
+                    />
+                    <NumberInput
+                      label={tx("corte", "A")}
+                      value={Number(plane.position.toFixed(2))}
+                      onChange={(v) => setCuts(cuts().map((c, k) => (k === i() ? { ...c, position: Math.max(0.1, Math.min(modelSize()[c.axis] - 0.1, v)) } : c)))}
+                      min={0.1}
+                      max={modelSize()[plane.axis]}
+                      step={1}
+                      suffix="mm"
+                    />
+                    <NumberInput
+                      label={t("Giro")}
+                      value={plane.tilt_deg}
+                      onChange={(v) => setCuts(cuts().map((c, k) => (k === i() ? { ...c, tilt_deg: Math.max(-80, Math.min(80, v)) } : c)))}
+                      min={-80}
+                      max={80}
+                      step={5}
+                      suffix="°"
+                    />
+                    <button
+                      class="h-7 w-7 flex items-center justify-center rounded text-text-muted hover:text-red hover:bg-surface/40"
+                      aria-label={t("Quitar plano")}
+                      onClick={() => setCuts(cuts().filter((_, k) => k !== i()))}
+                    >
+                      <Icons.X size={12} />
+                    </button>
+                  </div>
+                )}
+              </For>
+              <Button
+                size="sm"
+                variant="ghost"
+                fullWidth
+                onClick={() => setCuts([...cuts(), { axis: 2, position: Number((modelSize()[2] / 2).toFixed(1)), tilt_deg: 0 }])}
+              >
+                {t("Agregar plano")}
+              </Button>
+            </div>
+          </Show>
 
           <NumberInput
             label={t("Margen")}
@@ -368,9 +433,10 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
                 build_volume: printer().build_volume,
                 strategy: strategy(),
                 margin: margin(),
+                planes: strategy() === "manual" ? cuts() : undefined,
               })
             }
-            disabled={!props.canAnalyze || props.isProcessing}
+            disabled={!props.canAnalyze || props.isProcessing || (strategy() === "manual" && cuts().length === 0)}
             loading={props.isProcessing}
             variant="primary"
             fullWidth
@@ -389,6 +455,18 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
             {t("Piezas")} ({props.subdivideResult!.piece_count})
           </h4>
 
+          <Show when={props.piecesView}>
+            {(view) => (
+              <div class="space-y-1.5">
+                <Button size="sm" fullWidth variant={view().on ? "primary" : "default"} loading={view().busy} onClick={view().onToggle} icon={<Icons.Cube size={14} />}>
+                  {view().on ? t("Volver al modelo entero") : t("Ver las piezas separadas")}
+                </Button>
+                <Show when={view().on}>
+                  <NumberInput label={t("Separación")} value={view().explode} onChange={(v) => view().onExplode(Math.max(0, Math.min(2, v)))} min={0} max={2} step={0.1} suffix="×" />
+                </Show>
+              </div>
+            )}
+          </Show>
           <div class="space-y-1.5 max-h-48 overflow-y-auto">
             <For each={props.subdivideResult!.pieces}>
               {(piece) => (

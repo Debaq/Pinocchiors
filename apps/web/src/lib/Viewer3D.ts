@@ -557,6 +557,8 @@ export class Viewer3D {
   private placementGroup = new THREE.Group();
   /** Puntos marcados por la verificación de impresión (paredes finas); siguen a la malla */
   private printMarkers: THREE.Object3D | null = null;
+  /** Recuadros de los planos de corte de Fabricar; siguen a la malla */
+  private cutPlanes: THREE.Group | null = null;
   private placementPlanes: THREE.Mesh[] = [];
   private hoveredPlane = -1;
 
@@ -2675,6 +2677,34 @@ export class Viewer3D {
       );
       this.placementGroup.add(outline);
     }
+  }
+
+  /** Dibuja los planos de corte como recuadros translúcidos (esquinas en coordenadas de la malla); `null` los quita */
+  setCutPlanes(planes: { corners: [number, number, number][] }[] | null): void {
+    if (this.cutPlanes) {
+      this.meshGroup.remove(this.cutPlanes);
+      this.cutPlanes.traverse((o) => {
+        if (o instanceof THREE.Mesh || o instanceof THREE.LineLoop) {
+          o.geometry.dispose();
+          (o.material as THREE.Material).dispose();
+        }
+      });
+      this.cutPlanes = null;
+    }
+    if (!planes?.length) return;
+    const group = new THREE.Group();
+    for (const plane of planes) {
+      const c = plane.corners.map((p) => new THREE.Vector3(...p));
+      const fill = new THREE.BufferGeometry().setFromPoints([c[0], c[1], c[2], c[0], c[2], c[3]]);
+      const mesh = new THREE.Mesh(fill, new THREE.MeshBasicMaterial({ color: 0x50a8ff, transparent: true, opacity: 0.18, side: THREE.DoubleSide, depthWrite: false }));
+      mesh.renderOrder = 997;
+      group.add(mesh);
+      const outline = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(c), new THREE.LineBasicMaterial({ color: 0x50a8ff, transparent: true, opacity: 0.9, depthTest: false }));
+      outline.renderOrder = 998;
+      group.add(outline);
+    }
+    this.cutPlanes = group;
+    this.meshGroup.add(group);
   }
 
   /** Marca puntos de la malla (coordenadas de la malla) con esferas rojas visibles a través de ella; `null` las quita */

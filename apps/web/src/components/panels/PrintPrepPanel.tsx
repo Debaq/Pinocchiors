@@ -3,6 +3,7 @@ import { Button, Checkbox, NumberInput, Select } from "../ui";
 import * as Icons from "../icons";
 import { fmtNumber, t, tx } from "../../lib/i18n";
 import { tBackend } from "../../lib/i18nBackend.ts";
+import type { CutPlane } from "../../lib/printCuts.ts";
 import { customMaterials, customPrinters, removeCustomMaterial, removeCustomPrinter, saveCustomMaterial, saveCustomPrinter } from "../../lib/settings.ts";
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -146,6 +147,10 @@ export interface PrepSettings {
   drainDiameter: number;
   /** El diseño (Diseñar) sale con todo lo hueco compensado para la impresora */
   compensateAll?: boolean;
+  /** Cómo se parte el modelo: grid, optimal, zlayers o manual */
+  cutStrategy?: string;
+  /** Los planos de corte a mano */
+  cuts?: CutPlane[];
   plate: PlateSettings;
 }
 

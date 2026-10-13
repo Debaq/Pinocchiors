@@ -214,3 +214,16 @@ Leyenda: ⬜ falta · 🧪 falta probarlo de verdad · ⚠ límite conocido (fun
 - ⬜ Mapeo triplanar o en caja (sin UV), máscara de borde suave pintada, y decimar la malla después de aplicar.
 - ⬜ Comprobar que la piel no invade uniones, agujeros ni roscas: hoy depende de que la zona elegida no los toque.
 
+
+
+## Fase 9: cortes (hecha)
+
+- **Óptimo** (`cuts::optimal_planes`): el menor número de piezas, repartiendo el eje más largo del modelo contra el espacio
+  más largo de la impresora (las piezas se pueden girar: si el modelo cabe girado, no se corta), y cada plano donde la sección
+  es más chica (programación dinámica sobre áreas de sección calculadas por plano, con piezas de al menos un décimo del
+  máximo y una pequeña preferencia por el reparto parejo).
+- **A mano** (`SubdivideStrategy::Manual`, `CutPlane { axis, position, tilt_deg }`): planos perpendiculares a un eje, a tantos
+  mm del borde del modelo, con inclinación (la normal gira hacia el eje que sigue: X→Y, Y→Z, Z→X, entre ±80°). Parte aunque
+  el modelo ya quepa. En la interfaz: lista de planos con eje, distancia y giro; se dibujan en el visor mientras se eligen.
+- **Piezas en el visor**: «Ver las piezas separadas» las muestra de colores y separadas del centro (control de separación).
+- El cortador ya no se rompe con planos que pasan justo por vértices de la malla (ver fase 8).

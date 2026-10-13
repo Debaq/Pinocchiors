@@ -296,6 +296,7 @@ import type {
   PrepSettings,
 } from "./components/panels/Print3DPanel";
 import { defaultPrep, jointShapeConfig } from "./components/panels/PrintPrepPanel";
+import { planeQuad, uiBounds } from "./lib/printCuts.ts";
 import { defaultSkinImage, type SkinEstimate, type SkinImageSettings, type SkinPattern, type SkinZone } from "./components/panels/SkinPanel";
 import { DESIGN_FORMATS, IMAGE_FORMATS, SKELETON_FORMATS, defaultExportOptions, formatBytes, type ExportOptions } from "./components/steps/ExportStep";
 import { defaultUvConfig, type UvConfig, type UvInfo, type UvPreview } from "./components/steps/UvStep";
@@ -1579,6 +1580,23 @@ export const App: Component = () => {
   const [skinPicking, setSkinPicking] = createSignal(false);
   const [skinLibrary, setSkinLibrary] = createSignal<SkinPattern[]>([]);
   const [skinImage, setSkinImage] = createSignal<SkinImageSettings>(defaultSkinImage);
+  // Planos de corte a mano: se dibujan en el visor mientras se eligen
+  const cutPlaneQuads = createMemo(() => {
+    const prep = printPrep();
+    const data = meshData();
+    const dims = meshAnalysis()?.dimensions;
+    if (prep.cutStrategy !== "manual" || !data || !dims || pipeline.activeStep() !== "print3d") return undefined;
+    const b = uiBounds(data.positions);
+    const size = [0, 1, 2].map((k) => b.max[k] - b.min[k]);
+    // Mm por unidad de la escena: lo que mide el modelo en mm sobre lo que mide en la escena
+    const k = size[0] > 1e-9 ? dims[0] / size[0] : size[2] > 1e-9 ? dims[2] / size[2] : 1;
+    return (prep.cuts ?? []).map((c) => ({ corners: planeQuad(b, c, k).corners as [number, number, number][] }));
+  });
+  // Ver las piezas del corte separadas y de colores, en lugar del modelo
+  const [piecesViewOn, setPiecesViewOn] = createSignal(false);
+  const [piecesExplode, setPiecesExplode] = createSignal(0.5);
+  const [piecesViewBusy, setPiecesViewBusy] = createSignal(false);
+  const [piecesViewData, setPiecesViewData] = createSignal<MeshData | undefined>();
   const [skinEstimate, setSkinEstimate] = createSignal<SkinEstimate | undefined>();
   // Vista previa del relieve: una malla con menos detalle que se ve en lugar del modelo
   const [skinPreviewOn, setSkinPreviewOn] = createSignal(false);
@@ -7089,6 +7107,41 @@ export const App: Component = () => {
     if (pipeline.activeStep() !== "print3d") setSkinPreviewOn(false);
   });
   createEffect(on(meshData, () => setSkinPreviewOn(false), { defer: true }));
+  let piecesViewRequest = 0;
+  createEffect(() => {
+    const on = piecesViewOn();
+    const explode = piecesExplode();
+    const hasPieces = !!subdivideResult();
+    const mine = ++piecesViewRequest;
+    if (!on || !hasPieces) {
+      setPiecesViewData(undefined);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      setPiecesViewBusy(true);
+      try {
+        const data = decodeMesh(await invoke<ArrayBuffer>("print_pieces_view", { explode }));
+        if (mine === piecesViewRequest) setPiecesViewData(data);
+      } catch (e) {
+        if (mine === piecesViewRequest) {
+          setPiecesViewOn(false);
+          setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
+        }
+      } finally {
+        if (mine === piecesViewRequest) setPiecesViewBusy(false);
+      }
+    }, 150);
+    onCleanup(() => clearTimeout(timer));
+  });
+  createEffect(() => {
+    if (pipeline.activeStep() !== "print3d" || !subdivideResult()) setPiecesViewOn(false);
+  });
+  createEffect(() => {
+    if (piecesViewOn()) {
+      setSkinPicking(false);
+      setSkinPreviewOn(false);
+    }
+  });
   const applySkin = () =>
     undoable(async (done) => {
       try {
@@ -8698,7 +8751,7 @@ export const App: Component = () => {
               onPaintSettingsChanged={(change) => setPaintConfig((prev) => ({ ...prev, ...change }))}
               onWeightsPainted={handleWeightsPainted}
               paintSettings={paintSettings()}
-              meshData={skinPreviewOn() && skinPreviewData() ? skinPreviewData() : showsPreview() ? remeshPreviewData() : displayQuad() ? quadMeshData() : meshData()}
+              meshData={piecesViewOn() && piecesViewData() ? piecesViewData() : skinPreviewOn() && skinPreviewData() ? skinPreviewData() : showsPreview() ? remeshPreviewData() : displayQuad() ? quadMeshData() : meshData()}
               sceneMaterials={viewerMaterials()}
               lights={lights()}
               onLightsChanged={setLights}
@@ -8727,6 +8780,7 @@ export const App: Component = () => {
               placementMode={placementMode()}
               floorCandidates={floorCandidates()}
               printMarkers={printReadiness()?.thin_points}
+              cutPlanes={cutPlaneQuads()}
               boneEditMode={boneEditMode()}
               activeTool={activeTool()}
               objectTools={toolCtx() === "object"}
@@ -9075,6 +9129,13 @@ export const App: Component = () => {
               onSubdivide: handleSubdivide,
               onExportPiece: handleExportPiece,
               presets: printPresets(),
+              piecesView: {
+                on: piecesViewOn(),
+                explode: piecesExplode(),
+                busy: piecesViewBusy(),
+                onToggle: () => setPiecesViewOn(!piecesViewOn()),
+                onExplode: setPiecesExplode,
+              },
               skin: {
                 zone: skinZone(),
                 picking: skinPicking(),

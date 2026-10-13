@@ -82,6 +82,8 @@ export interface ViewportProps {
   floorCandidates?: FloorCandidate[];
   /** Puntos de la malla a marcar (paredes finas de la verificación de impresión) */
   printMarkers?: [number, number, number][];
+  /** Planos de corte de Fabricar (esquinas en coordenadas de la malla) */
+  cutPlanes?: { corners: [number, number, number][] }[];
 
   // Bone editing
   boneEditMode?: boolean;
@@ -235,6 +237,11 @@ export const Viewport: Component<ViewportProps> = (props) => {
   // Orientación: planos candidatos o clic en la superficie
   createEffect(() => {
     viewer?.setPlacementMode(props.placementMode ?? null, props.floorCandidates ?? []);
+  });
+
+  // Planos de corte que se están eligiendo
+  createEffect(() => {
+    viewer?.setCutPlanes(props.cutPlanes ?? null);
   });
 
   // Verificación de impresión: paredes finas
