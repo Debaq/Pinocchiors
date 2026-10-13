@@ -1260,6 +1260,8 @@ export interface Fabrication {
   printer: { name: string; build_volume: [number, number, number]; nozzle: number; layer_height: number; fit_clearance?: number; hole_comp?: number };
   material: { name: string; density: number; max_overhang_deg: number; shrink?: [number, number, number]; clearance_factor?: number };
   fit?: "tight" | "normal" | "loose";
+  /** Compensar para imprimir todo lo hueco del diseño (agujeros, roscas interiores, tuercas, chaveteros) */
+  compensate_all?: boolean;
 }
 
 export interface Material {

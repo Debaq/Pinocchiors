@@ -45,6 +45,10 @@ pub struct GearPart {
     pub print_clearance: f64,
     /// La holgura de impresión la da la impresora del documento (ajuste justo); `print_clearance` se ignora
     pub auto_clearance: bool,
+    /// Cuánto más chico sale un agujero, por lado (mm): agranda el eje, el chavetero y los aligeramientos.
+    /// No se guarda: lo pone el cálculo cuando el diseño compensa para imprimir.
+    #[serde(skip)]
+    pub hole_comp: f64,
     /// Doble helicoidal (espina de pescado): dos mitades de mano contraria
     pub herringbone: bool,
     /// Canal central de la espina de pescado (mm; 0: sin canal)
@@ -103,14 +107,15 @@ impl Default for GearPart {
             hole_count: 0,
             hole_diameter: 0.0,
             hole_circle: 0.0,
-            print_clearance: 0.0,
-            auto_clearance: false,
-            herringbone: false,
-            groove: 0.0,
             spokes: 0,
             spoke_width: 0.0,
             rim: 0.0,
             set_screw: 0.0,
+            print_clearance: 0.0,
+            auto_clearance: false,
+            hole_comp: 0.0,
+            herringbone: false,
+            groove: 0.0,
             throat: 0.0,
             link: None,
         }
@@ -224,11 +229,6 @@ impl GearPart {
                 return Err("los agujeros de aligeramiento tienen que quedar entre el cubo y el pie del diente".into());
             }
         }
-        Ok(())
-    }
-}
-
-fn world_point(l: &Local, p: P3) -> P3 {
         if self.spokes > 0 {
             if s.kind != GearKind::External || self.hole_count > 0 {
                 return Err("los rayos van en engranes exteriores y no se combinan con los agujeros de aligeramiento".into());
@@ -249,6 +249,11 @@ fn world_point(l: &Local, p: P3) -> P3 {
                 return Err("el prisionero es más grande que la pared o el largo del cubo".into());
             }
         }
+        Ok(())
+    }
+}
+
+fn world_point(l: &Local, p: P3) -> P3 {
     l.p(p[0], p[1], p[2])
 }
 
@@ -348,6 +353,17 @@ fn scale_curve(c: &Curve, k: f64) -> Curve {
     }
 }
 
+/// Diámetro del agujero del eje ya compensado
+fn bore_fit(g: &GearPart) -> f64 {
+    g.bore + 2.0 * g.hole_comp
+}
+
+/// Chavetero DIN 6885 para el eje: ancho y profundidad ya compensados
+fn keyway_fit(g: &GearPart) -> (f64, f64) {
+    let (b, t2) = keyway_for(g.bore).unwrap();
+    (b + 2.0 * g.hole_comp, t2 + g.hole_comp)
+}
+
 fn cyl(l: &Local, d: f64, z0: f64, z1: f64) -> R<Shape> {
     Shape::cylinder(l.at(z0, false), d / 2.0, z1 - z0).map_err(e)
 }
@@ -417,30 +433,14 @@ pub fn gear(frame: Frame, g: &GearPart) -> R<Shape> {
     }
     if spec.kind == GearKind::External {
         if g.bore > 0.0 {
-            body = body.cut(&cyl(&l, g.bore, -MARGIN, total + MARGIN)?).map_err(e)?;
+            body = body.cut(&cyl(&l, bore_fit(g), -MARGIN, total + MARGIN)?).map_err(e)?;
         }
         if g.keyway {
-            let (b, t2) = keyway_for(g.bore).unwrap();
+            let (b, t2) = keyway_fit(g);
             let f = Frame { origin: l.p(0.0, -b / 2.0, -MARGIN), z: l.z, x: l.x };
-            let slot = Shape::make_box(f, g.bore / 2.0 + t2, b, total + 2.0 * MARGIN).map_err(e)?;
+            let slot = Shape::make_box(f, bore_fit(g) / 2.0 + t2, b, total + 2.0 * MARGIN).map_err(e)?;
             body = body.cut(&slot).map_err(e)?;
         }
-        for k in 0..g.hole_count {
-            let a = TAU * k as f64 / g.hole_count as f64;
-            let f = Frame { origin: l.p(g.hole_circle / 2.0 * a.cos(), g.hole_circle / 2.0 * a.sin(), -MARGIN), z: l.z, x: l.x };
-            let hole = Shape::cylinder(f, g.hole_diameter / 2.0, g.width + 2.0 * MARGIN).map_err(e)?;
-            body = body.cut(&hole).map_err(e)?;
-        }
-    }
-    Ok(body)
-}
-
-/// Lo que el diálogo muestra de un engrane
-#[derive(Debug, Clone, Serialize)]
-pub struct GearInfo {
-    pub pitch_diameter: f64,
-    pub base_diameter: f64,
-    pub tip_diameter: f64,
         if g.spokes > 0 {
             // Ventanas entre rayos: el anillo entre el cubo y el aro, menos los rayos
             let r_in = (g.bore / 2.0).max(g.hub_diameter / 2.0) + 1.0;
@@ -732,12 +732,12 @@ fn bevel(l: &Local, g: &GearPart, spec: &GearSpec) -> R<Shape> {
     }
     let (zb, zt) = (-g.hub_length - MARGIN, z_top + MARGIN);
     if g.bore > 0.0 {
-        body = body.cut(&cyl(l, g.bore, zb, zt)?).map_err(e)?;
+        body = body.cut(&cyl(l, bore_fit(g), zb, zt)?).map_err(e)?;
     }
     if g.keyway {
-        let (kw, t2) = keyway_for(g.bore).unwrap();
+        let (kw, t2) = keyway_fit(g);
         let f = Frame { origin: l.p(0.0, -kw / 2.0, zb), z: l.z, x: l.x };
-        let slot = Shape::make_box(f, g.bore / 2.0 + t2, kw, zt - zb).map_err(e)?;
+        let slot = Shape::make_box(f, bore_fit(g) / 2.0 + t2, kw, zt - zb).map_err(e)?;
         body = body.cut(&slot).map_err(e)?;
     }
     Ok(body)
@@ -791,12 +791,12 @@ fn worm(l: &Local, g: &GearPart, spec: &GearSpec) -> R<Shape> {
     let mut body = Shape::thread_trapezoid(frame, r_root, r_tip, lead, spec.teeth, hw_in, hw_out, g.width, spec.left_hand).map_err(e)?;
     let (zb, zt) = (-MARGIN, g.width + MARGIN);
     if g.bore > 0.0 {
-        body = body.cut(&cyl(l, g.bore, zb, zt)?).map_err(e)?;
+        body = body.cut(&cyl(l, bore_fit(g), zb, zt)?).map_err(e)?;
     }
     if g.keyway {
-        let (kw, t2) = keyway_for(g.bore).unwrap();
+        let (kw, t2) = keyway_fit(g);
         let f = Frame { origin: l.p(0.0, -kw / 2.0, zb), z: l.z, x: l.x };
-        let slot = Shape::make_box(f, g.bore / 2.0 + t2, kw, zt - zb).map_err(e)?;
+        let slot = Shape::make_box(f, bore_fit(g) / 2.0 + t2, kw, zt - zb).map_err(e)?;
         body = body.cut(&slot).map_err(e)?;
     }
     Ok(body)

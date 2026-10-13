@@ -63,5 +63,11 @@ Hecho (lado CAD, 2026-10-13):
    que la holgura de la impresora (se saltan los engranes que engranan).
 4. Exportar desde Diseñar con «Compensar la contracción del material» (solo mallas; STEP queda exacto).
 
-Pendiente: roscas y chaveteros con «Ajustar a la impresora»; compensación de agujeros en el STEP; pruebas
-e2e de la sincronía impresora ↔ diseño (hoy solo hay pruebas de Rust).
+5. **Compensar los huecos** (`Fabrication.compensate_all`, casilla «Compensar los huecos del diseño» en Fabricar):
+   agujeros (también caja y avellanado), roscas modeladas e interiores (holgura del ajuste normal), tuercas
+   (con y sin rosca), arandelas, y eje, chavetero y aligeramientos de los engranes salen más anchos lo que la
+   impresora los achica. Los externos (tornillos, ejes) no cambian: la holgura la lleva el hueco.
+6. **Exportar compensado, también STEP**: se evalúa el diseño otra vez con todo compensado y cada pieza se
+   agranda por eje con la contracción (transformación exacta del sólido, no de la malla). El diseño abierto no cambia.
+
+Pendiente: pruebas e2e de la sincronía impresora ↔ diseño (hoy solo hay pruebas de Rust).

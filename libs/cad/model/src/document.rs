@@ -149,6 +149,11 @@ pub struct Fabrication {
     /// Ajuste por defecto entre piezas
     #[serde(default)]
     pub fit: pinocchio_print3d::Fit,
+    /// Compensar para imprimir todo lo que sea hueco (agujeros, roscas interiores, tuercas,
+    /// arandelas, ejes y chaveteros de engranes), no solo lo marcado. Los archivos exportados lo
+    /// activan por su cuenta; aquí sirve para ver el diseño ya compensado.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub compensate_all: bool,
 }
 
 impl Fabrication {

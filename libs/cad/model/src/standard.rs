@@ -308,6 +308,12 @@ pub fn nut(frame: Frame, size_name: &str, modeled: bool) -> R<Shape> {
 
 /// Como [`nut`], con la rosca modelada a medida (`None`: lisa).
 pub fn nut_with(frame: Frame, size_name: &str, modeled: Option<Threading>) -> R<Shape> {
+    nut_fitted(frame, size_name, modeled, 0.0, 0.0)
+}
+
+/// Como [`nut_with`] para imprimir: la rosca interior con `clearance` de holgura en el diámetro y,
+/// sin rosca modelada, el agujero `2·hole_comp` más ancho (los agujeros salen más chicos)
+pub fn nut_fitted(frame: Frame, size_name: &str, modeled: Option<Threading>, clearance: f64, hole_comp: f64) -> R<Shape> {
     let m = size(size_name).ok_or_else(|| unknown(size_name))?;
     let l = Local::new(frame);
     let blank = chamfered_hex(&l, m.hex_s, 0.0, m.nut_m, true)?;
@@ -320,19 +326,24 @@ pub fn nut_with(frame: Frame, size_name: &str, modeled: Option<Threading>) -> R<
     let hole = if let Some(t) = modeled {
         // El macho con el núcleo al diámetro menor: lo que se quita es justo la rosca hembra
         let minor = m.d - 1.082_532 * pitch;
-        Shape::thread(l.helix(from, t.x.unwrap_or(l.x)), minor / 2.0, m.d / 2.0, pitch, span, t.left).map_err(e)?
+        Shape::thread(l.helix(from, t.x.unwrap_or(l.x)), (minor + clearance) / 2.0, (m.d + clearance) / 2.0, pitch, span, t.left).map_err(e)?
     } else {
-        Shape::cylinder(l.at(from, false), m.d / 2.0, span).map_err(e)?
+        Shape::cylinder(l.at(from, false), m.d / 2.0 + hole_comp, span).map_err(e)?
     };
     blank.cut(&hole).map_err(e)
 }
 
 /// Arandela plana.
 pub fn washer(frame: Frame, size_name: &str) -> R<Shape> {
+    washer_fitted(frame, size_name, 0.0)
+}
+
+/// Arandela con el agujero `2·hole_comp` más ancho (para imprimir)
+pub fn washer_fitted(frame: Frame, size_name: &str, hole_comp: f64) -> R<Shape> {
     let m = size(size_name).ok_or_else(|| unknown(size_name))?;
     let l = Local::new(frame);
     let disk = Shape::cylinder(l.at(0.0, false), m.washer_d2 / 2.0, m.washer_h).map_err(e)?;
-    disk.cut(&Shape::cylinder(l.at(-MARGIN, false), m.washer_d1 / 2.0, m.washer_h + 2.0 * MARGIN).map_err(e)?).map_err(e)
+    disk.cut(&Shape::cylinder(l.at(-MARGIN, false), m.washer_d1 / 2.0 + hole_comp, m.washer_h + 2.0 * MARGIN).map_err(e)?).map_err(e)
 }
 
 /// La medida que va en un agujero de diámetro `hole`: pasante (ISO 273) o

@@ -1,5 +1,5 @@
 import { Component, Show, For, createEffect, createSignal } from "solid-js";
-import { Button, Select, NumberInput } from "../ui";
+import { Button, Checkbox, Select, NumberInput } from "../ui";
 import * as Icons from "../icons";
 import { fmtNumber, t } from "../../lib/i18n";
 import {
@@ -230,6 +230,13 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
         {/* Impresora, verificación y orientación */}
         <div class="space-y-3 pt-2 border-t border-border/50">
           <PrinterMaterial presets={props.presets} printer={printer()} material={material()} onPrinter={setPrinterChoice} onMaterial={setMaterialChoice} />
+          <Checkbox
+            small
+            label={t("Compensar los huecos del diseño")}
+            checked={!!prep().compensateAll}
+            onChange={(compensateAll) => patch({ compensateAll })}
+            hint={t("En Diseñar, los agujeros, las roscas interiores, las tuercas, las arandelas y los ejes y chaveteros de los engranes salen ya más anchos lo que esta impresora los achica. Cambia la medida de lo que ves.")}
+          />
           <ReadinessSection
             readiness={props.readiness}
             busy={props.isProcessing}

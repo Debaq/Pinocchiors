@@ -1610,10 +1610,7 @@ fn shapes_scene(items: &[(&cad_model::Shape, String)]) -> Result<Scene, String> 
     Ok(scene)
 }
 
-/// Instancias del ensamble en su lugar con su nombre y el color de su pieza.
-fn assembly_items(state: &AppState) -> Result<Vec<(cad_model::Shape, String, Option<[f64; 3]>)>, String> {
-    let (asm, shapes) = assembly_shapes(state)?;
-    let doc = state.cad_document.lock().unwrap().clone().unwrap_or_default();
+fn assembly_items_of(doc: &Document, asm: &cad_model::Assembly, shapes: Vec<(u32, cad_model::Shape)>) -> Result<Vec<(cad_model::Shape, String, Option<[f64; 3]>)>, String> {
     let items: Vec<_> = shapes
         .into_iter()
         .filter_map(|(id, shape)| {
@@ -1642,82 +1639,93 @@ pub async fn cad_export(
     in_background(app, move |state| export_impl(state, &path, &format, part, assembly.unwrap_or(false), compensate.unwrap_or(false))).await
 }
 
-/// Agranda la escena por eje lo que el material se encoge (la impresora y el material del diseño).
-/// El diseño no cambia: solo el archivo. Con la escena en Z arriba o Y arriba.
-fn compensate_scene(state: &AppState, scene: Scene) -> Result<Scene, String> {
-    use converter_scene::glam::{Mat4, Vec3};
-    let scale = {
-        let doc = state.cad_document.lock().unwrap();
-        let fab = doc.as_ref().and_then(|d| d.fabrication.as_ref()).ok_or("Elige una impresora y un material para compensar la contracción")?;
-        fab.tolerances().shrink_scale()
-    };
-    let [sx, sy, sz] = scale.map(|v| v as f32);
-    // La contracción es por eje de la impresora (Z arriba); en una escena Y arriba el alto es Y
-    let v = if scene.y_up { Vec3::new(sx, sz, sy) } else { Vec3::new(sx, sy, sz) };
-    Ok(crate::commands::wrap_scene(&scene, Mat4::from_scale(v), "shrink_compensation"))
+/// El diseño evaluado otra vez con todo lo hueco compensado para imprimir (agujeros, roscas
+/// interiores, tuercas, arandelas, ejes y chaveteros) y la matriz que agranda lo que el material
+/// se encoge. El diseño abierto no cambia.
+fn compensated_eval(state: &AppState) -> Result<(Document, cad_model::Evaluation, Option<[[f64; 4]; 3]>), String> {
+    let mut doc = state.cad_document.lock().unwrap().clone().ok_or("No hay un diseño abierto")?;
+    let fab = doc.fabrication.as_mut().ok_or("Elige una impresora y un material para compensar")?;
+    fab.compensate_all = true;
+    let scale = fab.tolerances().shrink_scale();
+    let fitted = fit_scan_references(state, &doc);
+    let ev = fitted.as_ref().unwrap_or(&doc).evaluate();
+    if let Some((_, message)) = ev.errors().first() {
+        return Err(format!("El diseño compensado no se pudo calcular: {message}"));
+    }
+    let matrix = scale.iter().any(|s| (s - 1.0).abs() > 1e-12).then(|| [[scale[0], 0.0, 0.0, 0.0], [0.0, scale[1], 0.0, 0.0], [0.0, 0.0, scale[2], 0.0]]);
+    Ok((doc, ev, matrix))
 }
 
 fn export_impl(state: &AppState, path: &str, format: &str, part: Option<cad_model::PartId>, assembly: bool, compensate: bool) -> Result<u64, String> {
-    if compensate && matches!(format, "step" | "stp") {
-        return Err("La compensación de contracción solo se aplica a mallas (STL, 3MF, OBJ...); STEP queda exacto".into());
-    }
-    // El ensamble: cada instancia en su lugar, con su nombre
+    let p = std::path::Path::new(path);
+    let step = matches!(format, "step" | "stp");
+    // Con compensación el diseño se evalúa de nuevo; si no, sale de la caché
+    let comp = if compensate { Some(compensated_eval(state)?) } else { None };
+    let doc_owned;
+    let guard;
+    let (doc, ev): (&Document, &cad_model::Evaluation) = match &comp {
+        Some((d, e, _)) => (d, e),
+        None => {
+            evaluate_committed(state)?;
+            doc_owned = state.cad_document.lock().unwrap().clone().unwrap_or_default();
+            guard = state.cad_cache.lock().unwrap();
+            (&doc_owned, &guard.as_ref().ok_or("El diseño todavía no tiene un sólido")?.eval)
+        }
+    };
+    let shrink = comp.as_ref().and_then(|c| c.2);
+    let fit = |s: &cad_model::Shape| -> Result<cad_model::Shape, String> {
+        match shrink {
+            Some(m) => s.transform(m).map_err(|e| e.to_string()),
+            None => Ok(s.clone()),
+        }
+    };
+
     if assembly {
-        let p = std::path::Path::new(path);
-        let items = assembly_items(state)?;
-        match format {
-            "step" | "stp" => {
-                let list: Vec<_> = items.iter().map(|(s, n, c)| (s, n.as_str(), *c)).collect();
-                let bytes = cad_model::Shape::parts_to_step(&list).map_err(|e| e.to_string())?;
-                std::fs::write(p, &bytes).map_err(|e| format!("No se pudo escribir {path}: {e}"))?;
-            }
-            _ => {
-                let mut scene = shapes_scene(&items.iter().map(|(s, n, _)| (s, n.clone())).collect::<Vec<_>>())?;
-                if compensate {
-                    scene = compensate_scene(state, scene)?;
-                }
-                export_scene(&scene, p, format)?;
-            }
+        // El ensamble: cada instancia en su lugar, con su nombre
+        let asm = doc.assembly.clone().ok_or("El diseño no tiene ensamble")?;
+        let sol = cad_model::assembly::solve(&asm);
+        let shapes = cad_model::assembly::instance_shapes(ev, &asm, &sol);
+        let items: Vec<_> = assembly_items_of(doc, &asm, shapes)?
+            .into_iter()
+            .map(|(s, n, c)| fit(&s).map(|s| (s, n, c)))
+            .collect::<Result<_, _>>()?;
+        if step {
+            let list: Vec<_> = items.iter().map(|(s, n, c)| (s, n.as_str(), *c)).collect();
+            let bytes = cad_model::Shape::parts_to_step(&list).map_err(|e| e.to_string())?;
+            std::fs::write(p, &bytes).map_err(|e| format!("No se pudo escribir {path}: {e}"))?;
+        } else {
+            let scene = shapes_scene(&items.iter().map(|(s, n, _)| (s, n.clone())).collect::<Vec<_>>())?;
+            export_scene(&scene, p, format)?;
         }
         return Ok(std::fs::metadata(p).map(|m| m.len()).unwrap_or(0));
     }
-    {
-        let p = std::path::Path::new(path);
-        let scene = || parts_scene(state, "Diseño", part);
-        match format {
-            "step" | "stp" => {
-                // Cada pieza como sólido con su nombre y su color (si se eligió)
-                evaluate_committed(state)?;
-                let doc = state.cad_document.lock().unwrap().clone().unwrap_or_default();
-                let cache = state.cad_cache.lock().unwrap();
-                let eval = &cache.as_ref().ok_or("El diseño todavía no tiene un sólido")?.eval;
-                let names: Vec<String> = eval.parts.iter().enumerate().map(|(i, x)| part_name(&doc, x.id, i + 1)).collect();
-                let list: Vec<(&cad_model::Shape, &str, Option<[f64; 3]>)> = eval
-                    .parts
-                    .iter()
-                    .zip(&names)
-                    .filter(|(x, _)| part.is_none_or(|id| id == x.id))
-                    .map(|(x, n)| {
-                        let color = doc.parts.iter().find(|q| q.part == x.id).and_then(|q| q.color.as_deref()).and_then(hex_rgb);
-                        (&x.shape, n.as_str(), color)
-                    })
-                    .collect();
-                if list.is_empty() {
-                    return Err(if part.is_some() { "Esa pieza ya no existe" } else { "El diseño todavía no tiene un sólido" }.into());
-                }
-                let bytes = cad_model::Shape::parts_to_step(&list).map_err(|e| e.to_string())?;
-                std::fs::write(p, &bytes).map_err(|e| format!("No se pudo escribir {path}: {e}"))?;
-            }
-            other => {
-                let mut scene = scene()?;
-                if compensate {
-                    scene = compensate_scene(state, scene)?;
-                }
-                export_scene(&scene, p, other)?
-            }
-        }
-        Ok(std::fs::metadata(p).map(|m| m.len()).unwrap_or(0))
+
+    // Una pieza sola conserva el nombre del diseño
+    let several = ev.parts.len() > 1;
+    let selected: Vec<(String, Option<[f64; 3]>, cad_model::Shape)> = ev
+        .parts
+        .iter()
+        .enumerate()
+        .filter(|(_, x)| part.is_none_or(|id| id == x.id))
+        .map(|(i, x)| {
+            let name = if several || part.is_some() { part_name(doc, x.id, i + 1) } else { "Diseño".to_string() };
+            let color = doc.parts.iter().find(|q| q.part == x.id).and_then(|q| q.color.as_deref()).and_then(hex_rgb);
+            fit(&x.shape).map(|s| (name, color, s))
+        })
+        .collect::<Result<_, _>>()?;
+    if selected.is_empty() {
+        return Err(if part.is_some() { "Esa pieza ya no existe" } else { "El diseño todavía no tiene un sólido" }.into());
     }
+    if step {
+        // Cada pieza como sólido con su nombre y su color (si se eligió)
+        let list: Vec<(&cad_model::Shape, &str, Option<[f64; 3]>)> = selected.iter().map(|(n, c, s)| (s, n.as_str(), *c)).collect();
+        let bytes = cad_model::Shape::parts_to_step(&list).map_err(|e| e.to_string())?;
+        std::fs::write(p, &bytes).map_err(|e| format!("No se pudo escribir {path}: {e}"))?;
+    } else {
+        let scene = shapes_scene(&selected.iter().map(|(n, _, s)| (s, n.clone())).collect::<Vec<_>>())?;
+        export_scene(&scene, p, format)?;
+    }
+    Ok(std::fs::metadata(p).map(|m| m.len()).unwrap_or(0))
 }
 
 /// Malla del diseño a un archivo según el formato.
@@ -2422,6 +2430,53 @@ mod tests {
         // Del otro lado sale hacia abajo
         let bottom = edge_seat_impl(&state, rim(0.0)).unwrap();
         assert!((bottom.z[2] + 1.0).abs() < 1e-9 && bottom.origin[2].abs() < 1e-9);
+    }
+
+    #[test]
+    fn exports_compensated_for_printing() {
+        if !cad_model::occt::available() {
+            return;
+        }
+        use pinocchio_print3d::{Fit, MaterialProfile, PrinterProfile};
+        // Una arandela M6 (agujero de 6,4 y 1,6 de alto) con una PLA de 0,3 % de contracción
+        let mut doc = Document::new();
+        doc.add(FeatureKind::Primitive(cad_model::Primitive {
+            shape: cad_model::PrimitiveShape::Washer { size: "M6".into() },
+            origin: [0.0; 3],
+            z: [0.0, 0.0, 1.0],
+            x: [1.0, 0.0, 0.0],
+            op: BodyOp::Join,
+            link: None,
+        }));
+        doc.fabrication = Some(cad_model::Fabrication {
+            printer: PrinterProfile::new("t", [200.0; 3], 0.4, 0.2),
+            material: MaterialProfile::presets().remove(0),
+            fit: Fit::Normal,
+            compensate_all: false,
+        });
+        let state = AppState::new();
+        *state.cad_document.lock().unwrap() = Some(doc);
+        evaluate(&state).unwrap();
+        let dir = std::env::temp_dir().join("pinocchio_cad_comp");
+        std::fs::create_dir_all(&dir).unwrap();
+        let volume = |compensate: bool, ext: &str| -> f64 {
+            let path = dir.join(format!("w_{compensate}.{ext}"));
+            export_impl(&state, path.to_str().unwrap(), ext, None, false, compensate).unwrap();
+            let bytes = std::fs::read(&path).unwrap();
+            std::fs::remove_file(&path).ok();
+            cad_model::Shape::from_step(&bytes).unwrap().mass().unwrap().volume
+        };
+        let m = cad_model::standard::size("M6").unwrap();
+        let ring = |hole: f64| std::f64::consts::PI * (m.washer_d2 * m.washer_d2 - hole * hole) / 4.0 * m.washer_h;
+        let plain = volume(false, "step");
+        assert!((plain - ring(m.washer_d1)).abs() < 1e-6 * plain, "{plain}");
+        // Agujero 0,2 más ancho y todo agrandado por 1 / (1 − 0,003) en los tres ejes
+        let s = 1.0 / (1.0 - 0.003);
+        let comp = volume(true, "step");
+        assert!((comp - ring(m.washer_d1 + 0.2) * s * s * s).abs() < 1e-5 * comp, "{comp} vs {}", ring(m.washer_d1 + 0.2) * s * s * s);
+        // Sin impresora no hay con qué compensar
+        state.cad_document.lock().unwrap().as_mut().unwrap().fabrication = None;
+        assert!(export_impl(&state, dir.join("x.step").to_str().unwrap(), "step", None, false, true).is_err());
     }
 
     #[test]

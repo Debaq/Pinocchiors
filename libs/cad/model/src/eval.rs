@@ -372,6 +372,7 @@ fn fabrication_key(doc: &Document) -> u64 {
         v.to_bits().hash(&mut h);
     }
     (fab.fit as u8).hash(&mut h);
+    fab.compensate_all.hash(&mut h);
     h.finish() | 1
 }
 
@@ -1814,6 +1815,11 @@ impl Ctx<'_> {
         Ok((Tagged { shape, tags }, threads, centers))
     }
 
+    /// Las holguras de la impresora cuando el diseño compensa todo lo hueco para imprimir
+    fn comp_all(&self) -> Option<pinocchio_print3d::FabTolerances> {
+        self.doc.fabrication.as_ref().filter(|f| f.compensate_all).map(|f| f.tolerances())
+    }
+
     /// Marco y forma de una primitiva. Un tornillo o una tuerca asociados a
     /// otra rosca van en su eje, desde su boca, con su medida y el filete
     /// girado para calzar; también devuelve el paso y la mano de la rosca.
@@ -1821,13 +1827,18 @@ impl Ctx<'_> {
         let frame = Frame { origin: p.origin, z: p.z, x: p.x };
         let fitted;
         let p = if let PrimitiveShape::Gear(g) = &p.shape
-            && g.auto_clearance
+            && (g.auto_clearance || self.comp_all().is_some())
         {
-            // La holgura de impresión sale de la impresora del documento (ajuste justo: 0,5 de la base)
             let mut g = g.clone();
-            match &self.doc.fabrication {
-                Some(fab) => g.print_clearance = fab.tolerances().fit_clearance(pinocchio_print3d::Fit::Tight),
-                None => self.warn("«holgura según la impresora»: elige una impresora en Fabricar o en Diseñar".into()),
+            if g.auto_clearance {
+                // La holgura de impresión sale de la impresora del documento (ajuste justo: 0,5 de la base)
+                match &self.doc.fabrication {
+                    Some(fab) => g.print_clearance = fab.tolerances().fit_clearance(pinocchio_print3d::Fit::Tight),
+                    None => self.warn("«holgura según la impresora»: elige una impresora en Fabricar o en Diseñar".into()),
+                }
+            }
+            if let Some(t) = self.comp_all() {
+                g.hole_comp = t.hole_comp;
             }
             fitted = Primitive { shape: PrimitiveShape::Gear(g), ..p.clone() };
             &fitted
@@ -2421,8 +2432,11 @@ impl Ctx<'_> {
                     PrimitiveShape::Bolt { size, length, head, modeled } => {
                         Ok(crate::standard::bolt_with(frame, size, *length, *head, modeled.then_some(threading))?)
                     }
-                    PrimitiveShape::Nut { size, modeled } => Ok(crate::standard::nut_with(frame, size, modeled.then_some(threading))?),
-                    PrimitiveShape::Washer { size } => Ok(crate::standard::washer(frame, size)?),
+                    PrimitiveShape::Nut { size, modeled } => match self.comp_all() {
+                        Some(t) => Ok(crate::standard::nut_fitted(frame, size, modeled.then_some(threading), t.fit_clearance(pinocchio_print3d::Fit::Normal), t.hole_comp)?),
+                        None => Ok(crate::standard::nut_with(frame, size, modeled.then_some(threading))?),
+                    },
+                    PrimitiveShape::Washer { size } => Ok(crate::standard::washer_fitted(frame, size, self.comp_all().map_or(0.0, |t| t.hole_comp))?),
                     PrimitiveShape::Gear(g) => Ok(crate::gear_part::gear(frame, g)?),
                 }
                 .map_err(err)?;
@@ -3214,6 +3228,11 @@ impl Ctx<'_> {
                 // ¿Eje o agujero? La normal saliente apunta afuera del eje en un eje
                 let foot = add(ax.origin, scale(normalize(ax.dir), dot(sub(info.point, ax.origin), normalize(ax.dir))));
                 let outside = dot(info.normal, sub(info.point, foot)) > 0.0;
+                // Las roscas interiores llevan la holgura del ajuste normal si el diseño compensa lo hueco
+                let clearance = &match self.comp_all() {
+                    Some(t) if !outside => clearance.max(t.fit_clearance(pinocchio_print3d::Fit::Normal)),
+                    _ => *clearance,
+                };
                 let h = 1.082_532 * pitch / 2.0;
                 let margin = (self.diag() * 1e-4).max(1e-3);
                 // Un poco más allá de cada punta: con las tapas justo en el mismo
@@ -3638,12 +3657,6 @@ impl Ctx<'_> {
                 // Asociado a otra rosca: su medida (la holgura es la propia)
                 let src = h.link.as_ref().map(|l| self.thread_source(l)).transpose()?;
                 let mut h = h.clone();
-                if h.compensate {
-                    match &self.doc.fabrication {
-                        Some(fab) => h.diameter = fab.tolerances().compensated_hole(h.diameter),
-                        None => self.warn("«compensar para imprimir»: elige una impresora en Fabricar o en Diseñar".into()),
-                    }
-                }
                 if let Some(t) = &src {
                     let spec = ThreadSpec { clearance: h.modeled.map_or(0.0, |m| m.clearance), ..t.spec };
                     if h.modeled.is_some() {
@@ -3652,6 +3665,24 @@ impl Ctx<'_> {
                         // Cosmética: la broca para roscar
                         h.thread = Some(spec_name(&spec));
                         h.diameter = spec.nominal - spec.pitch;
+                    }
+                }
+                if h.compensate || self.comp_all().is_some() {
+                    match &self.doc.fabrication {
+                        Some(fab) => {
+                            let t = fab.tolerances();
+                            h.diameter = t.compensated_hole(h.diameter);
+                            h.style = match h.style {
+                                HoleStyle::Counterbore { diameter, depth } => HoleStyle::Counterbore { diameter: t.compensated_hole(diameter), depth },
+                                HoleStyle::Countersink { diameter, angle } => HoleStyle::Countersink { diameter: t.compensated_hole(diameter), angle },
+                                other => other,
+                            };
+                            // La rosca modelada de un agujero es interior: lleva la holgura del ajuste normal
+                            if let Some(m) = h.modeled.as_mut() {
+                                m.clearance = m.clearance.max(t.fit_clearance(pinocchio_print3d::Fit::Normal));
+                            }
+                        }
+                        None => self.warn("«compensar para imprimir»: elige una impresora en Fabricar o en Diseñar".into()),
                     }
                 }
                 let (tool, threads, centers) = self.hole_tool(f.id, &h, src.as_ref())?;

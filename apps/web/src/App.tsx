@@ -5473,7 +5473,7 @@ export const App: Component = () => {
         pipeline.markCompleted("export");
         return;
       }
-      const bytes = await busy(t("Exportando a {file}...", { file: file ?? "" }), () => cad.exportDesign(path, format, part?.id, assembly, !!exportOptions().compensate && format !== "step"));
+      const bytes = await busy(t("Exportando a {file}...", { file: file ?? "" }), () => cad.exportDesign(path, format, part?.id, assembly, !!exportOptions().compensate));
       setLastExport({ bytes, files: [path] });
       setStatusMessage(t("Diseño exportado: {file} ({size})", { file: file ?? "", size: formatBytes(bytes) }));
       pipeline.markCompleted("export");
@@ -6934,7 +6934,7 @@ export const App: Component = () => {
     const material = prep.material ?? printPresets()?.materials[0];
     if (!printer || !material) return null;
     const fit = prep.joint.fit && prep.joint.fit !== "manual" ? prep.joint.fit : "normal";
-    return { printer, material, fit };
+    return { printer, material, fit, ...(prep.compensateAll ? { compensate_all: true } : {}) };
   };
   createEffect(() => {
     const fab = fabricationFromPrep();
@@ -6956,7 +6956,7 @@ export const App: Component = () => {
     const json = JSON.stringify(fab);
     if (json === lastFab) return;
     lastFab = json;
-    untrack(() => setPrintPrep({ ...printPrep(), printer: fab.printer, material: fab.material, joint: { ...printPrep().joint, fit: fab.fit ?? "normal" } }));
+    untrack(() => setPrintPrep({ ...printPrep(), printer: fab.printer, material: fab.material, joint: { ...printPrep().joint, fit: fab.fit ?? "normal" }, compensateAll: !!fab.compensate_all }));
   });
 
   /** Las holguras de la impresora y el material elegidos (se piden al cambiarlos) */

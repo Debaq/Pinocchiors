@@ -124,5 +124,10 @@ export const en_print: Catalog = {
   "La compensación de contracción solo se aplica a mallas (STL, 3MF, OBJ...); STEP queda exacto": "Shrinkage compensation only applies to meshes (STL, 3MF, OBJ...); STEP stays exact",
   "«holgura según la impresora»: elige una impresora en Fabricar o en Diseñar": "\"clearance from the printer\": choose a printer in Fabricate or Design",
   "«compensar para imprimir»: elige una impresora en Fabricar o en Diseñar": "\"compensate for printing\": choose a printer in Fabricate or Design",
+  "Compensar para imprimir (agujeros, roscas y contracción)": "Compensate for printing (holes, threads and shrinkage)",
+  "En el archivo que exportas, los agujeros, las roscas interiores, las tuercas y los chaveteros salen más anchos lo que la impresora los achica, y cada pieza se agranda lo que el material se encoge. El diseño no cambia.": "In the exported file, holes, internal threads, nuts and keyways come out wider by what the printer shrinks them, and each part is enlarged by what the material shrinks. The design doesn't change.",
+  "Elige una impresora y un material en Fabricar para compensar.": "Choose a printer and a material in Fabricate to compensate.",
+  "Compensar los huecos del diseño": "Compensate the design's holes",
+  "En Diseñar, los agujeros, las roscas interiores, las tuercas, las arandelas y los ejes y chaveteros de los engranes salen ya más anchos lo que esta impresora los achica. Cambia la medida de lo que ves.": "In Design, holes, internal threads, nuts, washers and the bores and keyways of gears come out already wider by what this printer shrinks them. It changes the size of what you see.",
   "No se pudieron rehacer las uniones: {e}": "Couldn't redo the joints: {e}",
 };

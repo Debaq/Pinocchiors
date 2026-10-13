@@ -144,6 +144,8 @@ export interface PrepSettings {
   /** Agujero de drenaje al vaciar (resina) y su diámetro */
   drain: boolean;
   drainDiameter: number;
+  /** El diseño (Diseñar) sale con todo lo hueco compensado para la impresora */
+  compensateAll?: boolean;
   plate: PlateSettings;
 }
 

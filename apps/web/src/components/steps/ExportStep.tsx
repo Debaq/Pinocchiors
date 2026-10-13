@@ -207,14 +207,14 @@ export const ExportStep: Component<ExportStepProps> = (props) => {
               onChange={(v) => props.onDesignPartChange?.(v === "all" ? undefined : v)}
             />
           </Show>
-          <Show when={opts().format !== "step"}>
+          <Show when={true}>
             <Checkbox
               small
-              label={t("Compensar la contracción del material")}
+              label={t("Compensar para imprimir (agujeros, roscas y contracción)")}
               checked={!!opts().compensate && !!props.hasFabrication}
               disabled={!props.hasFabrication}
               onChange={(v) => set({ compensate: v })}
-              hint={props.hasFabrication ? t("Agranda cada pieza lo que se va a encoger al enfriar, para que salga a la medida diseñada. El diseño no cambia: solo el archivo que exportas.") : t("Elige una impresora y un material en Fabricar para compensar la contracción.")}
+              hint={props.hasFabrication ? t("En el archivo que exportas, los agujeros, las roscas interiores, las tuercas y los chaveteros salen más anchos lo que la impresora los achica, y cada pieza se agranda lo que el material se encoge. El diseño no cambia.") : t("Elige una impresora y un material en Fabricar para compensar.")}
             />
           </Show>
           <Hint
