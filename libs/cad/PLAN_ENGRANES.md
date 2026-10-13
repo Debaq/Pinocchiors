@@ -185,7 +185,7 @@ Lo que quedó fuera de cada fase, por área. Nada de esto impide usar lo hecho.
 - Módulo transversal elegible (hoy el módulo es siempre el normal).
 
 **Pares y enlaces (F3)**
-- Diseñar por relación: calcular dientes desde «1:3» o la distancia entre centros.
+- (Diseñar por relación: hecho 2026-10-13, `gear_part::design_teeth` + `cad_gear_design`; campo «Relación» y botón de distancia en «Engranar con». Sin probar en la app real.)
 - Elegir la dirección del centro con un clic en el visor (hoy es un ángulo).
 - Cremallera como fuente (hoy el piñón va primero).
 - Avisar de ejes no paralelos y de helicoidales cruzados.

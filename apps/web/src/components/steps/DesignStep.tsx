@@ -3258,6 +3258,13 @@ export const FeatureEditor: Component<{
                       </button>
                     </Show>
                   </div>
+                  <Checkbox
+                    small
+                    label={tl("Compensar para imprimir")}
+                    checked={!!k().compensate}
+                    onChange={(c) => update((x) => x.type === "hole" && (x.compensate = c))}
+                    hint={tl("El diámetro es el que quieres medir impreso: se agranda lo que la impresora achica los agujeros (según la impresora elegida en Fabricar).")}
+                  />
                   <Show when={k().depth.type === "blind"}>
                     {field(tl("Hasta"), "kind.depth.depth", (k().depth as { depth: number }).depth, (x, v) => x.type === "hole" && x.depth.type === "blind" && (x.depth.depth = v), "mm")}
                     {field(tl("Punta"), "kind.tip_angle", k().tip_angle, (x, v) => x.type === "hole" && (x.tip_angle = v), "°")}
@@ -4923,6 +4930,23 @@ const GearLinkBox: Component<{
   const gear = (x: FeatureKind) => (x.type === "primitive" && x.shape.type === "gear" ? x.shape : undefined);
   const link = () => props.shape.link ?? undefined;
   const own = () => props.store.result()?.gears?.find((x) => x.feature === props.feature);
+  const source = () => sources().find((x) => x.feature === link()?.feature);
+  const [designError, setDesignError] = createSignal("");
+  /** Calcula los dientes de este engrane por relación o por distancia entre centros y los escribe */
+  const design = (ratio: number | null, distance: number | null) => {
+    const src = source();
+    if (!src) return;
+    void props.store
+      .gearDesign(JSON.parse(JSON.stringify(src.part)) as GearPart, props.shape.spec.kind, ratio, distance)
+      .then((teeth) => {
+        setDesignError("");
+        props.update((x) => {
+          const s = gear(x);
+          if (s) s.spec.teeth = teeth;
+        });
+      })
+      .catch((e) => setDesignError(String(e)));
+  };
   return (
     <Show when={link() || sources().length > 0}>
       <Row label={tl("Engranar con")}>
@@ -4956,6 +4980,18 @@ const GearLinkBox: Component<{
                 onChange={(v) => props.update((x) => { const s = gear(x); if (s?.link) s.link.distance = v > 0 ? v : null; })}
               />
             </Row>
+            <Row label={tl("Relación (dientes / dientes del otro)")}>
+              <NumberInput
+                value={source() ? props.shape.spec.teeth / source()!.part.spec.teeth : 0}
+                onChange={(v) => design(v, null)}
+              />
+            </Row>
+            <Show when={l().distance != null}>
+              <Button onClick={() => design(null, l().distance!)}>{tl("Calcular los dientes para esta distancia")}</Button>
+            </Show>
+            <Show when={designError()}>
+              <p class="text-[11px] text-error">{designError()}</p>
+            </Show>
             <Show when={l().distance != null}>
               <Button onClick={() => props.update((x) => { const s = gear(x); if (s?.link) s.link.distance = null; })}>
                 {tl("Usar la distancia de las correcciones")}
@@ -5058,7 +5094,14 @@ const GearFields: Component<{
       </Show>
       {spec(tl("Corrección de perfil"), "shift", "")}
       {spec(tl("Juego entre dientes"), "backlash", "mm")}
-      {num(tl("Holgura de impresión"), "print_clearance")}
+      <Checkbox
+        small
+        label={tl("Holgura según la impresora")}
+        checked={!!props.shape.auto_clearance}
+        onChange={(c) => props.update((x) => { const s = g(x); if (s) s.auto_clearance = c; })}
+        hint={tl("La holgura de impresión sale de la impresora y el material elegidos en Fabricar (ajuste justo). Cambia sola si cambias de impresora.")}
+      />
+      <Show when={!props.shape.auto_clearance}>{num(tl("Holgura de impresión"), "print_clearance")}</Show>
       <Show when={kind() === "internal"}>{num(tl("Diámetro exterior"), "outer")}</Show>
       <Show when={kind() === "rack"}>{num(tl("Alto del cuerpo"), "outer")}</Show>
       <Show when={kind() === "external" || kind() === "bevel" || kind() === "worm"}>
@@ -5505,6 +5548,8 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
   const [kind, setKind] = createSignal<MateKind>("revolute");
   const [picking, setPicking] = createSignal<"" | "a" | "b">("");
   const [hits, setHits] = createSignal<[number, number, number][] | null>(null);
+  const [gaps, setGaps] = createSignal<[number, number, number][] | null>(null);
+  const [gapError, setGapError] = createSignal("");
   const partKey = (p: PartView) => `${p.id.feature}:${p.id.index}`;
   const instName = (id: number) => asm()?.instances.find((i) => i.id === id)?.name ?? `#${id}`;
   const [note, setNote] = createSignal<string>();
@@ -5749,6 +5794,39 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
               {([a, b, v]) => (
                 <p class="text-[11px] text-warning" data-hit>
                   {instName(a)} y {instName(b)}: {fmt(v / 1000, 3)} {tl("cm³ en común")}
+                </p>
+              )}
+            </For>
+          )}
+        </Show>
+        <Button
+          size="sm"
+          fullWidth
+          disabled={(asm()?.instances.length ?? 0) < 2}
+          onClick={() =>
+            void store
+              .assemblyClearance()
+              .then((g) => {
+                setGapError("");
+                setGaps(g);
+              })
+              .catch((e) => {
+                setGaps(null);
+                setGapError(String(e));
+              })
+          }
+        >
+          {tl("Revisar holguras")}
+        </Button>
+        <Show when={gapError()}>
+          <p class="text-[11px] text-warning">{gapError()}</p>
+        </Show>
+        <Show when={gaps()}>
+          {(list) => (
+            <For each={list()} fallback={<p class="text-[11px] text-success">{tl("Todas las piezas guardan la holgura de la impresora")}</p>}>
+              {([a, b, d]) => (
+                <p class="text-[11px] text-warning" data-gap>
+                  {instName(a)} y {instName(b)}: {tl("{v1} mm de holgura", { v1: fmt(d, 2) })}
                 </p>
               )}
             </For>

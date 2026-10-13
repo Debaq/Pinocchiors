@@ -108,3 +108,36 @@ fn instances_and_interference() {
     assert_eq!(hits.len(), 1);
     assert_relative_eq!(hits[0].2, 100.0, max_relative = 1e-6);
 }
+
+#[test]
+fn tight_gaps_report_pairs_closer_than_the_clearance() {
+    if !occt() {
+        return;
+    }
+    let mut doc = Document::new();
+    doc.add(FeatureKind::Primitive(Primitive {
+        shape: PrimitiveShape::Box { dx: 10.0, dy: 10.0, dz: 10.0, centered: false, centered_z: false },
+        origin: [0.0; 3],
+        z: [0.0, 0.0, 1.0],
+        x: [1.0, 0.0, 0.0],
+        op: BodyOp::Join,
+        link: None,
+    }));
+    let ev = doc.evaluate();
+    let mk = |id: u32, x: f64| {
+        let mut i = inst(id, [x, 0.0, 0.0], true);
+        i.rotation = [0.0; 3];
+        i
+    };
+    // A en 0..10; B a 0,3 mm; C a 0,8 mm de B (más holgada); D choca con C
+    let asm = Assembly { instances: vec![mk(1, 0.0), mk(2, 10.3), mk(3, 21.1), mk(4, 30.0)], mates: vec![], next_id: 5, ..Default::default() };
+    let sol = solve(&asm);
+    let shapes = instance_shapes(&ev, &asm, &sol);
+    let gaps = cad_model::assembly::tight_gaps(&ev, &asm, &shapes, 0.4);
+    // Solo A–B (0,3 < 0,4); B–C hay 0,8; C–D se pisan (ya salen en los choques)
+    assert_eq!(gaps.len(), 1, "{gaps:?}");
+    assert_eq!((gaps[0].0, gaps[0].1), (1, 2));
+    assert_relative_eq!(gaps[0].2, 0.3, epsilon = 1e-6);
+    // Con una holgura mayor entran las dos separaciones
+    assert_eq!(cad_model::assembly::tight_gaps(&ev, &asm, &shapes, 1.0).len(), 2);
+}

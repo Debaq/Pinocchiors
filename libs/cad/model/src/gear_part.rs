@@ -749,6 +749,50 @@ fn mesh_worm(src: &GearAxis, mut b: GearPart, link: &GearLink, [z, _xa, _ya, u]:
     Ok((Frame { origin, z: z_b, x: x_face }, b, info))
 }
 
+/// Dientes que debe tener un engrane de tipo `kind_b` para engranar con `src`
+/// con la relación pedida (dientes de este / dientes de `src`) o, sin ella, a
+/// la distancia entre centros pedida (sin corrección de perfil: la distancia
+/// exacta la ajusta después `GearLink::distance` con la corrección).
+pub fn design_teeth(src: &GearPart, kind_b: GearKind, ratio: Option<f64>, distance: Option<f64>) -> Result<u32, String> {
+    use GearKind::*;
+    let ka = src.spec.kind;
+    let sign = match (ka, kb_ok(ka, kind_b)?) {
+        (External, External) => 1.0,
+        (External, Internal) => -1.0,
+        _ => 0.0,
+    };
+    let za = src.spec.teeth as f64;
+    let z = match (ratio, distance) {
+        (Some(r), _) if r > 0.0 => za * r,
+        (Some(_), _) => return Err("la relación debe ser positiva".into()),
+        (None, Some(c)) if c > 0.0 => {
+            let sum = 2.0 * c / src.effective_spec().module_t();
+            if ka == Internal { za - sum } else if sign > 0.0 { sum - za } else { sum + za }
+        }
+        (None, Some(_)) => return Err("la distancia entre centros debe ser positiva".into()),
+        (None, None) => return Err("pide una relación o una distancia entre centros".into()),
+    };
+    let z = z.round();
+    if z < 4.0 || z > 1000.0 {
+        return Err(format!("salen {z} dientes: fuera de lo posible"));
+    }
+    if ka == Internal && z >= za {
+        return Err("el piñón de una corona tiene menos dientes que ella".into());
+    }
+    if kind_b == Internal && ka == External && z <= za {
+        return Err("la corona tiene más dientes que su piñón".into());
+    }
+    Ok(z as u32)
+}
+
+fn kb_ok(ka: GearKind, kb: GearKind) -> Result<GearKind, String> {
+    use GearKind::*;
+    match (ka, kb) {
+        (External, External) | (External, Internal) | (Internal, External) => Ok(kb),
+        _ => Err("solo se calculan los dientes de pares exterior-exterior y piñón-corona".into()),
+    }
+}
+
 /// Rendimiento del sin fin moviendo la rueda y si se autobloquea (la rueda no
 /// lo mueve a él), con rozamiento μ = 0,1 típico de bronce sobre acero lubricado.
 pub fn worm_efficiency(gamma: f64, pressure_angle: f64) -> (f64, bool) {

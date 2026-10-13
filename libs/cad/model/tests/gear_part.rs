@@ -323,3 +323,26 @@ fn worm_efficiency_locks_at_small_lead_angle() {
     let (eta, locks) = worm_efficiency(25f64.to_radians(), a);
     assert!(!locks && eta > 0.7, "{eta}");
 }
+
+#[test]
+fn design_teeth_by_ratio_and_distance() {
+    use cad_model::gear_part::design_teeth;
+    let pinion = GearPart { spec: GearSpec { teeth: 20, module: 2.0, ..Default::default() }, ..Default::default() };
+    // Relación 3:1 → 60 dientes
+    assert_eq!(design_teeth(&pinion, GearKind::External, Some(3.0), None), Ok(60));
+    // Distancia 60 mm con m=2: z1+z2 = 60 → 40 dientes
+    assert_eq!(design_teeth(&pinion, GearKind::External, None, Some(60.0)), Ok(40));
+    // Corona a 20 mm del piñón: z2−z1 = 20 → 40
+    assert_eq!(design_teeth(&pinion, GearKind::Internal, None, Some(20.0)), Ok(40));
+    // Helicoidal: el módulo transversal manda
+    let mut h = pinion.clone();
+    h.spec.helix_angle = 30.0;
+    let z = design_teeth(&h, GearKind::External, None, Some(60.0)).unwrap();
+    assert_eq!(z, (2.0 * 60.0 * 30f64.to_radians().cos() / 2.0).round() as u32 - 20);
+    // Piñón de una corona
+    let ring = GearPart { spec: GearSpec { kind: GearKind::Internal, teeth: 60, module: 2.0, ..Default::default() }, outer: 140.0, ..Default::default() };
+    assert_eq!(design_teeth(&ring, GearKind::External, None, Some(40.0)), Ok(20));
+    assert!(design_teeth(&ring, GearKind::External, Some(2.0), None).is_err());
+    assert!(design_teeth(&pinion, GearKind::External, None, None).is_err());
+    assert!(design_teeth(&pinion, GearKind::Rack, Some(2.0), None).is_err());
+}

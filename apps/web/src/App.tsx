@@ -309,7 +309,7 @@ import type { PreviewView } from "./components/layout/ViewportHeader";
 import { ScanEditor, type ScanEditorTab, type ScanMeshSettings } from "./components/layout/ScanEditor";
 import { CadView } from "./components/layout/CadView";
 import { DesignStep, FeatureTree } from "./components/steps/DesignStep";
-import { createCadStore, partColor, partHidden, PLANE_LABELS, type PartId } from "./lib/cad";
+import { createCadStore, partColor, partHidden, PLANE_LABELS, type Fabrication, type PartId } from "./lib/cad";
 import { createCadUi } from "./lib/cadUi";
 import { createDesignActions } from "./lib/designActions";
 import { designOperations } from "./components/design/DesignToolbar";
@@ -5473,7 +5473,7 @@ export const App: Component = () => {
         pipeline.markCompleted("export");
         return;
       }
-      const bytes = await busy(t("Exportando a {file}...", { file: file ?? "" }), () => cad.exportDesign(path, format, part?.id, assembly));
+      const bytes = await busy(t("Exportando a {file}...", { file: file ?? "" }), () => cad.exportDesign(path, format, part?.id, assembly, !!exportOptions().compensate && format !== "step"));
       setLastExport({ bytes, files: [path] });
       setStatusMessage(t("Diseño exportado: {file} ({size})", { file: file ?? "", size: formatBytes(bytes) }));
       pipeline.markCompleted("export");
@@ -6923,6 +6923,41 @@ export const App: Component = () => {
 
   /** Las últimas uniones puestas: se rehacen cuando el diseño cambia y se regeneran las piezas */
   let lastJointConfig: { config: object; fit: object | null } | undefined;
+
+  // ── Impresora y material: los mismos en Fabricar y en Diseñar ──
+  // Fabricar manda; al abrir un diseño con impresora propia, esa pasa a Fabricar
+  let lastFab = "";
+  const fabricationFromPrep = (): Fabrication | null => {
+    const prep = printPrep();
+    if (!prep.printer && !prep.material) return null;
+    const printer = prep.printer ?? printPresets()?.printers[0];
+    const material = prep.material ?? printPresets()?.materials[0];
+    if (!printer || !material) return null;
+    const fit = prep.joint.fit && prep.joint.fit !== "manual" ? prep.joint.fit : "normal";
+    return { printer, material, fit };
+  };
+  createEffect(() => {
+    const fab = fabricationFromPrep();
+    const doc = cad.committed();
+    // Un diseño vacío sin impresora no se ensucia
+    if (!fab || !doc || (doc.features.length === 0 && !doc.fabrication)) return;
+    const json = JSON.stringify(fab);
+    if (JSON.stringify(doc.fabrication ?? null) === json) {
+      lastFab = json;
+      return;
+    }
+    if (json === lastFab) return;
+    lastFab = json;
+    void cad.commit((d) => (d.fabrication = fab));
+  });
+  createEffect(() => {
+    const fab = cad.committed()?.fabrication;
+    if (!fab) return;
+    const json = JSON.stringify(fab);
+    if (json === lastFab) return;
+    lastFab = json;
+    untrack(() => setPrintPrep({ ...printPrep(), printer: fab.printer, material: fab.material, joint: { ...printPrep().joint, fit: fab.fit ?? "normal" } }));
+  });
 
   /** Las holguras de la impresora y el material elegidos (se piden al cambiarlos) */
   let fabRequest = 0;
@@ -8943,6 +8978,7 @@ export const App: Component = () => {
               onCompactUvChange: setExportCompactUv,
               options: exportOptions(),
               onOptionsChange: setExportOptions,
+              hasFabrication: !!cad.doc()?.fabrication,
               lastExport: lastExport(),
             }}
             renderProps={{

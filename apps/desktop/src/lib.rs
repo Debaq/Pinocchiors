@@ -211,6 +211,7 @@ pub fn run() {
             cad::cad_solve_sketch,
             cad::cad_sketch_suggest,
             cad::cad_gear_info,
+            cad::cad_gear_design,
             cad::cad_gear_block,
             cad::cad_sketch_define,
             cad::cad_vertex_spec,

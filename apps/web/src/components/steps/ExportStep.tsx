@@ -27,9 +27,11 @@ export interface ExportOptions {
   textureQuality: number;
   /** Soldar vértices duplicados y quitar materiales sin uso */
   cleanGeometry: boolean;
+  /** Diseño: agrandar por eje lo que el material se encoge al enfriar (solo mallas) */
+  compensate?: boolean;
 }
 
-type WebSettings = Omit<ExportOptions, "format" | "preset">;
+type WebSettings = Omit<ExportOptions, "format" | "preset" | "compensate">;
 
 const PRESETS: Record<Exclude<WebPreset, "custom">, WebSettings> = {
   none: {
@@ -123,6 +125,8 @@ export interface ExportStepProps {
   /** Piezas del diseño (clave "operación:índice", o "assembly" para el ensamble) y la elegida; sin elegir, todo el diseño */
   designParts?: { key: string; name: string }[];
   designPart?: string;
+  /** El diseño tiene impresora y material (de ahí sale la contracción) */
+  hasFabrication?: boolean;
   onDesignPartChange?: (key: string | undefined) => void;
   hasSkeleton?: boolean;
   /** Esqueleto solo: un octaedro por hueso para verlo en cualquier visor */
@@ -201,6 +205,16 @@ export const ExportStep: Component<ExportStepProps> = (props) => {
               options={[{ value: "all", label: t("Todo el diseño") }, ...(props.designParts ?? []).map((p) => ({ value: p.key, label: p.name }))]}
               value={props.designPart ?? "all"}
               onChange={(v) => props.onDesignPartChange?.(v === "all" ? undefined : v)}
+            />
+          </Show>
+          <Show when={opts().format !== "step"}>
+            <Checkbox
+              small
+              label={t("Compensar la contracción del material")}
+              checked={!!opts().compensate && !!props.hasFabrication}
+              disabled={!props.hasFabrication}
+              onChange={(v) => set({ compensate: v })}
+              hint={props.hasFabrication ? t("Agranda cada pieza lo que se va a encoger al enfriar, para que salga a la medida diseñada. El diseño no cambia: solo el archivo que exportas.") : t("Elige una impresora y un material en Fabricar para compensar la contracción.")}
             />
           </Show>
           <Hint

@@ -593,6 +593,8 @@ export interface GearPart {
   hole_diameter: number;
   hole_circle: number;
   print_clearance: number;
+  /** La holgura de impresión sale de la impresora del diseño (ajuste justo) y se ignora la de arriba */
+  auto_clearance?: boolean;
   /** Doble helicoidal (espina de pescado), con un canal central opcional */
   herringbone?: boolean;
   groove?: number;
@@ -863,6 +865,8 @@ export type FeatureKind =
       /** Medida de otra rosca, con el filete alineado en el centro que está en su eje */
       link?: ThreadLink | null;
       reverse?: boolean | null;
+      /** El diámetro es el que se quiere medir al imprimir: se agranda lo que la impresora achica los agujeros */
+      compensate?: boolean;
     }
   /** Rosca sobre una cara cilíndrica: exterior en un eje, interior en un agujero */
   | { type: "thread"; face: FaceRef; pitch: number; length: number; flip: boolean; left: boolean; clearance: number; link?: ThreadLink | null }
@@ -980,6 +984,8 @@ export interface CadDocument {
   bindings?: Record<string, string>;
   /** Material del sólido (densidad en kg/m³), para la masa */
   material?: Material | null;
+  /** Impresora y material del diseño: de aquí sale la holgura de lo que se marca «según la impresora» */
+  fabrication?: Fabrication | null;
   /** Carpetas del árbol (solo presentación) */
   folders?: Folder[];
   /** Nombre, color y visibilidad de las piezas */
@@ -1237,6 +1243,13 @@ export function fixFolders(doc: CadDocument, id: number, next: number[]): Folder
     out.push({ ...f, first: next[Math.min(...pos)], last: next[Math.max(...pos)] });
   }
   return out;
+}
+
+/** Cómo se va a fabricar (la misma impresora y material de Fabricar) */
+export interface Fabrication {
+  printer: { name: string; build_volume: [number, number, number]; nozzle: number; layer_height: number; fit_clearance?: number; hole_comp?: number };
+  material: { name: string; density: number; max_overhang_deg: number; shrink?: [number, number, number]; clearance_factor?: number };
+  fit?: "tight" | "normal" | "loose";
 }
 
 export interface Material {
@@ -3941,6 +3954,9 @@ export function createCadStore() {
     /** Círculos, avisos y error de medidas de un engrane */
     gearInfo: (part: GearPart) => invoke<GearInfo>("cad_gear_info", { part }),
     /** El perfil del engrane como bloque del sketch */
+    /** Dientes del engrane que engrana con `source` por relación (dientes de este / del otro) o distancia entre centros */
+    gearDesign: (source: GearPart, kind: GearKind, ratio: number | null, distance: number | null) =>
+      invoke<number>("cad_gear_design", { source, kind, ratio, distance }),
     gearBlock: (part: GearPart) => invoke<SketchBlock>("cad_gear_block", { part }),
     resolveRefs: (faces: FaceRef[], edges: EdgeRef[]) => invoke<ResolvedRefs>("cad_resolve_refs", { faces, edges }),
     /** Eje x que tendría el sketch `feature` con esa horizontal (null: la del plano) */
@@ -4399,13 +4415,16 @@ export function createCadStore() {
 
     /** Exporta el diseño (todas las piezas, o solo `part`) */
     /** Con `assembly`, las instancias del ensamble en su lugar */
-    exportDesign: (path: string, format: string, part?: PartId, assembly = false) => invoke<number>("cad_export", { path, format, part: part ?? null, assembly }),
+    exportDesign: (path: string, format: string, part?: PartId, assembly = false, compensate = false) =>
+      invoke<number>("cad_export", { path, format, part: part ?? null, assembly, compensate }),
 
     // ─── Ensamble ─────────────────────────────────────────────────────
     assemblyMesh: async () => decodeCadMesh(await invoke<ArrayBuffer>("cad_assembly_mesh")),
     assemblyFaces: () => invoke<[number, number, number][]>("cad_assembly_faces"),
     assemblyConnector: (face: number) => invoke<Connector>("cad_assembly_connector", { face }),
     assemblyInterference: () => invoke<[number, number, number][]>("cad_assembly_interference"),
+    /** Pares que quedan más cerca que la holgura de la impresora del diseño (o de `minGap`, en mm) */
+    assemblyClearance: (minGap?: number) => invoke<[number, number, number][]>("cad_assembly_clearance", { minGap: minGap ?? null }),
     /** Acoplamientos de los engranes enlazados que están en el ensamble */
     assemblySuggest: () => invoke<Relation[]>("cad_assembly_suggest"),
     /** Cambia el ensamble (deshacible); lo crea si no hay */

@@ -623,6 +623,8 @@ export const en_ui_steps: Catalog = {
   "Arandela": "Washer",
   "Engrane": "Gear",
   "Engranar con": "Mesh with",
+  "Relación (dientes / dientes del otro)": "Ratio (teeth / other's teeth)",
+  "Calcular los dientes para esta distancia": "Work out the teeth for this distance",
   "Engranes en el plano": "Gears on the sheet",
   "Engranes con círculo primitivo y tabla de datos": "Gears with pitch circle and data table",
   "Módulo (m)": "Module (m)",

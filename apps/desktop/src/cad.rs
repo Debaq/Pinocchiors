@@ -563,6 +563,12 @@ pub fn cad_gear_info(part: cad_model::GearPart) -> cad_model::gear_part::GearInf
     cad_model::gear_part::info(&part)
 }
 
+/// Dientes de un engrane para engranar con `source` con una relación o una distancia entre centros.
+#[tauri::command]
+pub fn cad_gear_design(source: cad_model::GearPart, kind: cad_model::gears::GearKind, ratio: Option<f64>, distance: Option<f64>) -> Result<u32, String> {
+    cad_model::gear_part::design_teeth(&source, kind, ratio, distance)
+}
+
 /// El perfil de un engrane como bloque del sketch (origen en su centro).
 #[tauri::command]
 pub fn cad_gear_block(part: cad_model::GearPart) -> Result<cad_model::sketch::SketchBlock, String> {
@@ -1630,12 +1636,31 @@ pub async fn cad_export(
     format: String,
     part: Option<cad_model::PartId>,
     assembly: Option<bool>,
+    compensate: Option<bool>,
 ) -> Result<u64, String> {
     require_occt()?;
-    in_background(app, move |state| export_impl(state, &path, &format, part, assembly.unwrap_or(false))).await
+    in_background(app, move |state| export_impl(state, &path, &format, part, assembly.unwrap_or(false), compensate.unwrap_or(false))).await
 }
 
-fn export_impl(state: &AppState, path: &str, format: &str, part: Option<cad_model::PartId>, assembly: bool) -> Result<u64, String> {
+/// Agranda la escena por eje lo que el material se encoge (la impresora y el material del diseño).
+/// El diseño no cambia: solo el archivo. Con la escena en Z arriba o Y arriba.
+fn compensate_scene(state: &AppState, scene: Scene) -> Result<Scene, String> {
+    use converter_scene::glam::{Mat4, Vec3};
+    let scale = {
+        let doc = state.cad_document.lock().unwrap();
+        let fab = doc.as_ref().and_then(|d| d.fabrication.as_ref()).ok_or("Elige una impresora y un material para compensar la contracción")?;
+        fab.tolerances().shrink_scale()
+    };
+    let [sx, sy, sz] = scale.map(|v| v as f32);
+    // La contracción es por eje de la impresora (Z arriba); en una escena Y arriba el alto es Y
+    let v = if scene.y_up { Vec3::new(sx, sz, sy) } else { Vec3::new(sx, sy, sz) };
+    Ok(crate::commands::wrap_scene(&scene, Mat4::from_scale(v), "shrink_compensation"))
+}
+
+fn export_impl(state: &AppState, path: &str, format: &str, part: Option<cad_model::PartId>, assembly: bool, compensate: bool) -> Result<u64, String> {
+    if compensate && matches!(format, "step" | "stp") {
+        return Err("La compensación de contracción solo se aplica a mallas (STL, 3MF, OBJ...); STEP queda exacto".into());
+    }
     // El ensamble: cada instancia en su lugar, con su nombre
     if assembly {
         let p = std::path::Path::new(path);
@@ -1647,7 +1672,10 @@ fn export_impl(state: &AppState, path: &str, format: &str, part: Option<cad_mode
                 std::fs::write(p, &bytes).map_err(|e| format!("No se pudo escribir {path}: {e}"))?;
             }
             _ => {
-                let scene = shapes_scene(&items.iter().map(|(s, n, _)| (s, n.clone())).collect::<Vec<_>>())?;
+                let mut scene = shapes_scene(&items.iter().map(|(s, n, _)| (s, n.clone())).collect::<Vec<_>>())?;
+                if compensate {
+                    scene = compensate_scene(state, scene)?;
+                }
                 export_scene(&scene, p, format)?;
             }
         }
@@ -1680,7 +1708,13 @@ fn export_impl(state: &AppState, path: &str, format: &str, part: Option<cad_mode
                 let bytes = cad_model::Shape::parts_to_step(&list).map_err(|e| e.to_string())?;
                 std::fs::write(p, &bytes).map_err(|e| format!("No se pudo escribir {path}: {e}"))?;
             }
-            other => export_scene(&scene()?, p, other)?,
+            other => {
+                let mut scene = scene()?;
+                if compensate {
+                    scene = compensate_scene(state, scene)?;
+                }
+                export_scene(&scene, p, other)?
+            }
         }
         Ok(std::fs::metadata(p).map(|m| m.len()).unwrap_or(0))
     }
@@ -2151,6 +2185,7 @@ pub mod bridge {
             "cad_solve_sketch" => ok(cad_solve_sketch(arg(args, "sketch")?, arg(args, "drag")?)?),
             "cad_sketch_suggest" => ok(cad_sketch_suggest(arg(args, "sketch")?)?),
             "cad_gear_info" => ok(cad_gear_info(arg(args, "part")?)),
+            "cad_gear_design" => ok(cad_gear_design(arg(args, "source")?, arg(args, "kind")?, arg(args, "ratio")?, arg(args, "distance")?)?),
             "cad_gear_block" => ok(cad_gear_block(arg(args, "part")?)?),
             "cad_sketch_define" => ok(cad_sketch_define(arg(args, "sketch")?, arg(args, "relations")?)?),
             "cad_mesh" => mesh_impl(state).map(Reply::Bytes),
@@ -2169,6 +2204,7 @@ pub mod bridge {
             "cad_assembly_faces" => ok(assembly_faces_impl(state)?),
             "cad_assembly_connector" => ok(assembly_connector_impl(state, arg(args, "face")?)?),
             "cad_assembly_interference" => ok(assembly_interference_impl(state)?),
+            "cad_assembly_clearance" => ok(assembly_clearance_impl(state, arg::<Option<f64>>(args, "min_gap")?)?),
             "cad_assembly_suggest" => ok(assembly_suggest_impl(state)?),
             "cad_drawing" => ok(drawing_impl(state, &arg::<Vec<DrawingViewSpec>>(args, "views")?)?),
             "cad_write_pdf" => {
@@ -2204,7 +2240,7 @@ pub mod bridge {
             "cad_project_sketch" => ok(project_sketch_impl(state, arg(args, "feature")?, &arg::<cad_model::Plane>(args, "plane")?)?),
             "cad_export" => {
                 let (path, format): (String, String) = (arg(args, "path")?, arg(args, "format")?);
-                ok(export_impl(state, &path, &format, arg::<Option<cad_model::PartId>>(args, "part")?, arg::<Option<bool>>(args, "assembly")?.unwrap_or(false))?)
+                ok(export_impl(state, &path, &format, arg::<Option<cad_model::PartId>>(args, "part")?, arg::<Option<bool>>(args, "assembly")?.unwrap_or(false), arg::<Option<bool>>(args, "compensate")?.unwrap_or(false))?)
             }
             "cad_eval_expr" => ok(cad_eval_expr(arg(args, "expr")?, arg(args, "parameters")?)?),
             "cad_scan_pick" => {
