@@ -3,6 +3,7 @@ import { Button, Checkbox, NumberInput, Select } from "../ui";
 import * as Icons from "../icons";
 import { fmtNumber, t } from "../../lib/i18n";
 import { tBackend } from "../../lib/i18nBackend.ts";
+import { customPrinters, removeCustomPrinter, saveCustomPrinter } from "../../lib/settings.ts";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TIPOS (lo que devuelve el backend, en milímetros con Z arriba)
@@ -166,7 +167,9 @@ export const PrinterMaterial: Component<{
   onPrinter: (p: PrinterProfile) => void;
   onMaterial: (m: MaterialProfile) => void;
 }> = (props) => {
-  const printers = () => props.presets?.printers ?? [];
+  const printers = () => [...(props.presets?.printers ?? []), ...customPrinters()];
+  const isSaved = () => customPrinters().some((p) => p.name === props.printer.name);
+  const [newName, setNewName] = createSignal("");
   const materials = () => props.presets?.materials ?? [];
   const setVolume = (axis: number, v: number) => {
     const bv = [...props.printer.build_volume] as [number, number, number];
@@ -190,6 +193,39 @@ export const PrinterMaterial: Component<{
         <For each={["X", "Y", "Z"]}>
           {(axis, i) => <NumberInput label={axis} value={props.printer.build_volume[i()]} onChange={(v) => setVolume(i(), v)} min={10} step={10} />}
         </For>
+      </div>
+      <div class="flex gap-1.5 items-center">
+        <input
+          class="min-w-0 flex-1 px-2 py-1 rounded bg-surface/40 border border-border text-xs text-text outline-none focus:border-accent"
+          placeholder={t("Nombre para guardarla")}
+          value={newName()}
+          onInput={(e) => setNewName(e.currentTarget.value)}
+        />
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={!newName().trim()}
+          onClick={() => {
+            const name = newName().trim();
+            saveCustomPrinter({ ...props.printer, name });
+            props.onPrinter({ ...props.printer, name });
+            setNewName("");
+          }}
+        >
+          {t("Guardar")}
+        </Button>
+        <Show when={isSaved()}>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              removeCustomPrinter(props.printer.name);
+              props.onPrinter(props.presets?.printers[0] ?? props.printer);
+            }}
+          >
+            {t("Quitar")}
+          </Button>
+        </Show>
       </div>
       <NumberInput
         label={t("Boquilla")}

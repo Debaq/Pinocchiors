@@ -86,5 +86,6 @@ export const en_print: Catalog = {
   "Ver cómo quedan en la cama": "See how they sit on the bed",
   "Placa {n}": "Plate {n}",
   "Acomodando las piezas...": "Arranging the parts...",
+  "Nombre para guardarla": "Name to save it",
   "No se pudieron rehacer las uniones: {e}": "Couldn't redo the joints: {e}",
 };

@@ -37,6 +37,20 @@ const [previewFirstRaw, setPreviewFirst] = createPersisted<boolean>("settings.pr
 export const previewFirst = previewFirstRaw;
 export const setPreviewFirstModel = setPreviewFirst;
 
+/** Impresoras propias (Fabricar): nombre, cama y boquilla; se recuerdan entre sesiones */
+export interface SavedPrinter {
+  name: string;
+  build_volume: [number, number, number];
+  nozzle: number;
+  layer_height: number;
+}
+const [savedPrinters, setSavedPrinters] = createPersisted<SavedPrinter[]>("settings.printers", []);
+export const customPrinters = savedPrinters;
+/** Guarda (o reemplaza, por nombre) una impresora propia */
+export const saveCustomPrinter = (printer: SavedPrinter) =>
+  setSavedPrinters([...savedPrinters().filter((p) => p.name !== printer.name), printer]);
+export const removeCustomPrinter = (name: string) => setSavedPrinters(savedPrinters().filter((p) => p.name !== name));
+
 const PREFIX = "pinocchio.ui.";
 /** Lo que no es disposición de la interfaz: se conserva al restablecer */
 const KEEP = ["settings.", "templates."];
