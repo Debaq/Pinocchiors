@@ -30,6 +30,9 @@ pub enum PlanarShape {
     /// Cierre de cuarto de vuelta: un perno con cabeza de barra entra por una ranura de la
     /// misma forma, y al girarlo 90° la cabeza queda atrapada bajo el labio de la ranura
     Bayonet { length: Real, width: Real },
+    /// Cola de milano deslizante: riel en una pieza y ranura en la otra, de pared a pared de la
+    /// cara de corte. `width` es el ancho de la boca; la ranura se ensancha hacia el fondo
+    Rail { width: Real },
 }
 
 impl PlanarShape {
@@ -41,6 +44,7 @@ impl PlanarShape {
             PlanarShape::Dovetail { width_base, width_top, length } => width_base.max(width_top).hypot(length),
             // La cámara redonda de abajo, un poco más ancha que la diagonal de la barra
             PlanarShape::Bayonet { length, width } => length.hypot(width) + 2.0,
+            PlanarShape::Rail { width } => width,
         }
     }
 
@@ -55,6 +59,7 @@ impl PlanarShape {
                 length: (length + delta).max(0.1),
             },
             PlanarShape::Bayonet { length, width } => PlanarShape::Bayonet { length: (length + delta).max(0.1), width: (width + delta).max(0.1) },
+            PlanarShape::Rail { width } => PlanarShape::Rail { width: (width + delta).max(0.1) },
         }
     }
 }
@@ -144,6 +149,11 @@ pub fn footprint_polygon(shape: &PlanarShape, center: Vector3, normal: Vector3, 
         PlanarShape::Bayonet { length, width } => {
             let (l, w) = (length * 0.5, width * 0.5);
             vec![(-l, -w), (l, -w), (l, w), (-l, w)]
+        }
+        // El riel no tiene una huella fija (corre de pared a pared): se da su boca como cuadrado
+        PlanarShape::Rail { width } => {
+            let h = width * 0.5;
+            vec![(-h, -h), (h, -h), (h, h), (-h, h)]
         }
     };
     pts2.into_iter()
@@ -573,6 +583,139 @@ pub fn add_bayonet_hole(mesh: &Mesh, center: Vector3, normal: Vector3, rotation_
     weld_build(&pos, &tris)
 }
 
+/// Riel de cola de milano sobre la tapa plana de normal `normal`: corre a lo largo de `along`,
+/// mide `length`, tiene `root_half` de semiancho en la tapa y `tip_half` (mayor) en la punta,
+/// a `height` de la tapa
+#[allow(clippy::too_many_arguments)]
+pub fn add_rail(mesh: &Mesh, center: Vector3, normal: Vector3, along: Vector3, root_half: Real, tip_half: Real, height: Real, length: Real) -> Result<Mesh> {
+    let n = normal.try_normalize().ok_or_else(|| Print3dError::JointError("normal nula".into()))?;
+    let s = along.try_normalize().ok_or_else(|| Print3dError::JointError("dirección nula".into()))?;
+    if !(root_half > 0.0 && tip_half >= root_half && height > 0.0 && length > 0.0) {
+        return Err(Print3dError::JointError("medidas del riel no válidas".into()));
+    }
+    let w = n.cross(&s).normalize();
+    let half = length * 0.5;
+    let at = |sl: Real, wl: Real, h: Real| center + s * sl + w * wl + n * h;
+    let root = [at(-half, -root_half, 0.0), at(half, -root_half, 0.0), at(half, root_half, 0.0), at(-half, root_half, 0.0)];
+    let (mut pos, mut tris, ring) = open_cap(mesh, &root, n)?;
+    let diag = diagonal(&pos);
+    // Cada vértice del contorno sube a su esquina de la punta (más ancha)
+    let top_of = |p: &Vector3| {
+        let d = *p - center;
+        let (sl, wl) = (d.dot(&s), d.dot(&w));
+        at(sl, wl.signum() * tip_half, height)
+    };
+    let m = ring.len();
+    let base = pos.len();
+    let tops: Vec<Vector3> = ring.iter().map(|&i| top_of(&pos[i])).collect();
+    pos.extend(tops);
+    for i in 0..m {
+        let (a, b) = (ring[i], ring[(i + 1) % m]);
+        tris.push([b, a, base + i]);
+        tris.push([b, base + i, base + (i + 1) % m]);
+    }
+    let top_ring = [at(-half, -tip_half, height), at(half, -tip_half, height), at(half, tip_half, height), at(-half, tip_half, height)];
+    region_tris(&[top_ring.to_vec()], n, diag, &mut pos, &mut tris);
+    weld_build(&pos, &tris)
+}
+
+/// Un riel entre dos piezas: la línea de la cara por la que corre y su cuerda
+struct RailLine {
+    /// Punto de la línea en el plano de contacto, a la mitad de la cuerda
+    mid: Vector3,
+    along: Vector3,
+    /// Largo de la cuerda dentro de la cara (mm)
+    chord: Real,
+}
+
+/// Líneas de riel dentro de la región de contacto: `count` paralelas, centradas en el contacto
+fn rail_lines(contact: &Contact, config: &PlanarJointConfig, width: Real) -> (Vec<RailLine>, Vec<String>) {
+    let n = contact.normal;
+    let (u, v) = plane_basis(n);
+    let (sr, cr) = config.rotation_deg.to_radians().sin_cos();
+    let along = u * cr + v * sr;
+    let lateral = n.cross(&along).normalize();
+    let to2 = |p: &Vector3| (p.dot(&u), p.dot(&v));
+    let region2: Vec<Vec<(Real, Real)>> = contact.region.iter().map(|poly| poly.iter().map(to2).collect()).collect();
+    let inside = |p: &Vector3| {
+        let q = to2(p);
+        region2.iter().any(|poly| point_in_convex(q, poly))
+    };
+    let spacing = width * 4.0;
+    let mut lines = Vec::new();
+    let mut notes = Vec::new();
+    let step = 0.25;
+    let reach = contact.area.sqrt() * 4.0 + 10.0;
+    for k in 0..config.count.max(1) {
+        let off = (k as Real - (config.count.max(1) as Real - 1.0) * 0.5) * spacing;
+        let origin = contact.center + lateral * off;
+        if !inside(&origin) {
+            notes.push("el centro de la cara no está dentro de ella (hueco al medio): no hay riel".to_string());
+            continue;
+        }
+        let walk = |dir: Real| {
+            let mut t = 0.0;
+            while t < reach && inside(&(origin + along * ((t + step) * dir))) && {
+                // el borde de la riel también tiene que estar dentro
+                let e = origin + along * ((t + step) * dir);
+                inside(&(e + lateral * width)) && inside(&(e - lateral * width))
+            } {
+                t += step;
+            }
+            t
+        };
+        let (fwd, back) = (walk(1.0), walk(-1.0));
+        lines.push(RailLine { mid: origin + along * ((fwd - back) * 0.5), along, chord: fwd + back });
+    }
+    (lines, notes)
+}
+
+/// Un riel entre `ia` (riel) e `ib` (ranura) sobre la línea dada
+fn place_rail(pieces: &mut [LabeledPiece], ia: usize, ib: usize, line: &RailLine, n: Vector3, width: Real, config: &PlanarJointConfig) -> std::result::Result<(), String> {
+    use crate::groove::{dovetail_trench, subtract_trench};
+    let gap = config.gap();
+    let wall = config.edge_margin.max(0.8);
+    let margin = 1.5;
+    let rail_len = line.chord - 2.0 * margin;
+    if rail_len < width * 3.0 {
+        return Err(format!("la cara es muy corta para un riel ({:.1} mm)", line.chord));
+    }
+    // Ranura: boca de `width` y fondo más ancho (15° de cada lado); no puede pasar del fondo libre
+    let probe = {
+        let w = n.cross(&line.along).normalize();
+        let b = width * 0.5 + config.depth * 0.27;
+        // Un poco adentro de los extremos: ahí la ranura sale por la pared y el rayo de prueba no tiene sólido
+        let h = line.chord * 0.5 - margin;
+        [line.mid - line.along * h - w * b, line.mid + line.along * h - w * b, line.mid + line.along * h + w * b, line.mid - line.along * h + w * b]
+    };
+    let free = free_depth_inside(&pieces[ib].mesh, &probe, -n);
+    let depth = config.depth.min(free - wall);
+    if depth < config.min_depth {
+        return Err(format!("fondo insuficiente ({free:.1} mm) para un riel"));
+    }
+    let undercut = depth * (15f64.to_radians().tan());
+    let (a, b) = (width * 0.5, width * 0.5 + undercut);
+    let planes = dovetail_trench(line.mid, -n, line.along, a, b, depth);
+    // Riel: más delgado por la holgura, un poco más corto que la ranura, y de `depth − gap` de alto
+    // Cada lado del riel sigue al de la ranura con la misma inclinación, a `holgura/2` de distancia
+    let half_clear = config.tolerance * 0.5;
+    let rail_h = (depth - gap).max(0.5);
+    let (root_half, tip_half) = (a + half_clear, a + rail_h * 15f64.to_radians().tan() + half_clear);
+    if root_half <= 0.3 {
+        return Err("la holgura deja el riel sin grosor".to_string());
+    }
+    let rail = add_rail(&pieces[ia].mesh, line.mid, n, line.along, root_half, tip_half, rail_h, rail_len);
+    let groove = subtract_trench(&pieces[ib].mesh, &planes);
+    match (groove, rail) {
+        (Ok(g), Ok(r)) => {
+            pieces[ib].mesh = g;
+            pieces[ia].mesh = r;
+            Ok(())
+        }
+        (g, r) => Err(format!("unión omitida: {}", g.err().or(r.err()).map_or_else(String::new, |e| e.to_string()))),
+    }
+}
+
 /// Pone uniones (perno en la pieza de menor id, hueco en la otra) en todas las caras de contacto
 pub fn apply_joints(pieces: &mut [LabeledPiece], config: &PlanarJointConfig) -> Result<JointsReport> {
     let tol = pieces.iter().find(|p| !p.mesh.vertices.is_empty()).map_or(1e-4, |p| plane_tolerance(&p.mesh));
@@ -582,6 +725,19 @@ pub fn apply_joints(pieces: &mut [LabeledPiece], config: &PlanarJointConfig) -> 
         let mut conn = ConnectionJoints { piece_a: contact.piece_a, piece_b: contact.piece_b, contact_area: contact.area, requested: config.count, placed: 0, notes: Vec::new() };
         let Some(ia) = pieces.iter().position(|p| p.id == contact.piece_a) else { continue };
         let Some(ib) = pieces.iter().position(|p| p.id == contact.piece_b) else { continue };
+        if let PlanarShape::Rail { width } = config.shape {
+            let (lines, notes) = rail_lines(&contact, config, width);
+            conn.notes.extend(notes);
+            for line in &lines {
+                match place_rail(pieces, ia, ib, line, contact.normal, width, config) {
+                    Ok(()) => conn.placed += 1,
+                    Err(why) => conn.notes.push(why),
+                }
+            }
+            report.joints_placed += conn.placed;
+            report.connections.push(conn);
+            continue;
+        }
         let spots = choose_spots(&contact, config);
         if spots.len() < config.count {
             conn.notes.push(format!("solo caben {} de {} uniones en la cara", spots.len(), config.count));
@@ -965,5 +1121,74 @@ mod tests {
         let cfg = PlanarJointConfig { shape: PlanarShape::Bayonet { length: 14.0, width: 6.0 }, count: 1, ..Default::default() };
         assert_eq!(apply_joints(&mut pieces, &cfg).unwrap().joints_placed, 0);
     }
-}
 
+    #[test]
+    fn riel_deslizante_en_dos_mitades_de_una_caja() {
+        let b = make_box(80.0, 60.0, 50.0);
+        let meshes = crate::slicer::slice_by_planes(&b, &[Plane::xy_at_z(25.0)]).unwrap();
+        let mut pieces: Vec<LabeledPiece> = meshes.into_iter().enumerate().map(|(id, mesh)| LabeledPiece { mesh, id, ..Default::default() }).collect();
+        let before: Vec<Real> = pieces.iter().map(|p| compute_volume(&p.mesh)).collect();
+        let cfg = PlanarJointConfig { shape: PlanarShape::Rail { width: 6.0 }, depth: 8.0, count: 1, ..Default::default() };
+        let report = apply_joints(&mut pieces, &cfg).unwrap();
+        assert_eq!(report.joints_placed, 1, "{report:?}");
+        for p in &pieces {
+            assert!(p.mesh.is_closed());
+        }
+        let deltas: Vec<Real> = pieces.iter().zip(&before).map(|(p, v)| compute_volume(&p.mesh) - v).collect();
+        let (rail, groove) = (deltas.iter().cloned().fold(Real::NEG_INFINITY, Real::max), deltas.iter().cloned().fold(Real::INFINITY, Real::min));
+        // Ranura: sección ((6 + 6 + 2·8·tan15°)/2)·8 por el largo de la cara en la dirección del riel (60 mm: la dirección es −Y)
+        let undercut = 8.0 * 15f64.to_radians().tan();
+        let section = (6.0 + (6.0 + 2.0 * undercut)) * 0.5 * 8.0;
+        assert!((groove + section * 60.0).abs() < 1e-6 * section * 60.0, "ranura {groove} esperada {}", -section * 60.0);
+        // El riel es más fino y más corto que la ranura, pero no mucho
+        assert!(rail > 0.6 * section * 60.0 && rail < section * 60.0, "riel {rail}");
+    }
+
+    #[test]
+    fn el_riel_cabe_en_la_ranura_con_holgura() {
+        use crate::groove::dovetail_trench;
+        let b = make_box(80.0, 60.0, 50.0);
+        let meshes = crate::slicer::slice_by_planes(&b, &[Plane::xy_at_z(25.0)]).unwrap();
+        let mut pieces: Vec<LabeledPiece> = meshes.into_iter().enumerate().map(|(id, mesh)| LabeledPiece { mesh, id, ..Default::default() }).collect();
+        let before: Vec<Real> = pieces.iter().map(|p| compute_volume(&p.mesh)).collect();
+        let cfg = PlanarJointConfig { shape: PlanarShape::Rail { width: 6.0 }, depth: 12.0, tolerance: -0.1, count: 1, ..Default::default() };
+        assert_eq!(apply_joints(&mut pieces, &cfg).unwrap().joints_placed, 1);
+        let after: Vec<Real> = pieces.iter().map(|p| compute_volume(&p.mesh)).collect();
+        let rail_piece = if after[0] - before[0] > after[1] - before[1] { 0 } else { 1 };
+        // Cara de la pieza del riel: su centro de z (25) y hacia dónde sobresale
+        let zs: Vec<Real> = pieces[rail_piece].mesh.vertices.iter().map(|v| v.position.z()).collect();
+        // El cuerpo está abajo de la cara (z < 25) o arriba; el riel sale hacia el otro lado
+        let mean_z = zs.iter().sum::<Real>() / zs.len() as Real;
+        let body_below = mean_z < 25.0;
+        let n = if body_below { Vector3::unit_z() } else { -Vector3::unit_z() };
+        let depth = 12.0;
+        let undercut = depth * 15f64.to_radians().tan();
+        let planes = dovetail_trench(Vector3::new(40.0, 30.0, 25.0), -n, Vector3::unit_y(), 3.0, 3.0 + undercut, depth);
+        let mut checked = 0;
+        for v in &pieces[rail_piece].mesh.vertices {
+            let beyond = (v.position.z() - 25.0) * n.z();
+            if beyond > 1e-6 {
+                checked += 1;
+                for (origin, n_in) in &planes {
+                    let clearance = n_in.dot(&(v.position - *origin));
+                    assert!(clearance > 0.02, "el riel invade la ranura: {clearance} en {:?}", v.position);
+                }
+            }
+        }
+        assert!(checked >= 4, "pocos vértices del riel ({checked})");
+    }
+
+    #[test]
+    fn riel_en_una_esfera_cortada() {
+        let s = uv_sphere(40.0, 48, 64);
+        let meshes = crate::slicer::slice_by_planes(&s, &[Plane::xy_at_z(5.0)]).unwrap();
+        let mut pieces: Vec<LabeledPiece> = meshes.into_iter().enumerate().map(|(id, mesh)| LabeledPiece { mesh, id, ..Default::default() }).collect();
+        let cfg = PlanarJointConfig { shape: PlanarShape::Rail { width: 6.0 }, depth: 8.0, count: 1, ..Default::default() };
+        let report = apply_joints(&mut pieces, &cfg).unwrap();
+        assert_eq!(report.joints_placed, 1, "{report:?}");
+        for p in &pieces {
+            assert!(p.mesh.is_closed());
+            assert!(compute_volume(&p.mesh) > 0.0);
+        }
+    }
+}

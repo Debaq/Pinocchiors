@@ -66,7 +66,7 @@ export interface JointsReport {
   connections: Array<{ piece_a: number; piece_b: number; contact_area: number; requested: number; placed: number; notes: string[] }>;
 }
 
-export type JointShape = "round" | "square" | "dovetail" | "bayonet";
+export type JointShape = "round" | "square" | "dovetail" | "bayonet" | "rail";
 
 export interface JointSettings {
   shape: JointShape;
@@ -74,6 +74,8 @@ export interface JointSettings {
   depth: number;
   tolerance: number;
   count: number;
+  /** Giro de la unión dentro de la cara (grados): hacia dónde corre el riel */
+  angle: number;
 }
 
 export interface MaterialEstimate {
@@ -119,7 +121,7 @@ export interface PrepSettings {
 }
 
 export const defaultPrep: PrepSettings = {
-  joint: { shape: "round", size: 6, depth: 10, tolerance: -0.4, count: 2 },
+  joint: { shape: "round", size: 6, depth: 10, tolerance: -0.4, count: 2, angle: 0 },
   infill: 1,
   hollow: false,
   wall: 2,
@@ -141,6 +143,8 @@ export function jointShapeConfig(s: JointSettings) {
   switch (s.shape) {
     case "square":
       return { kind: "square", size: s.size };
+    case "rail":
+      return { kind: "rail", width: s.size };
     case "bayonet":
       return { kind: "bayonet", length: s.size * 2.3, width: s.size };
     case "dovetail":
@@ -351,6 +355,7 @@ export const JointsSection: Component<{
           { value: "square", label: t("Perno cuadrado") },
           { value: "dovetail", label: t("Trapecio") },
           { value: "bayonet", label: t("Cierre de cuarto de vuelta") },
+          { value: "rail", label: t("Cola de milano deslizante") },
         ]}
         value={props.settings.shape}
         onChange={(v) => set({ shape: v as JointShape })}
@@ -360,6 +365,7 @@ export const JointsSection: Component<{
         <NumberInput label={t("Hondo")} value={props.settings.depth} onChange={(v) => set({ depth: v })} min={3} max={60} step={1} suffix="mm" />
         <NumberInput label={t("Holgura")} value={props.settings.tolerance} onChange={(v) => set({ tolerance: v })} min={-1.5} max={0} step={0.05} suffix="mm" />
         <NumberInput label={t("Por cara")} value={props.settings.count} onChange={(v) => set({ count: Math.max(1, Math.round(v)) })} min={1} max={8} step={1} />
+        <NumberInput label={t("Giro")} value={props.settings.angle ?? 0} onChange={(v) => set({ angle: v })} min={-180} max={180} step={5} suffix="°" />
       </div>
       <Button onClick={props.onAdd} disabled={!props.hasPieces || props.busy} loading={props.busy} fullWidth size="sm" variant="primary">
         {t("Añadir uniones")}

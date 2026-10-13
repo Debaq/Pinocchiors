@@ -94,5 +94,13 @@ export const en_print: Catalog = {
   "Acomodar por el contorno": "Arrange by outline",
   "Usa la forma de cada pieza vista desde arriba y no su caja: caben más piezas por cama, pero tarda un poco más.": "Uses each part's shape seen from above instead of its box: more parts fit per bed, but it takes a bit longer.",
   "Cierre de cuarto de vuelta": "Quarter-turn lock",
+  "Cola de milano deslizante": "Sliding dovetail",
+  "Giro": "Rotation",
+  "la cara es muy corta para un riel ({len} mm)": "the face is too short for a rail ({len} mm)",
+  "fondo insuficiente ({free} mm) para un riel": "not enough depth ({free} mm) for a rail",
+  "el centro de la cara no está dentro de ella (hueco al medio): no hay riel": "the face's center isn't inside it (hole in the middle): no rail",
+  "la holgura deja el riel sin grosor": "the clearance leaves the rail without thickness",
+  "error en joint: la zanja abrió más de un contorno: tiene que cruzar la pieza de pared a pared": "joint error: the groove opened more than one outline: it has to cross the part from wall to wall",
+  "error en joint: la malla con la ranura no quedó cerrada": "joint error: the mesh with the groove isn't closed",
   "No se pudieron rehacer las uniones: {e}": "Couldn't redo the joints: {e}",
 };

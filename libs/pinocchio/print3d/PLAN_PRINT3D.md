@@ -27,13 +27,14 @@ planos reales entre piezas.
 - Vista previa de la distribución en la cama.
 - Agujero de drenaje al vaciar (túnel desde la cara plana de abajo hasta el hueco).
 - Distribución por contorno en planta (`nest_contour`, por celdas).
+- Cola de milano deslizante (`PlanarShape::Rail`, `groove::subtract_trench`): riel en una pieza y ranura en la otra, de pared a pared; la ranura se resta de cualquier pared (también curva) con un recorte de triángulos y cierre de las caras de la zanja.
 - Cierre de cuarto de vuelta (`PlanarShape::Bayonet`): perno con cabeza de barra que entra por una ranura y se traba al girar 90°.
 
 ## Límites conocidos
 
 - Las uniones solo van en caras de corte **planas** y dentro de la cara (redonda, cuadrada, trapecio
-  o cuarto de vuelta). **No hay colas de milano deslizantes ni puzzles**: el riel tiene que salir por la
-  pared de la pieza, y eso pide recortar una superficie cualquiera (hoy solo se recorta la tapa plana).
+  cuarto de vuelta) y el riel deslizante, que corre una línea recta de pared a pared (la cuerda tiene que
+  caber en la cara sin huecos). No hay puzzles. El riel no tiene tope: se desliza por los dos extremos.
 - El drenaje pide una cara plana abajo (al exportar, tras apoyar la pieza) y un solo agujero; sin venteo.
 - La verificación mide paredes con rayos desde una muestra de caras.
 
@@ -41,4 +42,4 @@ planos reales entre piezas.
 
 - Venteo (segundo agujero) y drenaje sin cara plana.
 - Orientación por pieza visible antes de exportar.
-- Colas de milano deslizantes y puzzles (recorte de la pared de la pieza).
+- Tope en la ranura (un extremo ciego) y puzzles.

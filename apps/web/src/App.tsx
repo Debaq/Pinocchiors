@@ -6931,7 +6931,7 @@ export const App: Component = () => {
       edge_margin: 2,
       min_depth: 3,
       min_contact_area: 50,
-      rotation_deg: 0,
+      rotation_deg: s.angle ?? 0,
     };
     const result = await printTask(t("Poniendo uniones..."), () => invoke<JointsReport>("add_print_joints", { config }));
     if (!result) return;
