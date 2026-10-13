@@ -126,6 +126,26 @@ export interface PlateSettings {
   vent?: boolean;
 }
 
+export type PrepareStatus = "done" | "skipped" | "warning" | "failed";
+
+/** Un paso de «Preparar todo» */
+export interface PrepareStep {
+  id: string;
+  label: string;
+  status: PrepareStatus;
+  detail: string;
+  notes: string[];
+}
+
+/** Lo que dejó «Preparar todo»: un informe por paso */
+export interface PrepareReport {
+  steps: PrepareStep[];
+  ok: boolean;
+  plates: PlateResult | null;
+  split: { piece_count: number; pieces: Array<{ index: number; label: string; vertex_count: number; face_count: number; dimensions: [number, number, number] }> } | null;
+  joints: JointsReport | null;
+}
+
 export interface PlateResult {
   files: string[];
   plates: number;
@@ -155,6 +175,8 @@ export interface PrepSettings {
   vent?: boolean;
   /** El diseño (Diseñar) sale con todo lo hueco compensado para la impresora */
   compensateAll?: boolean;
+  /** «Preparar todo» pone también las uniones entre piezas */
+  prepareJoints?: boolean;
   /** Cómo se parte el modelo: grid, optimal, zlayers o manual */
   cutStrategy?: string;
   /** Los planos de corte a mano */
@@ -809,3 +831,54 @@ export const PlatePreviewView: Component<{
     </div>
   );
 };
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PREPARAR TODO
+// ═══════════════════════════════════════════════════════════════════════════
+
+const STATUS_MARK: Record<PrepareStatus, { mark: string; tone: string }> = {
+  done: { mark: "✓", tone: "text-green" },
+  warning: { mark: "⚠", tone: "text-warning" },
+  failed: { mark: "✕", tone: "text-red" },
+  skipped: { mark: "–", tone: "text-text-dim" },
+};
+
+/** Verifica, divide si no cabe, pone uniones, vacía y exporta, todo de una vez */
+export const PrepareAllSection: Component<{
+  withJoints: boolean;
+  onWithJoints: (v: boolean) => void;
+  report?: PrepareReport;
+  busy?: boolean;
+  disabled?: boolean;
+  onPrepare?: () => void;
+}> = (props) => (
+  <div class="space-y-2 pt-2 border-t border-border/50">
+    <Title>{t("Preparar todo")}</Title>
+    <p class="text-[10px] text-text-dim leading-snug">
+      {t("Verifica el modelo, lo divide si no cabe en la cama, pone las uniones, lo vacía si lo pediste y exporta las placas, con lo que elegiste arriba.")}
+    </p>
+    <Checkbox small label={t("Con uniones entre las piezas")} checked={props.withJoints} onChange={props.onWithJoints} />
+    <Button onClick={props.onPrepare} disabled={props.disabled || props.busy} loading={props.busy} fullWidth size="sm" variant="primary">
+      {t("Preparar todo para imprimir")}
+    </Button>
+    <Show when={props.report}>
+      {(r) => (
+        <div class="space-y-1.5 p-2 rounded-md bg-surface/30 border border-border">
+          <For each={r().steps}>
+            {(s) => (
+              <div class="text-[11px] leading-snug">
+                <span class={`inline-block w-4 ${STATUS_MARK[s.status].tone}`}>{STATUS_MARK[s.status].mark}</span>
+                <span class="text-text font-medium">{t(s.label)}</span>
+                <Show when={s.detail}>
+                  <span class="text-text-dim"> · {tBackend(s.detail)}</span>
+                </Show>
+                <For each={s.notes}>{(n) => <div class={`ml-4 ${s.status === "failed" ? "text-red" : "text-warning"}`}>{tBackend(n)}</div>}</For>
+              </div>
+            )}
+          </For>
+          <p class={`text-[11px] font-medium ${r().ok ? "text-green" : "text-red"}`}>{r().ok ? t("Listo para imprimir") : t("Se detuvo: hay algo que arreglar")}</p>
+        </div>
+      )}
+    </Show>
+  </div>
+);

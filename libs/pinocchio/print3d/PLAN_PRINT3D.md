@@ -159,11 +159,10 @@ Leyenda: ⬜ falta · 🧪 falta probarlo de verdad · ⚠ límite conocido (fun
 - ⚠ La pared fina se mide con rayos desde una muestra de 1 500 caras; puede perder una zona chica.
 - ⚠ El soporte estimado son columnas verticales hasta lo primero que hay debajo; no simula soporte en árbol ni
   ángulos de voladizo del slicer. Con muchas caras se muestrea.
-- ⚠ La orientación sugerida es para el modelo entero. Al exportar las placas cada pieza se orienta sola, pero no
-  se ve antes. ⬜ Orientación por pieza visible antes de exportar.
-- ⬜ `SubdivideStrategy::Optimal` («menos cortes») sigue usando la grilla.
-- ⬜ Cortes manuales (planos elegidos por el usuario), vista de los planos y las piezas en el visor, y candado de
-  proporción por eje al escalar.
+- ⚠ La orientación sugerida es para el modelo entero. Al exportar las placas cada pieza se orienta sola, y cómo
+  queda apoyada cada una se ve antes (Fase 11).
+- ✅ `SubdivideStrategy::Optimal` («menos cortes»), cortes manuales con sus planos y las piezas en el visor, y el
+  candado de proporción por eje al escalar (Fases 9 y 10).
 
 ### Uniones
 
@@ -288,4 +287,19 @@ Leyenda: ⬜ falta · 🧪 falta probarlo de verdad · ⚠ límite conocido (fun
   normales hacia el eje (un perno o una pared plana no cuentan).
 - Escritorio: `SkinZone.protected` (se guarda en el proyecto), `skin_protect_edit/holes/clear`, `SkinParams.mapping/margin_mm/decimate_mm`.
   UI: «Zonas protegidas» (elegir en el visor, «Proteger agujeros», margen), proyección y «Simplificar el resultado».
+
+## Fase 15: preparar todo en un paso (hecha)
+
+- Comando `prepare_for_printing` (`apps/desktop/src/print_all.rs`): encadena, con las mismas funciones que cada botón por
+  separado, **verificar** (`check_print_readiness`: si no es estanco o no se puede imprimir, se detiene aquí), **dividir** (solo si
+  el modelo no cabe en la cama o se fuerza; si ya hay piezas, las usa), **uniones** (si se piden y hay 2 o más piezas),
+  **vaciar** (con drenaje y venteo, pieza por pieza al armar las placas) y **exportar** las placas.
+- Devuelve un informe por paso (`done`, `skipped`, `warning`, `failed` + detalle + notas), las piezas y uniones nuevas y la
+  información de las placas. Se detiene en el primer paso que falla y no exporta nada a medias.
+- UI: sección «Preparar todo» al final de Fabricar, con los valores ya elegidos arriba (corte, uniones, material, placas),
+  casilla «Con uniones entre las piezas» y la lista de pasos con ✓ ⚠ ✕ –. Lo dividido y las uniones aparecen en sus secciones.
+- Pruebas: cabe y se exporta sin dividir, grande se divide + une + vacía (con drenaje) + exporta, modelo abierto se
+  detiene en verificar, sin modelo es error.
+- Límite: la orientación por pieza va dentro de «Exportar» (cada pieza se apoya sola), no es un paso aparte; y las
+  piezas quedan en el estado aunque una parte posterior falle (se pueden volver a exportar).
 

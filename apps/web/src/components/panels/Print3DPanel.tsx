@@ -13,6 +13,7 @@ import {
   MaterialSection,
   OrientationSection,
   PlatesSection,
+  PrepareAllSection,
   PrinterMaterial,
   ReadinessSection,
   type FabInfo,
@@ -24,6 +25,7 @@ import {
   type PlateResult,
   type PlatePreview,
   type PlateSettings,
+  type PrepareReport,
   type PrintPresets,
   type PrinterProfile,
   type Readiness,
@@ -40,6 +42,8 @@ export type {
   OrientationOption,
   PlateResult,
   PlateSettings,
+  PrepareReport,
+  PrepareStep,
   PrintPresets,
   PrinterProfile,
   Readiness,
@@ -111,6 +115,15 @@ export interface Print3DPanelProps {
   plateView?: { plate: number | null; busy?: boolean; onView: (plate: number | null) => void };
   onPreviewPlates?: (printer: PrinterProfile, material: MaterialProfile, settings: PlateSettings) => void;
   onExportPlates?: (printer: PrinterProfile, material: MaterialProfile, settings: PlateSettings) => void;
+  /** Todo de una vez: verificar, dividir, uniones, vaciar y exportar */
+  prepareReport?: PrepareReport;
+  onPrepareAll?: (args: {
+    printer: PrinterProfile;
+    material: MaterialProfile;
+    subdivide: SubdivideConfig;
+    joint: JointSettings | null;
+    plate: PlateSettings;
+  }) => void;
 }
 
 export interface ScaleParams {
@@ -588,6 +601,22 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
           disabled={!props.canAnalyze}
           hasPieces={!!props.subdivideResult}
           onExport={() => props.onExportPlates?.(printer(), material(), { ...plate(), hollowWall: hollow() ? wall() : null, drain: hollow() && drain() ? drainDiameter() : null, vent: hollow() && drain() && vent() })}
+        />
+        <PrepareAllSection
+          withJoints={prep().prepareJoints ?? true}
+          onWithJoints={(prepareJoints) => patch({ prepareJoints })}
+          report={props.prepareReport}
+          busy={props.isProcessing}
+          disabled={!props.canAnalyze}
+          onPrepare={() =>
+            props.onPrepareAll?.({
+              printer: printer(),
+              material: material(),
+              subdivide: { build_volume: printer().build_volume, strategy: strategy(), margin: margin(), planes: strategy() === "manual" ? cuts() : undefined },
+              joint: (prep().prepareJoints ?? true) ? joint() : null,
+              plate: { ...plate(), hollowWall: hollow() ? wall() : null, drain: hollow() && drain() ? drainDiameter() : null, vent: hollow() && drain() && vent() },
+            })
+          }
         />
       </Show>
     </div>

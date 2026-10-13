@@ -182,8 +182,8 @@ Pendiente:
 - ⬜ Validación: comparar con el Pinocchio C++, suite estándar de mallas,
   métricas de skinning, benchmarks con `criterion`.
 - ⬜ API WASM propia (la feature `wasm` no tiene código), GPU (`wgpu`), FBX.
-- ⬜ `prepare_for_printing` (un solo paso que encadene verificar, orientar, cortar, unir y exportar); la lib
-  ya tiene pruebas de volumen, área y centro de masa.
+- ✅ `prepare_for_printing` (print3d, Fase 15): un solo paso que verifica, divide si no cabe, pone uniones, vacía y
+  exporta las placas, con informe por paso (comando de escritorio + botón «Preparar todo»).
 
 ### Render (`libs/geppettoray`, plan en `libs/PLAN_RENDER.md`)
 Hechas las fases 3a–3g (motor, BSDF glTF, luces y HDRI con MIS, vidrio, cámara

@@ -11,6 +11,7 @@ pub mod mesh_slot;
 pub mod linux_desktop;
 pub mod commands;
 pub mod placement;
+pub mod print_all;
 pub mod print_prep;
 pub mod print_skin;
 pub mod project;
@@ -191,6 +192,7 @@ pub fn run() {
             print_prep::add_print_joints,
             print_prep::estimate_print_material,
             print_prep::export_print_plates,
+            print_all::prepare_for_printing,
             print_prep::preview_print_plates,
             print_prep::preview_print_plate_view,
             // Escáneres 3D (Orizon3D)

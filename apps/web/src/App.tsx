@@ -292,6 +292,7 @@ import type {
   PlateSettings,
   PlateResult,
   PlatePreview,
+  PrepareReport,
   FabInfo,
   PrepSettings,
 } from "./components/panels/Print3DPanel";
@@ -1613,6 +1614,7 @@ export const App: Component = () => {
   const [jointsReport, setJointsReport] = createSignal<JointsReport | undefined>();
   const [materialEstimate, setMaterialEstimate] = createSignal<MaterialEstimate | undefined>();
   const [plateResult, setPlateResult] = createSignal<PlateResult | undefined>();
+  const [prepareReport, setPrepareReport] = createSignal<PrepareReport | undefined>();
   const [platePreview, setPlatePreview] = createSignal<PlatePreview | undefined>();
 
   // Viewer ref
@@ -2704,6 +2706,7 @@ export const App: Component = () => {
     setJointsReport(undefined);
     setMaterialEstimate(undefined);
     setPlateResult(undefined);
+    setPrepareReport(undefined);
     setPlatePreview(undefined);
     if (!keepClips) {
       setClips([]);
@@ -7265,18 +7268,20 @@ export const App: Component = () => {
     }
   };
 
+  /** La configuración de uniones que entiende el backend, a partir de lo elegido en el panel */
+  const jointConfigFor = (s: JointSettings) => ({
+    shape: jointShapeConfig(s),
+    depth: s.depth,
+    tolerance: s.tolerance,
+    count: s.count,
+    edge_margin: 2,
+    min_depth: 3,
+    min_contact_area: 50,
+    rotation_deg: s.angle ?? 0,
+    rail_stop: s.shape === "rail" && (s.railStop ?? false),
+  });
   const handleAddJoints = async (s: JointSettings, printer: PrinterProfile, material: MaterialProfile) => {
-    const config = {
-      shape: jointShapeConfig(s),
-      depth: s.depth,
-      tolerance: s.tolerance,
-      count: s.count,
-      edge_margin: 2,
-      min_depth: 3,
-      min_contact_area: 50,
-      rotation_deg: s.angle ?? 0,
-      rail_stop: s.shape === "rail" && (s.railStop ?? false),
-    };
+    const config = jointConfigFor(s);
     const fit = s.fit && s.fit !== "manual" ? { printer, material, fit: s.fit } : null;
     const result = await printTask(t("Poniendo uniones..."), () => invoke<JointsReport>("add_print_joints", { config, fit }));
     if (!result) return;
@@ -7314,6 +7319,41 @@ export const App: Component = () => {
           ? t("Placa exportada ({kb} KB)", { kb: (result.total_bytes / 1024).toLocaleString(locale(), { maximumFractionDigits: 0 }) })
           : t("{n} placas exportadas ({kb} KB)", { n: result.plates, kb: (result.total_bytes / 1024).toLocaleString(locale(), { maximumFractionDigits: 0 }) }),
       );
+    } catch (e) {
+      setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
+    }
+  };
+
+  /** Verificar, dividir si no cabe, uniones, vaciar y exportar las placas, de una vez */
+  const handlePrepareAll = async (args: { printer: PrinterProfile; material: MaterialProfile; subdivide: SubdivideConfig; joint: JointSettings | null; plate: PlateSettings }) => {
+    try {
+      const path = await save({
+        title: t("Exportar para imprimir"),
+        filters: [{ name: args.plate.format.toUpperCase(), extensions: [args.plate.format] }],
+      });
+      if (!path) return;
+      const { printer, material, plate: settings, joint } = args;
+      const plate = { printer, material, format: settings.format, spacing: settings.spacing, orient: settings.orient, contour: settings.contour !== false, hollow_wall: settings.hollowWall, drain: settings.drain, vent: settings.vent ?? false, compensate: settings.compensate !== false, path };
+      const input = {
+        plate,
+        strategy: args.subdivide.strategy,
+        margin: args.subdivide.margin,
+        planes: args.subdivide.planes ?? [],
+        joints: joint ? jointConfigFor(joint) : null,
+        fit: joint?.fit && joint.fit !== "manual" ? { printer, material, fit: joint.fit } : null,
+      };
+      const report = await printTask(t("Preparando todo para imprimir..."), () => invoke<PrepareReport>("prepare_for_printing", { input }));
+      if (!report) return;
+      setPrepareReport(report);
+      // Lo que cambió en el modelo: las piezas, las uniones y las placas
+      if (report.split) {
+        setSubdivideResult(report.split);
+        setPlatePreview(undefined);
+        pipeline.markCompleted("print3d");
+      }
+      if (report.joints) setJointsReport(report.joints);
+      if (report.plates) setPlateResult(report.plates);
+      setStatusMessage(report.ok ? t("Todo listo para imprimir") : t("Se detuvo: hay algo que arreglar"));
     } catch (e) {
       setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
     }
@@ -9239,6 +9279,8 @@ export const App: Component = () => {
               materialEstimate: materialEstimate(),
               onEstimate: handleEstimateMaterial,
               plateResult: plateResult(),
+              prepareReport: prepareReport(),
+              onPrepareAll: handlePrepareAll,
               platePreview: platePreview(),
               plateView: { plate: plateViewIndex(), busy: plateViewBusy(), onView: setPlateViewIndex },
               onPreviewPlates: handlePreviewPlates,
