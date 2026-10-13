@@ -4764,13 +4764,27 @@ export class Viewer3D {
   }
 
   /** El marco del render para esa relación de aspecto: en píxeles CSS dentro del visor y en píxeles reales */
-  getRenderFrameRect(aspect: number): { css: { x: number; y: number; w: number; h: number }; pixels: { width: number; height: number } } {
+  getRenderFrameRect(
+    aspect: number,
+    /** Elemento donde se dibujará algo sobre el marco (la vista previa): las coordenadas salen respecto a él */
+    host?: HTMLElement | null,
+  ): { css: { x: number; y: number; w: number; h: number }; pixels: { width: number; height: number } } {
     const w = this.canvas.clientWidth;
     const h = this.canvas.clientHeight;
     const rect = renderFrameRect(w, h, aspect);
     const ratio = this.renderer.getPixelRatio();
+    // Sin `host`, respecto al padre del lienzo (como el marco). Con `host`, corrige lo que haya entre
+    // ambos (la cabecera del visor): si no, la imagen queda corrida hacia arriba
+    let ox = this.canvas.offsetLeft;
+    let oy = this.canvas.offsetTop;
+    if (host) {
+      const c = this.canvas.getBoundingClientRect();
+      const o = host.getBoundingClientRect();
+      ox = c.left - o.left - host.clientLeft;
+      oy = c.top - o.top - host.clientTop;
+    }
     return {
-      css: { x: this.canvas.offsetLeft + rect.x, y: this.canvas.offsetTop + rect.y, w: rect.w, h: rect.h },
+      css: { x: ox + rect.x, y: oy + rect.y, w: rect.w, h: rect.h },
       pixels: { width: Math.max(16, Math.round(rect.w * ratio)), height: Math.max(16, Math.round(rect.h * ratio)) },
     };
   }

@@ -10,8 +10,20 @@ export const en_render: Catalog = {
   "Máxima (2048 muestras)": "Maximum (2048 samples)",
   "Quita el ruido al terminar, sin borrar el detalle de las texturas ni los bordes.":
     "Removes the noise at the end without erasing texture detail or edges.",
-  "Simula la luz de verdad (rebotes, vidrio, reflejos): tarda más, pero la imagen se ve mientras se afina. Las sombras suaves, el suelo con sombra y la oclusión ambiental del visor no se usan: la luz ya las produce.":
-    "Simulates light for real (bounces, glass, reflections): it takes longer, but you can watch the image refine. The viewport's soft shadows, shadow floor and ambient occlusion are not used: the light already produces them.",
+  "Simula la luz de verdad (rebotes, vidrio, reflejos): tarda más, pero la imagen se ve mientras se afina. Las sombras suaves y la oclusión ambiental del visor no se usan: la luz ya las produce.":
+    "Simulates light for real (bounces, glass, reflections): it takes longer, but you can watch the image refine. The viewport's soft shadows and ambient occlusion are not used: the light already produces them.",
+  "Entorno HDR": "HDR environment",
+  "Cielo uniforme del visor": "Viewport uniform sky",
+  "Cargar un .hdr…": "Load a .hdr…",
+  "Loft de fotografía": "Photo loft",
+  "Cielo con nubes": "Cloudy sky",
+  "Cielo nublado": "Overcast sky",
+  "Atardecer": "Sunset",
+  "Bodega": "Warehouse",
+  "Una imagen HDR ilumina la escena y se ve de fondo (con el fondo del visor); reemplaza al cielo uniforme. Elige uno incluido o carga un .hdr propio.":
+    "An HDR image lights the scene and shows as the background (with the viewport background); it replaces the uniform sky. Pick one of the included ones or load your own .hdr.",
+  "Intensidad del entorno": "Environment intensity",
+  "Giro del entorno": "Environment rotation",
   "Pasada {pass} de {passes} · {samples} de {total} muestras{eta}": "Pass {pass} of {passes} · {samples} of {total} samples{eta}",
   " · faltan {time}": " · {time} left",
   "El render se detuvo sin terminar": "The render stopped before finishing",
@@ -49,7 +61,7 @@ export const en_render: Catalog = {
   "Contraluz": "Backlight",
   "Dramática": "Dramatic",
   "Suelo con sombra": "Ground shadow",
-  "Un suelo invisible bajo el modelo recibe su sombra. Pide sombras suaves.": "An invisible floor under the model catches its shadow. Needs soft shadows.",
+  "Un suelo invisible bajo el modelo recibe su sombra. En el visor pide sombras suaves.": "An invisible floor under the model catches its shadow. In the viewport it needs soft shadows.",
   "Mismo zoom en todas": "Same zoom on all",
   "Encuadran el modelo entero desde cada lado. El ojo lleva el visor a esa cámara para ver el encuadre.":
     "They frame the whole model from each side. The eye takes the viewport to that camera to see the framing.",
@@ -87,6 +99,37 @@ export const en_render: Catalog = {
   "Calidad de compresión": "Compression quality",
   "Gizmos y guías": "Gizmos and guides",
   "Resaltados de selección": "Selection highlights",
+  "Animación": "Animation",
+  "Clip": "Clip",
+  "Para renderizar una animación hace falta el rig (esqueleto y pesos) y un clip con claves.":
+    "To render an animation you need the rig (skeleton and weights) and a clip with keys.",
+  "Desenfoque de movimiento": "Motion blur",
+  "Promedia varios instantes de cada cuadro: lo que se mueve queda borroso, como en una cámara. Tarda más.":
+    "Averages several instants of each frame: whatever moves gets blurred, like with a camera. Takes longer.",
+  "Reanudar": "Resume",
+  "Salta los cuadros que ya están en la carpeta: sirve para seguir un render interrumpido.":
+    "Skips the frames already in the folder: use it to continue an interrupted render.",
+  "Video (MP4)": "Video (MP4)",
+  "Arma un MP4 con los cuadros si ffmpeg está instalado. No guarda transparencia: usa fondo de color o degradado.":
+    "Builds an MP4 from the frames if ffmpeg is installed. It does not keep transparency: use a color or gradient background.",
+  "Los cuadros salen como PNG en la carpeta que elijas, con la primera cámara activa, el tamaño y las luces de arriba.":
+    "Frames are saved as PNG in the folder you choose, using the first active camera, the size and the lights above.",
+  "Renderizar animación": "Render animation",
+  "Renderiza cada cuadro de la animación con GeppettoRay y los guarda como imágenes en una carpeta.":
+    "Renders every frame of the animation with GeppettoRay and saves them as images in a folder.",
+  "Cuadro {frame} de {frames} · pasada {pass} de {passes}{eta}": "Frame {frame} of {frames} · pass {pass} of {passes}{eta}",
+  "La animación no tiene claves": "The animation has no keys",
+  "Carpeta para los cuadros": "Folder for the frames",
+  "Animación guardada: {n} cuadros y {video}": "Animation saved: {n} frames and {video}",
+  "{n} cuadros guardados en {dir}": "{n} frames saved in {dir}",
+  "Render cancelado: los cuadros hechos quedaron en {dir}": "Render cancelled: the finished frames were kept in {dir}",
+  "No existe la animación elegida": "The chosen animation does not exist",
+  "El rango de cuadros no es válido": "The frame range is not valid",
+  "Hace falta una carpeta y un nombre para los cuadros": "A folder and a name for the frames are needed",
+  "Hace falta el rig (esqueleto y pesos) para renderizar la animación": "The rig (skeleton and weights) is needed to render the animation",
+  "El video no guarda transparencia: elige un fondo de color o degradado. Quedó la secuencia de imágenes.":
+    "The video does not keep transparency: choose a color or gradient background. The image sequence was kept.",
+  "No se encontró ffmpeg: quedó la secuencia de imágenes.": "ffmpeg was not found: the image sequence was kept.",
   "Ya hay un render en curso": "A render is already running",
   "No se pudo crear la imagen": "Could not create the image",
   "Esta ventana no puede guardar {f}; prueba con PNG": "This window can't save {f}; try PNG",

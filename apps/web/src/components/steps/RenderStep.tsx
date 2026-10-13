@@ -1,10 +1,12 @@
 import { Component, For, Show, createEffect, onCleanup, onMount } from "solid-js";
+import { open } from "@tauri-apps/plugin-dialog";
 import { Button, Checkbox, IconButton, NumberInput, ProgressBar, Select, Slider, Tooltip, Hint } from "../ui";
 import * as Icons from "../icons";
 import { t } from "../../lib/i18n";
 import { MAX_STILL_SIDE, type StillBackground, type StillFormat } from "../../lib/renderStill";
 import { RENDER_CAMERAS, sheetGrid } from "../../lib/renderCameras";
 import { RENDER_LIGHTS } from "../../lib/renderLights";
+import { BUILTIN_HDRIS, HDRI_FILE, HDRI_NONE, hdriSelectValue } from "../../lib/rayHdri";
 
 export type RenderSize = "screen" | "hd" | "uhd" | "custom";
 /** Una imagen por cámara, o todas juntas en una hoja */
@@ -34,6 +36,19 @@ export interface RenderSettings {
   raySamples: number;
   /** GeppettoRay: quita el ruido que queda al final */
   rayDenoise: boolean;
+  /** GeppettoRay: entorno HDR: "builtin:id" (los incluidos), la ruta de un .hdr, o vacío = cielo uniforme del visor */
+  rayHdri: string;
+  rayHdriIntensity: number;
+  /** Giro del entorno en grados */
+  rayHdriRotation: number;
+  /** Animación: clip que se renderiza ("" = el primero) */
+  animClip: string;
+  /** Desenfoque de movimiento (obturador de 180° con varios instantes por cuadro) */
+  animBlur: boolean;
+  /** Saltar los cuadros que ya están en la carpeta */
+  animResume: boolean;
+  /** Armar un video con ffmpeg al terminar */
+  animVideo: boolean;
   /** Cuadros promediados por píxel: 1, 4 o 16 */
   samples: number;
   format: StillFormat;
@@ -75,6 +90,13 @@ export const defaultRenderSettings: RenderSettings = {
   engine: "viewer",
   raySamples: 128,
   rayDenoise: true,
+  rayHdri: "builtin:studio",
+  rayHdriIntensity: 1,
+  rayHdriRotation: 0,
+  animClip: "",
+  animBlur: true,
+  animResume: false,
+  animVideo: true,
   samples: 4,
   format: "png",
   quality: 92,
@@ -123,6 +145,8 @@ export interface RenderOptionsProps {
   viewSize: { width: number; height: number };
   /** Hay un render en curso: las opciones no se tocan */
   busy?: boolean;
+  /** Animaciones que se pueden renderizar (con el rig listo y claves) */
+  animation?: { clips: { id: string; name: string }[]; ready: boolean };
 }
 
 /** Opciones del render: tarjetas que fluyen en columnas según el ancho del panel */
@@ -195,6 +219,21 @@ export const RenderOptions: Component<RenderOptionsProps> = (props) => {
     { value: "2048", get label() { return t("Máxima (2048 muestras)"); } },
   ];
   const ray = () => s().engine === "geppettoray";
+  /** Elegir el entorno: uno incluido, ninguno (cielo del visor) o un .hdr del disco */
+  const chooseHdri = async (value: string) => {
+    if (value === HDRI_FILE) {
+      const path = await open({ multiple: false, filters: [{ name: "HDR", extensions: ["hdr"] }] });
+      if (typeof path === "string") set({ rayHdri: path });
+    } else {
+      set({ rayHdri: value === HDRI_NONE ? "" : value });
+    }
+  };
+  const hdriOptions = () => [
+    { value: HDRI_NONE, label: t("Cielo uniforme del visor") },
+    ...BUILTIN_HDRIS.map((h) => ({ value: h.path, label: h.label() })),
+    { value: HDRI_FILE, label: s().rayHdri && hdriSelectValue(s().rayHdri) === HDRI_FILE ? hdriName() : t("Cargar un .hdr…") },
+  ];
+  const hdriName = () => s().rayHdri.split(/[\\/]/).pop() ?? "";
   const formatOptions = [
     { value: "png", label: "PNG" },
     { value: "jpeg", label: "JPG" },
@@ -303,13 +342,42 @@ export const RenderOptions: Component<RenderOptionsProps> = (props) => {
           <Tooltip content={t("Quita el ruido al terminar, sin borrar el detalle de las texturas ni los bordes.")} placement="left">
             <Checkbox label={t("Quitar ruido")} checked={s().rayDenoise} disabled={busy()} onChange={(v) => set({ rayDenoise: v })} />
           </Tooltip>
-          <Hint text={t("Simula la luz de verdad (rebotes, vidrio, reflejos): tarda más, pero la imagen se ve mientras se afina. Las sombras suaves, el suelo con sombra y la oclusión ambiental del visor no se usan: la luz ya las produce.")} />
+          <Hint text={t("Simula la luz de verdad (rebotes, vidrio, reflejos): tarda más, pero la imagen se ve mientras se afina. Las sombras suaves y la oclusión ambiental del visor no se usan: la luz ya las produce.")} />
         </Show>
         <Select label={t("Formato")} options={formatOptions} value={s().format} disabled={busy()} onChange={(v) => set({ format: v as StillFormat })} />
         <Show when={s().format !== "png"}>
           <Slider label={t("Calidad de compresión")} min={50} max={100} step={1} value={s().quality} onChange={(v) => set({ quality: v })} showValue />
         </Show>
       </div>
+
+      {/* Animación */}
+      <Show when={ray()}>
+        <div class="space-y-2 p-3 rounded-md bg-surface/30 border border-border break-inside-avoid mb-3">
+          <span class="text-xs font-medium text-text-muted">{t("Animación")}</span>
+          <Show
+            when={props.animation?.ready}
+            fallback={<Hint text={t("Para renderizar una animación hace falta el rig (esqueleto y pesos) y un clip con claves.")} />}
+          >
+            <Select
+              label={t("Clip")}
+              options={(props.animation?.clips ?? []).map((c) => ({ value: c.id, label: c.name }))}
+              value={props.animation?.clips.some((c) => c.id === s().animClip) ? s().animClip : (props.animation?.clips[0]?.id ?? "")}
+              disabled={busy()}
+              onChange={(v) => set({ animClip: v })}
+            />
+            <Tooltip content={t("Promedia varios instantes de cada cuadro: lo que se mueve queda borroso, como en una cámara. Tarda más.")} placement="left">
+              <Checkbox label={t("Desenfoque de movimiento")} checked={s().animBlur} disabled={busy()} onChange={(v) => set({ animBlur: v })} />
+            </Tooltip>
+            <Tooltip content={t("Salta los cuadros que ya están en la carpeta: sirve para seguir un render interrumpido.")} placement="left">
+              <Checkbox label={t("Reanudar")} checked={s().animResume} disabled={busy()} onChange={(v) => set({ animResume: v })} />
+            </Tooltip>
+            <Tooltip content={t("Arma un MP4 con los cuadros si ffmpeg está instalado. No guarda transparencia: usa fondo de color o degradado.")} placement="left">
+              <Checkbox label={t("Video (MP4)")} checked={s().animVideo} disabled={busy()} onChange={(v) => set({ animVideo: v })} />
+            </Tooltip>
+            <Hint text={t("Los cuadros salen como PNG en la carpeta que elijas, con la primera cámara activa, el tamaño y las luces de arriba.")} />
+          </Show>
+        </div>
+      </Show>
 
       {/* Luz */}
       <div class="flex flex-col items-start gap-2 p-3 rounded-md bg-surface/30 border border-border break-inside-avoid mb-3">
@@ -320,12 +388,30 @@ export const RenderOptions: Component<RenderOptionsProps> = (props) => {
         <Tooltip content={t("Salen de la luz principal y ganan penumbra con 4 o 16 cuadros.")} placement="left">
           <Checkbox label={t("Sombras suaves")} checked={s().shadows} disabled={busy() || ray()} onChange={(v) => set({ shadows: v })} />
         </Tooltip>
-        <Tooltip content={t("Un suelo invisible bajo el modelo recibe su sombra. Pide sombras suaves.")} placement="left">
-          <Checkbox label={t("Suelo con sombra")} checked={s().groundShadow && s().shadows} disabled={busy() || ray() || !s().shadows} onChange={(v) => set({ groundShadow: v })} />
+        <Tooltip content={t("Un suelo invisible bajo el modelo recibe su sombra. En el visor pide sombras suaves.")} placement="left">
+          <Checkbox
+            label={t("Suelo con sombra")}
+            checked={s().groundShadow && (ray() || s().shadows)}
+            disabled={busy() || (!ray() && !s().shadows)}
+            onChange={(v) => set({ groundShadow: v })}
+          />
         </Tooltip>
         <Tooltip content={t("Oscurece rincones y contactos entre superficies.")} placement="left">
           <Checkbox label={t("Oclusión ambiental")} checked={s().ambientOcclusion} disabled={busy() || ray()} onChange={(v) => set({ ambientOcclusion: v })} />
         </Tooltip>
+        <Show when={ray()}>
+          <div class="w-full space-y-2">
+            <Tooltip content={t("Una imagen HDR ilumina la escena y se ve de fondo (con el fondo del visor); reemplaza al cielo uniforme. Elige uno incluido o carga un .hdr propio.")} placement="left">
+              <div class="w-full">
+                <Select label={t("Entorno HDR")} options={hdriOptions()} value={hdriSelectValue(s().rayHdri)} disabled={busy()} onChange={(v) => void chooseHdri(v)} />
+              </div>
+            </Tooltip>
+            <Show when={s().rayHdri}>
+              <Slider label={t("Intensidad del entorno")} min={0} max={5} step={0.05} value={s().rayHdriIntensity} onChange={(v) => set({ rayHdriIntensity: v })} showValue />
+              <Slider label={t("Giro del entorno")} min={0} max={360} step={1} value={s().rayHdriRotation} onChange={(v) => set({ rayHdriRotation: v })} showValue />
+            </Show>
+          </div>
+        </Show>
       </div>
 
       {/* Qué se oculta */}
@@ -350,6 +436,9 @@ export interface RenderStepProps {
   /** Hay algo que renderizar */
   canRender?: boolean;
   onRender: () => void;
+  /** Hay rig y un clip con claves: se puede renderizar la animación */
+  canAnimate?: boolean;
+  onRenderAnimation?: () => void;
   /** Render chico de la vista actual; la imagen se muestra encima del visor */
   onPreview: () => void;
   /** Detiene el render en curso */
@@ -414,6 +503,13 @@ export const RenderStep: Component<RenderStepProps> = (props) => {
             {t("Cancelar")}
           </Button>
         </div>
+      </Show>
+      <Show when={!busy() && props.settings.engine === "geppettoray" && props.canAnimate}>
+        <Tooltip content={t("Renderiza cada cuadro de la animación con GeppettoRay y los guarda como imágenes en una carpeta.")} placement="left">
+          <Button fullWidth disabled={!props.canRender} icon={<Icons.FrameCorners size={16} />} onClick={() => props.onRenderAnimation?.()}>
+            {t("Renderizar animación")}
+          </Button>
+        </Tooltip>
       </Show>
       <Show when={!props.panelOpen}>
         <Button fullWidth onClick={props.onTogglePanel}>

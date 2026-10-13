@@ -196,24 +196,45 @@ real, denoise, progreso en la app). Falta o es aproximado:
   progreso, vista previa, cancelar, guardar) solo se probó con tests de Rust y
   un `invoke` falso; falta correrla en la app de escritorio. Lo mismo para el
   atajo Ctrl+Shift+R y el guardado completo del render del visor.
-- ⬜ **3h, animación**: un fotograma por pose evaluada en CPU (esqueleto +
-  pesos), secuencia PNG y video si hay ffmpeg, reanudar un render interrumpido.
-  Hoy no hay pose de esqueleto en el motor (usa `AppState.scene` tal cual) ni
-  desenfoque de movimiento de objetos (solo de cámara).
-- ⬜ **Suelo con sombra** como receptor invisible en GeppettoRay (en el visor ya
-  existe); con GeppettoRay se desactivan sombras suaves, suelo y oclusión
-  ambiental.
-- ⬜ **HDRI elegible desde la interfaz** (el motor lo soporta: `EnvMap`).
-- 🟨 **Luces del visor → motor**: pasan como sol principal + relleno + luz de
-  cámara y un cielo uniforme que resume ambiente y entorno; no coinciden exacto
-  con el visor (usa una imagen de estudio para los reflejos). Sin el tono ACES
-  del visor (sale lineal → sRGB).
-- ⬜ **Vidrio**: sin rugosidad en la transmisión (vidrio esmerilado), sin medios
-  anidados (líquido dentro de un vaso), sin cáusticas (la sombra del vidrio es
-  una aproximación que deja pasar la luz sin desviarla); la escena de converter
-  no trae `attenuationColor/Distance` (se usa color base + grosor).
-- ⬜ **Luces**: las de área con emisión texturizada se ven pero no iluminan por
-  muestreo; sol y foco no tienen tamaño (sombras duras).
+- 🧪 **3h, animación** (hecha; el motor se verificó con el Fox.glb de Khronos —ciclo Run, 6 cuadros, patas y cola deforman bien—; falta la app Tauri real): `converter-scene` evalúa
+  animaciones (`Scene::posed_locals`, `world_primitives_at`: lineal, escalón y
+  spline cúbico, skinning lineal en CPU); `geppettoray::render_animation` renderiza
+  un cuadro por instante (BVH nuevo por cuadro, texturas compartidas), con
+  desenfoque de movimiento por subcuadros (obturador 0,5 × 8 instantes), cancelar,
+  tiempo estimado y reanudar saltando los PNG que ya existen; la app arma la escena
+  con rig como la exportación (`ray_render_animation_start`) y guarda
+  `nombre_0001.png…` (con degradado si se pide) y un MP4 con ffmpeg si está
+  (no con fondo transparente). Panel Render: tarjeta "Animación" + botón
+  "Renderizar animación". Límites: cámara fija (la primera activa), sin denoise
+  temporal (misma semilla en todos los cuadros para que el ruido no baile), BVH
+  reconstruido entero por cuadro, sin desenfoque de movimiento con cámara animada,
+  una animación por render (no la secuencia de clips de la barra de reproducción).
+- ✅ **Suelo con sombra** en GeppettoRay (`ShadowCatcher`: disco invisible bajo la
+  escena que solo ven los rayos de cámara; su opacidad = luz que le falta por la
+  sombra de sol/luces/área/entorno × 0,7). Con GeppettoRay siguen desactivadas
+  las sombras suaves y la oclusión ambiental del visor (la luz ya las produce).
+  Límite: un solo plano horizontal bajo la caja de la escena; no lo ven los
+  reflejos ni lo que se mira a través de un vidrio.
+- ✅ **HDRI elegible desde la interfaz** (Render → Luz → "Entorno HDR": 6 incluidos de
+  Poly Haven CC0 1K en `apps/desktop/assets/hdri` —estudio por defecto—, o un .hdr
+  propio, con intensidad y giro; se ve de fondo y reemplaza al cielo uniforme). Una imagen
+  muy grande (8K) tarda en prepararse y pesa en memoria.
+- ✅ **Tono ACES** igual al del visor (`ToneMap::Aces`, mismas matrices que
+  three.js; la app lo activa siempre). Sin ajuste de exposición en la interfaz.
+- ✅ **Luces**: sol con disco (`angular_radius`; la app usa 0,035 rad) y puntual/foco
+  con esfera (`radius`; la app no los usa todavía, solo el sol); las de área con
+  emisión texturizada ahora se muestrean (potencia = luminancia media de la textura).
+  Pendiente: tamaño del sol/foco editable en la interfaz.
+- 🟨 **Vidrio**: ya hay transmisión esmerilada (microfacetas GGX con peso de Smith,
+  aproximado: no conserva toda la energía, el horno blanco da ≥ 0,85) y volúmenes
+  anidados (un líquido dentro de un vaso, con pila de medios y salto de índice
+  vaso→líquido). Sigue sin haber cáusticas (la sombra del vidrio deja pasar la luz
+  sin desviarla); la lámina delgada esmerilada se abre en un cono; la escena de
+  converter no trae `attenuationColor/Distance` (se usa color base + grosor).
+  Los vidrios con rugosidad 1 (el valor por defecto de glTF) ahora salen muy
+  esmerilados, como manda la especificación.
+- ⬜ **Luces del visor → motor**: pasan como sol principal + relleno + luz de cámara
+  y un cielo uniforme (o el HDRI); no coinciden exacto con el visor.
 - ⬜ **Materiales**: sin mipmaps; solo el set UV 0 y la escala UV; las tangentes
   del mapa de normales salen por triángulo (no MikkTSpace); el mapa de oclusión
   se ignora a propósito (el path tracing calcula la oclusión real).

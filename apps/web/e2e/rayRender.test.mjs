@@ -2,7 +2,7 @@
 //   node --test apps/web/e2e/rayRender.test.mjs
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { formatEta, hexToLinear, imageFov, raySun, renderRay } from "../src/lib/rayRender.ts";
+import { formatEta, hexToLinear, imageFov, raySun, renderRay, renderRayAnimation } from "../src/lib/rayRender.ts";
 
 const lights = { azimuth: 90, elevation: 0, intensity: 2, color: "#ffffff", fill: 0.5, ambient: 0.3, headlight: false, environment: 0.6 };
 const view = { position: [0, 0, 5], target: [0, 0, 4], up: [0, 1, 0], fov: 40, viewAspect: 1.5, lights };
@@ -50,7 +50,7 @@ function fakeInvoke(script) {
   let i = 0;
   const invoke = async (cmd, args) => {
     calls.push([cmd, args]);
-    if (cmd === "ray_render_start") return undefined;
+    if (cmd === "ray_render_start" || cmd === "ray_render_animation_start") return undefined;
     if (cmd === "ray_render_cancel") {
       script.cancelled = true;
       return undefined;
@@ -106,6 +106,23 @@ test("renderRay: color de fondo sólido y JPG sin alfa", async () => {
   assert.deepEqual(req2.background, [1, 1, 1]);
 });
 
+test("renderRay: sol con tamaño, tono, suelo con sombra y entorno HDR en la petición", async () => {
+  const mk = () => fakeInvoke({ steps: [{ phase: "done", pass: 4, samples: 32, version: 1 }] });
+  let m = mk();
+  await renderRay(m.invoke, view, { ...opts, groundShadow: false }, { samples: 8, denoise: false }).catch(() => {});
+  const req = m.calls.find(([c]) => c === "ray_render_start")[1].request;
+  assert.ok(req.sunAngularRadius > 0, "el sol tiene disco");
+  assert.equal(req.toneMap, true);
+  assert.equal(req.shadowFloor, null);
+  assert.equal(req.hdri, null);
+  m = mk();
+  const hdri = { path: "/cielos/estudio.hdr", intensity: 1.5, rotationDeg: 90 };
+  await renderRay(m.invoke, view, { ...opts, groundShadow: true }, { samples: 8, denoise: false, hdri }).catch(() => {});
+  const req2 = m.calls.find(([c]) => c === "ray_render_start")[1].request;
+  assert.ok(req2.shadowFloor > 0 && req2.shadowFloor <= 1);
+  assert.deepEqual(req2.hdri, hdri);
+});
+
 test("renderRay: cancelar avisa al motor y lanza AbortError", async () => {
   const script = { steps: [{ phase: "running", pass: 1, samples: 8, version: 1 }] };
   const { invoke, calls } = fakeInvoke(script);
@@ -118,4 +135,46 @@ test("renderRay: cancelar avisa al motor y lanza AbortError", async () => {
 test("renderRay: un error del motor se propaga", async () => {
   const { invoke } = fakeInvoke({ steps: [{ phase: "error", error: "La escena no tiene geometría para renderizar" }] });
   await assert.rejects(renderRay(invoke, view, opts, { samples: 8, denoise: false }), /no tiene geometría/);
+});
+
+test("renderRayAnimation: manda el clip y el degradado, sigue los cuadros y devuelve el resultado", async () => {
+  const { invoke, calls } = fakeInvoke({
+    steps: [
+      { phase: "running", pass: 1, samples: 8, version: 1, frame: 1, frames: 4, fraction: 0.125, etaSecs: 9 },
+      { phase: "running", pass: 2, samples: 16, version: 2, frame: 3, frames: 4, fraction: 0.6, etaSecs: 2 },
+      { phase: "done", pass: 4, samples: 32, version: 3, frame: 4, frames: 4, fraction: 1, skipped: 1, video: "/tmp/x/anim.mp4", note: null },
+    ],
+  });
+  const progress = [];
+  const anim = {
+    clips: [{ name: "caminar", fps: 24, tracks: [] }],
+    clip: 0,
+    firstFrame: 0,
+    lastFrame: 3,
+    fps: 24,
+    dir: "/tmp/x",
+    name: "anim",
+    shutter: 0.5,
+    motionSamples: 8,
+    resume: true,
+    video: true,
+    nonDeforming: [],
+    useRetopology: false,
+  };
+  const result = await renderRayAnimation(
+    invoke,
+    view,
+    { ...opts, background: "gradient", color: "#ff0000", color2: "#0000ff", format: "jpeg" },
+    { samples: 32, denoise: false },
+    anim,
+    (p) => progress.push(p),
+  );
+  const [, args] = calls.find(([c]) => c === "ray_render_animation_start");
+  assert.equal(args.request.transparent, true, "el degradado va debajo: el motor entrega alfa");
+  assert.deepEqual(args.animation.gradient, { top: [255, 0, 0], bottom: [0, 0, 255] });
+  assert.equal(args.animation.clips.length, 1);
+  assert.equal(args.animation.motionSamples, 8);
+  assert.deepEqual(progress.map((p) => [p.frame, p.frames, p.fraction]), [[1, 4, 0.125], [3, 4, 0.6], [4, 4, 1]]);
+  assert.deepEqual(result, { frames: 4, skipped: 1, video: "/tmp/x/anim.mp4", note: null });
+  assert.equal(calls.filter(([c]) => c === "ray_render_start").length, 0);
 });

@@ -1188,7 +1188,7 @@ fn total_size(files: &[String]) -> u64 {
 
 /// Escena a exportar según las opciones: geometría original o retopologizada,
 /// con o sin el rig del autorig.
-fn build_export_scene(config: &ExportConfig, state: &AppState) -> Result<Scene, String> {
+pub(crate) fn build_export_scene(config: &ExportConfig, state: &AppState) -> Result<Scene, String> {
     let scene = state.scene.lock().unwrap().clone().ok_or("No hay escena para exportar")?;
     let use_retopology = config.use_retopology.unwrap_or(false);
 
@@ -4914,6 +4914,55 @@ mod tests {
 
         let usda = converter_usda::write_usda(&rigged, &Default::default()).unwrap().usda;
         assert!(usda.contains("SkelAnimation"), "{usda}");
+    }
+
+    /// La malla con rig, evaluada en CPU con un clip, se deforma como esperan el esqueleto y la animación
+    #[test]
+    fn rigged_scene_posed_in_cpu_follows_the_clip() {
+        use crate::animation::{AnimationClip, JointTrack, Key, KeyInterpolation};
+        use converter_scene::glam::{Quat, Vec3};
+        let scene = transformed_cube_scene();
+        let prims = scene.world_primitives();
+        let (skel, joints) = chain_skeleton();
+        // Mitad inferior al segmento root→mid (hueso 1), superior a mid→tip (hueso 2)
+        let weights: Vec<Vec<f64>> = prims[0]
+            .positions
+            .iter()
+            .map(|p| if p[1] < 1.0 { vec![0.0, 1.0, 0.0] } else { vec![0.0, 0.0, 1.0] })
+            .collect();
+        let angle = 0.8f32;
+        let clip = AnimationClip {
+            name: "doblar".into(),
+            fps: 24.0,
+            tracks: vec![JointTrack {
+                joint: 1,
+                rotation: vec![
+                    Key { frame: 0.0, value: [0.0, 0.0, 0.0, 1.0], interpolation: KeyInterpolation::Linear },
+                    Key { frame: 24.0, value: Quat::from_rotation_z(angle).to_array(), interpolation: KeyInterpolation::Linear },
+                ],
+                translation: vec![],
+            }],
+            start: None,
+            end: None,
+        };
+        let rigged = rigged_scene(&scene, &prims, &weights, &skel, &joints, &[clip]);
+        let rest = rigged.world_primitives_at(0, 0.0).remove(0);
+        // En el cuadro 0 queda en reposo (la malla original)
+        for (a, b) in rest.positions.iter().zip(&prims[0].positions) {
+            assert!((Vec3::from(*a) - Vec3::from(*b)).length() < 1e-4, "{a:?} vs {b:?}");
+        }
+        // Al segundo (cuadro 24) lo que cuelga de "mid" giró `angle` alrededor de esa articulación
+        let bent = rigged.world_primitives_at(0, 1.0).remove(0);
+        let pivot = Vec3::new(11.0, 1.0, 1.0);
+        let rot = Quat::from_rotation_z(angle);
+        let mut moved = 0;
+        for (i, p) in prims[0].positions.iter().enumerate() {
+            let expected = if p[1] < 1.0 { Vec3::from(*p) } else { pivot + rot * (Vec3::from(*p) - pivot) };
+            let got = Vec3::from(bent.positions[i]);
+            assert!((got - expected).length() < 1e-3, "vértice {i}: {got:?} vs {expected:?}");
+            moved += usize::from((got - Vec3::from(*p)).length() > 1e-3);
+        }
+        assert!(moved > 0, "algo se movió");
     }
 
     /// JSON de un GLB (primer chunk)

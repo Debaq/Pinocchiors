@@ -123,8 +123,8 @@ import { ConfirmDialog, type ConfirmChoice, type ConfirmRequest } from "./compon
 import { cameraFileSuffix, renderCameraById } from "./lib/renderCameras";
 import { renderLightById } from "./lib/renderLights";
 import { composeSheet, type RenderStillOptions, type SheetCell, type StillImage } from "./lib/renderStill";
-import { formatEta, renderRay, type RayProgress } from "./lib/rayRender";
-import { cameraZoom, defaultRenderSettings, renderLayout, type RenderSettings } from "./components/steps/RenderStep";
+import { formatEta, renderRay, renderRayAnimation, type RayProgress } from "./lib/rayRender";
+import { cameraZoom, defaultRenderSettings, renderLayout, renderPixels, type RenderSettings } from "./components/steps/RenderStep";
 import { RenderEditor } from "./components/layout/RenderEditor";
 
 interface ProjectSaved {
@@ -145,6 +145,7 @@ interface RecoveryInfo {
 }
 import {
   clipsForExport,
+  keyFrames,
   createClip,
   deleteKeys,
   duplicateClip,
@@ -5596,11 +5597,14 @@ export const App: Component = () => {
       );
     };
     try {
-      return await renderRay(invoke as never, view, opts, { samples: s.raySamples, denoise: s.rayDenoise }, show, signal, onPreview);
+      const hdri = s.rayHdri ? { path: s.rayHdri, intensity: s.rayHdriIntensity, rotationDeg: s.rayHdriRotation } : undefined;
+      return await renderRay(invoke as never, view, opts, { samples: s.raySamples, denoise: s.rayDenoise, hdri }, show, signal, onPreview);
     } finally {
       setRenderDetail(undefined);
     }
   };
+  /** Contenedor donde se dibuja la vista previa del render: su origen es el de sus coordenadas */
+  let renderHost: HTMLDivElement | undefined;
   const closeRenderPreview = () => {
     const old = renderPreview();
     if (old) URL.revokeObjectURL(old.url);
@@ -5613,7 +5617,7 @@ export const App: Component = () => {
     const s = renderSettings();
     const layout = renderLayout(s, v.getViewSize());
     // Del tamaño del marco en el visor, así la imagen lo cubre exacto
-    const frame = v.getRenderFrameRect(layout.cell.width / layout.cell.height);
+    const frame = v.getRenderFrameRect(layout.cell.width / layout.cell.height, renderHost);
     const scale = Math.min(1, 2048 / Math.max(frame.pixels.width, frame.pixels.height));
     const width = Math.max(16, Math.round(frame.pixels.width * scale));
     const height = Math.max(16, Math.round(frame.pixels.height * scale));
@@ -5661,6 +5665,131 @@ export const App: Component = () => {
     }
   };
 
+  /** Clips que se pueden renderizar: los de la línea de tiempo con claves y la mezcla activa */
+  const renderableClips = createMemo(() => {
+    const list = clips()
+      .filter((c) => c.tracks.some((tr) => !tr.kind && !tr.muted && keyFrames(tr).length > 0))
+      .map((c) => ({ id: c.id, name: c.name }));
+    if (mixer().enabled && mixer().layers.length > 0) list.push({ id: "__mix__", name: t("Mezcla") });
+    return list;
+  });
+  const renderAnimationInfo = () => ({ clips: renderableClips(), ready: autorigComplete() && renderableClips().length > 0 });
+
+  /** Renderiza cada cuadro de un clip con GeppettoRay: un PNG por cuadro en la carpeta elegida */
+  const handleRenderAnimation = async () => {
+    const v = viewer();
+    if (!v || renderProgress() !== undefined) return;
+    const s = renderSettings();
+    const list = renderableClips();
+    const id = list.some((c) => c.id === s.animClip) ? s.animClip : list[0]?.id;
+    const layout = renderLayout(s, v.getViewSize());
+    const camera = layout.cameras[0];
+    if (!id || !camera) return;
+    const source = id === "__mix__" ? bakeMixer(mixer(), clips(), rigCtx(), t("Mezcla"), activeClip()?.fps ?? 24) : clips().find((c) => c.id === id);
+    if (!source) return;
+    // La misma pila de evaluación horneada que se exporta
+    const baked = source.baked ? source : bakeClip(source, rigCtx());
+    const [clip] = clipsForExport([baked], boneIndex());
+    const keyed = clip.tracks.flatMap((tr) => [...tr.rotation, ...tr.translation].map((k) => k.frame));
+    const first = Math.round(clip.start ?? Math.min(...keyed));
+    const last = Math.round(clip.end ?? Math.max(...keyed));
+    if (!Number.isFinite(first) || !Number.isFinite(last) || last < first) {
+      setStatusMessage(t("La animación no tiene claves"));
+      return;
+    }
+    const chosen = await open({ directory: true, title: t("Carpeta para los cuadros"), defaultPath: renderDir() || undefined });
+    if (typeof chosen !== "string") return;
+    setRenderDir(chosen);
+    const base = (fileName() ?? "render").replace(/\.[^.]+$/, "");
+    const name = `${base}_${source.name}`.replace(/[^\p{L}\p{N}_-]+/gu, "_");
+    // Un MP4 pide medidas pares
+    const size = renderPixels(s, v.getViewSize());
+    const width = s.animVideo ? size.width & ~1 : size.width;
+    const height = s.animVideo ? size.height & ~1 : size.height;
+    const controller = new AbortController();
+    renderAbort = controller;
+    setRenderProgress(0);
+    const pose = v.getCameraPose();
+    if (camera.direction) v.setRenderCamera(camera.direction, width / height, cameraZoom(s, camera.id));
+    const liveFrame = v.getRenderFrameRect(width / height, renderHost);
+    try {
+      const view = v.getRayView();
+      const lights = renderLightById(s.lightPreset)?.lights ?? null;
+      if (lights) view.lights = lights;
+      const hdri = s.rayHdri ? { path: s.rayHdri, intensity: s.rayHdriIntensity, rotationDeg: s.rayHdriRotation } : undefined;
+      const result = await renderRayAnimation(
+        invoke as never,
+        view,
+        {
+          width,
+          height,
+          background: s.background,
+          color: s.color,
+          color2: s.color2,
+          lights,
+          groundShadow: s.groundShadow,
+          samples: s.samples,
+          format: "png",
+          quality: 1,
+          hideGrid: s.hideGrid,
+          hideSkeleton: s.hideSkeleton,
+          hideGizmos: s.hideGizmos,
+          hideSelection: s.hideSelection,
+          shadows: s.shadows,
+          ambientOcclusion: s.ambientOcclusion,
+        },
+        { samples: s.raySamples, denoise: s.rayDenoise, hdri },
+        {
+          clips: [clip],
+          clip: 0,
+          firstFrame: first,
+          lastFrame: last,
+          fps: baked.fps,
+          dir: chosen,
+          name,
+          shutter: s.animBlur ? 0.5 : 0,
+          motionSamples: s.animBlur ? 8 : 1,
+          resume: s.animResume,
+          video: s.animVideo,
+          nonDeforming: rigBones().flatMap((b, i) => (boneProps(rigSettings(), b.name).deform ? [] : [i])),
+          useRetopology: exportUseRetopology() && quadMeshLoaded(),
+        },
+        (p) => {
+          setRenderProgress(p.fraction);
+          setRenderDetail(
+            t("Cuadro {frame} de {frames} · pasada {pass} de {passes}{eta}", {
+              frame: p.frame,
+              frames: p.frames,
+              pass: p.pass,
+              passes: p.passes,
+              eta: p.etaSecs > 0 ? t(" · faltan {time}", { time: formatEta(p.etaSecs) }) : "",
+            }),
+          );
+        },
+        controller.signal,
+        (png) => {
+          closeRenderPreview();
+          setRenderPreview({ url: URL.createObjectURL(new Blob([png as BlobPart], { type: "image/png" })), ...liveFrame.css });
+        },
+      );
+      const done = result.video
+        ? t("Animación guardada: {n} cuadros y {video}", { n: result.frames, video: result.video.split("/").pop() ?? "" })
+        : t("{n} cuadros guardados en {dir}", { n: result.frames, dir: chosen });
+      setStatusMessage(result.note ? `${done}. ${tBackend(result.note)}` : done);
+    } catch (e) {
+      const cancelled = e instanceof DOMException && e.name === "AbortError";
+      setStatusMessage(
+        cancelled ? t("Render cancelado: los cuadros hechos quedaron en {dir}", { dir: chosen }) : t("Error: {e}", { e: tBackend(String(e instanceof Error ? e.message : e)) }),
+      );
+    } finally {
+      v.restoreCameraPose(pose);
+      closeRenderPreview();
+      renderAbort = undefined;
+      setRenderProgress(undefined);
+      setRenderDetail(undefined);
+    }
+  };
+
   const handleRender = async () => {
     const v = viewer();
     if (!v || renderProgress() !== undefined) return;
@@ -5690,7 +5819,7 @@ export const App: Component = () => {
       const cells: SheetCell[] = [];
       let size = 0;
       // Dónde se muestra la imagen mientras GeppettoRay la afina
-      const liveFrame = v.getRenderFrameRect(layout.cell.width / layout.cell.height);
+      const liveFrame = v.getRenderFrameRect(layout.cell.width / layout.cell.height, renderHost);
       const count = layout.cameras.length;
       for (let i = 0; i < count; i++) {
         const camera = layout.cameras[i];
@@ -8073,6 +8202,7 @@ export const App: Component = () => {
                 onPreviewCamera={previewRenderCamera}
                 viewSize={renderViewSize()}
                 busy={renderProgress() !== undefined}
+                animation={renderAnimationInfo()}
                 onClose={() => setRenderEditorOpen(false)}
               />
             </div>
@@ -8105,7 +8235,7 @@ export const App: Component = () => {
               </>
             )}
           </Show>
-          <div class="relative flex-1 min-w-0 min-h-0">
+          <div class="relative flex-1 min-w-0 min-h-0" ref={renderHost}>
             {/* Vista previa del render encima del visor, justo sobre el marco (como la ventana de render de Blender) */}
             <Show when={inRender() ? renderPreview() : undefined}>
               {(preview) => (
@@ -8623,6 +8753,8 @@ export const App: Component = () => {
               progressDetail: renderDetail(),
               canRender: hasWork() && !inDesign(),
               onRender: () => void handleRender(),
+              canAnimate: renderAnimationInfo().ready,
+              onRenderAnimation: () => void handleRenderAnimation(),
               onPreview: () => void handleRenderPreview(),
               onStop: () => renderAbort?.abort(),
             }}

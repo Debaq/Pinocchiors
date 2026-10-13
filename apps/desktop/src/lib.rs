@@ -4,6 +4,7 @@ pub mod animation;
 pub mod body_parts;
 pub mod cad;
 pub mod bvh;
+pub mod hdri;
 pub mod imported_rig;
 pub mod mesh_slot;
 #[cfg(target_os = "linux")]
@@ -61,6 +62,7 @@ pub fn run() {
             commands::export_model,
             commands::write_render_image,
             ray_render::ray_render_start,
+            ray_render::ray_render_animation_start,
             ray_render::ray_render_status,
             ray_render::ray_render_image,
             ray_render::ray_render_cancel,
