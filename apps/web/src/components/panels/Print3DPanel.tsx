@@ -209,6 +209,8 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
   const setWall = (wall: number) => patch({ wall });
   const drain = () => prep().drain;
   const setDrain = (drain: boolean) => patch({ drain });
+  const vent = () => prep().vent ?? false;
+  const setVent = (vent: boolean) => patch({ vent });
   const drainDiameter = () => prep().drainDiameter;
   const setDrainDiameter = (drainDiameter: number) => patch({ drainDiameter });
   const plate = () => prep().plate;
@@ -566,6 +568,8 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
           onDrain={setDrain}
           drainDiameter={drainDiameter()}
           onDrainDiameter={setDrainDiameter}
+          vent={vent()}
+          onVent={setVent}
           estimate={props.materialEstimate}
           busy={props.isProcessing}
           disabled={!props.canAnalyze}
@@ -583,7 +587,7 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
           busy={props.isProcessing}
           disabled={!props.canAnalyze}
           hasPieces={!!props.subdivideResult}
-          onExport={() => props.onExportPlates?.(printer(), material(), { ...plate(), hollowWall: hollow() ? wall() : null, drain: hollow() && drain() ? drainDiameter() : null })}
+          onExport={() => props.onExportPlates?.(printer(), material(), { ...plate(), hollowWall: hollow() ? wall() : null, drain: hollow() && drain() ? drainDiameter() : null, vent: hollow() && drain() && vent() })}
         />
       </Show>
     </div>

@@ -24,11 +24,15 @@ pub struct HollowConfig {
     /// Agujero de drenaje en la cara plana de abajo, con este diámetro (mm). Pide una cara
     /// plana en `z` mínimo; para resina, donde el hueco cerrado atrapa la resina
     pub drain_diameter: Option<Real>,
+    /// Segundo agujero (venteo) del mismo diámetro, lejos del de drenaje, para que el aire entre al sacar la
+    /// resina. Solo con `drain_diameter`
+    #[serde(default)]
+    pub vent: bool,
 }
 
 impl Default for HollowConfig {
     fn default() -> Self {
-        Self { wall: 2.0, voxel_size: None, drain_diameter: None }
+        Self { wall: 2.0, voxel_size: None, drain_diameter: None, vent: false }
     }
 }
 
@@ -42,6 +46,8 @@ pub struct HollowResult {
     pub original_volume: Real,
     /// Fracción de material ahorrada (0..1)
     pub saved_fraction: Real,
+    /// Avisos (por ejemplo, que se aplanó la base para poder poner el agujero)
+    pub notes: Vec<String>,
 }
 
 /// Vacía una malla cerrada dejando paredes de `config.wall`
@@ -55,6 +61,18 @@ pub fn hollow(mesh: &Mesh, config: &HollowConfig) -> Result<HollowResult> {
     if !mesh.is_closed() {
         return Err(Print3dError::MeshNotClosed);
     }
+    let mut notes = Vec::new();
+    // Con agujero, hace falta una cara plana abajo donde quepa: si no la hay se aplana la base
+    let mut count = 0;
+    let flattened;
+    let mesh = match config.drain_diameter {
+        Some(d) => {
+            count = if config.vent { 2 } else { 1 };
+            flattened = prepare_base(mesh, d, config.wall, count, &mut notes)?;
+            &flattened
+        }
+        None => mesh,
+    };
     let (pos, tris) = triangles(mesh);
     let original_volume = compute_volume(mesh);
     let positions: Vec<[f32; 3]> = pos.iter().map(|p| [p.x() as f32, p.y() as f32, p.z() as f32]).collect();
@@ -71,7 +89,13 @@ pub fn hollow(mesh: &Mesh, config: &HollowConfig) -> Result<HollowResult> {
     let cav_pos: Vec<Vector3> = cavity.positions.iter().map(|p| Vector3::new(f64::from(p[0]), f64::from(p[1]), f64::from(p[2]))).collect();
     let cav_tris: Vec<[usize; 3]> = cavity.indices.as_chunks::<3>().0.iter().map(|t| [t[0] as usize, t[2] as usize, t[1] as usize]).collect();
     let (all, all_tris) = match config.drain_diameter {
-        Some(d) => drill_drain(mesh, &pos, &tris, &cav_pos, &cav_tris, d, config.wall)?,
+        Some(d) => {
+            let (all, all_tris, placed) = drill_drain(mesh, &pos, &tris, &cav_pos, &cav_tris, d, config.wall, count)?;
+            if placed < count {
+                notes.push("solo cupo un agujero en la base: no hay venteo".to_string());
+            }
+            (all, all_tris)
+        }
         None => {
             let mut all = pos.clone();
             let mut all_tris = tris.clone();
@@ -81,36 +105,20 @@ pub fn hollow(mesh: &Mesh, config: &HollowConfig) -> Result<HollowResult> {
             (all, all_tris)
         }
     };
+    let all_tris = if config.drain_diameter.is_some() { crate::planar_joints::flip_slivers(&all, all_tris) } else { all_tris };
     let result = Mesh::from_triangles(&all, &all_tris);
 
     let new_volume = compute_signed_volume(&result);
     let cavity_volume = (original_volume - new_volume).max(0.0);
-    Ok(HollowResult { mesh: result, cavity_volume, original_volume, saved_fraction: if original_volume > 0.0 { cavity_volume / original_volume } else { 0.0 } })
+    Ok(HollowResult { mesh: result, cavity_volume, original_volume, saved_fraction: if original_volume > 0.0 { cavity_volume / original_volume } else { 0.0 }, notes })
 }
 
-/// Agujero de drenaje: un túnel desde la cara plana de abajo hasta el suelo del hueco
-///
-/// Se abre la tapa plana con la huella (recorte exacto), se quita el suelo del hueco bajo ella y
-/// el borde de ambos agujeros se une con una banda de triángulos
-fn drill_drain(
-    outer: &Mesh,
-    pos: &[Vector3],
-    tris: &[[usize; 3]],
-    cav_pos: &[Vector3],
-    cav_tris: &[[usize; 3]],
-    diameter: Real,
-    wall: Real,
-) -> Result<(Vec<Vector3>, Vec<[usize; 3]>)> {
-    use crate::contact::Contact;
+/// La cara plana de abajo (en `z` mínimo, mirando hacia abajo) como región de contacto
+fn bottom_face(pos: &[Vector3], tris: &[[usize; 3]]) -> Option<crate::contact::Contact> {
     use crate::geom::normal_area;
-    use crate::planar_joints::{choose_spots, footprint_polygon, open_cap, PlanarJointConfig, PlanarShape};
-    use std::collections::HashMap;
-
-    let err = |m: &str| Print3dError::JointError(m.to_string());
     let n = Vector3::new(0.0, 0.0, -1.0);
     let zmin = pos.iter().map(|p| p.z()).fold(Real::INFINITY, Real::min);
     let ptol = (crate::geom::diagonal(pos) * 1e-6).max(1e-7);
-    // Triángulos de la cara plana de abajo
     let mut region: Vec<Vec<Vector3>> = Vec::new();
     let mut area = 0.0;
     let mut centroid = Vector3::zero();
@@ -126,32 +134,108 @@ fn drill_drain(
         }
     }
     if region.is_empty() {
+        return None;
+    }
+    Some(crate::contact::Contact { piece_a: 0, piece_b: 0, normal: n, offset: -zmin, area, center: centroid * (1.0 / area), region })
+}
+
+/// Dónde caben `count` agujeros de `diameter` en la cara plana de abajo (vacío si no caben)
+fn drain_spots(pos: &[Vector3], tris: &[[usize; 3]], diameter: Real, wall: Real, count: usize) -> Vec<Vector3> {
+    use crate::planar_joints::{choose_spots, PlanarJointConfig, PlanarShape};
+    let Some(contact) = bottom_face(pos, tris) else { return Vec::new() };
+    let config = PlanarJointConfig { shape: PlanarShape::Round { diameter }, edge_margin: (wall * 2.0).max(1.0), count, ..Default::default() };
+    choose_spots(&contact, &config)
+}
+
+/// Deja una base plana donde quepan los agujeros: si la pieza no tiene cara plana abajo (o es muy chica) le quita
+/// la lámina más delgada que lo logre. Avisa en `notes` cuánto se quitó
+fn prepare_base(mesh: &Mesh, diameter: Real, wall: Real, count: usize, notes: &mut Vec<String>) -> Result<Mesh> {
+    use crate::slicer::{slice_by_plane, Plane};
+    let (pos, tris) = triangles(mesh);
+    let found = drain_spots(&pos, &tris, diameter, wall, count).len();
+    if found >= count {
+        return Ok(mesh.clone());
+    }
+    let zmin = pos.iter().map(|p| p.z()).fold(Real::INFINITY, Real::min);
+    let zmax = pos.iter().map(|p| p.z()).fold(Real::NEG_INFINITY, Real::max);
+    let limit = (zmax - zmin) * 0.3;
+    let top_of = |m: &Mesh| m.vertices.iter().map(|v| v.position.z()).fold(Real::NEG_INFINITY, Real::max);
+    // La mejor base con todos los agujeros; si ninguna sirve para todos, la primera que sirva para uno
+    let mut fallback: Option<(Mesh, Real, usize)> = None;
+    let mut h = (diameter * 0.05).max(0.1);
+    while h <= limit {
+        if let Ok((a, b)) = slice_by_plane(mesh, &Plane::xy_at_z(zmin + h)) {
+            let upper = if top_of(&a) > top_of(&b) { a } else { b };
+            let (up_pos, up_tris) = triangles(&upper);
+            let got = drain_spots(&up_pos, &up_tris, diameter, wall, count).len();
+            if got >= count {
+                notes.push(format!("se aplanó la base quitando {h:.2} mm para poder poner el agujero"));
+                return Ok(upper);
+            }
+            if got >= 1 && fallback.is_none() {
+                fallback = Some((upper, h, got));
+            }
+        }
+        h *= 1.3;
+    }
+    match fallback {
+        Some((m, h, _)) => {
+            notes.push(format!("se aplanó la base quitando {h:.2} mm para poder poner el agujero"));
+            Ok(m)
+        }
+        None => Err(Print3dError::JointError("no hay dónde poner el agujero de drenaje: la pieza no tiene una base donde quepa ni quitando hasta el 30 % de su alto".to_string())),
+    }
+}
+
+/// Agujeros de drenaje (y venteo): un túnel por cada uno desde la cara plana de abajo hasta el suelo del hueco
+///
+/// Se abre la tapa plana con las huellas (recorte exacto), se quita el suelo del hueco bajo ellas y
+/// el borde de cada par de agujeros se une con una banda de triángulos. Devuelve cuántos agujeros se hicieron
+#[allow(clippy::too_many_arguments)]
+fn drill_drain(
+    outer: &Mesh,
+    pos: &[Vector3],
+    tris: &[[usize; 3]],
+    cav_pos: &[Vector3],
+    cav_tris: &[[usize; 3]],
+    diameter: Real,
+    wall: Real,
+    count: usize,
+) -> Result<(Vec<Vector3>, Vec<[usize; 3]>, usize)> {
+    use crate::geom::normal_area;
+    use crate::planar_joints::{footprint_polygon, open_cap_multi, PlanarShape};
+    use std::collections::HashMap;
+
+    let err = |m: &str| Print3dError::JointError(m.to_string());
+    let n = Vector3::new(0.0, 0.0, -1.0);
+    if bottom_face(pos, tris).is_none() {
         return Err(err("para el drenaje hace falta una cara plana abajo: apoya el modelo en una cara plana"));
     }
-    let contact = Contact { piece_a: 0, piece_b: 0, normal: n, offset: -zmin, area, center: centroid * (1.0 / area), region };
-    let config = PlanarJointConfig { shape: PlanarShape::Round { diameter }, edge_margin: wall.max(1.0), count: 1, ..Default::default() };
-    let spot = *choose_spots(&contact, &config).first().ok_or_else(|| err("la cara de abajo es muy chica para el agujero de drenaje"))?;
-    let polygon = footprint_polygon(&config.shape, spot, n, 0.0);
+    let spots = drain_spots(pos, tris, diameter, wall, count);
+    if spots.is_empty() {
+        return Err(err("la cara de abajo es muy chica para el agujero de drenaje"));
+    }
+    let polygons: Vec<Vec<Vector3>> = spots.iter().map(|&s| footprint_polygon(&PlanarShape::Round { diameter }, s, n, 0.0)).collect();
 
-    // Tapa de abajo abierta
-    let (mut all, mut all_tris, ring) = open_cap(outer, &polygon, n)?;
+    // Tapa de abajo abierta, con un contorno por agujero
+    let (mut all, mut all_tris, rings) = open_cap_multi(outer, &polygons, n)?;
 
-    // Suelo del hueco bajo el agujero: triángulos que miran hacia arriba y cuyo centro cae dentro
+    // Suelo del hueco bajo los agujeros: triángulos que miran hacia arriba y cuyo centro cae dentro de alguno
     let radius = diameter * 0.5;
-    let inside = |c: Vector3| ((c.x() - spot.x()).powi(2) + (c.y() - spot.y()).powi(2)).sqrt() < radius;
+    let near_spot = |c: Vector3| spots.iter().position(|s| ((c.x() - s.x()).powi(2) + (c.y() - s.y()).powi(2)).sqrt() < radius);
     let keep: Vec<[usize; 3]> = cav_tris
         .iter()
         .filter(|t| {
             let (a, b, c) = (cav_pos[t[0]], cav_pos[t[1]], cav_pos[t[2]]);
             let up = normal_area(a, b, c).is_some_and(|(tn, _)| tn.z() > 0.2);
-            !(up && inside((a + b + c) * (1.0 / 3.0)))
+            !(up && near_spot((a + b + c) * (1.0 / 3.0)).is_some())
         })
         .copied()
         .collect();
     if keep.len() == cav_tris.len() {
         return Err(err("no hay suelo de hueco sobre el agujero de drenaje"));
     }
-    // Borde del agujero del hueco
+    // Bordes de los agujeros del hueco: un lazo por agujero
     let mut directed: HashMap<(usize, usize), u32> = HashMap::new();
     for t in &keep {
         for i in 0..3 {
@@ -163,26 +247,51 @@ fn drill_drain(
     if boundary.is_empty() || next.len() != boundary.len() {
         return Err(err("el agujero del hueco no es simple"));
     }
-    let start = boundary[0].0;
-    let mut kloop = vec![start];
-    let mut cur = next[&start];
-    while cur != start {
-        if kloop.len() > boundary.len() {
-            return Err(err("el borde del hueco no se cierra"));
+    let mut loops: Vec<Vec<usize>> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for &(start, _) in &boundary {
+        if seen.contains(&start) {
+            continue;
         }
-        kloop.push(cur);
-        cur = *next.get(&cur).ok_or_else(|| err("el borde del hueco está roto"))?;
+        let mut lp = vec![start];
+        seen.insert(start);
+        let mut cur = next[&start];
+        while cur != start {
+            if !seen.insert(cur) {
+                return Err(err("el borde del hueco no se cierra"));
+            }
+            lp.push(cur);
+            cur = *next.get(&cur).ok_or_else(|| err("el borde del hueco está roto"))?;
+        }
+        loops.push(lp);
     }
-    if kloop.len() != boundary.len() {
+    if loops.len() != spots.len() {
         return Err(err("el suelo del hueco quedó en varios agujeros"));
     }
 
-    // Banda entre el borde de la tapa (A: aristas gemelas) y el del hueco (B': su orden original)
     let base = all.len();
     all.extend(cav_pos.iter().copied());
     all_tris.extend(keep.iter().map(|t| [base + t[0], base + t[1], base + t[2]]));
-    let a_seq: Vec<usize> = ring.iter().rev().copied().collect();
-    let b_seq: Vec<usize> = kloop.iter().map(|&i| base + i).collect();
+    // Cada lazo del hueco con la tapa de su agujero
+    for (k, spot) in spots.iter().enumerate() {
+        let lp = loops
+            .iter()
+            .position(|l| {
+                let c = l.iter().fold(Vector3::zero(), |s, &i| s + cav_pos[i]) * (1.0 / l.len() as Real);
+                ((c.x() - spot.x()).powi(2) + (c.y() - spot.y()).powi(2)).sqrt() < radius
+            })
+            .ok_or_else(|| err("falta el borde del hueco bajo un agujero"))?;
+        let a_seq: Vec<usize> = rings[k].iter().rev().copied().collect();
+        let b_seq: Vec<usize> = loops[lp].iter().map(|&i| base + i).collect();
+        stitch_band(&all, &mut all_tris, &a_seq, &b_seq, *spot)?;
+    }
+    Ok((all, all_tris, spots.len()))
+}
+
+/// Banda de triángulos entre el borde de la tapa (`a_seq`: aristas gemelas) y el del hueco (`b_seq`: su orden
+/// original), ambos alrededor del eje de `spot`
+fn stitch_band(all: &[Vector3], all_tris: &mut Vec<[usize; 3]>, a_seq: &[usize], b_seq: &[usize], spot: Vector3) -> Result<()> {
+    let err = |m: &str| Print3dError::JointError(m.to_string());
     let angle = |i: usize| (all[i].y() - spot.y()).atan2(all[i].x() - spot.x());
     let signed_area = |seq: &[usize]| -> Real {
         let mut s = 0.0;
@@ -193,8 +302,8 @@ fn drill_drain(
         s
     };
     // Las dos secuencias deben girar igual alrededor del eje; si no, el hueco o la tapa están al revés
-    let sense = signed_area(&a_seq).signum();
-    if sense != signed_area(&b_seq).signum() {
+    let sense = signed_area(a_seq).signum();
+    if sense != signed_area(b_seq).signum() {
         return Err(err("los bordes del drenaje giran en sentidos distintos"));
     }
     let progress = |seq: &[usize], k: usize, a0: Real| -> Real {
@@ -214,7 +323,7 @@ fn drill_drain(
     let b_start = (0..b_seq.len())
         .max_by(|&x, &y| {
             // el más cercano por detrás de a0 (mayor progreso desde a0 que no pase de la vuelta)
-            progress(&b_seq, x, a0).total_cmp(&progress(&b_seq, y, a0))
+            progress(b_seq, x, a0).total_cmp(&progress(b_seq, y, a0))
         })
         .unwrap_or(0);
     let a_rot: Vec<usize> = (0..a_seq.len()).map(|k| a_seq[(a_start + k) % a_seq.len()]).collect();
@@ -257,7 +366,7 @@ fn drill_drain(
             j += 1;
         }
     }
-    Ok((all, all_tris))
+    Ok(())
 }
 
 /// Volumen con signo: el exterior suma y las cavidades restan
@@ -369,13 +478,13 @@ mod tests {
     #[test]
     fn caja_hueca_con_drenaje() {
         let b = make_box(40.0, 40.0, 40.0);
-        let r = hollow(&b, &HollowConfig { wall: 3.0, voxel_size: Some(1.0), drain_diameter: Some(5.0) }).unwrap();
+        let r = hollow(&b, &HollowConfig { wall: 3.0, voxel_size: Some(1.0), drain_diameter: Some(5.0), ..Default::default() }).unwrap();
         assert!(r.mesh.is_closed(), "la malla con drenaje no quedó cerrada");
         // El túnel de drenaje conecta el hueco con el exterior: un solo cuerpo
         let rep = check_printability(&r.mesh, &PrinterProfile::default(), &MaterialProfile::default()).unwrap();
         assert!(rep.is_watertight, "{:?}", rep.issues);
         assert_eq!(rep.components, 1);
-        let plain = hollow(&b, &HollowConfig { wall: 3.0, voxel_size: Some(1.0), drain_diameter: None }).unwrap();
+        let plain = hollow(&b, &HollowConfig { wall: 3.0, voxel_size: Some(1.0), ..Default::default() }).unwrap();
         // Con el agujero hay un poco más de volumen vaciado
         let vol = |m: &Mesh| super::compute_signed_volume(m);
         // El túnel (≈ π·2,5²·3 mm³ = 59) resta material; con las paredes al revés restaría de más o sumaría
@@ -383,10 +492,7 @@ mod tests {
         assert!(removed > 20.0 && removed < 140.0, "túnel de {removed} mm³");
     }
 
-    #[test]
-    fn drenaje_sin_cara_plana_falla() {
-        // Esfera: sin cara plana abajo
-        let (rings, segs, rad) = (24usize, 32usize, 15.0);
+    fn uv_sphere(rad: Real, rings: usize, segs: usize) -> Mesh {
         let mut pos = vec![Vector3::new(0.0, 0.0, rad)];
         for i in 1..rings {
             let th = std::f64::consts::PI * i as Real / rings as Real;
@@ -409,7 +515,53 @@ mod tests {
                 tris.push([at(i, j), at(i + 1, j + 1), at(i, j + 1)]);
             }
         }
-        let sphere = Mesh::from_triangles(&pos, &tris);
-        assert!(hollow(&sphere, &HollowConfig { wall: 2.0, voxel_size: Some(1.0), drain_diameter: Some(4.0) }).is_err());
+        Mesh::from_triangles(&pos, &tris)
+    }
+
+    #[test]
+    fn drenaje_sin_cara_plana_aplana_la_base() {
+        // Esfera: sin cara plana abajo; se le quita una lámina de la base y se avisa
+        let sphere = uv_sphere(15.0, 24, 32);
+        let r = hollow(&sphere, &HollowConfig { wall: 2.0, voxel_size: Some(1.0), drain_diameter: Some(4.0), ..Default::default() }).unwrap();
+        assert!(r.mesh.is_closed());
+        assert!(r.notes.iter().any(|n| n.contains("aplanó la base")), "{:?}", r.notes);
+        let rep = check_printability(&r.mesh, &PrinterProfile::default(), &MaterialProfile::default()).unwrap();
+        assert!(rep.is_watertight, "{:?}", rep.issues);
+        assert_eq!(rep.components, 1, "el túnel tiene que unir el hueco con el exterior");
+        // La base quedó plana: el punto más bajo ya no es el polo
+        let zmin = r.mesh.vertices.iter().map(|v| v.position.z()).fold(Real::INFINITY, Real::min);
+        assert!(zmin > -15.0 + 0.1, "zmin {zmin}");
+    }
+
+    #[test]
+    fn caja_hueca_con_drenaje_y_venteo() {
+        let b = make_box(60.0, 40.0, 40.0);
+        let one = hollow(&b, &HollowConfig { wall: 3.0, voxel_size: Some(1.0), drain_diameter: Some(5.0), ..Default::default() }).unwrap();
+        let two = hollow(&b, &HollowConfig { wall: 3.0, voxel_size: Some(1.0), drain_diameter: Some(5.0), vent: true }).unwrap();
+        assert!(two.mesh.is_closed());
+        assert!(two.notes.is_empty(), "{:?}", two.notes);
+        let rep = check_printability(&two.mesh, &PrinterProfile::default(), &MaterialProfile::default()).unwrap();
+        assert!(rep.is_watertight, "{:?}", rep.issues);
+        assert_eq!(rep.components, 1);
+        // El venteo suma un segundo túnel (≈ π·2,5²·3 mm³ cada uno)
+        let vol = |m: &Mesh| super::compute_signed_volume(m);
+        let second = vol(&one.mesh) - vol(&two.mesh);
+        assert!(second > 20.0 && second < 140.0, "segundo túnel de {second} mm³");
+        // Los dos agujeros quedan lejos entre sí
+        let (pos, tris) = triangles(&two.mesh);
+        let zmin = pos.iter().map(|p| p.z()).fold(Real::INFINITY, Real::min);
+        let mut hole_pts: Vec<Vector3> = Vec::new();
+        for t in &tris {
+            let ps = [pos[t[0]], pos[t[1]], pos[t[2]]];
+            // Vértices de la tapa de abajo que no son del contorno del cuadro exterior: los de los agujeros
+            for p in ps {
+                if (p.z() - zmin).abs() < 1e-6 && p.x() > 1.0 && p.x() < 59.0 && p.y() > 1.0 && p.y() < 39.0 {
+                    hole_pts.push(p);
+                }
+            }
+        }
+        let xs: Vec<Real> = hole_pts.iter().map(|p| p.x()).collect();
+        let spread = xs.iter().cloned().fold(Real::NEG_INFINITY, Real::max) - xs.iter().cloned().fold(Real::INFINITY, Real::min);
+        assert!(spread > 20.0, "los agujeros están muy juntos ({spread} mm)");
     }
 }

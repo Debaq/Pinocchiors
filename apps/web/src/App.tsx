@@ -7290,7 +7290,7 @@ export const App: Component = () => {
         filters: [{ name: settings.format.toUpperCase(), extensions: [settings.format] }],
       });
       if (!path) return;
-      const input = { printer, material, format: settings.format, spacing: settings.spacing, orient: settings.orient, contour: settings.contour !== false, hollow_wall: settings.hollowWall, drain: settings.drain, compensate: settings.compensate !== false, path };
+      const input = { printer, material, format: settings.format, spacing: settings.spacing, orient: settings.orient, contour: settings.contour !== false, hollow_wall: settings.hollowWall, drain: settings.drain, vent: settings.vent ?? false, compensate: settings.compensate !== false, path };
       const result = await printTask(t("Preparando las placas..."), () => invoke<PlateResult>("export_print_plates", { input }));
       if (!result) return;
       setPlateResult(result);

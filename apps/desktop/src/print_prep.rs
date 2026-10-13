@@ -417,6 +417,9 @@ pub struct PlateInput {
     /// Agujero de drenaje de este diámetro en la cara de abajo (mm), al vaciar
     #[serde(default)]
     pub drain: Option<f64>,
+    /// Segundo agujero (venteo) lejos del de drenaje
+    #[serde(default)]
+    pub vent: bool,
     /// Agrandar por eje lo que se encoge el material al enfriar
     #[serde(default)]
     pub compensate: bool,
@@ -435,6 +438,8 @@ pub struct PlateInfo {
     pub unplaced: Vec<String>,
     /// Piezas más altas que la impresora
     pub too_tall: Vec<String>,
+    /// Avisos al preparar las piezas (por ejemplo, base aplanada para el drenaje)
+    pub notes: Vec<String>,
     pub total_bytes: u64,
 }
 
@@ -467,6 +472,7 @@ pub(crate) struct PlatePlan {
     pub utilization: Vec<f64>,
     pub unplaced: Vec<String>,
     pub too_tall: Vec<String>,
+    pub notes: Vec<String>,
 }
 
 /// Prepara las piezas (vaciar, orientar) y las reparte en camas
@@ -475,6 +481,7 @@ pub(crate) fn plan_plates(list: Vec<(String, Mesh)>, input: &PlateInput) -> Resu
     let tolerances = FabTolerances::derive(&input.printer, &input.material);
     let mut prepared: Vec<(String, Mesh)> = Vec::new();
     let mut stats: Vec<PieceStat> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
     for (label, mut mesh) in list {
         // Primero se apoya: el drenaje va en la cara de abajo de esa posición. Se prefieren las
         // orientaciones en que la pieza cabe en la impresora
@@ -490,8 +497,10 @@ pub(crate) fn plan_plates(list: Vec<(String, Mesh)>, input: &PlateInput) -> Resu
             None => PieceStat { height, overhang_area: 0.0, contact_area: 0.0, support_volume: 0.0, fits: height <= input.printer.build_volume[2] + 1e-9 },
         });
         if let Some(wall) = input.hollow_wall {
-            let hollow = HollowConfig { wall, drain_diameter: input.drain, ..Default::default() };
-            mesh = p3d::hollow(&mesh, &hollow).map_err(|e| format!("Pieza {label}: {e}"))?.mesh;
+            let hollow = HollowConfig { wall, drain_diameter: input.drain, vent: input.vent, ..Default::default() };
+            let done = p3d::hollow(&mesh, &hollow).map_err(|e| format!("Pieza {label}: {e}"))?;
+            notes.extend(done.notes.iter().map(|n| format!("Pieza {label}: {n}")));
+            mesh = done.mesh;
         }
         if input.compensate {
             p3d::compensate_shrink(&mut mesh, &tolerances);
@@ -524,7 +533,7 @@ pub(crate) fn plan_plates(list: Vec<(String, Mesh)>, input: &PlateInput) -> Resu
     }
     let unplaced = result.unplaced.iter().map(|&i| prepared[i].0.clone()).collect();
     let shrink_scale = if input.compensate { tolerances.shrink_scale() } else { [1.0; 3] };
-    Ok(PlatePlan { shrink_scale, plates, utilization: result.utilization, unplaced, too_tall })
+    Ok(PlatePlan { shrink_scale, plates, utilization: result.utilization, unplaced, too_tall, notes })
 }
 
 /// Escena de una placa: las piezas como objetos, en mm (se exporta con Z arriba)
@@ -687,7 +696,7 @@ pub(crate) fn export_print_plates_impl(state: &AppState, input: PlateInput) -> R
         files.push(path);
     }
     let total_bytes = files.iter().filter_map(|f| std::fs::metadata(f).ok()).map(|m| m.len()).sum();
-    Ok(PlateInfo { shrink_scale: plan.shrink_scale, plates: plan.plates.len(), files, pieces, utilization: plan.utilization, unplaced: plan.unplaced, too_tall: plan.too_tall, total_bytes })
+    Ok(PlateInfo { shrink_scale: plan.shrink_scale, plates: plan.plates.len(), files, pieces, utilization: plan.utilization, unplaced: plan.unplaced, too_tall: plan.too_tall, notes: plan.notes, total_bytes })
 }
 
 #[cfg(test)]
@@ -712,6 +721,7 @@ mod tests {
             contour: false,
             hollow_wall: None,
             drain: None,
+            vent: false,
             compensate: false,
             path: "x.stl".into(),
         }
@@ -782,6 +792,19 @@ mod tests {
         inp.compensate = false;
         let plain = plan_plates(vec![("a".into(), cube(40.0))], &inp).unwrap();
         assert!((p3d::compute_bounding_box(&plain.plates[0].meshes[0].1).dimensions()[0] - 40.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn el_vaciado_con_venteo_avisa_si_aplana_la_base() {
+        let mut inp = input(2.0);
+        inp.hollow_wall = Some(3.0);
+        inp.drain = Some(4.0);
+        inp.vent = true;
+        inp.orient = false;
+        // Un cubo tiene cara plana: dos agujeros y sin avisos
+        let plan = plan_plates(vec![("cubo".into(), cube(40.0))], &inp).unwrap();
+        assert!(plan.notes.is_empty(), "{:?}", plan.notes);
+        assert!(plan.plates[0].meshes[0].1.is_closed());
     }
 
     #[test]

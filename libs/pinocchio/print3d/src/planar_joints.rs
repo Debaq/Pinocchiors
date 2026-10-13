@@ -266,23 +266,32 @@ fn sample_polygon(polygon: &[Vector3]) -> Vec<Vector3> {
 /// agujero (índices, recorrido con el agujero a la derecha, es decir horario mirando contra la normal)
 pub(crate) type OpenedCap = (Vec<Vector3>, Vec<[usize; 3]>, Vec<usize>);
 
+/// Como `OpenedCap` con un contorno por huella
+pub(crate) type OpenedCaps = (Vec<Vector3>, Vec<[usize; 3]>, Vec<Vec<usize>>);
+
 /// Quita de la tapa plana (normal exterior `n`) lo que queda bajo la huella
 pub(crate) fn open_cap(mesh: &Mesh, polygon: &[Vector3], n: Vector3) -> Result<OpenedCap> {
-    if polygon.len() < 3 {
+    let (positions, tris, mut rings) = open_cap_multi(mesh, &[polygon.to_vec()], n)?;
+    Ok((positions, tris, rings.remove(0)))
+}
+
+/// Como `open_cap` con varias huellas separadas: devuelve un contorno por huella, en el mismo orden
+pub(crate) fn open_cap_multi(mesh: &Mesh, polygons: &[Vec<Vector3>], n: Vector3) -> Result<OpenedCaps> {
+    if polygons.is_empty() || polygons.iter().any(|p| p.len() < 3) {
         return Err(Print3dError::JointError("huella degenerada".into()));
     }
-    let cap = find_cap(mesh, polygon, n)?;
+    let cap = find_cap(mesh, &polygons[0], n)?;
     if !cap.is_cap.iter().any(|&c| c) {
         return Err(Print3dError::JointError("la pieza no tiene una cara plana en ese plano".into()));
     }
-    if !sample_polygon(polygon).iter().all(|&p| in_cap(&cap, p, n)) {
+    if !polygons.iter().flat_map(|p| sample_polygon(p)).all(|p| in_cap(&cap, p, n)) {
         return Err(Print3dError::JointError("la unión no cabe dentro de la cara de corte".into()));
     }
 
     // Triángulos de la tapa que solapan la huella: se sustituye su unión (región S)
     // por S menos la huella, así no aparecen vértices nuevos en aristas ajenas
-    let sides: Vec<(Vector3, Vector3)> = (0..polygon.len()).map(|i| (polygon[i], polygon[(i + 1) % polygon.len()] - polygon[i])).collect();
-    let fp_tris = footprint_triangles(polygon, n);
+    let sides: Vec<(Vector3, Vector3)> = polygons.iter().flat_map(|polygon| (0..polygon.len()).map(move |i| (polygon[i], polygon[(i + 1) % polygon.len()] - polygon[i]))).collect();
+    let fp_tris: Vec<[Vector3; 3]> = polygons.iter().flat_map(|p| footprint_triangles(p, n)).collect();
     let overlap_area = |tri: [Vector3; 3]| -> Real {
         fp_tris
             .iter()
@@ -323,13 +332,13 @@ pub(crate) fn open_cap(mesh: &Mesh, polygon: &[Vector3], n: Vector3) -> Result<O
     let mut segments: Vec<(Vector3, Vector3)> = edge_count.values().filter(|e| e.0 == 1).map(|e| (cap.pos[e.1], cap.pos[e.2])).collect();
     // La huella debe quedar bien dentro de la región: lejos de su borde
     let near = |p: &Vector3| segments.iter().any(|(a, b)| point_segment_distance(p, a, b) < tol * 100.0);
-    if polygon.iter().any(near) {
+    if polygons.iter().flatten().any(near) {
         return Err(Print3dError::JointError("la unión toca el borde de la cara de corte".into()));
     }
     for (p0, e) in &sides {
         segments.push((*p0, *p0 + *e));
     }
-    let filled = crate::capping::cap_triangles(&segments, n, polygon[0], tol);
+    let filled = crate::capping::cap_triangles(&segments, n, polygons[0][0], tol);
     if filled.is_empty() {
         return Err(Print3dError::JointError("no se pudo rehacer la tapa".into()));
     }
@@ -384,10 +393,23 @@ pub(crate) fn open_cap(mesh: &Mesh, polygon: &[Vector3], n: Vector3) -> Result<O
         }
         rings.push(ring);
     }
-    if rings.len() != 1 {
+    if rings.len() != polygons.len() {
         return Err(Print3dError::JointError("la unión abrió más de un contorno".into()));
     }
-    Ok((positions, tris, rings.remove(0)))
+    // Un contorno por huella: el que tiene más cerca su centro
+    let center_of = |poly: &[Vector3]| poly.iter().fold(Vector3::zero(), |s, p| s + *p) * (1.0 / poly.len() as Real);
+    let ring_center = |r: &[usize]| r.iter().fold(Vector3::zero(), |s, &i| s + positions[i]) * (1.0 / r.len() as Real);
+    let mut ordered: Vec<Vec<usize>> = Vec::with_capacity(polygons.len());
+    for poly in polygons {
+        let c = center_of(poly);
+        let (k, _) = rings
+            .iter()
+            .enumerate()
+            .min_by(|(_, a), (_, b)| (ring_center(a) - c).length().total_cmp(&(ring_center(b) - c).length()))
+            .ok_or_else(|| Print3dError::JointError("falta un contorno".into()))?;
+        ordered.push(rings.swap_remove(k));
+    }
+    Ok((positions, tris, ordered))
 }
 
 /// Recorta la tapa bajo la huella y extruye su borde `dir` (perno: hacia afuera; hueco: hacia adentro)
@@ -493,11 +515,37 @@ pub(crate) fn weld_build(positions: &[Vector3], tris: &[[usize; 3]]) -> Result<M
         }
     }
     let tris: Vec<[usize; 3]> = merged.iter().map(|t| [remap[t[0]], remap[t[1]], remap[t[2]]]).collect();
+    let tris = flip_slivers(&compact, tris);
     let mesh = Mesh::from_triangles(&compact, &tris);
     if !mesh.is_closed() {
         return Err(Print3dError::JointError("la malla resultante no quedó cerrada".into()));
     }
     Ok(mesh)
+}
+
+/// Quita los triángulos de área cero (tres puntos en línea, que deja la triangulación de un borde con puntos
+/// intermedios): el vecino de su lado largo se parte en dos por el punto del medio, y la malla sigue cerrada
+pub(crate) fn flip_slivers(pos: &[Vector3], mut tris: Vec<[usize; 3]>) -> Vec<[usize; 3]> {
+    let diag = diagonal(pos);
+    let eps = 1e-12 * diag * diag + 1e-14;
+    for _ in 0..tris.len().max(1) {
+        let Some(ti) = tris.iter().position(|t| (pos[t[1]] - pos[t[0]]).cross(&(pos[t[2]] - pos[t[0]])).length() <= eps) else { break };
+        let t = tris[ti];
+        // Girar para que t = [p, q, m] con p→q el lado más largo
+        let lens = [(pos[t[1]] - pos[t[0]]).length(), (pos[t[2]] - pos[t[1]]).length(), (pos[t[0]] - pos[t[2]]).length()];
+        let long = (0..3).max_by(|&a, &b| lens[a].total_cmp(&lens[b])).unwrap_or(0);
+        let (p, q, m) = (t[long], t[(long + 1) % 3], t[(long + 2) % 3]);
+        let Some(ui) = tris.iter().position(|u| (0..3).any(|k| u[k] == q && u[(k + 1) % 3] == p)) else { break };
+        let u = tris[ui];
+        let k = (0..3).find(|&k| u[k] == q && u[(k + 1) % 3] == p).unwrap_or(0);
+        let x = u[(k + 2) % 3];
+        let (hi, lo) = (ti.max(ui), ti.min(ui));
+        tris.swap_remove(hi);
+        tris.swap_remove(lo);
+        tris.push([q, m, x]);
+        tris.push([m, p, x]);
+    }
+    tris
 }
 
 /// Triángulos de una región plana con huecos, sacados de sus contornos (cada uno cerrado); salen

@@ -174,8 +174,8 @@ Leyenda: ⬜ falta · 🧪 falta probarlo de verdad · ⚠ límite conocido (fun
 
 ### Vaciado, material y placas
 
-- ⚠ El vaciado deja un hueco cerrado (partes más finas que el doble de la pared quedan macizas). El drenaje pide
-  una cara plana abajo, es un solo agujero y no hay venteo. ⬜ Venteo y drenaje sin cara plana.
+- ⚠ El vaciado deja un hueco cerrado (partes más finas que el doble de la pared quedan macizas). El drenaje
+  se hace en la base: si no hay cara plana donde quepa, se aplana (Fase 13), y el venteo es un segundo agujero.
 - ⚠ La estimación de material no cuenta perímetros ni capas superiores: es una cota aproximada.
 - ⚠ La distribución por contorno va por celdas (la separación real es la pedida más, como mucho, una celda) y
   solo gira de 90 en 90°.
@@ -260,4 +260,16 @@ Leyenda: ⬜ falta · 🧪 falta probarlo de verdad · ⚠ límite conocido (fun
 - Pruebas: volúmenes exactos de terraza y rompecabezas, zanja ciega (sección × largo), riel con tope (sección × (c − 2)),
   y el perno del rompecabezas dentro de su hueco para varios giros.
 - UI: formas «Terraza escalonada» y «Rompecabezas» y casilla «Con tope» (solo con el riel).
+
+## Fase 13: venteo y drenaje sin cara plana (hecha)
+
+- **Venteo** (`HollowConfig.vent`): un segundo agujero del mismo diámetro en la base, lo más lejos posible del de
+  drenaje. `open_cap_multi` abre varias huellas en la misma tapa (un contorno por huella) y `drill_drain` hace un túnel
+  por agujero (`stitch_band` une el borde de la tapa con el del suelo del hueco). Si solo cabe uno, avisa.
+- **Sin cara plana abajo** (esfera, pieza redondeada): `prepare_base` quita la lámina más delgada de la base
+  (`slice_by_plane`, pasos crecientes hasta el 30 % del alto) hasta que caben los agujeros, y lo avisa en
+  `HollowResult.notes` («se aplanó la base quitando X mm…»). Se vacía la pieza ya aplanada.
+- `flip_slivers`: la triangulación de bordes con puntos intermedios deja triángulos de área cero; se quitan partiendo
+  el vecino por el punto del medio, así la malla sigue cerrada y estanca (antes salía algo no determinista).
+- Escritorio: `PlateInput.vent`, avisos en `PlateInfo.notes`. UI: casilla «Agujero de venteo» y los avisos al exportar.
 

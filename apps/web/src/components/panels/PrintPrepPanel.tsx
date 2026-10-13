@@ -122,6 +122,8 @@ export interface PlateSettings {
   hollowWall: number | null;
   /** Diámetro del agujero de drenaje (mm) al vaciar; null: sin agujero */
   drain: number | null;
+  /** Segundo agujero (venteo) lejos del de drenaje */
+  vent?: boolean;
 }
 
 export interface PlateResult {
@@ -132,6 +134,8 @@ export interface PlateResult {
   unplaced: string[];
   too_tall: string[];
   total_bytes: number;
+  /** Avisos al preparar las piezas */
+  notes?: string[];
   /** Factor por eje aplicado por la contracción (1 = sin compensar) */
   shrink_scale?: [number, number, number];
 }
@@ -147,6 +151,8 @@ export interface PrepSettings {
   /** Agujero de drenaje al vaciar (resina) y su diámetro */
   drain: boolean;
   drainDiameter: number;
+  /** Un segundo agujero para que entre aire al sacar la resina */
+  vent?: boolean;
   /** El diseño (Diseñar) sale con todo lo hueco compensado para la impresora */
   compensateAll?: boolean;
   /** Cómo se parte el modelo: grid, optimal, zlayers o manual */
@@ -586,6 +592,8 @@ export const MaterialSection: Component<{
   onDrain: (v: boolean) => void;
   drainDiameter: number;
   onDrainDiameter: (v: number) => void;
+  vent?: boolean;
+  onVent?: (v: boolean) => void;
   estimate?: MaterialEstimate;
   busy?: boolean;
   disabled?: boolean;
@@ -608,10 +616,17 @@ export const MaterialSection: Component<{
         label={t("Agujero de drenaje")}
         checked={props.drain}
         onChange={props.onDrain}
-        hint={t("Abre un agujero en la cara plana de abajo para que salga la resina del hueco. Pide una cara plana apoyada en la cama.")}
+        hint={t("Abre un agujero en la base para que salga la resina del hueco. Si la pieza no tiene una cara plana abajo donde quepa, se le aplana la base quitando una lámina fina y se avisa.")}
       />
       <Show when={props.drain}>
         <NumberInput label={t("Diámetro")} value={props.drainDiameter} onChange={props.onDrainDiameter} min={2} max={15} step={0.5} suffix="mm" />
+        <Checkbox
+          small
+          label={t("Agujero de venteo")}
+          checked={props.vent ?? false}
+          onChange={(v) => props.onVent?.(v)}
+          hint={t("Un segundo agujero, lejos del de drenaje, para que entre aire y la resina salga sin glugluear.")}
+        />
       </Show>
     </Show>
     <Button onClick={props.onEstimate} disabled={props.disabled || props.busy} loading={props.busy} fullWidth size="sm">
@@ -714,6 +729,7 @@ export const PlatesSection: Component<{
               <Show when={r().too_tall.length > 0}>
                 <p class="text-[11px] text-warning">{t("Más altas que la impresora: {names}", { names: r().too_tall.join(", ") })}</p>
               </Show>
+              <For each={r().notes ?? []}>{(n) => <p class="text-[11px] text-warning">{tBackend(n)}</p>}</For>
             </div>
           )}
         </Show>
