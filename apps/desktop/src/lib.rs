@@ -12,6 +12,7 @@ pub mod linux_desktop;
 pub mod commands;
 pub mod placement;
 pub mod print_prep;
+pub mod print_skin;
 pub mod project;
 pub mod ray_render;
 pub mod remesh;
@@ -168,6 +169,15 @@ pub fn run() {
             print_prep::get_print_presets,
             print_prep::get_fab_tolerances,
             print_prep::export_calibration_model,
+            print_skin::skin_library,
+            print_skin::skin_preview,
+            print_skin::skin_import_image,
+            print_skin::skin_remove_image,
+            print_skin::skin_zone_get,
+            print_skin::skin_zone_edit,
+            print_skin::skin_zone_grow,
+            print_skin::skin_zone_invert,
+            print_skin::skin_zone_clear,
             print_prep::solve_print_calibration,
             print_prep::check_print_readiness,
             print_prep::suggest_print_orientation,

@@ -155,6 +155,9 @@ pub struct AppState {
     pub print3d_pieces: Mutex<Option<Vec<pinocchio_print3d::LabeledPiece>>>,
     /// Las mismas piezas sin uniones (de aquí se rehacen al cambiar sus parámetros)
     pub print3d_pieces_plain: Mutex<Option<Vec<pinocchio_print3d::LabeledPiece>>>,
+    /// Pieles imprimibles: las caras elegidas y las imágenes importadas
+    pub print_skin_zone: Mutex<crate::print_skin::SkinZone>,
+    pub print_skin_images: Mutex<Vec<crate::print_skin::SkinImage>>,
     /// Backup de malla antes de escalar para impresión
     pub mesh_before_print_scale: Mutex<Option<Mesh>>,
     /// Backup de escena antes de escalar para impresión
@@ -218,6 +221,8 @@ impl AppState {
             scene_before_unwrap: Mutex::new(None),
             print3d_pieces: Mutex::new(None),
             print3d_pieces_plain: Mutex::new(None),
+            print_skin_zone: Mutex::new(Default::default()),
+            print_skin_images: Mutex::new(Vec::new()),
             mesh_before_print_scale: Mutex::new(None),
             scene_before_print_scale: Mutex::new(None),
             scene_edits: Mutex::new(Vec::new()),
@@ -318,6 +323,7 @@ impl AppState {
         *self.scene_before_unwrap.lock().unwrap() = None;
         *self.print3d_pieces.lock().unwrap() = None;
         *self.print3d_pieces_plain.lock().unwrap() = None;
+        *self.print_skin_zone.lock().unwrap() = Default::default();
         *self.mesh_before_print_scale.lock().unwrap() = None;
         *self.scene_before_print_scale.lock().unwrap() = None;
         self.scene_edits.lock().unwrap().clear();

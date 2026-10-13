@@ -69,12 +69,33 @@ struct ProjectState {
     print3d_pieces: Option<Vec<PieceDto>>,
     mesh_before_print_scale: Option<MeshDto>,
     scene_before_print_scale: Option<Scene>,
+    /// Pieles imprimibles: caras elegidas e imágenes importadas
+    print_skin: Option<PrintSkinDto>,
     /// Diseño CAD (recetas: el sólido se recalcula al abrir)
     cad: Option<cad_model::Document>,
     /// Los objetos de la escena que no están activos (el activo es el resto
     /// de los campos); `None` = el activo todavía no tiene número
     active_object: Option<u64>,
     objects: Vec<StoredObject>,
+}
+
+/// Pieles imprimibles: la zona elegida y las imágenes de la biblioteca (grises de 8 bits)
+#[derive(Serialize, Deserialize, Default)]
+#[serde(default)]
+struct PrintSkinDto {
+    zone_total: usize,
+    zone: Vec<u32>,
+    images: Vec<PrintSkinImageDto>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct PrintSkinImageDto {
+    id: String,
+    name: String,
+    width: usize,
+    height: usize,
+    #[serde(with = "serde_bytes")]
+    gray: Vec<u8>,
 }
 
 /// Un objeto que no está activo: su modelo completo (sin diseño ni objetos)
@@ -496,6 +517,15 @@ fn capture_model(state: &AppState) -> ProjectState {
         }),
         mesh_before_print_scale: mesh(&state.mesh_before_print_scale),
         scene_before_print_scale: state.scene_before_print_scale.lock().unwrap().clone(),
+        print_skin: {
+            let zone = state.print_skin_zone.lock().unwrap();
+            let images = state.print_skin_images.lock().unwrap();
+            (!zone.faces.is_empty() || !images.is_empty()).then(|| PrintSkinDto {
+                zone_total: zone.total,
+                zone: zone.faces.clone(),
+                images: images.iter().map(|i| PrintSkinImageDto { id: i.id.clone(), name: i.name.clone(), width: i.map.width, height: i.map.height, gray: i.map.to_gray8() }).collect(),
+            })
+        },
         ..Default::default()
     }
 }
@@ -556,6 +586,19 @@ fn restore_model(state: &AppState, p: ProjectState) -> Result<(), String> {
     *state.print3d_pieces.lock().unwrap() = pieces;
     *state.mesh_before_print_scale.lock().unwrap() = before_print;
     *state.scene_before_print_scale.lock().unwrap() = p.scene_before_print_scale;
+    // Pieles: la zona es de este objeto; las imágenes son de la biblioteca y se suman (sin repetir id)
+    let skin = p.print_skin.unwrap_or_default();
+    *state.print_skin_zone.lock().unwrap() = crate::print_skin::SkinZone { total: skin.zone_total, faces: skin.zone };
+    {
+        let mut images = state.print_skin_images.lock().unwrap();
+        for i in skin.images {
+            if images.iter().all(|x| x.id != i.id)
+                && let Ok(map) = pinocchio_print3d::HeightMap::from_gray8(i.width, i.height, &i.gray)
+            {
+                images.push(crate::print_skin::SkinImage { id: i.id, name: i.name, map });
+            }
+        }
+    }
     // La malla del escaneo → CAD sale del modelo activo
     *state.cad_scan.lock().unwrap() = None;
     Ok(())
@@ -1127,6 +1170,41 @@ mod tests {
             [3, 7, 6], [3, 6, 2], [0, 4, 7], [0, 7, 3], [1, 2, 6], [1, 6, 5],
         ];
         Mesh::try_from_triangles(&p, &t).unwrap()
+    }
+
+    /// La zona de la piel y las imágenes importadas viajan en el proyecto; cada objeto lleva su zona
+    #[test]
+    fn print_skin_survives_save_and_follows_the_object() {
+        let state = AppState::new();
+        *state.cad_document.lock().unwrap() = Some(cad_model::Document::new());
+        *state.mesh.lock().unwrap() = Some(cube());
+        crate::print_skin::edit_zone(&state, &[2, 3], crate::print_skin::ZoneMode::Set).unwrap();
+        state.print_skin_images.lock().unwrap().push(crate::print_skin::SkinImage {
+            id: "img_1".into(),
+            name: "rayas".into(),
+            map: pinocchio_print3d::HeightMap::from_gray8(2, 2, &[0, 255, 255, 0]).unwrap(),
+        });
+        let bytes = rmp_serde::to_vec_named(&capture(&state)).unwrap();
+        let back: ProjectState = rmp_serde::from_slice(&bytes).unwrap();
+        let other = AppState::new();
+        restore(&other, back).unwrap();
+        assert_eq!(other.print_skin_zone.lock().unwrap().faces, vec![2, 3]);
+        assert_eq!(other.print_skin_zone.lock().unwrap().total, 12);
+        let images = other.print_skin_images.lock().unwrap();
+        assert_eq!((images.len(), images[0].id.as_str(), images[0].map.data.clone()), (1, "img_1", vec![0.0, 1.0, 1.0, 0.0]));
+        drop(images);
+        // Un proyecto viejo (sin pieles) se abre vacío
+        let mut old: ProjectState = rmp_serde::from_slice(&bytes).unwrap();
+        old.print_skin = None;
+        let fresh = AppState::new();
+        restore(&fresh, old).unwrap();
+        assert!(fresh.print_skin_zone.lock().unwrap().faces.is_empty());
+        // Cambiar de objeto: la zona se queda con su objeto
+        adopt_impl(&state, 1);
+        activate_impl(&state, 2).unwrap();
+        assert!(state.print_skin_zone.lock().unwrap().faces.is_empty() || state.mesh.lock().unwrap().is_none());
+        activate_impl(&state, 1).unwrap();
+        assert_eq!(state.print_skin_zone.lock().unwrap().faces, vec![2, 3]);
     }
 
     /// Cambiar de objeto guarda el activo en su casillero y trae el otro; el
