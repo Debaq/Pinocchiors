@@ -146,7 +146,7 @@ pub fn apply_skin(mesh: &Mesh, uvs: &[[f32; 2]], zone: &[usize], map: &HeightMap
     // Lado de los triángulos: el detalle del mapa, sin bajar de media boquilla (≈ 0,2 mm)
     let pixel_mm = cfg.tile_mm / map.width.max(map.height) as Real;
     let edge_mm = cfg.edge_mm.unwrap_or_else(|| pixel_mm.max(0.2));
-    if !(edge_mm > 0.0) {
+    if edge_mm.is_nan() || edge_mm <= 0.0 {
         return Err(Print3dError::InvalidConfig("el lado de los triángulos tiene que ser positivo".into()));
     }
     let estimate = (zone_area_mm2 / (0.19 * edge_mm * edge_mm)) as usize;
@@ -433,5 +433,27 @@ mod tests {
         let map = Pattern::Dots.generate(64);
         let r = apply_skin(&mesh, &uvs, &zone, &map, &SkinConfig { edge_mm: Some(0.15), max_triangles: 5_000_000, amplitude: 0.05, ..cfg(0.05) }).unwrap();
         assert_eq!(r.warnings.len(), 2, "{:?}", r.warnings);
+    }
+
+    /// Cortar después de texturizar: las piezas salen cerradas y las tapas planas, aunque la malla sea densa
+    #[test]
+    fn se_puede_cortar_una_malla_con_piel() {
+        use crate::slicer::{slice_by_plane, Plane};
+        let (mesh, uvs, zone) = box_soup();
+        let map = Pattern::Leather.generate(128);
+        let skinned = apply_skin(&mesh, &uvs, &zone, &map, &SkinConfig { tile_mm: 12.0, amplitude: 0.7, edge_mm: Some(0.5), feather_mm: Some(2.0), ..Default::default() }).unwrap();
+        assert!(skinned.triangles_after > 20_000, "{}", skinned.triangles_after);
+        let t0 = std::time::Instant::now();
+        // Un corte vertical por el medio de la tapa texturizada
+        let (a, b) = slice_by_plane(&skinned.mesh, &Plane::yz_at_x(20.0)).unwrap();
+        let elapsed = t0.elapsed();
+        assert!(a.is_closed() && b.is_closed(), "las piezas cortadas no quedaron cerradas");
+        let va = crate::analysis::compute_volume(&a);
+        let vb = crate::analysis::compute_volume(&b);
+        assert!((va + vb - crate::analysis::compute_volume(&skinned.mesh)).abs() < 1e-6 * (va + vb));
+        // La tapa del corte es plana: todos sus vértices en x = 20
+        let cap: Vec<_> = a.vertices.iter().filter(|v| (v.position.x() - 20.0).abs() < 1e-9).collect();
+        assert!(cap.len() > 20, "{}", cap.len());
+        eprintln!("corte de {} triángulos en {:?}", skinned.triangles_after, elapsed);
     }
 }

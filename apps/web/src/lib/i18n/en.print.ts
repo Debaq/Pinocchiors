@@ -223,5 +223,10 @@ export const en_print: Catalog = {
   "La malla ya no coincide con el modelo desplegado: vuelve a desplegar el UV": "The mesh no longer matches the unwrapped model: unwrap the UV again",
   "No se pudo aplicar la piel: {e}": "Couldn't apply the skin: {e}",
   "Saldrían unos {n} triángulos: la malla se pone muy pesada": "It would come out at about {n} triangles: the mesh gets very heavy",
+  "Ver el relieve": "See the relief",
+  "Dejar de ver el relieve": "Stop seeing the relief",
+  "Vista previa con menos detalle que el resultado; el modelo no cambió.": "Preview with less detail than the result; the model didn't change.",
+  "Piel aplicada, pero la revisión encontró {n} avisos: míralos en «¿Se puede imprimir?»": "Skin applied, but the check found {n} warnings: see them in \"Can it be printed?\"",
+  "No se pudo armar la vista previa: {e}": "Couldn't build the preview: {e}",
   "No se pudieron rehacer las uniones: {e}": "Couldn't redo the joints: {e}",
 };

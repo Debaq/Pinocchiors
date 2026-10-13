@@ -74,6 +74,10 @@ export interface SkinPanelProps {
   onImport: () => void;
   onRemove: (id: string) => void;
   estimate?: SkinEstimate;
+  /** Se está viendo el relieve en el visor (con menos detalle) */
+  previewing?: boolean;
+  previewBusy?: boolean;
+  onTogglePreview?: () => void;
   onApply: () => void;
   busy?: boolean;
 }
@@ -255,6 +259,20 @@ export const SkinPanel: Component<SkinPanelProps> = (props) => {
               <For each={e().warnings}>{(w) => <p class="text-warning">{t(w)}</p>}</For>
             </div>
           )}
+        </Show>
+        <Button
+          size="sm"
+          fullWidth
+          variant={props.previewing ? "primary" : "default"}
+          onClick={props.onTogglePreview}
+          disabled={count() === 0 || props.estimate?.has_uv === false}
+          loading={props.previewBusy}
+          icon={<Icons.Cube size={14} />}
+        >
+          {props.previewing ? t("Dejar de ver el relieve") : t("Ver el relieve")}
+        </Button>
+        <Show when={props.previewing}>
+          <p class="text-[10px] text-text-dim leading-snug">{t("Vista previa con menos detalle que el resultado; el modelo no cambió.")}</p>
         </Show>
         <Button size="sm" fullWidth variant="primary" onClick={props.onApply} disabled={props.busy || count() === 0 || props.estimate?.has_uv === false} loading={props.busy}>
           {t("Aplicar piel a la zona")}

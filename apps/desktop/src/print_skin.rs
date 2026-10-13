@@ -331,6 +331,49 @@ pub(crate) fn estimate(state: &AppState, params: &SkinParams) -> Result<SkinEsti
     Ok(SkinEstimate { has_uv, edge_mm, triangles, zone_area_mm2: zone.area_mm2, warnings })
 }
 
+/// Cuántos triángulos como mucho tiene la vista previa del relieve
+const PREVIEW_TRIANGLES: usize = 250_000;
+
+/// La malla con el relieve puesto, con menos detalle si hace falta (para verla sin cambiar el modelo).
+/// Sale en el formato de los datos de malla del visor
+#[tauri::command]
+pub async fn skin_preview_mesh(app: AppHandle, params: SkinParams) -> Result<Response, String> {
+    in_background(app, move |state| preview_mesh(state, &params).map(Response::new)).await
+}
+
+pub(crate) fn preview_mesh(state: &AppState, params: &SkinParams) -> Result<Vec<u8>, String> {
+    let zone = zone_info(state)?;
+    if zone.faces.is_empty() {
+        return Err("Elige primero la zona donde va la piel".into());
+    }
+    let scene = state.scene.lock().unwrap().clone().ok_or("No hay escena cargada")?;
+    let mesh = state.mesh.lock().unwrap().clone().ok_or("No hay malla cargada")?;
+    let uvs = scene_uvs(&scene)?;
+    if uvs.len() != mesh.vertices.len() {
+        return Err("La malla ya no coincide con el modelo desplegado: vuelve a desplegar el UV".into());
+    }
+    let map = height_map(state, &params.image, &params.ops)?;
+    // El lado que cabe en el presupuesto de triángulos (nunca más fino que el real)
+    let pixel_mm = params.tile_mm.max(0.01) / map.width.max(map.height) as f64;
+    let wanted = params.edge_mm.unwrap_or_else(|| pixel_mm.max(0.2));
+    let outside = zone.total.saturating_sub(zone.faces.len());
+    let budget = PREVIEW_TRIANGLES.saturating_sub(outside).max(10_000) as f64;
+    let affordable = (zone.area_mm2 / (0.19 * budget)).sqrt();
+    let cfg = p3d::SkinConfig {
+        tile_mm: params.tile_mm,
+        amplitude: params.amplitude,
+        offset: params.offset,
+        rotation_deg: params.rotation_deg,
+        edge_mm: Some(wanted.max(affordable)),
+        feather_mm: params.feather_mm,
+        unit_mm: mm_per_unit(state),
+        max_triangles: PREVIEW_TRIANGLES * 2,
+    };
+    let faces: Vec<usize> = zone.faces.iter().map(|&f| f as usize).collect();
+    let result = p3d::apply_skin(&mesh, &uvs, &faces, &map, &cfg).map_err(|e| format!("No se pudo armar la vista previa: {e}"))?;
+    Ok(crate::commands::scene_mesh_data(&crate::commands::mesh_to_scene(&result.mesh, "Vista previa", Some(&scene))).to_bytes())
+}
+
 /// Un UV por vértice de la malla activa, en el orden de la escena (el de `scene_to_mesh`)
 fn scene_uvs(scene: &converter_scene::Scene) -> Result<Vec<[f32; 2]>, String> {
     let mut out = Vec::new();
@@ -490,6 +533,35 @@ mod tests {
         // El orden coincide con el que aplica: la estimación no se aleja mucho de la realidad
         let real = apply_skin_impl(&state, &params(10.0, 0.6)).unwrap();
         assert!((real.triangles_after as f64 / e.triangles as f64 - 1.0).abs() < 0.5, "{} vs {}", real.triangles_after, e.triangles);
+    }
+
+    #[test]
+    fn la_vista_previa_no_toca_el_modelo_y_respeta_el_presupuesto() {
+        let state = AppState::new();
+        let scene = box_scene();
+        *state.mesh.lock().unwrap() = Some(crate::commands::scene_to_pinocchio_mesh(&scene).unwrap());
+        *state.scene.lock().unwrap() = Some(scene);
+        edit_zone(&state, &[2, 3], ZoneMode::Set).unwrap();
+        let params = SkinParams {
+            image: "lines".into(),
+            ops: SkinOps::default(),
+            tile_mm: 10.0,
+            amplitude: 0.8,
+            offset: p3d::SkinOffset::Outward,
+            rotation_deg: 0.0,
+            edge_mm: Some(0.3),
+            feather_mm: None,
+        };
+        let before = state.mesh.lock().unwrap().clone().unwrap().num_faces();
+        let bytes = preview_mesh(&state, &params).unwrap();
+        // No cambió nada del modelo ni de la zona
+        assert_eq!(state.mesh.lock().unwrap().as_ref().unwrap().num_faces(), before);
+        assert_eq!(state.print_skin_zone.lock().unwrap().faces, vec![2, 3]);
+        // Con 0,3 mm la tapa pediría ~17 000 · 1,3; el presupuesto de la vista previa lo deja con menos triángulos que lo real
+        assert!(bytes.len() > 1000);
+        let real = estimate(&state, &params).unwrap().triangles;
+        assert!(real > 15_000, "{real}");
+        assert!(preview_mesh(&AppState::new(), &params).is_err(), "sin malla no hay vista previa");
     }
 
     #[test]

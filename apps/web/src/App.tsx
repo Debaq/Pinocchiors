@@ -1580,6 +1580,10 @@ export const App: Component = () => {
   const [skinLibrary, setSkinLibrary] = createSignal<SkinPattern[]>([]);
   const [skinImage, setSkinImage] = createSignal<SkinImageSettings>(defaultSkinImage);
   const [skinEstimate, setSkinEstimate] = createSignal<SkinEstimate | undefined>();
+  // Vista previa del relieve: una malla con menos detalle que se ve en lugar del modelo
+  const [skinPreviewOn, setSkinPreviewOn] = createSignal(false);
+  const [skinPreviewBusy, setSkinPreviewBusy] = createSignal(false);
+  const [skinPreviewData, setSkinPreviewData] = createSignal<MeshData | undefined>();
   const [fabInfo, setFabInfo] = createSignal<FabInfo | undefined>();
   const [printReadiness, setPrintReadiness] = createSignal<Readiness | undefined>();
   const [printOrientations, setPrintOrientations] = createSignal<OrientationOption[] | undefined>();
@@ -7051,6 +7055,40 @@ export const App: Component = () => {
     }, 250);
     onCleanup(() => clearTimeout(timer));
   });
+  let skinPreviewRequest = 0;
+  createEffect(() => {
+    const params = skinParams();
+    const faces = skinZone()?.faces.length ?? 0;
+    const on = skinPreviewOn();
+    const mine = ++skinPreviewRequest;
+    if (!on || faces === 0) {
+      setSkinPreviewData(undefined);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      setSkinPreviewBusy(true);
+      try {
+        const data = decodeMesh(await invoke<ArrayBuffer>("skin_preview_mesh", { params }));
+        if (mine === skinPreviewRequest) setSkinPreviewData(data);
+      } catch (e) {
+        if (mine === skinPreviewRequest) {
+          setSkinPreviewOn(false);
+          setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
+        }
+      } finally {
+        if (mine === skinPreviewRequest) setSkinPreviewBusy(false);
+      }
+    }, 400);
+    onCleanup(() => clearTimeout(timer));
+  });
+  // La vista previa y la elección de caras no van juntas (los números de cara son los del modelo)
+  createEffect(() => {
+    if (skinPicking()) setSkinPreviewOn(false);
+  });
+  createEffect(() => {
+    if (pipeline.activeStep() !== "print3d") setSkinPreviewOn(false);
+  });
+  createEffect(on(meshData, () => setSkinPreviewOn(false), { defer: true }));
   const applySkin = () =>
     undoable(async (done) => {
       try {
@@ -7067,9 +7105,24 @@ export const App: Component = () => {
         setPrintOrientations(undefined);
         setJointsReport(undefined);
         setSkinPicking(false);
+        setSkinPreviewOn(false);
         setMeshData(await fetchMeshData());
         if (meshAnalysis()) setMeshAnalysis(await invoke<TauriPrint3dAnalysis>("analyze_print3d").catch(() => undefined));
         setStatusMessage(t("Piel aplicada: {n} triángulos, relieve de hasta {h} mm", { n: r.triangles_after.toLocaleString(locale()), h: r.max_displacement_mm.toFixed(2) }));
+        // Con el relieve puesto puede haber voladizos o paredes finas nuevas: se revisa de una vez
+        const prep = printPrep();
+        const printer = prep.printer ?? printPresets()?.printers[0];
+        const material = prep.material ?? printPresets()?.materials[0];
+        if (printer && material) {
+          try {
+            const report = await busy(t("Revisando si se puede imprimir..."), () => invoke<Readiness>("check_print_readiness", { printer, material }));
+            setPrintReadiness(report);
+            const problems = report.issues.filter((i) => i.severity !== "info").length;
+            if (problems > 0) setStatusMessage(t("Piel aplicada, pero la revisión encontró {n} avisos: míralos en «¿Se puede imprimir?»", { n: problems }));
+          } catch (e) {
+            console.error("Skin check error:", e);
+          }
+        }
       } catch (e) {
         console.error("Skin error:", e);
         setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
@@ -8645,7 +8698,7 @@ export const App: Component = () => {
               onPaintSettingsChanged={(change) => setPaintConfig((prev) => ({ ...prev, ...change }))}
               onWeightsPainted={handleWeightsPainted}
               paintSettings={paintSettings()}
-              meshData={showsPreview() ? remeshPreviewData() : displayQuad() ? quadMeshData() : meshData()}
+              meshData={skinPreviewOn() && skinPreviewData() ? skinPreviewData() : showsPreview() ? remeshPreviewData() : displayQuad() ? quadMeshData() : meshData()}
               sceneMaterials={viewerMaterials()}
               lights={lights()}
               onLightsChanged={setLights}
@@ -9026,6 +9079,12 @@ export const App: Component = () => {
                 zone: skinZone(),
                 picking: skinPicking(),
                 onTogglePicking: () => setSkinPicking(!skinPicking()),
+                previewing: skinPreviewOn(),
+                previewBusy: skinPreviewBusy(),
+                onTogglePreview: () => {
+                  if (!skinPreviewOn()) setSkinPicking(false);
+                  setSkinPreviewOn(!skinPreviewOn());
+                },
                 onGrow: growSkinZone,
                 onInvert: invertSkinZone,
                 onClear: clearSkinZone,

@@ -101,7 +101,7 @@ Decisiones tomadas (2026-10-13):
 - **Imágenes de fábrica**, pocas y sin costuras (se generan por código, sin archivos): grano de cuero, líneas,
   rejilla, puntos, rombos, panal. Más las que el usuario importe (PNG/JPG a grises, con invertir, contraste y desenfoque).
 
-Estado (2026-10-13): **fases 1 a 4 hechas**, y de la 5 los avisos de antes de aplicar; falta la revisión después de aplicar (voladizos y paredes finas) y la vista previa del relieve (6).
+Estado (2026-10-13): **fases 1 a 6 hechas** (zonas, imágenes, desplazamiento, parámetros en mm, revisión antes y después de aplicar, vista previa).
 
 Fases:
 
@@ -115,14 +115,15 @@ Fases:
    hacia ahí (para no abrir grietas). Los vértices que comparten posición pero no UV (costuras) toman la misma altura,
    para que la malla siga cerrada.
 4. **Escala en mm** ✅: tamaño de la baldosa en mm (la relación UV→mm sale del área de la zona), rotación e inversión.
-5. **Revisión** 🟡 (hecho: `skin_estimate` avisa de relieve menor que una capa, mayor que 2 mm, detalle bajo la boquilla y malla muy pesada, antes de aplicar; falta volver a pasar `check_printability` tras aplicar y decimar): el límite físico lo da la boquilla (relieve útil de 0,2 a 1 mm; detalle mínimo ≈ una boquilla). Avisar
+5. **Revisión** ✅ (`skin_estimate` avisa antes de aplicar de relieve menor que una capa, mayor que 2 mm, detalle bajo la boquilla y malla muy pesada; después de aplicar se vuelve a correr `check_printability` y los avisos salen en «¿Se puede imprimir?»; no se decima): el límite físico lo da la boquilla (relieve útil de 0,2 a 1 mm; detalle mínimo ≈ una boquilla). Avisar
    si la imagen pide más detalle del que se imprime, si aparecen voladizos o paredes finas (se vuelve a pasar
    `check_printability`), y cuántos triángulos salen (decimar al final si pasa de un tope).
 6. **Interfaz**: panel «Texturas imprimibles» con zona, imagen, tamaño, amplitud, desfase, rotación y una vista previa
    (sombreado con la altura) antes de generar la geometría. Hecho: zona (elegir en el visor con clic o recuadro, crecer por
    ángulo, invertir, quitar), biblioteca con miniaturas, importar, invertir / contraste / suavizar. Además: baldosa en mm, altura, giro, 
-   «crece» (hacia afuera / centrado / hacia adentro), estimación de triángulos y «Aplicar piel a la zona». Falta la vista
-   previa del relieve en el visor.
+   «crece» (hacia afuera / centrado / hacia adentro), estimación de triángulos y «Aplicar piel a la zona». La vista
+   previa («Ver el relieve») arma el resultado con menos detalle (hasta 250 000 triángulos) y lo muestra en lugar del
+   modelo sin cambiarlo.
 
 Dónde está: `texture.rs` y `zones.rs` (lib), `print_skin.rs` (comandos y estado; la zona y las imágenes van en el
 .pinocchio y la zona viaja con su objeto), `SkinPanel.tsx` (interfaz). La elección de caras reutiliza la del visor
@@ -145,4 +146,9 @@ relación UV→mm es el promedio de la zona) y se mueve por su normal suave, con
 fundido en tres alturas. Los vértices de una costura de UV toman la misma altura (así no se abre). El resultado
 reemplaza la malla del modelo y la escena queda como geometría sola; la copia para deshacer es la del historial.
 Límite conocido: una sola escala de UV para toda la zona (si las islas tienen estiramientos distintos, la baldosa
-cambia de tamaño entre ellas) y la zona se pierde si se corta antes, mientras el cortador no lleve el UV.
+cambia de tamaño entre ellas).
+
+Cortar antes o después (resuelto): se texturiza el modelo entero y se corta después. Medido: cortar una malla texturizada
+de 33 000 triángulos tarda ~17 ms (release), las piezas salen cerradas y las tapas de corte planas; así no hace falta
+que el cortador lleve UV ni máscara. De paso se arregló el cortador con planos que pasan justo por vértices de la malla
+(dejaba piezas abiertas): ahora esos vértices cuentan como del lado de adelante.

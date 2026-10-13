@@ -238,10 +238,15 @@ pub fn slice_by_plane(mesh: &Mesh, plane: &Plane) -> Result<(Mesh, Mesh)> {
     }
 
     // Clasificar todos los vértices
+    // Los vértices sobre el plano cuentan como del lado de adelante: así cada triángulo cruza el plano
+    // con un solo vértice solitario (o no lo cruza) y los cortes por vértices de la malla no se rompen
     let classifications: Vec<PointClassification> = mesh
         .vertices
         .iter()
-        .map(|v| plane.classify_point(v.position, EPSILON))
+        .map(|v| match plane.classify_point(v.position, EPSILON) {
+            PointClassification::OnPlane => PointClassification::Front,
+            other => other,
+        })
         .collect();
 
     // Verificar si el plano intersecta la malla
@@ -821,6 +826,26 @@ mod tests {
         let pieces = result.unwrap();
         // 2 planos perpendiculares deberían crear ~4 piezas
         assert!(pieces.len() >= 2);
+    }
+
+    /// Un plano que pasa justo por vértices de la malla (el ecuador de un octaedro) corta en dos piezas cerradas
+    #[test]
+    fn corte_por_los_vertices_de_la_malla() {
+        let v = vec![
+            Vector3::new(1.0, 0.0, 0.0),
+            Vector3::new(0.0, 1.0, 0.0),
+            Vector3::new(-1.0, 0.0, 0.0),
+            Vector3::new(0.0, -1.0, 0.0),
+            Vector3::new(0.0, 0.0, 1.0),
+            Vector3::new(0.0, 0.0, -1.0),
+        ];
+        let f = vec![[0, 1, 4], [1, 2, 4], [2, 3, 4], [3, 0, 4], [1, 0, 5], [2, 1, 5], [3, 2, 5], [0, 3, 5]];
+        let octa = Mesh::from_triangles(&v, &f);
+        assert!(octa.is_closed());
+        let (a, b) = slice_by_plane(&octa, &Plane::xy_at_z(0.0)).unwrap();
+        assert!(a.is_closed() && b.is_closed(), "cortes por los vértices dejan piezas abiertas");
+        let (va, vb) = (crate::compute_volume(&a), crate::compute_volume(&b));
+        assert!((va - vb).abs() < 1e-9 && (va + vb - 4.0 / 3.0).abs() < 1e-9, "{va} {vb}");
     }
 
     #[test]
