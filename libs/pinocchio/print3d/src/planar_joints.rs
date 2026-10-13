@@ -504,6 +504,7 @@ fn prism_walls(ring: &[Vector3], dir: Vector3, out_pos: &mut Vec<Vector3>, out_t
 
 /// Perno de cierre de cuarto de vuelta: tallo redondo de `stem_r` y `h1` de largo, y encima una
 /// cabeza de barra `head` (largo, ancho) de `head_t` de grosor
+#[allow(clippy::too_many_arguments)]
 pub fn add_bayonet_pin(mesh: &Mesh, center: Vector3, normal: Vector3, rotation_deg: Real, head: (Real, Real), stem_r: Real, h1: Real, head_t: Real) -> Result<Mesh> {
     let n = normal.try_normalize().ok_or_else(|| Print3dError::JointError("normal nula".into()))?;
     if stem_r <= 0.0 || h1 <= 0.0 || head_t <= 0.0 {
@@ -536,6 +537,7 @@ pub fn add_bayonet_pin(mesh: &Mesh, center: Vector3, normal: Vector3, rotation_d
 
 /// Ranura de cierre de cuarto de vuelta: boca rectangular `(len, wid)` de `d1` de hondo, y debajo
 /// una cámara redonda de `chamber_r` hasta `d2` donde la barra puede girar
+#[allow(clippy::too_many_arguments)]
 pub fn add_bayonet_hole(mesh: &Mesh, center: Vector3, normal: Vector3, rotation_deg: Real, mouth: (Real, Real), chamber_r: Real, d1: Real, d2: Real, min_wall: Real) -> Result<Mesh> {
     let n = normal.try_normalize().ok_or_else(|| Print3dError::JointError("normal nula".into()))?;
     if !(d2 > d1 && d1 > 0.0) || chamber_r <= mouth.0.hypot(mouth.1) * 0.5 {
