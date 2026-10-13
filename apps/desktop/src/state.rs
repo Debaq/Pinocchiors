@@ -153,6 +153,8 @@ pub struct AppState {
     // ── Print3D ──
     /// Piezas resultantes de subdivisión
     pub print3d_pieces: Mutex<Option<Vec<pinocchio_print3d::LabeledPiece>>>,
+    /// Las mismas piezas sin uniones (de aquí se rehacen al cambiar sus parámetros)
+    pub print3d_pieces_plain: Mutex<Option<Vec<pinocchio_print3d::LabeledPiece>>>,
     /// Backup de malla antes de escalar para impresión
     pub mesh_before_print_scale: Mutex<Option<Mesh>>,
     /// Backup de escena antes de escalar para impresión
@@ -215,6 +217,7 @@ impl AppState {
             mesh_before_unwrap: Mutex::new(None),
             scene_before_unwrap: Mutex::new(None),
             print3d_pieces: Mutex::new(None),
+            print3d_pieces_plain: Mutex::new(None),
             mesh_before_print_scale: Mutex::new(None),
             scene_before_print_scale: Mutex::new(None),
             scene_edits: Mutex::new(Vec::new()),
@@ -314,6 +317,7 @@ impl AppState {
         *self.mesh_before_unwrap.lock().unwrap() = None;
         *self.scene_before_unwrap.lock().unwrap() = None;
         *self.print3d_pieces.lock().unwrap() = None;
+        *self.print3d_pieces_plain.lock().unwrap() = None;
         *self.mesh_before_print_scale.lock().unwrap() = None;
         *self.scene_before_print_scale.lock().unwrap() = None;
         self.scene_edits.lock().unwrap().clear();

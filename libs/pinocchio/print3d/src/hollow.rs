@@ -69,7 +69,7 @@ pub fn hollow(mesh: &Mesh, config: &HollowConfig) -> Result<HollowResult> {
     let mut all_tris: Vec<[usize; 3]> = tris.clone();
     let base = all.len();
     all.extend(cavity.positions.iter().map(|p| Vector3::new(f64::from(p[0]), f64::from(p[1]), f64::from(p[2]))));
-    for t in cavity.indices.chunks_exact(3) {
+    for t in cavity.indices.as_chunks::<3>().0 {
         all_tris.push([base + t[0] as usize, base + t[2] as usize, base + t[1] as usize]);
     }
     let result = Mesh::from_triangles(&all, &all_tris);

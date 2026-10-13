@@ -1,0 +1,492 @@
+//! Preparación para imprimir: verificar, orientar, uniones, material y placas
+//!
+//! La lógica vive en `pinocchio-print3d` (Z arriba, milímetros). Aquí se
+//! traduce de la escena (Y arriba, unidades de la escena) a ese espacio y vuelta,
+//! y se leen/guardan las piezas de `AppState::print3d_pieces`.
+
+use crate::commands::{in_background, mesh_reoriented, mesh_to_scene, mm_per_unit};
+use crate::state::AppState;
+use pinocchio_mesh::Mesh;
+use pinocchio_print3d::{
+    self as p3d, HollowConfig, JointsReport, MaterialProfile, NestItem, OrientationCandidate, PlanarJointConfig, PrintabilityConfig, PrintabilityReport, PrinterProfile,
+};
+use serde::{Deserialize, Serialize};
+use tauri::AppHandle;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ESPACIO DE IMPRESIÓN
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// De la escena (Y arriba, `k` mm por unidad) a Z arriba en milímetros
+pub(crate) fn to_print_space(mesh: &Mesh, k: f64) -> Mesh {
+    let mut out = mesh_reoriented(mesh, true);
+    for v in &mut out.vertices {
+        v.position *= k;
+    }
+    out
+}
+
+/// De Z arriba en milímetros a la escena
+pub(crate) fn from_print_space(mesh: &Mesh, k: f64) -> Mesh {
+    let mut out = mesh.clone();
+    for v in &mut out.vertices {
+        v.position *= 1.0 / k;
+    }
+    mesh_reoriented(&out, false)
+}
+
+/// Dirección de impresión (Z arriba) a la de la escena (Y arriba)
+fn dir_to_scene(d: [f64; 3]) -> [f64; 3] {
+    [d[0], d[2], -d[1]]
+}
+
+fn point_to_scene(p: [f64; 3], k: f64) -> [f64; 3] {
+    let s = dir_to_scene(p);
+    [s[0] / k, s[1] / k, s[2] / k]
+}
+
+/// Mallas a preparar, en milímetros con Z arriba: las piezas si se dividió, o el modelo
+fn sources(state: &AppState) -> Result<Vec<(String, Mesh)>, String> {
+    let k = mm_per_unit(state);
+    if let Some(pieces) = state.print3d_pieces.lock().unwrap().as_ref() {
+        return Ok(pieces.iter().map(|p| (p.label.clone(), to_print_space(&p.mesh, k))).collect());
+    }
+    let mesh = state.mesh.lock().unwrap();
+    let mesh = mesh.as_ref().ok_or("No hay malla cargada")?;
+    Ok(vec![("modelo".to_string(), to_print_space(mesh, k))])
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PERFILES
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PrintPresets {
+    pub printers: Vec<PrinterProfile>,
+    pub materials: Vec<MaterialProfile>,
+}
+
+/// Impresoras y materiales de fábrica
+#[tauri::command]
+pub fn get_print_presets() -> PrintPresets {
+    PrintPresets { printers: PrinterProfile::presets(), materials: MaterialProfile::presets() }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// VERIFICAR
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PrintabilityInfo {
+    #[serde(flatten)]
+    pub report: PrintabilityReport,
+    /// De qué se habla: "modelo" o las piezas
+    pub subject: String,
+}
+
+/// Revisa si la malla (o cada pieza) se puede imprimir; junta los hallazgos
+#[tauri::command]
+pub async fn check_print_readiness(app: AppHandle, printer: PrinterProfile, material: MaterialProfile) -> Result<PrintabilityInfo, String> {
+    in_background(app, move |state| check_print_readiness_impl(state, &printer, &material)).await
+}
+
+pub(crate) fn check_print_readiness_impl(state: &AppState, printer: &PrinterProfile, material: &MaterialProfile) -> Result<PrintabilityInfo, String> {
+    let k = mm_per_unit(state);
+    let list = sources(state)?;
+    let single = list.len() == 1;
+    let mut merged: Option<PrintabilityReport> = None;
+    for (label, mesh) in &list {
+        let mut report = p3d::check_printability(mesh, printer, material).map_err(|e| format!("No se pudo revisar: {e}"))?;
+        report.thin_points = report.thin_points.iter().map(|&p| point_to_scene(p, k)).collect();
+        if !single {
+            for issue in &mut report.issues {
+                issue.message = format!("Pieza {label}: {}", issue.message);
+            }
+        }
+        merged = Some(match merged {
+            None => report,
+            Some(mut acc) => {
+                acc.open_edges += report.open_edges;
+                acc.non_manifold_edges += report.non_manifold_edges;
+                acc.inconsistent_edges += report.inconsistent_edges;
+                acc.degenerate_faces += report.degenerate_faces;
+                acc.duplicate_faces += report.duplicate_faces;
+                acc.components += report.components;
+                acc.inverted |= report.inverted;
+                acc.is_watertight &= report.is_watertight;
+                acc.overhang_area += report.overhang_area;
+                acc.support_volume_max += report.support_volume_max;
+                acc.bed_contact_area += report.bed_contact_area;
+                acc.min_thickness = match (acc.min_thickness, report.min_thickness) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (a, b) => a.or(b),
+                };
+                acc.thin_fraction = acc.thin_fraction.max(report.thin_fraction);
+                acc.thin_points.extend(report.thin_points);
+                acc.thin_points.truncate(64);
+                acc.fit.fits &= report.fit.fits;
+                acc.fit.fits_rotated &= report.fit.fits_rotated;
+                acc.issues.extend(report.issues);
+                acc.printable &= report.printable;
+                acc
+            }
+        });
+    }
+    let report = merged.ok_or("No hay nada que revisar")?;
+    Ok(PrintabilityInfo { report, subject: if single { "modelo".into() } else { "piezas".into() } })
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ORIENTACIÓN
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OrientationInfo {
+    /// Normal de la cara que queda abajo, en la escena (Y arriba)
+    pub down: [f64; 3],
+    pub overhang_area: f64,
+    pub contact_area: f64,
+    pub height: f64,
+    pub support_volume_max: f64,
+    pub score: f64,
+}
+
+fn orientation_info(c: &OrientationCandidate) -> OrientationInfo {
+    OrientationInfo {
+        down: dir_to_scene(c.down),
+        overhang_area: c.overhang_area,
+        contact_area: c.contact_area,
+        height: c.height,
+        support_volume_max: c.support_volume_max,
+        score: c.score,
+    }
+}
+
+/// Las mejores formas de apoyar el modelo en la cama (mínimos voladizos)
+#[tauri::command]
+pub async fn suggest_print_orientation(app: AppHandle, printer: PrinterProfile, material: MaterialProfile) -> Result<Vec<OrientationInfo>, String> {
+    in_background(app, move |state| suggest_print_orientation_impl(state, &printer, &material)).await
+}
+
+pub(crate) fn suggest_print_orientation_impl(state: &AppState, printer: &PrinterProfile, material: &MaterialProfile) -> Result<Vec<OrientationInfo>, String> {
+    let k = mm_per_unit(state);
+    let mesh = state.mesh.lock().unwrap();
+    let mesh = mesh.as_ref().ok_or("No hay malla cargada")?;
+    let config = PrintabilityConfig::from_profiles(printer, material);
+    let found = p3d::suggest_orientations(&to_print_space(mesh, k), &config, 6).map_err(|e| format!("No se pudo orientar: {e}"))?;
+    Ok(found.iter().map(orientation_info).collect())
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// UNIONES
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Pone pernos y huecos en las caras de corte de las piezas (parte de las piezas sin uniones)
+#[tauri::command]
+pub async fn add_print_joints(app: AppHandle, config: PlanarJointConfig) -> Result<JointsReport, String> {
+    in_background(app, move |state| add_print_joints_impl(state, &config)).await
+}
+
+pub(crate) fn add_print_joints_impl(state: &AppState, config: &PlanarJointConfig) -> Result<JointsReport, String> {
+    let k = mm_per_unit(state);
+    let plain = state.print3d_pieces_plain.lock().unwrap().clone().ok_or("Primero divide el modelo en piezas")?;
+    let mut work: Vec<p3d::LabeledPiece> = plain
+        .iter()
+        .map(|p| p3d::LabeledPiece { mesh: to_print_space(&p.mesh, k), ..p.clone() })
+        .collect();
+    let report = p3d::apply_joints(&mut work, config).map_err(|e| format!("No se pudieron poner las uniones: {e}"))?;
+    let back: Vec<p3d::LabeledPiece> = work.into_iter().map(|p| p3d::LabeledPiece { mesh: from_print_space(&p.mesh, k), ..p }).collect();
+    *state.print3d_pieces.lock().unwrap() = Some(back);
+    Ok(report)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MATERIAL
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MaterialInfo {
+    pub volume_mm3: f64,
+    pub mass_g: f64,
+    pub filament_m: f64,
+    /// Con vaciado: hueco total y fracción ahorrada
+    pub hollow: Option<HollowInfo>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HollowInfo {
+    pub cavity_volume: f64,
+    pub saved_fraction: f64,
+    pub volume_mm3: f64,
+    pub mass_g: f64,
+    pub filament_m: f64,
+}
+
+/// Material que gasta imprimir el modelo (o las piezas), macizo y, si se pide, vaciado
+#[tauri::command]
+pub async fn estimate_print_material(app: AppHandle, material: MaterialProfile, infill: f64, hollow_wall: Option<f64>) -> Result<MaterialInfo, String> {
+    in_background(app, move |state| estimate_print_material_impl(state, &material, infill, hollow_wall)).await
+}
+
+pub(crate) fn estimate_print_material_impl(state: &AppState, material: &MaterialProfile, infill: f64, hollow_wall: Option<f64>) -> Result<MaterialInfo, String> {
+    let list = sources(state)?;
+    let (mut solid, mut hol) = (p3d::MaterialEstimate { volume_mm3: 0.0, mass_g: 0.0, filament_m: 0.0 }, None::<(p3d::MaterialEstimate, f64)>);
+    let add = |a: &mut p3d::MaterialEstimate, b: p3d::MaterialEstimate| {
+        a.volume_mm3 += b.volume_mm3;
+        a.mass_g += b.mass_g;
+        a.filament_m += b.filament_m;
+    };
+    for (label, mesh) in &list {
+        add(&mut solid, p3d::estimate_material(mesh, material, infill, 1.75));
+        if let Some(wall) = hollow_wall {
+            let r = p3d::hollow(mesh, &HollowConfig { wall, voxel_size: None }).map_err(|e| format!("Pieza {label}: {e}"))?;
+            let e = p3d::estimate_material(&r.mesh, material, infill, 1.75);
+            let (mut acc, cavity) = hol.take().unwrap_or((p3d::MaterialEstimate { volume_mm3: 0.0, mass_g: 0.0, filament_m: 0.0 }, 0.0));
+            add(&mut acc, e);
+            hol = Some((acc, cavity + r.cavity_volume));
+        }
+    }
+    let hollow = hol.map(|(e, cavity)| HollowInfo {
+        cavity_volume: cavity,
+        saved_fraction: if solid.volume_mm3 > 0.0 { 1.0 - e.volume_mm3 / solid.volume_mm3 } else { 0.0 },
+        volume_mm3: e.volume_mm3,
+        mass_g: e.mass_g,
+        filament_m: e.filament_m,
+    });
+    Ok(MaterialInfo { volume_mm3: solid.volume_mm3, mass_g: solid.mass_g, filament_m: solid.filament_m, hollow })
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PLACAS
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PlateInput {
+    pub printer: PrinterProfile,
+    pub material: MaterialProfile,
+    /// stl, 3mf, obj…
+    pub format: String,
+    /// Separación entre piezas (mm)
+    pub spacing: f64,
+    /// Girar cada pieza a su mejor posición de apoyo
+    pub orient: bool,
+    /// Vaciar con este espesor de pared (mm)
+    pub hollow_wall: Option<f64>,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PlateInfo {
+    pub files: Vec<String>,
+    pub plates: usize,
+    pub pieces: usize,
+    pub utilization: Vec<f64>,
+    /// Piezas que no caben en la cama ni solas
+    pub unplaced: Vec<String>,
+    /// Piezas más altas que la impresora
+    pub too_tall: Vec<String>,
+    pub total_bytes: u64,
+}
+
+/// Una placa lista: sus piezas ya acomodadas (mm, Z arriba, esquina de la cama en el origen)
+pub(crate) struct Plate {
+    pub meshes: Vec<(String, Mesh)>,
+}
+
+pub(crate) struct PlatePlan {
+    pub plates: Vec<Plate>,
+    pub utilization: Vec<f64>,
+    pub unplaced: Vec<String>,
+    pub too_tall: Vec<String>,
+}
+
+/// Prepara las piezas (vaciar, orientar) y las reparte en camas
+pub(crate) fn plan_plates(list: Vec<(String, Mesh)>, input: &PlateInput) -> Result<PlatePlan, String> {
+    let config = PrintabilityConfig::from_profiles(&input.printer, &input.material);
+    let mut prepared: Vec<(String, Mesh)> = Vec::new();
+    for (label, mut mesh) in list {
+        if let Some(wall) = input.hollow_wall {
+            mesh = p3d::hollow(&mesh, &HollowConfig { wall, voxel_size: None }).map_err(|e| format!("Pieza {label}: {e}"))?.mesh;
+        }
+        if input.orient {
+            p3d::orient_for_print(&mut mesh, &config).map_err(|e| format!("Pieza {label}: {e}"))?;
+        } else {
+            p3d::settle_on_bed(&mut mesh);
+        }
+        prepared.push((label, mesh));
+    }
+    let bed = [input.printer.build_volume[0], input.printer.build_volume[1]];
+    let items: Vec<NestItem> = prepared.iter().enumerate().map(|(id, (_, m))| NestItem { id, size: p3d::footprint(m) }).collect();
+    let result = p3d::nest(&items, bed, input.spacing.max(0.0), true);
+    let mut meshes: Vec<Mesh> = prepared.iter().map(|(_, m)| m.clone()).collect();
+    p3d::apply_nesting(&mut meshes, &result);
+    let too_tall = prepared
+        .iter()
+        .zip(&meshes)
+        .enumerate()
+        .filter(|(i, (_, m))| !result.unplaced.contains(i) && p3d::compute_bounding_box(m).dimensions()[2] > input.printer.build_volume[2] + 1e-6)
+        .map(|(_, ((label, _), _))| label.clone())
+        .collect();
+    let mut plates: Vec<Plate> = (0..result.bed_count).map(|_| Plate { meshes: Vec::new() }).collect();
+    for p in &result.placements {
+        plates[p.bed].meshes.push((prepared[p.id].0.clone(), meshes[p.id].clone()));
+    }
+    let unplaced = result.unplaced.iter().map(|&i| prepared[i].0.clone()).collect();
+    Ok(PlatePlan { plates, utilization: result.utilization, unplaced, too_tall })
+}
+
+/// Escena de una placa: las piezas como objetos, en mm (se exporta con Z arriba)
+pub(crate) fn plate_scene(plate: &Plate) -> converter_scene::Scene {
+    let mut scene = converter_scene::Scene { meters_per_unit: 0.001, y_up: true, ..Default::default() };
+    for (label, mesh) in &plate.meshes {
+        let part = mesh_to_scene(&from_print_space(mesh, 1.0), &format!("pieza_{label}"), None);
+        let mesh_offset = scene.meshes.len();
+        let node_offset = scene.nodes.len();
+        scene.meshes.extend(part.meshes);
+        for mut node in part.nodes {
+            node.mesh = node.mesh.map(|m| m + mesh_offset);
+            node.children = node.children.iter().map(|c| c + node_offset).collect();
+            scene.nodes.push(node);
+        }
+        scene.root_nodes.extend(part.root_nodes.iter().map(|r| r + node_offset));
+    }
+    scene
+}
+
+fn plate_path(path: &str, index: usize, count: usize) -> String {
+    if count <= 1 {
+        return path.to_string();
+    }
+    let p = std::path::Path::new(path);
+    let stem = p.file_stem().map_or_else(String::new, |s| s.to_string_lossy().into_owned());
+    let name = match p.extension() {
+        Some(ext) => format!("{stem}_{}.{}", index + 1, ext.to_string_lossy()),
+        None => format!("{stem}_{}", index + 1),
+    };
+    p.with_file_name(name).to_string_lossy().into_owned()
+}
+
+/// Reparte las piezas en placas del tamaño de la cama y las exporta, una por archivo
+#[tauri::command]
+pub async fn export_print_plates(app: AppHandle, input: PlateInput) -> Result<PlateInfo, String> {
+    in_background(app, move |state| export_print_plates_impl(state, input)).await
+}
+
+pub(crate) fn export_print_plates_impl(state: &AppState, input: PlateInput) -> Result<PlateInfo, String> {
+    let list = sources(state)?;
+    let pieces = list.len();
+    let plan = plan_plates(list, &input)?;
+    if plan.plates.is_empty() {
+        return Err("Ninguna pieza cabe en la cama de la impresora".into());
+    }
+    let mut files = Vec::new();
+    for (i, plate) in plan.plates.iter().enumerate() {
+        let path = plate_path(&input.path, i, plan.plates.len());
+        crate::cad::export_scene(&plate_scene(plate), std::path::Path::new(&path), &input.format)?;
+        files.push(path);
+    }
+    let total_bytes = files.iter().filter_map(|f| std::fs::metadata(f).ok()).map(|m| m.len()).sum();
+    Ok(PlateInfo { plates: plan.plates.len(), files, pieces, utilization: plan.utilization, unplaced: plan.unplaced, too_tall: plan.too_tall, total_bytes })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pinocchio_math::Vector3;
+
+    fn cube(size: f64) -> Mesh {
+        let p = |x: f64, y: f64, z: f64| Vector3::new(x * size, y * size, z * size);
+        let v = vec![p(0., 0., 0.), p(1., 0., 0.), p(1., 1., 0.), p(0., 1., 0.), p(0., 0., 1.), p(1., 0., 1.), p(1., 1., 1.), p(0., 1., 1.)];
+        let f = vec![[0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7], [0, 1, 5], [0, 5, 4], [1, 2, 6], [1, 6, 5], [2, 3, 7], [2, 7, 6], [3, 0, 4], [3, 4, 7]];
+        Mesh::from_triangles(&v, &f)
+    }
+
+    fn input(spacing: f64) -> PlateInput {
+        PlateInput {
+            printer: PrinterProfile::new("t", [100.0, 100.0, 80.0], 0.4, 0.2),
+            material: MaterialProfile::default(),
+            format: "stl".into(),
+            spacing,
+            orient: true,
+            hollow_wall: None,
+            path: "x.stl".into(),
+        }
+    }
+
+    #[test]
+    fn el_espacio_de_impresion_es_reversible() {
+        let m = cube(10.0);
+        let back = from_print_space(&to_print_space(&m, 1000.0), 1000.0);
+        for (a, b) in m.vertices.iter().zip(&back.vertices) {
+            assert!((a.position - b.position).length() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn y_arriba_pasa_a_z_arriba() {
+        let m = cube(1.0);
+        let z = to_print_space(&m, 10.0);
+        // La altura (Y) del cubo de 1 m pasa a Z, en mm × 10
+        let bb = p3d::compute_bounding_box(&z);
+        assert!((bb.dimensions()[2] - 10.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn reparte_en_dos_placas() {
+        let list: Vec<(String, Mesh)> = (0..3).map(|i| (format!("{i}"), cube(60.0))).collect();
+        let plan = plan_plates(list, &input(2.0)).unwrap();
+        assert!(plan.plates.len() >= 2, "{}", plan.plates.len());
+        assert!(plan.unplaced.is_empty());
+        let total: usize = plan.plates.iter().map(|p| p.meshes.len()).sum();
+        assert_eq!(total, 3);
+        for plate in &plan.plates {
+            for (_, m) in &plate.meshes {
+                let bb = p3d::compute_bounding_box(m);
+                assert!(bb.max[0] <= 100.0 + 1e-6 && bb.max[1] <= 100.0 + 1e-6 && bb.min[2].abs() < 1e-9);
+            }
+        }
+    }
+
+    #[test]
+    fn pieza_alta_y_pieza_enorme() {
+        let list = vec![("alta".to_string(), cube(90.0)), ("enorme".to_string(), cube(150.0))];
+        let plan = plan_plates(list, &input(0.0)).unwrap();
+        assert_eq!(plan.unplaced, vec!["enorme".to_string()]);
+        assert_eq!(plan.too_tall, vec!["alta".to_string()]);
+    }
+
+    #[test]
+    fn la_escena_de_la_placa_exporta_en_mm() {
+        let plan = plan_plates(vec![("a".into(), cube(20.0)), ("b".into(), cube(20.0))], &input(5.0)).unwrap();
+        let scene = plate_scene(&plan.plates[0]);
+        assert_eq!(scene.meshes.len(), 2);
+        let dir = std::env::temp_dir().join("pinocchio_plate_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("placa.stl");
+        crate::cad::export_scene(&scene, &path, "stl").unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        let count = u32::from_le_bytes(bytes[80..84].try_into().unwrap()) as usize;
+        let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+        for t in 0..count {
+            let base = 84 + t * 50 + 12;
+            for v in 0..3 {
+                for k in 0..3 {
+                    let o = base + v * 12 + k * 4;
+                    let c = f32::from_le_bytes(bytes[o..o + 4].try_into().unwrap());
+                    lo[k] = lo[k].min(c);
+                    hi[k] = hi[k].max(c);
+                }
+            }
+        }
+        // Dos cubos de 20 mm con 5 mm entre ellos, en Z arriba
+        assert!((hi[2] - lo[2] - 20.0).abs() < 1e-3 && lo[2].abs() < 1e-3, "{lo:?} {hi:?}");
+        assert!((hi[0] - lo[0]).max(hi[1] - lo[1]) >= 44.9, "{lo:?} {hi:?}");
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn nombres_de_placa() {
+        assert_eq!(plate_path("/a/b.stl", 0, 1), "/a/b.stl");
+        assert_eq!(plate_path("/a/b.stl", 1, 3), "/a/b_2.stl");
+    }
+}

@@ -11,6 +11,7 @@ pub mod mesh_slot;
 pub mod linux_desktop;
 pub mod commands;
 pub mod placement;
+pub mod print_prep;
 pub mod project;
 pub mod ray_render;
 pub mod remesh;
@@ -164,6 +165,12 @@ pub fn run() {
             commands::undo_print_scale,
             commands::subdivide_mesh,
             commands::export_print3d_piece,
+            print_prep::get_print_presets,
+            print_prep::check_print_readiness,
+            print_prep::suggest_print_orientation,
+            print_prep::add_print_joints,
+            print_prep::estimate_print_material,
+            print_prep::export_print_plates,
             // Escáneres 3D (Orizon3D)
             scanner::scanner_connect,
             scanner::scanner_disconnect,

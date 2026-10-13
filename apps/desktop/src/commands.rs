@@ -4022,6 +4022,7 @@ pub(crate) fn undo_print_scale_impl(state: &AppState) -> Result<Print3dAnalysisI
     *state.scene.lock().unwrap() = Some(scene);
     state.geometry_changed();
     *state.print3d_pieces.lock().unwrap() = None;
+    *state.print3d_pieces_plain.lock().unwrap() = None;
 
     Ok(analysis_to_info(&analysis, mm_per_unit(state)))
 }
@@ -4033,7 +4034,7 @@ fn print_size([x, y, z]: [f64; 3]) -> [f64; 3] {
 
 /// La malla girada 90° en X: de Y arriba a Z arriba (`to_z_up`) o al revés.
 /// Es un giro, no un espejo: las caras siguen hacia afuera
-fn mesh_reoriented(mesh: &Mesh, to_z_up: bool) -> Mesh {
+pub(crate) fn mesh_reoriented(mesh: &Mesh, to_z_up: bool) -> Mesh {
     let turn = |v: &Vector3| {
         let (x, y, z) = (v.x(), v.y(), v.z());
         if to_z_up { Vector3::new(x, -z, y) } else { Vector3::new(x, z, -y) }
@@ -4047,7 +4048,7 @@ fn mesh_reoriented(mesh: &Mesh, to_z_up: bool) -> Mesh {
 }
 
 /// Milímetros por unidad de la escena (la UI de impresión trabaja en mm)
-fn mm_per_unit(state: &AppState) -> f64 {
+pub(crate) fn mm_per_unit(state: &AppState) -> f64 {
     state
         .scene
         .lock()
@@ -4120,6 +4121,8 @@ pub(crate) fn subdivide_mesh_impl(config: SubdivideConfigInput, state: &AppState
         piece.mesh = mesh_reoriented(&piece.mesh, false);
     }
 
+    // Copia sin uniones: las uniones se rehacen desde aquí al cambiar sus parámetros
+    *state.print3d_pieces_plain.lock().unwrap() = Some(pieces.clone());
     let mut pieces_lock = state.print3d_pieces.lock().unwrap();
     *pieces_lock = Some(pieces);
 
