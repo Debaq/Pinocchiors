@@ -8,6 +8,15 @@ complementen, que tengan relaciones, rectos, helicoidales y otros».
 
 Estado (2026-10-13): **F1–F8 hechas**; queda «Más adelante» y lo pendiente anotado en cada fase.
 
+Lo hecho el 2026-10-13 después de cerrar F8 (todo con prueba de `cargo test`/`node --test`, **nada probado en la app real**):
+cremallera helicoidal; aviso de autobloqueo y rendimiento del sin fin; diseñar el par por relación o distancia (`design_teeth`);
+arrastrar piezas del ensamble en el visor y acoplamientos a mano; rayos, prisionero y paso diametral; cota entre bolas de la corona,
+círculos da/df/db en la hoja y aviso de engranes borrados.
+**Lo que falta, en orden de utilidad:** (1) correr el e2e en la app real de todo lo anterior (lo corre el usuario primero);
+(2) nombres de cara y módulo transversal elegible; (3) clic en el visor para la dirección del par y cremallera/rueda como fuente;
+(4) elegir la unión al arrastrar cuando hay varias y arrastrar deslizantes; (5) cónicos con extremos cónicos y cono del primero calculado;
+(6) cotas ISO exactas; (7) lo de «Más adelante» (planetario, cicloidales, poleas, resistencia, sin fin globoide).
+
 Leyenda: ✅ hecho · 🟡 a medias · ❌ falta · (F*n*) fase que lo cubre.
 
 ## ¿Sketch u otra cosa? Cómo lo hacen otros
@@ -179,8 +188,7 @@ Lo que quedó fuera de cada fase, por área. Nada de esto impide usar lo hecho.
 - Las pruebas de choque de `gear_mesh`/`gear_part` tardan minutos (booleanas pesadas de corona y helicoidales): acortarlas o marcarlas lentas.
 
 **Geometría y piezas (F1–F2)**
-- Paso diametral (solo hay módulo).
-- Aligeramientos con rayos (hoy solo agujeros en círculo) y prisionero junto al chavetero.
+- (Hechos 2026-10-13, sin probar en la app real: paso diametral —campo en el cuadro que convierte a módulo = 25,4/DP—, rayos de aligeramiento `spokes/spoke_width/rim` y prisionero `set_screw` radial en el cubo a 90° del chavetero.) Falta: rayos en cónicos, prisionero en cónicos/sin fin, rayos curvos.
 - Nombres de cara («diente», «flanco», «agujero»): hoy las caras van por índice.
 - Módulo transversal elegible (hoy el módulo es siempre el normal).
 
