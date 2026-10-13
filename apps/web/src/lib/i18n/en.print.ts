@@ -249,5 +249,13 @@ export const en_print: Catalog = {
   "Reducir para que quepa en la cama": "Shrink to fit the bed",
   "Factores de escala inválidos: {x}, {y}, {z}": "Invalid scale factors: {x}, {y}, {z}",
   "Faltan los factores de escala": "The scale factors are missing",
+  "Ver en 3D": "See in 3D",
+  "Salir de la vista 3D": "Leave the 3D view",
+  "alto {h} mm": "height {h} mm",
+  "base {a} cm²": "base {a} cm²",
+  "voladizo {a} cm²": "overhang {a} cm²",
+  "soporte {v} cm³": "support {v} cm³",
+  "no cabe en esta posición": "doesn't fit in this position",
+  "Esa placa no existe": "That plate doesn't exist",
   "No se pudieron rehacer las uniones: {e}": "Couldn't redo the joints: {e}",
 };

@@ -1596,6 +1596,10 @@ export const App: Component = () => {
   const [piecesViewOn, setPiecesViewOn] = createSignal(false);
   const [piecesExplode, setPiecesExplode] = createSignal(0.5);
   const [piecesViewBusy, setPiecesViewBusy] = createSignal(false);
+  // Una placa de la distribución vista en 3D en el visor
+  const [plateViewIndex, setPlateViewIndex] = createSignal<number | null>(null);
+  const [plateViewBusy, setPlateViewBusy] = createSignal(false);
+  const [plateViewData, setPlateViewData] = createSignal<MeshData | undefined>();
   const [piecesViewData, setPiecesViewData] = createSignal<MeshData | undefined>();
   const [skinEstimate, setSkinEstimate] = createSignal<SkinEstimate | undefined>();
   // Vista previa del relieve: una malla con menos detalle que se ve en lugar del modelo
@@ -7107,6 +7111,50 @@ export const App: Component = () => {
     if (pipeline.activeStep() !== "print3d") setSkinPreviewOn(false);
   });
   createEffect(on(meshData, () => setSkinPreviewOn(false), { defer: true }));
+  let plateViewRequest = 0;
+  const plateInput = () => {
+    const prep = printPrep();
+    const presets = printPresets();
+    const printer = prep.printer ?? presets?.printers[0];
+    const material = prep.material ?? presets?.materials[0];
+    if (!printer || !material) return undefined;
+    const settings = prep.plate;
+    return { printer, material, format: settings.format, spacing: settings.spacing, orient: settings.orient, contour: settings.contour !== false, hollow_wall: null, compensate: settings.compensate !== false, path: "" };
+  };
+  createEffect(() => {
+    const index = plateViewIndex();
+    const input = plateInput();
+    const mine = ++plateViewRequest;
+    if (index === null || !input) {
+      setPlateViewData(undefined);
+      return;
+    }
+    void (async () => {
+      setPlateViewBusy(true);
+      try {
+        const data = decodeMesh(await invoke<ArrayBuffer>("preview_print_plate_view", { input, plate: index }));
+        if (mine === plateViewRequest) setPlateViewData(data);
+      } catch (e) {
+        if (mine === plateViewRequest) {
+          setPlateViewIndex(null);
+          setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
+        }
+      } finally {
+        if (mine === plateViewRequest) setPlateViewBusy(false);
+      }
+    })();
+  });
+  createEffect(() => {
+    if (pipeline.activeStep() !== "print3d") setPlateViewIndex(null);
+  });
+  createEffect(() => {
+    if (plateViewIndex() !== null) {
+      setSkinPicking(false);
+      setSkinPreviewOn(false);
+      setPiecesViewOn(false);
+    }
+  });
+  createEffect(on(meshData, () => setPlateViewIndex(null), { defer: true }));
   let piecesViewRequest = 0;
   createEffect(() => {
     const on = piecesViewOn();
@@ -8751,7 +8799,7 @@ export const App: Component = () => {
               onPaintSettingsChanged={(change) => setPaintConfig((prev) => ({ ...prev, ...change }))}
               onWeightsPainted={handleWeightsPainted}
               paintSettings={paintSettings()}
-              meshData={piecesViewOn() && piecesViewData() ? piecesViewData() : skinPreviewOn() && skinPreviewData() ? skinPreviewData() : showsPreview() ? remeshPreviewData() : displayQuad() ? quadMeshData() : meshData()}
+              meshData={plateViewIndex() !== null && plateViewData() ? plateViewData() : piecesViewOn() && piecesViewData() ? piecesViewData() : skinPreviewOn() && skinPreviewData() ? skinPreviewData() : showsPreview() ? remeshPreviewData() : displayQuad() ? quadMeshData() : meshData()}
               sceneMaterials={viewerMaterials()}
               lights={lights()}
               onLightsChanged={setLights}
@@ -9172,6 +9220,7 @@ export const App: Component = () => {
               onEstimate: handleEstimateMaterial,
               plateResult: plateResult(),
               platePreview: platePreview(),
+              plateView: { plate: plateViewIndex(), busy: plateViewBusy(), onView: setPlateViewIndex },
               onPreviewPlates: handlePreviewPlates,
               onExportPlates: handleExportPlates,
               selection: {

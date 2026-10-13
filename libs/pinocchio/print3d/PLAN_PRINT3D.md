@@ -235,3 +235,13 @@ Leyenda: ⬜ falta · 🧪 falta probarlo de verdad · ⚠ límite conocido (fun
   estira (modo `axes` del backend: un factor por eje de la vista, Z arriba; malla y escena se escalan igual).
 - «Reducir para que quepa en la cama» es el antiguo «Ajustar a medida»: solo reduce, al volumen de la impresora menos el margen.
 - Límite: estirar con proporción libre un modelo con rig lo deja como geometría sola (igual que el escalado uniforme con esqueleto).
+
+## Fase 11: placas y orientación por pieza, a la vista (hecha)
+
+- **Orientación que cabe**: `suggest_orientations_in` / `orient_for_print_in` reciben el volumen de la impresora y ponen primero
+  las orientaciones en que la pieza cabe (girándola sobre la cama); cada candidata trae sus medidas (`dims`) y `fits`. Al armar las
+  placas cada pieza usa esa elección, así una barra larga se acuesta si de pie no entra.
+- **Cómo quedó cada pieza**: la vista previa de placas lista alto, base, voladizo y soporte estimado por pieza, y avisa las que
+  no caben en la posición elegida.
+- **Placa en 3D**: «Ver en 3D» arma la placa en el visor (cama gris, piezas de colores en su lugar, en milímetros).
+- Límite: el chequeo de que cabe usa la caja de la pieza en el giro mínimo que la apoya; no prueba ángulos intermedios sobre la cama.

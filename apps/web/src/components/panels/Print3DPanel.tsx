@@ -107,6 +107,8 @@ export interface Print3DPanelProps {
   onEstimate?: (material: MaterialProfile, infill: number, hollowWall: number | null) => void;
   plateResult?: PlateResult;
   platePreview?: PlatePreview;
+  /** Placa vista en 3D en el visor */
+  plateView?: { plate: number | null; busy?: boolean; onView: (plate: number | null) => void };
   onPreviewPlates?: (printer: PrinterProfile, material: MaterialProfile, settings: PlateSettings) => void;
   onExportPlates?: (printer: PrinterProfile, material: MaterialProfile, settings: PlateSettings) => void;
 }
@@ -574,6 +576,9 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
           onSettings={setPlate}
           result={props.plateResult}
           preview={props.platePreview}
+          viewing={props.plateView?.plate}
+          viewBusy={props.plateView?.busy}
+          onView={props.plateView?.onView}
           onPreview={() => props.onPreviewPlates?.(printer(), material(), plate())}
           busy={props.isProcessing}
           disabled={!props.canAnalyze}

@@ -166,7 +166,21 @@ export const defaultPrep: PrepSettings = {
 
 export interface PlatePreview {
   bed: [number, number];
-  plates: Array<Array<{ label: string; x: number; y: number; w: number; h: number; height: number }>>;
+  plates: Array<
+    Array<{
+      label: string;
+      x: number;
+      y: number;
+      w: number;
+      h: number;
+      height: number;
+      /** Cómo quedó apoyada */
+      overhang_area?: number;
+      contact_area?: number;
+      support_volume?: number;
+      fits?: boolean;
+    }>
+  >;
   utilization: number[];
   unplaced: string[];
   too_tall: string[];
@@ -614,6 +628,10 @@ export const PlatesSection: Component<{
   hasPieces: boolean;
   onExport?: () => void;
   onPreview?: () => void;
+  /** Ver una placa en 3D en el visor */
+  viewing?: number | null;
+  viewBusy?: boolean;
+  onView?: (plate: number | null) => void;
 }> = (props) => {
   const set = (patch: Partial<PlateSettings>) => props.onSettings({ ...props.settings, ...patch });
   const [open, setOpen] = createSignal(true);
@@ -658,7 +676,7 @@ export const PlatesSection: Component<{
         <Button onClick={props.onPreview} disabled={props.disabled || props.busy} fullWidth size="sm" icon={<Icons.Cube size={14} />}>
           {t("Ver cómo quedan en la cama")}
         </Button>
-        <Show when={props.preview}>{(p) => <PlatePreviewView preview={p()} />}</Show>
+        <Show when={props.preview}>{(p) => <PlatePreviewView preview={p()} viewing={props.viewing} viewBusy={props.viewBusy} onView={props.onView} />}</Show>
         <Button onClick={props.onExport} disabled={props.disabled || props.busy} loading={props.busy} fullWidth size="sm" variant="primary" icon={<Icons.Download size={14} />}>
           {props.hasPieces ? t("Exportar placas") : t("Exportar para imprimir")}
         </Button>
@@ -686,16 +704,29 @@ export const PlatesSection: Component<{
 };
 
 /** Las camas vistas desde arriba, con cada pieza como un rectángulo */
-export const PlatePreviewView: Component<{ preview: PlatePreview }> = (props) => {
+export const PlatePreviewView: Component<{
+  preview: PlatePreview;
+  /** Placa que se ve en 3D en el visor (null: ninguna) */
+  viewing?: number | null;
+  viewBusy?: boolean;
+  onView?: (plate: number | null) => void;
+}> = (props) => {
   const [w, h] = props.preview.bed;
   return (
     <div class="space-y-2">
       <For each={props.preview.plates}>
         {(pieces, i) => (
           <div class="space-y-0.5">
-            <p class="text-[10px] text-text-dim">
-              {t("Placa {n}", { n: i() + 1 })} · {fmtNumber((props.preview.utilization[i()] ?? 0) * 100, { maximumFractionDigits: 0 })} %
-            </p>
+            <div class="flex items-center justify-between gap-2">
+              <p class="text-[10px] text-text-dim">
+                {t("Placa {n}", { n: i() + 1 })} · {fmtNumber((props.preview.utilization[i()] ?? 0) * 100, { maximumFractionDigits: 0 })} %
+              </p>
+              <Show when={props.onView}>
+                <Button size="sm" variant={props.viewing === i() ? "primary" : "ghost"} loading={props.viewing === i() && props.viewBusy} onClick={() => props.onView?.(props.viewing === i() ? null : i())}>
+                  {props.viewing === i() ? t("Salir de la vista 3D") : t("Ver en 3D")}
+                </Button>
+              </Show>
+            </div>
             <svg viewBox={`0 0 ${w} ${h}`} class="w-full rounded border border-border bg-surface/30" style={{ "aspect-ratio": `${w} / ${h}` }}>
               <For each={pieces}>
                 {(p) => (
@@ -717,6 +748,20 @@ export const PlatePreviewView: Component<{ preview: PlatePreview }> = (props) =>
                 )}
               </For>
             </svg>
+            <div class="space-y-0.5 text-[10px] leading-snug">
+              <For each={pieces}>
+                {(p) => (
+                  <p class={p.fits === false ? "text-warning" : "text-text-dim"}>
+                    <span class="font-mono text-text">{p.label}</span> · {t("alto {h} mm", { h: fmtNumber(p.height, { maximumFractionDigits: 1 }) })}
+                    <Show when={(p.overhang_area ?? 0) > 0 || (p.contact_area ?? 0) > 0}>
+                      {" "}· {t("base {a} cm²", { a: fmtNumber((p.contact_area ?? 0) / 100, { maximumFractionDigits: 1 }) })} · {t("voladizo {a} cm²", { a: fmtNumber((p.overhang_area ?? 0) / 100, { maximumFractionDigits: 1 }) })}
+                      <Show when={(p.support_volume ?? 0) > 0}> · {t("soporte {v} cm³", { v: fmtNumber((p.support_volume ?? 0) / 1000, { maximumFractionDigits: 1 }) })}</Show>
+                    </Show>
+                    <Show when={p.fits === false}> · {t("no cabe en esta posición")}</Show>
+                  </p>
+                )}
+              </For>
+            </div>
           </div>
         )}
       </For>
