@@ -1578,6 +1578,7 @@ export const App: Component = () => {
   // Pieles imprimibles: la zona de caras (la guarda el backend), la biblioteca de imágenes y la elegida
   const [skinZone, setSkinZone] = createSignal<SkinZone | undefined>();
   const [skinPicking, setSkinPicking] = createSignal(false);
+  const [skinPickTarget, setSkinPickTarget] = createSignal<"zone" | "protected">("zone");
   const [skinLibrary, setSkinLibrary] = createSignal<SkinPattern[]>([]);
   const [skinImage, setSkinImage] = createSignal<SkinImageSettings>(defaultSkinImage);
   // Planos de corte a mano: se dibujan en el visor mientras se eligen
@@ -7018,7 +7019,18 @@ export const App: Component = () => {
     }
   };
   const pickSkinFaces = async (faces: number[], mode: "set" | "add" | "remove" | "toggle") => {
-    const zone = await skinCall("Skin zone", () => invoke<SkinZone>("skin_zone_edit", { faces, mode }));
+    const command = skinPickTarget() === "protected" ? "skin_protect_edit" : "skin_zone_edit";
+    const zone = await skinCall("Skin zone", () => invoke<SkinZone>(command, { faces, mode }));
+    if (zone) setSkinZone(zone);
+  };
+  const protectSkinHoles = async (minMm: number, maxMm: number) => {
+    const r = await skinCall("Skin protect", () => busy(t("Buscando agujeros..."), () => invoke<{ zone: SkinZone; found: number }>("skin_protect_holes", { minMm, maxMm })));
+    if (!r) return;
+    setSkinZone(r.zone);
+    setStatusMessage(r.found === 1 ? t("1 agujero protegido") : t("{n} agujeros protegidos", { n: r.found }));
+  };
+  const clearSkinProtected = async () => {
+    const zone = await skinCall("Skin protect clear", () => invoke<SkinZone>("skin_protect_clear"));
     if (zone) setSkinZone(zone);
   };
   const growSkinZone = async (angle: number) => {
@@ -7054,6 +7066,9 @@ export const App: Component = () => {
       rotation_deg: s.rotation_deg,
       edge_mm: null,
       feather_mm: null,
+      mapping: s.mapping ?? "uv",
+      margin_mm: s.margin_mm ?? 0,
+      decimate_mm: s.decimate ? s.decimate_mm : null,
     };
   };
   // La estimación sigue a la zona y a los valores (con una pausa mientras se escribe)
@@ -8773,7 +8788,7 @@ export const App: Component = () => {
               nodePicking={["prepare", "materials"].includes(pipeline.workspace()?.id ?? "") && !animating()}
               onNodesPicked={pickNodes}
               facePicking={(faceMode() && materialEditorVisible() && materialEditorTab() === "materials" && !animating() && !displayQuad()) || (skinPicking() && !displayQuad())}
-              pickedFaces={skinPicking() ? (skinZone()?.faces ?? []) : pickedFaces()}
+              pickedFaces={skinPicking() ? (skinPickTarget() === "protected" ? (skinZone()?.protected ?? []) : (skinZone()?.faces ?? [])) : pickedFaces()}
               onFacesPicked={skinPicking() ? pickSkinFaces : pickFaces}
               onNodePicked={(node) => {
                 setExtraFileNodes([]);
@@ -9198,6 +9213,10 @@ export const App: Component = () => {
                 onGrow: growSkinZone,
                 onInvert: invertSkinZone,
                 onClear: clearSkinZone,
+                pickTarget: skinPickTarget(),
+                onPickTarget: setSkinPickTarget,
+                onProtectHoles: protectSkinHoles,
+                onClearProtected: clearSkinProtected,
                 library: skinLibrary(),
                 settings: skinImage(),
                 onSettings: setSkinImage,

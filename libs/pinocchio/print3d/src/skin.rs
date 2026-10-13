@@ -29,6 +29,18 @@ pub enum SkinOffset {
     Inward,
 }
 
+/// De dónde sale el UV con que se lee el mapa de altura
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SkinMapping {
+    /// El UV del modelo (hay que desplegarlo antes)
+    #[default]
+    Uv,
+    /// Proyección en caja, sin UV: cada vértice proyecta sobre el plano del eje al que más mira su normal, en mm,
+    /// así que la baldosa mide lo mismo en todas partes. Se nota una costura donde cambia de eje
+    Box,
+}
+
 /// Parámetros de la piel (todo en milímetros; `unit_mm` es cuántos mm mide una unidad de la malla)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkinConfig {
@@ -47,11 +59,34 @@ pub struct SkinConfig {
     pub max_triangles: usize,
     /// Mm por unidad de la malla
     pub unit_mm: Real,
+    /// De dónde sale el UV (con `Box` no hace falta que el modelo lo tenga)
+    #[serde(default)]
+    pub mapping: SkinMapping,
+    /// Distancia que el relieve se mantiene alejada de las caras protegidas (mm); luego nace con el mismo tramo
+    /// que en el borde de la zona
+    #[serde(default)]
+    pub margin_mm: Real,
+    /// Simplificar el resultado sin pasarse de esta desviación (mm): las zonas lisas pierden triángulos y el relieve
+    /// se queda. `None`: no se simplifica
+    #[serde(default)]
+    pub decimate_mm: Option<Real>,
 }
 
 impl Default for SkinConfig {
     fn default() -> Self {
-        Self { tile_mm: 20.0, amplitude: 0.6, offset: SkinOffset::Outward, rotation_deg: 0.0, edge_mm: None, feather_mm: None, max_triangles: 2_000_000, unit_mm: 1.0 }
+        Self {
+            tile_mm: 20.0,
+            amplitude: 0.6,
+            offset: SkinOffset::Outward,
+            rotation_deg: 0.0,
+            edge_mm: None,
+            feather_mm: None,
+            max_triangles: 2_000_000,
+            unit_mm: 1.0,
+            mapping: SkinMapping::Uv,
+            margin_mm: 0.0,
+            decimate_mm: None,
+        }
     }
 }
 
@@ -61,6 +96,8 @@ pub struct SkinResult {
     pub mesh: Mesh,
     pub triangles_before: usize,
     pub triangles_after: usize,
+    /// Triángulos antes de simplificar (igual a `triangles_after` si no se simplificó)
+    pub triangles_skinned: usize,
     /// Lado de triángulo con que se partió la zona (mm)
     pub edge_mm: Real,
     /// Mayor desplazamiento (mm, en valor absoluto)
@@ -75,6 +112,8 @@ struct Face {
     v: [usize; 3],
     uv: [[Real; 2]; 3],
     sel: bool,
+    /// Cara protegida: no se texturiza ni el relieve se le acerca
+    prot: bool,
 }
 
 fn face_normal_area(p: &[Vector3], v: [usize; 3]) -> (Vector3, Real) {
@@ -88,13 +127,72 @@ fn smooth(t: Real) -> Real {
     t * t * (3.0 - 2.0 * t)
 }
 
-/// Aplica el mapa `map` a las caras `zone` de `mesh`. `uvs` lleva un UV por vértice de la malla
+fn feather_of(cfg: &SkinConfig) -> Real {
+    cfg.feather_mm.unwrap_or(cfg.amplitude * 3.0).max(1e-9)
+}
+
+/// Distancia (mm) de cada vértice al más cercano de `seeds`; infinita si pasa de `reach` (unidades de la malla)
+fn nearest_distance(pos: &[Vector3], seeds: &[usize], reach: Real, unit_mm: Real) -> Vec<Real> {
+    let mut out = vec![Real::INFINITY; pos.len()];
+    if seeds.is_empty() || reach.is_nan() || reach <= 0.0 {
+        return out;
+    }
+    let key = |p: &Vector3| ((p.x() / reach).floor() as i64, (p.y() / reach).floor() as i64, (p.z() / reach).floor() as i64);
+    let mut grid: HashMap<(i64, i64, i64), Vec<usize>> = HashMap::new();
+    for &s in seeds {
+        grid.entry(key(&pos[s])).or_default().push(s);
+    }
+    for (v, p) in pos.iter().enumerate() {
+        let (cx, cy, cz) = key(p);
+        let mut best = Real::INFINITY;
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    if let Some(list) = grid.get(&(cx + dx, cy + dy, cz + dz)) {
+                        for &s in list {
+                            best = best.min((pos[s] - *p).length());
+                        }
+                    }
+                }
+            }
+        }
+        if best.is_finite() {
+            out[v] = best * unit_mm;
+        }
+    }
+    out
+}
+
+/// UV de proyección en caja de un punto con normal `n` (en las unidades de la malla)
+fn box_uv(p: Vector3, n: Vector3) -> [Real; 2] {
+    let (ax, ay, az) = (n.x().abs(), n.y().abs(), n.z().abs());
+    if ax >= ay && ax >= az {
+        let s = n.x().signum();
+        [-s * p.z(), p.y()]
+    } else if ay >= az {
+        let s = n.y().signum();
+        [s * p.x(), -p.z()]
+    } else {
+        let s = n.z().signum();
+        [s * p.x(), p.y()]
+    }
+}
+
+/// Aplica el mapa `map` a las caras `zone` de `mesh`. `uvs` lleva un UV por vértice de la malla (con
+/// `SkinMapping::Box` no se usa y puede ir vacío)
 pub fn apply_skin(mesh: &Mesh, uvs: &[[f32; 2]], zone: &[usize], map: &HeightMap, cfg: &SkinConfig) -> Result<SkinResult> {
+    apply_skin_with(mesh, uvs, zone, &[], map, cfg)
+}
+
+/// Como [`apply_skin`] con caras `protected` (un agujero, una unión): quedan fuera de la zona aunque estén en ella y el
+/// relieve se aleja de ellas `cfg.margin_mm`, naciendo desde ahí
+pub fn apply_skin_with(mesh: &Mesh, uvs: &[[f32; 2]], zone: &[usize], protected: &[usize], map: &HeightMap, cfg: &SkinConfig) -> Result<SkinResult> {
     let (pos, tris) = triangles(mesh);
     if tris.is_empty() {
         return Err(Print3dError::EmptyMesh);
     }
-    if uvs.len() != pos.len() {
+    let boxed = cfg.mapping == SkinMapping::Box;
+    if !boxed && uvs.len() != pos.len() {
         return Err(Print3dError::InvalidConfig("la malla no tiene UV: despliégala primero en UV / Piel".into()));
     }
     if !(cfg.tile_mm > 0.0 && cfg.amplitude >= 0.0 && cfg.unit_mm > 0.0) {
@@ -103,6 +201,11 @@ pub fn apply_skin(mesh: &Mesh, uvs: &[[f32; 2]], zone: &[usize], map: &HeightMap
     let mut in_zone = vec![false; tris.len()];
     for &f in zone.iter().filter(|&&f| f < tris.len()) {
         in_zone[f] = true;
+    }
+    let mut is_prot = vec![false; tris.len()];
+    for &f in protected.iter().filter(|&&f| f < tris.len()) {
+        is_prot[f] = true;
+        in_zone[f] = false;
     }
     if !in_zone.iter().any(|&s| s) {
         return Err(Print3dError::InvalidConfig("no hay una zona elegida".into()));
@@ -125,8 +228,8 @@ pub fn apply_skin(mesh: &Mesh, uvs: &[[f32; 2]], zone: &[usize], map: &HeightMap
         .enumerate()
         .filter_map(|(f, t)| {
             let v = [wid(t[0]), wid(t[1]), wid(t[2])];
-            let uv = [0, 1, 2].map(|k| [Real::from(uvs[t[k]][0]), Real::from(uvs[t[k]][1])]);
-            (v[0] != v[1] && v[1] != v[2] && v[0] != v[2]).then_some(Face { v, uv, sel: in_zone[f] })
+            let uv = if boxed { [[0.0; 2]; 3] } else { [0, 1, 2].map(|k| [Real::from(uvs[t[k]][0]), Real::from(uvs[t[k]][1])]) };
+            (v[0] != v[1] && v[1] != v[2] && v[0] != v[2]).then_some(Face { v, uv, sel: in_zone[f], prot: is_prot[f] })
         })
         .collect();
     let triangles_before = faces.len();
@@ -137,10 +240,11 @@ pub fn apply_skin(mesh: &Mesh, uvs: &[[f32; 2]], zone: &[usize], map: &HeightMap
         area3 += face_normal_area(&wpos, f.v).1;
         area_uv += ((f.uv[1][0] - f.uv[0][0]) * (f.uv[2][1] - f.uv[0][1]) - (f.uv[2][0] - f.uv[0][0]) * (f.uv[1][1] - f.uv[0][1])).abs() * 0.5;
     }
-    if !(area_uv > 1e-12 && area3 > 0.0) {
+    if !boxed && !(area_uv > 1e-12 && area3 > 0.0) {
         return Err(Print3dError::InvalidConfig("la zona no tiene UV (todas sus caras caen en un punto): despliégala primero en UV / Piel".into()));
     }
-    let mm_per_uv = (area3 / area_uv).sqrt() * cfg.unit_mm;
+    // En caja el UV ya está en unidades de la malla
+    let mm_per_uv = if boxed { cfg.unit_mm } else { (area3 / area_uv).sqrt() * cfg.unit_mm };
     let zone_area_mm2 = area3 * cfg.unit_mm * cfg.unit_mm;
 
     // Lado de los triángulos: el detalle del mapa, sin bajar de media boquilla (≈ 0,2 mm)
@@ -193,8 +297,8 @@ pub fn apply_skin(mesh: &Mesh, uvs: &[[f32; 2]], zone: &[usize], map: &HeightMap
                 let (p, q, r) = (f.v[k], f.v[(k + 1) % 3], f.v[(k + 2) % 3]);
                 let (up, uq, ur) = (f.uv[k], f.uv[(k + 1) % 3], f.uv[(k + 2) % 3]);
                 let um = [(up[0] + uq[0]) * 0.5, (up[1] + uq[1]) * 0.5];
-                faces[fi] = Face { v: [p, m, r], uv: [up, um, ur], sel: f.sel };
-                added.push(Face { v: [m, q, r], uv: [um, uq, ur], sel: f.sel });
+                faces[fi] = Face { v: [p, m, r], uv: [up, um, ur], sel: f.sel, prot: f.prot };
+                added.push(Face { v: [m, q, r], uv: [um, uq, ur], sel: f.sel, prot: f.prot });
             }
         }
         faces.extend(added);
@@ -206,7 +310,7 @@ pub fn apply_skin(mesh: &Mesh, uvs: &[[f32; 2]], zone: &[usize], map: &HeightMap
     // Normales suaves de cada vértice y a qué lado del borde de la zona está
     let nv = wpos.len();
     let mut normal = vec![Vector3::zero(); nv];
-    let (mut in_sel, mut in_other) = (vec![false; nv], vec![false; nv]);
+    let (mut in_sel, mut in_other, mut in_prot) = (vec![false; nv], vec![false; nv], vec![false; nv]);
     for f in &faces {
         let (n, a) = face_normal_area(&wpos, f.v);
         for &v in &f.v {
@@ -215,6 +319,9 @@ pub fn apply_skin(mesh: &Mesh, uvs: &[[f32; 2]], zone: &[usize], map: &HeightMap
                 in_sel[v] = true;
             } else {
                 in_other[v] = true;
+            }
+            if f.prot {
+                in_prot[v] = true;
             }
         }
     }
@@ -228,29 +335,36 @@ pub fn apply_skin(mesh: &Mesh, uvs: &[[f32; 2]], zone: &[usize], map: &HeightMap
             adj[b].push((a, l));
         }
     }
-    let mut dist = vec![Real::INFINITY; nv];
-    let mut heap: BinaryHeap<(std::cmp::Reverse<u64>, usize)> = BinaryHeap::new();
-    for v in 0..nv {
-        if in_sel[v] && in_other[v] {
+    // Por las aristas de la zona: distancia desde `seeds` (vértices) a cada vértice
+    let spread = |seeds: &[usize]| -> Vec<Real> {
+        let mut dist = vec![Real::INFINITY; nv];
+        let mut heap: BinaryHeap<(std::cmp::Reverse<u64>, usize)> = BinaryHeap::new();
+        for &v in seeds {
             dist[v] = 0.0;
             heap.push((std::cmp::Reverse(0), v));
         }
-    }
-    // Una zona sin vecinos (toda la malla): no hay borde y el relieve no se funde
-    let closed_zone = !heap.is_empty();
-    while let Some((std::cmp::Reverse(bits), v)) = heap.pop() {
-        let d = f64::from_bits(bits);
-        if d > dist[v] {
-            continue;
-        }
-        for &(w, l) in &adj[v] {
-            if d + l < dist[w] {
-                dist[w] = d + l;
-                heap.push((std::cmp::Reverse((d + l).to_bits()), w));
+        while let Some((std::cmp::Reverse(bits), v)) = heap.pop() {
+            let d = f64::from_bits(bits);
+            if d > dist[v] {
+                continue;
+            }
+            for &(w, l) in &adj[v] {
+                if d + l < dist[w] {
+                    dist[w] = d + l;
+                    heap.push((std::cmp::Reverse((d + l).to_bits()), w));
+                }
             }
         }
-    }
-    let feather = cfg.feather_mm.unwrap_or(cfg.amplitude * 3.0).max(1e-9);
+        dist
+    };
+    let rim: Vec<usize> = (0..nv).filter(|&v| in_sel[v] && in_other[v]).collect();
+    // Una zona sin vecinos (toda la malla): no hay borde y el relieve no se funde
+    let closed_zone = !rim.is_empty();
+    let dist = spread(&rim);
+    let near_prot: Vec<usize> = (0..nv).filter(|&v| in_sel[v] && in_prot[v]).collect();
+    // Lejos de lo protegido: distancia en línea recta al borde protegido (por las aristas sobrestimaría hasta 40 %)
+    let dist_prot = nearest_distance(&wpos, &near_prot, (cfg.margin_mm + feather_of(cfg)) / cfg.unit_mm, cfg.unit_mm);
+    let feather = feather_of(cfg);
 
     // UV de cada vértice (de una cara de la zona si la hay) y su altura
     let mut vuv: Vec<Option<[Real; 2]>> = vec![None; nv];
@@ -273,8 +387,13 @@ pub fn apply_skin(mesh: &Mesh, uvs: &[[f32; 2]], zone: &[usize], map: &HeightMap
         if !in_sel[v] || (in_other[v] && closed_zone) {
             continue;
         }
-        let Some(uv) = vuv[v] else { continue };
-        let w = if closed_zone { smooth(dist[v] / feather) } else { 1.0 };
+        let uv = if boxed {
+            box_uv(wpos[v], normal[v].try_normalize().unwrap_or_else(Vector3::unit_z))
+        } else {
+            let Some(uv) = vuv[v] else { continue };
+            uv
+        };
+        let w = if closed_zone { smooth(dist[v] / feather) } else { 1.0 } * smooth((dist_prot[v] - cfg.margin_mm) / feather);
         if w <= 0.0 {
             continue;
         }
@@ -288,8 +407,18 @@ pub fn apply_skin(mesh: &Mesh, uvs: &[[f32; 2]], zone: &[usize], map: &HeightMap
         }
     }
 
-    let tris_out: Vec<[usize; 3]> = faces.iter().map(|f| f.v).collect();
+    let mut tris_out: Vec<[usize; 3]> = faces.iter().map(|f| f.v).collect();
     let mut warnings = Vec::new();
+    let triangles_skinned = tris_out.len();
+    if let Some(tolerance) = cfg.decimate_mm {
+        match decimate(&out, &tris_out, tolerance / cfg.unit_mm) {
+            Some((positions, tris)) => {
+                out = positions;
+                tris_out = tris;
+            }
+            None => warnings.push("no se pudo simplificar sin abrir la malla: queda con todo el detalle".to_string()),
+        }
+    }
     if edge_mm < 0.2 {
         warnings.push(format!("el detalle es de {edge_mm:.2} mm, más fino que media boquilla: la impresora no lo va a reproducir"));
     }
@@ -300,11 +429,40 @@ pub fn apply_skin(mesh: &Mesh, uvs: &[[f32; 2]], zone: &[usize], map: &HeightMap
         mesh: Mesh::from_triangles(&out, &tris_out),
         triangles_before,
         triangles_after: tris_out.len(),
+        triangles_skinned,
         edge_mm,
         max_displacement_mm: max_d,
         zone_faces: faces.iter().filter(|f| f.sel).count(),
         warnings,
     })
+}
+
+/// Simplifica sin pasar de `max_error` (unidades de la malla). `None` si el resultado no queda cerrado
+fn decimate(pos: &[Vector3], tris: &[[usize; 3]], max_error: Real) -> Option<(Vec<Vector3>, Vec<[usize; 3]>)> {
+    use quadriflow_core::remesh::{simplify, SimplifyInput, SimplifyOptions};
+    let positions: Vec<[f32; 3]> = pos.iter().map(|p| [p.x() as f32, p.y() as f32, p.z() as f32]).collect();
+    let indices: Vec<u32> = tris.iter().flat_map(|t| t.map(|i| i as u32)).collect();
+    let input = SimplifyInput { positions: &positions, indices: &indices, attributes: &[], attribute_weights: &[], groups: &[] };
+    let options = SimplifyOptions { target_triangles: 1, max_error: Some(max_error.max(0.0) as f32), lock_borders: true, keep_seams: true, aggressive: false };
+    let result = simplify(&input, &options);
+    let kept: Vec<[usize; 3]> = result.indices.as_chunks::<3>().0.iter().map(|t| [t[0] as usize, t[1] as usize, t[2] as usize]).collect();
+    // Compactar los vértices que quedan
+    let mut remap = vec![usize::MAX; pos.len()];
+    let mut out_pos = Vec::new();
+    let mut out_tris = Vec::with_capacity(kept.len());
+    for t in &kept {
+        let mut nt = [0; 3];
+        for (k, &i) in t.iter().enumerate() {
+            if remap[i] == usize::MAX {
+                remap[i] = out_pos.len();
+                out_pos.push(pos[i]);
+            }
+            nt[k] = remap[i];
+        }
+        out_tris.push(nt);
+    }
+    let mesh = Mesh::from_triangles(&out_pos, &out_tris);
+    (mesh.is_closed() && out_tris.len() < tris.len()).then_some((out_pos, out_tris))
 }
 
 #[cfg(test)]
@@ -414,6 +572,79 @@ mod tests {
         let r = apply_skin(&mesh, &uvs, &[2, 3, 4, 5], &map, &cfg(0.6)).unwrap();
         assert!(r.mesh.is_closed(), "se abrió la costura entre cartas");
         assert!(r.triangles_after > 500);
+    }
+
+    #[test]
+    fn la_proyeccion_en_caja_no_necesita_uv() {
+        let (mesh, _, _) = box_soup();
+        let map = Pattern::Lines.generate(64);
+        // Sin UV: la tapa (mira a +z) toma (x, y) y la cara de y = 0 (mira a −y) toma (−x, −z)
+        let r = apply_skin(&mesh, &[], &[2, 3, 4, 5], &map, &SkinConfig { mapping: SkinMapping::Box, ..cfg(1.0) }).unwrap();
+        assert!(r.mesh.is_closed(), "la caja proyectada abrió la malla");
+        let (mut top, mut front) = (0, 0);
+        for v in r.mesh.vertices.iter() {
+            let p = v.position;
+            if p.z() > 9.0 && p.x() > 4.0 && p.x() < 36.0 && p.y() > 4.0 && p.y() < 36.0 {
+                assert!((p.z() - (10.0 + map.sample(p.x() / 10.0, p.y() / 10.0))).abs() < 1e-6, "tapa en ({:.2}, {:.2})", p.x(), p.y());
+                top += 1;
+            }
+            if p.y() < 0.0 + 1.0 && p.x() > 4.0 && p.x() < 36.0 && p.z() > 3.0 && p.z() < 7.0 {
+                assert!((p.y() + map.sample(-p.x() / 10.0, -p.z() / 10.0)).abs() < 1e-6, "frente en ({:.2}, {:.2})", p.x(), p.z());
+                front += 1;
+            }
+        }
+        assert!(top > 300 && front > 100, "{top} {front}");
+        // Pedir UV con el modo UV y sin UV sigue fallando
+        assert!(apply_skin(&mesh, &[], &[2, 3], &map, &cfg(0.5)).is_err());
+    }
+
+    #[test]
+    fn simplificar_despues_deja_menos_triangulos_y_el_relieve() {
+        let (mesh, uvs, zone) = box_soup();
+        let map = Pattern::Dots.generate(64);
+        let full = apply_skin(&mesh, &uvs, &zone, &map, &cfg(0.8)).unwrap();
+        let slim = apply_skin(&mesh, &uvs, &zone, &map, &SkinConfig { decimate_mm: Some(0.05), ..cfg(0.8) }).unwrap();
+        assert!(slim.mesh.is_closed());
+        assert_eq!(slim.triangles_skinned, full.triangles_after);
+        assert!(slim.triangles_after < full.triangles_after, "{} de {}", slim.triangles_after, full.triangles_after);
+        assert!(slim.warnings.is_empty(), "{:?}", slim.warnings);
+        // El relieve sigue ahí (dentro de la tolerancia) y el volumen casi no cambia
+        let top = |m: &Mesh| m.vertices.iter().map(|v| v.position.z()).fold(f64::MIN, f64::max);
+        assert!(top(&slim.mesh) > top(&full.mesh) - 0.1, "{} vs {}", top(&slim.mesh), top(&full.mesh));
+        let (vf, vs) = (crate::analysis::compute_volume(&full.mesh), crate::analysis::compute_volume(&slim.mesh));
+        assert!((vf - vs).abs() < 0.02 * vf, "{vf} vs {vs}");
+    }
+
+    #[test]
+    fn el_relieve_se_aleja_de_un_agujero_protegido() {
+        use crate::planar_joints::{add_hole, footprint_polygon, PlanarShape};
+        let b = crate::printability::tests::make_box(40.0, 40.0, 20.0);
+        let poly = footprint_polygon(&PlanarShape::Round { diameter: 8.0 }, Vector3::new(20.0, 20.0, 20.0), Vector3::unit_z(), 0.0);
+        let m = add_hole(&b, &poly, Vector3::unit_z(), 10.0, 1.0).unwrap();
+        let holes = crate::zones::detect_cylindrical_holes(&m, 3.0, 20.0);
+        assert_eq!(holes.len(), 1);
+        let all: Vec<usize> = (0..m.num_faces()).collect();
+        let map = Pattern::Dots.generate(64);
+        // Toda la malla como zona: la pared del agujero y su suelo quedan protegidos con 2 mm de margen
+        let protect: Vec<usize> = holes[0].faces.clone();
+        let c = SkinConfig { tile_mm: 10.0, amplitude: 0.5, edge_mm: Some(0.8), feather_mm: Some(1.0), margin_mm: 2.0, ..Default::default() };
+        let r = apply_skin_with(&m, &[], &all, &protect, &map, &SkinConfig { mapping: SkinMapping::Box, ..c.clone() }).unwrap();
+        assert!(r.mesh.is_closed(), "la malla con el agujero protegido se abrió");
+        assert!(r.max_displacement_mm > 0.3, "no hay relieve");
+        // Ningún vértice de la tapa que se movió está a menos de radio + margen del eje
+        let (mut moved, mut checked) = (0, 0);
+        for v in r.mesh.vertices.iter() {
+            let p = v.position;
+            if p.z() > 20.0 + 1e-6 {
+                moved += 1;
+            }
+            let d = ((p.x() - 20.0).powi(2) + (p.y() - 20.0).powi(2)).sqrt();
+            if d < 4.0 + 2.0 - 0.3 && p.z() > 19.5 && p.z() < 20.0 + 0.6 {
+                checked += 1;
+                assert!((p.z() - 20.0).abs() < 1e-6 || d < 4.2, "vértice movido a {d} mm del eje: z = {}", p.z());
+            }
+        }
+        assert!(moved > 100 && checked > 20, "{moved} {checked}");
     }
 
     #[test]

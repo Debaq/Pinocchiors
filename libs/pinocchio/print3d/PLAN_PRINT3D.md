@@ -207,12 +207,12 @@ Leyenda: ⬜ falta · 🧪 falta probarlo de verdad · ⚠ límite conocido (fun
 - ⚠ Una sola escala de UV por zona: si las islas están estiradas distinto, la baldosa cambia de tamaño entre ellas.
 - ⚠ Aplicar la piel deja el modelo como geometría sola (sin UV, texturas ni rig) y borra la zona. Se deshace con el
   historial; si el diseño cambia y se rehace, la piel no se vuelve a poner.
-- ⚠ Necesita UV: sin ellos el botón se desactiva y pide desplegar el modelo. Solo usa la altura (grises); el color
+- ⚠ Con la proyección por UV necesita UV: sin ellos el botón se desactiva (se puede usar la proyección en caja, Fase 14). Solo usa la altura (grises); el color
   de la imagen se ignora. Las imágenes importadas se guardan en 8 bits y hasta 1 024 px; los patrones de fábrica
   son de 256 px.
 - ⚠ La vista previa tiene menos detalle (hasta 250 000 triángulos) y se calcula sobre el modelo entero.
-- ⬜ Mapeo triplanar o en caja (sin UV), máscara de borde suave pintada, y decimar la malla después de aplicar.
-- ⬜ Comprobar que la piel no invade uniones, agujeros ni roscas: hoy depende de que la zona elegida no los toque.
+- ✅ Mapeo en caja y simplificar después de aplicar: Fase 14. ⬜ Máscara de borde suave pintada.
+- ✅ La piel no invade agujeros cilíndricos ni caras protegidas (Fase 14). ⬜ Uniones y roscas se protegen a mano (no se detectan solas).
 
 
 
@@ -272,4 +272,20 @@ Leyenda: ⬜ falta · 🧪 falta probarlo de verdad · ⚠ límite conocido (fun
 - `flip_slivers`: la triangulación de bordes con puntos intermedios deja triángulos de área cero; se quitan partiendo
   el vecino por el punto del medio, así la malla sigue cerrada y estanca (antes salía algo no determinista).
 - Escritorio: `PlateInput.vent`, avisos en `PlateInfo.notes`. UI: casilla «Agujero de venteo» y los avisos al exportar.
+
+## Fase 14: pieles sin UV, simplificar y proteger (hecha)
+
+- **Proyección en caja** (`SkinMapping::Box`): sin UV. Cada vértice (ya con su normal suave, después de partir) proyecta sobre
+  el plano del eje al que más mira su normal, en las unidades de la malla, así `mm_per_uv` es exacto (`unit_mm`) y la
+  baldosa mide lo mismo en todas partes. Se nota una costura donde cambia el eje dominante.
+- **Simplificar después** (`SkinConfig.decimate_mm`): `quadriflow_core::remesh::simplify` con `max_error` = la tolerancia,
+  así las partes lisas pierden triángulos y el relieve se queda. Si el resultado no queda cerrado, se deja sin simplificar y
+  se avisa. `SkinResult.triangles_skinned` dice cuántos eran antes.
+- **Protección**: `apply_skin_with(.., protected, ..)` saca esas caras de la zona y `margin_mm` aleja el relieve (distancia en
+  línea recta al borde protegido; por las aristas sobrestimaría hasta 40 %), que nace con el mismo tramo del borde.
+  `detect_cylindrical_holes` encuentra agujeros: componentes lisas (35°), eje = autovector de menor autovalor de la covarianza
+  de normales (Jacobi), cobertura ≥ 270°, círculo por mínimos cuadrados con diámetro dentro del rango, residuo < 8 % y
+  normales hacia el eje (un perno o una pared plana no cuentan).
+- Escritorio: `SkinZone.protected` (se guarda en el proyecto), `skin_protect_edit/holes/clear`, `SkinParams.mapping/margin_mm/decimate_mm`.
+  UI: «Zonas protegidas» (elegir en el visor, «Proteger agujeros», margen), proyección y «Simplificar el resultado».
 

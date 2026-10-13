@@ -11,6 +11,8 @@ import { fmtNumber, t, tx } from "../../lib/i18n";
 /** Zona de caras elegida (las caras se numeran como las dibuja el visor) */
 export interface SkinZone {
   faces: number[];
+  /** Caras que no se texturizan (agujeros, uniones…) */
+  protected: number[];
   total: number;
   area_mm2: number;
   fraction: number;
@@ -38,6 +40,13 @@ export interface SkinImageSettings {
   amplitude: number;
   offset: "outward" | "centered" | "inward";
   rotation_deg: number;
+  /** De dónde sale el UV: el del modelo o una proyección en caja (sin UV) */
+  mapping: "uv" | "box";
+  /** Simplificar el resultado sin pasarse de `decimate_mm` */
+  decimate: boolean;
+  decimate_mm: number;
+  /** Cuánto se aleja el relieve de lo protegido (mm) */
+  margin_mm: number;
 }
 
 export const defaultSkinImage: SkinImageSettings = {
@@ -49,6 +58,10 @@ export const defaultSkinImage: SkinImageSettings = {
   amplitude: 0.6,
   offset: "outward",
   rotation_deg: 0,
+  mapping: "uv",
+  decimate: false,
+  decimate_mm: 0.05,
+  margin_mm: 1.5,
 };
 
 /** Lo que cuesta aplicar la piel con estos valores (backend) */
@@ -68,6 +81,12 @@ export interface SkinPanelProps {
   onGrow: (angle: number) => void;
   onInvert: () => void;
   onClear: () => void;
+  /** Lo que se elige con el visor: la zona de piel o las caras protegidas */
+  pickTarget?: "zone" | "protected";
+  onPickTarget?: (t: "zone" | "protected") => void;
+  /** Protege los agujeros cilíndricos de entre esos diámetros (mm); devuelve cuántos encontró */
+  onProtectHoles?: (minMm: number, maxMm: number) => void;
+  onClearProtected?: () => void;
   library: SkinPattern[];
   settings: SkinImageSettings;
   onSettings: (s: SkinImageSettings) => void;
@@ -129,15 +148,17 @@ const Title: Component<{ children: string }> = (props) => (
 
 export const SkinPanel: Component<SkinPanelProps> = (props) => {
   const [angle, setAngle] = createSignal(15);
+  const [holeRange, setHoleRange] = createSignal<[number, number]>([2, 20]);
   const set = (patch: Partial<SkinImageSettings>) => props.onSettings({ ...props.settings, ...patch });
   const count = () => props.zone?.faces.length ?? 0;
+  const protectedCount = () => props.zone?.protected?.length ?? 0;
   const selected = () => props.library.find((p) => p.id === props.settings.image);
 
   return (
     <div class="space-y-3 pt-2 border-t border-border/50">
       <Title>{t("Texturas imprimibles")}</Title>
       <p class="text-[10px] text-text-dim leading-snug">
-        {t("Un patrón en blanco y negro que se vuelve relieve de verdad en la zona que elijas (blanco = alto). Si el modelo no tiene UV, despliégalo primero en UV / Piel.")}
+        {t("Un patrón en blanco y negro que se vuelve relieve de verdad en la zona que elijas (blanco = alto). Si el modelo no tiene UV, despliégalo primero en UV / Piel o usa la proyección en caja.")}
       </p>
 
       <div class="space-y-2">
@@ -170,6 +191,38 @@ export const SkinPanel: Component<SkinPanelProps> = (props) => {
                 pct: fmtNumber(props.zone.fraction * 100, { maximumFractionDigits: 0 }),
               })
             : t("Sin zona elegida")}
+        </p>
+      </div>
+
+      <div class="space-y-2">
+        <p class="text-[11px] font-medium text-text">{t("Zonas protegidas")}</p>
+        <p class="text-[10px] text-text-dim leading-snug">{t("Caras que se quedan lisas (agujeros de tornillos, uniones): el relieve no las toca y se aleja un margen.")}</p>
+        <Show when={props.picking}>
+          <Select
+            label={t("Elegir en el modelo")}
+            options={[
+              { value: "zone", label: t("Zona de piel") },
+              { value: "protected", label: t("Zona protegida") },
+            ]}
+            value={props.pickTarget ?? "zone"}
+            onChange={(v) => props.onPickTarget?.(v as "zone" | "protected")}
+          />
+        </Show>
+        <div class="grid grid-cols-2 gap-1.5">
+          <NumberInput label={t("Diámetro mín.")} value={holeRange()[0]} onChange={(v) => setHoleRange([Math.max(0.5, v), holeRange()[1]])} min={0.5} max={100} step={0.5} suffix="mm" />
+          <NumberInput label={t("Diámetro máx.")} value={holeRange()[1]} onChange={(v) => setHoleRange([holeRange()[0], Math.max(0.5, v)])} min={0.5} max={200} step={1} suffix="mm" />
+        </div>
+        <div class="flex gap-1.5">
+          <Button size="sm" onClick={() => props.onProtectHoles?.(holeRange()[0], holeRange()[1])} disabled={props.busy || !props.zone}>
+            {t("Proteger agujeros")}
+          </Button>
+          <Button size="sm" variant="ghost" onClick={props.onClearProtected} disabled={props.busy || protectedCount() === 0}>
+            {t("Quitar protección")}
+          </Button>
+        </div>
+        <NumberInput label={t("Margen")} value={props.settings.margin_mm} onChange={(v) => set({ margin_mm: Math.max(0, Math.min(20, v)) })} min={0} max={20} step={0.5} suffix="mm" />
+        <p class={`text-[11px] ${protectedCount() > 0 ? "text-text" : "text-text-dim"}`}>
+          {protectedCount() > 0 ? t("{n} caras protegidas", { n: fmtNumber(protectedCount()) }) : t("Nada protegido")}
         </p>
       </div>
 
@@ -240,6 +293,28 @@ export const SkinPanel: Component<SkinPanelProps> = (props) => {
             onChange={(v) => set({ offset: v as SkinImageSettings["offset"] })}
           />
         </div>
+        <Select
+          label={t("Proyección")}
+          options={[
+            { value: "uv", label: t("Por el UV del modelo") },
+            { value: "box", label: t("En caja (sin UV)") },
+          ]}
+          value={props.settings.mapping ?? "uv"}
+          onChange={(v) => set({ mapping: v as "uv" | "box" })}
+        />
+        <Show when={props.settings.mapping === "box"}>
+          <p class="text-[10px] text-text-dim leading-snug">{t("Cada punto proyecta sobre el plano del eje al que más mira. La baldosa mide lo mismo en todas partes, pero se nota una costura donde cambia de eje.")}</p>
+        </Show>
+        <Checkbox
+          small
+          label={t("Simplificar el resultado")}
+          checked={props.settings.decimate ?? false}
+          onChange={(v) => set({ decimate: v })}
+          hint={t("Quita triángulos de las partes lisas sin pasarse de la tolerancia: el relieve se queda y el archivo pesa mucho menos.")}
+        />
+        <Show when={props.settings.decimate}>
+          <NumberInput label={t("Tolerancia")} value={props.settings.decimate_mm ?? 0.05} onChange={(v) => set({ decimate_mm: Math.max(0.005, Math.min(1, v)) })} min={0.005} max={1} step={0.01} suffix="mm" />
+        </Show>
         <p class="text-[10px] text-text-dim leading-snug">
           {props.settings.offset === "outward"
             ? t("La superficie queda como el fondo del relieve: el blanco sobresale.")

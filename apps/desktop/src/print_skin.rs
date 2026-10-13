@@ -26,6 +26,8 @@ pub struct SkinImage {
 pub struct SkinZone {
     pub total: usize,
     pub faces: Vec<u32>,
+    /// Caras que no se texturizan (agujeros, uniones…), aunque estén dentro de la zona
+    pub protected: Vec<u32>,
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -146,6 +148,8 @@ pub fn skin_remove_image(id: String, state: tauri::State<'_, AppState>) -> Vec<P
 pub struct ZoneInfo {
     /// Caras de la zona, ordenadas
     pub faces: Vec<u32>,
+    /// Caras protegidas
+    pub protected: Vec<u32>,
     pub total: usize,
     /// Área de la zona en mm²
     pub area_mm2: f64,
@@ -169,13 +173,13 @@ fn zone_info(state: &AppState) -> Result<ZoneInfo, String> {
     let mut zone = state.print_skin_zone.lock().unwrap();
     // Otra malla (otro número de caras): la zona de antes ya no vale
     if zone.total != total {
-        *zone = SkinZone { total, faces: Vec::new() };
+        *zone = SkinZone { total, ..Default::default() };
     }
     let faces: Vec<usize> = zone.faces.iter().map(|&f| f as usize).collect();
     let k = mm_per_unit(state);
     let area = p3d::zone_area(mesh, &faces) * k * k;
     let all = p3d::zone_area(mesh, &(0..total).collect::<Vec<_>>()) * k * k;
-    Ok(ZoneInfo { faces: zone.faces.clone(), total, area_mm2: area, fraction: if all > 0.0 { area / all } else { 0.0 } })
+    Ok(ZoneInfo { faces: zone.faces.clone(), protected: zone.protected.clone(), total, area_mm2: area, fraction: if all > 0.0 { area / all } else { 0.0 } })
 }
 
 /// La zona elegida
@@ -195,7 +199,7 @@ pub(crate) fn edit_zone(state: &AppState, faces: &[u32], mode: ZoneMode) -> Resu
     {
         let mut zone = state.print_skin_zone.lock().unwrap();
         if zone.total != total {
-            *zone = SkinZone { total, faces: Vec::new() };
+            *zone = SkinZone { total, ..Default::default() };
         }
         let valid = faces.iter().copied().filter(|&f| (f as usize) < total);
         let mut set: std::collections::BTreeSet<u32> = zone.faces.iter().copied().collect();
@@ -258,11 +262,83 @@ pub fn skin_zone_clear(state: tauri::State<'_, AppState>) -> Result<ZoneInfo, St
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// PROTEGIDAS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Cambia las caras protegidas con `faces`: reemplazar, sumar, quitar o alternar
+#[tauri::command]
+pub fn skin_protect_edit(faces: Vec<u32>, mode: ZoneMode, state: tauri::State<'_, AppState>) -> Result<ZoneInfo, String> {
+    edit_protected(&state, &faces, mode)
+}
+
+pub(crate) fn edit_protected(state: &AppState, faces: &[u32], mode: ZoneMode) -> Result<ZoneInfo, String> {
+    zone_info(state)?;
+    {
+        let mut zone = state.print_skin_zone.lock().unwrap();
+        let total = zone.total;
+        let valid = faces.iter().copied().filter(|&f| (f as usize) < total);
+        let mut set: std::collections::BTreeSet<u32> = zone.protected.iter().copied().collect();
+        match mode {
+            ZoneMode::Set => set = valid.collect(),
+            ZoneMode::Add => set.extend(valid),
+            ZoneMode::Remove => {
+                for f in valid {
+                    set.remove(&f);
+                }
+            }
+            ZoneMode::Toggle => {
+                for f in valid {
+                    if !set.remove(&f) {
+                        set.insert(f);
+                    }
+                }
+            }
+        }
+        zone.protected = set.into_iter().collect();
+    }
+    zone_info(state)
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProtectedHoles {
+    pub zone: ZoneInfo,
+    /// Agujeros encontrados
+    pub found: usize,
+}
+
+/// Protege los agujeros cilíndricos de entre `min_mm` y `max_mm` de diámetro (los de tornillos y clavijas)
+#[tauri::command]
+pub async fn skin_protect_holes(app: AppHandle, min_mm: f64, max_mm: f64) -> Result<ProtectedHoles, String> {
+    in_background(app, move |state| protect_holes(state, min_mm, max_mm)).await
+}
+
+pub(crate) fn protect_holes(state: &AppState, min_mm: f64, max_mm: f64) -> Result<ProtectedHoles, String> {
+    zone_info(state)?;
+    let k = mm_per_unit(state);
+    let holes = {
+        let mesh = state.mesh.lock().unwrap();
+        let mesh = mesh.as_ref().ok_or("No hay malla cargada")?;
+        p3d::detect_cylindrical_holes(mesh, min_mm / k, max_mm / k)
+    };
+    let faces: Vec<u32> = holes.iter().flat_map(|h| h.faces.iter().map(|&f| f as u32)).collect();
+    let zone = edit_protected(state, &faces, ZoneMode::Add)?;
+    Ok(ProtectedHoles { zone, found: holes.len() })
+}
+
+/// Quita todas las caras protegidas
+#[tauri::command]
+pub fn skin_protect_clear(state: tauri::State<'_, AppState>) -> Result<ZoneInfo, String> {
+    zone_info(&state)?;
+    state.print_skin_zone.lock().unwrap().protected.clear();
+    zone_info(&state)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // APLICAR
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// Cómo se aplica la piel a la zona
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct SkinParams {
     /// Patrón de fábrica o imagen importada
     pub image: String,
@@ -279,12 +355,23 @@ pub struct SkinParams {
     /// Lado de los triángulos (mm); sin él, lo da el detalle del mapa
     pub edge_mm: Option<f64>,
     pub feather_mm: Option<f64>,
+    /// De dónde sale el UV: el del modelo o una proyección en caja (sin UV)
+    #[serde(default)]
+    pub mapping: p3d::SkinMapping,
+    /// Cuánto se aleja el relieve de las caras protegidas (mm)
+    #[serde(default)]
+    pub margin_mm: f64,
+    /// Simplificar el resultado sin pasarse de esta desviación (mm)
+    #[serde(default)]
+    pub decimate_mm: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SkinApplied {
     pub triangles_before: usize,
     pub triangles_after: usize,
+    /// Triángulos antes de simplificar
+    pub triangles_skinned: usize,
     pub edge_mm: f64,
     pub max_displacement_mm: f64,
     pub warnings: Vec<String>,
@@ -309,7 +396,7 @@ pub fn skin_estimate(params: SkinParams, state: tauri::State<'_, AppState>) -> R
 
 pub(crate) fn estimate(state: &AppState, params: &SkinParams) -> Result<SkinEstimate, String> {
     let zone = zone_info(state)?;
-    let has_uv = state.scene.lock().unwrap().as_ref().is_some_and(|s| scene_uvs(s).is_ok());
+    let has_uv = params.mapping == p3d::SkinMapping::Box || state.scene.lock().unwrap().as_ref().is_some_and(|s| scene_uvs(s).is_ok());
     let map = height_map(state, &params.image, &params.ops)?;
     let pixel_mm = params.tile_mm.max(0.01) / map.width.max(map.height) as f64;
     let edge_mm = params.edge_mm.unwrap_or_else(|| pixel_mm.max(0.2));
@@ -348,8 +435,8 @@ pub(crate) fn preview_mesh(state: &AppState, params: &SkinParams) -> Result<Vec<
     }
     let scene = state.scene.lock().unwrap().clone().ok_or("No hay escena cargada")?;
     let mesh = state.mesh.lock().unwrap().clone().ok_or("No hay malla cargada")?;
-    let uvs = scene_uvs(&scene)?;
-    if uvs.len() != mesh.vertices.len() {
+    let uvs = if params.mapping == p3d::SkinMapping::Box { Vec::new() } else { scene_uvs(&scene)? };
+    if params.mapping == p3d::SkinMapping::Uv && uvs.len() != mesh.vertices.len() {
         return Err("La malla ya no coincide con el modelo desplegado: vuelve a desplegar el UV".into());
     }
     let map = height_map(state, &params.image, &params.ops)?;
@@ -368,9 +455,13 @@ pub(crate) fn preview_mesh(state: &AppState, params: &SkinParams) -> Result<Vec<
         feather_mm: params.feather_mm,
         unit_mm: mm_per_unit(state),
         max_triangles: PREVIEW_TRIANGLES * 2,
+        mapping: params.mapping,
+        margin_mm: params.margin_mm,
+        decimate_mm: None,
     };
     let faces: Vec<usize> = zone.faces.iter().map(|&f| f as usize).collect();
-    let result = p3d::apply_skin(&mesh, &uvs, &faces, &map, &cfg).map_err(|e| format!("No se pudo armar la vista previa: {e}"))?;
+    let protected: Vec<usize> = zone.protected.iter().map(|&f| f as usize).collect();
+    let result = p3d::apply_skin_with(&mesh, &uvs, &faces, &protected, &map, &cfg).map_err(|e| format!("No se pudo armar la vista previa: {e}"))?;
     Ok(crate::commands::scene_mesh_data(&crate::commands::mesh_to_scene(&result.mesh, "Vista previa", Some(&scene))).to_bytes())
 }
 
@@ -400,8 +491,8 @@ pub(crate) fn apply_skin_impl(state: &AppState, params: &SkinParams) -> Result<S
     }
     let scene = state.scene.lock().unwrap().clone().ok_or("No hay escena cargada")?;
     let mesh = state.mesh.lock().unwrap().clone().ok_or("No hay malla cargada")?;
-    let uvs = scene_uvs(&scene)?;
-    if uvs.len() != mesh.vertices.len() {
+    let uvs = if params.mapping == p3d::SkinMapping::Box { Vec::new() } else { scene_uvs(&scene)? };
+    if params.mapping == p3d::SkinMapping::Uv && uvs.len() != mesh.vertices.len() {
         return Err("La malla ya no coincide con el modelo desplegado: vuelve a desplegar el UV".into());
     }
     let map = height_map(state, &params.image, &params.ops)?;
@@ -414,10 +505,14 @@ pub(crate) fn apply_skin_impl(state: &AppState, params: &SkinParams) -> Result<S
         edge_mm: params.edge_mm,
         feather_mm: params.feather_mm,
         unit_mm: k,
+        mapping: params.mapping,
+        margin_mm: params.margin_mm,
+        decimate_mm: params.decimate_mm,
         ..Default::default()
     };
     let faces: Vec<usize> = zone.faces.iter().map(|&f| f as usize).collect();
-    let result = p3d::apply_skin(&mesh, &uvs, &faces, &map, &cfg).map_err(|e| format!("No se pudo aplicar la piel: {e}"))?;
+    let protected: Vec<usize> = zone.protected.iter().map(|&f| f as usize).collect();
+    let result = p3d::apply_skin_with(&mesh, &uvs, &faces, &protected, &map, &cfg).map_err(|e| format!("No se pudo aplicar la piel: {e}"))?;
     let new_scene = crate::commands::mesh_to_scene(&result.mesh, "Piel", Some(&scene));
     *state.mesh.lock().unwrap() = Some(result.mesh);
     *state.scene.lock().unwrap() = Some(new_scene);
@@ -428,6 +523,7 @@ pub(crate) fn apply_skin_impl(state: &AppState, params: &SkinParams) -> Result<S
     Ok(SkinApplied {
         triangles_before: result.triangles_before,
         triangles_after: result.triangles_after,
+        triangles_skinned: result.triangles_skinned,
         edge_mm: result.edge_mm,
         max_displacement_mm: result.max_displacement_mm,
         warnings: result.warnings,
@@ -523,6 +619,7 @@ mod tests {
             rotation_deg: 0.0,
             edge_mm: Some(1.0),
             feather_mm: None,
+            ..Default::default()
         };
         let e = estimate(&state, &params(10.0, 0.6)).unwrap();
         assert!(e.has_uv && e.warnings.is_empty());
@@ -551,6 +648,7 @@ mod tests {
             rotation_deg: 0.0,
             edge_mm: Some(0.3),
             feather_mm: None,
+            ..Default::default()
         };
         let before = state.mesh.lock().unwrap().clone().unwrap().num_faces();
         let bytes = preview_mesh(&state, &params).unwrap();
@@ -579,6 +677,7 @@ mod tests {
             rotation_deg: 0.0,
             edge_mm: Some(1.0),
             feather_mm: Some(2.0),
+            ..Default::default()
         };
         assert!(apply_skin_impl(&state, &params).is_err(), "sin zona no hay piel");
         edit_zone(&state, &[2, 3], ZoneMode::Set).unwrap();
@@ -629,5 +728,80 @@ mod tests {
         assert_eq!(import_image(&state, path.to_str().unwrap()).unwrap().id, "img_2");
         std::fs::remove_file(path).ok();
         assert!(import_image(&state, "/no/existe.png").is_err());
+    }
+
+    #[test]
+    fn piel_en_caja_sin_uv_y_simplificada() {
+        let state = AppState::new();
+        let mut scene = box_scene();
+        // Sin UV en el modelo
+        for prim in scene.meshes.iter_mut().flat_map(|m| m.primitives.iter_mut()) {
+            prim.attributes.retain(|a| !matches!(a, converter_scene::VertexAttribute::TexCoords(..)));
+        }
+        *state.mesh.lock().unwrap() = Some(crate::commands::scene_to_pinocchio_mesh(&scene).unwrap());
+        *state.scene.lock().unwrap() = Some(scene);
+        edit_zone(&state, &[2, 3], ZoneMode::Set).unwrap();
+        let params = |mapping| SkinParams {
+            image: "dots".into(),
+            tile_mm: 10.0,
+            amplitude: 0.8,
+            edge_mm: Some(1.0),
+            mapping,
+            ..Default::default()
+        };
+        // Con UV falla y sin él (caja) anda
+        assert!(!estimate(&state, &params(p3d::SkinMapping::Uv)).unwrap().has_uv);
+        assert!(apply_skin_impl(&state, &params(p3d::SkinMapping::Uv)).is_err());
+        assert!(estimate(&state, &params(p3d::SkinMapping::Box)).unwrap().has_uv);
+        assert!(preview_mesh(&state, &params(p3d::SkinMapping::Box)).is_ok());
+        let slim = SkinParams { decimate_mm: Some(0.05), ..params(p3d::SkinMapping::Box) };
+        let applied = apply_skin_impl(&state, &slim).unwrap();
+        assert!(applied.triangles_after < applied.triangles_skinned, "{} de {}", applied.triangles_after, applied.triangles_skinned);
+        assert!(state.mesh.lock().unwrap().as_ref().unwrap().is_closed());
+    }
+
+    #[test]
+    fn proteger_agujeros_y_caras_a_mano() {
+        use pinocchio_print3d::{add_hole, footprint_polygon, PlanarShape};
+        let state = AppState::new();
+        let b = {
+            let p = |x: f64, y: f64, z: f64| Vector3::new(x * 40.0, y * 40.0, z * 20.0);
+            let v = vec![p(0., 0., 0.), p(1., 0., 0.), p(1., 1., 0.), p(0., 1., 0.), p(0., 0., 1.), p(1., 0., 1.), p(1., 1., 1.), p(0., 1., 1.)];
+            let f = vec![[0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7], [0, 1, 5], [0, 5, 4], [1, 2, 6], [1, 6, 5], [2, 3, 7], [2, 7, 6], [3, 0, 4], [3, 4, 7]];
+            Mesh::from_triangles(&v, &f)
+        };
+        let poly = footprint_polygon(&PlanarShape::Round { diameter: 8.0 }, Vector3::new(20.0, 20.0, 20.0), Vector3::new(0.0, 0.0, 1.0), 0.0);
+        let m = add_hole(&b, &poly, Vector3::new(0.0, 0.0, 1.0), 10.0, 1.0).unwrap();
+        let total = m.num_faces();
+        let mut scene = crate::commands::mesh_to_scene(&m, "caja", None);
+        scene.meters_per_unit = 0.001;
+        *state.scene.lock().unwrap() = Some(scene);
+        *state.mesh.lock().unwrap() = Some(m);
+        // Escena en mm: agujeros de 3 a 20 mm
+        let found = protect_holes(&state, 3.0, 20.0).unwrap();
+        assert_eq!(found.found, 1);
+        assert_eq!(found.zone.protected.len(), 48);
+        // Fuera de rango no encuentra otros y no borra lo que ya había
+        assert_eq!(protect_holes(&state, 10.0, 30.0).unwrap().found, 0);
+        assert_eq!(edit_protected(&state, &[0, 1], ZoneMode::Add).unwrap().protected.len(), 50);
+        assert_eq!(edit_protected(&state, &[0], ZoneMode::Remove).unwrap().protected.len(), 49);
+        assert!(edit_protected(&state, &[total as u32 + 5], ZoneMode::Add).unwrap().protected.len() == 49, "las caras que no existen se ignoran");
+        // Aplicar con toda la malla como zona deja el agujero liso
+        edit_zone(&state, &(0..total as u32).collect::<Vec<_>>(), ZoneMode::Set).unwrap();
+        let params = SkinParams {
+            image: "dots".into(),
+            tile_mm: 10.0,
+            amplitude: 0.5,
+            edge_mm: Some(1.0),
+            mapping: p3d::SkinMapping::Box,
+            margin_mm: 2.0,
+            ..Default::default()
+        };
+        let applied = apply_skin_impl(&state, &params).unwrap();
+        assert!(applied.max_displacement_mm > 0.2);
+        let after = state.mesh.lock().unwrap().clone().unwrap();
+        assert!(after.is_closed());
+        // Tras aplicar, la zona y las protegidas se limpian
+        assert!(state.print_skin_zone.lock().unwrap().protected.is_empty());
     }
 }
