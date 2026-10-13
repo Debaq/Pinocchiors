@@ -5,7 +5,7 @@
 // hoja con Y hacia arriba desde la esquina de abajo a la izquierda.
 
 import type { Sketch } from "./cad.ts";
-import { gearTableBoxes, GEAR_TABLE } from "./gearSheet.ts";
+import { circleLabelAt, gearTableBoxes, GEAR_TABLE } from "./gearSheet.ts";
 import { t as tr } from "./i18n.ts";
 import { polylineOf } from "./sketchCheck.ts";
 
@@ -233,7 +233,7 @@ export interface CutMarks {
   centers?: { view: string; a: P2; b: P2 }[];
   breaks?: { view: string; index: number; points: P2[] }[];
   /** Círculos primitivos de engranes (trazo y punto) y sus tablas de datos */
-  gears?: { view: string; center: P2; radius: number }[];
+  gears?: { view: string; center: P2; radius: number; circles?: { label: string; radius: number }[] }[];
   tables?: { title: string; rows: [string, string][] }[];
 }
 
@@ -1195,6 +1195,15 @@ export function sheetSvg(
       `<g data-pitch-circle="${esc(c.view)}" fill="none" stroke="#000" stroke-width="0.25" stroke-dasharray="8 1.5 1.5 1.5"><circle cx="${n(cx)}" cy="${n(cy)}" r="${n(r)}"/>` +
         `<line x1="${n(cx - r - 3)}" y1="${n(cy)}" x2="${n(cx + r + 3)}" y2="${n(cy)}"/><line x1="${n(cx)}" y1="${n(cy - r - 3)}" x2="${n(cx)}" y2="${n(cy + r + 3)}"/></g>`,
     );
+    // Cabeza, pie y base: círculos finos con su rótulo (da, df, db)
+    for (const k of c.circles ?? []) {
+      const rk = k.radius * v.scale;
+      const [lx, ly] = circleLabelAt([cx, cy], rk);
+      out.push(
+        `<g data-gear-circle="${esc(k.label)}" fill="none" stroke="#000" stroke-width="0.18"${k.label === "db" ? ' stroke-dasharray="1.2 0.8"' : ""}><circle cx="${n(cx)}" cy="${n(cy)}" r="${n(rk)}"/>` +
+          `<text x="${n(lx + 0.6)}" y="${n(ly - 0.4)}" font-size="2.2" fill="#000" stroke="none">${esc(k.label)}</text></g>`,
+      );
+    }
   }
   for (const b of gearTableBoxes(opts.marks?.tables ?? [], sheet.width, sheet.height, MARGIN, TITLE_H)) {
     const g = GEAR_TABLE;
@@ -1564,6 +1573,23 @@ export function sheetDxf(
         pair(40, r);
         line("CORTES", [cx - r - 3, cy], [cx + r + 3, cy]);
         line("CORTES", [cx, cy - r - 3], [cx, cy + r + 3]);
+        for (const k of c.circles ?? []) {
+          const rk = k.radius * v.scale;
+          pair(0, "CIRCLE");
+          pair(8, "CORTES");
+          pair(10, cx);
+          pair(20, cy);
+          pair(30, 0);
+          pair(40, rk);
+          const [lx, ly] = circleLabelAt([cx, cy], rk);
+          pair(0, "TEXT");
+          pair(8, "COTAS");
+          pair(10, lx + 0.6);
+          pair(20, ly + 0.4);
+          pair(30, 0);
+          pair(40, 2.2);
+          pair(1, k.label);
+        }
       }
     }
     // Tablas de datos de los engranes (en la hoja entera)

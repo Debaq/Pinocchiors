@@ -380,3 +380,22 @@ fn prisionero_hace_un_agujero_radial_en_el_cubo() {
     assert!(build(GearPart { set_screw: 3.0, ..spur(30) }).is_err());
     assert!(build(GearPart { set_screw: 20.0, ..hub }).is_err());
 }
+
+#[test]
+fn cota_entre_bolas_de_la_corona() {
+    use cad_model::gear_part::measurement_between_pins;
+    let ring = |z: u32, shift: f64| GearSpec { kind: GearKind::Internal, teeth: z, module: 2.0, shift, ..Default::default() };
+    let (d, m) = measurement_between_pins(&ring(60, 0.0)).unwrap();
+    assert_relative_eq!(d, 3.4);
+    // Valor calculado a mano con inv α_M = inv α + π/2z − d/(2 r_b): bola a ≈ 59,3 mm del eje
+    assert!((m - 115.2).abs() < 0.15, "{m}");
+    // Con dientes impares la cota baja por cos(π/2z) sobre el diámetro de las bolas
+    let (_, odd) = measurement_between_pins(&ring(61, 0.0)).unwrap();
+    assert!(odd > 115.0 && odd < 118.0, "{odd}");
+    // La bola entra más hondo si el hueco es más ancho (corrección negativa) → cota menor
+    assert!(measurement_between_pins(&ring(60, -0.5)).unwrap().1 != m);
+    assert!(measurement_between_pins(&GearSpec { teeth: 20, ..Default::default() }).is_none());
+    // info() la expone en over_pins para la corona
+    let g = GearPart { spec: ring(60, 0.0), outer: 140.0, ..Default::default() };
+    assert_relative_eq!(info(&g).over_pins, m);
+}

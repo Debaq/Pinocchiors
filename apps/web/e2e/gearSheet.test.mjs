@@ -77,3 +77,27 @@ test("la hoja dibuja el círculo, su cruz y la tabla (SVG y DXF)", () => {
   // Sin marcas, nada de esto
   assert.doesNotMatch(sheetSvg(placed, sheet, info2, { hidden: false, smooth: false }), /pitch-circle|gear-table/);
 });
+
+test("los círculos de cabeza, pie y base se rotulan en la vista y en el DXF", () => {
+  const views = [{ name: "top", dir: viewSpec("top") }];
+  const [mark] = gearMarks([gear()], views, [info]);
+  assert.deepEqual(mark.circles.map((c) => [c.label, c.radius]), [["da", 22], ["df", 17.5], ["db", info.base_diameter / 2]]);
+  // Sin datos del engrane no hay círculos extra
+  assert.equal(gearMarks([gear()], views)[0].circles, undefined);
+  // El sin fin y la cremallera no llevan círculo base
+  assert.equal(gearMarks([gear({ kind: "worm" })], [{ name: "front", dir: viewSpec("front") }], [info])[0]?.circles?.some((c) => c.label === "db") ?? false, false);
+  const sheet = SHEETS[0];
+  const placed = [{ name: "top", x: 100, y: 100, scale: 1, lines: [{ kind: "visible", points: [[0, 0], [10, 0]] }] }];
+  const info2 = { title: "T", date: "2026-10-13", scale: "1:1", projection: "first", sheet: sheet.name };
+  const svg = sheetSvg(placed, sheet, info2, { hidden: false, smooth: false, marks: { gears: [mark], tables: [] } });
+  for (const l of ["da", "df", "db"]) assert.match(svg, new RegExp(`data-gear-circle="${l}"`));
+  assert.match(svg, />df</);
+  const dxf = sheetDxf(placed, sheet, { hidden: false, smooth: false, marks: { gears: [mark], tables: [] } });
+  assert.match(dxf, /\ndf\n/);
+});
+
+test("la tabla de una corona dice «entre bolas»", () => {
+  const r = Object.fromEntries(gearTable(gear({ kind: "internal" }), info, "C").rows);
+  assert.equal(r["Cota entre bolas Ø3,4"], "43,2");
+  assert.equal(r["Cota sobre bolas Ø3,4"], undefined);
+});

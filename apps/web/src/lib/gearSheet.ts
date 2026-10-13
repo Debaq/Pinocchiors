@@ -12,6 +12,8 @@ export interface GearMark {
   /** Centro en coordenadas de la vista y radio primitivo (mm de la pieza) */
   center: P2;
   radius: number;
+  /** Los otros círculos del engrane, rotulados (cabeza, pie, base): lo que se sabe de `gearInfo` */
+  circles?: { label: string; radius: number }[];
 }
 
 export interface GearTable {
@@ -26,9 +28,9 @@ const num = (v: number, digits = 3) => (+v.toFixed(digits)).toLocaleString("es",
  * Círculos primitivos de los engranes `gears` en las vistas `views` (nombre y
  * hacia dónde mira): solo donde el eje del engrane apunta a quien mira.
  */
-export function gearMarks(gears: GearAxis[], views: { name: string; dir: ViewDir }[]): GearMark[] {
+export function gearMarks(gears: GearAxis[], views: { name: string; dir: ViewDir }[], infos: (GearInfo | undefined)[] = []): GearMark[] {
   const out: GearMark[] = [];
-  for (const g of gears) {
+  for (const [index, g] of gears.entries()) {
     if (g.part.spec.kind === "rack" || !(g.pitch_radius > 0)) continue;
     const z = norm(g.z);
     // Centro del engrane a media altura de su ancho
@@ -39,7 +41,13 @@ export function gearMarks(gears: GearAxis[], views: { name: string; dir: ViewDir
       const e = v.dir.eye;
       const x = v.dir.xdir;
       const up = norm([e[1] * x[2] - e[2] * x[1], e[2] * x[0] - e[0] * x[2], e[0] * x[1] - e[1] * x[0]]);
-      out.push({ view: v.name, center: [dot(mid, v.dir.xdir), dot(mid, up)], radius: g.pitch_radius });
+      const info = infos[index];
+      const circles = info && [
+        { label: "da", radius: info.tip_diameter / 2 },
+        { label: "df", radius: info.root_diameter / 2 },
+        ...(g.part.spec.kind === "external" || g.part.spec.kind === "internal" ? [{ label: "db", radius: info.base_diameter / 2 }] : []),
+      ];
+      out.push({ view: v.name, center: [dot(mid, v.dir.xdir), dot(mid, up)], radius: g.pitch_radius, circles });
     }
   }
   return out;
@@ -49,6 +57,9 @@ function norm(a: P3): P3 {
   const l = Math.hypot(...a) || 1;
   return [a[0] / l, a[1] / l, a[2] / l];
 }
+
+/** Posición del rótulo de un círculo de radio `r` (a 45° arriba a la derecha del centro) */
+export const circleLabelAt = (center: P2, r: number): P2 => [center[0] + r * Math.SQRT1_2, center[1] - r * Math.SQRT1_2];
 
 /** La tabla de datos de un engrane (los datos ya vienen calculados de `gearInfo`) */
 export function gearTable(gear: GearAxis, info: GearInfo, name: string): GearTable {
@@ -87,7 +98,7 @@ export function gearTable(gear: GearAxis, info: GearInfo, name: string): GearTab
     add("Ø de pie", num(info.root_diameter));
     if (spec.kind !== "bevel") add("Ø base", num(info.base_diameter));
     if (info.span > 0) add("Cota sobre {k} dientes", num(info.span));
-    if (info.over_pins > 0) add("Cota sobre bolas Ø{d}", num(info.over_pins));
+    if (info.over_pins > 0) add(spec.kind === "internal" ? "Cota entre bolas Ø{d}" : "Cota sobre bolas Ø{d}", num(info.over_pins));
     if (spec.backlash) add("Juego", num(spec.backlash));
   }
   add("Ancho", num(gear.part.width));

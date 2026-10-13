@@ -332,8 +332,8 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
       const dir = viewDirOf(s, p.name);
       return dir ? [{ name: p.name, dir }] : [];
     });
-    const gears = gearMarks(picked, views);
     const infos = gearInfos() ?? [];
+    const gears = gearMarks(picked, views, infos);
     const tables = picked.flatMap((g, i) => (infos[i] ? [gearTable(g, infos[i]!, store.doc()?.features.find((f) => f.id === g.feature)?.name ?? `#${g.feature}`)] : []));
     return { lines, centers, breaks, gears, tables };
   });
@@ -1047,6 +1047,8 @@ const ElementWindow: Component<{
     window.addEventListener("pointerup", up);
   };
   const el = () => props.element;
+  /** Engranes que el plano pide y el diseño ya no tiene (se borraron): su tabla no se dibuja */
+  const missingGears = () => (props.sheet.gears ?? []).filter((id) => !props.gearList.some((g) => g.id === id));
   const detail = (): Detail | undefined => {
     const x = el();
     return x.kind === "detail" ? props.sheet.details.find((y) => y.label === x.label) : undefined;
@@ -1163,7 +1165,7 @@ const ElementWindow: Component<{
               {check(t("Ocultas"), props.sheet.hiddenLines, (v) => props.update((s) => (s.hiddenLines = v)))}
               {check(t("Tangentes"), props.sheet.smooth, (v) => props.update((s) => (s.smooth = v)))}
             </div>
-            <Show when={props.gearList.length > 0}>
+            <Show when={props.gearList.length > 0 || missingGears().length > 0}>
               <div class="space-y-0.5" aria-label={t("Engranes en el plano")}>
                 <p class="text-[11px] text-text-dim">{t("Engranes con círculo primitivo y tabla de datos")}</p>
                 <For each={props.gearList}>
@@ -1178,6 +1180,14 @@ const ElementWindow: Component<{
                     )
                   }
                 </For>
+                <Show when={missingGears().length > 0}>
+                  <p class="text-[11px] text-warning" data-missing-gears>
+                    {t("{n} engrane(s) del plano ya no existen en el diseño: su tabla no se dibuja", { n: missingGears().length })}{" "}
+                    <button class="underline" onClick={() => props.update((s) => (s.gears = (s.gears ?? []).filter((id) => props.gearList.some((g) => g.id === id))))}>
+                      {t("Quitarlos")}
+                    </button>
+                  </p>
+                </Show>
               </div>
             </Show>
             {check(t("Rayado según el material"), props.sheet.hatchByMaterial !== false, (on) => props.update((s) => (s.hatchByMaterial = on)))}

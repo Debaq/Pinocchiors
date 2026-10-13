@@ -461,6 +461,51 @@ pub struct GearInfo {
             let f = Frame { origin: l.p(0.0, 0.0, mid), z: l.y, x: l.x };
             body = body.cut(&Shape::cylinder(f, g.set_screw / 2.0, g.hub_diameter / 2.0 + MARGIN).map_err(e)?).map_err(e)?;
         }
+        for k in 0..g.hole_count {
+            let a = TAU * k as f64 / g.hole_count as f64;
+            let f = Frame { origin: l.p(g.hole_circle / 2.0 * a.cos(), g.hole_circle / 2.0 * a.sin(), -MARGIN), z: l.z, x: l.x };
+            let hole = Shape::cylinder(f, (g.hole_diameter + 2.0 * g.hole_comp) / 2.0, g.width + 2.0 * MARGIN).map_err(e)?;
+            body = body.cut(&hole).map_err(e)?;
+        }
+    }
+    Ok(body)
+}
+
+/// Cota **entre** bolas de una corona (engrane interno): bolas de 1,7·m en dos huecos, opuestos
+/// si hay dientes pares. Devuelve (Ø de la bola, cota). La bola va en el hueco, que se achica
+/// hacia afuera: inv α_M = inv α + medio hueco − (Ø/2)/r_base. `None` si el engrane no es interno.
+pub fn measurement_between_pins(spec: &GearSpec) -> Option<(f64, f64)> {
+    if spec.kind != GearKind::Internal {
+        return None;
+    }
+    let c = spec.circles().ok()?;
+    let (m, z) = (spec.module, spec.teeth as f64);
+    let (an, at) = (spec.pressure_angle.to_radians(), c.alpha_t);
+    let inv = |a: f64| a.tan() - a;
+    let d_pin = 1.7 * m;
+    // Medio hueco en el primitivo: la corona tiene el hueco de un diente exterior con la misma corrección
+    let half_space = PI / (2.0 * z) - 2.0 * spec.shift * an.tan() / z;
+    let inv_m = inv(at) + half_space - d_pin / (2.0 * c.base);
+    let mut am = at;
+    for _ in 0..60 {
+        let df = am.tan().powi(2);
+        if df < 1e-14 {
+            break;
+        }
+        am -= (inv(am) - inv_m) / df;
+    }
+    let even = spec.teeth % 2 == 0;
+    // `c.base` es el radio base: entre centros opuestos va el diámetro
+    let m_between = 2.0 * c.base / am.cos() * if even { 1.0 } else { (PI / (2.0 * z)).cos() } - d_pin;
+    Some((d_pin, m_between))
+}
+
+/// Lo que el diálogo muestra de un engrane
+#[derive(Debug, Clone, Serialize)]
+pub struct GearInfo {
+    pub pitch_diameter: f64,
+    pub base_diameter: f64,
+    pub tip_diameter: f64,
     pub root_diameter: f64,
     pub module_t: f64,
     pub pressure_angle_t: f64,
@@ -519,6 +564,7 @@ pub fn info(g: &GearPart) -> GearInfo {
         }
     }
     let meas = measurements(&spec);
+    let between = measurement_between_pins(&spec);
     let c = circles.unwrap_or(GearCircles { module_t: 0.0, alpha_t: 0.0, pitch: 0.0, base: 0.0, tip: 0.0, root: 0.0, thickness: 0.0 });
     GearInfo {
         pitch_diameter: 2.0 * c.pitch,
@@ -531,8 +577,8 @@ pub fn info(g: &GearPart) -> GearInfo {
         warnings,
         span_teeth: meas.map_or(0, |m| m.0),
         span: meas.map_or(0.0, |m| m.1),
-        pin_diameter: meas.map_or(0.0, |m| m.2),
-        over_pins: meas.map_or(0.0, |m| m.3),
+        pin_diameter: meas.map_or_else(|| between.map_or(0.0, |b| b.0), |m| m.2),
+        over_pins: meas.map_or_else(|| between.map_or(0.0, |b| b.1), |m| m.3),
         error,
     }
 }
