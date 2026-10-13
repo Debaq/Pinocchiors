@@ -267,6 +267,17 @@ pub enum ShapeKind {
     Vertex,
 }
 
+/// Clase de una cara, sin áreas: superficie, si es un hueco (cara invertida) y su geometría básica
+/// (planos: un punto y la normal saliente; cilindros, conos y toros: un punto del eje, su dirección y el radio).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FaceClass {
+    pub surface: SurfaceKind,
+    pub reversed: bool,
+    pub origin: P3,
+    pub dir: P3,
+    pub radius: f64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SurfaceKind {
     Plane,
@@ -775,6 +786,36 @@ impl Shape {
             axis: analytic.then_some(Axis { origin: r.axis_origin, dir: r.axis_dir }),
             radius: analytic.then_some(r.radius),
         })
+    }
+
+    /// Clase de cada cara sin medir áreas (ver [`FaceClass`]); rápido con muchas caras de forma libre.
+    pub fn face_classes(&self) -> Result<Vec<FaceClass>> {
+        let n = self.face_count();
+        let mut raw = vec![ffi::CadFaceClass::default(); n];
+        if n > 0 && unsafe { ffi::cad_face_classes(self.ptr(), raw.as_mut_ptr(), n as i32) } == 0 {
+            return Err(last_error());
+        }
+        Ok(raw
+            .iter()
+            .map(|r| FaceClass {
+                surface: match r.surface {
+                    0 => SurfaceKind::Plane,
+                    1 => SurfaceKind::Cylinder,
+                    2 => SurfaceKind::Cone,
+                    3 => SurfaceKind::Sphere,
+                    4 => SurfaceKind::Torus,
+                    5 => SurfaceKind::BSpline,
+                    6 => SurfaceKind::Revolution,
+                    7 => SurfaceKind::Extrusion,
+                    8 => SurfaceKind::Offset,
+                    _ => SurfaceKind::Other,
+                },
+                reversed: r.reversed != 0,
+                origin: r.origin,
+                dir: r.dir,
+                radius: r.radius,
+            })
+            .collect())
     }
 
     pub fn faces(&self) -> Result<Vec<FaceInfo>> {

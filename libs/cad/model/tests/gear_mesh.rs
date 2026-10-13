@@ -329,3 +329,18 @@ fn rueda_como_fuente_o_con_otro_tipo_falla() {
     doc.add(prim(b, BodyOp::New));
     assert!(!doc.evaluate().errors().is_empty());
 }
+
+#[test]
+fn par_con_modulo_transversal_se_ubica_por_el_primitivo_transversal() {
+    // El primero da mt = 2 con β = 15°; el segundo copia el módulo normal y lo pasa a transversal con su hélice
+    let mut a = gear(GearKind::External, 20);
+    a.spec.helix_angle = 15.0;
+    a.transverse_module = true;
+    let mut b = gear(GearKind::External, 30);
+    b.transverse_module = true;
+    let (_, g) = pair(a, b, link(0.0));
+    assert_relative_eq!(g[1].part.spec.helix_angle, -15.0, epsilon = 1e-9);
+    assert_relative_eq!(g[1].part.effective_spec().module, 2.0 * 15f64.to_radians().cos(), epsilon = 1e-9);
+    // Distancia entre centros = mt·(z1+z2)/2 = 2·50/2
+    assert_relative_eq!(g[1].center_distance, 50.0, epsilon = 1e-6);
+}

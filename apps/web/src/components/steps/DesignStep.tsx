@@ -5151,7 +5151,14 @@ const GearFields: Component<{
             checked={!!props.shape.herringbone}
             onChange={(c) => props.update((x) => { const s = g(x); if (s) s.herringbone = c; })}
           />
-          <Show when={props.shape.herringbone && kind() === "external"}>{num(tl("Canal central"), "groove")}</Show>
+          <Show when={props.shape.herringbone}>{num(tl("Canal central"), "groove")}</Show>
+          <Checkbox
+            small
+            label={tl("El módulo es el transversal")}
+            checked={!!props.shape.transverse_module}
+            onChange={(c) => props.update((x) => { const s = g(x); if (s) s.transverse_module = c; })}
+            hint={tl("Con hélice, el módulo de arriba suele ser el normal (el de la herramienta). Marca esto si tu dato es el del plano de giro: el normal sale de mt·cos β.")}
+          />
         </Show>
       </Show>
       {spec(tl("Corrección de perfil"), "shift", "")}

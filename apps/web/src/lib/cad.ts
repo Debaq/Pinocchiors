@@ -604,6 +604,8 @@ export interface GearPart {
   /** Doble helicoidal (espina de pescado), con un canal central opcional */
   herringbone?: boolean;
   groove?: number;
+  /** El módulo de la receta es el transversal, no el normal (con hélice) */
+  transverse_module?: boolean;
   /** Rueda de sin fin: distancia entre centros (la pone el engrane enlazado) */
   throat?: number;
   /** Engranar con otro engrane anterior */
@@ -1533,6 +1535,8 @@ export interface ItemMeasure {
   radius: number | null;
   center: P3;
   direction: P3 | null;
+  /** Función de la cara en su pieza («flanco», «agujero»…) cuando la pieza las nombra */
+  role?: string | null;
 }
 
 export interface Measurement {

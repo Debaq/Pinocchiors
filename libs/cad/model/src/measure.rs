@@ -29,6 +29,8 @@ pub struct ItemMeasure {
     pub center: P3,
     /// Normal de caras planas; dirección de aristas rectas.
     pub direction: Option<P3>,
+    /// Función de la cara en su pieza («flanco», «agujero»…), si la pieza las nombra (engranes).
+    pub role: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

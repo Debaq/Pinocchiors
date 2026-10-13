@@ -4896,6 +4896,7 @@ const MeasurePanel: Component<{ m: Measurement }> = (props) => {
     if (m.items.length === 1) {
       const it = m.items[0];
       out.push(["", tr(KIND_NAMES[it.kind] ?? (it.kind.startsWith("b") ? "Superficie libre" : it.kind))]);
+      if (it.role) out.push(["Función", tr(it.role)]);
       if (it.area != null) out.push(["Área", `${it.area.toFixed(3).replace(/\.?0+$/, "")} mm²`]);
       if (it.length != null) out.push(["Largo", mm(it.length)]);
       if (it.radius != null) out.push(["Radio", mm(it.radius)], ["Diámetro", mm(2 * it.radius)]);

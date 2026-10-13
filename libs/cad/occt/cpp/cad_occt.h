@@ -169,6 +169,18 @@ typedef struct {
     int32_t closed;
 } CadEdgeInfo;
 
+// Clase de cada cara sin medir áreas (barato aun con cientos de caras de forma libre): superficie
+// (mismos códigos que CadFaceInfo), si la cara está invertida (hueco), y para planos origen y normal
+// saliente, para cilindros/conos/toros el eje y el radio.
+typedef struct {
+    int32_t surface;
+    int32_t reversed;
+    double origin[3];
+    double dir[3];
+    double radius;
+} CadFaceClass;
+
+int32_t cad_face_classes(const CadShape* s, CadFaceClass* out, int32_t n);
 int32_t cad_face_info(const CadShape* s, int32_t index, CadFaceInfo* out);
 int32_t cad_edge_info(const CadShape* s, int32_t index, CadEdgeInfo* out);
 // Caras adyacentes a una arista (hasta 2); devuelve cuántas escribió.

@@ -53,6 +53,9 @@ pub struct GearPart {
     pub herringbone: bool,
     /// Canal central de la espina de pescado (mm; 0: sin canal)
     pub groove: f64,
+    /// El módulo de la receta es el transversal (el del plano de giro), no el normal: el normal
+    /// sale de `mt·cos β`. Solo importa con hélice; cónico y sin fin lo ignoran.
+    pub transverse_module: bool,
     /// Rueda de sin fin: distancia entre centros con el sin fin (0: sin garganta).
     /// La rueda es cóncava para abrazar el filete; la pone `mesh` sola.
     pub throat: f64,
@@ -116,6 +119,7 @@ impl Default for GearPart {
             hole_comp: 0.0,
             herringbone: false,
             groove: 0.0,
+            transverse_module: false,
             throat: 0.0,
             link: None,
         }
@@ -148,6 +152,9 @@ impl GearPart {
     /// Receta con la holgura de impresión ya aplicada
     pub fn effective_spec(&self) -> GearSpec {
         let mut s = self.spec;
+        if self.transverse_module && matches!(s.kind, GearKind::External | GearKind::Internal | GearKind::Rack) {
+            s.module *= s.helix_angle.to_radians().cos();
+        }
         if self.print_clearance > 0.0 {
             s.backlash += self.print_clearance;
             s.addendum = (s.addendum - self.print_clearance / s.module).max(0.05);
@@ -489,6 +496,109 @@ pub fn gear(frame: Frame, g: &GearPart) -> R<Shape> {
     Ok(body)
 }
 
+/// Nombre de cada cara del engrane según lo que es en la pieza («diente», «flanco», «agujero»…):
+/// con ellos una referencia a la cara sigue valiendo al cambiar los dientes, el módulo o el ancho
+/// (varias caras comparten nombre y entre ellas manda la cercanía al punto guardado).
+pub fn face_roles(frame: Frame, g: &GearPart, classes: &[cad_occt::FaceClass]) -> Vec<String> {
+    use cad_occt::SurfaceKind::*;
+    let spec = g.effective_spec();
+    let z = normalize(frame.z);
+    let x = normalize(sub(frame.x, scale(z, dot(frame.x, z))));
+    let y = cross(z, x);
+    let axial = |p: P3| dot(sub(p, frame.origin), z);
+    // Distancia de un punto de un eje paralelo al eje del engrane
+    let off = |p: P3| {
+        let d = sub(p, frame.origin);
+        let r = sub(d, scale(z, dot(d, z)));
+        dot(r, r).sqrt()
+    };
+    let (tol, c) = (0.01, spec.circles().ok());
+    let (tip, root) = c.map_or((0.0, 0.0), |c| (c.tip, c.root));
+    let hub = if spec.kind == GearKind::External || spec.kind == GearKind::Bevel || spec.kind == GearKind::Worm { g.hub_length } else { 0.0 };
+    let top = if spec.kind == GearKind::Bevel { g.width * spec.cone_angle.to_radians().cos() } else { g.width };
+    let r_out = root - g.rim;
+    let r_in = (g.bore / 2.0).max(g.hub_diameter / 2.0) + 1.0;
+    // Cremallera: niveles (en Y) de las caras planas paralelas al eje, para separar cabeza y pie
+    let rack_tip = classes
+        .iter()
+        .filter(|k| k.surface == Plane && dot(k.dir, z).abs() < 1e-3 && dot(k.dir, y) > 0.999)
+        .map(|k| dot(sub(k.origin, frame.origin), y))
+        .fold(f64::MIN, f64::max);
+    classes
+        .iter()
+        .map(|k| {
+            let name = match k.surface {
+                Plane if dot(k.dir, z).abs() > 0.999 => {
+                    let (d, s) = (axial(k.origin), dot(k.dir, z));
+                    if s < 0.0 && d.abs() < tol {
+                        "cara de abajo"
+                    } else if s > 0.0 && (d - top).abs() < tol {
+                        "cara de arriba"
+                    } else if (s > 0.0 && hub > 0.0 && (d - g.width - hub).abs() < tol) || (s < 0.0 && spec.kind == GearKind::Bevel && hub > 0.0 && (d + hub).abs() < tol) {
+                        "cara del cubo"
+                    } else {
+                        "canal"
+                    }
+                }
+                Plane if dot(k.dir, z).abs() < 1e-3 => {
+                    let ny = dot(k.dir, y);
+                    if spec.kind == GearKind::Rack && dot(k.dir, x).abs() > 0.999 {
+                        "extremo"
+                    } else if spec.kind == GearKind::Rack && ny.abs() > 0.999 {
+                        if ny < 0.0 {
+                            "base del cuerpo"
+                        } else if (dot(sub(k.origin, frame.origin), y) - rack_tip).abs() < tol {
+                            "cabeza de diente"
+                        } else {
+                            "pie de diente"
+                        }
+                    } else if g.keyway && dot(sub(k.origin, frame.origin), k.dir).abs() <= g.bore / 2.0 + 5.0 && off(k.origin) < g.bore / 2.0 + 12.0 {
+                        "chavetero"
+                    } else if g.spokes > 0 {
+                        "rayo"
+                    } else {
+                        "flanco"
+                    }
+                }
+                Cylinder if dot(k.dir, z).abs() > 0.999 => {
+                    let r = k.radius;
+                    if off(k.origin) < tol {
+                        let bore = bore_fit(g) / 2.0;
+                        if g.bore > 0.0 && k.reversed && (r - bore).abs() < tol {
+                            "agujero"
+                        } else if hub > 0.0 && !k.reversed && (r - g.hub_diameter / 2.0).abs() < tol {
+                            "cubo"
+                        } else if spec.kind == GearKind::Internal && g.outer > 0.0 && !k.reversed && (r - g.outer / 2.0).abs() < tol {
+                            "exterior"
+                        } else if g.spokes > 0 && (r - r_in).abs() < tol {
+                            "cubo"
+                        } else if g.spokes > 0 && (r - r_out).abs() < tol {
+                            "aro"
+                        } else if spec.kind == GearKind::Worm {
+                            "núcleo"
+                        } else if (r - tip).abs() < tol {
+                            "cabeza de diente"
+                        } else if (r - root).abs() < tol {
+                            "pie de diente"
+                        } else {
+                            "flanco"
+                        }
+                    } else if g.hole_count > 0 {
+                        "aligeramiento"
+                    } else {
+                        "flanco"
+                    }
+                }
+                Cylinder if g.set_screw > 0.0 && dot(k.dir, z).abs() < 1e-3 => "prisionero",
+                Torus if g.throat > 0.0 => "garganta",
+                BSpline | Revolution | Extrusion | Offset | Other if spec.kind == GearKind::Worm => "filete",
+                _ => "flanco",
+            };
+            name.to_string()
+        })
+        .collect()
+}
+
 /// Cota **entre** bolas de una corona (engrane interno): bolas de 1,7·m en dos huecos, opuestos
 /// si hay dientes pares. Devuelve (Ø de la bola, cota). La bola va en el hueco, que se achica
 /// hacia afuera: inv α_M = inv α + medio hueco − (Ø/2)/r_base. `None` si el engrane no es interno.
@@ -634,9 +744,13 @@ pub fn mesh(src: &GearAxis, g: &GearPart, link: &GearLink) -> Result<(Frame, Gea
     use GearKind::*;
     let mut b = g.clone();
     let a = &src.part;
-    b.spec.module = a.spec.module;
+    // El módulo normal del otro (si el suyo es transversal, se vuelve a pasar con la hélice nueva)
+    b.spec.module = a.effective_spec().module;
     b.spec.pressure_angle = a.spec.pressure_angle;
     b.spec.helix_angle = if (a.spec.kind == Internal) == (b.spec.kind == Internal) { -a.spec.helix_angle } else { a.spec.helix_angle };
+    if b.transverse_module && matches!(b.spec.kind, External | Internal | Rack) {
+        b.spec.module /= b.spec.helix_angle.to_radians().cos();
+    }
     let (ka, kb) = (a.spec.kind, b.spec.kind);
     if (ka == Bevel) != (kb == Bevel) {
         return Err("un cónico solo engrana con otro cónico".into());
@@ -835,6 +949,7 @@ fn mesh_worm(src: &GearAxis, mut b: GearPart, link: &GearLink, [z, _xa, _ya, u]:
     let (_, gamma, lead) = ea.worm_dims();
     let s_h = if ea.left_hand { -1.0 } else { 1.0 };
     let m_x = ea.module;
+    b.transverse_module = false;
     b.spec.module = m_x * gamma.cos();
     b.spec.pressure_angle = (ea.pressure_angle.to_radians().tan() * gamma.cos()).atan().to_degrees();
     b.spec.helix_angle = s_h * gamma.to_degrees();

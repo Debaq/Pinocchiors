@@ -2385,6 +2385,63 @@ int32_t cad_face_info(const CadShape* s, int32_t index, CadFaceInfo* out) {
     });
 }
 
+int32_t cad_face_classes(const CadShape* s, CadFaceClass* out, int32_t n) {
+    return guard("clases de cara", 0, [&] {
+        auto m = map_of(s->s, TopAbs_FACE);
+        if (n < m.Extent()) throw Standard_Failure("faltan lugares para las caras");
+        for (int i = 1; i <= m.Extent(); i++) {
+            TopoDS_Face face = TopoDS::Face(m(i));
+            CadFaceClass& o = out[i - 1];
+            std::memset(&o, 0, sizeof(CadFaceClass));
+            o.reversed = face.Orientation() == TopAbs_REVERSED ? 1 : 0;
+            BRepAdaptor_Surface ad(face);
+            switch (ad.GetType()) {
+                case GeomAbs_Plane: {
+                    o.surface = 0;
+                    gp_Pln pl = ad.Plane();
+                    put(o.origin, pl.Location().XYZ());
+                    gp_Dir d = pl.Axis().Direction();
+                    if (o.reversed) d.Reverse();
+                    put(o.dir, d.XYZ());
+                    break;
+                }
+                case GeomAbs_Cylinder: {
+                    o.surface = 1;
+                    gp_Cylinder cy = ad.Cylinder();
+                    put(o.origin, cy.Axis().Location().XYZ());
+                    put(o.dir, cy.Axis().Direction().XYZ());
+                    o.radius = cy.Radius();
+                    break;
+                }
+                case GeomAbs_Cone: {
+                    o.surface = 2;
+                    gp_Cone co = ad.Cone();
+                    put(o.origin, co.Axis().Location().XYZ());
+                    put(o.dir, co.Axis().Direction().XYZ());
+                    o.radius = co.RefRadius();
+                    break;
+                }
+                case GeomAbs_Sphere: o.surface = 3; break;
+                case GeomAbs_Torus: {
+                    o.surface = 4;
+                    gp_Torus to = ad.Torus();
+                    put(o.origin, to.Axis().Location().XYZ());
+                    put(o.dir, to.Axis().Direction().XYZ());
+                    o.radius = to.MajorRadius();
+                    break;
+                }
+                case GeomAbs_BezierSurface:
+                case GeomAbs_BSplineSurface: o.surface = 5; break;
+                case GeomAbs_SurfaceOfRevolution: o.surface = 6; break;
+                case GeomAbs_SurfaceOfExtrusion: o.surface = 7; break;
+                case GeomAbs_OffsetSurface: o.surface = 8; break;
+                default: o.surface = 9; break;
+            }
+        }
+        return 1;
+    });
+}
+
 int32_t cad_edge_info(const CadShape* s, int32_t index, CadEdgeInfo* out) {
     return guard("arista", 0, [&] {
         auto m = map_of(s->s, TopAbs_EDGE);

@@ -1561,8 +1561,19 @@ pub async fn cad_measure(app: AppHandle, items: Vec<cad_model::MeasureItem>) -> 
 fn measure_impl(state: &AppState, items: &[cad_model::MeasureItem]) -> Result<cad_model::Measurement, String> {
     evaluate(state)?;
     let cache = state.cad_cache.lock().unwrap();
-    let body = cache.as_ref().and_then(|c| c.eval.body.as_ref()).ok_or("No hay sólido")?;
-    cad_model::measure(body, items)
+    let eval = &cache.as_ref().ok_or("No hay sólido")?.eval;
+    let body = eval.body.as_ref().ok_or("No hay sólido")?;
+    let mut m = cad_model::measure(body, items)?;
+    // Las caras de un engrane llevan el nombre de su función
+    for (it, out) in items.iter().zip(m.items.iter_mut()) {
+        if let cad_model::MeasureItem::Face { index } = it
+            && let Some(t) = eval.face_tags.get(*index).and_then(|ts| ts.first())
+            && eval.gears.iter().any(|g| g.feature == t.feature)
+        {
+            out.role = Some(t.name.clone());
+        }
+    }
+    Ok(m)
 }
 
 #[cfg(test)]

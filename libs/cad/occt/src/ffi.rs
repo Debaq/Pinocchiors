@@ -22,6 +22,16 @@ pub struct CadFaceInfo {
 
 #[repr(C)]
 #[derive(Debug, Default, Clone, Copy)]
+pub struct CadFaceClass {
+    pub surface: i32,
+    pub reversed: i32,
+    pub origin: [f64; 3],
+    pub dir: [f64; 3],
+    pub radius: f64,
+}
+
+#[repr(C)]
+#[derive(Debug, Default, Clone, Copy)]
 pub struct CadEdgeInfo {
     pub curve: i32,
     pub length: f64,
@@ -143,6 +153,7 @@ unsafe extern "C" {
 
     pub fn cad_count_faces(s: *const CadShape) -> i32;
     pub fn cad_count_edges(s: *const CadShape) -> i32;
+    pub fn cad_face_classes(s: *const CadShape, out: *mut CadFaceClass, n: i32) -> i32;
     pub fn cad_face_info(s: *const CadShape, index: i32, out: *mut CadFaceInfo) -> i32;
     pub fn cad_edge_info(s: *const CadShape, index: i32, out: *mut CadEdgeInfo) -> i32;
     pub fn cad_edge_faces(s: *const CadShape, edge: i32, out2: *mut i32) -> i32;

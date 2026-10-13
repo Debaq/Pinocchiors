@@ -2440,7 +2440,14 @@ impl Ctx<'_> {
                     PrimitiveShape::Gear(g) => Ok(crate::gear_part::gear(frame, g)?),
                 }
                 .map_err(err)?;
-                let tool = Tagged { tags: primitive_tags(f.id, p, &tool), shape: tool };
+                let mut tags = primitive_tags(f.id, p, &tool);
+                if let PrimitiveShape::Gear(g) = &shape
+                    && let Ok(classes) = tool.face_classes()
+                {
+                    // Caras con nombre de función (agujero, flanco…) en vez de por índice
+                    tags = crate::gear_part::face_roles(frame, g, &classes).into_iter().map(|n| vec![tag(f.id, n)]).collect();
+                }
+                let tool = Tagged { tags, shape: tool };
                 self.ev.tools.insert(f.id, (tool.clone(), p.op));
                 self.apply(f.id, tool, p.op)?;
                 self.ev.threads.extend(standard_thread(f.id, &shape, frame, threading, p.link));

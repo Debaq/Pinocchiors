@@ -675,6 +675,8 @@ export const en_ui_steps: Catalog = {
   "Razón (− si giran al revés)": "Ratio (− if they turn opposite)",
   "mm por vuelta": "mm per turn",
   "Fase": "Phase",
+  "El módulo es el transversal": "The module is the transverse one",
+  "Con hélice, el módulo de arriba suele ser el normal (el de la herramienta). Marca esto si tu dato es el del plano de giro: el normal sale de mt·cos β.": "With a helix, the module above is usually the normal one (the cutter's). Tick this if your figure is the one in the plane of rotation: the normal one comes out as mt·cos β.",
   "No hay engranes enlazados con una unión giratoria cada uno": "No meshed gears with a revolute joint each",
   "{a} y {b} tienen los ejes a {angle}°: los engranes rectos y helicoidales solo engranan con ejes paralelos": "{a} and {b} have axes {angle}° apart: spur and helical gears only mesh with parallel axes",
   "{a} y {b} tienen los ejes a {angle}°: los engranes rectos y helicoidales solo engranan con ejes paralelos; los helicoidales cruzados no se tallan, para ejes cruzados usa un sin fin": "{a} and {b} have axes {angle}° apart: spur and helical gears only mesh with parallel axes; crossed helical gears are not generated, use a worm for crossed axes",

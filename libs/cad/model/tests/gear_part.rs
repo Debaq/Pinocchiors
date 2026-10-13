@@ -412,3 +412,80 @@ fn cota_entre_bolas_de_la_corona() {
     let g = GearPart { spec: ring(60, 0.0), outer: 140.0, ..Default::default() };
     assert_relative_eq!(info(&g).over_pins, m);
 }
+
+#[test]
+fn modulo_transversal_da_el_primitivo_sin_dividir_por_cos_beta() {
+    let mut g = helical(20, 20.0);
+    // Normal: Ø primitivo = m·z / cos β
+    assert_relative_eq!(info(&g).pitch_diameter, 40.0 / 20f64.to_radians().cos(), epsilon = 1e-9);
+    // Transversal: Ø primitivo = mt·z, y el módulo normal que se talla es mt·cos β
+    g.transverse_module = true;
+    assert_relative_eq!(info(&g).pitch_diameter, 40.0, epsilon = 1e-9);
+    assert_relative_eq!(g.effective_spec().module, 2.0 * 20f64.to_radians().cos(), epsilon = 1e-12);
+    // Sin hélice no cambia nada
+    let mut s = spur(20);
+    s.transverse_module = true;
+    assert_relative_eq!(info(&s).pitch_diameter, 40.0, epsilon = 1e-9);
+}
+
+fn roles(g: GearPart) -> std::collections::BTreeMap<String, usize> {
+    let mut doc = Document::new();
+    doc.add(FeatureKind::Primitive(Primitive { shape: PrimitiveShape::Gear(g), origin: [0.0; 3], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op: BodyOp::New, link: None }));
+    let ev = doc.evaluate();
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    let mut out = std::collections::BTreeMap::new();
+    for tags in &ev.face_tags {
+        assert_eq!(tags.len(), 1);
+        *out.entry(tags[0].name.clone()).or_insert(0) += 1;
+    }
+    out
+}
+
+#[test]
+fn las_caras_llevan_nombre_de_funcion() {
+    if !occt::available() {
+        return;
+    }
+    let z = 24;
+    let g = GearPart { bore: 8.0, keyway: true, hub_diameter: 16.0, hub_length: 6.0, set_screw: 3.0, hole_count: 3, hole_diameter: 4.0, hole_circle: 30.0, ..spur(z) };
+    let r = roles(g);
+    let n = |k: &str| r.get(k).copied().unwrap_or(0);
+    assert_eq!(n("cara de abajo"), 1, "{r:?}");
+    assert_eq!(n("cara de arriba"), 1, "{r:?}");
+    assert_eq!(n("cara del cubo"), 1, "{r:?}");
+    assert_eq!(n("agujero"), 1, "{r:?}");
+    assert_eq!(n("cubo"), 1, "{r:?}");
+    assert_eq!(n("chavetero"), 3, "{r:?}");
+    assert_eq!(n("prisionero"), 1, "{r:?}");
+    assert_eq!(n("aligeramiento"), 3, "{r:?}");
+    assert!(n("flanco") >= z as usize * 2 && n("pie de diente") >= 1 && n("cabeza de diente") >= 1, "{r:?}");
+    // Corona: el cilindro de afuera
+    let ring = GearPart { spec: GearSpec { kind: GearKind::Internal, teeth: 30, module: 2.0, ..Default::default() }, width: 10.0, outer: 80.0, ..Default::default() };
+    assert_eq!(roles(ring).get("exterior"), Some(&1));
+    // Cremallera: cabezas, pies y fondo
+    let rack = GearPart { spec: GearSpec { kind: GearKind::Rack, teeth: 4, module: 2.0, ..Default::default() }, width: 10.0, outer: 6.0, ..Default::default() };
+    let r = roles(rack);
+    assert_eq!(r.get("cabeza de diente"), Some(&4), "{r:?}");
+    assert_eq!(r.get("base del cuerpo"), Some(&1), "{r:?}");
+    assert_eq!(r.get("flanco"), Some(&8), "{r:?}");
+    assert_eq!(r.get("extremo"), Some(&2), "{r:?}");
+    assert_eq!(r.get("pie de diente"), Some(&8), "{r:?}");
+}
+
+#[test]
+fn la_referencia_a_una_cara_sobrevive_al_cambiar_los_dientes() {
+    if !occt::available() {
+        return;
+    }
+    let eval = |z: u32| {
+        let mut doc = Document::new();
+        doc.add(FeatureKind::Primitive(Primitive { shape: PrimitiveShape::Gear(GearPart { bore: 8.0, ..spur(z) }), origin: [0.0; 3], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op: BodyOp::New, link: None }));
+        doc.evaluate()
+    };
+    let before = eval(20);
+    let bore = before.face_tags.iter().position(|t| t[0].name == "agujero").unwrap();
+    let r = before.face_ref(bore).unwrap();
+    let after = eval(31);
+    let found = after.resolve_face(&r).unwrap();
+    assert_eq!(after.face_tags[found][0].name, "agujero");
+}
