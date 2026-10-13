@@ -40,9 +40,25 @@ pub(crate) fn dovetail_trench(center: Vector3, m: Vector3, s: Vector3, a: Real, 
     ]
 }
 
-/// Resta la zanja `planes` = [lado 1, lado 2, fondo] de `mesh`. Falla si el contorno que deja
-/// no es el de una zanja que cruza la pieza de pared a pared
-pub(crate) fn subtract_trench(mesh: &Mesh, planes: &[TrenchPlane; 3]) -> Result<Mesh> {
+/// Punto donde se cruzan tres planos `(punto, normal)`; `None` si son paralelos
+fn intersect3(a: &TrenchPlane, b: &TrenchPlane, c: &TrenchPlane) -> Option<Vector3> {
+    let (n1, n2, n3) = (a.1, b.1, c.1);
+    let det = n1.dot(&n2.cross(&n3));
+    if det.abs() < 1e-12 {
+        return None;
+    }
+    let (d1, d2, d3) = (n1.dot(&a.0), n2.dot(&b.0), n3.dot(&c.0));
+    Some((n2.cross(&n3) * d1 + n3.cross(&n1) * d2 + n1.cross(&n2) * d3) * (1.0 / det))
+}
+
+/// Resta la zanja `planes` = [lado 1, lado 2, fondo] de `mesh` (de pared a pared), o con un cuarto plano, el
+/// tope, [lado 1, lado 2, fondo, tope]: la zanja entra por una pared y termina ciega en el tope (cuya normal
+/// mira hacia la zanja). Falla si el contorno que deja no es el de una zanja así
+pub(crate) fn subtract_trench(mesh: &Mesh, planes: &[TrenchPlane]) -> Result<Mesh> {
+    let np = planes.len();
+    if np != 3 && np != 4 {
+        return Err(err("una zanja lleva tres planos (lados y fondo) y, si termina ciega, un cuarto (el tope)"));
+    }
     let (pos, tris) = triangles(mesh);
     if tris.is_empty() {
         return Err(Print3dError::EmptyMesh);
@@ -66,7 +82,7 @@ pub(crate) fn subtract_trench(mesh: &Mesh, planes: &[TrenchPlane; 3]) -> Result<
         let poly = vec![pos[t[0]], pos[t[1]], pos[t[2]]];
         // ¿Entra a la zanja con área?
         let mut inside = poly.clone();
-        for i in 0..3 {
+        for i in 0..np {
             inside = clip_half_plane(&inside, |p| side(i, p));
             if inside.len() < 3 {
                 break;
@@ -80,7 +96,7 @@ pub(crate) fn subtract_trench(mesh: &Mesh, planes: &[TrenchPlane; 3]) -> Result<
         }
         let mut rest = poly;
         let mut outs = Vec::new();
-        for i in 0..3 {
+        for i in 0..np {
             let out = clip_half_plane(&rest, |p| -side(i, p));
             if out.len() >= 3 && polygon_area(&out, n.try_normalize().unwrap_or_else(Vector3::unit_z)) > area_tol {
                 outs.push(out);
@@ -216,7 +232,7 @@ pub(crate) fn subtract_trench(mesh: &Mesh, planes: &[TrenchPlane; 3]) -> Result<
     // Plano de cada arista del contorno (la que cae en uno solo)
     let on_plane = |p: &Vector3, i: usize| side(i, p).abs() <= plane_tol;
     let label = |a: usize, b: usize| -> Option<usize> {
-        let hits: Vec<usize> = (0..3).filter(|&i| on_plane(&positions[a], i) && on_plane(&positions[b], i)).collect();
+        let hits: Vec<usize> = (0..np).filter(|&i| on_plane(&positions[a], i) && on_plane(&positions[b], i)).collect();
         (hits.len() == 1).then(|| hits[0])
     };
     let n = lp.len();
@@ -236,28 +252,47 @@ pub(crate) fn subtract_trench(mesh: &Mesh, planes: &[TrenchPlane; 3]) -> Result<
             _ => runs.push((labels[i], vec![lp[i], lp[(i + 1) % n]])),
         }
     }
-    if runs.len() != 4 || runs.iter().enumerate().any(|(k, r)| (r.0 == 2) != (k % 2 == (if runs[0].0 == 2 { 0 } else { 1 }))) {
-        return Err(err("el contorno de la zanja no es el de una ranura que cruza la pieza (lado, fondo, lado, fondo)"));
+    // Caras de la zanja: cada tramo del contorno se cierra con los segmentos que son aristas de la zanja
+    let mut face_loops: Vec<(usize, Vec<usize>)> = Vec::new();
+    if np == 3 {
+        if runs.len() != 4 || runs.iter().enumerate().any(|(k, r)| (r.0 == 2) != (k % 2 == (if runs[0].0 == 2 { 0 } else { 1 }))) {
+            return Err(err("el contorno de la zanja no es el de una ranura que cruza la pieza (lado, fondo, lado, fondo)"));
+        }
+        // Poner un tramo de fondo primero para fijar el orden: [fondo, lado, fondo, lado]
+        if runs[0].0 != 2 {
+            runs.rotate_left(1);
+        }
+        let (floor_a, side_a, floor_b, side_b) = (&runs[0], &runs[1], &runs[2], &runs[3]);
+        // Cada lado cierra su tramo con el segmento entre sus extremos; el fondo une sus dos tramos
+        face_loops.push((side_a.0, side_a.1.clone()));
+        face_loops.push((side_b.0, side_b.1.clone()));
+        let mut floor_loop: Vec<usize> = floor_a.1.clone();
+        floor_loop.extend(floor_b.1.iter().copied());
+        face_loops.push((floor_a.0, floor_loop));
+    } else {
+        // Ciega: [fondo, lado, tope, lado]; las esquinas donde se cruzan lado, fondo y tope no son vértices de la malla
+        let mut labels_seen: Vec<usize> = runs.iter().map(|r| r.0).collect();
+        labels_seen.sort_unstable();
+        if runs.len() != 4 || labels_seen != [0, 1, 2, 3] {
+            return Err(err("el contorno de la zanja con tope no es el de una ranura que entra por una pared y termina ciega (fondo, lado, tope, lado)"));
+        }
+        while runs[0].0 != 2 {
+            runs.rotate_left(1);
+        }
+        if runs[2].0 != 3 {
+            return Err(err("el tope tiene que quedar frente al fondo del recorrido"));
+        }
+        let (floor, x, end, y) = (runs[0].clone(), runs[1].clone(), runs[2].clone(), runs[3].clone());
+        let corner = |side_plane: usize| intersect3(&planes[side_plane], &planes[2], &planes[3]).ok_or_else(|| err("el tope es paralelo a un lado o al fondo"));
+        let (ca, cb) = (corner(x.0)?, corner(y.0)?);
+        let (ia, ib) = (positions.len(), positions.len() + 1);
+        positions.push(ca);
+        positions.push(cb);
+        face_loops.push((x.0, [x.1.clone(), vec![ia]].concat()));
+        face_loops.push((y.0, [y.1.clone(), vec![ib]].concat()));
+        face_loops.push((3, [end.1.clone(), vec![ib, ia]].concat()));
+        face_loops.push((2, [floor.1.clone(), vec![ia, ib]].concat()));
     }
-    // Poner un tramo de fondo primero para fijar el orden: [fondo, lado, fondo, lado]
-    if runs[0].0 != 2 {
-        runs.rotate_left(1);
-    }
-    let (floor_a, side_a, floor_b, side_b) = (&runs[0], &runs[1], &runs[2], &runs[3]);
-    // Caras: cada lado cierra su tramo con el segmento entre sus extremos; el fondo une sus dos tramos
-    let first = |r: &(usize, Vec<usize>)| *r.1.first().expect("tramo");
-    let last = |r: &(usize, Vec<usize>)| *r.1.last().expect("tramo");
-    let mut face_loops: Vec<(usize, Vec<usize>)> = vec![
-        (side_a.0, side_a.1.clone()),
-        (side_b.0, side_b.1.clone()),
-    ];
-    // Fondo: tramo A, salto al inicio del lado de B... el recorrido es floor_a → side_a → floor_b → side_b:
-    // fondo = floor_a, luego el segmento hasta el inicio de floor_b, floor_b, y el segmento de vuelta
-    let mut floor_loop: Vec<usize> = floor_a.1.clone();
-    floor_loop.extend(floor_b.1.iter().copied());
-    face_loops.push((floor_a.0, floor_loop));
-    debug_assert_eq!(last(floor_a), first(side_a));
-    debug_assert_eq!(last(side_a), first(floor_b));
 
     // Triangular cada cara con su normal hacia el vacío
     for (plane, vs) in &face_loops {
@@ -339,6 +374,20 @@ mod tests {
         let area = (2.0 * a + 2.0 * bb) * 0.5 * d;
         let vol = compute_volume(&b) - compute_volume(&r);
         assert!((vol - area * 80.0).abs() < 1e-6 * vol, "{vol} vs {}", area * 80.0);
+    }
+
+    #[test]
+    fn zanja_ciega_con_tope() {
+        let b = make_box(80.0, 60.0, 40.0);
+        let (a, bb, d) = (3.0, 5.0, 6.0);
+        let [l1, l2, fl] = trench(a, bb, d, 30.0);
+        // Entra por la pared x = 0 y termina en x = 50
+        let stop = (Vector3::new(50.0, 30.0, 40.0), Vector3::new(-1.0, 0.0, 0.0));
+        let r = subtract_trench(&b, &[l1, l2, fl, stop]).unwrap();
+        assert!(r.is_closed());
+        let area = (2.0 * a + 2.0 * bb) * 0.5 * d;
+        let vol = compute_volume(&b) - compute_volume(&r);
+        assert!((vol - area * 50.0).abs() < 1e-6 * vol, "{vol} vs {}", area * 50.0);
     }
 
     #[test]

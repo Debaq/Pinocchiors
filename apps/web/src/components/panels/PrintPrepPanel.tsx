@@ -88,7 +88,7 @@ export interface JointsReport {
   connections: Array<{ piece_a: number; piece_b: number; contact_area: number; requested: number; placed: number; notes: string[] }>;
 }
 
-export type JointShape = "round" | "square" | "dovetail" | "bayonet" | "rail";
+export type JointShape = "round" | "square" | "dovetail" | "bayonet" | "rail" | "terrace" | "puzzle";
 
 export interface JointSettings {
   shape: JointShape;
@@ -100,6 +100,8 @@ export interface JointSettings {
   fit?: FitKind | "manual";
   /** Giro de la unión dentro de la cara (grados): hacia dónde corre el riel */
   angle: number;
+  /** Riel con tope: la ranura termina ciega cerca de la otra pared */
+  railStop?: boolean;
 }
 
 export interface MaterialEstimate {
@@ -193,6 +195,10 @@ export function jointShapeConfig(s: JointSettings) {
       return { kind: "square", size: s.size };
     case "rail":
       return { kind: "rail", width: s.size };
+    case "terrace":
+      return { kind: "terrace", diameter: s.size };
+    case "puzzle":
+      return { kind: "puzzle", size: s.size };
     case "bayonet":
       return { kind: "bayonet", length: s.size * 2.3, width: s.size };
     case "dovetail":
@@ -498,6 +504,8 @@ export const JointsSection: Component<{
           { value: "dovetail", label: t("Trapecio") },
           { value: "bayonet", label: t("Cierre de cuarto de vuelta") },
           { value: "rail", label: t("Cola de milano deslizante") },
+          { value: "terrace", label: t("Terraza escalonada") },
+          { value: "puzzle", label: t("Rompecabezas") },
         ]}
         value={props.settings.shape}
         onChange={(v) => set({ shape: v as JointShape })}
@@ -528,6 +536,17 @@ export const JointsSection: Component<{
         </Show>
         <NumberInput label={t("Por cara")} value={props.settings.count} onChange={(v) => set({ count: Math.max(1, Math.round(v)) })} min={1} max={8} step={1} />
         <NumberInput label={t("Giro")} value={props.settings.angle ?? 0} onChange={(v) => set({ angle: v })} min={-180} max={180} step={5} suffix="°" />
+        <Show when={props.settings.shape === "rail"}>
+          <div class="col-span-2">
+            <Checkbox
+              small
+              label={t("Con tope")}
+              checked={props.settings.railStop ?? false}
+              onChange={(v) => set({ railStop: v })}
+              hint={t("La ranura entra por una pared y termina ciega a 2 mm de la otra: el riel no se pasa.")}
+            />
+          </div>
+        </Show>
       </div>
       <Button onClick={props.onAdd} disabled={!props.hasPieces || props.busy} loading={props.busy} fullWidth size="sm" variant="primary">
         {t("Añadir uniones")}

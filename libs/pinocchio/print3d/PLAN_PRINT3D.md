@@ -169,7 +169,7 @@ Leyenda: ⬜ falta · 🧪 falta probarlo de verdad · ⚠ límite conocido (fun
 
 - ⚠ Las uniones solo van en caras de corte **planas**. La huella es redonda, cuadrada, trapecio, cuarto de vuelta
   o riel deslizante; el riel corre en línea recta de pared a pared y la cuerda tiene que caber en la cara sin huecos.
-- ⬜ El riel no tiene tope (un extremo ciego): se desliza por los dos lados. ⬜ No hay puzzles ni terraza.
+- ✅ El riel puede llevar tope (casilla «Con tope»); también hay terraza y rompecabezas (Fase 12).
 - ⚠ Si la cara de corte tiene un hueco en el medio (un anillo), el riel no se pone (lo avisa).
 
 ### Vaciado, material y placas
@@ -245,3 +245,19 @@ Leyenda: ⬜ falta · 🧪 falta probarlo de verdad · ⚠ límite conocido (fun
   no caben en la posición elegida.
 - **Placa en 3D**: «Ver en 3D» arma la placa en el visor (cama gris, piezas de colores en su lugar, en milímetros).
 - Límite: el chequeo de que cabe usa la caja de la pieza en el giro mínimo que la apoya; no prueba ángulos intermedios sobre la cama.
+
+## Fase 12: uniones (hecha)
+
+- **Terraza** (`PlanarShape::Terrace{diameter}`): perno y hueco escalonados y concéntricos (radio ½·d abajo y 0,3·d
+  arriba; el escalón cae a 0,45 de la profundidad). Perno y hueco se arman apilando prismas como la bayoneta.
+- **Rompecabezas** (`PlanarShape::Puzzle{size}`): huella no convexa (cabeza redonda de diámetro `size` sobre un cuello de
+  0,8·r, alto total 1,6·size). Como no es simétrica, perno y hueco usan la misma huella en el mundo (el hueco, con el
+  contorno invertido). Para eso `open_cap` ya no recorta por semiplanos de un polígono convexo: cubre la huella con
+  triángulos (`cap_triangles`) y `carve` cierra el fondo/punta con `region_tris` en vez de un abanico.
+- **Tope del riel** (`PlanarJointConfig.rail_stop`): `groove::subtract_trench` acepta un 4.º plano (el tope). La ranura
+  entra por una pared y termina ciega a 2 mm de la otra; sus esquinas se calculan cruzando tres planos. El riel se acorta
+  para llegar hasta ahí con holgura.
+- Pruebas: volúmenes exactos de terraza y rompecabezas, zanja ciega (sección × largo), riel con tope (sección × (c − 2)),
+  y el perno del rompecabezas dentro de su hueco para varios giros.
+- UI: formas «Terraza escalonada» y «Rompecabezas» y casilla «Con tope» (solo con el riel).
+

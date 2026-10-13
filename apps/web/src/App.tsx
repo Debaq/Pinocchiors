@@ -7260,6 +7260,7 @@ export const App: Component = () => {
       min_depth: 3,
       min_contact_area: 50,
       rotation_deg: s.angle ?? 0,
+      rail_stop: s.shape === "rail" && (s.railStop ?? false),
     };
     const fit = s.fit && s.fit !== "manual" ? { printer, material, fit: s.fit } : null;
     const result = await printTask(t("Poniendo uniones..."), () => invoke<JointsReport>("add_print_joints", { config, fit }));

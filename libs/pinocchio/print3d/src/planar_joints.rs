@@ -33,6 +33,11 @@ pub enum PlanarShape {
     /// Cola de milano deslizante: riel en una pieza y ranura en la otra, de pared a pared de la
     /// cara de corte. `width` es el ancho de la boca; la ranura se ensancha hacia el fondo
     Rail { width: Real },
+    /// Terraza: perno y hueco escalonados y concéntricos (ancho `diameter` abajo y 0,6 de eso arriba)
+    Terrace { diameter: Real },
+    /// Rompecabezas: cabeza redonda de diámetro `size` sobre un cuello angosto; no es convexa y no
+    /// tiene simetría, así que perno y hueco se arman con la misma huella en el mundo
+    Puzzle { size: Real },
 }
 
 impl PlanarShape {
@@ -45,6 +50,8 @@ impl PlanarShape {
             // La cámara redonda de abajo, un poco más ancha que la diagonal de la barra
             PlanarShape::Bayonet { length, width } => length.hypot(width) + 2.0,
             PlanarShape::Rail { width } => width,
+            PlanarShape::Terrace { diameter } => diameter,
+            PlanarShape::Puzzle { size } => size * 1.6,
         }
     }
 
@@ -60,6 +67,8 @@ impl PlanarShape {
             },
             PlanarShape::Bayonet { length, width } => PlanarShape::Bayonet { length: (length + delta).max(0.1), width: (width + delta).max(0.1) },
             PlanarShape::Rail { width } => PlanarShape::Rail { width: (width + delta).max(0.1) },
+            PlanarShape::Terrace { diameter } => PlanarShape::Terrace { diameter: (diameter + delta).max(0.1) },
+            PlanarShape::Puzzle { size } => PlanarShape::Puzzle { size: (size + delta).max(0.1) },
         }
     }
 }
@@ -82,6 +91,9 @@ pub struct PlanarJointConfig {
     pub min_contact_area: Real,
     /// Giro de la huella dentro del plano (grados)
     pub rotation_deg: Real,
+    /// Riel con tope: la ranura entra por una pared y termina ciega 2 mm antes de la otra, así el riel no se pasa
+    #[serde(default)]
+    pub rail_stop: bool,
 }
 
 impl Default for PlanarJointConfig {
@@ -95,6 +107,7 @@ impl Default for PlanarJointConfig {
             min_depth: 3.0,
             min_contact_area: 50.0,
             rotation_deg: 0.0,
+            rail_stop: false,
         }
     }
 }
@@ -124,7 +137,24 @@ pub struct JointsReport {
     pub connections: Vec<ConnectionJoints>,
 }
 
-/// Polígono convexo (antihorario mirando contra `normal`) de la huella
+/// Contorno 2D (antihorario) del rompecabezas: cuello de ancho 0,8·r abajo y cabeza redonda de radio `r = size/2`
+/// arriba, centrado en la mitad de su caja (alto total 3,2·r)
+fn puzzle_outline(size: Real) -> Vec<(Real, Real)> {
+    let r = size * 0.5;
+    let w = 0.4 * r;
+    let c = 0.6 * r;
+    let y0 = -1.6 * r;
+    let x = (w / r).acos();
+    let mut pts = vec![(-w, y0), (w, y0)];
+    let n = 20;
+    for i in 0..=n {
+        let phi = -x + (std::f64::consts::PI + 2.0 * x) * i as Real / n as Real;
+        pts.push((r * phi.cos(), c + r * phi.sin()));
+    }
+    pts
+}
+
+/// Polígono (antihorario mirando contra `normal`) de la huella; solo el del rompecabezas no es convexo
 pub fn footprint_polygon(shape: &PlanarShape, center: Vector3, normal: Vector3, rotation_deg: Real) -> Vec<Vector3> {
     let (u, v) = plane_basis(normal);
     let (s, c) = rotation_deg.to_radians().sin_cos();
@@ -155,6 +185,9 @@ pub fn footprint_polygon(shape: &PlanarShape, center: Vector3, normal: Vector3, 
             let h = width * 0.5;
             vec![(-h, -h), (h, -h), (h, h), (-h, h)]
         }
+        // La base de la terraza (la parte ancha)
+        PlanarShape::Terrace { diameter } => return footprint_polygon(&PlanarShape::Round { diameter }, center, normal, rotation_deg),
+        PlanarShape::Puzzle { size } => puzzle_outline(size),
     };
     pts2.into_iter()
         .map(|(x, y)| {
@@ -199,17 +232,32 @@ fn in_cap(cap: &Cap, p: Vector3, n: Vector3) -> bool {
     })
 }
 
+/// Normal del polígono (regla de Newell), sin normalizar
+fn polygon_normal(polygon: &[Vector3]) -> Vector3 {
+    (0..polygon.len()).fold(Vector3::zero(), |s, i| s + polygon[i].cross(&polygon[(i + 1) % polygon.len()]))
+}
+
+/// Triángulos que cubren la huella (sirve también si no es convexa)
+fn footprint_triangles(polygon: &[Vector3], n: Vector3) -> Vec<[Vector3; 3]> {
+    let segments: Vec<(Vector3, Vector3)> = (0..polygon.len()).map(|i| (polygon[i], polygon[(i + 1) % polygon.len()])).collect();
+    let tol = (diagonal(polygon) * 1e-9).max(1e-9);
+    crate::capping::cap_triangles(&segments, n, polygon[0], tol)
+}
+
 /// Puntos de muestra: borde y relleno de la huella
 fn sample_polygon(polygon: &[Vector3]) -> Vec<Vector3> {
-    let c = polygon.iter().fold(Vector3::zero(), |s, p| s + *p) * (1.0 / polygon.len() as Real);
-    let mut pts = vec![c];
+    let mut pts = Vec::new();
     for i in 0..polygon.len() {
         let (a, b) = (polygon[i], polygon[(i + 1) % polygon.len()]);
         for k in 0..6 {
-            let p = a.lerp(&b, k as Real / 6.0);
-            pts.push(p);
-            pts.push(c.lerp(&p, 0.5));
+            pts.push(a.lerp(&b, k as Real / 6.0));
         }
+    }
+    let normal = polygon_normal(polygon).try_normalize().unwrap_or_else(Vector3::unit_z);
+    for t in footprint_triangles(polygon, normal) {
+        let c = (t[0] + t[1] + t[2]) * (1.0 / 3.0);
+        pts.push(c);
+        pts.extend(t.iter().map(|v| c.lerp(v, 0.5)));
     }
     pts
 }
@@ -234,15 +282,22 @@ pub(crate) fn open_cap(mesh: &Mesh, polygon: &[Vector3], n: Vector3) -> Result<O
     // Triángulos de la tapa que solapan la huella: se sustituye su unión (región S)
     // por S menos la huella, así no aparecen vértices nuevos en aristas ajenas
     let sides: Vec<(Vector3, Vector3)> = (0..polygon.len()).map(|i| (polygon[i], polygon[(i + 1) % polygon.len()] - polygon[i])).collect();
+    let fp_tris = footprint_triangles(polygon, n);
     let overlap_area = |tri: [Vector3; 3]| -> Real {
-        let mut inside = tri.to_vec();
-        for (p0, e) in &sides {
-            inside = clip_half_plane(&inside, |p| e.cross(&(*p - *p0)).dot(&n));
-            if inside.len() < 3 {
-                return 0.0;
-            }
-        }
-        crate::contact::polygon_area(&inside, n)
+        fp_tris
+            .iter()
+            .map(|ft| {
+                let mut inside = tri.to_vec();
+                for k in 0..3 {
+                    let (p0, e) = (ft[k], ft[(k + 1) % 3] - ft[k]);
+                    inside = clip_half_plane(&inside, |p| e.cross(&(*p - p0)).dot(&n));
+                    if inside.len() < 3 {
+                        return 0.0;
+                    }
+                }
+                crate::contact::polygon_area(&inside, n)
+            })
+            .sum()
     };
     let area_tol = (cap.diag * cap.diag * 1e-12).max(1e-12);
     let in_s: Vec<bool> = cap
@@ -351,53 +406,12 @@ fn carve(mesh: &Mesh, polygon: &[Vector3], n: Vector3, dir: Vector3) -> Result<M
         tris.push([b, a, ta]);
         tris.push([b, ta, tb]);
     }
-    // Fondo (hueco) o punta (perno): abanico desde el centro, de cara a +n
-    let center = ring.iter().fold(Vector3::zero(), |s, &i| s + positions[i]) * (1.0 / m as Real) + dir;
-    let cidx = positions.len();
-    positions.push(center);
-    for i in 0..m {
-        let (ta, tb) = (top_start + i, top_start + (i + 1) % m);
-        tris.push([tb, ta, cidx]);
-    }
-    // El fondo del hueco mira hacia +n (hacia el vacío) y la punta del perno también: si
-    // dir va contra n (hueco) el abanico anterior ya queda hacia +n; si va a favor (perno)
-    // también. Se comprueba el sentido real por el área firmada
-    let last = &tris[tris.len() - m..];
-    let signed: Real = last
-        .iter()
-        .map(|t| {
-            let (a, b, c) = (positions[t[0]], positions[t[1]], positions[t[2]]);
-            (b - a).cross(&(c - a)).dot(&n)
-        })
-        .sum();
-    if signed < 0.0 {
-        let l = tris.len();
-        for t in &mut tris[l - m..] {
-            t.swap(1, 2);
-        }
-    }
+    // Fondo (hueco) o punta (perno): la huella a esa altura, de cara a +n
+    let diag = diagonal(&positions);
+    let top: Vec<Vector3> = (top_start..top_start + m).map(|i| positions[i]).collect();
+    region_tris(&[top], n, diag, &mut positions, &mut tris);
 
-    // Quitar vértices sin usar
-    let mut used = vec![false; positions.len()];
-    for t in &tris {
-        for &i in t {
-            used[i] = true;
-        }
-    }
-    let mut remap = vec![usize::MAX; positions.len()];
-    let mut compact = Vec::new();
-    for (i, p) in positions.iter().enumerate() {
-        if used[i] {
-            remap[i] = compact.len();
-            compact.push(*p);
-        }
-    }
-    let tris: Vec<[usize; 3]> = tris.iter().map(|t| [remap[t[0]], remap[t[1]], remap[t[2]]]).collect();
-    let result = Mesh::from_triangles(&compact, &tris);
-    if !result.is_closed() {
-        return Err(Print3dError::JointError("la malla resultante no quedó cerrada".into()));
-    }
-    Ok(result)
+    weld_build(&positions, &tris)
 }
 
 /// Añade un perno de `height` mm saliendo de la tapa plana de normal `normal`
@@ -695,7 +709,13 @@ fn place_rail(pieces: &mut [LabeledPiece], ia: usize, ib: usize, line: &RailLine
     }
     let undercut = depth * (15f64.to_radians().tan());
     let (a, b) = (width * 0.5, width * 0.5 + undercut);
-    let planes = dovetail_trench(line.mid, -n, line.along, a, b, depth);
+    let trench = dovetail_trench(line.mid, -n, line.along, a, b, depth);
+    // Con tope, la ranura termina a `end` de la mitad de la cuerda (2 mm antes de la pared del fondo)
+    let end = line.chord * 0.5 - 2.0;
+    let mut planes = trench.to_vec();
+    if config.rail_stop {
+        planes.push((line.mid + line.along * end, -line.along));
+    }
     // Riel: más delgado por la holgura, un poco más corto que la ranura, y de `depth − gap` de alto
     // Cada lado del riel sigue al de la ranura con la misma inclinación, a `holgura/2` de distancia
     let half_clear = config.tolerance * 0.5;
@@ -704,7 +724,16 @@ fn place_rail(pieces: &mut [LabeledPiece], ia: usize, ib: usize, line: &RailLine
     if root_half <= 0.3 {
         return Err("la holgura deja el riel sin grosor".to_string());
     }
-    let rail = add_rail(&pieces[ia].mesh, line.mid, n, line.along, root_half, tip_half, rail_h, rail_len);
+    let rail = if config.rail_stop {
+        // Ocupa [−c/2 + margen, end − holgura] a lo largo de la cuerda
+        let (from, to) = (-line.chord * 0.5 + margin, end - gap);
+        if to - from < width * 3.0 {
+            return Err(format!("la cara es muy corta para un riel con tope ({:.1} mm)", line.chord));
+        }
+        add_rail(&pieces[ia].mesh, line.mid + line.along * ((from + to) * 0.5), n, line.along, root_half, tip_half, rail_h, to - from)
+    } else {
+        add_rail(&pieces[ia].mesh, line.mid, n, line.along, root_half, tip_half, rail_h, rail_len)
+    };
     let groove = subtract_trench(&pieces[ib].mesh, &planes);
     match (groove, rail) {
         (Ok(g), Ok(r)) => {
@@ -751,8 +780,23 @@ pub fn apply_joints(pieces: &mut [LabeledPiece], config: &PlanarJointConfig) -> 
                 }
                 continue;
             }
+            if let PlanarShape::Terrace { diameter } = config.shape {
+                match place_terrace(pieces, ia, ib, center, n, diameter, config) {
+                    Ok(()) => conn.placed += 1,
+                    Err(why) => conn.notes.push(why),
+                }
+                continue;
+            }
             // Pin en A saliendo hacia B; hueco en B hacia dentro (normal exterior de B = −n)
-            let hole_poly = footprint_polygon(&config.shape, center, -n, config.rotation_deg);
+            // El rompecabezas no es simétrico: perno y hueco usan la misma huella en el mundo
+            let puzzle = matches!(config.shape, PlanarShape::Puzzle { .. });
+            let hole_poly = if puzzle {
+                let mut w = footprint_polygon(&config.shape, center, n, config.rotation_deg);
+                w.reverse();
+                w
+            } else {
+                footprint_polygon(&config.shape, center, -n, config.rotation_deg)
+            };
             let free = free_depth(&pieces[ib].mesh, &hole_poly, -n);
             let wall = config.edge_margin.max(0.8);
             let depth = config.depth.min(free - wall);
@@ -762,7 +806,7 @@ pub fn apply_joints(pieces: &mut [LabeledPiece], config: &PlanarJointConfig) -> 
             }
             // Pin: huella más pequeña por la holgura, en el sentido de A (normal n)
             let pin_shape = config.shape.resized(config.tolerance);
-            let pin_poly = footprint_polygon(&pin_shape, center, n, -config.rotation_deg);
+            let pin_poly = footprint_polygon(&pin_shape, center, n, if puzzle { config.rotation_deg } else { -config.rotation_deg });
             let pin_height = (depth - config.gap()).max(0.5);
             let hole = add_hole(&pieces[ib].mesh, &hole_poly, -n, depth, wall);
             let pin = add_pin(&pieces[ia].mesh, &pin_poly, n, pin_height);
@@ -782,6 +826,92 @@ pub fn apply_joints(pieces: &mut [LabeledPiece], config: &PlanarJointConfig) -> 
         report.connections.push(conn);
     }
     Ok(report)
+}
+
+/// Perno de terraza: base redonda de radio `r1` y `h1` de alto, y encima un escalón de radio `r2` y `h2`
+#[allow(clippy::too_many_arguments)]
+pub fn add_terrace_pin(mesh: &Mesh, center: Vector3, normal: Vector3, r1: Real, r2: Real, h1: Real, h2: Real) -> Result<Mesh> {
+    let n = normal.try_normalize().ok_or_else(|| Print3dError::JointError("normal nula".into()))?;
+    if !(r1 > r2 && r2 > 0.0 && h1 > 0.0 && h2 > 0.0) {
+        return Err(Print3dError::JointError("medidas del perno de terraza no válidas".into()));
+    }
+    let base = footprint_polygon(&PlanarShape::Round { diameter: r1 * 2.0 }, center, n, 0.0);
+    let (mut pos, mut tris, ring) = open_cap(mesh, &base, n)?;
+    let diag = diagonal(&pos);
+    let outer: Vec<Vector3> = ring.iter().map(|&i| pos[i]).collect();
+    let step_outer: Vec<Vector3> = outer.iter().map(|p| *p + n * h1).collect();
+    let m = ring.len();
+    let first = pos.len();
+    pos.extend(step_outer.iter().copied());
+    for i in 0..m {
+        let (a, b) = (ring[i], ring[(i + 1) % m]);
+        tris.push([b, a, first + i]);
+        tris.push([b, first + i, first + (i + 1) % m]);
+    }
+    let inner: Vec<Vector3> = footprint_polygon(&PlanarShape::Round { diameter: r2 * 2.0 }, center, n, 0.0).iter().map(|p| *p + n * h1).collect();
+    region_tris(&[step_outer, inner.clone()], n, diag, &mut pos, &mut tris);
+    prism_walls(&inner, n * h2, &mut pos, &mut tris);
+    let top: Vec<Vector3> = inner.iter().map(|p| *p + n * h2).collect();
+    region_tris(&[top], n, diag, &mut pos, &mut tris);
+    weld_build(&pos, &tris)
+}
+
+/// Hueco de terraza: boca de radio `r1` hasta `d1` y debajo un pozo de radio `r2` hasta `d2`
+#[allow(clippy::too_many_arguments)]
+pub fn add_terrace_hole(mesh: &Mesh, center: Vector3, normal: Vector3, r1: Real, r2: Real, d1: Real, d2: Real, min_wall: Real) -> Result<Mesh> {
+    let n = normal.try_normalize().ok_or_else(|| Print3dError::JointError("normal nula".into()))?;
+    if !(r1 > r2 && r2 > 0.0 && d2 > d1 && d1 > 0.0) {
+        return Err(Print3dError::JointError("medidas del hueco de terraza no válidas".into()));
+    }
+    let mouth = footprint_polygon(&PlanarShape::Round { diameter: r1 * 2.0 }, center, n, 0.0);
+    let free = free_depth_inside(mesh, &mouth, n);
+    if free < d2 + min_wall {
+        return Err(Print3dError::JointError(format!("la pieza solo tiene {free:.1} mm de fondo bajo la unión")));
+    }
+    let (mut pos, mut tris, ring) = open_cap(mesh, &mouth, n)?;
+    let diag = diagonal(&pos);
+    let outer: Vec<Vector3> = ring.iter().map(|&i| pos[i]).collect();
+    let step_outer: Vec<Vector3> = outer.iter().map(|p| *p - n * d1).collect();
+    let m = ring.len();
+    let first = pos.len();
+    pos.extend(step_outer.iter().copied());
+    for i in 0..m {
+        let (a, b) = (ring[i], ring[(i + 1) % m]);
+        tris.push([b, a, first + i]);
+        tris.push([b, first + i, first + (i + 1) % m]);
+    }
+    // Escalón: mira hacia la boca (al vacío), entre la pared ancha y el pozo
+    let inner: Vec<Vector3> = footprint_polygon(&PlanarShape::Round { diameter: r2 * 2.0 }, center, n, 0.0).iter().map(|p| *p - n * d1).collect();
+    region_tris(&[step_outer, inner.clone()], n, diag, &mut pos, &mut tris);
+    prism_walls(&inner, -n * (d2 - d1), &mut pos, &mut tris);
+    let floor: Vec<Vector3> = inner.iter().map(|p| *p - n * (d2 - d1)).collect();
+    region_tris(&[floor], n, diag, &mut pos, &mut tris);
+    weld_build(&pos, &tris)
+}
+
+/// Una terraza entre dos piezas (perno en `ia`, hueco en `ib`)
+fn place_terrace(pieces: &mut [LabeledPiece], ia: usize, ib: usize, center: Vector3, n: Vector3, diameter: Real, config: &PlanarJointConfig) -> std::result::Result<(), String> {
+    let gap = config.gap();
+    let wall = config.edge_margin.max(0.8);
+    let total = config.depth;
+    let (r1, r2) = (diameter * 0.5, diameter * 0.3);
+    let (d1, d2) = (total * 0.45, total);
+    let (pr1, pr2) = (r1 + config.tolerance * 0.5, r2 + config.tolerance * 0.5);
+    let h1 = d1 - gap * 0.5;
+    let h2 = (d2 - gap) - h1;
+    if pr2 <= 0.3 || pr1 <= pr2 || h2 <= 0.3 || h1 <= 0.3 {
+        return Err("la holgura o la profundidad no dejan terraza".into());
+    }
+    let hole = add_terrace_hole(&pieces[ib].mesh, center, -n, r1, r2, d1, d2, wall);
+    let pin = add_terrace_pin(&pieces[ia].mesh, center, n, pr1, pr2, h1, h2);
+    match (hole, pin) {
+        (Ok(h), Ok(p)) => {
+            pieces[ib].mesh = h;
+            pieces[ia].mesh = p;
+            Ok(())
+        }
+        (h, p) => Err(format!("unión omitida: {}", h.err().or(p.err()).map_or_else(String::new, |e| e.to_string()))),
+    }
 }
 
 /// Una unión de cuarto de vuelta entre dos piezas (perno en `ia`, ranura en `ib`)
@@ -1084,6 +1214,84 @@ mod tests {
         }
     }
 
+    fn split_box_in_two(z: Real) -> (Vec<LabeledPiece>, Vec<Real>) {
+        let b = make_box(80.0, 80.0, 60.0);
+        let meshes = crate::slicer::slice_by_planes(&b, &[Plane::xy_at_z(z)]).unwrap();
+        let pieces: Vec<LabeledPiece> = meshes.into_iter().enumerate().map(|(id, mesh)| LabeledPiece { mesh, id, ..Default::default() }).collect();
+        let before = pieces.iter().map(|p| compute_volume(&p.mesh)).collect();
+        (pieces, before)
+    }
+
+    /// (aumento del que gana volumen, disminución del que pierde)
+    fn deltas_of(pieces: &[LabeledPiece], before: &[Real]) -> (Real, Real) {
+        let d: Vec<Real> = pieces.iter().zip(before).map(|(p, v)| compute_volume(&p.mesh) - v).collect();
+        (d.iter().cloned().fold(Real::NEG_INFINITY, Real::max), -d.iter().cloned().fold(Real::INFINITY, Real::min))
+    }
+
+    #[test]
+    fn terraza_en_dos_mitades_de_una_caja() {
+        let (mut pieces, before) = split_box_in_two(30.0);
+        let cfg = PlanarJointConfig { shape: PlanarShape::Terrace { diameter: 12.0 }, depth: 14.0, count: 1, ..Default::default() };
+        let report = apply_joints(&mut pieces, &cfg).unwrap();
+        assert_eq!(report.joints_placed, 1, "{report:?}");
+        assert!(pieces.iter().all(|p| p.mesh.is_closed()));
+        // Holgura 0,4: boca de radio 6 hasta 6,3 y pozo de radio 3,6 hasta 14; perno de radios 5,8 y 3,4, alturas 6,1 y 7,5
+        let poly24 = |r: Real| 0.5 * 24.0 * r * r * (std::f64::consts::TAU / 24.0).sin();
+        let removed = poly24(6.0) * 6.3 + poly24(3.6) * (14.0 - 6.3);
+        let added = poly24(5.8) * 6.1 + poly24(3.4) * 7.5;
+        let (pin, hole) = deltas_of(&pieces, &before);
+        assert!((pin - added).abs() < 1e-6 * added, "perno {pin} esperado {added}");
+        assert!((hole - removed).abs() < 1e-6 * removed, "hueco {hole} esperado {removed}");
+        assert!(pin < hole, "el perno tiene que ser más chico que el hueco");
+    }
+
+    #[test]
+    fn rompecabezas_en_dos_mitades_de_una_caja() {
+        let (mut pieces, before) = split_box_in_two(30.0);
+        let cfg = PlanarJointConfig { shape: PlanarShape::Puzzle { size: 10.0 }, depth: 10.0, count: 1, rotation_deg: 30.0, ..Default::default() };
+        let report = apply_joints(&mut pieces, &cfg).unwrap();
+        assert_eq!(report.joints_placed, 1, "{report:?}");
+        assert!(pieces.iter().all(|p| p.mesh.is_closed()));
+        let area = |size: Real| {
+            let o = puzzle_outline(size);
+            (0..o.len()).map(|i| o[i].0 * o[(i + 1) % o.len()].1 - o[(i + 1) % o.len()].0 * o[i].1).sum::<Real>() * 0.5
+        };
+        let (removed, added) = (area(10.0) * 10.0, area(9.6) * 9.6);
+        let (pin, hole) = deltas_of(&pieces, &before);
+        assert!((pin - added).abs() < 1e-6 * added, "perno {pin} esperado {added}");
+        assert!((hole - removed).abs() < 1e-6 * removed, "hueco {hole} esperado {removed}");
+        // La huella no es convexa: una cabeza ancha sobre un cuello angosto
+        let o = puzzle_outline(10.0);
+        let xs = o.iter().map(|p| p.0);
+        assert!(xs.clone().fold(Real::NEG_INFINITY, Real::max) > 4.9 && o[0].0.abs() < 2.1);
+    }
+
+    #[test]
+    fn el_rompecabezas_entra_en_su_hueco() {
+        // Mismo marco en el mundo: la huella chica del perno cae dentro de la del hueco aunque se gire
+        for rot in [0.0, 37.0, 90.0, 200.0] {
+            let n = Vector3::unit_z();
+            let c = Vector3::new(10.0, 20.0, 30.0);
+            let hole = footprint_polygon(&PlanarShape::Puzzle { size: 10.0 }, c, n, rot);
+            let pin = footprint_polygon(&PlanarShape::Puzzle { size: 9.6 }, c, n, rot);
+            let (u, v) = plane_basis(n);
+            let to2 = |p: &Vector3| ((*p - c).dot(&u), (*p - c).dot(&v));
+            let hole2: Vec<(Real, Real)> = hole.iter().map(to2).collect();
+            // Dentro de un polígono no convexo: regla par-impar
+            let inside = |q: (Real, Real)| {
+                let mut odd = false;
+                for i in 0..hole2.len() {
+                    let (a, b) = (hole2[i], hole2[(i + 1) % hole2.len()]);
+                    if (a.1 > q.1) != (b.1 > q.1) && q.0 < (b.0 - a.0) * (q.1 - a.1) / (b.1 - a.1) + a.0 {
+                        odd = !odd;
+                    }
+                }
+                odd
+            };
+            assert!(pin.iter().all(|p| inside(to2(p))), "el perno se sale del hueco con giro {rot}");
+        }
+    }
+
     #[test]
     fn bayoneta_en_dos_mitades_de_una_caja() {
         let b = make_box(80.0, 80.0, 60.0);
@@ -1142,6 +1350,27 @@ mod tests {
         assert!((groove + section * 60.0).abs() < 1e-6 * section * 60.0, "ranura {groove} esperada {}", -section * 60.0);
         // El riel es más fino y más corto que la ranura, pero no mucho
         assert!(rail > 0.6 * section * 60.0 && rail < section * 60.0, "riel {rail}");
+    }
+
+    #[test]
+    fn riel_con_tope_termina_ciego_a_2_mm_de_la_pared() {
+        let b = make_box(80.0, 60.0, 50.0);
+        let meshes = crate::slicer::slice_by_planes(&b, &[Plane::xy_at_z(25.0)]).unwrap();
+        let mut pieces: Vec<LabeledPiece> = meshes.into_iter().enumerate().map(|(id, mesh)| LabeledPiece { mesh, id, ..Default::default() }).collect();
+        let before: Vec<Real> = pieces.iter().map(|p| compute_volume(&p.mesh)).collect();
+        let cfg = PlanarJointConfig { shape: PlanarShape::Rail { width: 6.0 }, depth: 8.0, count: 1, rail_stop: true, ..Default::default() };
+        let report = apply_joints(&mut pieces, &cfg).unwrap();
+        assert_eq!(report.joints_placed, 1, "{report:?}");
+        for p in &pieces {
+            assert!(p.mesh.is_closed());
+        }
+        let deltas: Vec<Real> = pieces.iter().zip(&before).map(|(p, v)| compute_volume(&p.mesh) - v).collect();
+        let (rail, groove) = (deltas.iter().cloned().fold(Real::NEG_INFINITY, Real::max), deltas.iter().cloned().fold(Real::INFINITY, Real::min));
+        let undercut = 8.0 * 15f64.to_radians().tan();
+        let section = (6.0 + (6.0 + 2.0 * undercut)) * 0.5 * 8.0;
+        // La ranura entra por una pared (60 mm de cuerda) y termina 2 mm antes de la otra
+        assert!((groove + section * 58.0).abs() < 1e-6 * section * 58.0, "ranura {groove} esperada {}", -section * 58.0);
+        assert!(rail > 0.5 * section * 58.0 && rail < section * 58.0, "riel {rail}");
     }
 
     #[test]
