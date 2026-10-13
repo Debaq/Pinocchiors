@@ -41,6 +41,7 @@ mod config;
 mod contact;
 mod error;
 mod geom;
+mod groove;
 mod hollow;
 mod joints;
 mod labeling;
