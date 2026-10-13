@@ -71,3 +71,17 @@ Hecho (lado CAD, 2026-10-13):
    agranda por eje con la contracción (transformación exacta del sólido, no de la malla). El diseño abierto no cambia.
 
 Pendiente: pruebas e2e de la sincronía impresora ↔ diseño (hoy solo hay pruebas de Rust).
+
+## Calibración con piezas de prueba (wizard)
+
+`calibration.rs` genera dos modelos sin soportes y con los huecos verticales, y saca las holguras de lo medido:
+
+- **Placa de holgura**: agujeros del diámetro de la clavija más una holgura creciente (numerados en relieve) y dos
+  clavijas con base. Se elige el agujero donde entra justa → holgura de un ajuste normal; se guarda en la
+  impresora como `fit_clearance = holgura / factor del material`.
+- **Bloque de calibración** (53 × 30 × 20 mm con agujeros de Ø4, 6, 8 y 10; largo en X, fondo en Y, alto en Z):
+  `contracción = 1 − medido / nominal` por eje y `hole_comp = promedio((nominal − medido) / 2)`.
+
+Comandos `export_calibration_model` y `solve_print_calibration`; asistente `CalibrationWizard.tsx` (en Fabricar,
+«Calibrar con piezas de prueba»). Los materiales propios (con contracción por eje y factor de holgura) y las
+impresoras propias se recuerdan entre sesiones. Los resultados se pueden guardar como perfiles nuevos.

@@ -3,7 +3,7 @@ import { Button, Checkbox, NumberInput, Select } from "../ui";
 import * as Icons from "../icons";
 import { fmtNumber, t, tx } from "../../lib/i18n";
 import { tBackend } from "../../lib/i18nBackend.ts";
-import { customPrinters, removeCustomPrinter, saveCustomPrinter } from "../../lib/settings.ts";
+import { customMaterials, customPrinters, removeCustomMaterial, removeCustomPrinter, saveCustomMaterial, saveCustomPrinter } from "../../lib/settings.ts";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TIPOS (lo que devuelve el backend, en milímetros con Z arriba)
@@ -210,11 +210,21 @@ export const PrinterMaterial: Component<{
   material: MaterialProfile;
   onPrinter: (p: PrinterProfile) => void;
   onMaterial: (m: MaterialProfile) => void;
+  /** Abre el asistente que calcula las holguras imprimiendo piezas de prueba */
+  onCalibrate?: () => void;
 }> = (props) => {
+  const materialIsSaved = () => customMaterials().some((m) => m.name === props.material.name);
+  const [newMaterial, setNewMaterial] = createSignal("");
+  const shrink = (): [number, number, number] => props.material.shrink ?? [0, 0, 0];
+  const setShrink = (axis: number, percent: number) => {
+    const next = [...shrink()] as [number, number, number];
+    next[axis] = Math.max(0, percent) / 100;
+    props.onMaterial({ ...props.material, shrink: next });
+  };
   const printers = () => [...(props.presets?.printers ?? []), ...customPrinters()];
   const isSaved = () => customPrinters().some((p) => p.name === props.printer.name);
   const [newName, setNewName] = createSignal("");
-  const materials = () => props.presets?.materials ?? [];
+  const materials = () => [...(props.presets?.materials ?? []), ...customMaterials()];
   const setVolume = (axis: number, v: number) => {
     const bv = [...props.printer.build_volume] as [number, number, number];
     bv[axis] = v;
@@ -309,15 +319,69 @@ export const PrinterMaterial: Component<{
           if (m) props.onMaterial(m);
         }}
       />
+      <div class="grid grid-cols-3 gap-1.5">
+        <For each={["X", "Y", "Z"]}>
+          {(axis, i) => (
+            <NumberInput
+              label={axis}
+              value={Number((shrink()[i()] * 100).toFixed(3))}
+              onChange={(v) => setShrink(i(), v)}
+              min={0}
+              max={5}
+              step={0.05}
+              suffix="%"
+            />
+          )}
+        </For>
+      </div>
+      <p class="text-[10px] text-text-dim">{t("Contracción del material por eje")}</p>
       <NumberInput
-        label={t("Contracción")}
-        value={Number(((props.material.shrink?.[0] ?? 0) * 100).toFixed(2))}
-        onChange={(v) => props.onMaterial({ ...props.material, shrink: [v / 100, v / 100, v / 100] })}
-        min={0}
-        max={5}
-        step={0.1}
-        suffix="%"
+        label={t("Factor de holgura")}
+        value={props.material.clearance_factor ?? 1}
+        onChange={(v) => props.onMaterial({ ...props.material, clearance_factor: Math.max(0.1, v) })}
+        min={0.1}
+        max={4}
+        step={0.05}
+        suffix="×"
       />
+      <div class="flex gap-1.5 items-center">
+        <input
+          class="min-w-0 flex-1 px-2 py-1 rounded bg-surface/40 border border-border text-xs text-text outline-none focus:border-accent"
+          placeholder={t("Nombre del material")}
+          value={newMaterial()}
+          onInput={(e) => setNewMaterial(e.currentTarget.value)}
+        />
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={!newMaterial().trim()}
+          onClick={() => {
+            const name = newMaterial().trim();
+            saveCustomMaterial({ ...props.material, name });
+            props.onMaterial({ ...props.material, name });
+            setNewMaterial("");
+          }}
+        >
+          {t("Guardar")}
+        </Button>
+        <Show when={materialIsSaved()}>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              removeCustomMaterial(props.material.name);
+              props.onMaterial(props.presets?.materials[0] ?? props.material);
+            }}
+          >
+            {t("Quitar")}
+          </Button>
+        </Show>
+      </div>
+      <Show when={props.onCalibrate}>
+        <Button size="sm" fullWidth onClick={props.onCalibrate} icon={<Icons.Ruler size={14} />}>
+          {t("Calibrar con piezas de prueba")}
+        </Button>
+      </Show>
     </div>
   );
 };

@@ -2,6 +2,8 @@ import { Component, Show, For, createEffect, createSignal } from "solid-js";
 import { Button, Checkbox, Select, NumberInput } from "../ui";
 import * as Icons from "../icons";
 import { fmtNumber, t } from "../../lib/i18n";
+import { CalibrationWizard, type CalibrationApply } from "../layout/CalibrationWizard";
+import { saveCustomMaterial, saveCustomPrinter } from "../../lib/settings.ts";
 import {
   JointsSection,
   defaultPrep,
@@ -173,12 +175,23 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
   const plate = () => prep().plate;
   const setPlate = (plate: PlateSettings) => patch({ plate });
 
+  // Asistente de calibración: lo que calcula se aplica a la impresora y al material elegidos
+  const [calibrating, setCalibrating] = createSignal(false);
+  const applyCalibration = (r: CalibrationApply) => {
+    if (r.savePrinterAs) saveCustomPrinter(r.printer);
+    if (r.saveMaterialAs) saveCustomMaterial(r.material);
+    patch({ printer: r.printer, material: r.material });
+  };
+
   // Subdivide state
   const [strategy, setStrategy] = createSignal("grid");
   const [margin, setMargin] = createSignal(2.0);
 
   return (
     <div class="space-y-4">
+      <Show when={calibrating()}>
+        <CalibrationWizard printer={printer()} material={material()} onApply={applyCalibration} onClose={() => setCalibrating(false)} />
+      </Show>
       {/* Análisis */}
       <div class="space-y-3">
         <h4 class="text-xs font-semibold uppercase tracking-wider text-text-muted">{t("Análisis")}</h4>
@@ -229,7 +242,7 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
 
         {/* Impresora, verificación y orientación */}
         <div class="space-y-3 pt-2 border-t border-border/50">
-          <PrinterMaterial presets={props.presets} printer={printer()} material={material()} onPrinter={setPrinterChoice} onMaterial={setMaterialChoice} />
+          <PrinterMaterial presets={props.presets} printer={printer()} material={material()} onPrinter={setPrinterChoice} onMaterial={setMaterialChoice} onCalibrate={() => setCalibrating(true)} />
           <Checkbox
             small
             label={t("Compensar los huecos del diseño")}

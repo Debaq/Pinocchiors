@@ -51,6 +51,21 @@ export const saveCustomPrinter = (printer: SavedPrinter) =>
   setSavedPrinters([...savedPrinters().filter((p) => p.name !== printer.name), printer]);
 export const removeCustomPrinter = (name: string) => setSavedPrinters(savedPrinters().filter((p) => p.name !== name));
 
+/** Materiales propios (Fabricar): densidad, voladizo, contracción por eje y factor de holgura */
+export interface SavedMaterial {
+  name: string;
+  density: number;
+  max_overhang_deg: number;
+  shrink?: [number, number, number];
+  clearance_factor?: number;
+}
+const [savedMaterials, setSavedMaterials] = createPersisted<SavedMaterial[]>("settings.materials", []);
+export const customMaterials = savedMaterials;
+/** Guarda (o reemplaza, por nombre) un material propio */
+export const saveCustomMaterial = (material: SavedMaterial) =>
+  setSavedMaterials([...savedMaterials().filter((m) => m.name !== material.name), material]);
+export const removeCustomMaterial = (name: string) => setSavedMaterials(savedMaterials().filter((m) => m.name !== name));
+
 const PREFIX = "pinocchio.ui.";
 /** Lo que no es disposición de la interfaz: se conserva al restablecer */
 const KEEP = ["settings.", "templates."];
