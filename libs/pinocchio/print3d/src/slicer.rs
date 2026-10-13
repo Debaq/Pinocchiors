@@ -466,10 +466,14 @@ pub fn subdivide(mesh: &Mesh, config: &SubdivideConfig) -> Result<Vec<LabeledPie
         )));
     }
 
-    if dims[0] <= effective_volume[0]
-        && dims[1] <= effective_volume[1]
-        && dims[2] <= effective_volume[2]
-    {
+    let manual = config.strategy == SubdivideStrategy::Manual;
+    // Con «óptimo» las piezas pueden girarse: basta que quepa en algún giro
+    let fits = if config.strategy == SubdivideStrategy::Optimal {
+        crate::cuts::fits_any_orientation(dims, effective_volume)
+    } else {
+        dims[0] <= effective_volume[0] && dims[1] <= effective_volume[1] && dims[2] <= effective_volume[2]
+    };
+    if fits && !manual {
         // No necesita subdivisión
         return Ok(vec![LabeledPiece {
             mesh: mesh.clone(),
@@ -485,6 +489,7 @@ pub fn subdivide(mesh: &Mesh, config: &SubdivideConfig) -> Result<Vec<LabeledPie
     let cuts = |axis: usize| (dims[axis] / effective_volume[axis]).ceil().max(1.0) - 1.0;
     let needed = match config.strategy {
         SubdivideStrategy::ZLayers => cuts(2),
+        SubdivideStrategy::Manual => config.manual.len() as Real,
         _ => cuts(0) + cuts(1) + cuts(2),
     };
     if needed > MAX_CUT_PLANES as Real {
@@ -497,10 +502,8 @@ pub fn subdivide(mesh: &Mesh, config: &SubdivideConfig) -> Result<Vec<LabeledPie
     let planes = match config.strategy {
         SubdivideStrategy::Grid => calculate_grid_planes(&bbox, &effective_volume),
         SubdivideStrategy::ZLayers => calculate_z_planes(&bbox, effective_volume[2]),
-        SubdivideStrategy::Optimal => {
-            // Por ahora usa grid
-            calculate_grid_planes(&bbox, &effective_volume)
-        }
+        SubdivideStrategy::Optimal => crate::cuts::optimal_planes(mesh, &bbox, effective_volume),
+        SubdivideStrategy::Manual => crate::cuts::manual_planes(&bbox, &config.manual)?,
     };
 
     if planes.is_empty() {
@@ -579,7 +582,7 @@ impl From<SubdivideStrategy> for LabelingScheme {
         match strategy {
             SubdivideStrategy::Grid => LabelingScheme::Alphanumeric,
             SubdivideStrategy::ZLayers => LabelingScheme::Numeric,
-            SubdivideStrategy::Optimal => LabelingScheme::Numeric,
+            SubdivideStrategy::Optimal | SubdivideStrategy::Manual => LabelingScheme::Numeric,
         }
     }
 }

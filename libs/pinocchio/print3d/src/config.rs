@@ -21,6 +21,23 @@ pub struct SubdivideConfig {
 
     /// Margen de seguridad respecto al volumen de construcción (mm)
     pub margin: Real,
+
+    /// Planos elegidos por el usuario (solo con la estrategia `Manual`)
+    #[serde(default)]
+    pub manual: Vec<CutPlane>,
+}
+
+/// Un corte elegido a mano: plano perpendicular a un eje, a cierta distancia del borde del modelo, con
+/// una inclinación opcional
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct CutPlane {
+    /// Eje al que el plano es perpendicular (0 = X, 1 = Y, 2 = Z)
+    pub axis: usize,
+    /// Distancia desde el borde mínimo del modelo a lo largo del eje (mm de la malla)
+    pub position: Real,
+    /// Giro del plano (grados) alrededor del eje que sigue al suyo (X→Y, Y→Z, Z→X)
+    #[serde(default)]
+    pub tilt_deg: Real,
 }
 
 impl Default for SubdivideConfig {
@@ -31,6 +48,7 @@ impl Default for SubdivideConfig {
             overlap: 0.0,
             strategy: SubdivideStrategy::Grid,
             margin: 5.0,
+            manual: Vec::new(),
         }
     }
 }
@@ -47,6 +65,9 @@ pub enum SubdivideStrategy {
 
     /// Solo corta en eje Z (capas)
     ZLayers,
+
+    /// Los planos que el usuario eligió (`SubdivideConfig::manual`)
+    Manual,
 }
 
 /// Configuración para análisis de malla
