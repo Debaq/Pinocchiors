@@ -16,6 +16,7 @@ mod skeleton;
 mod animation;
 mod transform;
 mod world;
+mod pose;
 mod polygon;
 mod faces;
 

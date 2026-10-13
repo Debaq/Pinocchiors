@@ -4,7 +4,7 @@
 //! sin grafo de escena como STL/OBJ, visores, rigging) deben usar estas
 //! funciones para recorrer la escena en el mismo orden.
 
-use crate::{IndexData, Scene, VertexAttribute};
+use crate::{IndexData, Scene, Transform, VertexAttribute};
 use glam::{Mat3, Mat4, Vec3};
 
 /// Una malla colocada en la escena por un nodo
@@ -62,7 +62,13 @@ impl Scene {
 
     /// Recorre los nodos en preorden desde las raíces, llamando `visit(nodo, mundo)`.
     /// Ignora ciclos e índices inválidos.
-    fn walk_nodes(&self, mut visit: impl FnMut(usize, Mat4)) {
+    fn walk_nodes(&self, visit: impl FnMut(usize, Mat4)) {
+        self.walk_nodes_with(None, visit)
+    }
+
+    /// Como `walk_nodes`, con transformaciones locales que reemplazan a las de los nodos
+    /// (una pose evaluada de una animación)
+    fn walk_nodes_with(&self, locals: Option<&[Transform]>, mut visit: impl FnMut(usize, Mat4)) {
         let mut visited = vec![false; self.nodes.len()];
         let mut stack: Vec<(usize, Mat4)> =
             self.effective_roots().into_iter().rev().map(|r| (r, Mat4::IDENTITY)).collect();
@@ -72,7 +78,8 @@ impl Scene {
             }
             visited[idx] = true;
             let node = &self.nodes[idx];
-            let world = parent * node.transform.to_matrix();
+            let local = locals.and_then(|l| l.get(idx)).copied().unwrap_or(node.transform);
+            let world = parent * local.to_matrix();
             visit(idx, world);
             for &child in node.children.iter().rev() {
                 if child < self.nodes.len() {
@@ -95,13 +102,17 @@ impl Scene {
     /// - Una malla con skin usa identidad: como en glTF, sus vértices ya están
     ///   en el espacio de bind del esqueleto y se ignora la transformación del nodo.
     pub fn mesh_instances(&self) -> Vec<MeshInstance> {
+        self.mesh_instances_with(None)
+    }
+
+    pub(crate) fn mesh_instances_with(&self, locals: Option<&[Transform]>) -> Vec<MeshInstance> {
         if self.nodes.is_empty() {
             return (0..self.meshes.len())
                 .map(|mesh| MeshInstance { mesh, node: None, world: Mat4::IDENTITY })
                 .collect();
         }
         let mut instances = Vec::new();
-        self.walk_nodes(|idx, world| {
+        self.walk_nodes_with(locals, |idx, world| {
             let node = &self.nodes[idx];
             if let Some(mesh) = node.mesh.filter(|&m| m < self.meshes.len()) {
                 let world = if node.skin.is_some() { Mat4::IDENTITY } else { world };
@@ -132,8 +143,42 @@ impl Scene {
     }
 
     pub fn world_primitives(&self) -> Vec<WorldPrimitive> {
+        self.world_primitives_with(None)
+    }
+
+    /// Geometría en espacio mundo con la pose de `animation` en `time` (segundos): los
+    /// nodos animados se mueven y las mallas con skin se deforman en CPU (skinning lineal)
+    pub fn world_primitives_at(&self, animation: usize, time: f32) -> Vec<WorldPrimitive> {
+        match self.posed_locals(animation, time) {
+            Some(locals) => self.world_primitives_with(Some(&locals)),
+            None => self.world_primitives_with(None),
+        }
+    }
+
+    fn world_primitives_with(&self, locals: Option<&[Transform]>) -> Vec<WorldPrimitive> {
         let mut out = Vec::new();
-        for (instance_idx, instance) in self.mesh_instances().into_iter().enumerate() {
+        // Matrices de las articulaciones (mundo · inversa de bind) de cada skin, si hay pose
+        let joint_matrices: Vec<Vec<Mat4>> = match locals {
+            Some(l) if !self.skeletons.is_empty() => {
+                let mut worlds = vec![Mat4::IDENTITY; self.nodes.len()];
+                self.walk_nodes_with(Some(l), |idx, world| worlds[idx] = world);
+                self.skeletons
+                    .iter()
+                    .map(|sk| {
+                        sk.joints
+                            .iter()
+                            .map(|j| j.node_index.and_then(|n| worlds.get(n)).map_or(Mat4::IDENTITY, |w| *w * j.inverse_bind_matrix))
+                            .collect()
+                    })
+                    .collect()
+            }
+            _ => Vec::new(),
+        };
+        for (instance_idx, instance) in self.mesh_instances_with(locals).into_iter().enumerate() {
+            let skin_matrices: Option<&Vec<Mat4>> = instance
+                .node
+                .and_then(|n| self.nodes[n].skin)
+                .and_then(|s| joint_matrices.get(s));
             let world = instance.world;
             let identity = world == Mat4::IDENTITY;
             let normal_matrix = Mat3::from_mat4(world).inverse().transpose();
@@ -144,12 +189,16 @@ impl Scene {
                 let mut normals = None;
                 let mut uvs = None;
                 let mut colors = None;
+                let mut joint_ids = None;
+                let mut joint_weights = None;
                 for attr in &prim.attributes {
                     match attr {
                         VertexAttribute::Positions(p) => positions = Some(p),
                         VertexAttribute::Normals(n) => normals = Some(n),
                         VertexAttribute::TexCoords(0, uv) => uvs = Some(uv),
                         VertexAttribute::Colors(c) => colors = Some(c),
+                        VertexAttribute::JointIndices(j) => joint_ids = Some(j),
+                        VertexAttribute::JointWeights(w) => joint_weights = Some(w),
                         _ => {}
                     }
                 }
@@ -173,6 +222,33 @@ impl Scene {
                             .collect()
                     }
                 });
+                // Con pose, una malla con skin se deforma con las matrices de sus articulaciones
+                let (positions, normals) = match (skin_matrices, joint_ids, joint_weights) {
+                    (Some(mats), Some(ids), Some(ws)) if ids.len() == count && ws.len() == count => {
+                        let blend = |v: usize| {
+                            let mut m = Mat4::ZERO;
+                            for k in 0..4 {
+                                if ws[v][k] > 0.0 {
+                                    if let Some(jm) = mats.get(ids[v][k] as usize) {
+                                        m += *jm * ws[v][k];
+                                    }
+                                }
+                            }
+                            m
+                        };
+                        let mut skinned_p = Vec::with_capacity(count);
+                        let mut skinned_n = normals.as_ref().map(|_| Vec::with_capacity(count));
+                        for v in 0..count {
+                            let m = blend(v);
+                            skinned_p.push(m.transform_point3(Vec3::from(positions[v])).to_array());
+                            if let (Some(out), Some(ns)) = (skinned_n.as_mut(), normals.as_ref()) {
+                                out.push((Mat3::from_mat4(m) * Vec3::from(ns[v])).normalize_or_zero().to_array());
+                            }
+                        }
+                        (skinned_p, skinned_n)
+                    }
+                    _ => (positions, normals),
+                };
                 let uvs = uvs.filter(|uv| uv.len() == count).cloned();
                 let colors = colors.filter(|c| c.len() == count).cloned();
 
