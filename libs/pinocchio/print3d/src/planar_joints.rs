@@ -456,7 +456,7 @@ fn free_depth_inside(mesh: &Mesh, polygon: &[Vector3], normal: Vector3) -> Real 
 }
 
 /// Soldar por posición y cerrar la malla armada con triángulos sueltos
-fn weld_build(positions: &[Vector3], tris: &[[usize; 3]]) -> Result<Mesh> {
+pub(crate) fn weld_build(positions: &[Vector3], tris: &[[usize; 3]]) -> Result<Mesh> {
     let diag = diagonal(positions);
     let weld = weld_ids(positions, (diag * 1e-9).max(1e-9));
     let mut rep: HashMap<usize, Vector3> = HashMap::new();

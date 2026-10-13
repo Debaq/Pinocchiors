@@ -36,6 +36,7 @@
 //! ```
 
 mod analysis;
+mod calibration;
 mod capping;
 mod config;
 mod contact;
@@ -55,6 +56,7 @@ mod slicer;
 mod transform;
 
 pub use analysis::*;
+pub use calibration::*;
 pub use config::*;
 pub use contact::*;
 pub use error::*;
