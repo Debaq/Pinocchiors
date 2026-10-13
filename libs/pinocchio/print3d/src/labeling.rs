@@ -93,28 +93,43 @@ impl AssemblyInfo {
     }
 }
 
-/// Detecta qué piezas son vecinas basándose en proximidad de caras de corte
+/// Detecta qué piezas son vecinas: comparten una cara de corte plana
 ///
-/// Dos piezas son vecinas si comparten una cara de corte (dentro de tolerancia)
-pub fn find_neighbors(pieces: &mut [LabeledPiece], _tolerance: Real) {
-    // TODO: Implementar detección de vecinos
-    //
-    // Algoritmo:
-    // 1. Para cada pieza, obtener las caras de corte
-    // 2. Para cada par de piezas, verificar si alguna cara de corte coincide
-    // 3. Dos caras coinciden si sus vértices están dentro de tolerancia
-    // 4. Marcar como vecinas si comparten cara
-
-    // Por ahora, marcamos como vecinas las piezas consecutivas
-    for i in 0..pieces.len() {
-        let mut neighbors = Vec::new();
-        if i > 0 {
-            neighbors.push(i - 1);
+/// `tolerance` es la holgura (mm) con la que dos cajas cuentan como cercanas.
+/// Si las piezas no tienen malla (solo etiquetas) se consideran vecinas las
+/// consecutivas.
+pub fn find_neighbors(pieces: &mut [LabeledPiece], tolerance: Real) {
+    for p in pieces.iter_mut() {
+        p.neighbors.clear();
+    }
+    if pieces.iter().all(|p| p.mesh.vertices.is_empty()) {
+        for i in 0..pieces.len() {
+            if i > 0 {
+                pieces[i].neighbors.push(i - 1);
+            }
+            if i + 1 < pieces.len() {
+                pieces[i].neighbors.push(i + 1);
+            }
         }
-        if i + 1 < pieces.len() {
-            neighbors.push(i + 1);
+        return;
+    }
+    let tol = pieces.iter().find(|p| !p.mesh.vertices.is_empty()).map_or(1e-4, |p| crate::contact::plane_tolerance(&p.mesh)).max(tolerance * 1e-3);
+    let contacts = crate::contact::find_contacts(pieces, 1e-3, tol);
+    for c in contacts {
+        let (ia, ib) = (c.piece_a, c.piece_b);
+        if let Some(a) = pieces.iter_mut().find(|p| p.id == ia)
+            && !a.neighbors.contains(&ib)
+        {
+            a.neighbors.push(ib);
         }
-        pieces[i].neighbors = neighbors;
+        if let Some(b) = pieces.iter_mut().find(|p| p.id == ib)
+            && !b.neighbors.contains(&ia)
+        {
+            b.neighbors.push(ia);
+        }
+    }
+    for p in pieces.iter_mut() {
+        p.neighbors.sort_unstable();
     }
 }
 
@@ -134,6 +149,9 @@ pub struct PieceConnection {
 }
 
 /// Calcula las conexiones entre piezas
+///
+/// Con malla, mide el área, la normal y el centro reales de la cara de contacto;
+/// sin malla deja esos datos en cero.
 pub fn calculate_connections(pieces: &[LabeledPiece]) -> Vec<PieceConnection> {
     let mut connections = Vec::new();
 
@@ -141,14 +159,26 @@ pub fn calculate_connections(pieces: &[LabeledPiece]) -> Vec<PieceConnection> {
         for &neighbor_id in &piece.neighbors {
             // Evitar duplicados (solo añadir si piece.id < neighbor_id)
             if piece.id < neighbor_id {
-                // TODO: Calcular área y posición real del contacto
-                connections.push(PieceConnection {
+                let mut conn = PieceConnection {
                     piece_a: piece.id,
                     piece_b: neighbor_id,
                     contact_area: 0.0,
                     contact_normal: [0.0, 0.0, 0.0],
                     contact_center: [0.0, 0.0, 0.0],
-                });
+                };
+                if let Some(other) = pieces.iter().find(|p| p.id == neighbor_id)
+                    && !piece.mesh.vertices.is_empty()
+                    && !other.mesh.vertices.is_empty()
+                {
+                    let tol = crate::contact::plane_tolerance(&piece.mesh);
+                    let contacts = crate::contact::contacts_between(&piece.mesh, &other.mesh, 1e-3, tol);
+                    if let Some(best) = contacts.into_iter().max_by(|a, b| a.area.total_cmp(&b.area)) {
+                        conn.contact_area = best.area;
+                        conn.contact_normal = [best.normal.x(), best.normal.y(), best.normal.z()];
+                        conn.contact_center = [best.center.x(), best.center.y(), best.center.z()];
+                    }
+                }
+                connections.push(conn);
             }
         }
     }
@@ -260,5 +290,31 @@ mod tests {
         assert_eq!(connections[0].piece_b, 1);
         assert_eq!(connections[1].piece_a, 1);
         assert_eq!(connections[1].piece_b, 2);
+    }
+
+    #[test]
+    fn vecinos_y_conexiones_con_malla_real() {
+        use crate::printability::tests::make_box;
+        use crate::slicer::{slice_by_planes, Plane};
+        let b = make_box(60.0, 20.0, 20.0);
+        let meshes = slice_by_planes(&b, &[Plane::yz_at_x(20.0), Plane::yz_at_x(40.0)]).unwrap();
+        let mut pieces: Vec<LabeledPiece> = meshes.into_iter().enumerate().map(|(id, mesh)| LabeledPiece { mesh, id, ..Default::default() }).collect();
+        // Ordenar por X para que los ids sigan la posición
+        pieces.sort_by(|a, b| {
+            let cx = |p: &LabeledPiece| p.mesh.vertices.iter().map(|v| v.position.x()).sum::<Real>() / p.mesh.vertices.len() as Real;
+            cx(a).total_cmp(&cx(b))
+        });
+        for (i, p) in pieces.iter_mut().enumerate() {
+            p.id = i;
+        }
+        find_neighbors(&mut pieces, 1.0);
+        assert_eq!(pieces[0].neighbors, vec![1]);
+        assert_eq!(pieces[1].neighbors, vec![0, 2]);
+        assert_eq!(pieces[2].neighbors, vec![1]);
+        let conns = calculate_connections(&pieces);
+        assert_eq!(conns.len(), 2);
+        for c in &conns {
+            assert!((c.contact_area - 400.0).abs() < 1e-3, "{c:?}");
+        }
     }
 }

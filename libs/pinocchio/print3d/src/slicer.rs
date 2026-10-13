@@ -389,192 +389,16 @@ fn split_triangle(
     }
 }
 
-/// Triangula el polígono formado por los segmentos de corte
+/// Triangula las tapas del corte: cada contorno cerrado (con sus huecos) formado
+/// por los segmentos. Los triángulos salen con su normal exterior igual a la
+/// normal del plano (la tapa de la parte trasera)
 fn triangulate_cut_polygon(segments: &[(Vector3, Vector3)], plane: &Plane) -> Vec<(Vector3, Vector3, Vector3)> {
-    if segments.is_empty() {
-        return Vec::new();
-    }
-
-    // Construir el polígono ordenando los segmentos
-    let polygon = build_polygon_from_segments(segments);
-
-    if polygon.len() < 3 {
-        return Vec::new();
-    }
-
-    // Triangular usando ear clipping simple
-    ear_clip_triangulate(&polygon, plane)
-}
-
-/// Construye un polígono ordenado desde segmentos desordenados
-fn build_polygon_from_segments(segments: &[(Vector3, Vector3)]) -> Vec<Vector3> {
-    if segments.is_empty() {
-        return Vec::new();
-    }
-
-    let mut result = Vec::new();
-    let mut remaining: Vec<(Vector3, Vector3)> = segments.to_vec();
-
-    // Empezar con el primer segmento
-    let first = remaining.remove(0);
-    result.push(first.0);
-    result.push(first.1);
-
-    let tolerance = 1e-6;
-
-    // Intentar conectar segmentos
-    while !remaining.is_empty() {
-        let last = *result.last().unwrap();
-        let mut found = false;
-
-        for i in 0..remaining.len() {
-            let (a, b) = remaining[i];
-
-            if (a - last).length() < tolerance {
-                result.push(b);
-                remaining.remove(i);
-                found = true;
-                break;
-            } else if (b - last).length() < tolerance {
-                result.push(a);
-                remaining.remove(i);
-                found = true;
-                break;
-            }
-        }
-
-        if !found {
-            // No se pudo conectar, puede haber múltiples loops
-            // Por ahora solo manejamos un loop
-            break;
-        }
-    }
-
-    // Remover el último punto si es igual al primero (cerrar el loop)
-    if result.len() > 2 && (*result.first().unwrap() - *result.last().unwrap()).length() < tolerance {
-        result.pop();
-    }
-
-    result
-}
-
-/// Triangula un polígono usando ear clipping
-fn ear_clip_triangulate(polygon: &[Vector3], plane: &Plane) -> Vec<(Vector3, Vector3, Vector3)> {
-    if polygon.len() < 3 {
-        return Vec::new();
-    }
-
-    if polygon.len() == 3 {
-        return vec![(polygon[0], polygon[1], polygon[2])];
-    }
-
-    let mut result = Vec::new();
-    let mut remaining: Vec<Vector3> = polygon.to_vec();
-
-    // Proyectar a 2D para el test de ear
-    let normal = plane.normal_vec();
-    let (axis_u, axis_v) = get_perpendicular_axes(normal);
-
-    let project = |p: Vector3| -> (Real, Real) {
-        let rel = p - plane.origin_vec();
-        (rel.dot(&axis_u), rel.dot(&axis_v))
-    };
-
-    let mut iterations = 0;
-    let max_iterations = remaining.len() * remaining.len();
-
-    while remaining.len() > 3 && iterations < max_iterations {
-        iterations += 1;
-        let n = remaining.len();
-        let mut ear_found = false;
-
-        for i in 0..n {
-            let prev = (i + n - 1) % n;
-            let next = (i + 1) % n;
-
-            let p_prev = project(remaining[prev]);
-            let p_curr = project(remaining[i]);
-            let p_next = project(remaining[next]);
-
-            // Verificar si es convexo
-            if !is_convex_2d(p_prev, p_curr, p_next) {
-                continue;
-            }
-
-            // Verificar que ningún otro punto esté dentro del triángulo
-            let mut is_ear = true;
-            for (j, &point) in remaining.iter().enumerate().take(n) {
-                if j == prev || j == i || j == next {
-                    continue;
-                }
-                let p = project(point);
-                if point_in_triangle_2d(p, p_prev, p_curr, p_next) {
-                    is_ear = false;
-                    break;
-                }
-            }
-
-            if is_ear {
-                result.push((remaining[prev], remaining[i], remaining[next]));
-                remaining.remove(i);
-                ear_found = true;
-                break;
-            }
-        }
-
-        if !ear_found {
-            // No se encontró ear, intentar con cualquier triángulo válido
-            break;
-        }
-    }
-
-    // Añadir el último triángulo
-    if remaining.len() == 3 {
-        result.push((remaining[0], remaining[1], remaining[2]));
-    }
-
-    result
-}
-
-/// Obtiene dos ejes perpendiculares a un vector normal
-fn get_perpendicular_axes(normal: Vector3) -> (Vector3, Vector3) {
-    let up = if normal.y().abs() < 0.9 {
-        Vector3::new(0.0, 1.0, 0.0)
-    } else {
-        Vector3::new(1.0, 0.0, 0.0)
-    };
-
-    let u = normal.cross(&up).normalize();
-    let v = normal.cross(&u);
-
-    (u, v)
-}
-
-/// Verifica si un ángulo es convexo en 2D
-fn is_convex_2d(p0: (Real, Real), p1: (Real, Real), p2: (Real, Real)) -> bool {
-    let cross = (p1.0 - p0.0) * (p2.1 - p0.1) - (p1.1 - p0.1) * (p2.0 - p0.0);
-    cross > 0.0
-}
-
-/// Verifica si un punto está dentro de un triángulo en 2D
-fn point_in_triangle_2d(
-    p: (Real, Real),
-    t0: (Real, Real),
-    t1: (Real, Real),
-    t2: (Real, Real),
-) -> bool {
-    let sign = |p1: (Real, Real), p2: (Real, Real), p3: (Real, Real)| -> Real {
-        (p1.0 - p3.0) * (p2.1 - p3.1) - (p2.0 - p3.0) * (p1.1 - p3.1)
-    };
-
-    let d1 = sign(p, t0, t1);
-    let d2 = sign(p, t1, t2);
-    let d3 = sign(p, t2, t0);
-
-    let has_neg = d1 < 0.0 || d2 < 0.0 || d3 < 0.0;
-    let has_pos = d1 > 0.0 || d2 > 0.0 || d3 > 0.0;
-
-    !(has_neg && has_pos)
+    let scale = segments.iter().fold(0.0 as Real, |m, (a, b)| m.max(a.x().abs()).max(a.y().abs()).max(a.z().abs()).max(b.x().abs()).max(b.y().abs()).max(b.z().abs()));
+    let tol = (scale * 1e-9).max(1e-9);
+    crate::capping::cap_triangles(segments, plane.normal_vec(), plane.origin_vec(), tol)
+        .into_iter()
+        .map(|t| (t[0], t[1], t[2]))
+        .collect()
 }
 
 /// Corta una malla con múltiples planos secuencialmente
@@ -1058,24 +882,6 @@ mod tests {
         assert_eq!(pieces[25].label, "1Z");
         assert_eq!(pieces[26].label, "2A");
         assert_eq!(pieces[27].label, "2B");
-    }
-
-    #[test]
-    fn test_is_convex_2d() {
-        // Triángulo counter-clockwise
-        assert!(is_convex_2d((0.0, 0.0), (1.0, 0.0), (0.5, 1.0)));
-        // Triángulo clockwise
-        assert!(!is_convex_2d((0.0, 0.0), (0.5, 1.0), (1.0, 0.0)));
-    }
-
-    #[test]
-    fn test_point_in_triangle_2d() {
-        let t0 = (0.0, 0.0);
-        let t1 = (1.0, 0.0);
-        let t2 = (0.5, 1.0);
-
-        assert!(point_in_triangle_2d((0.5, 0.3), t0, t1, t2));
-        assert!(!point_in_triangle_2d((2.0, 0.0), t0, t1, t2));
     }
 
     #[test]

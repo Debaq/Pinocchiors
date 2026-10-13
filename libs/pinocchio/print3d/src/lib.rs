@@ -36,7 +36,9 @@
 //! ```
 
 mod analysis;
+mod capping;
 mod config;
+mod contact;
 mod error;
 mod geom;
 mod joints;
@@ -50,6 +52,7 @@ mod transform;
 
 pub use analysis::*;
 pub use config::*;
+pub use contact::*;
 pub use error::*;
 pub use joints::*;
 pub use labeling::*;
