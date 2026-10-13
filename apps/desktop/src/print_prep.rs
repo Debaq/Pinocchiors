@@ -185,7 +185,7 @@ pub(crate) fn export_calibration_impl(model: &CalibrationModel, format: &str, pa
         CalibrationModel::Block(cfg) => vec![("bloque".to_string(), p3d::calibration_block(cfg).map_err(|e| format!("No se pudo armar el bloque: {e}"))?)],
     };
     let p = std::path::Path::new(path);
-    crate::cad::export_scene(&plate_scene(&Plate { meshes }), p, format)?;
+    crate::cad::export_scene(&plate_scene(&Plate { meshes, stats: Vec::new() }), p, format)?;
     Ok(std::fs::metadata(p).map(|m| m.len()).unwrap_or(0))
 }
 
@@ -441,6 +441,23 @@ pub struct PlateInfo {
 /// Una placa lista: sus piezas ya acomodadas (mm, Z arriba, esquina de la cama en el origen)
 pub(crate) struct Plate {
     pub meshes: Vec<(String, Mesh)>,
+    /// Cómo quedó apoyada cada pieza (mismo orden que `meshes`); vacío si no se calculó
+    pub stats: Vec<PieceStat>,
+}
+
+/// Cómo quedó apoyada una pieza en la cama
+#[derive(Debug, Clone, Serialize)]
+pub struct PieceStat {
+    /// Alto con la orientación elegida (mm)
+    pub height: f64,
+    /// Área en voladizo (mm²)
+    pub overhang_area: f64,
+    /// Área apoyada en la cama (mm²)
+    pub contact_area: f64,
+    /// Soporte estimado (mm³)
+    pub support_volume: f64,
+    /// Cabe en el volumen de la impresora con esta orientación
+    pub fits: bool,
 }
 
 pub(crate) struct PlatePlan {
@@ -457,13 +474,21 @@ pub(crate) fn plan_plates(list: Vec<(String, Mesh)>, input: &PlateInput) -> Resu
     let config = PrintabilityConfig::from_profiles(&input.printer, &input.material);
     let tolerances = FabTolerances::derive(&input.printer, &input.material);
     let mut prepared: Vec<(String, Mesh)> = Vec::new();
+    let mut stats: Vec<PieceStat> = Vec::new();
     for (label, mut mesh) in list {
-        // Primero se apoya: el drenaje va en la cara de abajo de esa posición
-        if input.orient {
-            p3d::orient_for_print(&mut mesh, &config).map_err(|e| format!("Pieza {label}: {e}"))?;
+        // Primero se apoya: el drenaje va en la cara de abajo de esa posición. Se prefieren las
+        // orientaciones en que la pieza cabe en la impresora
+        let chosen = if input.orient {
+            Some(p3d::orient_for_print_in(&mut mesh, &config, Some(input.printer.build_volume)).map_err(|e| format!("Pieza {label}: {e}"))?)
         } else {
             p3d::settle_on_bed(&mut mesh);
-        }
+            None
+        };
+        let height = p3d::compute_bounding_box(&mesh).dimensions()[2];
+        stats.push(match chosen {
+            Some(c) => PieceStat { height, overhang_area: c.overhang_area, contact_area: c.contact_area, support_volume: c.support_volume, fits: c.fits },
+            None => PieceStat { height, overhang_area: 0.0, contact_area: 0.0, support_volume: 0.0, fits: height <= input.printer.build_volume[2] + 1e-9 },
+        });
         if let Some(wall) = input.hollow_wall {
             let hollow = HollowConfig { wall, drain_diameter: input.drain, ..Default::default() };
             mesh = p3d::hollow(&mesh, &hollow).map_err(|e| format!("Pieza {label}: {e}"))?.mesh;
@@ -492,9 +517,10 @@ pub(crate) fn plan_plates(list: Vec<(String, Mesh)>, input: &PlateInput) -> Resu
         .filter(|(i, (_, m))| !result.unplaced.contains(i) && p3d::compute_bounding_box(m).dimensions()[2] > input.printer.build_volume[2] + 1e-6)
         .map(|(_, ((label, _), _))| label.clone())
         .collect();
-    let mut plates: Vec<Plate> = (0..result.bed_count).map(|_| Plate { meshes: Vec::new() }).collect();
+    let mut plates: Vec<Plate> = (0..result.bed_count).map(|_| Plate { meshes: Vec::new(), stats: Vec::new() }).collect();
     for p in &result.placements {
         plates[p.bed].meshes.push((prepared[p.id].0.clone(), meshes[p.id].clone()));
+        plates[p.bed].stats.push(stats[p.id].clone());
     }
     let unplaced = result.unplaced.iter().map(|&i| prepared[i].0.clone()).collect();
     let shrink_scale = if input.compensate { tolerances.shrink_scale() } else { [1.0; 3] };
@@ -540,6 +566,11 @@ pub struct PreviewPiece {
     pub w: f64,
     pub h: f64,
     pub height: f64,
+    /// Cómo quedó apoyada (con `orient` activo)
+    pub overhang_area: f64,
+    pub contact_area: f64,
+    pub support_volume: f64,
+    pub fits: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -569,10 +600,22 @@ pub(crate) fn preview_print_plates_impl(state: &AppState, mut input: PlateInput)
             plate
                 .meshes
                 .iter()
-                .map(|(label, mesh)| {
+                .zip(&plate.stats)
+                .map(|((label, mesh), stat)| {
                     let bb = p3d::compute_bounding_box(mesh);
                     let d = bb.dimensions();
-                    PreviewPiece { label: label.clone(), x: bb.min[0], y: bb.min[1], w: d[0], h: d[1], height: d[2] }
+                    PreviewPiece {
+                        label: label.clone(),
+                        x: bb.min[0],
+                        y: bb.min[1],
+                        w: d[0],
+                        h: d[1],
+                        height: d[2],
+                        overhang_area: stat.overhang_area,
+                        contact_area: stat.contact_area,
+                        support_volume: stat.support_volume,
+                        fits: stat.fits,
+                    }
                 })
                 .collect()
         })
@@ -584,6 +627,44 @@ pub(crate) fn preview_print_plates_impl(state: &AppState, mut input: PlateInput)
         unplaced: plan.unplaced,
         too_tall: plan.too_tall,
     })
+}
+
+/// Caja `[x0, x1] × [y0, y1] × [z0, z1]` (mm, Z arriba) como malla cerrada
+fn slab(x0: f64, y0: f64, z0: f64, x1: f64, y1: f64, z1: f64) -> Mesh {
+    let p = |x: f64, y: f64, z: f64| Vector3::new(x, y, z);
+    let v = [p(x0, y0, z0), p(x1, y0, z0), p(x1, y1, z0), p(x0, y1, z0), p(x0, y0, z1), p(x1, y0, z1), p(x1, y1, z1), p(x0, y1, z1)];
+    let f = [[0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7], [0, 1, 5], [0, 5, 4], [1, 2, 6], [1, 6, 5], [2, 3, 7], [2, 7, 6], [3, 0, 4], [3, 4, 7]];
+    Mesh::from_triangles(&v, &f)
+}
+
+/// Una placa vista en 3D: las piezas de colores donde van sobre la cama, y la cama como una losa gris. Sale en el
+/// formato de los datos de malla del visor (milímetros, Y arriba)
+#[tauri::command]
+pub async fn preview_print_plate_view(app: AppHandle, input: PlateInput, plate: usize) -> Result<tauri::ipc::Response, String> {
+    in_background(app, move |state| plate_view(state, input, plate).map(tauri::ipc::Response::new)).await
+}
+
+pub(crate) fn plate_view(state: &AppState, mut input: PlateInput, plate: usize) -> Result<Vec<u8>, String> {
+    input.hollow_wall = None;
+    let plan = plan_plates(sources(state)?, &input)?;
+    let chosen = plan.plates.get(plate).ok_or("Esa placa no existe")?;
+    let mut scene = converter_scene::Scene { meters_per_unit: 0.001, y_up: true, ..Default::default() };
+    let mut add = |mesh: &Mesh, name: &str, color: [f32; 4], index: usize| {
+        let mut part = mesh_to_scene(&from_print_space(mesh, 1.0), name, None);
+        for m in &mut part.meshes {
+            for p in &mut m.primitives {
+                p.material = Some(index);
+            }
+        }
+        scene.materials.push(converter_scene::Material { name: name.to_string(), base_color_factor: color, ..Default::default() });
+        scene.merge(part);
+    };
+    let [bx, by] = [input.printer.build_volume[0], input.printer.build_volume[1]];
+    add(&slab(0.0, 0.0, -2.0, bx, by, 0.0), "cama", [0.32, 0.34, 0.38, 1.0], 0);
+    for (i, (label, mesh)) in chosen.meshes.iter().enumerate() {
+        add(mesh, &format!("pieza_{label}"), piece_color(i), i + 1);
+    }
+    Ok(crate::commands::scene_mesh_data(&scene).to_bytes())
 }
 
 /// Reparte las piezas en placas del tamaño de la cama y las exporta, una por archivo
@@ -831,6 +912,39 @@ mod tests {
         assert!(scale_mesh_for_print_impl(bad, &state).is_err());
         let none = ScalePrintInput { mode: "axes".into(), factor: None, factors: None, target_size: None, target_volume: None };
         assert!(scale_mesh_for_print_impl(none, &state).is_err());
+    }
+
+    #[test]
+    fn la_placa_se_ve_en_3d_y_cuenta_como_quedo_apoyada() {
+        let state = AppState::new();
+        let mut scene = mesh_to_scene(&cube(40.0), "cubo", None);
+        scene.meters_per_unit = 0.001;
+        *state.mesh.lock().unwrap() = Some(crate::commands::scene_to_pinocchio_mesh(&scene).unwrap());
+        *state.scene.lock().unwrap() = Some(scene);
+        let mut inp = input(5.0);
+        inp.contour = false;
+        let preview = preview_print_plates_impl(&state, inp.clone()).unwrap();
+        assert_eq!(preview.plates.len(), 1);
+        let piece = &preview.plates[0][0];
+        // Un cubo se apoya en una cara: sin voladizos, 1 600 mm² de base, 40 de alto, cabe
+        assert!((piece.height - 40.0).abs() < 1e-6 && (piece.contact_area - 1600.0).abs() < 1e-6 && piece.overhang_area < 1e-9 && piece.fits, "{piece:?}");
+        let bytes = plate_view(&state, inp.clone(), 0).unwrap();
+        assert!(bytes.len() > 200);
+        assert!(plate_view(&state, inp, 3).is_err(), "esa placa no existe");
+    }
+
+    #[test]
+    fn la_orientacion_prefiere_la_que_cabe_en_la_impresora() {
+        // Una barra de 10 × 10 × 120 en una impresora de 100 × 100 × 50: acostada cabe, de pie no
+        let mut bar = cube(10.0);
+        for v in &mut bar.vertices {
+            v.position = Vector3::new(v.position.x(), v.position.y(), v.position.z() * 12.0);
+        }
+        let mut inp = input(2.0);
+        inp.printer = PrinterProfile::new("t", [200.0, 200.0, 50.0], 0.4, 0.2);
+        let plan = plan_plates(vec![("barra".into(), bar)], &inp).unwrap();
+        assert!(plan.too_tall.is_empty() && plan.unplaced.is_empty(), "{:?} {:?}", plan.too_tall, plan.unplaced);
+        assert!(plan.plates[0].stats[0].fits && plan.plates[0].stats[0].height <= 50.0 + 1e-9);
     }
 
     #[test]

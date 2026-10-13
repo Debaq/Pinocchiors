@@ -189,6 +189,7 @@ pub fn run() {
             print_prep::estimate_print_material,
             print_prep::export_print_plates,
             print_prep::preview_print_plates,
+            print_prep::preview_print_plate_view,
             // Escáneres 3D (Orizon3D)
             scanner::scanner_connect,
             scanner::scanner_disconnect,

@@ -31,6 +31,12 @@ pub struct OrientationCandidate {
     /// Volumen de soporte estimado (mm³): cada columna baja hasta lo primero que hay debajo
     pub support_volume: Real,
     pub score: Real,
+    /// Medidas con esta orientación: ancho y fondo de la huella (en el giro mínimo que la deja abajo) y alto
+    #[serde(default)]
+    pub dims: [Real; 3],
+    /// Cabe en el volumen pedido (siempre `true` si no se pidió ninguno)
+    #[serde(default)]
+    pub fits: bool,
 }
 
 struct Face {
@@ -78,11 +84,33 @@ fn evaluate(faces: &[Face], d: Vector3, config: &PrintabilityConfig, diag: Real,
         }
     }
     let score = overhang_area - 0.5 * contact_area + 0.1 * total_area * (height / diag.max(1e-9));
-    OrientationCandidate { down: [d.x(), d.y(), d.z()], overhang_area, contact_area, height, support_volume_max: support, support_volume: support, score }
+    OrientationCandidate { down: [d.x(), d.y(), d.z()], overhang_area, contact_area, height, support_volume_max: support, support_volume: support, score, dims: [0.0; 3], fits: true }
 }
 
 /// Las mejores orientaciones (hasta `max`), de mejor a peor
 pub fn suggest_orientations(mesh: &Mesh, config: &PrintabilityConfig, max: usize) -> Result<Vec<OrientationCandidate>> {
+    suggest_orientations_in(mesh, config, max, None)
+}
+
+/// Medidas de la malla con la cara de normal `d` abajo: huella (ancho, fondo) y alto
+fn oriented_dims(faces: &[Face], d: Vector3) -> [Real; 3] {
+    let rot = rotation_to_down(d);
+    let (mut lo, mut hi) = ([Real::INFINITY; 3], [Real::NEG_INFINITY; 3]);
+    for f in faces {
+        for v in &f.verts {
+            let p = apply(&rot, *v);
+            for (k, c) in [p.x(), p.y(), p.z()].into_iter().enumerate() {
+                lo[k] = lo[k].min(c);
+                hi[k] = hi[k].max(c);
+            }
+        }
+    }
+    [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]]
+}
+
+/// Como [`suggest_orientations`], pero con un volumen de impresión (ancho, fondo, alto): las orientaciones en que la
+/// pieza cabe (girándola sobre la cama) van primero, y `fits` dice cuáles
+pub fn suggest_orientations_in(mesh: &Mesh, config: &PrintabilityConfig, max: usize, volume: Option<[Real; 3]>) -> Result<Vec<OrientationCandidate>> {
     let faces = faces_of(mesh);
     if faces.is_empty() {
         return Err(Print3dError::EmptyMesh);
@@ -142,6 +170,18 @@ pub fn suggest_orientations(mesh: &Mesh, config: &PrintabilityConfig, max: usize
         cand.score += cand.support_volume / (0.25 * diag.max(1e-9));
     }
     out[..refine].sort_by(|a, b| a.score.total_cmp(&b.score));
+    // Medidas de cada orientación y si caben; las que caben van antes (el orden de puntaje se conserva)
+    for cand in &mut out {
+        let d = Vector3::new(cand.down[0], cand.down[1], cand.down[2]);
+        cand.dims = oriented_dims(&faces, d);
+        cand.fits = volume.is_none_or(|v| {
+            let [w, depth, h] = cand.dims;
+            h <= v[2] + 1e-9 && ((w <= v[0] + 1e-9 && depth <= v[1] + 1e-9) || (depth <= v[0] + 1e-9 && w <= v[1] + 1e-9))
+        });
+    }
+    if volume.is_some() {
+        out.sort_by_key(|c| !c.fits);
+    }
     out.truncate(max.max(1));
     Ok(out)
 }
@@ -161,7 +201,12 @@ pub fn orient_with_down(mesh: &mut Mesh, down: [Real; 3]) -> Result<()> {
 
 /// Elige la mejor orientación y la aplica
 pub fn orient_for_print(mesh: &mut Mesh, config: &PrintabilityConfig) -> Result<OrientationCandidate> {
-    let best = suggest_orientations(mesh, config, 1)?.remove(0);
+    orient_for_print_in(mesh, config, None)
+}
+
+/// Como [`orient_for_print`], preferiendo las orientaciones en que la pieza cabe en `volume`
+pub fn orient_for_print_in(mesh: &mut Mesh, config: &PrintabilityConfig, volume: Option<[Real; 3]>) -> Result<OrientationCandidate> {
+    let best = suggest_orientations_in(mesh, config, 1, volume)?.remove(0);
     orient_with_down(mesh, best.down)?;
     Ok(best)
 }
@@ -269,5 +314,26 @@ mod tests {
             let o = apply(&r, d);
             assert!((o.x()).abs() < 1e-9 && (o.y()).abs() < 1e-9 && (o.z() + 1.0).abs() < 1e-9, "{d:?} -> {o:?}");
         }
+    }
+
+    #[test]
+    fn prefiere_la_orientacion_que_cabe() {
+        // Una barra de 10 × 10 × 120 en una impresora de altura 50: de pie no cabe (120 > 50), acostada sí
+        let mut bar = make_box(10.0, 10.0, 120.0);
+        let cfg = PrintabilityConfig::default();
+        let volume = [200.0, 200.0, 50.0];
+        let best = suggest_orientations_in(&bar, &cfg, 6, Some(volume)).unwrap();
+        assert!(best[0].fits, "{:?}", best[0]);
+        assert!(best[0].dims[2] <= 50.0 + 1e-9, "alto {}", best[0].dims[2]);
+        // Sin volumen manda solo el puntaje: todas «caben»
+        assert!(suggest_orientations(&bar, &cfg, 6).unwrap().iter().all(|c| c.fits));
+        // La orientación elegida deja la barra baja
+        let chosen = orient_for_print_in(&mut bar, &cfg, Some(volume)).unwrap();
+        assert!(chosen.fits);
+        let bb = compute_bounding_box(&bar);
+        assert!(bb.dimensions()[2] <= 50.0 + 1e-9);
+        // Una pieza que no cabe de ninguna forma lo dice
+        let huge = make_box(300.0, 300.0, 300.0);
+        assert!(suggest_orientations_in(&huge, &cfg, 6, Some(volume)).unwrap().iter().all(|c| !c.fits));
     }
 }
