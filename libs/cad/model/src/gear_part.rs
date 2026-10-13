@@ -53,6 +53,8 @@ pub struct GearPart {
     pub herringbone: bool,
     /// Canal central de la espina de pescado (mm; 0: sin canal)
     pub groove: f64,
+    /// Polea: diámetro de las dos bridas que guían la correa (mm; 0: sin bridas). Cada una mide 1,2 mm
+    pub flange: f64,
     /// El módulo de la receta es el transversal (el del plano de giro), no el normal: el normal
     /// sale de `mt·cos β`. Solo importa con hélice; cónico y sin fin lo ignoran.
     pub transverse_module: bool,
@@ -129,6 +131,7 @@ impl Default for GearPart {
             hole_comp: 0.0,
             herringbone: false,
             groove: 0.0,
+            flange: 0.0,
             transverse_module: false,
             cone_ends: false,
             throat: 0.0,
@@ -163,6 +166,10 @@ impl GearPart {
     /// Receta con la holgura de impresión ya aplicada
     pub fn effective_spec(&self) -> GearSpec {
         let mut s = self.spec;
+        // Polea y piñón de cadena: el «módulo» es el paso entre π (el primitivo de la polea sale de él)
+        if let Some(pitch) = crate::belts::form_pitch(s.form).filter(|_| matches!(s.kind, GearKind::Pulley | GearKind::Sprocket)) {
+            s.module = pitch / PI;
+        }
         if self.transverse_module && matches!(s.kind, GearKind::External | GearKind::Internal | GearKind::Rack) {
             s.module *= s.helix_angle.to_radians().cos();
         }
@@ -171,6 +178,11 @@ impl GearPart {
             s.addendum = (s.addendum - self.print_clearance / s.module).max(0.05);
         }
         s
+    }
+
+    /// Espesor de cada brida de la polea (mm), o 0 si no lleva
+    fn flange_thickness(&self) -> f64 {
+        if self.spec.kind == GearKind::Pulley && self.flange > 0.0 { 1.2 } else { 0.0 }
     }
 
     fn validate(&self) -> R<()> {
@@ -185,8 +197,19 @@ impl GearPart {
             return Err("las medidas no pueden ser negativas".into());
         }
         let c = self.effective_spec().circles().map_err(|e| e.to_string())?;
+        if matches!(s.kind, GearKind::Pulley | GearKind::Sprocket) && (s.helix_angle != 0.0 || self.herringbone || self.throat > 0.0) {
+            return Err("la polea y el piñón de cadena no llevan hélice".into());
+        }
+        if self.flange > 0.0 {
+            if s.kind != GearKind::Pulley {
+                return Err("las bridas son de las poleas".into());
+            }
+            if self.flange < 2.0 * c.tip + 1.0 {
+                return Err(format!("la brida (Ø{}) tiene que pasar el diámetro exterior de la polea (Ø{:.2}) en al menos 0,5 mm por lado", self.flange, 2.0 * c.tip));
+            }
+        }
         match s.kind {
-            GearKind::External => {
+            GearKind::External | GearKind::Pulley | GearKind::Sprocket => {
                 if self.bore > 0.0 && self.bore >= 2.0 * c.root - 1.0 {
                     return Err(format!("el agujero ({}) no cabe bajo el pie del diente (Ø{:.2})", self.bore, 2.0 * c.root));
                 }
@@ -232,14 +255,14 @@ impl GearPart {
                 }
             }
         }
-        if self.keyway && (!matches!(s.kind, GearKind::External | GearKind::Bevel | GearKind::Worm) || keyway_for(self.bore).is_none()) {
+        if self.keyway && (!matches!(s.kind, GearKind::External | GearKind::Bevel | GearKind::Worm | GearKind::Pulley | GearKind::Sprocket) || keyway_for(self.bore).is_none()) {
             return Err("el chavetero pide un agujero de eje de más de 6 mm hasta 75 mm".into());
         }
         // Radio de pie donde el cuerpo es más angosto (el cónico se achica hacia el vértice)
         let narrow = if s.kind == GearKind::Bevel { c.root * (1.0 - self.width / s.cone_distance()) } else { c.root };
         if self.hole_count > 0 {
-            if !matches!(s.kind, GearKind::External | GearKind::Bevel) {
-                return Err("los aligeramientos van en engranes exteriores y cónicos".into());
+            if !matches!(s.kind, GearKind::External | GearKind::Bevel | GearKind::Pulley | GearKind::Sprocket) {
+                return Err("los aligeramientos van en engranes exteriores, cónicos, poleas y piñones".into());
             }
             let (r_in, r_out) = (self.hole_circle / 2.0 - self.hole_diameter / 2.0, self.hole_circle / 2.0 + self.hole_diameter / 2.0);
             let hub_r = (self.bore / 2.0).max(self.hub_diameter / 2.0);
@@ -248,7 +271,7 @@ impl GearPart {
             }
         }
         if self.spokes > 0 {
-            if !matches!(s.kind, GearKind::External | GearKind::Bevel) || self.hole_count > 0 {
+            if !matches!(s.kind, GearKind::External | GearKind::Bevel | GearKind::Pulley | GearKind::Sprocket) || self.hole_count > 0 {
                 return Err("los rayos van en engranes exteriores y cónicos, y no se combinan con los agujeros de aligeramiento".into());
             }
             if self.spokes < 2 || self.spoke_width <= 0.0 || self.rim <= 0.0 {
@@ -260,7 +283,7 @@ impl GearPart {
             }
         }
         if self.set_screw > 0.0 {
-            if !matches!(s.kind, GearKind::External | GearKind::Bevel | GearKind::Worm) || self.hub_length <= 0.0 || self.bore <= 0.0 {
+            if !matches!(s.kind, GearKind::External | GearKind::Bevel | GearKind::Worm | GearKind::Pulley | GearKind::Sprocket) || self.hub_length <= 0.0 || self.bore <= 0.0 {
                 return Err("el prisionero va en el cubo (o el vástago del sin fin) de un engrane con agujero".into());
             }
             if self.set_screw >= (self.hub_diameter - self.bore) / 2.0 || self.set_screw >= self.hub_length {
@@ -450,9 +473,10 @@ pub fn gear(frame: Frame, g: &GearPart) -> R<Shape> {
     if spec.kind == GearKind::Worm {
         return worm(&l, g, &spec);
     }
-    let total = g.width + if spec.kind == GearKind::External { g.hub_length } else { 0.0 };
+    // Engrane exterior, polea o piñón de cadena: cuerpo con cubo, agujero, chavetero, aligeramientos y prisionero
+    let wheel = matches!(spec.kind, GearKind::External | GearKind::Pulley | GearKind::Sprocket);
     let mut body = match spec.kind {
-        GearKind::External => {
+        GearKind::External | GearKind::Pulley | GearKind::Sprocket => {
             // Rueda de sin fin: los dientes suben hacia las caras para abrazar el
             // filete, y un toro del radio del sin fin da la garganta
             let mut spec = spec;
@@ -498,23 +522,30 @@ pub fn gear(frame: Frame, g: &GearPart) -> R<Shape> {
             }
         }
     };
-    if spec.kind == GearKind::External && g.hub_length > 0.0 {
-        let hub = cyl(&l, g.hub_diameter, g.width - MARGIN, total)?;
+    // Bridas de la polea: dos discos de 1,2 mm a cada lado del canal de la correa
+    let ft = g.flange_thickness();
+    if ft > 0.0 {
+        body = Shape::fuse_all(&[body, cyl(&l, g.flange, -ft, 0.0)?, cyl(&l, g.flange, g.width, g.width + ft)?]).map_err(e)?;
+    }
+    let top = g.width + ft;
+    let total = top + if wheel { g.hub_length } else { 0.0 };
+    if wheel && g.hub_length > 0.0 {
+        let hub = cyl(&l, g.hub_diameter, top - MARGIN, total)?;
         body = Shape::fuse_all(&[body, hub]).map_err(e)?;
     }
-    if spec.kind == GearKind::External {
+    if wheel {
         if g.bore > 0.0 {
-            body = body.cut(&cyl(&l, bore_fit(g), -MARGIN, total + MARGIN)?).map_err(e)?;
+            body = body.cut(&cyl(&l, bore_fit(g), -ft - MARGIN, total + MARGIN)?).map_err(e)?;
         }
         if g.keyway {
             let (b, t2) = keyway_fit(g);
-            let f = Frame { origin: l.p(0.0, -b / 2.0, -MARGIN), z: l.z, x: l.x };
-            let slot = Shape::make_box(f, bore_fit(g) / 2.0 + t2, b, total + 2.0 * MARGIN).map_err(e)?;
+            let f = Frame { origin: l.p(0.0, -b / 2.0, -ft - MARGIN), z: l.z, x: l.x };
+            let slot = Shape::make_box(f, bore_fit(g) / 2.0 + t2, b, total + ft + 2.0 * MARGIN).map_err(e)?;
             body = body.cut(&slot).map_err(e)?;
         }
-        body = lighten(body, &l, g, spec.circles().map_err(|e| e.to_string())?.root, 0.0, g.width)?;
+        body = lighten(body, &l, g, spec.circles().map_err(|e| e.to_string())?.root, -ft, top)?;
         if g.set_screw > 0.0 {
-            body = set_screw_hole(body, &l, g, g.width + g.hub_length / 2.0)?;
+            body = set_screw_hole(body, &l, g, top + g.hub_length / 2.0)?;
         }
     }
     Ok(body)
@@ -538,7 +569,7 @@ pub fn face_roles(frame: Frame, g: &GearPart, classes: &[cad_occt::FaceClass]) -
     };
     let (tol, c) = (0.01, spec.circles().ok());
     let (tip, root) = c.map_or((0.0, 0.0), |c| (c.tip, c.root));
-    let hub = if spec.kind == GearKind::External || spec.kind == GearKind::Bevel || spec.kind == GearKind::Worm { g.hub_length } else { 0.0 };
+    let hub = if matches!(spec.kind, GearKind::External | GearKind::Bevel | GearKind::Worm | GearKind::Pulley | GearKind::Sprocket) { g.hub_length } else { 0.0 };
     // Cónico: alturas del fondo y la cara de arriba (planos, o las del alma si los extremos son cónicos)
     let ends = (spec.kind == GearKind::Bevel && g.cone_ends).then(|| bevel_ends(&spec, g, spec.apex_height())).and_then(Result::ok);
     let bottom = ends.as_ref().map_or(0.0, |b| b.web_back);
@@ -654,7 +685,7 @@ pub fn face_roles(frame: Frame, g: &GearPart, classes: &[cad_occt::FaceClass]) -
 /// si hay dientes pares. Devuelve (Ø de la bola, cota). La bola va en el hueco, que se achica
 /// hacia afuera: inv α_M = inv α + medio hueco − (Ø/2)/r_base. `None` si el engrane no es interno.
 pub fn measurement_between_pins(spec: &GearSpec) -> Option<(f64, f64)> {
-    if spec.kind != GearKind::Internal {
+    if spec.kind != GearKind::Internal || spec.form != crate::gears::ToothForm::Involute {
         return None;
     }
     let c = spec.circles().ok()?;
@@ -704,7 +735,7 @@ pub struct GearInfo {
 /// Cota sobre dientes (W) y sobre bolas (M) de un exterior; todo en el plano
 /// transversal salvo el espesor (normal). Devuelve (k, W, d_bola, M).
 pub fn measurements(spec: &GearSpec) -> Option<(u32, f64, f64, f64)> {
-    if spec.kind != GearKind::External {
+    if spec.kind != GearKind::External || spec.form != crate::gears::ToothForm::Involute {
         return None;
     }
     let c = spec.circles().ok()?;
@@ -774,6 +805,8 @@ pub fn describe(g: &GearPart) -> String {
         GearKind::Rack => "Cremallera",
         GearKind::Bevel => "Engrane cónico",
         GearKind::Worm => "Sin fin",
+        GearKind::Pulley => return format!("Polea {} · z{}", crate::belts::form_name(g.spec.form), g.spec.teeth),
+        GearKind::Sprocket => return format!("Piñón de cadena {} · z{}", crate::belts::form_name(g.spec.form), g.spec.teeth),
     };
     format!("{what} m{m} · z{}", g.spec.teeth)
 }
@@ -798,6 +831,23 @@ pub fn mesh(src: &GearAxis, g: &GearPart, link: &GearLink) -> Result<(Frame, Gea
     use GearKind::*;
     let mut b = g.clone();
     let a = &src.part;
+    if matches!(a.spec.kind, Pulley | Sprocket) || matches!(b.spec.kind, Pulley | Sprocket) {
+        return Err("las poleas y los piñones de cadena no engranan entre sí: los une una correa o una cadena".into());
+    }
+    // Cicloidal con cicloidal: mismos círculos generadores y sin corrección ni distancia pedida
+    if a.spec.form == crate::gears::ToothForm::Cycloidal {
+        if b.spec.kind != External {
+            return Err("el diente cicloidal solo engrana con otro engrane exterior".into());
+        }
+        if link.distance.is_some() {
+            return Err("el cicloidal no admite corrección de perfil: la distancia entre centros sale de los dientes".into());
+        }
+        b.spec.form = a.spec.form;
+        b.spec.cycloid_circle = a.spec.cycloid_circle;
+        b.spec.shift = 0.0;
+        b.spec.addendum = a.spec.addendum;
+        b.spec.dedendum = a.spec.dedendum;
+    }
     // El módulo normal del otro (si el suyo es transversal, se vuelve a pasar con la hélice nueva)
     b.spec.module = a.effective_spec().module;
     b.spec.pressure_angle = a.spec.pressure_angle;
@@ -1361,7 +1411,19 @@ pub fn sketch_block(g: &GearPart) -> Result<crate::sketch::SketchBlock, String> 
     for c in &curves {
         let geometry = match c {
             Curve::Line(a, b) => Geometry::Line { start: point(*a, &mut points, &mut next), end: point(*b, &mut points, &mut next) },
-            Curve::Arc(a, _, b) => Geometry::Arc { center: 0, start: point(*a, &mut points, &mut next), end: point(*b, &mut points, &mut next) },
+            Curve::Arc(a, m, b) => {
+                // Arco del contorno: centrado en el eje (cabeza y pie) o con su propio centro (ranura de polea, asiento de rodillo)
+                let (ca, cm, cb) = ([a[0], a[1]], [m[0], m[1]], [b[0], b[1]]);
+                let d = 2.0 * (ca[0] * (cm[1] - cb[1]) + cm[0] * (cb[1] - ca[1]) + cb[0] * (ca[1] - cm[1]));
+                let center = if d.abs() < 1e-12 {
+                    [0.0, 0.0]
+                } else {
+                    let sq = |p: [f64; 2]| p[0] * p[0] + p[1] * p[1];
+                    [(sq(ca) * (cm[1] - cb[1]) + sq(cm) * (cb[1] - ca[1]) + sq(cb) * (ca[1] - cm[1])) / d, (sq(ca) * (cb[0] - cm[0]) + sq(cm) * (ca[0] - cb[0]) + sq(cb) * (cm[0] - ca[0])) / d]
+                };
+                let center_id = if center[0].hypot(center[1]) < 1e-6 { 0 } else { point([center[0], center[1], 0.0], &mut points, &mut next) };
+                Geometry::Arc { center: center_id, start: point(*a, &mut points, &mut next), end: point(*b, &mut points, &mut next) }
+            }
             Curve::SplineEnds { points: pts, start, end } => {
                 let ids: Vec<u32> = pts.iter().map(|p| point(*p, &mut points, &mut next)).collect();
                 // Manijas: la tangente sale del primer punto y llega al último, en el sentido de avance

@@ -78,11 +78,14 @@ import {
   type PartView,
   type PatternKind,
   type PrimitiveShape,
+  type DriveLength,
   type GearBending,
   type GearInfo,
   type GearMaterial,
   type GearStrength,
   type GearStrengthInput,
+  type ToothForm,
+  type ToothFormInfo,
   type GearKind,
   type GearPart,
   type GearSpec,
@@ -4987,7 +4990,8 @@ const GearLinkBox: Component<{
     const doc = props.store.doc();
     const order = new Map((doc?.features ?? []).map((f, i) => [f.id, i]));
     const at = order.get(props.feature) ?? Infinity;
-    return (props.store.result()?.gears ?? []).filter((x) => x.feature !== props.feature && (order.get(x.feature) ?? Infinity) < at);
+    // Las poleas y los piñones de cadena no engranan con nada: los une una correa o una cadena
+    return (props.store.result()?.gears ?? []).filter((x) => x.feature !== props.feature && (order.get(x.feature) ?? Infinity) < at && x.part.spec.kind !== "pulley" && x.part.spec.kind !== "sprocket");
   });
   const name = (id: number) => props.store.doc()?.features.find((f) => f.id === id)?.name ?? `#${id}`;
   const gear = (x: FeatureKind) => (x.type === "primitive" && x.shape.type === "gear" ? x.shape : undefined);
@@ -5225,6 +5229,55 @@ const PlanetaryBox: Component<{ store: CadStore; feature: number; shape: Extract
 };
 
 /**
+ * Correa o cadena entre esta rueda y otra: dientes (o eslabones) para la distancia entre centros deseada y
+ * los centros exactos con ese largo entero.
+ */
+const DriveBox: Component<{ store: CadStore; spec: GearSpec }> = (props) => {
+  const [open, setOpen] = createSignal(false);
+  const [other, setOther] = createSignal(40);
+  const [center, setCenter] = createSignal(100);
+  const [result, setResult] = createSignal<DriveLength>();
+  const [error, setError] = createSignal("");
+  let seq = 0;
+  createEffect(() => {
+    if (!open()) return;
+    const mine = ++seq;
+    void props.store
+      .driveLength(props.spec.form, props.spec.teeth, other(), center())
+      .then((r) => mine === seq && (setResult(r), setError("")))
+      .catch((e) => mine === seq && (setResult(undefined), setError(String(e))));
+  });
+  const chain = () => props.spec.kind === "sprocket";
+  return (
+    <div class="space-y-1 border-t border-border pt-1.5" data-drive>
+      <Checkbox small label={chain() ? tl("Largo de la cadena con otro piñón") : tl("Largo de la correa con otra polea")} checked={open()} onChange={setOpen} />
+      <Show when={open()}>
+        <Row label={chain() ? tl("Dientes del otro piñón") : tl("Dientes de la otra polea")}>
+          <NumberInput value={other()} onChange={(v) => v >= 8 && setOther(Math.round(v))} />
+        </Row>
+        <Row label={tl("Distancia entre centros deseada (mm)")}>
+          <NumberInput value={center()} onChange={(v) => v > 0 && setCenter(v)} />
+        </Row>
+        <Show when={error()}>
+          <p class="text-[11px] text-error">{tBackend(error())}</p>
+        </Show>
+        <Show when={result()}>
+          {(r) => (
+            <div class="space-y-0.5 text-[11px]">
+              <p>
+                {chain() ? tl("{n} eslabones", { n: r().count }) : tl("{n} dientes de correa", { n: r().count })} · {tl("largo")} {+r().length.toFixed(2)} mm
+              </p>
+              <p>{tl("Con ese largo, los centros quedan a {mm} mm", { mm: +r().center_distance.toFixed(3) })}</p>
+              <For each={r().notes}>{(n) => <p class="text-warning">{tBackend(n)}</p>}</For>
+            </div>
+          )}
+        </Show>
+      </Show>
+    </div>
+  );
+};
+
+/**
  * Resistencia del par (orientativa): flexión del pie de cada diente y presión de contacto, con el par que
  * recibe el primer engrane, su velocidad, los materiales y un factor de impresión.
  */
@@ -5337,9 +5390,16 @@ const GearFields: Component<{
       if (s) (s.spec[key] as number) = v;
     }, suffix);
   const kind = () => props.shape.spec.kind;
+  // Polea dentada o piñón de cadena: sin módulo ni evolvente, el paso lo da la correa o la cadena
+  const wheel = () => kind() === "pulley" || kind() === "sprocket";
+  const [forms, setForms] = createSignal<ToothFormInfo[]>([]);
+  void props.store.toothForms().then(setForms);
+  const familyForms = () => forms().filter((f) => f.family === (kind() === "pulley" ? "belt" : kind() === "sprocket" ? "chain" : "gear"));
   return (
     <>
-      <GearLinkBox store={props.store} ui={props.ui} feature={props.feature} shape={props.shape} field={props.field} update={props.update} />
+      <Show when={!wheel()}>
+        <GearLinkBox store={props.store} ui={props.ui} feature={props.feature} shape={props.shape} field={props.field} update={props.update} />
+      </Show>
       <Show when={kind() === "external" && !props.shape.link}>
         <PlanetaryBox store={props.store} feature={props.feature} shape={props.shape} />
       </Show>
@@ -5351,6 +5411,8 @@ const GearFields: Component<{
             { value: "rack", label: tl("Cremallera") },
             { value: "bevel", label: tl("Cónico recto") },
             { value: "worm", label: tl("Tornillo sin fin") },
+            { value: "pulley", label: tl("Polea dentada (correa)") },
+            { value: "sprocket", label: tl("Piñón de cadena") },
           ]}
           value={kind()}
           onChange={(v) =>
@@ -5360,8 +5422,16 @@ const GearFields: Component<{
               s.spec.kind = v as GearKind;
               if (v === "internal" && s.outer <= 0) s.outer = Math.ceil(s.spec.module * (s.spec.teeth + 6) + 4);
               if (v === "rack" && s.outer <= 0) s.outer = 8;
-              if (v !== "external" && v !== "bevel") [s.hole_count, s.spokes] = [0, 0];
-              if (v !== "external" && v !== "bevel" && v !== "worm") [s.hub_length, s.hub_diameter, s.bore] = [0, 0, 0];
+              const wheelLike = v === "pulley" || v === "sprocket";
+              if (v !== "external" && v !== "bevel" && !wheelLike) [s.hole_count, s.spokes] = [0, 0];
+              if (v !== "external" && v !== "bevel" && v !== "worm" && !wheelLike) [s.hub_length, s.hub_diameter, s.bore] = [0, 0, 0];
+              // Forma del diente según el tipo: la primera correa o cadena, o evolvente
+              const fam = v === "pulley" ? "belt" : v === "sprocket" ? "chain" : "gear";
+              const first = forms().find((f) => f.family === fam);
+              if (wheelLike && first) {
+                [s.spec.form, s.spec.teeth, s.width, s.spec.helix_angle, s.spec.shift, s.herringbone, s.throat, s.link] = [first.form, v === "pulley" ? 20 : 17, first.width, 0, 0, false, 0, null];
+              } else if (s.spec.form !== "involute" && !(v === "external" && s.spec.form === "cycloidal")) s.spec.form = "involute";
+              if (v !== "pulley") s.flange = 0;
               if (v === "worm") [s.spec.teeth, s.width, s.hub_length, s.hub_diameter, s.spec.helix_angle] = [Math.min(s.spec.teeth, 4), Math.max(s.width, 6 * s.spec.module * Math.PI), 0, 0, 0];
               if (v === "bevel") [s.spec.helix_angle, s.herringbone] = [0, false];
               s.keyway = false;
@@ -5369,13 +5439,40 @@ const GearFields: Component<{
           }
         />
       </Row>
-      {spec(tl("Módulo"), "module", "mm")}
-      <Row label={tl("Paso diametral (dientes/pulgada)")}>
-        <NumberInput
-          value={+(25.4 / props.shape.spec.module).toFixed(4)}
-          onChange={(v) => v > 0 && props.update((x) => { const s = g(x); if (s) s.spec.module = +(25.4 / v).toFixed(6); })}
-        />
-      </Row>
+      <Show when={wheel()}>
+        <Row label={kind() === "pulley" ? tl("Correa") : tl("Cadena")}>
+          <Select
+            options={familyForms().map((f) => ({ value: f.form, label: f.name }))}
+            value={props.shape.spec.form}
+            onChange={(v) => props.update((x) => { const s = g(x); if (s) s.spec.form = v as ToothForm; })}
+          />
+        </Row>
+      </Show>
+      <Show when={!wheel()}>
+        {spec(tl("Módulo"), "module", "mm")}
+        <Row label={tl("Paso diametral (dientes/pulgada)")}>
+          <NumberInput
+            value={+(25.4 / props.shape.spec.module).toFixed(4)}
+            onChange={(v) => v > 0 && props.update((x) => { const s = g(x); if (s) s.spec.module = +(25.4 / v).toFixed(6); })}
+          />
+        </Row>
+      </Show>
+      <Show when={kind() === "external"}>
+        <Row label={tl("Perfil del diente")}>
+          <Select
+            options={[
+              { value: "involute", label: tl("Evolvente") },
+              { value: "cycloidal", label: tl("Cicloidal") },
+            ]}
+            value={props.shape.spec.form === "cycloidal" ? "cycloidal" : "involute"}
+            onChange={(v) => props.update((x) => { const s = g(x); if (s) [s.spec.form, s.spec.helix_angle, s.spec.shift] = [v as ToothForm, v === "cycloidal" ? 0 : s.spec.helix_angle, v === "cycloidal" ? 0 : s.spec.shift]; })}
+          />
+        </Row>
+        <Show when={props.shape.spec.form === "cycloidal"}>
+          {spec(tl("Radio del círculo generador (× módulo)"), "cycloid_circle", "")}
+          <p class="text-[11px] text-text-dim">{tl("Los dos engranes del par deben tener el mismo círculo generador. Con 1,5 sirve desde 6 dientes; menos de la mitad del primitivo evita el socavado.")}</p>
+        </Show>
+      </Show>
       {spec(kind() === "worm" ? tl("Entradas") : tl("Dientes"), "teeth", "")}
       <Show when={kind() === "worm"}>
         {spec(tl("Diámetro primitivo (0: 10·módulo)"), "worm_diameter", "mm")}
@@ -5387,7 +5484,8 @@ const GearFields: Component<{
         />
       </Show>
       {num(tl("Ancho"), "width")}
-      {spec(tl("Ángulo de presión"), "pressure_angle", "°")}
+      <Show when={!wheel() && props.shape.spec.form !== "cycloidal"}>{spec(tl("Ángulo de presión"), "pressure_angle", "°")}</Show>
+      <Show when={kind() === "pulley"}>{num(tl("Diámetro de las bridas (0: sin bridas)"), "flange")}</Show>
       <Show when={kind() === "bevel"}>
         {spec(tl("Ángulo del cono primitivo"), "cone_angle", "°")}
         <Checkbox
@@ -5400,7 +5498,7 @@ const GearFields: Component<{
         <Show when={props.shape.link}>{spec(tl("Ángulo entre ejes"), "shaft_angle", "°")}</Show>
         {spec(tl("Ángulo de espiral (+ derecha, − izquierda, 0: recto)"), "spiral_angle", "°")}
       </Show>
-      <Show when={kind() !== "rack" && kind() !== "bevel" && kind() !== "worm"}>
+      <Show when={kind() !== "rack" && kind() !== "bevel" && kind() !== "worm" && !wheel() && props.shape.spec.form !== "cycloidal"}>
         {spec(tl("Ángulo de hélice (+ derecha, − izquierda)"), "helix_angle", "°")}
         <Show when={props.shape.spec.helix_angle !== 0}>
           <Checkbox
@@ -5422,8 +5520,8 @@ const GearFields: Component<{
       <Show when={kind() === "external" && props.shape.spec.helix_angle !== 0 && !props.shape.link}>
         {num(tl("Garganta: distancia al sin fin (0: sin ella)"), "throat")}
       </Show>
-      {spec(tl("Corrección de perfil"), "shift", "")}
-      {spec(tl("Juego entre dientes"), "backlash", "mm")}
+      <Show when={!wheel() && props.shape.spec.form !== "cycloidal"}>{spec(tl("Corrección de perfil"), "shift", "")}</Show>
+      {spec(wheel() ? tl("Holgura de la ranura o el asiento") : tl("Juego entre dientes"), "backlash", "mm")}
       <Checkbox
         small
         label={tl("Holgura según la impresora")}
@@ -5434,7 +5532,10 @@ const GearFields: Component<{
       <Show when={!props.shape.auto_clearance}>{num(tl("Holgura de impresión"), "print_clearance")}</Show>
       <Show when={kind() === "internal"}>{num(tl("Diámetro exterior"), "outer")}</Show>
       <Show when={kind() === "rack"}>{num(tl("Alto del cuerpo"), "outer")}</Show>
-      <Show when={kind() === "external" || kind() === "bevel" || kind() === "worm"}>
+      <Show when={wheel()}>
+        <DriveBox store={props.store} spec={props.shape.spec} />
+      </Show>
+      <Show when={kind() === "external" || kind() === "bevel" || kind() === "worm" || wheel()}>
         {num(tl("Agujero del eje"), "bore")}
         {num(kind() === "worm" ? tl("Diámetro del vástago") : tl("Diámetro del cubo"), "hub_diameter")}
         {num(kind() === "worm" ? tl("Largo del vástago") : tl("Largo del cubo"), "hub_length")}
@@ -5444,7 +5545,7 @@ const GearFields: Component<{
           checked={props.shape.keyway}
           onChange={(c) => props.update((x) => { const s = g(x); if (s) s.keyway = c; })}
         />
-        <Show when={kind() === "external" || kind() === "bevel"}>
+        <Show when={kind() === "external" || kind() === "bevel" || wheel()}>
           {num(tl("Aligeramientos (cantidad)"), "hole_count", "")}
           <Show when={props.shape.hole_count > 0}>
             {num(tl("Ø de cada agujero"), "hole_diameter")}

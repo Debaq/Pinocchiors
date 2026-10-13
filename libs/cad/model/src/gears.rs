@@ -37,6 +37,65 @@ pub enum GearKind {
     Bevel,
     /// Tornillo sin fin de filete trapecial: `module` axial, `teeth` = entradas
     Worm,
+    /// Polea dentada para correa (GT2, HTD, T…): el paso lo da `form`
+    Pulley,
+    /// Piñón de cadena de rodillos (ANSI / ISO 606): el paso lo da `form`
+    Sprocket,
+}
+
+/// Forma del diente: evolvente (por defecto), cicloidal, o el paso y el perfil de una correa o cadena.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ToothForm {
+    #[default]
+    #[serde(rename = "involute")]
+    Involute,
+    #[serde(rename = "cycloidal")]
+    Cycloidal,
+    #[serde(rename = "gt2_2mm")]
+    Gt2Mm2,
+    #[serde(rename = "gt2_3mm")]
+    Gt2Mm3,
+    #[serde(rename = "gt2_5mm")]
+    Gt2Mm5,
+    #[serde(rename = "htd_3m")]
+    Htd3M,
+    #[serde(rename = "htd_5m")]
+    Htd5M,
+    #[serde(rename = "mxl")]
+    Mxl,
+    #[serde(rename = "xl")]
+    Xl,
+    #[serde(rename = "t2_5")]
+    T25,
+    #[serde(rename = "t5")]
+    T5,
+    #[serde(rename = "chain_25")]
+    Chain25,
+    #[serde(rename = "chain_35")]
+    Chain35,
+    #[serde(rename = "chain_40")]
+    Chain40,
+    #[serde(rename = "chain_50")]
+    Chain50,
+    #[serde(rename = "chain_06b")]
+    Chain06B,
+    #[serde(rename = "chain_08b")]
+    Chain08B,
+    #[serde(rename = "chain_10b")]
+    Chain10B,
+}
+
+impl ToothForm {
+    pub const BELTS: &[ToothForm] = &[ToothForm::Gt2Mm2, ToothForm::Gt2Mm3, ToothForm::Gt2Mm5, ToothForm::Htd3M, ToothForm::Htd5M, ToothForm::Mxl, ToothForm::Xl, ToothForm::T25, ToothForm::T5];
+    pub const CHAINS: &[ToothForm] = &[ToothForm::Chain25, ToothForm::Chain35, ToothForm::Chain40, ToothForm::Chain50, ToothForm::Chain06B, ToothForm::Chain08B, ToothForm::Chain10B];
+
+    pub fn is_belt(self) -> bool {
+        Self::BELTS.contains(&self)
+    }
+
+    pub fn is_chain(self) -> bool {
+        Self::CHAINS.contains(&self)
+    }
 }
 
 /// Receta de un engrane. Con `helix_angle ≠ 0` el módulo y el ángulo de
@@ -71,6 +130,10 @@ pub struct GearSpec {
     /// Sin fin: diámetro primitivo (mm; 0: 10·módulo) y mano izquierda
     pub worm_diameter: f64,
     pub left_hand: bool,
+    /// Forma del diente: evolvente, cicloidal, o la correa / cadena de una polea o un piñón de cadena
+    pub form: ToothForm,
+    /// Cicloidal: radio de los círculos generadores de cabeza y pie (× módulo). Los dos del par deben coincidir
+    pub cycloid_circle: f64,
 }
 
 impl Default for GearSpec {
@@ -91,6 +154,8 @@ impl Default for GearSpec {
             spiral_angle: 0.0,
             worm_diameter: 0.0,
             left_hand: false,
+            form: ToothForm::Involute,
+            cycloid_circle: 1.5,
         }
     }
 }
@@ -142,8 +207,23 @@ pub struct GearCircles {
 impl GearSpec {
     fn check(&self) -> Result<(), GearError> {
         let bad = |m: &str| Err(GearError::Invalid(m.into()));
-        if self.module.is_nan() || self.module <= 0.0 || !self.module.is_finite() {
+        let wheel = matches!(self.kind, GearKind::Pulley | GearKind::Sprocket);
+        // Poleas y piñones de cadena toman el paso de la correa o la cadena, no del módulo
+        if !wheel && (self.module.is_nan() || self.module <= 0.0 || !self.module.is_finite()) {
             return bad("el módulo debe ser positivo");
+        }
+        match self.kind {
+            GearKind::Pulley if !self.form.is_belt() => return bad("elige una correa para la polea"),
+            GearKind::Sprocket if !self.form.is_chain() => return bad("elige una cadena para el piñón"),
+            GearKind::Pulley | GearKind::Sprocket => {}
+            _ if self.form.is_belt() || self.form.is_chain() => return bad("la forma del diente es de una correa o una cadena: usa polea o piñón de cadena"),
+            _ => {}
+        }
+        if self.form == ToothForm::Cycloidal && self.kind != GearKind::External {
+            return bad("el diente cicloidal solo existe en engranes exteriores");
+        }
+        if wheel {
+            return Ok(());
         }
         if !(1.0..=45.0).contains(&self.pressure_angle) {
             return bad("el ángulo de presión debe estar entre 1° y 45°");
@@ -231,6 +311,14 @@ impl GearSpec {
 
     pub fn circles(&self) -> Result<GearCircles, GearError> {
         self.check()?;
+        if matches!(self.kind, GearKind::Pulley | GearKind::Sprocket) {
+            return crate::belts::wheel_circles(self);
+        }
+        if self.form == ToothForm::Cycloidal {
+            let (m, z) = (self.module, self.teeth as f64);
+            let pitch = m * z / 2.0;
+            return Ok(GearCircles { module_t: m, alpha_t: 0.0, pitch, base: pitch, tip: pitch + self.addendum * m, root: pitch - self.dedendum * m, thickness: PI * m / 2.0 - self.backlash / 2.0 });
+        }
         if self.kind == GearKind::Worm {
             let (r_root, r_tip, _, _) = self.worm_profile()?;
             let (d1, _, _) = self.worm_dims();
@@ -617,6 +705,14 @@ impl GearSpec {
         if self.kind == GearKind::Worm {
             return Err(GearError::Invalid("el sin fin no tiene perfil de dientes: el filete sale de `worm_profile`".into()));
         }
+        if matches!(self.kind, GearKind::Pulley | GearKind::Sprocket) {
+            self.check()?;
+            return crate::belts::wheel_profile(self);
+        }
+        if self.form == ToothForm::Cycloidal {
+            self.check()?;
+            return crate::belts::cycloidal_profile(self);
+        }
         let circles = self.circles()?;
         let core = self.core()?;
         let rb = core.r * core.alpha.cos();
@@ -770,6 +866,21 @@ pub fn pair(a: &GearSpec, b: &GearSpec) -> Result<GearPair, GearError> {
         if same != (a.kind != b.kind) {
             return Err(GearError::Mismatch(if same { "la misma mano: los ejes quedarían cruzados, usa manos contrarias" } else { "con corona las dos van con la misma mano" }.into()));
         }
+    }
+    if a.form == ToothForm::Cycloidal || b.form == ToothForm::Cycloidal {
+        if a.form != b.form || a.kind != GearKind::External || b.kind != GearKind::External {
+            return Err(GearError::Mismatch("un engrane cicloidal solo engrana con otro cicloidal exterior".into()));
+        }
+        if (a.cycloid_circle - b.cycloid_circle).abs() > 1e-9 {
+            return Err(GearError::Mismatch("los dos cicloidales deben tener el mismo círculo generador".into()));
+        }
+        return Ok(GearPair {
+            center_distance: a.module * (a.teeth + b.teeth) as f64 / 2.0,
+            working_angle: 0.0,
+            contact_ratio: crate::belts::cycloidal_contact_ratio(a, b)?,
+            ratio: b.teeth as f64 / a.teeth as f64,
+            interference: false,
+        });
     }
     let internal = match (a.kind, b.kind) {
         (GearKind::External, GearKind::External) => false,

@@ -77,6 +77,12 @@ export function gearTable(gear: GearAxis, info: GearInfo, name: string): GearTab
     add("Avance", num(+lead));
     add("Ángulo de avance (γ)", `${num(Math.atan((spec.teeth * spec.module) / info.pitch_diameter) * (180 / Math.PI), 2)}°`);
     add("Mano", spec.left_hand ? tr("Izquierda") : tr("Derecha"));
+  } else if (spec.kind === "pulley" || spec.kind === "sprocket") {
+    add(spec.kind === "pulley" ? "Correa" : "Cadena", spec.form.replace(/_/g, " ").toUpperCase());
+    add("Dientes (z)", String(spec.teeth));
+    add("Ø primitivo", num(info.pitch_diameter));
+    add("Ø exterior", num(info.tip_diameter));
+    add("Ø de pie", num(info.root_diameter));
   } else if (spec.kind === "rack") {
     add("Módulo (m)", num(spec.module));
     add("Dientes (z)", String(spec.teeth));
@@ -86,7 +92,8 @@ export function gearTable(gear: GearAxis, info: GearInfo, name: string): GearTab
   } else {
     add("Módulo (m)", num(spec.module));
     add("Dientes (z)", String(spec.teeth));
-    add("Ángulo de presión (α)", `${num(spec.pressure_angle, 2)}°`);
+    if (spec.form === "cycloidal") add("Perfil del diente", tr("Cicloidal"));
+    else add("Ángulo de presión (α)", `${num(spec.pressure_angle, 2)}°`);
     if (spec.helix_angle) add("Ángulo de hélice (β)", `${num(spec.helix_angle, 2)}°`);
     if (spec.kind === "bevel") {
       add("Ángulo del cono (δ)", `${num(spec.cone_angle, 2)}°`);

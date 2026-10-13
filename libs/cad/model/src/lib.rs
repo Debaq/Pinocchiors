@@ -9,6 +9,7 @@
 //! Unidades: mm y grados. Ejes: Z arriba.
 
 pub mod assembly;
+pub mod belts;
 pub mod document;
 pub mod eval;
 pub mod expr;

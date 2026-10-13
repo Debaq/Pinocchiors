@@ -569,6 +569,22 @@ pub fn cad_gear_design(source: cad_model::GearPart, kind: cad_model::gears::Gear
     cad_model::gear_part::design_teeth(&source, kind, ratio, distance)
 }
 
+/// Formas de diente (evolvente, cicloidal, correas y cadenas) con su paso y ancho por defecto.
+#[tauri::command]
+pub fn cad_tooth_forms() -> Vec<cad_model::belts::FormInfo> {
+    cad_model::belts::forms()
+}
+
+/// Dientes de correa (o eslabones de cadena) para dos ruedas a una distancia entre centros, y los centros exactos.
+#[tauri::command]
+pub fn cad_drive_length(form: cad_model::gears::ToothForm, teeth_a: u32, teeth_b: u32, center: f64) -> Result<cad_model::belts::DriveLength, String> {
+    if form.is_chain() {
+        cad_model::belts::chain_length(form, teeth_a, teeth_b, center)
+    } else {
+        cad_model::belts::belt_length(form, teeth_a, teeth_b, center)
+    }
+}
+
 /// Plan de un planetario: dientes del satélite y de la corona, ángulos y relaciones, con la condición de montaje.
 #[tauri::command]
 pub fn cad_planetary_plan(module: f64, sun_teeth: u32, planet_teeth: Option<u32>, ring_teeth: Option<u32>, planets: u32, pressure_angle: f64) -> Result<cad_model::gear_part::PlanetaryPlan, String> {
@@ -2239,6 +2255,8 @@ pub mod bridge {
             "cad_sketch_suggest" => ok(cad_sketch_suggest(arg(args, "sketch")?)?),
             "cad_gear_info" => ok(cad_gear_info(arg(args, "part")?)),
             "cad_gear_design" => ok(cad_gear_design(arg(args, "source")?, arg(args, "kind")?, arg(args, "ratio")?, arg(args, "distance")?)?),
+            "cad_tooth_forms" => ok(cad_tooth_forms()),
+            "cad_drive_length" => ok(cad_drive_length(arg(args, "form")?, arg(args, "teeth_a")?, arg(args, "teeth_b")?, arg(args, "center")?)?),
             "cad_planetary_plan" => ok(cad_planetary_plan(arg(args, "module")?, arg(args, "sun_teeth")?, arg(args, "planet_teeth")?, arg(args, "ring_teeth")?, arg(args, "planets")?, arg(args, "pressure_angle")?)?),
             "cad_gear_materials" => ok(cad_gear_materials()),
             "cad_gear_strength" => ok(cad_gear_strength(arg(args, "first")?, arg(args, "second")?, arg(args, "input")?)?),

@@ -1504,6 +1504,8 @@ impl FeatureKind {
                     crate::gears::GearKind::Rack => "Cremallera",
                     crate::gears::GearKind::Bevel => "Engrane cónico",
                     crate::gears::GearKind::Worm => "Sin fin",
+                    crate::gears::GearKind::Pulley => "Polea dentada",
+                    crate::gears::GearKind::Sprocket => "Piñón de cadena",
                 },
             },
             FeatureKind::Fillet { .. } => "Redondeo",

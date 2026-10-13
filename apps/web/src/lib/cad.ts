@@ -556,7 +556,46 @@ export type PrimitiveShape =
   | { type: "washer"; size: string }
   | ({ type: "gear" } & GearPart);
 
-export type GearKind = "external" | "internal" | "rack" | "bevel" | "worm";
+export type GearKind = "external" | "internal" | "rack" | "bevel" | "worm" | "pulley" | "sprocket";
+
+/** Forma del diente: evolvente, cicloidal, o la correa (poleas) / cadena (piñones) */
+export type ToothForm =
+  | "involute"
+  | "cycloidal"
+  | "gt2_2mm"
+  | "gt2_3mm"
+  | "gt2_5mm"
+  | "htd_3m"
+  | "htd_5m"
+  | "mxl"
+  | "xl"
+  | "t2_5"
+  | "t5"
+  | "chain_25"
+  | "chain_35"
+  | "chain_40"
+  | "chain_50"
+  | "chain_06b"
+  | "chain_08b"
+  | "chain_10b";
+
+/** Una forma de diente para elegir */
+export interface ToothFormInfo {
+  form: ToothForm;
+  name: string;
+  family: "gear" | "belt" | "chain";
+  pitch: number | null;
+  /** Ancho por defecto (mm) */
+  width: number;
+}
+
+/** Correa o cadena para dos ruedas: dientes (o eslabones) y los centros exactos */
+export interface DriveLength {
+  count: number;
+  center_distance: number;
+  length: number;
+  notes: string[];
+}
 
 export interface GearSpec {
   kind: GearKind;
@@ -577,6 +616,10 @@ export interface GearSpec {
   shaft_angle: number;
   /** Cónico espiral: ángulo de espiral (°; + mano derecha, − izquierda; 0: recto). El segundo del par toma el contrario */
   spiral_angle: number;
+  /** Forma del diente (evolvente, cicloidal, o la correa / cadena de una polea / un piñón) */
+  form: ToothForm;
+  /** Cicloidal: radio de los círculos generadores (× módulo); igual en los dos del par */
+  cycloid_circle: number;
   /** Sin fin: diámetro primitivo (0: 10·módulo), mano izquierda; «dientes» son las entradas */
   worm_diameter: number;
   left_hand: boolean;
@@ -604,6 +647,8 @@ export interface GearPart {
   print_clearance: number;
   /** La holgura de impresión sale de la impresora del diseño (ajuste justo) y se ignora la de arriba */
   auto_clearance?: boolean;
+  /** Polea: diámetro de las dos bridas que guían la correa (mm; 0: sin bridas) */
+  flange?: number;
   /** Doble helicoidal (espina de pescado), con un canal central opcional */
   herringbone?: boolean;
   groove?: number;
@@ -707,7 +752,7 @@ export interface GearInfo {
 }
 
 export const defaultGear = (kind: GearKind = "external"): GearPart => ({
-  spec: { kind, module: 2, teeth: kind === "rack" ? 6 : kind === "worm" ? 1 : 20, pressure_angle: 20, helix_angle: 0, shift: 0, backlash: 0, addendum: 1, dedendum: 1.25, root_fillet: 0.25, cone_angle: 45, shaft_angle: 90, spiral_angle: 0, worm_diameter: 0, left_hand: false },
+  spec: { kind, module: 2, teeth: kind === "rack" ? 6 : kind === "worm" ? 1 : 20, pressure_angle: 20, helix_angle: 0, shift: 0, backlash: 0, addendum: 1, dedendum: 1.25, root_fillet: 0.25, cone_angle: 45, shaft_angle: 90, spiral_angle: 0, form: "involute", cycloid_circle: 1.5, worm_diameter: 0, left_hand: false },
   width: kind === "bevel" ? 6 : kind === "worm" ? 40 : 10,
   bore: kind === "external" || kind === "bevel" || kind === "worm" ? 8 : 0,
   hub_diameter: 0,
@@ -4033,6 +4078,8 @@ export function createCadStore() {
     gearBlock: (part: GearPart) => invoke<SketchBlock>("cad_gear_block", { part }),
     planetaryPlan: (module: number, sunTeeth: number, planetTeeth: number | null, ringTeeth: number | null, planets: number, pressureAngle: number) =>
       invoke<PlanetaryPlan>("cad_planetary_plan", { module, sun_teeth: sunTeeth, planet_teeth: planetTeeth, ring_teeth: ringTeeth, planets, pressure_angle: pressureAngle }),
+    toothForms: () => invoke<ToothFormInfo[]>("cad_tooth_forms"),
+    driveLength: (form: ToothForm, teethA: number, teethB: number, center: number) => invoke<DriveLength>("cad_drive_length", { form, teeth_a: teethA, teeth_b: teethB, center }),
     gearMaterials: () => invoke<GearMaterial[]>("cad_gear_materials"),
     gearStrength: (first: GearPart, second: GearPart, input: GearStrengthInput) => invoke<GearStrength>("cad_gear_strength", { first, second, input }),
     resolveRefs: (faces: FaceRef[], edges: EdgeRef[]) => invoke<ResolvedRefs>("cad_resolve_refs", { faces, edges }),

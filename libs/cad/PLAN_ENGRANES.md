@@ -6,26 +6,29 @@ complementen, que tengan relaciones, rectos, helicoidales y otros».
 > **No borrar en limpiezas de planes** (pedido del usuario, 2026-10-10). Aunque se pida
 > «eliminar cualquier plan previo», este se conserva salvo que el usuario lo nombre.
 
-Estado (2026-10-13): **F1–F8 hechas**; queda «Más adelante» y lo pendiente anotado en cada fase.
+Estado (2026-10-13): **F1–F8 hechas** y casi todo lo que se anotó como pendiente. **Nada de F2 en adelante se probó en la app real**
+(solo `cargo test` y `node --test`); correr el e2e de todo es lo primero que falta y lo corre el usuario.
 
-Lo hecho el 2026-10-13 después de cerrar F8 (todo con prueba de `cargo test`/`node --test`, **nada probado en la app real**):
-cremallera helicoidal; aviso de autobloqueo y rendimiento del sin fin; diseñar el par por relación o distancia (`design_teeth`);
-arrastrar piezas del ensamble en el visor y acoplamientos a mano; rayos, prisionero y paso diametral; cota entre bolas de la corona,
-círculos da/df/db en la hoja y aviso de engranes borrados.
-Problemas conocidos resueltos el 2026-10-13 (con `cargo test`, nada probado en la app real): punto muerto de 180° del solver
-(el residuo se envolvía justo en ±π y el jacobiano numérico salía basura: ahora se fija la vuelta al derivar); detección de
-uniones por eje paralelo al del engrane; trenes de 3 y 4 engranes y **planetarios con brazo que gira** (`Relation::Gear.carrier`
-+ `carrier_ratio`, fórmula de Willis, detectado solo); canal central también en coronas; avisos de ejes no paralelos y de
-helicoidales cruzados (`assembly::gear_axis_warnings`, comando `cad_assembly_gear_warnings`, salen al «Detectar engranes»);
-espina de pescado sin canal como un solo loft con el vértice en medio (17 s → 1,4 s por par) y pruebas con menos dientes.
-Hecho también el 2026-10-13 (puntos 2–4 de la lista anterior): módulo transversal elegible (`GearPart.transverse_module`), caras
-del engrane con nombre de función (`face_roles`, `cad_face_classes` en OCCT, se ve en el panel de medidas), clic en el visor para
-la dirección del par y la posición sobre la cremallera (`plane_point`), cremallera y rueda de sin fin como fuente
-(`mesh_from_rack`, `mesh_worm_from_wheel`, `GearLink.along`), elegir la unión al arrastrar y arrastrar deslizantes
-(`jointsOf`/`dragJointOf`, `lineParam`), y el solver reintenta desde arranques corridos (un ángulo impuesto de 180°).
-**Lo que falta, en orden de utilidad:** (1) correr el e2e en la app real de todo lo anterior (lo corre el usuario primero);
-(5) cónicos con extremos cónicos y cono del primero calculado;
-(6) cotas ISO exactas; (7) lo de «Más adelante» (planetario, cicloidales, poleas, resistencia, sin fin globoide).
+Resumen de lo hecho el 2026-10-13 después de F8 (cada cosa con su prueba):
+- **Solver y ensamble**: punto muerto de 180° (se fija la vuelta del residuo al derivar y se reintenta desde arranques corridos),
+  detección de la bisagra por eje paralelo, trenes de 3–4 engranes, **planetarios con brazo que gira** (`Relation::Gear.carrier`, Willis),
+  corona fija como carcasa, avisos de ejes no paralelos y helicoidales cruzados (al «Detectar engranes»), elegir la unión por la que se
+  arrastra una pieza y arrastrar deslizantes, relaciones con la cremallera o la rueda de sin fin como fuente.
+- **Engranes**: módulo transversal, caras con nombre de función (`face_roles`, `cad_face_classes`), canal central en coronas, espina de
+  pescado como un solo loft (17 s → 1,4 s), cremallera y rueda de sin fin como fuente (`GearLink.along`), clic en el visor para la dirección,
+  **cónicos espirales** (`spiral_angle`), extremos cónicos (hasta 50°), rayos y agujeros en cónicos, vástago y prisionero en el sin fin,
+  cono del primero calculado, **poleas dentadas** (GT2, HTD, MXL, XL, T) con bridas, **piñones de cadena** (ANSI 25–50, ISO 06B–10B),
+  **dientes cicloidales** (par que calza), largo de correa y de cadena.
+- **Planetario completo** (`planetary_plan`, «Armar un planetario con este sol», «Armar el planetario en el ensamble»).
+- **Resistencia** (`gear_strength`): flexión del pie con el factor de forma medido en el perfil real y contacto de Hertz.
+- **Cotas y bloques**: las cotas W y M repartían mal el juego y la cota entre bolas de la corona tenía el signo de x al revés (corregido con
+  prueba contra el perfil real); el sin fin deja su sección axial como bloque del sketch.
+
+**Lo que no se hizo (y por qué):** hipoides (los ejes desfasados piden superficies de paso que no son conos: sin una geometría exacta el
+resultado engañaría); sin fin globoide y rueda tallada por simulación del sin fin (decenas de booleanas de superficies libres, minutos por
+pieza); engranes no circulares. Siguen en «Más adelante».
+**Lo que falta, en orden de utilidad:** (1) correr el e2e en la app real de todo lo anterior; (2) las pruebas de choque siguen tardando
+(~1–1,5 min por archivo); (3) espina de pescado con canal (une tres sólidos); (4) lo de «Más adelante».
 
 Leyenda: ✅ hecho · 🟡 a medias · ❌ falta · (F*n*) fase que lo cubre.
 
@@ -88,9 +91,9 @@ se volvería lento con 40 dientes). Lo que funciona mejor es la combinación de 
 | Tornillo sin fin + corona | ✅ F7 |
 | Perfil del engrane en el sketch (bloque), tabla de datos en la hoja | ✅ F8 |
 | Holgura para impresión 3D (juego extra por boquilla) | ✅ F2 |
-| Tren planetario (sol, satélites, corona) de una vez | ❌ (más adelante) |
-| Cicloidal, poleas dentadas (GT2/HTD), piñones de cadena, no circulares | ❌ (más adelante) |
-| Cálculo de resistencia (Lewis / AGMA / ISO 6336) | ❌ (más adelante) |
+| Tren planetario (sol, satélites, corona) de una vez | ✅ planetary_plan + ensamble |
+| Cicloidal, poleas dentadas (GT2/HTD…), piñones de cadena | ✅ (no circulares: no) |
+| Cálculo de resistencia (Lewis / ISO 6336 simplificado) | ✅ `gear_strength` |
 
 ## Fases
 
@@ -189,51 +192,36 @@ nuevo. Campos nuevos con `#[serde(default)]`.
 - En la hoja: tabla de datos del engrane (m, z, α, β, x, Ø primitivo, cota sobre dientes / sobre
   bolas) al elegir una vista de un engrane; círculo primitivo en línea de trazo y punto.
 
-## Pendientes (anotados el 2026-10-13, al cerrar F8)
+## Pendientes (revisados el 2026-10-13)
 
-Lo que quedó fuera de cada fase, por área. Nada de esto impide usar lo hecho.
+Lo que queda, por área. Nada de esto impide usar lo hecho.
 
 **Pruebas y verificación**
-- Nada de F2–F8 se probó en la app real ni con e2e en el navegador (solo `cargo test` y `node --test`). Correr e2e de lo nuevo cuando se pida: botón «Engrane», panel de propiedades (tipos, «Engranar con», cónico, sin fin), «Detectar engranes» en el ensamble, «Traer» perfil en el sketch y engranes en la hoja.
-- Las pruebas de choque de `gear_mesh`/`gear_part` siguen tardando (booleanas de superficies libres; ~1–1,5 min cada suite): ya con menos dientes. La espina de pescado CON canal sigue usando una unión pesada.
+- Nada de F2 en adelante se probó en la app real ni con e2e en el navegador (solo `cargo test` y `node --test`): botón «Engrane», panel de
+  propiedades (tipos, «Engranar con», cónico, sin fin, poleas, cadenas, cicloidal), «Detectar engranes» y «Armar el planetario» en el
+  ensamble, «Traer» perfil en el sketch, engranes en la hoja, resistencia y arrastrar piezas.
+- Las pruebas de choque de `gear_mesh`/`gear_part` siguen tardando (booleanas de superficies libres; ~1–1,5 min por archivo).
 
-**Geometría y piezas (F1–F2)**
-- (Hechos 2026-10-13, sin probar en la app real: paso diametral —campo en el cuadro que convierte a módulo = 25,4/DP—, rayos de aligeramiento `spokes/spoke_width/rim` y prisionero `set_screw` radial en el cubo a 90° del chavetero.) Falta: rayos en cónicos, prisionero en cónicos/sin fin, rayos curvos.
-- (Nombres de cara y módulo transversal elegible: hechos 2026-10-13.)
+**Rendimiento**
+- La espina de pescado CON canal une tres sólidos (lenta); sin canal es un solo loft.
+- Extremos cónicos del cónico: booleana con los dientes, unos 10 s por pieza, y falla pasando de 50° de cono (avisa).
 
-**Pares y enlaces (F3)**
-- (Diseñar por relación: hecho 2026-10-13, `gear_part::design_teeth` + `cad_gear_design`; campo «Relación» y botón de distancia en «Engranar con». Sin probar en la app real.)
-- (Dirección del centro con clic en el visor y cremallera como fuente: hechos 2026-10-13.)
-- (Avisos de ejes no paralelos y helicoidales cruzados: hechos 2026-10-13, en el ensamble.) Falta avisar al enlazar en el árbol.
+**Geometría**
+- Hipoides, sin fin globoide, rueda tallada por simulación del sin fin y engranes no circulares: no hechos (ver «Más adelante»).
+- Cónico espiral: espiral logarítmica con secciones planas (aprox.): queda un contacto residual de ~4–6 % de un diente entre el par; con el
+  juego entre dientes se va. El cicloidal ya calza con el círculo generador igual en los dos.
+- Cicloidal solo en engranes exteriores (corona y cremallera cicloidales no).
+- Poleas y cadenas: medidas de uso común (aproximadas); confirma con tu correa o cadena y ajusta con la holgura.
 
-**Helicoidales (F4)**
-- (Cremallera helicoidal: hecha 2026-10-13, sección transversal corrida por z·tanβ; probada con choque en las dos manos.)
-- (Canal central en coronas: hecho 2026-10-13.) Espina de pescado con canal sigue uniendo tres sólidos (lento).
-
-**Ensamble (F5)**
-- (Hechos 2026-10-13, sin probar en la app real: arrastrar una pieza en el visor del ensamble gira la revoluta/cilíndrica que la sostiene —`lib/assemblyDrag.ts`, un solo paso de deshacer por gesto— y «Agregar acoplamiento» crea relaciones a mano. Después se hizo también: elegir la unión por la que se arrastra y arrastrar deslizantes, 2026-10-13.)
-- (Hechos 2026-10-13: trenes de 3–4 engranes, planetario con brazo móvil, punto muerto de 180° y elección de la bisagra por eje.) Falta: planetario con satélites repetidos (condición de montaje) y piezas con más de un brazo.
-
-**Cónicos (F6)**
-- Extremos planos en vez de cónicos (la versión por booleanas con los conos fallaba con δ ≥ 55°): revisar si se puede volver a conos de atrás/adelante.
-- Calcular solo el cono del primer cónico según los dientes y Σ (hoy solo avisa).
-- Aligeramientos en cónicos; ancho de cara óptimo (hoy solo se valida < 0,6 de la generatriz).
-- Espirales e hipoides.
-
-**Sin fin y rueda (F7)**
-- (La rueda como fuente: hecha 2026-10-13; avisa si falta la garganta o el avance no coincide.)
-- Tallado exacto de la rueda por simulación del sin fin (hoy: helicoidal con garganta).
-- Sin fin globoide (doble envolvente). (Autobloqueo y rendimiento: hecho, aviso en el árbol con μ = 0,1.)
-
-**Sketch y hoja (F8)**
-- (Hechos 2026-10-13: cota entre bolas de la corona —`measurement_between_pins`, verificada solo contra el cálculo a mano—, círculos da/df/db rotulados y aviso de engranes borrados.) Falta: cotas ISO exactas con juego y helicoidales (hoy: nominales, bola de 1,7·m).
-- Bloque de sketch de la rueda de sin fin (hoy sale como helicoidal normal) y del sin fin (sección axial).
+**Ensamble**
+- Planetario con satélites repartidos por igual (la condición de montaje lo exige); sin satélites desiguales ni varios brazos.
+- La detección de acoplamientos con la corona fija relaciona solo el primer satélite con la corona (los demás quedan atados por el sol).
+- Los avisos de ejes no paralelos salen al «Detectar engranes», no en el árbol.
 
 ## Más adelante
 
-Tren planetario completo (sol + satélites + corona con la condición de montaje), cicloidales,
-poleas dentadas y piñones de cadena, engranes no circulares, helicoidales cruzados, cónicos
-espirales, resistencia (Lewis/AGMA), corona tallada por simulación.
+Hipoides, sin fin globoide (doble envolvente), corona tallada por simulación del sin fin, engranes no circulares, helicoidales cruzados,
+cicloidales internos y cremallera cicloidal, resistencia del sin fin (rozamiento y calentamiento).
 
 ## Riesgos
 

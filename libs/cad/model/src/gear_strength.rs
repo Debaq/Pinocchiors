@@ -192,9 +192,12 @@ fn dynamic_factor(v: f64) -> f64 {
 /// Resistencia del par `a` (el primero, con el par pedido) y `b` (el que engrana con él).
 pub fn analyze(a: &GearPart, b: &GearPart, input: &StrengthInput) -> R<StrengthResult> {
     let (ea, eb) = (a.effective_spec(), b.effective_spec());
-    for k in [ea.kind, eb.kind] {
-        if k == GearKind::Worm {
+    for s in [&ea, &eb] {
+        if s.kind == GearKind::Worm {
             return Err("el sin fin se calcula distinto (rozamiento y calentamiento): esta cuenta es para dentados de evolvente".into());
+        }
+        if matches!(s.kind, GearKind::Pulley | GearKind::Sprocket) || s.form != crate::gears::ToothForm::Involute {
+            return Err("esta cuenta es para dentados de evolvente: no sirve para cicloidales, poleas ni cadenas".into());
         }
     }
     if input.torque <= 0.0 || input.rpm < 0.0 || input.service < 1.0 {
