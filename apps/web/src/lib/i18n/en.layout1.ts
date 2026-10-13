@@ -83,6 +83,8 @@ export const en_layout1: Catalog = {
   "Resultado": "Result",
   "Los dos": "Both",
   "Huesos": "Bones",
+  "Ocultar huesos": "Hide bones",
+  "Mostrar huesos": "Show bones",
   "Octaedro": "Octahedron",
   "Línea": "Line",
   "Colorear la malla según cuánto la mueve cada hueso": "Color the mesh by how much each bone moves it",

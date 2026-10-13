@@ -137,6 +137,16 @@ export const ViewportHeader: Component<ViewportHeaderProps> = (props) => {
       </Show>
       {/* Esqueleto: forma de los huesos y qué pesos se ven */}
       <Show when={props.hasSkeleton}>
+        <Tooltip content={props.settings.showSkeleton ? t("Ocultar huesos") : t("Mostrar huesos")} placement="bottom">
+          <button
+            class={clsx("h-6 w-7 flex items-center justify-center rounded", segmented(props.settings.showSkeleton))}
+            aria-label={props.settings.showSkeleton ? t("Ocultar huesos") : t("Mostrar huesos")}
+            aria-pressed={props.settings.showSkeleton}
+            onClick={() => set({ showSkeleton: !props.settings.showSkeleton })}
+          >
+            {props.settings.showSkeleton ? <Icons.Eye size={14} /> : <Icons.EyeSlash size={14} />}
+          </button>
+        </Tooltip>
         <span class="text-text-muted">{t("Huesos")}</span>
         <div class="flex rounded border border-border overflow-hidden">
           <For each={BONE_DISPLAYS}>
