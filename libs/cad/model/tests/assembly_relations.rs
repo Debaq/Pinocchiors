@@ -562,3 +562,102 @@ fn un_angulo_impuesto_de_180_grados_converge() {
     asm.mates.push(Mate { id: 10, name: String::new(), kind: MateKind::Fastened, a: asm.mates[1].a, b: Connector { origin: [5.0, 0.0, 0.0], ..asm.mates[1].b }, flip: false, angle: None, distance: None });
     assert!(!solve(&asm).converged);
 }
+
+/// Planetario completo: sol 24, tres satélites de 12 y corona de 48 (fija), con un portasatélites
+fn planetary(n: u32, hub_angle_check: bool) -> (Evaluation, Assembly) {
+    let mut doc = Document::new();
+    let sun = doc.add(prim(PrimitiveShape::Gear(gear(GearKind::External, 24))));
+    let mut planets = Vec::new();
+    for k in 0..n {
+        let mut p = gear(GearKind::External, 12);
+        p.link = Some(GearLink { feature: sun, angle: 360.0 * k as f64 / n as f64, offset: 0.0, distance: None, along: 0.0 });
+        planets.push(doc.add(prim(PrimitiveShape::Gear(p))));
+    }
+    // La dirección del centro se mide desde la X del satélite (que gira para calzar): para que la corona
+    // quede concentrica con el sol, hacia -X del mundo, hay que restar lo que giró esa X
+    let first = doc.evaluate();
+    let x = first.gears[1].x;
+    let psi = x[1].atan2(x[0]).to_degrees();
+    let mut ring = gear(GearKind::Internal, 48);
+    ring.outer = 110.0;
+    ring.link = Some(GearLink { feature: planets[0], angle: 180.0 - psi, offset: 0.0, distance: None, along: 0.0 });
+    doc.add(prim(PrimitiveShape::Gear(ring)));
+    doc.add(prim(PrimitiveShape::Cylinder { radius: 40.0, height: 3.0 }));
+    let ev = doc.evaluate();
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    let g = &ev.gears;
+    if hub_angle_check {
+        // La corona queda concentrica con el sol
+        for k in 0..3 {
+            assert_relative_eq!(g[n as usize + 1].origin[k], g[0].origin[k], epsilon = 1e-9);
+        }
+    }
+    // Instancias: 1 corona (fija), 2 sol, 3 portasatélites, luego los satélites
+    let part = |k: usize| ev.parts[k].id;
+    let ring_part = n as usize + 2; // la corona es la parte siguiente a sol y satélites
+    let mut instances = vec![
+        Instance { id: 1, part: part(ring_part - 1), name: "Corona".into(), position: [0.0; 3], rotation: [0.0; 3], fixed: true },
+        Instance { id: 2, part: part(0), name: "Sol".into(), position: [0.0; 3], rotation: [0.0; 3], fixed: false },
+        Instance { id: 3, part: part(ring_part), name: "Portasatélites".into(), position: [0.0; 3], rotation: [0.0; 3], fixed: false },
+    ];
+    let sun_axis = &g[0];
+    let mut mates = vec![
+        hinge(1, MateKind::Revolute, conn(1, sun_axis.origin, sun_axis.z, sun_axis.x), conn(2, sun_axis.origin, sun_axis.z, sun_axis.x)),
+        hinge(2, MateKind::Revolute, conn(1, sun_axis.origin, sun_axis.z, sun_axis.x), conn(3, sun_axis.origin, sun_axis.z, sun_axis.x)),
+    ];
+    for k in 0..n as usize {
+        let pa = &g[1 + k];
+        let id = 4 + k as u32;
+        instances.push(Instance { id, part: part(1 + k), name: format!("Satélite {}", k + 1), position: [0.0; 3], rotation: [0.0; 3], fixed: false });
+        mates.push(hinge(3 + k as u32, MateKind::Revolute, conn(3, pa.origin, pa.z, pa.x), conn(id, pa.origin, pa.z, pa.x)));
+    }
+    (ev, Assembly { instances, mates, next_id: 100, ..Default::default() })
+}
+
+#[test]
+fn planetario_completo_con_la_corona_fija() {
+    // Las partes: 0 sol, 1..3 satélites, 4 corona, 5 portasatélites
+    let (ev, mut asm) = planetary(3, true);
+    assert_eq!(ev.parts.len(), 6);
+    // Con el orden de las partes (sol, satélites, corona, portasatélites) la corona es la 5.ª
+    asm.instances[0].part = ev.parts[4].id;
+    asm.instances[2].part = ev.parts[5].id;
+    let sol = solve(&asm);
+    asm.relations = suggest_gear_relations(&ev, &asm, &sol);
+    // Sol → cada satélite (con el brazo) y, con la corona quieta, brazo → satélite 1 (la corona engrana con el 1.º;
+    // los demás quedan atados por el sol, sin ecuaciones de más)
+    assert_eq!(asm.relations.len(), 4, "{:?}", asm.relations);
+    assert_eq!(asm.relations.iter().filter(|r| matches!(r, Relation::Gear { carrier: Some(2), .. })).count(), 3);
+    // El sol a 72°: el portasatélites va a 72·24/(24+48) = 24° y cada satélite gira −(48/12)·24 = −96° respecto del brazo
+    asm.mates[0].angle = Some(72.0);
+    let sol = solve(&asm);
+    assert!(sol.converged, "residuo {}", sol.residual);
+    assert_relative_eq!(measure(&asm, &sol, 2).unwrap().0, 24.0, epsilon = 1e-4);
+    for id in 3..6 {
+        assert_relative_eq!(measure(&asm, &sol, id).unwrap().0, -96.0, epsilon = 1e-4);
+    }
+    // Un grado libre: sol y brazo van atados por la corona quieta
+    asm.mates[0].angle = None;
+    assert_eq!(solve(&asm).dof, 1);
+}
+
+#[test]
+fn planetario_gira_sin_chocar() {
+    if !occt::available() {
+        return;
+    }
+    let (ev, mut asm) = planetary(3, false);
+    asm.instances[0].part = ev.parts[4].id;
+    asm.instances[2].part = ev.parts[5].id;
+    let sol = solve(&asm);
+    asm.relations = suggest_gear_relations(&ev, &asm, &sol);
+    for angle in [0.0, 30.0] {
+        asm.mates[0].angle = Some(angle);
+        let sol = solve(&asm);
+        assert!(sol.converged);
+        let shapes: Vec<_> = instance_shapes(&ev, &asm, &sol).into_iter().filter(|(id, _)| *id != 3).collect();
+        let tooth = shapes[0].1.mass().unwrap().volume / 24.0;
+        let hits = interferences_for(&ev, &asm, &shapes);
+        assert!(hits.iter().all(|h| h.2 < 0.01 * tooth), "a {angle}°: {hits:?}");
+    }
+}

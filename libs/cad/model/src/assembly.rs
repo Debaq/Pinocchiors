@@ -595,6 +595,28 @@ pub fn suggest_gear_relations(ev: &Evaluation, asm: &Assembly, sol: &AssemblySol
                 out.push(Relation::RackPinion { revolute: mp.id, slider: ms.id, per_turn, phase: d - per_turn * t / 360.0 });
                 continue;
             }
+            // Corona fija (es la carcasa): el satélite que engrana con ella se acopla con el brazo
+            // que lo lleva, por Willis con la corona quieta: φ_sat − φ_brazo = −(z_corona/z_sat)·φ_brazo
+            let fixed_ring = asm.instances.iter().any(|i| i.id == b_inst.id && i.fixed);
+            if fixed_ring && ka == External && kb == Internal {
+                let Some((mp, side_p)) = hinge(a_inst.id) else { continue };
+                let arm = if mp.a.instance == a_inst.id { mp.b.instance } else { mp.a.instance };
+                let Some(mc) = asm.mates.iter().find(|m| {
+                    matches!(m.kind, MateKind::Revolute | MateKind::Cylindrical) && ([m.a.instance, m.b.instance] == [b_inst.id, arm] || [m.b.instance, m.a.instance] == [b_inst.id, arm])
+                }) else {
+                    continue;
+                };
+                if exists(mc.id, mp.id) {
+                    continue;
+                }
+                let side_c = if mc.b.instance == arm { 1.0 } else { -1.0 };
+                let sign_p = side_p * dot(axis_a, normalize(world(&mp.a, [0.0; 3], rot_of(sol, mp.a.instance)).1)).signum();
+                let sign_c = side_c * dot(axis_a, normalize(world(&mc.a, [0.0; 3], rot_of(sol, mc.a.instance)).1)).signum();
+                let ratio = -sign_p * sign_c * gb.part.spec.teeth as f64 / ga.part.spec.teeth as f64;
+                let (Some((tc, _)), Some((tp, _))) = (measure(asm, sol, mc.id), measure(asm, sol, mp.id)) else { continue };
+                out.push(Relation::Gear { a: mc.id, b: mp.id, ratio, phase: tp - ratio * tc, carrier: None, carrier_ratio: 0.0 });
+                continue;
+            }
             let Some((ma, side_a)) = hinge(a_inst.id) else { continue };
             let sign_a = side_a * dot(axis_a, normalize(world(&ma.a, [0.0; 3], rot_of(sol, ma.a.instance)).1)).signum();
             let (za, zb) = (ga.part.spec.teeth as f64, gb.part.spec.teeth as f64);

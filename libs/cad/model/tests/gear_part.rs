@@ -675,3 +675,27 @@ fn cotas_sobre_bolas_coinciden_con_el_perfil_real() {
         assert_relative_eq!(between, 2.0 * r_c - d_pin, epsilon = 6e-3);
     }
 }
+
+#[test]
+fn plan_de_planetario_y_condicion_de_montaje() {
+    use cad_model::gear_part::planetary_plan;
+    // Sol 24, satélite 12 → corona 48; 24 + 48 = 72 sirve con 3 (y con 2, 4, 6, 8)
+    let p = planetary_plan(2.0, 24, Some(12), None, 3, 20.0).unwrap();
+    assert_eq!((p.planet_teeth, p.ring_teeth), (12, 48));
+    assert_eq!(p.angles, vec![0.0, 120.0, 240.0]);
+    assert_relative_eq!(p.center_distance, 2.0 * (24.0 + 12.0) / 2.0, epsilon = 1e-9);
+    // Corona quieta: salida del portasatélites = 1 + z_r/z_s = 3; portasatélites quieto: -z_r/z_s
+    assert_relative_eq!(p.ratio_ring_fixed, 3.0, epsilon = 1e-12);
+    assert_relative_eq!(p.ratio_carrier_fixed, -2.0, epsilon = 1e-12);
+    // Dando la corona sale lo mismo
+    let q = planetary_plan(2.0, 24, None, Some(48), 3, 20.0).unwrap();
+    assert_eq!((q.planet_teeth, q.angles.len()), (12, 3));
+    // 5 satélites no reparten 72 por igual: el error propone los que sí
+    let e = planetary_plan(2.0, 24, Some(12), None, 5, 20.0).unwrap_err();
+    assert!(e.contains("múltiplo de 5") && e.contains("sirven 2, 3, 4, 6, 8"), "{e}");
+    // Paridad, mínimo de dientes y satélites que se tocan
+    assert!(planetary_plan(2.0, 24, None, Some(49), 3, 20.0).is_err());
+    assert!(planetary_plan(2.0, 24, Some(4), None, 3, 20.0).is_err());
+    assert!(planetary_plan(2.0, 30, Some(12), None, 8, 20.0).unwrap_err().contains("no caben") || planetary_plan(2.0, 30, Some(12), None, 8, 20.0).is_err());
+    assert!(planetary_plan(2.0, 24, Some(12), None, 1, 20.0).is_err());
+}

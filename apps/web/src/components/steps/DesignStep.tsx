@@ -133,6 +133,7 @@ import * as Icons from "../icons";
 import { t as tl, locale, tn } from "../../lib/i18n";
 import { tBackend } from "../../lib/i18nBackend";
 import { jointKey, jointsOf } from "../../lib/assemblyDrag";
+import { planetFeatures, planetaryAssembly, ringFeature, type PlanetaryPlan } from "../../lib/planetary";
 
 export interface DesignStepProps {
   store: CadStore;
@@ -5140,6 +5141,90 @@ const GearLinkBox: Component<{
 };
 
 /**
+ * Planetario de una vez con este engrane de sol: satélites enlazados a él, portasatélites con sus pasadores y
+ * corona concentrica. El backend revisa los dientes y la condición de montaje.
+ */
+const PlanetaryBox: Component<{ store: CadStore; feature: number; shape: Extract<PrimitiveShape, { type: "gear" }> }> = (props) => {
+  const [open, setOpen] = createSignal(false);
+  const [planets, setPlanets] = createSignal(3);
+  const [teeth, setTeeth] = createSignal(12);
+  const [plan, setPlan] = createSignal<PlanetaryPlan>();
+  const [error, setError] = createSignal("");
+  const [busy, setBusy] = createSignal(false);
+  let seq = 0;
+  createEffect(() => {
+    if (!open()) return;
+    const mine = ++seq;
+    void props.store
+      .planetaryPlan(props.shape.spec.module, props.shape.spec.teeth, teeth(), null, planets(), props.shape.spec.pressure_angle)
+      .then((p) => mine === seq && (setPlan(p), setError("")))
+      .catch((e) => mine === seq && (setPlan(undefined), setError(String(e))));
+  });
+  const create = async () => {
+    const p = plan();
+    const sun = props.store.doc()?.features.find((f) => f.id === props.feature);
+    if (!p || !sun) return;
+    setBusy(true);
+    try {
+      // El sol se acepta primero: lo demás se agrega al diseño ya guardado
+      await props.store.acceptDraft();
+      const sunNow = props.store.doc()?.features.find((f) => f.id === props.feature) ?? sun;
+      let first = 0;
+      await props.store.commit((d) => {
+        first = d.next_id ?? Math.max(0, ...d.features.map((f) => f.id)) + 1;
+        const feats = planetFeatures(sunNow, p, first);
+        d.features.push(...feats);
+        d.next_id = first + feats.length;
+      });
+      const planet0 = props.store.result()?.gears?.find((g) => g.feature === first);
+      if (!planet0) throw new Error(tl("el primer satélite no se calculó: revisa el aviso del árbol"));
+      await props.store.commit((d) => {
+        const id = d.next_id ?? Math.max(0, ...d.features.map((f) => f.id)) + 1;
+        d.features.push(ringFeature(sunNow, p, planet0, id));
+        d.next_id = id + 1;
+      });
+      setOpen(false);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div class="space-y-1 border-t border-border pt-1.5" data-planetary>
+      <Checkbox small label={tl("Armar un planetario con este sol")} checked={open()} onChange={setOpen} />
+      <Show when={open()}>
+        <Row label={tl("Satélites")}>
+          <NumberInput value={planets()} onChange={(v) => v >= 2 && setPlanets(Math.round(v))} />
+        </Row>
+        <Row label={tl("Dientes de cada satélite")}>
+          <NumberInput value={teeth()} onChange={(v) => v >= 6 && setTeeth(Math.round(v))} />
+        </Row>
+        <Show when={error()}>
+          <p class="text-[11px] text-error">{tBackend(error())}</p>
+        </Show>
+        <Show when={plan()}>
+          {(p) => (
+            <div class="space-y-0.5 text-[11px] text-text-dim">
+              <p>
+                {tl("Corona de {z} dientes · centros a {a} mm", { z: p().ring_teeth, a: +p().center_distance.toFixed(3) })}
+              </p>
+              <p>
+                {tl("Corona quieta: el portasatélites gira {i} veces menos que el sol", { i: +p().ratio_ring_fixed.toFixed(3) })} · {tl("portasatélites quieto: corona {r}", { r: +p().ratio_carrier_fixed.toFixed(3) })}
+              </p>
+              <For each={p().warnings}>{(w) => <p class="text-warning">{tBackend(w)}</p>}</For>
+              <Button disabled={busy()} onClick={() => void create()}>
+                {tl("Crear satélites, portasatélites y corona")}
+              </Button>
+            </div>
+          )}
+        </Show>
+      </Show>
+    </div>
+  );
+};
+
+/**
  * Resistencia del par (orientativa): flexión del pie de cada diente y presión de contacto, con el par que
  * recibe el primer engrane, su velocidad, los materiales y un factor de impresión.
  */
@@ -5255,6 +5340,9 @@ const GearFields: Component<{
   return (
     <>
       <GearLinkBox store={props.store} ui={props.ui} feature={props.feature} shape={props.shape} field={props.field} update={props.update} />
+      <Show when={kind() === "external" && !props.shape.link}>
+        <PlanetaryBox store={props.store} feature={props.feature} shape={props.shape} />
+      </Show>
       <Row label={tl("Tipo")}>
         <Select
           options={[
@@ -5988,6 +6076,27 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
           }}
         </For>
         <div class="space-y-1 border-t border-border pt-1.5" data-relations>
+          <Tooltip content={tl("Con un sol, satélites, corona y portasatélites creados con «Armar un planetario»: pone la corona fija, el sol y el portasatélites girando en ella, y cada satélite girando en el portasatélites, con sus acoplamientos")}>
+            <Button
+              size="sm"
+              onClick={() => {
+                const made = planetaryAssembly(store.doc()?.features ?? [], store.result()?.gears ?? [], store.result()?.parts ?? [], asm() ?? undefined);
+                if (typeof made === "string") return setNote(made);
+                setNote(undefined);
+                void store.editAssembly((a) => {
+                  a.instances = made.instances;
+                  a.mates = made.mates;
+                  a.next_id = made.next_id;
+                }).then(() => store.assemblySuggest()).then((found) =>
+                  store.editAssembly((a) => {
+                    a.relations = [...(a.relations ?? []), ...found];
+                  }),
+                );
+              }}
+            >
+              {tl("Armar el planetario en el ensamble")}
+            </Button>
+          </Tooltip>
           <div class="flex items-center gap-1.5">
             <span class="flex-1 text-[11px] text-text-dim">{tl("Acoplamientos (engranes, cremallera, tornillo)")}</span>
             <Tooltip content={tl("Busca los engranes enlazados que están en el ensamble y acopla sus uniones con la razón real de dientes")}>

@@ -12,6 +12,7 @@ import { t as tr, tx } from "./i18n.ts";
 import { invoke } from "@tauri-apps/api/core";
 import type { Snap } from "./sketchSnap";
 import type { Contour } from "./sketchText";
+import type { PlanetaryPlan } from "./planetary";
 import { breaks, ellipseArcPolyline, makeBSpline, sample, type BSpline } from "./sketchCurves.ts";
 
 export type P2 = [number, number];
@@ -4030,6 +4031,8 @@ export function createCadStore() {
     gearDesign: (source: GearPart, kind: GearKind, ratio: number | null, distance: number | null) =>
       invoke<number>("cad_gear_design", { source, kind, ratio, distance }),
     gearBlock: (part: GearPart) => invoke<SketchBlock>("cad_gear_block", { part }),
+    planetaryPlan: (module: number, sunTeeth: number, planetTeeth: number | null, ringTeeth: number | null, planets: number, pressureAngle: number) =>
+      invoke<PlanetaryPlan>("cad_planetary_plan", { module, sun_teeth: sunTeeth, planet_teeth: planetTeeth, ring_teeth: ringTeeth, planets, pressure_angle: pressureAngle }),
     gearMaterials: () => invoke<GearMaterial[]>("cad_gear_materials"),
     gearStrength: (first: GearPart, second: GearPart, input: GearStrengthInput) => invoke<GearStrength>("cad_gear_strength", { first, second, input }),
     resolveRefs: (faces: FaceRef[], edges: EdgeRef[]) => invoke<ResolvedRefs>("cad_resolve_refs", { faces, edges }),

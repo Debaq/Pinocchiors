@@ -1383,3 +1383,80 @@ pub fn sketch_block(g: &GearPart) -> Result<crate::sketch::SketchBlock, String> 
     }
     Ok(SketchBlock { id: 0, name: describe(g), points, entities, constraints: vec![] })
 }
+
+/// Tren planetario de una vez: sol, `planets` satélites y corona.
+#[derive(Debug, Clone, Serialize)]
+pub struct PlanetaryPlan {
+    pub sun_teeth: u32,
+    pub planet_teeth: u32,
+    pub ring_teeth: u32,
+    pub planets: u32,
+    /// Dirección del centro de cada satélite visto desde el sol (°, desde su X)
+    pub angles: Vec<f64>,
+    /// Distancia del sol al centro de los satélites (mm)
+    pub center_distance: f64,
+    /// Relación de entrada (sol) a salida (portasatélites) con la corona quieta, y la del sol a la corona con el portasatélites quieto
+    pub ratio_ring_fixed: f64,
+    pub ratio_carrier_fixed: f64,
+    /// Diámetro mayor del conjunto (corona) y del portasatélites que cabe (mm)
+    pub warnings: Vec<String>,
+}
+
+/// Arma el plan de un planetario: con los dientes del sol y los del satélite **o** los de la corona
+/// (`z_r = z_s + 2·z_p`), y cuántos satélites. Exige la condición de montaje: `(z_s + z_r)/N` entero
+/// para que los satélites queden repartidos por igual y todos calcen con el sol y con la corona, y
+/// que los satélites no se toquen entre sí.
+pub fn planetary_plan(module: f64, sun_teeth: u32, planet_teeth: Option<u32>, ring_teeth: Option<u32>, planets: u32, pressure_angle: f64) -> Result<PlanetaryPlan, String> {
+    if planets < 2 || planets > 8 {
+        return Err("un planetario lleva de 2 a 8 satélites".into());
+    }
+    let (zp, zr) = match (planet_teeth, ring_teeth) {
+        (Some(p), _) => (p, sun_teeth + 2 * p),
+        (None, Some(r)) => {
+            if r <= sun_teeth || (r - sun_teeth) % 2 != 0 {
+                return Err(format!("con un sol de {sun_teeth} dientes la corona debe tener más y la misma paridad (z_r = z_s + 2·z_p); {} no sirve", r));
+            }
+            ((r - sun_teeth) / 2, r)
+        }
+        (None, None) => return Err("pide los dientes del satélite o los de la corona".into()),
+    };
+    if sun_teeth < 6 || zp < 6 {
+        return Err("el sol y los satélites necesitan al menos 6 dientes".into());
+    }
+    if (sun_teeth + zr) % planets != 0 {
+        // Satélites que sí sirven con estos dientes
+        let ok: Vec<String> = (2..=8u32).filter(|n| (sun_teeth + zr) % n == 0).map(|n| n.to_string()).collect();
+        return Err(format!(
+            "condición de montaje: (z_sol + z_corona) = {} debe ser múltiplo de {planets} para repartir los satélites por igual{}",
+            sun_teeth + zr,
+            if ok.is_empty() { String::new() } else { format!("; con estos dientes sirven {} satélites", ok.join(", ")) }
+        ));
+    }
+    let spec = |z| GearSpec { teeth: z, module, pressure_angle, ..Default::default() };
+    let (sun, planet) = (spec(sun_teeth).circles().map_err(|e| e.to_string())?, spec(zp).circles().map_err(|e| e.to_string())?);
+    let a = sun.pitch + planet.pitch;
+    let mut warnings = Vec::new();
+    // Los satélites vecinos no deben tocarse: el diámetro de cabeza cabe en la cuerda entre centros
+    let chord = 2.0 * a * (PI / planets as f64).sin();
+    if chord < 2.0 * planet.tip + 0.5 {
+        return Err(format!("{planets} satélites no caben: la cuerda entre sus centros ({chord:.2} mm) no supera su diámetro exterior ({:.2} mm)", 2.0 * planet.tip));
+    }
+    if sun_teeth < 17 || zp < 17 {
+        warnings.push("menos de 17 dientes socava el pie sin corrección de perfil".to_string());
+    }
+    // Interferencia del satélite con la corona al engranar por dentro (diferencia mínima de dientes)
+    if zr - zp < 9 {
+        warnings.push("la corona tiene muy pocos dientes más que el satélite: puede interferir al engranar por dentro".to_string());
+    }
+    Ok(PlanetaryPlan {
+        sun_teeth,
+        planet_teeth: zp,
+        ring_teeth: zr,
+        planets,
+        angles: (0..planets).map(|k| 360.0 * k as f64 / planets as f64).collect(),
+        center_distance: a,
+        ratio_ring_fixed: 1.0 + zr as f64 / sun_teeth as f64,
+        ratio_carrier_fixed: -(zr as f64) / sun_teeth as f64,
+        warnings,
+    })
+}
