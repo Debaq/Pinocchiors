@@ -4,6 +4,7 @@
 //! difuso + emisión, luz de entorno uniforme y un sol. Se trabaja en lineal y
 //! se guarda en sRGB al final.
 
+mod animation;
 mod bsdf;
 mod bvh;
 mod camera;
@@ -21,11 +22,12 @@ pub use bsdf::Bsdf;
 pub use rng::Rng;
 pub use bvh::{Aabb, Bvh, Hit, Ray};
 pub use camera::{Camera, Lens, SENSOR_FULL_FRAME_HEIGHT_MM};
-pub use image_out::{Image, SaveError, linear_to_srgb};
+pub use image_out::{Image, SaveError, ToneMap, linear_to_srgb};
 pub use glass::{absorption_sigma, fresnel_dielectric, reflect, refract};
 pub use env::{EnvMap, Environment};
 pub use denoise::{DenoiseSettings, denoise};
+pub use animation::{AnimationOutcome, AnimationSettings, FrameProgress, render_animation};
 pub use progressive::{Frame, Outcome, PassInfo, ProgressiveOptions, render_progressive};
-pub use render::{Aov, Light, Settings, Sun, render, render_aov};
-pub use scene::{AreaLights, RayAlpha, RayMaterial, RayScene, Triangle, quad};
+pub use render::{Aov, Light, Settings, ShadowCatcher, Sun, render, render_aov};
+pub use scene::{AnimatedScene, AreaLights, RayAlpha, RayMaterial, RayScene, Triangle, quad};
 pub use texture::Texture;

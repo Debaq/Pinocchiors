@@ -24,7 +24,7 @@ fn st(env: Environment, lights: Vec<Light>, samples: u32, depth: u32) -> Setting
 fn luz_puntual_ley_cuadrado_inverso() {
     let (tris, m) = floor(50.0, 0.5);
     let scene = RayScene::new(tris, vec![m]);
-    let lights = vec![Light::Point { position: Vec3::new(0.0, 2.0, 0.0), intensity: Vec3::splat(10.0) }];
+    let lights = vec![Light::Point { position: Vec3::new(0.0, 2.0, 0.0), intensity: Vec3::splat(10.0), radius: 0.0 }];
     let img = render(&scene, &small_view(5.0), &st(Environment::uniform(Vec3::ZERO), lights, 4, 1));
     let expected = 0.5 / PI * 10.0 / 4.0;
     assert!((mean(&img).x / expected - 1.0).abs() < 0.06, "{} vs {expected}", mean(&img).x);
@@ -41,6 +41,7 @@ fn foco_respeta_el_cono() {
             intensity: Vec3::splat(10.0),
             inner: 0.3,
             outer: 0.5,
+            radius: 0.0,
         }]
     };
     let s = |d| mean(&render(&scene, &small_view(5.0), &st(Environment::uniform(Vec3::ZERO), spot(d), 4, 1))).x;

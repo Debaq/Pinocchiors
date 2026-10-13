@@ -5,7 +5,7 @@ use crate::bvh::Ray;
 use crate::camera::Camera;
 use crate::image_out::Image;
 use crate::rng::Rng;
-use crate::bsdf::Bsdf;
+use crate::bsdf::{Bsdf, g1, sample_vndf};
 use crate::env::Environment;
 use crate::glass::{absorption_sigma, fresnel_dielectric, reflect, refract};
 use crate::scene::{RayMaterial, RayScene, Triangle};
@@ -18,6 +18,14 @@ pub struct Sun {
     pub direction: Vec3,
     /// Irradiancia perpendicular a la luz (radiancia × ángulo sólido)
     pub color: Vec3,
+    /// Radio angular del disco del sol (radianes); 0 = sombras duras. El Sol real: ~0,0047
+    pub angular_radius: f32,
+}
+
+impl Sun {
+    pub fn new(direction: Vec3, color: Vec3) -> Self {
+        Sun { direction, color, angular_radius: 0.0 }
+    }
 }
 
 /// Luces delta (sin tamaño). Las luces de área son triángulos emisivos de la escena.
@@ -25,9 +33,42 @@ pub struct Sun {
 pub enum Light {
     Sun(Sun),
     /// `intensity` en W/sr: la irradiancia cae con 1/d²
-    Point { position: Vec3, intensity: Vec3 },
+    /// `radius` > 0: esfera luminosa (sombras suaves); 0 = punto ideal
+    Point { position: Vec3, intensity: Vec3, radius: f32 },
     /// Foco: `direction` hacia donde apunta; transición suave entre `inner` y `outer` (radianes)
-    Spot { position: Vec3, direction: Vec3, intensity: Vec3, inner: f32, outer: f32 },
+    /// `radius` como en `Point`
+    Spot { position: Vec3, direction: Vec3, intensity: Vec3, inner: f32, outer: f32, radius: f32 },
+}
+
+/// Suelo invisible que solo recibe sombras (como el `ShadowMaterial` del visor): un disco
+/// plano que únicamente ven los rayos de cámara. Su opacidad es cuánta luz le falta
+/// por la sombra de la escena (sol, luces, área, entorno) × `strength`.
+#[derive(Debug, Clone, Copy)]
+pub struct ShadowCatcher {
+    /// Un punto del plano
+    pub center: Vec3,
+    /// Hacia arriba (el lado que ve la cámara)
+    pub normal: Vec3,
+    /// Radio del disco alrededor de `center`
+    pub radius: f32,
+    /// 0..1: opacidad máxima de la sombra
+    pub strength: f32,
+}
+
+impl ShadowCatcher {
+    /// Distancia a lo largo del rayo si lo ve desde arriba
+    fn hit(&self, ray: &Ray) -> Option<f32> {
+        let n = self.normal.normalize_or_zero();
+        let denom = n.dot(ray.dir);
+        if denom >= -1e-6 {
+            return None;
+        }
+        let t = n.dot(self.center - ray.origin) / denom;
+        if t <= 0.0 {
+            return None;
+        }
+        ((ray.origin + ray.dir * t - self.center).length_squared() <= self.radius * self.radius).then_some(t)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -44,6 +85,7 @@ pub struct Settings {
     pub transparent_background: bool,
     /// Color con que se ve el fondo directo (la cámara); no ilumina. `None` = el del entorno
     pub background: Option<Vec3>,
+    pub shadow_catcher: Option<ShadowCatcher>,
 }
 
 impl Default for Settings {
@@ -58,7 +100,42 @@ impl Default for Settings {
             lights: Vec::new(),
             transparent_background: false,
             background: None,
+            shadow_catcher: None,
         }
+    }
+}
+
+/// Volúmenes que contiene el rayo: extinción acumulada e índice de refracción de cada uno
+#[derive(Default)]
+struct MediaStack {
+    layers: Vec<(Vec3, f32)>,
+    sigma: Vec3,
+}
+
+impl MediaStack {
+    fn is_empty(&self) -> bool {
+        self.layers.is_empty()
+    }
+    fn push(&mut self, sigma: Vec3, ior: f32) {
+        // Límite para que una malla mal cerrada no la haga crecer sin fin
+        if self.layers.len() < 8 {
+            self.layers.push((sigma, ior));
+            self.sigma += sigma;
+        }
+    }
+    fn pop(&mut self) {
+        if let Some((s, _)) = self.layers.pop() {
+            self.sigma = (self.sigma - s).max(Vec3::ZERO);
+        }
+    }
+    /// Índice del medio en el que está el rayo (1 = aire)
+    fn top_ior(&self) -> f32 {
+        self.layers.last().map_or(1.0, |l| l.1)
+    }
+    /// Índice del medio que queda al salir del más interno
+    fn below_top_ior(&self) -> f32 {
+        let n = self.layers.len();
+        if n >= 2 { self.layers[n - 2].1 } else { 1.0 }
     }
 }
 
@@ -93,10 +170,123 @@ fn apply_normal_map(scene: &RayScene, mat: &RayMaterial, tri: &Triangle, uv: Vec
     if out == Vec3::ZERO { n } else { out }
 }
 
+/// Dirección al azar dentro de un cono de semiángulo `half` alrededor de `axis`
+fn sample_cone(axis: Vec3, half: f32, rng: &mut Rng) -> Vec3 {
+    let cos_max = half.cos();
+    let cos_t = 1.0 - rng.next_f32() * (1.0 - cos_max);
+    let sin_t = (1.0 - cos_t * cos_t).max(0.0).sqrt();
+    let phi = std::f32::consts::TAU * rng.next_f32();
+    let (t, b) = onb(axis);
+    (t * (sin_t * phi.cos()) + b * (sin_t * phi.sin()) + axis * cos_t).normalize()
+}
+
+/// Punto de una esfera luminosa de radio `radius` visto desde `from`: un punto del disco
+/// perpendicular a la visual (la luz de una esfera se ve igual que la de ese disco)
+fn jitter_sphere(center: Vec3, radius: f32, from: Vec3, rng: &mut Rng) -> Vec3 {
+    if radius <= 0.0 {
+        return center;
+    }
+    let axis = (center - from).normalize_or_zero();
+    if axis == Vec3::ZERO {
+        return center;
+    }
+    let (t, b) = onb(axis);
+    let r = radius * rng.next_f32().sqrt();
+    let phi = std::f32::consts::TAU * rng.next_f32();
+    center + t * (r * phi.cos()) + b * (r * phi.sin())
+}
+
 #[inline]
 fn power(a: f32, b: f32) -> f32 {
     let (a2, b2) = (a * a, b * b);
     if a2 + b2 > 0.0 { a2 / (a2 + b2) } else { 0.0 }
+}
+
+/// Fracción de la luz que llega a `p` (superficie blanca con normal `n`) comparada con
+/// la que llegaría sin la escena. Una muestra por luz; `None` si no hay luz alguna.
+fn catcher_visibility(scene: &RayScene, s: &Settings, p: Vec3, n: Vec3, rng: &mut Rng) -> Option<f32> {
+    let eps = 1e-4 * scene.extent;
+    let origin = p + n * eps;
+    let (mut lit, mut total) = (0.0f32, 0.0f32);
+    let mut add = |w: f32, blocked: bool| {
+        total += w;
+        if !blocked {
+            lit += w;
+        }
+    };
+    for light in &s.lights {
+        let (l, dist, li) = match *light {
+            Light::Sun(sun) => {
+                let mut l = sun.direction.normalize_or_zero();
+                if sun.angular_radius > 0.0 && l != Vec3::ZERO {
+                    l = sample_cone(l, sun.angular_radius, rng);
+                }
+                (l, f32::INFINITY, sun.color)
+            }
+            Light::Point { position, intensity, radius } => {
+                let d = jitter_sphere(position, radius, origin, rng) - origin;
+                let d2 = d.length_squared().max(1e-12);
+                (d / d2.sqrt(), d2.sqrt(), intensity / d2)
+            }
+            Light::Spot { position, direction, intensity, inner, outer, radius } => {
+                let d = jitter_sphere(position, radius, origin, rng) - origin;
+                let d2 = d.length_squared().max(1e-12);
+                let l = d / d2.sqrt();
+                let cos_a = (-l).dot(direction.normalize_or_zero());
+                let (c_in, c_out) = (inner.cos(), outer.cos());
+                let t = ((cos_a - c_out) / (c_in - c_out).max(1e-6)).clamp(0.0, 1.0);
+                (l, d2.sqrt(), intensity * (t * t * (3.0 - 2.0 * t)) / d2)
+            }
+        };
+        let w = lum(li) * l.dot(n);
+        if w <= 0.0 {
+            continue;
+        }
+        let t_max = if dist.is_finite() { dist - eps } else { f32::INFINITY };
+        add(w, scene.occluded_alpha(&Ray { origin, dir: l }, t_max, rng));
+    }
+    if !scene.area_lights.is_empty() {
+        let (lt, p_sel) = scene.area_lights.pick(rng.next_f32());
+        let ltri = &scene.triangles[lt as usize];
+        let su = rng.next_f32().sqrt();
+        let (bu, bv) = (1.0 - su, rng.next_f32() * su);
+        let q = ltri.v0 + ltri.e1 * bu + ltri.e2 * bv;
+        let d = q - origin;
+        let d2 = d.length_squared();
+        if d2 > 1e-12 {
+            let dist = d2.sqrt();
+            let wi = d / dist;
+            let ln = ltri.geometric_normal();
+            let cos_l = ln.dot(-wi);
+            let lmat = scene.material(ltri);
+            let cos_s = wi.dot(n);
+            if (lmat.double_sided || cos_l > 0.0) && cos_s > 0.0 {
+                let area = 0.5 * ltri.e1.cross(ltri.e2).length();
+                let w = lum(scene.emission_at(ltri, lmat, bu, bv)) * cos_s * cos_l.abs() * area / (d2 * p_sel);
+                add(w, scene.occluded_alpha(&Ray { origin, dir: wi }, dist * (1.0 - 1e-3) - eps, rng));
+            }
+        }
+    }
+    if let Some(map) = s.environment.map.as_deref() {
+        if let Some((wi, le, pdf)) = map.sample(rng) {
+            let cos_s = wi.dot(n);
+            if cos_s > 0.0 {
+                add(lum(le) * cos_s / pdf, scene.occluded_alpha(&Ray { origin, dir: wi }, f32::INFINITY, rng));
+            }
+        }
+    } else {
+        let sky = lum(s.environment.eval(n));
+        if sky > 0.0 {
+            // Coseno-ponderado: cada muestra pesa π·L sea cual sea la dirección
+            let u1 = rng.next_f32();
+            let phi = std::f32::consts::TAU * rng.next_f32();
+            let r = u1.sqrt();
+            let (t, b) = onb(n);
+            let wi = t * (r * phi.cos()) + b * (r * phi.sin()) + n * (1.0 - u1).sqrt();
+            add(std::f32::consts::PI * sky, scene.occluded_alpha(&Ray { origin, dir: wi }, f32::INFINITY, rng));
+        }
+    }
+    (total > 0.0).then(|| (lit / total).clamp(0.0, 1.0))
 }
 
 /// Radiancia que llega por un rayo de cámara.
@@ -113,8 +303,9 @@ pub(crate) fn radiance(scene: &RayScene, s: &Settings, mut ray: Ray, rng: &mut R
     let mut prev_p = Vec3::ZERO;
     let env_map = s.environment.map.as_deref();
     let mut depth = 0u32;
-    // Extinción del volumen en el que está el rayo (dentro de un vidrio o líquido cerrado)
-    let mut medium: Option<Vec3> = None;
+    // Volúmenes en los que está el rayo, del más externo al más interno (un líquido dentro
+    // de un vaso son dos); `sigma` es la extinción total de todos
+    let mut media = MediaStack::default();
     // Mientras el rayo no haya rebotado ni cruzado vidrio, el fondo que ve es el de la imagen
     let mut camera_visible = true;
     // Cada iteración es un vértice; los cruces descartados (cara trasera) y los eventos
@@ -122,7 +313,22 @@ pub(crate) fn radiance(scene: &RayScene, s: &Settings, mut ray: Ray, rng: &mut R
     let mut guard = 0;
     while guard < 64 + 4 * s.max_depth {
         guard += 1;
-        let Some(hit) = scene.closest_alpha(&ray, f32::INFINITY, rng) else {
+        let hit = scene.closest_alpha(&ray, f32::INFINITY, rng);
+        // Suelo con sombra: solo lo ve la cámara y solo si queda delante de lo demás
+        if let (true, Some(c)) = (camera_visible, s.shadow_catcher.as_ref()) {
+            if let Some(tc) = c.hit(&ray).filter(|&tc| hit.as_ref().is_none_or(|h| tc < h.t)) {
+                let alpha = match catcher_visibility(scene, s, ray.origin + ray.dir * tc, c.normal.normalize(), rng) {
+                    Some(vis) => (1.0 - vis) * c.strength,
+                    None => 0.0,
+                };
+                if s.transparent_background {
+                    return (Vec3::ZERO, alpha);
+                }
+                let bg = s.background.unwrap_or_else(|| s.environment.eval(ray.dir));
+                return (bg * (1.0 - alpha), 1.0);
+            }
+        }
+        let Some(hit) = hit else {
             if camera_visible && s.transparent_background {
                 return (Vec3::ZERO, 0.0);
             }
@@ -137,7 +343,8 @@ pub(crate) fn radiance(scene: &RayScene, s: &Settings, mut ray: Ray, rng: &mut R
             sum += throughput * le;
             break;
         };
-        if let Some(sigma) = medium {
+        if !media.is_empty() {
+            let sigma = media.sigma;
             throughput *= Vec3::new((-sigma.x * hit.t).exp(), (-sigma.y * hit.t).exp(), (-sigma.z * hit.t).exp());
         }
         let tri = &scene.triangles[hit.tri as usize];
@@ -203,34 +410,59 @@ pub(crate) fn radiance(scene: &RayScene, s: &Settings, mut ray: Ray, rng: &mut R
         }
         let n = apply_normal_map(scene, mat, tri, uv, n);
 
-        // Vidrio y líquidos: interfaz lisa, se elige reflexión o refracción con la
-        // probabilidad de Fresnel (el peso queda en 1). Es un evento delta: sin luz
-        // directa en este vértice y sin MIS en el siguiente.
-        let t_prob = if medium.is_some() { 1.0 } else { (mat.transmission * (1.0 - metallic.clamp(0.0, 1.0))).clamp(0.0, 1.0) };
+        // Vidrio y líquidos: se elige reflexión o refracción con la probabilidad de Fresnel
+        // (el peso queda en 1; con rugosidad, el sombreado-enmascaramiento de Smith). Es un
+        // evento delta o un lóbulo estrecho: sin luz directa en este vértice y sin MIS en el
+        // siguiente. Al salir de un volumen por su cara trasera la luz siempre sigue su camino.
+        let volume = mat.thickness > 0.0;
+        let leaving = back && volume && !media.is_empty();
+        let t_prob = if leaving { 1.0 } else { (mat.transmission * (1.0 - metallic.clamp(0.0, 1.0))).clamp(0.0, 1.0) };
         if t_prob > 0.0 && rng.next_f32() < t_prob {
-            let volume = mat.thickness > 0.0;
-            let cos_i = n.dot(-ray.dir).clamp(1e-4, 1.0);
-            // Aire por fuera; el volumen se recorre hacia adentro por la cara frontal
-            let (n1, n2) = if volume && back { (mat.ior, 1.0) } else { (1.0, mat.ior) };
+            // Normal de la microfaceta: la de la superficie si es lisa
+            let a = roughness * roughness;
+            let (mut m, mut weight) = (n, 1.0f32);
+            if volume && roughness > 0.02 {
+                let (t, b) = onb(n);
+                let wo = Vec3::new((-ray.dir).dot(t), (-ray.dir).dot(b), (-ray.dir).dot(n));
+                let h = sample_vndf(wo, a.max(1e-3), rng);
+                m = t * h.x + b * h.y + n * h.z;
+            }
+            let cos_i = m.dot(-ray.dir).clamp(1e-4, 1.0);
+            // Aire por fuera; se entra por la cara frontal y se sale por la trasera
+            let (n1, n2) = match (volume, back) {
+                (true, true) => (mat.ior, media.below_top_ior()),
+                (true, false) => (media.top_ior(), mat.ior),
+                (false, _) => (1.0, mat.ior),
+            };
             let f = fresnel_dielectric(cos_i, n1, n2);
             let (dir, side) = if rng.next_f32() < f {
-                (reflect(ray.dir, n), 1.0)
+                (reflect(ray.dir, m), 1.0)
             } else if volume {
-                match refract(ray.dir, n, n1 / n2) {
+                match refract(ray.dir, m, n1 / n2) {
                     Some(d) => {
-                        medium = if back { None } else { Some(absorption_sigma(base, mat.thickness)) };
+                        if back {
+                            media.pop();
+                        } else {
+                            media.push(absorption_sigma(base, mat.thickness), mat.ior);
+                        }
                         (d, -1.0)
                     }
-                    None => (reflect(ray.dir, n), 1.0),
+                    None => (reflect(ray.dir, m), 1.0),
                 }
             } else {
-                // Lámina delgada: la luz sigue derecha y se tiñe con el color base
+                // Lámina delgada: la luz sigue derecha y se tiñe con el color base; esmerilada,
+                // se abre en un cono
                 throughput *= base;
-                (ray.dir, -1.0)
+                let d = if roughness > 0.02 { sample_cone(ray.dir, (roughness * 0.5).min(0.8), rng) } else { ray.dir };
+                (d, -1.0)
             };
+            if volume && roughness > 0.02 {
+                weight = g1(dir.dot(n).abs().max(1e-4), a.max(1e-3));
+            }
             if dir.dot(gn) * side <= 0.0 {
                 break;
             }
+            throughput *= weight;
             ray = Ray { origin: p + gn * (eps * side), dir };
             prev_pdf = 0.0;
             camera_visible = false;
@@ -250,14 +482,20 @@ pub(crate) fn radiance(scene: &RayScene, s: &Settings, mut ray: Ray, rng: &mut R
         // Luces delta: se evalúan exactas, sin MIS
         for light in &s.lights {
             let (l, dist, li) = match *light {
-                Light::Sun(sun) => (sun.direction.normalize_or_zero(), f32::INFINITY, sun.color),
-                Light::Point { position, intensity } => {
-                    let d = position - origin;
+                Light::Sun(sun) => {
+                    let mut l = sun.direction.normalize_or_zero();
+                    if sun.angular_radius > 0.0 && l != Vec3::ZERO {
+                        l = sample_cone(l, sun.angular_radius, rng);
+                    }
+                    (l, f32::INFINITY, sun.color)
+                }
+                Light::Point { position, intensity, radius } => {
+                    let d = jitter_sphere(position, radius, origin, rng) - origin;
                     let d2 = d.length_squared().max(1e-12);
                     (d / d2.sqrt(), d2.sqrt(), intensity / d2)
                 }
-                Light::Spot { position, direction, intensity, inner, outer } => {
-                    let d = position - origin;
+                Light::Spot { position, direction, intensity, inner, outer, radius } => {
+                    let d = jitter_sphere(position, radius, origin, rng) - origin;
                     let d2 = d.length_squared().max(1e-12);
                     let l = d / d2.sqrt();
                     let cos_a = (-l).dot(direction.normalize_or_zero());
@@ -298,7 +536,7 @@ pub(crate) fn radiance(scene: &RayScene, s: &Settings, mut ray: Ray, rng: &mut R
                     let shadow = Ray { origin, dir: wi };
                     if !scene.occluded_alpha(&shadow, dist * (1.0 - 1e-3) - eps, rng) {
                         let (f, pdf_b) = bsdf.eval(wo, to_local(wi));
-                        sum += throughput * f * lmat.emission * (wi.dot(n) * power(pdf_l, pdf_b) / pdf_l);
+                        sum += throughput * f * scene.emission_at(ltri, lmat, bu, bv) * (wi.dot(n) * power(pdf_l, pdf_b) / pdf_l);
                     }
                 }
             }

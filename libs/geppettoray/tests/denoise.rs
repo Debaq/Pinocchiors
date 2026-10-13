@@ -34,7 +34,7 @@ fn settings(samples: u32, w: u32) -> Settings {
         samples,
         max_depth: 3,
         environment: Environment::uniform(Vec3::splat(0.4)),
-        lights: vec![Light::Sun(Sun { direction: Vec3::new(0.4, 1.0, 0.5).normalize(), color: Vec3::splat(3.0) })],
+        lights: vec![Light::Sun(Sun { direction: Vec3::new(0.4, 1.0, 0.5).normalize(), color: Vec3::splat(3.0), angular_radius: 0.0 })],
         ..Default::default()
     }
 }
@@ -96,7 +96,7 @@ fn conserva_los_bordes_de_geometria() {
     let cam = Camera::look_at(Vec3::new(0.0, 4.0, 8.0), Vec3::new(0.0, 0.0, -5.0), Vec3::Y, 50.0, 1.0);
     let w = 48;
     let mut s = settings(4, w);
-    s.lights = vec![Light::Sun(Sun { direction: Vec3::new(0.0, 1.0, 0.1).normalize(), color: Vec3::splat(3.0) })];
+    s.lights = vec![Light::Sun(Sun { direction: Vec3::new(0.0, 1.0, 0.1).normalize(), color: Vec3::splat(3.0), angular_radius: 0.0 })];
     let reference = render(&sc, &cam, &Settings { seed: 5, samples: 256, ..s.clone() });
     let aov = render_aov(&sc, &cam, &s);
     let clean = denoise(&aov, &DenoiseSettings::default());

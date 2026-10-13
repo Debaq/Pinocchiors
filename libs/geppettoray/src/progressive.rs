@@ -4,7 +4,7 @@
 
 use crate::camera::Camera;
 use crate::denoise::{DenoiseSettings, denoise};
-use crate::image_out::Image;
+use crate::image_out::{Image, ToneMap};
 use crate::render::{Aov, Settings, first_hit, lum, radiance};
 use crate::rng::Rng;
 use crate::scene::RayScene;
@@ -42,7 +42,12 @@ pub struct Frame {
 impl Frame {
     /// RGBA de 8 bits en sRGB
     pub fn to_srgb8_rgba(&self) -> Vec<u8> {
-        let rgb = self.image.to_srgb8();
+        self.to_srgb8_rgba_with(ToneMap::Linear)
+    }
+
+    /// RGBA de 8 bits en sRGB pasando antes por la curva de tono
+    pub fn to_srgb8_rgba_with(&self, tone: ToneMap) -> Vec<u8> {
+        let rgb = self.image.to_srgb8_with(tone);
         let mut out = Vec::with_capacity(rgb.len() / 3 * 4);
         for (i, px) in rgb.chunks_exact(3).enumerate() {
             out.extend_from_slice(px);

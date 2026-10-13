@@ -4,6 +4,7 @@ use crate::bvh::{Aabb, Bvh, Hit, Ray};
 use crate::texture::Texture;
 use converter_scene::{AlphaMode, Scene, TextureRef};
 use glam::{Vec2, Vec3, Vec4};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum RayAlpha {
@@ -168,7 +169,7 @@ impl Triangle {
     }
 }
 
-/// Triángulos emisivos que se muestrean como luces de área (emisión sin textura)
+/// Triángulos emisivos que se muestrean como luces de área (con o sin textura de emisión)
 #[derive(Debug, Default)]
 pub struct AreaLights {
     /// Índices de triángulo
@@ -180,15 +181,25 @@ pub struct AreaLights {
 }
 
 impl AreaLights {
-    fn build(tris: &[Triangle], materials: &[RayMaterial]) -> AreaLights {
+    fn build(tris: &[Triangle], materials: &[RayMaterial], textures: &[Option<Texture>]) -> AreaLights {
+        // Luminancia media de cada textura de emisión usada (la potencia de la luz depende de ella)
+        let mut mean_lum: Vec<Option<f32>> = vec![None; textures.len()];
+        for m in materials {
+            if let Some(i) = m.emissive_texture {
+                if mean_lum[i].is_none() {
+                    mean_lum[i] = textures[i].as_ref().map(Texture::mean_luminance);
+                }
+            }
+        }
         let mut slot = vec![u32::MAX; tris.len()];
         let mut list = Vec::new();
         let mut weights = Vec::new();
         for (i, t) in tris.iter().enumerate() {
             let m = &materials[(t.material as usize).min(materials.len() - 1)];
             let area = 0.5 * t.e1.cross(t.e2).length();
-            let power = m.emission.dot(Vec3::new(0.2126, 0.7152, 0.0722)) * area;
-            if m.emissive_texture.is_none() && !m.unlit && power > 0.0 {
+            let tex = m.emissive_texture.and_then(|i| mean_lum[i]).unwrap_or(1.0);
+            let power = m.emission.dot(Vec3::new(0.2126, 0.7152, 0.0722)) * tex * area;
+            if !m.unlit && power > 0.0 {
                 slot[i] = list.len() as u32;
                 list.push(i as u32);
                 weights.push(power);
@@ -241,7 +252,7 @@ pub struct RayScene {
     pub area_lights: AreaLights,
     pub materials: Vec<RayMaterial>,
     /// Una por textura de la escena; `None` si no se pudo decodificar
-    pub textures: Vec<Option<Texture>>,
+    pub textures: Arc<Vec<Option<Texture>>>,
     pub bvh: Bvh,
     /// Diagonal de la caja de la escena: escala para los márgenes numéricos
     pub extent: f32,
@@ -256,10 +267,16 @@ impl RayScene {
         Self::with_textures(triangles, materials, Vec::new())
     }
 
-    pub fn with_textures(
+    pub fn with_textures(triangles: Vec<Triangle>, materials: Vec<RayMaterial>, textures: Vec<Option<Texture>>) -> Self {
+        Self::with_shared_textures(triangles, materials, Arc::new(textures))
+    }
+
+    /// Como [`RayScene::with_textures`], compartiendo las texturas ya decodificadas (los
+    /// cuadros de una animación no las decodifican de nuevo)
+    pub fn with_shared_textures(
         triangles: Vec<Triangle>,
         mut materials: Vec<RayMaterial>,
-        textures: Vec<Option<Texture>>,
+        textures: Arc<Vec<Option<Texture>>>,
     ) -> Self {
         if materials.is_empty() {
             materials.push(RayMaterial::default());
@@ -267,66 +284,21 @@ impl RayScene {
         let bvh = Bvh::build(&triangles);
         let b = bvh.bounds();
         let extent = if triangles.is_empty() { 1.0 } else { (b.max - b.min).length().max(1e-6) };
-        let area_lights = AreaLights::build(&triangles, &materials);
+        let area_lights = AreaLights::build(&triangles, &materials, &textures);
         RayScene { triangles, area_lights, materials, textures, bvh, extent }
     }
 
     /// Aplana un `Scene` de converter a triángulos en mundo.
     pub fn from_scene(scene: &Scene) -> Self {
-        let textures: Vec<Option<Texture>> = scene.textures.iter().map(|t| Texture::decode(&t.data)).collect();
-        let valid = |i: Option<usize>| i.filter(|&i| textures.get(i).is_some_and(|t| t.is_some()));
+        AnimatedScene::new(scene).at(None, 0.0)
+    }
 
-        let mut materials: Vec<RayMaterial> = scene
-            .materials
-            .iter()
-            .map(|m| {
-                let b = m.base_color_factor;
-                RayMaterial {
-                    base_color: Vec4::from(b),
-                    base_texture: valid(tex_index(&m.base_color_texture)),
-                    metallic: m.metallic_factor,
-                    roughness: m.roughness_factor,
-                    metal_rough_texture: valid(tex_index(&m.metallic_roughness_texture)),
-                    normal_texture: valid(tex_index(&m.normal_texture)),
-                    normal_scale: m.normal_scale,
-                    emission: Vec3::from(m.emissive_factor),
-                    emissive_texture: valid(tex_index(&m.emissive_texture)),
-                    alpha: match m.alpha_mode {
-                        AlphaMode::Opaque => RayAlpha::Opaque,
-                        AlphaMode::Mask(c) => RayAlpha::Mask(c),
-                        AlphaMode::Blend => RayAlpha::Blend,
-                    },
-                    double_sided: m.double_sided,
-                    unlit: m.unlit,
-                    lambert: false,
-                    clearcoat: m.clearcoat_factor,
-                    clearcoat_roughness: m.clearcoat_roughness_factor,
-                    uv_scale: Vec2::from(m.uv_scale),
-                    transmission: m.transmission_factor,
-                    ior: m.ior,
-                    thickness: m.thickness_factor,
-                }
-            })
-            .collect();
-        let default_idx = materials.len() as u32;
-        materials.push(RayMaterial::default());
-
-        let mut tris = Vec::new();
-        for prim in scene.world_primitives() {
-            let mat = prim.material.map_or(default_idx, |m| m as u32);
-            let pos = |i: u32| Vec3::from(prim.positions[i as usize]);
-            for t in &prim.triangles {
-                let p = [pos(t[0]), pos(t[1]), pos(t[2])];
-                let n = prim.normals.as_ref().map(|ns| t.map(|i| Vec3::from(ns[i as usize])));
-                let uv = prim.uvs.as_ref().map(|us| t.map(|i| Vec2::from(us[i as usize])));
-                let mut tri = Triangle::new(p, n, uv, mat);
-                if let Some(cs) = &prim.colors {
-                    tri = tri.with_colors(t.map(|i| Vec4::from(cs[i as usize])));
-                }
-                tris.push(tri);
-            }
+    /// Emisión en el punto (u, v) baricéntrico del triángulo: factor × textura
+    pub fn emission_at(&self, tri: &Triangle, mat: &RayMaterial, u: f32, v: f32) -> Vec3 {
+        match mat.emissive_texture.and_then(|i| self.textures[i].as_ref()) {
+            Some(tex) => mat.emission * tex.sample(tri.interp_uv(u, v) * mat.uv_scale, true).truncate(),
+            None => mat.emission,
         }
-        RayScene::with_textures(tris, materials, textures)
     }
 
     pub fn material(&self, tri: &Triangle) -> &RayMaterial {
@@ -376,5 +348,92 @@ impl RayScene {
             return rng.next_f32() >= pass;
         }
         solid
+    }
+}
+
+/// Una `Scene` lista para trazarse en cualquier instante de sus animaciones: las texturas se
+/// decodifican una sola vez y cada cuadro solo arma sus triángulos (con el esqueleto y los
+/// nodos en esa pose) y su BVH.
+pub struct AnimatedScene<'a> {
+    scene: &'a Scene,
+    materials: Vec<RayMaterial>,
+    default_material: u32,
+    textures: Arc<Vec<Option<Texture>>>,
+}
+
+impl<'a> AnimatedScene<'a> {
+    pub fn new(scene: &'a Scene) -> Self {
+        let textures: Vec<Option<Texture>> = scene.textures.iter().map(|t| Texture::decode(&t.data)).collect();
+        let valid = |i: Option<usize>| i.filter(|&i| textures.get(i).is_some_and(|t| t.is_some()));
+
+        let mut materials: Vec<RayMaterial> = scene
+            .materials
+            .iter()
+            .map(|m| {
+                let b = m.base_color_factor;
+                RayMaterial {
+                    base_color: Vec4::from(b),
+                    base_texture: valid(tex_index(&m.base_color_texture)),
+                    metallic: m.metallic_factor,
+                    roughness: m.roughness_factor,
+                    metal_rough_texture: valid(tex_index(&m.metallic_roughness_texture)),
+                    normal_texture: valid(tex_index(&m.normal_texture)),
+                    normal_scale: m.normal_scale,
+                    emission: Vec3::from(m.emissive_factor),
+                    emissive_texture: valid(tex_index(&m.emissive_texture)),
+                    alpha: match m.alpha_mode {
+                        AlphaMode::Opaque => RayAlpha::Opaque,
+                        AlphaMode::Mask(c) => RayAlpha::Mask(c),
+                        AlphaMode::Blend => RayAlpha::Blend,
+                    },
+                    double_sided: m.double_sided,
+                    unlit: m.unlit,
+                    lambert: false,
+                    clearcoat: m.clearcoat_factor,
+                    clearcoat_roughness: m.clearcoat_roughness_factor,
+                    uv_scale: Vec2::from(m.uv_scale),
+                    transmission: m.transmission_factor,
+                    ior: m.ior,
+                    thickness: m.thickness_factor,
+                }
+            })
+            .collect();
+        let default_material = materials.len() as u32;
+        materials.push(RayMaterial::default());
+        AnimatedScene { scene, materials, default_material, textures: Arc::new(textures) }
+    }
+
+    /// Cuántas animaciones trae la escena
+    pub fn animation_count(&self) -> usize {
+        self.scene.animations.len()
+    }
+
+    /// Duración (segundos) de una animación; 0 si no existe
+    pub fn duration(&self, animation: usize) -> f32 {
+        self.scene.animations.get(animation).map_or(0.0, |a| a.duration())
+    }
+
+    /// La escena en el instante `time` (segundos) de la animación; sin animación, en reposo
+    pub fn at(&self, animation: Option<usize>, time: f32) -> RayScene {
+        let prims = match animation {
+            Some(a) => self.scene.world_primitives_at(a, time),
+            None => self.scene.world_primitives(),
+        };
+        let mut tris = Vec::new();
+        for prim in prims {
+            let mat = prim.material.map_or(self.default_material, |m| m as u32);
+            let pos = |i: u32| Vec3::from(prim.positions[i as usize]);
+            for t in &prim.triangles {
+                let p = [pos(t[0]), pos(t[1]), pos(t[2])];
+                let n = prim.normals.as_ref().map(|ns| t.map(|i| Vec3::from(ns[i as usize])));
+                let uv = prim.uvs.as_ref().map(|us| t.map(|i| Vec2::from(us[i as usize])));
+                let mut tri = Triangle::new(p, n, uv, mat);
+                if let Some(cs) = &prim.colors {
+                    tri = tri.with_colors(t.map(|i| Vec4::from(cs[i as usize])));
+                }
+                tris.push(tri);
+            }
+        }
+        RayScene::with_shared_textures(tris, self.materials.clone(), self.textures.clone())
     }
 }

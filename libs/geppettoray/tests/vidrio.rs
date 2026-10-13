@@ -98,7 +98,7 @@ fn sombra_de_vidrio_no_es_negra() {
     tris.extend(quad(Vec3::new(-5.0, 1.0, 5.0), Vec3::X * 10.0, -Vec3::Z * 10.0, 1)); // lámina de vidrio encima
     let mats = vec![RayMaterial::diffuse(Vec3::splat(0.5), Vec3::ZERO), RayMaterial { double_sided: true, ..glass(Vec3::ONE, 1.5, 0.0) }];
     let scene = RayScene::new(tris, mats);
-    let sun = Light::Sun(Sun { direction: Vec3::Y, color: Vec3::splat(3.0) });
+    let sun = Light::Sun(Sun { direction: Vec3::Y, color: Vec3::splat(3.0), angular_radius: 0.0 });
     let cam = Camera::look_at(Vec3::new(0.0, 5.0, 0.001), Vec3::ZERO, Vec3::Y, 2.0, 1.0);
     let mut s = settings(Vec3::ZERO, 256);
     s.lights = vec![sun];

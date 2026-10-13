@@ -33,7 +33,7 @@ fn setup(samples: u32) -> (RayScene, Camera, Settings) {
         samples,
         max_depth: 3,
         environment: Environment::uniform(Vec3::splat(0.5)),
-        lights: vec![Light::Sun(Sun { direction: Vec3::new(0.5, 1.0, 0.7).normalize(), color: Vec3::splat(3.0) })],
+        lights: vec![Light::Sun(Sun { direction: Vec3::new(0.5, 1.0, 0.7).normalize(), color: Vec3::splat(3.0), angular_radius: 0.0 })],
         ..Default::default()
     };
     (sc, cam, s)

@@ -50,7 +50,7 @@ fn vis_smith(n_v: f32, n_l: f32, a: f32) -> f32 {
 }
 
 #[inline]
-fn g1(n_v: f32, a: f32) -> f32 {
+pub(crate) fn g1(n_v: f32, a: f32) -> f32 {
     let a2 = a * a;
     2.0 * n_v / (n_v + (a2 + (1.0 - a2) * n_v * n_v).sqrt())
 }
@@ -61,7 +61,7 @@ fn pdf_vndf(n_v: f32, n_h: f32, a: f32) -> f32 {
     g1(n_v, a) * d_ggx(n_h, a) / (4.0 * n_v)
 }
 
-fn sample_vndf(wo: Vec3, a: f32, rng: &mut Rng) -> Vec3 {
+pub(crate) fn sample_vndf(wo: Vec3, a: f32, rng: &mut Rng) -> Vec3 {
     let vh = Vec3::new(a * wo.x, a * wo.y, wo.z).normalize();
     let t1 = if vh.z < 0.9999 { Vec3::Z.cross(vh).normalize() } else { Vec3::X };
     let t2 = vh.cross(t1);

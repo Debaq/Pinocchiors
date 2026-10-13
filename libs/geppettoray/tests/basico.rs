@@ -122,7 +122,7 @@ fn sol_sobre_plano() {
         samples: 16,
         max_depth: 1,
         environment: Environment::uniform(Vec3::ZERO),
-        lights: vec![Light::Sun(Sun { direction: sun_dir, color: Vec3::splat(3.0) })],
+        lights: vec![Light::Sun(Sun { direction: sun_dir, color: Vec3::splat(3.0), angular_radius: 0.0 })],
         ..Default::default()
     };
     let camera = Camera::look_at(Vec3::new(0.0, 5.0, 0.1), Vec3::ZERO, Vec3::Y, 20.0, 1.0);

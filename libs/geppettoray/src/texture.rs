@@ -39,6 +39,17 @@ impl Texture {
         Texture { width: 1, height: 1, rgba: vec![rgba] }
     }
 
+    /// Luminancia lineal media (la textura se toma como sRGB)
+    pub fn mean_luminance(&self) -> f32 {
+        let l = srgb_lut();
+        let sum: f64 = self
+            .rgba
+            .iter()
+            .map(|p| (0.2126 * l[p[0] as usize] + 0.7152 * l[p[1] as usize] + 0.0722 * l[p[2] as usize]) as f64)
+            .sum();
+        (sum / self.rgba.len().max(1) as f64) as f32
+    }
+
     #[inline]
     fn texel(&self, x: i64, y: i64, srgb: bool) -> Vec4 {
         let x = x.rem_euclid(self.width as i64) as usize;
