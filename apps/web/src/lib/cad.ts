@@ -3859,7 +3859,7 @@ export function createCadStore() {
   };
 
   /** Cambia el documento (deshacible) y recalcula; con un diálogo abierto, cambia el borrador */
-  const commit = (mutate: (d: CadDocument) => void) => {
+  const commit = (mutate: (d: CadDocument) => void, join = false) => {
     if (viewing() !== undefined) {
       setError(tr("Estás viendo una versión guardada: vuelve al diseño o restáurala para editar"));
       return lastSend;
@@ -3876,10 +3876,13 @@ export function createCadStore() {
     const current = committed() ?? { features: [] };
     const next = clone(current);
     mutate(next);
-    undoStack.push(current);
-    if (undoStack.length > HISTORY_LIMIT) undoStack.shift();
-    redoStack.length = 0;
-    setHistoryVersion((v) => v + 1);
+    // `join`: sigue un gesto ya abierto (arrastrar), que cuenta como un solo paso de deshacer
+    if (!join) {
+      undoStack.push(current);
+      if (undoStack.length > HISTORY_LIMIT) undoStack.shift();
+      redoStack.length = 0;
+      setHistoryVersion((v) => v + 1);
+    }
     setDoc(next);
     return send(next);
   };
@@ -4428,12 +4431,12 @@ export function createCadStore() {
     /** Acoplamientos de los engranes enlazados que están en el ensamble */
     assemblySuggest: () => invoke<Relation[]>("cad_assembly_suggest"),
     /** Cambia el ensamble (deshacible); lo crea si no hay */
-    editAssembly(mutate: (a: Assembly) => void) {
+    editAssembly(mutate: (a: Assembly) => void, join = false) {
       return commit((d) => {
         const a = d.assembly ?? { instances: [], mates: [], next_id: 1 };
         mutate(a);
         d.assembly = a;
-      });
+      }, join);
     },
 
     /** Piezas que hay justo antes de la operación (para elegirlas en su diálogo) */

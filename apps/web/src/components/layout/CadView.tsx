@@ -6,6 +6,7 @@ import type { LightSettings } from "../../lib/lightRig";
 import type { CameraPose } from "../../lib/cameraRig";
 import { parse as parseFont, type Font } from "opentype.js";
 import { layoutText, type Contour } from "../../lib/sketchText";
+import { dragPlane, jointOf, mateAxis, measuredAngle, nextAngle, turned } from "../../lib/assemblyDrag";
 import { CONSTRAINT_LABELS, editsAsSketch, geometryPoints, type Report3d, type Sketch3d, type Plane, addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, curvePolyline, constraintValue, isReference, isLoosePoint, isSolidPoint, removeLoosePoint, leavingDirection, placeSnap, tangentArc, type CadStore, designMass, dragByHandle, flipByHandle, handleField, handleValue, partColor, partHidden, samePart, type FeatureHandle, type FeatureKind, type MeasureItem, type Measurement, type P2, type P3, type ScanOutline, type Sketch, type SketchConstraint } from "../../lib/cad";
 import { infer, solidRefs, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
 import { angleView, applyFrame, clipCenter, invertFrame, measureConstraint, rotation, scaling, selectedEntities, splitEntityAt, transformSelection, translation, type Frame, type Xform } from "../../lib/sketchTransform";
@@ -839,6 +840,7 @@ export const CadView: Component<CadViewProps> = (props) => {
   });
   // Ensamble: cada instancia en su lugar, con el color de su pieza
   let asmSeq = 0;
+  let asmFaceRanges: [number, number, number][] = [];
   createEffect(
     on([() => ui.assemblyMode(), () => store.result()?.assembly?.version], async ([on_]) => {
       const n = ++asmSeq;
@@ -850,6 +852,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       try {
         const [mesh, faces] = await Promise.all([store.assemblyMesh(), store.assemblyFaces()]);
         if (n !== asmSeq || !viewer) return;
+        asmFaceRanges = faces;
         viewer.setBody(mesh);
         const doc = store.doc();
         const parts = store.result()?.parts ?? [];
@@ -1015,6 +1018,8 @@ export const CadView: Component<CadViewProps> = (props) => {
   const [handleHot, setHandleHot] = createSignal(-1);
   // Arrastre en curso: la flecha del comienzo, su número, y el valor de antes y dónde
   // se pinchó (las que van con la pieza suman la diferencia)
+  // Ensamble: arrastrar una pieza gira la unión que la sostiene (un paso de deshacer por gesto)
+  let partDrag: { mate: number; sign: 1 | -1; plane: Plane; from: [number, number]; start: number; started: boolean; busy: boolean; latest?: number } | undefined;
   let handleDrag: { id: number; h: FeatureHandle; index: number; x: number; y: number; moved: boolean; canDrag: boolean; base: number; from?: number } | undefined;
   const [dragAt, setDragAt] = createSignal<{ index: number; h: FeatureHandle; t: number; base: number }>();
   createEffect(() => {
@@ -2628,11 +2633,61 @@ export const CadView: Component<CadViewProps> = (props) => {
     }
   };
 
+  /** Ensamble: agarrar una pieza con una unión giratoria para girarla arrastrando */
+  const startPartDrag = (e: PointerEvent): boolean => {
+    const hit = viewer?.pick(e.clientX, e.clientY, { faces: true });
+    if (hit?.kind !== "face") return false;
+    const instance = asmFaceRanges.find((r) => hit.face >= r[1] && hit.face < r[2])?.[0];
+    const asm = store.doc()?.assembly;
+    const poses = store.result()?.assembly?.solution.poses;
+    if (instance === undefined || !asm || !poses) return false;
+    const joint = jointOf(asm, instance);
+    const axis = joint && mateAxis(joint.mate, poses);
+    if (!joint || !axis) return false;
+    const plane = dragPlane(axis);
+    const from = viewer!.planePoint(e.clientX, e.clientY, plane);
+    if (!from) return false;
+    partDrag = { mate: joint.mate.id, sign: joint.sign, plane, from, start: joint.mate.angle ?? measuredAngle(joint.mate, poses) ?? 0, started: false, busy: false };
+    container.setPointerCapture(e.pointerId);
+    return true;
+  };
+
+  const movePartDrag = (e: PointerEvent) => {
+    const d = partDrag;
+    const p = d && viewer?.planePoint(e.clientX, e.clientY, d.plane);
+    if (!d || !p) return;
+    const delta = turned(d.from, p);
+    if (!d.started && Math.abs(delta) < 1) return;
+    d.latest = Math.round(nextAngle(d.start, delta, d.sign) * 10) / 10;
+    void pumpPartDrag();
+  };
+
+  /** Manda al ensamble el último ángulo pedido; si el cálculo anterior sigue, queda esperando */
+  const pumpPartDrag = async () => {
+    const d = partDrag;
+    if (!d || d.busy || d.latest === undefined) return;
+    const angle = d.latest;
+    d.latest = undefined;
+    d.busy = true;
+    const join = d.started;
+    d.started = true;
+    try {
+      await store.editAssembly((a) => {
+        const m = a.mates.find((x) => x.id === d.mate);
+        if (m) m.angle = angle;
+      }, join);
+    } finally {
+      d.busy = false;
+    }
+    if (partDrag === d) void pumpPartDrag();
+  };
+
   const onPointerDown = (e: PointerEvent) => {
     if (e.button === 2) rightDown = { x: e.clientX, y: e.clientY };
     if (e.button !== 0 || e.altKey) return;
     if (viewer?.cubeDown(e.clientX, e.clientY)) return;
     if (ui.session()) return sketchClick(e);
+    if (ui.assemblyMode() && viewer && startPartDrag(e)) return;
     const handle = handleOf();
     const index = handle && viewer ? viewer.handleHit(e.clientX, e.clientY) : -1;
     if (handle && index >= 0) {
@@ -2654,6 +2709,7 @@ export const CadView: Component<CadViewProps> = (props) => {
   };
 
   const onPointerMove = (e: PointerEvent) => {
+    if (partDrag) return movePartDrag(e);
     if (e.buttons === 0) setOverCube(viewer?.cubeHover(e.clientX, e.clientY) ?? false);
     const rect0 = container.getBoundingClientRect();
     setPointerPx([e.clientX - rect0.left, e.clientY - rect0.top]);
@@ -2972,6 +3028,10 @@ export const CadView: Component<CadViewProps> = (props) => {
   let rightDown: { x: number; y: number } | undefined;
   const [menu, setMenu] = createSignal<{ x: number; y: number; items: MenuEntry[] }>();
   const onPointerUp = (e: PointerEvent) => {
+    if (partDrag) {
+      partDrag = undefined;
+      return;
+    }
     dragging = undefined;
     entityDrag = undefined;
     ui.endDrag();

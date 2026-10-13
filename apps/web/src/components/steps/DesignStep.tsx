@@ -66,6 +66,7 @@ import {
   type Connector,
   type Mate,
   type MateKind,
+  type Relation,
   type PartId,
   type PlaneDef,
   type PointSpec,
@@ -146,6 +147,60 @@ export interface DesignStepProps {
 // ─── Controles chicos ─────────────────────────────────────────────────────
 
 /** Número que se aplica al confirmar (Enter o salir del campo), no con cada tecla */
+/** Acoplamiento hecho a mano: elegir el tipo, las uniones y la razón (los engranes enlazados se detectan solos) */
+const RelationAdder: Component<{ mates: Mate[]; onAdd: (r: Relation) => void }> = (props) => {
+  const [open, setOpen] = createSignal(false);
+  const [type, setType] = createSignal<Relation["type"]>("gear");
+  const [first, setFirst] = createSignal("");
+  const [second, setSecond] = createSignal("");
+  const [amount, setAmount] = createSignal(-1);
+  const [phase, setPhase] = createSignal(0);
+  const kinds = (): [MateKind[], MateKind[]] =>
+    type() === "gear" ? [["revolute"], ["revolute"]] : type() === "rack_pinion" ? [["revolute"], ["slider"]] : [["cylindrical"], []];
+  const options = (ks: MateKind[]) => props.mates.filter((m) => ks.includes(m.kind)).map((m) => ({ value: String(m.id), label: m.name }));
+  const valid = () => !!first() && (type() === "screw" || (!!second() && second() !== first())) && amount() !== 0;
+  const add = () => {
+    const [a, b] = [Number(first()), Number(second())];
+    const t = type();
+    props.onAdd(
+      t === "gear" ? { type: "gear", a, b, ratio: amount(), phase: phase() }
+      : t === "rack_pinion" ? { type: "rack_pinion", revolute: a, slider: b, per_turn: amount(), phase: phase() }
+      : { type: "screw", cylindrical: a, pitch: amount(), phase: phase() }
+    );
+    setOpen(false);
+  };
+  return (
+    <Show when={open()} fallback={<Button size="sm" disabled={props.mates.length < 1} onClick={() => setOpen(true)}>{tl("Agregar acoplamiento")}</Button>}>
+      <div class="space-y-1 rounded border border-border p-1.5" data-relation-adder>
+        <Select
+          options={[
+            { value: "gear", label: tl("Engranes (giro ↔ giro)") },
+            { value: "rack_pinion", label: tl("Piñón y cremallera (giro ↔ deslizamiento)") },
+            { value: "screw", label: tl("Tornillo (giro ↔ avance)") },
+          ]}
+          value={type()}
+          onChange={(v) => { setType(v as Relation["type"]); setFirst(""); setSecond(""); setAmount(v === "gear" ? -1 : 1); }}
+        />
+        <Select options={[{ value: "", label: tl("Unión…") }, ...options(kinds()[0])]} value={first()} onChange={setFirst} />
+        <Show when={type() !== "screw"}>
+          <Select options={[{ value: "", label: tl("Otra unión…") }, ...options(kinds()[1])]} value={second()} onChange={setSecond} />
+        </Show>
+        <Num
+          label={type() === "gear" ? tl("Razón (− si giran al revés)") : type() === "rack_pinion" ? tl("mm por vuelta") : tl("Paso")}
+          value={amount()}
+          step={type() === "gear" ? 0.1 : 1}
+          onCommit={setAmount}
+        />
+        <Num label={tl("Fase")} value={phase()} onCommit={setPhase} />
+        <div class="flex gap-1.5">
+          <Button size="sm" disabled={!valid()} onClick={add}>{tl("Agregar")}</Button>
+          <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>{tl("Cancelar")}</Button>
+        </div>
+      </div>
+    </Show>
+  );
+};
+
 const Num: Component<{ value: number; onCommit: (v: number) => void; label?: string; suffix?: string; step?: number; min?: number }> = (props) => (
   <label class="flex items-center gap-2 text-xs">
     <Show when={props.label}>
@@ -5765,6 +5820,7 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
               );
             }}
           </For>
+          <RelationAdder mates={asm()?.mates ?? []} onAdd={(r) => void store.editAssembly((a) => (a.relations = [...(a.relations ?? []), r]))} />
           <p class="text-[11px] text-text-dim">{tl("Con el ángulo de una unión marcado, la otra lo sigue.")}</p>
         </div>
         <Show when={sol()}>

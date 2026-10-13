@@ -64,7 +64,7 @@ se volvería lento con 40 dientes). Lo que funciona mejor es la combinación de 
 | Doble helicoidal / espina de pescado | ✅ F4 |
 | Relación de engrane (giro ↔ giro) en el ensamble | ✅ F5 |
 | Piñón-cremallera (giro ↔ deslizamiento) y tornillo (giro ↔ avance) | ✅ F5 |
-| Animar el mecanismo arrastrando un engrane | 🟡 F5 (por la casilla Ángulo; arrastrar en el visor falta) |
+| Animar el mecanismo arrastrando un engrane | ✅ F5 (arrastrar en el visor; sin probar en la app real) |
 | Cónico recto (eje a 90° u otro ángulo) | ✅ F6 |
 | Tornillo sin fin + corona | ✅ F7 |
 | Perfil del engrane en el sketch (bloque), tabla de datos en la hoja | ✅ F8 |
@@ -195,8 +195,7 @@ Lo que quedó fuera de cada fase, por área. Nada de esto impide usar lo hecho.
 - Espina de pescado: canal central solo en exteriores.
 
 **Ensamble (F5)**
-- Arrastrar un engrane en el visor para girar todo el tren (hoy: casilla Ángulo de la unión).
-- Crear relaciones a mano (hoy solo «Detectar engranes»).
+- (Hechos 2026-10-13, sin probar en la app real: arrastrar una pieza en el visor del ensamble gira la revoluta/cilíndrica que la sostiene —`lib/assemblyDrag.ts`, un solo paso de deshacer por gesto— y «Agregar acoplamiento» crea relaciones a mano. Falta: elegir la unión cuando una pieza tiene varias, y arrastrar uniones deslizantes.)
 - Trenes de más de dos engranes y planetarios sin probar.
 - El solver no sale del punto muerto de 180° exactos desde cero.
 - La detección toma la primera revoluta/cilíndrica de cada engrane.
