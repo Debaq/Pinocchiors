@@ -66,7 +66,7 @@ export interface JointsReport {
   connections: Array<{ piece_a: number; piece_b: number; contact_area: number; requested: number; placed: number; notes: string[] }>;
 }
 
-export type JointShape = "round" | "square" | "dovetail";
+export type JointShape = "round" | "square" | "dovetail" | "bayonet";
 
 export interface JointSettings {
   shape: JointShape;
@@ -141,6 +141,8 @@ export function jointShapeConfig(s: JointSettings) {
   switch (s.shape) {
     case "square":
       return { kind: "square", size: s.size };
+    case "bayonet":
+      return { kind: "bayonet", length: s.size * 2.3, width: s.size };
     case "dovetail":
       return { kind: "dovetail", width_base: s.size, width_top: s.size * 0.7, length: s.size * 1.2 };
     default:
@@ -348,6 +350,7 @@ export const JointsSection: Component<{
           { value: "round", label: t("Clavija redonda") },
           { value: "square", label: t("Perno cuadrado") },
           { value: "dovetail", label: t("Trapecio") },
+          { value: "bayonet", label: t("Cierre de cuarto de vuelta") },
         ]}
         value={props.settings.shape}
         onChange={(v) => set({ shape: v as JointShape })}

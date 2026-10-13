@@ -27,6 +27,9 @@ pub enum PlanarShape {
     Square { size: Real },
     /// Trapecio: ancho en la base, ancho en la punta y largo
     Dovetail { width_base: Real, width_top: Real, length: Real },
+    /// Cierre de cuarto de vuelta: un perno con cabeza de barra entra por una ranura de la
+    /// misma forma, y al girarlo 90° la cabeza queda atrapada bajo el labio de la ranura
+    Bayonet { length: Real, width: Real },
 }
 
 impl PlanarShape {
@@ -36,6 +39,8 @@ impl PlanarShape {
             PlanarShape::Round { diameter } => diameter,
             PlanarShape::Square { size } => size * std::f64::consts::SQRT_2,
             PlanarShape::Dovetail { width_base, width_top, length } => width_base.max(width_top).hypot(length),
+            // La cámara redonda de abajo, un poco más ancha que la diagonal de la barra
+            PlanarShape::Bayonet { length, width } => length.hypot(width) + 2.0,
         }
     }
 
@@ -49,6 +54,7 @@ impl PlanarShape {
                 width_top: (width_top + delta).max(0.1),
                 length: (length + delta).max(0.1),
             },
+            PlanarShape::Bayonet { length, width } => PlanarShape::Bayonet { length: (length + delta).max(0.1), width: (width + delta).max(0.1) },
         }
     }
 }
@@ -134,6 +140,10 @@ pub fn footprint_polygon(shape: &PlanarShape, center: Vector3, normal: Vector3, 
         PlanarShape::Dovetail { width_base, width_top, length } => {
             let l = length * 0.5;
             vec![(-width_base * 0.5, -l), (width_base * 0.5, -l), (width_top * 0.5, l), (-width_top * 0.5, l)]
+        }
+        PlanarShape::Bayonet { length, width } => {
+            let (l, w) = (length * 0.5, width * 0.5);
+            vec![(-l, -w), (l, -w), (l, w), (-l, w)]
         }
     };
     pts2.into_iter()
@@ -417,6 +427,150 @@ pub fn free_depth(mesh: &Mesh, polygon: &[Vector3], normal: Vector3) -> Real {
         .fold(Real::INFINITY, Real::min)
 }
 
+/// Espacio libre bajo la huella como `free_depth`, pero 0 si algún punto cae fuera del sólido
+/// (el primer corte hacia adentro tiene que ser una cara que se sale, no una que se entra)
+fn free_depth_inside(mesh: &Mesh, polygon: &[Vector3], normal: Vector3) -> Real {
+    let (pos, tris) = triangles(mesh);
+    let diag = diagonal(&pos);
+    let bvh = Bvh::build(tris.iter().map(|t| Triangle::new(pos[t[0]], pos[t[1]], pos[t[2]])).collect());
+    let dir = -normal;
+    let eps = (diag * 1e-5).max(1e-6);
+    let mut free = Real::INFINITY;
+    for p in sample_polygon(polygon) {
+        match bvh.ray_hit(&(p + dir * eps), &dir, 0.0, Real::INFINITY) {
+            Some((t, hit)) if bvh.triangle(hit).normal().dot(&dir) > 0.0 => free = free.min(t + eps),
+            _ => return 0.0,
+        }
+    }
+    free
+}
+
+/// Soldar por posición y cerrar la malla armada con triángulos sueltos
+fn weld_build(positions: &[Vector3], tris: &[[usize; 3]]) -> Result<Mesh> {
+    let diag = diagonal(positions);
+    let weld = weld_ids(positions, (diag * 1e-9).max(1e-9));
+    let mut rep: HashMap<usize, Vector3> = HashMap::new();
+    for (i, &w) in weld.iter().enumerate() {
+        rep.entry(w).or_insert(positions[i]);
+    }
+    let merged: Vec<[usize; 3]> = tris.iter().map(|t| [weld[t[0]], weld[t[1]], weld[t[2]]]).filter(|t| t[0] != t[1] && t[1] != t[2] && t[0] != t[2]).collect();
+    let mut used = vec![false; rep.len()];
+    for t in &merged {
+        for &i in t {
+            used[i] = true;
+        }
+    }
+    let mut remap = vec![usize::MAX; rep.len()];
+    let mut compact = Vec::new();
+    for w in 0..rep.len() {
+        if used[w] {
+            remap[w] = compact.len();
+            compact.push(rep[&w]);
+        }
+    }
+    let tris: Vec<[usize; 3]> = merged.iter().map(|t| [remap[t[0]], remap[t[1]], remap[t[2]]]).collect();
+    let mesh = Mesh::from_triangles(&compact, &tris);
+    if !mesh.is_closed() {
+        return Err(Print3dError::JointError("la malla resultante no quedó cerrada".into()));
+    }
+    Ok(mesh)
+}
+
+/// Triángulos de una región plana con huecos, sacados de sus contornos (cada uno cerrado); salen
+/// antihorarios mirando contra `normal`
+fn region_tris(rings: &[Vec<Vector3>], normal: Vector3, diag: Real, out_pos: &mut Vec<Vector3>, out_tris: &mut Vec<[usize; 3]>) {
+    let segments: Vec<(Vector3, Vector3)> = rings.iter().flat_map(|r| (0..r.len()).map(move |i| (r[i], r[(i + 1) % r.len()]))).collect();
+    for t in crate::capping::cap_triangles(&segments, normal, rings[0][0], (diag * 1e-9).max(1e-9)) {
+        let base = out_pos.len();
+        out_pos.extend(t);
+        out_tris.push([base, base + 1, base + 2]);
+    }
+}
+
+/// Paredes entre `ring` (antihorario mirando contra `n`) y `ring + dir`. Sus normales son
+/// `(q − p) × dir`: hacia afuera con `dir = +n·h` (cuerpo sólido) y hacia el eje con `dir = −n·h` (vacío)
+fn prism_walls(ring: &[Vector3], dir: Vector3, out_pos: &mut Vec<Vector3>, out_tris: &mut Vec<[usize; 3]>) {
+    let m = ring.len();
+    let base = out_pos.len();
+    out_pos.extend(ring.iter().copied());
+    out_pos.extend(ring.iter().map(|p| *p + dir));
+    for i in 0..m {
+        let j = (i + 1) % m;
+        let (p, q, pt, qt) = (base + i, base + j, base + m + i, base + m + j);
+        out_tris.push([p, q, qt]);
+        out_tris.push([p, qt, pt]);
+    }
+}
+
+/// Perno de cierre de cuarto de vuelta: tallo redondo de `stem_r` y `h1` de largo, y encima una
+/// cabeza de barra `head` (largo, ancho) de `head_t` de grosor
+pub fn add_bayonet_pin(mesh: &Mesh, center: Vector3, normal: Vector3, rotation_deg: Real, head: (Real, Real), stem_r: Real, h1: Real, head_t: Real) -> Result<Mesh> {
+    let n = normal.try_normalize().ok_or_else(|| Print3dError::JointError("normal nula".into()))?;
+    if stem_r <= 0.0 || h1 <= 0.0 || head_t <= 0.0 {
+        return Err(Print3dError::JointError("medidas del perno no positivas".into()));
+    }
+    let stem = footprint_polygon(&PlanarShape::Round { diameter: stem_r * 2.0 }, center, n, 0.0);
+    let (mut pos, mut tris, ring) = open_cap(mesh, &stem, n)?;
+    let diag = diagonal(&pos);
+    // Tallo: de la tapa a h1 (mismas paredes que un perno redondo)
+    let ring_pts: Vec<Vector3> = ring.iter().map(|&i| pos[i]).collect();
+    let stem_top: Vec<Vector3> = ring_pts.iter().map(|p| *p + n * h1).collect();
+    let m = ring.len();
+    let base = pos.len();
+    pos.extend(stem_top.iter().copied());
+    for i in 0..m {
+        let (a, b) = (ring[i], ring[(i + 1) % m]);
+        tris.push([b, a, base + i]);
+        tris.push([b, base + i, base + (i + 1) % m]);
+    }
+    // Cabeza: barra rectangular sobre el tallo; su cara de abajo lleva el agujero del tallo
+    let bar = footprint_polygon(&PlanarShape::Bayonet { length: head.0, width: head.1 }, center, n, rotation_deg);
+    let bar_low: Vec<Vector3> = bar.iter().map(|p| *p + n * h1).collect();
+    // El tallo (horario mirando contra n, como sale de la tapa) es el hueco de la cara de abajo
+    region_tris(&[bar_low.clone(), stem_top.clone()], -n, diag, &mut pos, &mut tris);
+    prism_walls(&bar_low, n * head_t, &mut pos, &mut tris);
+    let bar_top: Vec<Vector3> = bar_low.iter().map(|p| *p + n * head_t).collect();
+    region_tris(&[bar_top], n, diag, &mut pos, &mut tris);
+    weld_build(&pos, &tris)
+}
+
+/// Ranura de cierre de cuarto de vuelta: boca rectangular `(len, wid)` de `d1` de hondo, y debajo
+/// una cámara redonda de `chamber_r` hasta `d2` donde la barra puede girar
+pub fn add_bayonet_hole(mesh: &Mesh, center: Vector3, normal: Vector3, rotation_deg: Real, mouth: (Real, Real), chamber_r: Real, d1: Real, d2: Real, min_wall: Real) -> Result<Mesh> {
+    let n = normal.try_normalize().ok_or_else(|| Print3dError::JointError("normal nula".into()))?;
+    if !(d2 > d1 && d1 > 0.0) || chamber_r <= mouth.0.hypot(mouth.1) * 0.5 {
+        return Err(Print3dError::JointError("medidas de la ranura no válidas".into()));
+    }
+    let rect = footprint_polygon(&PlanarShape::Bayonet { length: mouth.0, width: mouth.1 }, center, n, rotation_deg);
+    let chamber = footprint_polygon(&PlanarShape::Round { diameter: chamber_r * 2.0 }, center, n, 0.0);
+    let free = free_depth_inside(mesh, &chamber, n);
+    if free < d2 + min_wall {
+        return Err(Print3dError::JointError(format!("la pieza solo tiene {free:.1} mm de fondo bajo la unión")));
+    }
+    let (mut pos, mut tris, ring) = open_cap(mesh, &rect, n)?;
+    let diag = diagonal(&pos);
+    // Boca: de la tapa a d1 hacia adentro
+    let down1 = -n * d1;
+    let ring_pts: Vec<Vector3> = ring.iter().map(|&i| pos[i]).collect();
+    let mouth_low: Vec<Vector3> = ring_pts.iter().map(|p| *p + down1).collect();
+    let m = ring.len();
+    let base = pos.len();
+    pos.extend(mouth_low.iter().copied());
+    for i in 0..m {
+        let (a, b) = (ring[i], ring[(i + 1) % m]);
+        tris.push([b, a, base + i]);
+        tris.push([b, base + i, base + (i + 1) % m]);
+    }
+    // Labio: entre la cámara y la boca, mirando hacia abajo (al vacío)
+    let chamber_top: Vec<Vector3> = chamber.iter().map(|p| *p + down1).collect();
+    region_tris(&[chamber_top.clone(), mouth_low], -n, diag, &mut pos, &mut tris);
+    // Cámara: paredes hacia el eje y suelo hacia arriba
+    prism_walls(&chamber_top, -n * (d2 - d1), &mut pos, &mut tris);
+    let chamber_floor: Vec<Vector3> = chamber_top.iter().map(|p| *p - n * (d2 - d1)).collect();
+    region_tris(&[chamber_floor], n, diag, &mut pos, &mut tris);
+    weld_build(&pos, &tris)
+}
+
 /// Pone uniones (perno en la pieza de menor id, hueco en la otra) en todas las caras de contacto
 pub fn apply_joints(pieces: &mut [LabeledPiece], config: &PlanarJointConfig) -> Result<JointsReport> {
     let tol = pieces.iter().find(|p| !p.mesh.vertices.is_empty()).map_or(1e-4, |p| plane_tolerance(&p.mesh));
@@ -431,8 +585,15 @@ pub fn apply_joints(pieces: &mut [LabeledPiece], config: &PlanarJointConfig) -> 
             conn.notes.push(format!("solo caben {} de {} uniones en la cara", spots.len(), config.count));
         }
         for center in spots {
-            // Pin en A saliendo hacia B; hueco en B hacia dentro (normal exterior de B = −n)
             let n = contact.normal;
+            if let PlanarShape::Bayonet { length, width } = config.shape {
+                match place_bayonet(pieces, ia, ib, center, n, (length, width), config) {
+                    Ok(()) => conn.placed += 1,
+                    Err(why) => conn.notes.push(why),
+                }
+                continue;
+            }
+            // Pin en A saliendo hacia B; hueco en B hacia dentro (normal exterior de B = −n)
             let hole_poly = footprint_polygon(&config.shape, center, -n, config.rotation_deg);
             let free = free_depth(&pieces[ib].mesh, &hole_poly, -n);
             let wall = config.edge_margin.max(0.8);
@@ -463,6 +624,37 @@ pub fn apply_joints(pieces: &mut [LabeledPiece], config: &PlanarJointConfig) -> 
         report.connections.push(conn);
     }
     Ok(report)
+}
+
+/// Una unión de cuarto de vuelta entre dos piezas (perno en `ia`, ranura en `ib`)
+fn place_bayonet(pieces: &mut [LabeledPiece], ia: usize, ib: usize, center: Vector3, n: Vector3, bar: (Real, Real), config: &PlanarJointConfig) -> std::result::Result<(), String> {
+    let gap = config.gap();
+    let wall = config.edge_margin.max(0.8);
+    // Espesor del labio y de la cabeza: lo que sobra de la profundidad, repartido por igual
+    let total = config.depth;
+    let (d1, head_t) = {
+        let t = ((total - 2.0 * gap) / 2.0).max(1.0);
+        (t, t)
+    };
+    let h1 = d1 + gap * 0.5;
+    let d2 = h1 + head_t + gap;
+    let chamber_r = bar.0.hypot(bar.1) * 0.5 + gap + 0.5;
+    let pin_bar = (bar.0 + config.tolerance, bar.1 + config.tolerance);
+    if pin_bar.0 <= 0.5 || pin_bar.1 <= 0.5 {
+        return Err("la holgura deja la barra sin grosor".into());
+    }
+    // Pin en A saliendo hacia B (frame de n); la ranura en B mira hacia −n
+    let stem_r = pin_bar.1 * 0.3;
+    let hole = add_bayonet_hole(&pieces[ib].mesh, center, -n, config.rotation_deg, bar, chamber_r, d1, d2, wall);
+    let pin = add_bayonet_pin(&pieces[ia].mesh, center, n, -config.rotation_deg, pin_bar, stem_r, h1, head_t);
+    match (hole, pin) {
+        (Ok(h), Ok(p)) => {
+            pieces[ib].mesh = h;
+            pieces[ia].mesh = p;
+            Ok(())
+        }
+        (h, p) => Err(format!("unión omitida: {}", h.err().or(p.err()).map_or_else(String::new, |e| e.to_string()))),
+    }
 }
 
 /// Elige hasta `count` posiciones dentro de la región de contacto, separadas entre sí
@@ -733,4 +925,43 @@ mod tests {
             assert!(p.mesh.is_closed());
         }
     }
+
+    #[test]
+    fn bayoneta_en_dos_mitades_de_una_caja() {
+        let b = make_box(80.0, 80.0, 60.0);
+        let meshes = crate::slicer::slice_by_planes(&b, &[Plane::xy_at_z(30.0)]).unwrap();
+        let mut pieces: Vec<LabeledPiece> = meshes.into_iter().enumerate().map(|(id, mesh)| LabeledPiece { mesh, id, ..Default::default() }).collect();
+        let before: Vec<Real> = pieces.iter().map(|p| compute_volume(&p.mesh)).collect();
+        let cfg = PlanarJointConfig { shape: PlanarShape::Bayonet { length: 14.0, width: 6.0 }, depth: 12.0, count: 1, ..Default::default() };
+        let report = apply_joints(&mut pieces, &cfg).unwrap();
+        assert_eq!(report.joints_placed, 1, "{report:?}");
+        for p in &pieces {
+            assert!(p.mesh.is_closed());
+        }
+        // Medidas de la unión (holgura 0,4): labio y cabeza de 5,6; tallo de 5,8; cámara hasta 11,8
+        let poly24 = |r: Real| 0.5 * 24.0 * r * r * (std::f64::consts::TAU / 24.0).sin();
+        let added = poly24(0.3 * 5.6) * 5.8 + 13.6 * 5.6 * 5.6;
+        let removed = 14.0 * 6.0 * 5.6 + poly24(14f64.hypot(6.0) * 0.5 + 0.9) * (11.8 - 5.6);
+        let deltas: Vec<Real> = pieces.iter().zip(&before).map(|(p, v)| compute_volume(&p.mesh) - v).collect();
+        let pin_delta = deltas.iter().cloned().fold(Real::NEG_INFINITY, Real::max);
+        let hole_delta = deltas.iter().cloned().fold(Real::INFINITY, Real::min);
+        assert!((pin_delta - added).abs() < 1e-6 * added.max(1.0) + 1e-3, "perno {pin_delta} esperado {added}");
+        assert!((hole_delta + removed).abs() < 1e-6 * removed.max(1.0) + 1e-3, "ranura {hole_delta} esperado {}", -removed);
+        // La pieza con el perno sobresale de su tapa
+        let z_extent = |m: &Mesh| {
+            let bb = crate::analysis::compute_bounding_box(m);
+            bb.max[2] - bb.min[2]
+        };
+        assert!(pieces.iter().any(|p| z_extent(&p.mesh) > 30.0 + 3.0), "ningún perno sobresale");
+    }
+
+    #[test]
+    fn bayoneta_en_cara_chica_se_omite() {
+        let b = make_box(14.0, 14.0, 40.0);
+        let meshes = crate::slicer::slice_by_planes(&b, &[Plane::xy_at_z(20.0)]).unwrap();
+        let mut pieces: Vec<LabeledPiece> = meshes.into_iter().enumerate().map(|(id, mesh)| LabeledPiece { mesh, id, ..Default::default() }).collect();
+        let cfg = PlanarJointConfig { shape: PlanarShape::Bayonet { length: 14.0, width: 6.0 }, count: 1, ..Default::default() };
+        assert_eq!(apply_joints(&mut pieces, &cfg).unwrap().joints_placed, 0);
+    }
 }
+

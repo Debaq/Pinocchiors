@@ -26,18 +26,19 @@ planos reales entre piezas.
 - Soporte estimado con rayos hacia la cama (las orientaciones se reordenan por él).
 - Vista previa de la distribución en la cama.
 - Agujero de drenaje al vaciar (túnel desde la cara plana de abajo hasta el hueco).
+- Distribución por contorno en planta (`nest_contour`, por celdas).
+- Cierre de cuarto de vuelta (`PlanarShape::Bayonet`): perno con cabeza de barra que entra por una ranura y se traba al girar 90°.
 
 ## Límites conocidos
 
-- Las uniones solo van en caras de corte **planas** y la huella es un prisma
-  (redondo, cuadrado o trapecio); no hay colas de milano deslizantes ni puzzles
-  (un riel deslizante toca el borde de la cara y `open_cap` pide la huella adentro).
+- Las uniones solo van en caras de corte **planas** y dentro de la cara (redonda, cuadrada, trapecio
+  o cuarto de vuelta). **No hay colas de milano deslizantes ni puzzles**: el riel tiene que salir por la
+  pared de la pieza, y eso pide recortar una superficie cualquiera (hoy solo se recorta la tapa plana).
 - El drenaje pide una cara plana abajo (al exportar, tras apoyar la pieza) y un solo agujero; sin venteo.
-- El nesting usa el rectángulo en planta de cada pieza, no su contorno.
 - La verificación mide paredes con rayos desde una muestra de caras.
 
 ## Ideas siguientes
 
 - Venteo (segundo agujero) y drenaje sin cara plana.
-- Nesting por contorno; orientación por pieza visible antes de exportar.
-- Colas de milano deslizantes y puzzles.
+- Orientación por pieza visible antes de exportar.
+- Colas de milano deslizantes y puzzles (recorte de la pared de la pieza).
