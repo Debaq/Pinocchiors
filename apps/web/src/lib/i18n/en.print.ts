@@ -87,5 +87,9 @@ export const en_print: Catalog = {
   "Placa {n}": "Plate {n}",
   "Acomodando las piezas...": "Arranging the parts...",
   "Nombre para guardarla": "Name to save it",
+  "Agujero de drenaje": "Drain hole",
+  "Abre un agujero en la cara plana de abajo para que salga la resina del hueco. Pide una cara plana apoyada en la cama.": "Opens a hole in the flat bottom face so the resin can drain from the cavity. Needs a flat face resting on the bed.",
+  "para el drenaje hace falta una cara plana abajo: apoya el modelo en una cara plana": "the drain needs a flat face underneath: rest the model on a flat face",
+  "error en joint: para el drenaje hace falta una cara plana abajo: apoya el modelo en una cara plana": "joint error: the drain needs a flat face underneath: rest the model on a flat face",
   "No se pudieron rehacer las uniones: {e}": "Couldn't redo the joints: {e}",
 };

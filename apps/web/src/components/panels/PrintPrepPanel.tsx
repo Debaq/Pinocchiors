@@ -88,6 +88,8 @@ export interface PlateSettings {
   spacing: number;
   orient: boolean;
   hollowWall: number | null;
+  /** Diámetro del agujero de drenaje (mm) al vaciar; null: sin agujero */
+  drain: number | null;
 }
 
 export interface PlateResult {
@@ -108,6 +110,9 @@ export interface PrepSettings {
   infill: number;
   hollow: boolean;
   wall: number;
+  /** Agujero de drenaje al vaciar (resina) y su diámetro */
+  drain: boolean;
+  drainDiameter: number;
   plate: PlateSettings;
 }
 
@@ -116,7 +121,9 @@ export const defaultPrep: PrepSettings = {
   infill: 1,
   hollow: false,
   wall: 2,
-  plate: { format: "stl", spacing: 5, orient: true, hollowWall: null },
+  drain: false,
+  drainDiameter: 4,
+  plate: { format: "stl", spacing: 5, orient: true, hollowWall: null, drain: null },
 };
 
 export interface PlatePreview {
@@ -383,6 +390,10 @@ export const MaterialSection: Component<{
   onHollow: (v: boolean) => void;
   wall: number;
   onWall: (v: number) => void;
+  drain: boolean;
+  onDrain: (v: boolean) => void;
+  drainDiameter: number;
+  onDrainDiameter: (v: number) => void;
   estimate?: MaterialEstimate;
   busy?: boolean;
   disabled?: boolean;
@@ -400,6 +411,16 @@ export const MaterialSection: Component<{
     />
     <Show when={props.hollow}>
       <NumberInput label={t("Pared")} value={props.wall} onChange={props.onWall} min={0.8} max={20} step={0.2} suffix="mm" />
+      <Checkbox
+        small
+        label={t("Agujero de drenaje")}
+        checked={props.drain}
+        onChange={props.onDrain}
+        hint={t("Abre un agujero en la cara plana de abajo para que salga la resina del hueco. Pide una cara plana apoyada en la cama.")}
+      />
+      <Show when={props.drain}>
+        <NumberInput label={t("Diámetro")} value={props.drainDiameter} onChange={props.onDrainDiameter} min={2} max={15} step={0.5} suffix="mm" />
+      </Show>
     </Show>
     <Button onClick={props.onEstimate} disabled={props.disabled || props.busy} loading={props.busy} fullWidth size="sm">
       {t("Estimar material")}

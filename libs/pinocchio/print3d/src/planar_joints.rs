@@ -150,7 +150,6 @@ struct Cap {
     tris: Vec<[usize; 3]>,
     is_cap: Vec<bool>,
     diag: Real,
-    off: Real,
 }
 
 fn find_cap(mesh: &Mesh, polygon: &[Vector3], n: Vector3) -> Result<Cap> {
@@ -168,7 +167,7 @@ fn find_cap(mesh: &Mesh, polygon: &[Vector3], n: Vector3) -> Result<Cap> {
             ps.iter().all(|p| (n.dot(p) - off).abs() <= ptol) && normal_area(ps[0], ps[1], ps[2]).is_some_and(|(tn, _)| tn.dot(&n) > 0.999)
         })
         .collect();
-    Ok(Cap { pos, tris, is_cap, diag, off })
+    Ok(Cap { pos, tris, is_cap, diag })
 }
 
 /// ¿Está el punto `p` (del plano) dentro de algún triángulo de la tapa?
@@ -195,8 +194,12 @@ fn sample_polygon(polygon: &[Vector3]) -> Vec<Vector3> {
     pts
 }
 
-/// Recorta la tapa bajo la huella y extruye su borde `dir` (perno: hacia afuera; hueco: hacia adentro)
-fn carve(mesh: &Mesh, polygon: &[Vector3], n: Vector3, dir: Vector3) -> Result<Mesh> {
+/// Malla con la tapa abierta bajo la huella: posiciones, triángulos y el contorno del
+/// agujero (índices, recorrido con el agujero a la derecha, es decir horario mirando contra la normal)
+pub(crate) type OpenedCap = (Vec<Vector3>, Vec<[usize; 3]>, Vec<usize>);
+
+/// Quita de la tapa plana (normal exterior `n`) lo que queda bajo la huella
+pub(crate) fn open_cap(mesh: &Mesh, polygon: &[Vector3], n: Vector3) -> Result<OpenedCap> {
     if polygon.len() < 3 {
         return Err(Print3dError::JointError("huella degenerada".into()));
     }
@@ -269,8 +272,8 @@ fn carve(mesh: &Mesh, polygon: &[Vector3], n: Vector3, dir: Vector3) -> Result<M
     for (i, &w) in weld.iter().enumerate() {
         rep.entry(w).or_insert(out_pos[i]);
     }
-    let mut tris: Vec<[usize; 3]> = out_tris.iter().map(|t| [weld[t[0]], weld[t[1]], weld[t[2]]]).filter(|t| t[0] != t[1] && t[1] != t[2] && t[0] != t[2]).collect();
-    let mut positions: Vec<Vector3> = (0..rep.len()).map(|w| rep[&w]).collect();
+    let tris: Vec<[usize; 3]> = out_tris.iter().map(|t| [weld[t[0]], weld[t[1]], weld[t[2]]]).filter(|t| t[0] != t[1] && t[1] != t[2] && t[0] != t[2]).collect();
+    let positions: Vec<Vector3> = (0..rep.len()).map(|w| rep[&w]).collect();
 
     // Borde abierto = contorno de la huella (aristas dirigidas sin su opuesta)
     let mut directed: HashMap<(usize, usize), u32> = HashMap::new();
@@ -309,7 +312,13 @@ fn carve(mesh: &Mesh, polygon: &[Vector3], n: Vector3, dir: Vector3) -> Result<M
     if rings.len() != 1 {
         return Err(Print3dError::JointError("la unión abrió más de un contorno".into()));
     }
-    let ring = &rings[0];
+    Ok((positions, tris, rings.remove(0)))
+}
+
+/// Recorta la tapa bajo la huella y extruye su borde `dir` (perno: hacia afuera; hueco: hacia adentro)
+fn carve(mesh: &Mesh, polygon: &[Vector3], n: Vector3, dir: Vector3) -> Result<Mesh> {
+    let (mut positions, mut tris, ring) = open_cap(mesh, polygon, n)?;
+    let ring = &ring;
 
     // Paredes: por cada arista a→b del borde, el cuadrilátero (b, a, a+dir, b+dir)
     let top_start = positions.len();
@@ -368,7 +377,6 @@ fn carve(mesh: &Mesh, polygon: &[Vector3], n: Vector3, dir: Vector3) -> Result<M
     if !result.is_closed() {
         return Err(Print3dError::JointError("la malla resultante no quedó cerrada".into()));
     }
-    let _ = cap.off;
     Ok(result)
 }
 
@@ -458,7 +466,7 @@ pub fn apply_joints(pieces: &mut [LabeledPiece], config: &PlanarJointConfig) -> 
 }
 
 /// Elige hasta `count` posiciones dentro de la región de contacto, separadas entre sí
-fn choose_spots(contact: &Contact, config: &PlanarJointConfig) -> Vec<Vector3> {
+pub(crate) fn choose_spots(contact: &Contact, config: &PlanarJointConfig) -> Vec<Vector3> {
     let n = contact.normal;
     let (u, v) = plane_basis(n);
     let to2 = |p: &Vector3| (p.dot(&u), p.dot(&v));

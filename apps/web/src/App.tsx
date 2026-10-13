@@ -6960,7 +6960,7 @@ export const App: Component = () => {
         filters: [{ name: settings.format.toUpperCase(), extensions: [settings.format] }],
       });
       if (!path) return;
-      const input = { printer, material, format: settings.format, spacing: settings.spacing, orient: settings.orient, hollow_wall: settings.hollowWall, path };
+      const input = { printer, material, format: settings.format, spacing: settings.spacing, orient: settings.orient, hollow_wall: settings.hollowWall, drain: settings.drain, path };
       const result = await printTask(t("Preparando las placas..."), () => invoke<PlateResult>("export_print_plates", { input }));
       if (!result) return;
       setPlateResult(result);

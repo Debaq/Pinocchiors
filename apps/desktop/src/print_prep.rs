@@ -242,7 +242,7 @@ pub(crate) fn estimate_print_material_impl(state: &AppState, material: &Material
     for (label, mesh) in &list {
         add(&mut solid, p3d::estimate_material(mesh, material, infill, 1.75));
         if let Some(wall) = hollow_wall {
-            let r = p3d::hollow(mesh, &HollowConfig { wall, voxel_size: None }).map_err(|e| format!("Pieza {label}: {e}"))?;
+            let r = p3d::hollow(mesh, &HollowConfig { wall, ..Default::default() }).map_err(|e| format!("Pieza {label}: {e}"))?;
             let e = p3d::estimate_material(&r.mesh, material, infill, 1.75);
             let (mut acc, cavity) = hol.take().unwrap_or((p3d::MaterialEstimate { volume_mm3: 0.0, mass_g: 0.0, filament_m: 0.0 }, 0.0));
             add(&mut acc, e);
@@ -275,6 +275,9 @@ pub struct PlateInput {
     pub orient: bool,
     /// Vaciar con este espesor de pared (mm)
     pub hollow_wall: Option<f64>,
+    /// Agujero de drenaje de este diámetro en la cara de abajo (mm), al vaciar
+    #[serde(default)]
+    pub drain: Option<f64>,
     pub path: String,
 }
 
@@ -308,13 +311,15 @@ pub(crate) fn plan_plates(list: Vec<(String, Mesh)>, input: &PlateInput) -> Resu
     let config = PrintabilityConfig::from_profiles(&input.printer, &input.material);
     let mut prepared: Vec<(String, Mesh)> = Vec::new();
     for (label, mut mesh) in list {
-        if let Some(wall) = input.hollow_wall {
-            mesh = p3d::hollow(&mesh, &HollowConfig { wall, voxel_size: None }).map_err(|e| format!("Pieza {label}: {e}"))?.mesh;
-        }
+        // Primero se apoya: el drenaje va en la cara de abajo de esa posición
         if input.orient {
             p3d::orient_for_print(&mut mesh, &config).map_err(|e| format!("Pieza {label}: {e}"))?;
         } else {
             p3d::settle_on_bed(&mut mesh);
+        }
+        if let Some(wall) = input.hollow_wall {
+            let hollow = HollowConfig { wall, drain_diameter: input.drain, ..Default::default() };
+            mesh = p3d::hollow(&mesh, &hollow).map_err(|e| format!("Pieza {label}: {e}"))?.mesh;
         }
         prepared.push((label, mesh));
     }
@@ -466,6 +471,7 @@ mod tests {
             spacing,
             orient: true,
             hollow_wall: None,
+            drain: None,
             path: "x.stl".into(),
         }
     }
