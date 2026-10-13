@@ -8,6 +8,7 @@
 //! - **Transformaciones**: Escalar, orientar, centrar
 //! - **Corte**: Dividir modelos con planos, subdividir para impresoras pequeñas
 //! - **Etiquetado**: Numerar piezas, tracking de vecinos
+//! - **Verificación**: Imprimibilidad (topología, voladizos, paredes finas) y perfiles de impresora
 //! - **Joints**: Generar insertos para ensamblaje (dowels, dovetails, etc.)
 //!
 //! ## Ejemplo
@@ -37,8 +38,11 @@
 mod analysis;
 mod config;
 mod error;
+mod geom;
 mod joints;
 mod labeling;
+mod printability;
+mod profile;
 mod slicer;
 mod transform;
 
@@ -47,5 +51,7 @@ pub use config::*;
 pub use error::*;
 pub use joints::*;
 pub use labeling::*;
+pub use printability::*;
+pub use profile::*;
 pub use slicer::*;
 pub use transform::*;
