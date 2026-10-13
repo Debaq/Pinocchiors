@@ -2,6 +2,37 @@ import { Component, Show, For, createSignal } from "solid-js";
 import { Button, Select, NumberInput } from "../ui";
 import * as Icons from "../icons";
 import { fmtNumber, t } from "../../lib/i18n";
+import {
+  JointsSection,
+  MaterialSection,
+  OrientationSection,
+  PlatesSection,
+  PrinterMaterial,
+  ReadinessSection,
+  type JointSettings,
+  type JointsReport,
+  type MaterialEstimate,
+  type MaterialProfile,
+  type OrientationOption,
+  type PlateResult,
+  type PlateSettings,
+  type PrintPresets,
+  type PrinterProfile,
+  type Readiness,
+} from "./PrintPrepPanel";
+
+export type {
+  JointSettings,
+  JointsReport,
+  MaterialEstimate,
+  MaterialProfile,
+  OrientationOption,
+  PlateResult,
+  PlateSettings,
+  PrintPresets,
+  PrinterProfile,
+  Readiness,
+} from "./PrintPrepPanel";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -42,6 +73,19 @@ export interface Print3DPanelProps {
   subdivideResult?: SubdivideResult;
   canAnalyze?: boolean;
   isProcessing?: boolean;
+  /** Impresoras y materiales de fábrica */
+  presets?: PrintPresets;
+  readiness?: Readiness;
+  onCheck?: (printer: PrinterProfile, material: MaterialProfile) => void;
+  orientations?: OrientationOption[];
+  onSuggestOrientation?: (printer: PrinterProfile, material: MaterialProfile) => void;
+  onApplyOrientation?: (down: [number, number, number]) => void;
+  jointsReport?: JointsReport;
+  onAddJoints?: (settings: JointSettings) => void;
+  materialEstimate?: MaterialEstimate;
+  onEstimate?: (material: MaterialProfile, infill: number, hollowWall: number | null) => void;
+  plateResult?: PlateResult;
+  onExportPlates?: (printer: PrinterProfile, material: MaterialProfile, settings: PlateSettings) => void;
 }
 
 export interface ScaleParams {
@@ -84,10 +128,24 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
   const [scaleFactor, setScaleFactor] = createSignal(1.0);
   const [targetSize, setTargetSize] = createSignal<[number, number, number]>([100, 100, 100]);
 
+  // Impresora y material
+  const [printerChoice, setPrinterChoice] = createSignal<PrinterProfile | undefined>();
+  const [materialChoice, setMaterialChoice] = createSignal<MaterialProfile | undefined>();
+  const printer = (): PrinterProfile =>
+    printerChoice() ?? props.presets?.printers[0] ?? { name: "Creality Ender 3", build_volume: [220, 220, 250], nozzle: 0.4, layer_height: 0.2 };
+  const material = (): MaterialProfile =>
+    materialChoice() ?? props.presets?.materials[0] ?? { name: "PLA", density: 1.24, max_overhang_deg: 50 };
+
   // Subdivide state
-  const [buildVolume, setBuildVolume] = createSignal<[number, number, number]>([220, 220, 250]);
   const [strategy, setStrategy] = createSignal("grid");
   const [margin, setMargin] = createSignal(2.0);
+
+  // Preparación
+  const [joint, setJoint] = createSignal<JointSettings>({ shape: "round", size: 6, depth: 10, tolerance: -0.4, count: 2 });
+  const [infill, setInfill] = createSignal(1);
+  const [hollow, setHollow] = createSignal(false);
+  const [wall, setWall] = createSignal(2);
+  const [plate, setPlate] = createSignal<PlateSettings>({ format: "stl", spacing: 5, orient: true, hollowWall: null });
 
   return (
     <div class="space-y-4">
@@ -137,6 +195,24 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
               <span class="text-text font-mono">{fmtNumber(props.analysis!.triangle_count)}</span>
             </div>
           </div>
+        </div>
+
+        {/* Impresora, verificación y orientación */}
+        <div class="space-y-3 pt-2 border-t border-border/50">
+          <PrinterMaterial presets={props.presets} printer={printer()} material={material()} onPrinter={setPrinterChoice} onMaterial={setMaterialChoice} />
+          <ReadinessSection
+            readiness={props.readiness}
+            busy={props.isProcessing}
+            disabled={!props.canAnalyze}
+            onCheck={() => props.onCheck?.(printer(), material())}
+          />
+          <OrientationSection
+            options={props.orientations}
+            busy={props.isProcessing}
+            disabled={!props.canAnalyze}
+            onSuggest={() => props.onSuggestOrientation?.(printer(), material())}
+            onApply={props.onApplyOrientation}
+          />
         </div>
 
         {/* Escalar */}
@@ -212,31 +288,6 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
         <div class="space-y-3 pt-2 border-t border-border/50">
           <h4 class="text-xs font-semibold uppercase tracking-wider text-text-muted">{t("Subdividir")}</h4>
 
-          <p class="text-[10px] text-text-dim">{t("Volumen de impresión (mm):")}</p>
-          <div class="flex gap-1.5">
-            <NumberInput
-              label="X"
-              value={buildVolume()[0]}
-              onChange={(v) => setBuildVolume([v, buildVolume()[1], buildVolume()[2]])}
-              min={10}
-              step={10}
-            />
-            <NumberInput
-              label="Y"
-              value={buildVolume()[1]}
-              onChange={(v) => setBuildVolume([buildVolume()[0], v, buildVolume()[2]])}
-              min={10}
-              step={10}
-            />
-            <NumberInput
-              label="Z"
-              value={buildVolume()[2]}
-              onChange={(v) => setBuildVolume([buildVolume()[0], buildVolume()[1], v])}
-              min={10}
-              step={10}
-            />
-          </div>
-
           <Select
             label={t("Estrategia")}
             options={[
@@ -261,7 +312,7 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
           <Button
             onClick={() =>
               props.onSubdivide?.({
-                build_volume: buildVolume(),
+                build_volume: printer().build_volume,
                 strategy: strategy(),
                 margin: margin(),
               })
@@ -308,6 +359,40 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
             </For>
           </div>
         </div>
+      </Show>
+
+      <Show when={props.analysis}>
+        <Show when={props.subdivideResult}>
+          <JointsSection
+            settings={joint()}
+            onSettings={setJoint}
+            report={props.jointsReport}
+            busy={props.isProcessing}
+            hasPieces={!!props.subdivideResult}
+            onAdd={() => props.onAddJoints?.(joint())}
+          />
+        </Show>
+        <MaterialSection
+          infill={infill()}
+          onInfill={setInfill}
+          hollow={hollow()}
+          onHollow={setHollow}
+          wall={wall()}
+          onWall={setWall}
+          estimate={props.materialEstimate}
+          busy={props.isProcessing}
+          disabled={!props.canAnalyze}
+          onEstimate={() => props.onEstimate?.(material(), infill(), hollow() ? wall() : null)}
+        />
+        <PlatesSection
+          settings={plate()}
+          onSettings={setPlate}
+          result={props.plateResult}
+          busy={props.isProcessing}
+          disabled={!props.canAnalyze}
+          hasPieces={!!props.subdivideResult}
+          onExport={() => props.onExportPlates?.(printer(), material(), { ...plate(), hollowWall: hollow() ? wall() : null })}
+        />
       </Show>
     </div>
   );

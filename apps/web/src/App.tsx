@@ -276,7 +276,23 @@ import {
 } from "./lib/presetAnimations";
 import type { SkeletonTransform } from "./components/panels/SkeletonTransformPanel";
 import type { MeshDiagnostics, RepairResult, RepairAnalysisConfig, RepairOptions } from "./components/panels/RepairPanel";
-import type { MeshAnalysis, SubdivideResult, ScaleParams, SubdivideConfig } from "./components/panels/Print3DPanel";
+import type {
+  MeshAnalysis,
+  SubdivideResult,
+  ScaleParams,
+  SubdivideConfig,
+  PrintPresets,
+  PrinterProfile,
+  MaterialProfile,
+  Readiness,
+  OrientationOption,
+  JointSettings,
+  JointsReport,
+  MaterialEstimate,
+  PlateSettings,
+  PlateResult,
+} from "./components/panels/Print3DPanel";
+import { jointShapeConfig } from "./components/panels/PrintPrepPanel";
 import { DESIGN_FORMATS, IMAGE_FORMATS, SKELETON_FORMATS, defaultExportOptions, formatBytes, type ExportOptions } from "./components/steps/ExportStep";
 import { defaultUvConfig, type UvConfig, type UvInfo, type UvPreview } from "./components/steps/UvStep";
 import type { SkeletonFitInfo } from "./components/steps/SkeletonStep";
@@ -1552,6 +1568,12 @@ export const App: Component = () => {
   // Print3D state
   const [meshAnalysis, setMeshAnalysis] = createSignal<MeshAnalysis | undefined>();
   const [subdivideResult, setSubdivideResult] = createSignal<SubdivideResult | undefined>();
+  const [printPresets, setPrintPresets] = createSignal<PrintPresets | undefined>();
+  const [printReadiness, setPrintReadiness] = createSignal<Readiness | undefined>();
+  const [printOrientations, setPrintOrientations] = createSignal<OrientationOption[] | undefined>();
+  const [jointsReport, setJointsReport] = createSignal<JointsReport | undefined>();
+  const [materialEstimate, setMaterialEstimate] = createSignal<MaterialEstimate | undefined>();
+  const [plateResult, setPlateResult] = createSignal<PlateResult | undefined>();
 
   // Viewer ref
   let viewerRef: Viewer3D | undefined;
@@ -2628,6 +2650,11 @@ export const App: Component = () => {
     setCanUndoUnwrap(false);
     setMeshAnalysis(undefined);
     setSubdivideResult(undefined);
+    setPrintReadiness(undefined);
+    setPrintOrientations(undefined);
+    setJointsReport(undefined);
+    setMaterialEstimate(undefined);
+    setPlateResult(undefined);
     if (!keepClips) {
       setClips([]);
       setActiveClipId(undefined);
@@ -6778,6 +6805,8 @@ export const App: Component = () => {
         const result = await busy(t("Subdividiendo malla..."), () => invoke<TauriSubdivideResult>("subdivide_mesh", { config }));
         done(t("Dividir en piezas"));
         setSubdivideResult(result);
+        setJointsReport(undefined);
+        setPlateResult(undefined);
         setIsProcessing(false);
         setStatusMessage(t("Subdivisión completada: {n} piezas", { n: result.piece_count }));
         pipeline.markCompleted("print3d");
@@ -6821,6 +6850,101 @@ export const App: Component = () => {
       setStatusMessage(tBackend(result.message));
     } catch (e) {
       console.error("Export piece error:", e);
+      setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
+    }
+  };
+
+  /** Impresoras y materiales de fábrica (una vez, al abrir el panel de Fabricar) */
+  const loadPrintPresets = async () => {
+    if (printPresets()) return;
+    try {
+      setPrintPresets(await invoke<PrintPresets>("get_print_presets"));
+    } catch (e) {
+      console.error("Print presets error:", e);
+    }
+  };
+  createEffect(() => {
+    if (meshLoaded()) void loadPrintPresets();
+  });
+
+  const printTask = async <T,>(label: string, run: () => Promise<T>): Promise<T | undefined> => {
+    try {
+      setIsProcessing(true);
+      setStatusMessage(label);
+      return await busy(label, run);
+    } catch (e) {
+      console.error("Print prep error:", e);
+      setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
+      return undefined;
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleCheckPrint = async (printer: PrinterProfile, material: MaterialProfile) => {
+    const result = await printTask(t("Revisando si se puede imprimir..."), () => invoke<Readiness>("check_print_readiness", { printer, material }));
+    if (!result) return;
+    setPrintReadiness(result);
+    setStatusMessage(result.printable ? t("Se puede imprimir") : t("Hay que arreglar el modelo antes de imprimir"));
+  };
+
+  const handleSuggestOrientation = async (printer: PrinterProfile, material: MaterialProfile) => {
+    const result = await printTask(t("Buscando cómo apoyarlo..."), () => invoke<OrientationOption[]>("suggest_print_orientation", { printer, material }));
+    if (result) setPrintOrientations(result);
+  };
+
+  const handleApplyOrientation = async (down: [number, number, number]) => {
+    const data = meshData();
+    if (!data) return;
+    const ok = await applyPlacement(floorMatrix(data.positions, new THREE.Vector3(...down)), t("Orientado para imprimir: apoyado en la cara elegida"));
+    if (ok) {
+      // Lo calculado era de la posición anterior
+      setPrintOrientations(undefined);
+      setPrintReadiness(undefined);
+    }
+  };
+
+  const handleAddJoints = async (s: JointSettings) => {
+    const config = {
+      shape: jointShapeConfig(s),
+      depth: s.depth,
+      tolerance: s.tolerance,
+      count: s.count,
+      edge_margin: 2,
+      min_depth: 3,
+      min_contact_area: 50,
+      rotation_deg: 0,
+    };
+    const result = await printTask(t("Poniendo uniones..."), () => invoke<JointsReport>("add_print_joints", { config }));
+    if (!result) return;
+    setJointsReport(result);
+    setStatusMessage(result.joints_placed === 1 ? t("1 unión puesta") : t("{n} uniones puestas", { n: result.joints_placed }));
+  };
+
+  const handleEstimateMaterial = async (material: MaterialProfile, infill: number, hollowWall: number | null) => {
+    const result = await printTask(hollowWall ? t("Vaciando para estimar...") : t("Estimando el material..."), () =>
+      invoke<MaterialEstimate>("estimate_print_material", { material, infill, hollowWall }),
+    );
+    if (result) setMaterialEstimate(result);
+  };
+
+  const handleExportPlates = async (printer: PrinterProfile, material: MaterialProfile, settings: PlateSettings) => {
+    try {
+      const path = await save({
+        title: t("Exportar para imprimir"),
+        filters: [{ name: settings.format.toUpperCase(), extensions: [settings.format] }],
+      });
+      if (!path) return;
+      const input = { printer, material, format: settings.format, spacing: settings.spacing, orient: settings.orient, hollow_wall: settings.hollowWall, path };
+      const result = await printTask(t("Preparando las placas..."), () => invoke<PlateResult>("export_print_plates", { input }));
+      if (!result) return;
+      setPlateResult(result);
+      setStatusMessage(
+        result.plates === 1
+          ? t("Placa exportada ({kb} KB)", { kb: (result.total_bytes / 1024).toLocaleString(locale(), { maximumFractionDigits: 0 }) })
+          : t("{n} placas exportadas ({kb} KB)", { n: result.plates, kb: (result.total_bytes / 1024).toLocaleString(locale(), { maximumFractionDigits: 0 }) }),
+      );
+    } catch (e) {
       setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
     }
   };
@@ -8694,6 +8818,18 @@ export const App: Component = () => {
               canUndoScale: canUndoPrintScale(),
               onSubdivide: handleSubdivide,
               onExportPiece: handleExportPiece,
+              presets: printPresets(),
+              readiness: printReadiness(),
+              onCheck: handleCheckPrint,
+              orientations: printOrientations(),
+              onSuggestOrientation: handleSuggestOrientation,
+              onApplyOrientation: handleApplyOrientation,
+              jointsReport: jointsReport(),
+              onAddJoints: handleAddJoints,
+              materialEstimate: materialEstimate(),
+              onEstimate: handleEstimateMaterial,
+              plateResult: plateResult(),
+              onExportPlates: handleExportPlates,
               selection: {
                 objects: selectedObjects().map((o) => ({ id: o.id, name: o.name })),
                 revision: selectedObjects().map((o) => `${o.id}:${o.rev ?? 0}`).join(",") + `|${meshRevision()}`,
