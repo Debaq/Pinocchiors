@@ -569,6 +569,18 @@ pub fn cad_gear_design(source: cad_model::GearPart, kind: cad_model::gears::Gear
     cad_model::gear_part::design_teeth(&source, kind, ratio, distance)
 }
 
+/// Materiales con sus límites de fatiga para la resistencia de los engranes.
+#[tauri::command]
+pub fn cad_gear_materials() -> Vec<cad_model::gear_strength::Material> {
+    cad_model::gear_strength::MATERIALS.to_vec()
+}
+
+/// Resistencia del par `first` (con el par pedido) y `second` (el que engrana con él): flexión del pie y contacto.
+#[tauri::command]
+pub fn cad_gear_strength(first: cad_model::GearPart, second: cad_model::GearPart, input: cad_model::gear_strength::StrengthInput) -> Result<cad_model::gear_strength::StrengthResult, String> {
+    cad_model::gear_strength::analyze(&first, &second, &input)
+}
+
 /// El perfil de un engrane como bloque del sketch (origen en su centro).
 #[tauri::command]
 pub fn cad_gear_block(part: cad_model::GearPart) -> Result<cad_model::sketch::SketchBlock, String> {
@@ -2221,6 +2233,8 @@ pub mod bridge {
             "cad_sketch_suggest" => ok(cad_sketch_suggest(arg(args, "sketch")?)?),
             "cad_gear_info" => ok(cad_gear_info(arg(args, "part")?)),
             "cad_gear_design" => ok(cad_gear_design(arg(args, "source")?, arg(args, "kind")?, arg(args, "ratio")?, arg(args, "distance")?)?),
+            "cad_gear_materials" => ok(cad_gear_materials()),
+            "cad_gear_strength" => ok(cad_gear_strength(arg(args, "first")?, arg(args, "second")?, arg(args, "input")?)?),
             "cad_gear_block" => ok(cad_gear_block(arg(args, "part")?)?),
             "cad_sketch_define" => ok(cad_sketch_define(arg(args, "sketch")?, arg(args, "relations")?)?),
             "cad_mesh" => mesh_impl(state).map(Reply::Bytes),

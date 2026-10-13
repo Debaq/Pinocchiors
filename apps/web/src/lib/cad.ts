@@ -641,6 +641,53 @@ export interface GearAxis {
   center_distance: number;
 }
 
+/** Material con sus límites de fatiga (MPa) para la resistencia de los engranes */
+export interface GearMaterial {
+  id: string;
+  name: string;
+  e_modulus: number;
+  poisson: number;
+  sigma_f_lim: number;
+  sigma_h_lim: number;
+}
+
+export interface GearStrengthInput {
+  /** Par en el primer engrane (N·mm) */
+  torque: number;
+  rpm: number;
+  /** Factor de aplicación K_A */
+  service: number;
+  material_a: string;
+  material_b: string;
+  /** Factor de impresión de cada uno (multiplica sus límites) */
+  factor_a: number;
+  factor_b: number;
+}
+
+export interface GearBending {
+  y_f: number;
+  y_s: number;
+  s_fn: number;
+  h_fe: number;
+  rho_f: number;
+  sigma_f: number;
+  allowable: number;
+  safety: number;
+}
+
+export interface GearStrength {
+  tangential_force: number;
+  speed: number;
+  dynamic: number;
+  contact_ratio: number;
+  bending_a: GearBending | null;
+  bending_b: GearBending | null;
+  sigma_h: number;
+  allowable_h: number;
+  safety_h: number;
+  notes: string[];
+}
+
 export interface GearInfo {
   pitch_diameter: number;
   base_diameter: number;
@@ -3983,6 +4030,8 @@ export function createCadStore() {
     gearDesign: (source: GearPart, kind: GearKind, ratio: number | null, distance: number | null) =>
       invoke<number>("cad_gear_design", { source, kind, ratio, distance }),
     gearBlock: (part: GearPart) => invoke<SketchBlock>("cad_gear_block", { part }),
+    gearMaterials: () => invoke<GearMaterial[]>("cad_gear_materials"),
+    gearStrength: (first: GearPart, second: GearPart, input: GearStrengthInput) => invoke<GearStrength>("cad_gear_strength", { first, second, input }),
     resolveRefs: (faces: FaceRef[], edges: EdgeRef[]) => invoke<ResolvedRefs>("cad_resolve_refs", { faces, edges }),
     /** Eje x que tendría el sketch `feature` con esa horizontal (null: la del plano) */
     sketchX: (feature: number, xAxis: AxisSpec | null) => invoke<P3>("cad_sketch_x", { feature, x_axis: xAxis }),

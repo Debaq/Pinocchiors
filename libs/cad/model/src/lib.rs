@@ -15,6 +15,7 @@ pub mod expr;
 pub mod feature;
 pub mod geom;
 pub mod gear_part;
+pub mod gear_strength;
 pub mod gears;
 pub mod measure;
 pub mod project;

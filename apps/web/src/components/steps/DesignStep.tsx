@@ -78,7 +78,11 @@ import {
   type PartView,
   type PatternKind,
   type PrimitiveShape,
+  type GearBending,
   type GearInfo,
+  type GearMaterial,
+  type GearStrength,
+  type GearStrengthInput,
   type GearKind,
   type GearPart,
   type GearSpec,
@@ -5125,10 +5129,98 @@ const GearLinkBox: Component<{
             <p class="text-[11px] text-text-dim">
               {tl("El módulo y el ángulo de presión se toman del otro engrane; con una distancia pedida, la corrección de perfil se ajusta sola.")}
             </p>
+            <Show when={source() && own()}>
+              <GearStrengthBox store={props.store} first={source()!.part} second={own()!.part} />
+            </Show>
           </>
         )}
       </Show>
     </Show>
+  );
+};
+
+/**
+ * Resistencia del par (orientativa): flexión del pie de cada diente y presión de contacto, con el par que
+ * recibe el primer engrane, su velocidad, los materiales y un factor de impresión.
+ */
+const GearStrengthBox: Component<{ store: CadStore; first: GearPart; second: GearPart }> = (props) => {
+  const [open, setOpen] = createSignal(false);
+  const [materials, setMaterials] = createSignal<GearMaterial[]>([]);
+  const [input, setInput] = createSignal<GearStrengthInput>({ torque: 1000, rpm: 300, service: 1, material_a: "pla", material_b: "pla", factor_a: 1, factor_b: 1 });
+  const [result, setResult] = createSignal<GearStrength>();
+  const [error, setError] = createSignal("");
+  let seq = 0;
+  createEffect(() => {
+    if (open() && materials().length === 0) void props.store.gearMaterials().then(setMaterials);
+  });
+  // Se recalcula solo al cambiar cualquier dato mientras está abierto
+  createEffect(() => {
+    if (!open()) return;
+    const mine = ++seq;
+    const i = input();
+    const first = JSON.parse(JSON.stringify(props.first)) as GearPart;
+    const second = JSON.parse(JSON.stringify(props.second)) as GearPart;
+    void props.store
+      .gearStrength(first, second, i)
+      .then((r) => mine === seq && (setResult(r), setError("")))
+      .catch((e) => mine === seq && (setResult(undefined), setError(String(e))));
+  });
+  const set = <K extends keyof GearStrengthInput>(k: K, v: GearStrengthInput[K]) => setInput({ ...input(), [k]: v });
+  const options = () => materials().map((m) => ({ value: m.id, label: tl(m.name) }));
+  const fmt1 = (x: number) => (Math.abs(x) >= 100 ? x.toFixed(0) : x.toFixed(2));
+  const verdict = (s: number) => (s >= 1.5 ? "text-success" : s >= 1 ? "text-warning" : "text-error");
+  return (
+    <div class="space-y-1 border-t border-border pt-1.5" data-gear-strength>
+      <Checkbox small label={tl("Resistencia del par (orientativa)")} checked={open()} onChange={setOpen} />
+      <Show when={open()}>
+        <Row label={tl("Par en el primero (N·m)")}>
+          <NumberInput value={+(input().torque / 1000).toFixed(4)} onChange={(v) => v > 0 && set("torque", v * 1000)} />
+        </Row>
+        <Row label={tl("Velocidad del primero (rpm)")}>
+          <NumberInput value={input().rpm} onChange={(v) => v >= 0 && set("rpm", v)} />
+        </Row>
+        <Row label={tl("Factor de aplicación (1 uniforme, 1,5 con golpes)")}>
+          <NumberInput value={input().service} onChange={(v) => v >= 1 && set("service", v)} />
+        </Row>
+        <Row label={tl("Material del primero")}>
+          <Select options={options()} value={input().material_a} onChange={(v) => set("material_a", v)} />
+        </Row>
+        <Row label={tl("Material del segundo")}>
+          <Select options={options()} value={input().material_b} onChange={(v) => set("material_b", v)} />
+        </Row>
+        <Row label={tl("Factor de impresión (1: sin rebaja)")}>
+          <NumberInput value={input().factor_a} onChange={(v) => v > 0 && setInput({ ...input(), factor_a: v, factor_b: v })} />
+        </Row>
+        <Show when={error()}>
+          <p class="text-[11px] text-error">{tBackend(error())}</p>
+        </Show>
+        <Show when={result()}>
+          {(r) => (
+            <div class="space-y-0.5 text-[11px]">
+              <p class="text-text-dim">
+                {tl("Fuerza tangencial")} {fmt1(r().tangential_force)} N · {tl("velocidad")} {r().speed.toFixed(2)} m/s · K<sub>v</sub> {r().dynamic.toFixed(2)} · ε<sub>α</sub> {r().contact_ratio.toFixed(2)}
+              </p>
+              <For each={[[tl("Flexión del primero"), r().bending_a], [tl("Flexión del segundo"), r().bending_b]] as [string, GearBending | null][]}>
+                {([label, b]) => (
+                  <Show when={b}>
+                    {(b) => (
+                      <p>
+                        {label}: σ<sub>F</sub> {fmt1(b().sigma_f)} / {fmt1(b().allowable)} MPa · {tl("seguridad")} <span class={verdict(b().safety)}>{b().safety.toFixed(2)}</span>
+                        <span class="text-text-dim"> (Y<sub>F</sub> {b().y_f.toFixed(2)}, Y<sub>S</sub> {b().y_s.toFixed(2)})</span>
+                      </p>
+                    )}
+                  </Show>
+                )}
+              </For>
+              <p>
+                {tl("Contacto")}: σ<sub>H</sub> {fmt1(r().sigma_h)} / {fmt1(r().allowable_h)} MPa · {tl("seguridad")} <span class={verdict(r().safety_h)}>{r().safety_h.toFixed(2)}</span>
+              </p>
+              <For each={r().notes}>{(n) => <p class="text-text-dim">{tBackend(n)}</p>}</For>
+            </div>
+          )}
+        </Show>
+      </Show>
+    </div>
   );
 };
 
