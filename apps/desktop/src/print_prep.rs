@@ -90,6 +90,42 @@ pub fn get_fab_tolerances(printer: PrinterProfile, material: MaterialProfile) ->
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// CALIBRACIÓN
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Qué modelo de calibración se descarga
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CalibrationModel {
+    /// Placa con agujeros de holgura creciente y clavijas
+    Clearance(p3d::ClearanceTest),
+    /// Bloque de medidas conocidas con agujeros pasantes
+    Block(p3d::CalibrationBlock),
+}
+
+/// Guarda un modelo de calibración listo para imprimir (STL, 3MF…), en milímetros con Z arriba
+#[tauri::command]
+pub async fn export_calibration_model(app: AppHandle, model: CalibrationModel, format: String, path: String) -> Result<u64, String> {
+    in_background(app, move |_| export_calibration_impl(&model, &format, &path)).await
+}
+
+pub(crate) fn export_calibration_impl(model: &CalibrationModel, format: &str, path: &str) -> Result<u64, String> {
+    let meshes: Vec<(String, Mesh)> = match model {
+        CalibrationModel::Clearance(cfg) => p3d::clearance_test(cfg).map_err(|e| format!("No se pudo armar la prueba: {e}"))?,
+        CalibrationModel::Block(cfg) => vec![("bloque".to_string(), p3d::calibration_block(cfg).map_err(|e| format!("No se pudo armar el bloque: {e}"))?)],
+    };
+    let p = std::path::Path::new(path);
+    crate::cad::export_scene(&plate_scene(&Plate { meshes }), p, format)?;
+    Ok(std::fs::metadata(p).map(|m| m.len()).unwrap_or(0))
+}
+
+/// Las holguras que salen de lo medido en las piezas de calibración impresas
+#[tauri::command]
+pub fn solve_print_calibration(block: p3d::CalibrationBlock, measures: p3d::CalibrationMeasures) -> Result<p3d::CalibrationResult, String> {
+    p3d::solve_calibration(&block, &measures).map_err(|e| e.to_string())
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // VERIFICAR
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -631,6 +667,42 @@ mod tests {
         // Dos cubos de 20 mm con 5 mm entre ellos, en Z arriba
         assert!((hi[2] - lo[2] - 20.0).abs() < 1e-3 && lo[2].abs() < 1e-3, "{lo:?} {hi:?}");
         assert!((hi[0] - lo[0]).max(hi[1] - lo[1]) >= 44.9, "{lo:?} {hi:?}");
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn los_modelos_de_calibracion_se_exportan_en_mm() {
+        let dir = std::env::temp_dir().join("pinocchio_calibration_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let bounds = |path: &std::path::Path| {
+            let bytes = std::fs::read(path).unwrap();
+            let count = u32::from_le_bytes(bytes[80..84].try_into().unwrap()) as usize;
+            let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+            for t in 0..count {
+                let base = 84 + t * 50 + 12;
+                for v in 0..3 {
+                    for k in 0..3 {
+                        let o = base + v * 12 + k * 4;
+                        let c = f32::from_le_bytes(bytes[o..o + 4].try_into().unwrap());
+                        lo[k] = lo[k].min(c);
+                        hi[k] = hi[k].max(c);
+                    }
+                }
+            }
+            (lo, hi, count)
+        };
+        let path = dir.join("bloque.stl");
+        export_calibration_impl(&CalibrationModel::Block(p3d::CalibrationBlock::default()), "stl", path.to_str().unwrap()).unwrap();
+        let (lo, hi, count) = bounds(&path);
+        // 53 × 30 × 20, Z arriba y apoyado en la cama
+        assert!((hi[0] - lo[0] - 53.0).abs() < 1e-3 && (hi[1] - lo[1] - 30.0).abs() < 1e-3 && (hi[2] - lo[2] - 20.0).abs() < 1e-3, "{lo:?} {hi:?}");
+        assert!(lo[2].abs() < 1e-3 && count > 100);
+        let path = dir.join("holgura.stl");
+        export_calibration_impl(&CalibrationModel::Clearance(p3d::ClearanceTest::default()), "stl", path.to_str().unwrap()).unwrap();
+        let (lo, hi, _) = bounds(&path);
+        assert!(hi[2] - lo[2] > 13.0 && lo[2].abs() < 1e-3, "{lo:?} {hi:?}");
+        assert!(export_calibration_impl(&CalibrationModel::Block(p3d::CalibrationBlock { holes: vec![], ..Default::default() }), "stl", path.to_str().unwrap()).is_err());
+        std::fs::remove_file(dir.join("bloque.stl")).ok();
         std::fs::remove_file(path).ok();
     }
 
