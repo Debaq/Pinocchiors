@@ -103,13 +103,13 @@ fn piñon_dentro_de_corona_y_al_reves() {
         return;
     }
     // Corona como engranada con el piñón
-    let (_, g) = pair(gear(GearKind::External, 12), gear(GearKind::Internal, 30), link(30.0));
-    assert_relative_eq!(g[1].center_distance, 18.0, epsilon = 1e-9);
+    let (_, g) = pair(gear(GearKind::External, 12), gear(GearKind::Internal, 24), link(30.0));
+    assert_relative_eq!(g[1].center_distance, 12.0, epsilon = 1e-9);
     let (p, r) = (solid(&g[0]), solid(&g[1]));
     assert!(overlap(&p, &r) < 1e-3 * p.mass().unwrap().volume / 12.0, "choque {}", overlap(&p, &r));
     // Piñón engranado con una corona anterior
-    let (_, g) = pair(gear(GearKind::Internal, 30), gear(GearKind::External, 12), link(110.0));
-    assert_relative_eq!(g[1].center_distance, 18.0, epsilon = 1e-9);
+    let (_, g) = pair(gear(GearKind::Internal, 24), gear(GearKind::External, 12), link(110.0));
+    assert_relative_eq!(g[1].center_distance, 12.0, epsilon = 1e-9);
     let (r, p) = (solid(&g[0]), solid(&g[1]));
     assert!(overlap(&p, &r) < 1e-3 * p.mass().unwrap().volume / 12.0, "choque {}", overlap(&p, &r));
 }
@@ -133,14 +133,14 @@ fn cremallera_helicoidal_con_piñon_de_las_dos_manos() {
     if !occt::available() {
         return;
     }
-    let rack = GearPart { spec: GearSpec { kind: GearKind::Rack, teeth: 9, module: 2.0, ..Default::default() }, width: 10.0, outer: 6.0, ..Default::default() };
+    let rack = GearPart { spec: GearSpec { kind: GearKind::Rack, teeth: 6, module: 2.0, ..Default::default() }, width: 10.0, outer: 6.0, ..Default::default() };
     for helix in [20.0, -20.0] {
-        let mut pinion = gear(GearKind::External, 20);
+        let mut pinion = gear(GearKind::External, 12);
         pinion.spec.helix_angle = helix;
         let (_, g) = pair(pinion, rack.clone(), link(-30.0));
         assert_relative_eq!(g[1].part.spec.helix_angle, -helix, epsilon = 1e-9);
         let (p, r) = (solid(&g[0]), solid(&g[1]));
-        let tooth = p.mass().unwrap().volume / 20.0;
+        let tooth = p.mass().unwrap().volume / 12.0;
         assert!(overlap(&p, &r) < 1e-3 * tooth, "hélice {helix}°: choque {}", overlap(&p, &r));
         // Control: la cremallera inclinada al otro lado choca
         let mut wrong = g[1].clone();
@@ -190,18 +190,19 @@ fn helicoidales_calzan_con_mano_contraria() {
         g
     };
     for (angle, herring) in [(0.0, false), (65.0, false), (20.0, true)] {
-        let (_, g) = pair(helical(20, 18.0, herring), helical(28, 18.0, herring), link(angle));
+        let (_, g) = pair(helical(14, 18.0, herring), helical(20, 18.0, herring), link(angle));
         // La mano del segundo se invirtió sola
         assert_eq!(g[1].part.spec.helix_angle, -18.0);
         let (a, b) = (solid(&g[0]), solid(&g[1]));
-        let tooth = a.mass().unwrap().volume / 20.0;
+        let tooth = a.mass().unwrap().volume / 14.0;
         let hit = overlap(&a, &b);
         assert!(hit < 5e-3 * tooth, "{angle}° espina={herring}: choque de {hit} (diente {tooth})");
         // Control: girado medio paso chocan
         let mut off = g[1].clone();
-        let h = PI / 28.0;
+        let h = PI / 20.0;
         off.x = [off.x[0] * h.cos() - off.x[1] * h.sin(), off.x[0] * h.sin() + off.x[1] * h.cos(), 0.0];
-        assert!(overlap(&a, &solid(&off)) > 0.05 * tooth, "el control debe chocar");
+        let control = overlap(&a, &solid(&off));
+        assert!(control > 0.05 * tooth, "{angle}° espina={herring}: el control debe chocar ({control} contra diente {tooth})");
     }
 }
 
@@ -288,7 +289,7 @@ fn sin_fin_y_rueda_calzan() {
     if !occt::available() {
         return;
     }
-    for (starts, left, z, angle) in [(1u32, false, 20u32, 0.0), (2, true, 24, 90.0)] {
+    for (starts, left, z, angle) in [(1u32, false, 14u32, 0.0), (2, true, 16, 90.0)] {
         let mut wheel = gear(GearKind::External, z);
         wheel.width = 12.0;
         wheel.bore = 8.0;

@@ -10,7 +10,7 @@ use crate::eval::Evaluation;
 use crate::feature::PartId;
 use crate::geom::*;
 use cad_occt::Shape;
-use std::f64::consts::{PI, TAU};
+use std::f64::consts::TAU;
 
 /// Ensamble guardado en el documento.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -33,13 +33,19 @@ pub struct Assembly {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Relation {
     /// Dos revolutas: `ángulo_b = razón · ángulo_a + fase` (° ). La razón lleva
-    /// el signo: negativa si giran al revés (engranes exteriores).
+    /// el signo: negativa si giran al revés (engranes exteriores). Con `carrier`
+    /// (planetarios: uno de los dos va montado en el brazo porta-satélites) suma
+    /// `razón_brazo · ángulo del brazo`: la unión del brazo con la carcasa.
     Gear {
         a: u32,
         b: u32,
         ratio: f64,
         #[serde(default)]
         phase: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        carrier: Option<u32>,
+        #[serde(default, skip_serializing_if = "is_zero")]
+        carrier_ratio: f64,
     },
     /// Revoluta y deslizante: `distancia = por_vuelta · ángulo/360 + fase` (mm)
     RackPinion {
@@ -58,10 +64,14 @@ pub enum Relation {
     },
 }
 
+fn is_zero(x: &f64) -> bool {
+    *x == 0.0
+}
+
 impl Relation {
     pub fn mates(&self) -> Vec<u32> {
         match self {
-            Relation::Gear { a, b, .. } => vec![*a, *b],
+            Relation::Gear { a, b, carrier, .. } => [*a, *b].into_iter().chain(*carrier).collect(),
             Relation::RackPinion { revolute, slider, .. } => vec![*revolute, *slider],
             Relation::Screw { cylindrical, .. } => vec![*cylindrical],
         }
@@ -206,10 +216,6 @@ fn residuals(m: &Mate, a: (P3, P3, P3), b: (P3, P3, P3), out: &mut Vec<f64>) {
     }
 }
 
-fn wrap(a: f64) -> f64 {
-    (a + PI).rem_euclid(TAU) - PI
-}
-
 /// Ángulo (rad) de `b` respecto de `a` alrededor de Z de `a`, y distancia (mm)
 /// a lo largo de ese Z, de una unión con los conectores en el mundo.
 fn measure_mate(m: &Mate, a: (P3, P3, P3), b: (P3, P3, P3)) -> (f64, f64) {
@@ -239,13 +245,24 @@ fn propagate(asm: &Assembly) -> (Vec<Mate>, Vec<Relation>) {
 fn impose(r: &Relation, mates: &mut [Mate]) -> bool {
     let idx = |id: u32| mates.iter().position(|m| m.id == id);
     match r {
-        Relation::Gear { a, b, ratio, phase } => {
+        Relation::Gear { a, b, ratio, phase, carrier, carrier_ratio } => {
             let (Some(i), Some(j)) = (idx(*a), idx(*b)) else { return true };
-            match (mates[i].angle, mates[j].angle) {
-                (Some(x), None) => mates[j].angle = Some(ratio * x + phase),
-                (None, Some(y)) if ratio.abs() > 1e-12 => mates[i].angle = Some((y - phase) / ratio),
-                (None, None) => return false,
-                _ => {}
+            let k = match carrier {
+                Some(c) => match idx(*c) {
+                    Some(k) => Some(k),
+                    None => return true,
+                },
+                None => None,
+            };
+            // t_b = razón·t_a + razón_brazo·t_c + fase: con una sola incógnita se despeja
+            let cr = if k.is_some() { *carrier_ratio } else { 0.0 };
+            let tc = k.map_or(Some(0.0), |k| mates[k].angle);
+            match (mates[i].angle, mates[j].angle, tc) {
+                (Some(x), None, Some(c)) => mates[j].angle = Some(ratio * x + cr * c + phase),
+                (None, Some(y), Some(c)) if ratio.abs() > 1e-12 => mates[i].angle = Some((y - cr * c - phase) / ratio),
+                (Some(x), Some(y), None) if cr.abs() > 1e-12 => mates[k.unwrap()].angle = Some((y - ratio * x - phase) / cr),
+                (Some(_), Some(_), Some(_)) => {}
+                _ => return false,
             }
             true
         }
@@ -305,7 +322,9 @@ pub fn solve(asm: &Assembly) -> AssemblySolution {
             None => Some((asm.instances[k].position, asm.instances[k].rotation)),
         }
     };
-    let eval = |x: &DVector<f64>| -> DVector<f64> {
+    // `pin`: vuelta (múltiplo de 2π) que se resta a cada relación de engrane abierta. Sin ella el
+    // residuo se envuelve a (-π, π] y salta justo en 180°: el jacobiano numérico ahí sale basura.
+    let eval_pinned = |x: &DVector<f64>, pin: Option<&[f64]>, turns: &mut Vec<f64>| -> DVector<f64> {
         let mut r = Vec::new();
         for m in &mates {
             let (Some((pa, ra)), Some((pb, rb))) = (pose(x, m.a.instance), pose(x, m.b.instance)) else { continue };
@@ -318,11 +337,22 @@ pub fn solve(asm: &Assembly) -> AssemblySolution {
             let (pb, rb) = pose(x, m.b.instance)?;
             Some(measure_mate(m, world(&m.a, pa, ra), world(&m.b, pb, rb)))
         };
-        for rel in &open {
+        for (k, rel) in open.iter().enumerate() {
             match rel {
-                Relation::Gear { a, b, ratio, phase } => {
-                    if let (Some((ta, _)), Some((tb, _))) = (measure(*a), measure(*b)) {
-                        r.push(wrap(tb - ratio * ta - phase.to_radians()));
+                Relation::Gear { a, b, ratio, phase, carrier, carrier_ratio } => {
+                    let tc = match carrier {
+                        Some(c) => measure(*c).map(|m| m.0),
+                        None => Some(0.0),
+                    };
+                    if let (Some((ta, _)), Some((tb, _)), Some(tc)) = (measure(*a), measure(*b), tc) {
+                        let e = tb - ratio * ta - carrier_ratio * tc - phase.to_radians();
+                        let n = match pin {
+                            Some(p) => p[k],
+                            None => (e / TAU).round(),
+                        };
+                        turns.resize(open.len(), 0.0);
+                        turns[k] = n;
+                        r.push(e - TAU * n);
                     }
                 }
                 Relation::RackPinion { revolute, slider, per_turn, phase } => {
@@ -339,8 +369,12 @@ pub fn solve(asm: &Assembly) -> AssemblySolution {
         }
         DVector::from_vec(r)
     };
+    let eval = |x: &DVector<f64>| eval_pinned(x, None, &mut Vec::new());
     let jac = |x: &DVector<f64>, f0: &DVector<f64>| -> DMatrix<f64> {
         let mut j = DMatrix::<f64>::zeros(f0.len(), x.len());
+        let mut turns = vec![0.0; open.len()];
+        eval_pinned(x, None, &mut turns);
+        let eval = |x: &DVector<f64>| eval_pinned(x, Some(&turns), &mut Vec::new());
         for c in 0..x.len() {
             let h = 1e-7 * (1.0 + x[c].abs());
             let mut xp = x.clone();
@@ -494,17 +528,23 @@ fn gear_world(ev: &Evaluation, asm: &Assembly, sol: &AssemblySolution, instance:
 pub fn suggest_gear_relations(ev: &Evaluation, asm: &Assembly, sol: &AssemblySolution) -> Vec<Relation> {
     use crate::gears::GearKind::*;
     let mut out = Vec::new();
-    // La unión giratoria de una instancia (la primera que la tenga de un lado)
+    // La unión giratoria de una instancia: de las que tenga, la de eje más paralelo al del engrane
+    let pick = |inst: u32, kinds: &[MateKind], axis: Option<P3>| -> Option<(&Mate, f64)> {
+        let score = |m: &Mate| {
+            let w = world(&m.a, [0.0; 3], rot_of(sol, m.a.instance)).1;
+            axis.map_or(1.0, |ax| dot(normalize(w), normalize(ax)).abs())
+        };
+        asm.mates
+            .iter()
+            .filter(|m| kinds.contains(&m.kind) && (m.a.instance == inst || m.b.instance == inst))
+            .max_by(|x, y| score(x).total_cmp(&score(y)))
+            .map(|m| (m, if m.b.instance == inst { 1.0 } else { -1.0 }))
+    };
     let hinge = |inst: u32| -> Option<(&Mate, f64)> {
-        asm.mates.iter().find_map(|m| {
-            (matches!(m.kind, MateKind::Revolute | MateKind::Cylindrical) && (m.a.instance == inst || m.b.instance == inst)).then(|| (m, if m.b.instance == inst { 1.0 } else { -1.0 }))
-        })
+        let axis = gear_world(ev, asm, sol, inst).map(|g| g.1);
+        pick(inst, &[MateKind::Revolute, MateKind::Cylindrical], axis)
     };
-    let slide = |inst: u32| -> Option<(&Mate, f64)> {
-        asm.mates.iter().find_map(|m| {
-            (matches!(m.kind, MateKind::Slider | MateKind::Cylindrical) && (m.a.instance == inst || m.b.instance == inst)).then(|| (m, if m.b.instance == inst { 1.0 } else { -1.0 }))
-        })
-    };
+    let slide = |inst: u32| -> Option<(&Mate, f64)> { pick(inst, &[MateKind::Slider, MateKind::Cylindrical], None) };
     let exists = |a: u32, b: u32| {
         asm.relations.iter().any(|r| matches!(r, Relation::Gear { a: x, b: y, .. } | Relation::RackPinion { revolute: x, slider: y, .. } if (*x, *y) == (a, b) || (*x, *y) == (b, a)))
     };
@@ -549,9 +589,58 @@ pub fn suggest_gear_relations(ev: &Evaluation, asm: &Assembly, sol: &AssemblySol
                     };
                     let ratio = sign_a * sign_b * k;
                     let (Some((ta, _)), Some((tb, _))) = (measure(asm, sol, ma.id), measure(asm, sol, mb.id)) else { continue };
-                    out.push(Relation::Gear { a: ma.id, b: mb.id, ratio, phase: tb - ratio * ta });
+                    // Planetarios: si los dos cuelgan de piezas distintas, una es la carcasa y la otra el brazo
+                    let parent = |m: &Mate, inst: u32| if m.a.instance == inst { m.b.instance } else { m.a.instance };
+                    let (pa, pb) = (parent(ma, a_inst.id), parent(mb, b_inst.id));
+                    let mut rel = Relation::Gear { a: ma.id, b: mb.id, ratio, phase: tb - ratio * ta, carrier: None, carrier_ratio: 0.0 };
+                    if pa != pb {
+                        let is_fixed = |i: u32| asm.instances.iter().find(|x| x.id == i).is_some_and(|x| x.fixed);
+                        let first = |i: u32| asm.instances.first().is_some_and(|x| x.id == i);
+                        let (house, arm) = if is_fixed(pa) || (!is_fixed(pb) && first(pa)) { (pa, pb) } else { (pb, pa) };
+                        let arm_mate = asm.mates.iter().find(|m| {
+                            matches!(m.kind, MateKind::Revolute | MateKind::Cylindrical) && ([m.a.instance, m.b.instance] == [house, arm] || [m.b.instance, m.a.instance] == [house, arm])
+                        });
+                        if let Some(mc) = arm_mate
+                            && let Some((tc, _)) = measure(asm, sol, mc.id)
+                        {
+                            let side_c = if mc.b.instance == arm { 1.0 } else { -1.0 };
+                            let sign_c = side_c * dot(axis_a, normalize(world(&mc.a, [0.0; 3], rot_of(sol, mc.a.instance)).1)).signum();
+                            // Willis: (φ_b − φ_c) = k·(φ_a − φ_c), con φ absolutos sobre el eje
+                            let (on_a, on_b) = (if pa == arm { 1.0 } else { 0.0 }, if pb == arm { 1.0 } else { 0.0 });
+                            let carrier_ratio = sign_b * sign_c * (k * (on_a - 1.0) + 1.0 - on_b);
+                            rel = Relation::Gear { a: ma.id, b: mb.id, ratio, phase: tb - ratio * ta - carrier_ratio * tc, carrier: Some(mc.id), carrier_ratio };
+                        }
+                    }
+                    out.push(rel);
                 }
             }
+        }
+    }
+    out
+}
+
+/// Avisos de los pares de engranes enlazados que están en el ensamble: los rectos y helicoidales
+/// solo engranan con ejes paralelos (cónicos y sin fin tienen los suyos, ya fijados por el enlace).
+/// Si además los dos son helicoidales, es el caso de helicoidales cruzados, que no se tallan.
+pub fn gear_axis_warnings(ev: &Evaluation, asm: &Assembly, sol: &AssemblySolution) -> Vec<String> {
+    use crate::gears::GearKind::*;
+    let mut out = Vec::new();
+    for b_inst in &asm.instances {
+        let Some(gb) = ev.gears.iter().find(|g| g.feature == b_inst.part.feature) else { continue };
+        let Some(link) = gb.part.link else { continue };
+        for a_inst in asm.instances.iter().filter(|i| i.part.feature == link.feature) {
+            let (Some((ga, axis_a, _)), Some((_, axis_b, _))) = (gear_world(ev, asm, sol, a_inst.id), gear_world(ev, asm, sol, b_inst.id)) else { continue };
+            let (ka, kb) = (ga.part.spec.kind, gb.part.spec.kind);
+            if matches!(ka, Bevel | Worm) || matches!(kb, Bevel | Worm) {
+                continue;
+            }
+            let angle = dot(normalize(axis_a), normalize(axis_b)).abs().clamp(0.0, 1.0).acos().to_degrees();
+            if angle < 0.5 {
+                continue;
+            }
+            let helical = ga.part.spec.helix_angle != 0.0 && gb.part.spec.helix_angle != 0.0;
+            let tail = if helical { "; los helicoidales cruzados no se tallan, para ejes cruzados usa un sin fin" } else { "" };
+            out.push(format!("{} y {} tienen los ejes a {:.1}°: los engranes rectos y helicoidales solo engranan con ejes paralelos{tail}", a_inst.name, b_inst.name, angle));
         }
     }
     out

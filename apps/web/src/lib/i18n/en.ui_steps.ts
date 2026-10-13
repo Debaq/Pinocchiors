@@ -676,6 +676,8 @@ export const en_ui_steps: Catalog = {
   "mm por vuelta": "mm per turn",
   "Fase": "Phase",
   "No hay engranes enlazados con una unión giratoria cada uno": "No meshed gears with a revolute joint each",
+  "{a} y {b} tienen los ejes a {angle}°: los engranes rectos y helicoidales solo engranan con ejes paralelos": "{a} and {b} have axes {angle}° apart: spur and helical gears only mesh with parallel axes",
+  "{a} y {b} tienen los ejes a {angle}°: los engranes rectos y helicoidales solo engranan con ejes paralelos; los helicoidales cruzados no se tallan, para ejes cruzados usa un sin fin": "{a} and {b} have axes {angle}° apart: spur and helical gears only mesh with parallel axes; crossed helical gears are not generated, use a worm for crossed axes",
   "{a} ↔ {b}: razón {ratio}": "{a} ↔ {b}: ratio {ratio}",
   "{a} ↔ {b}: {mm} mm por vuelta": "{a} ↔ {b}: {mm} mm per turn",
   "{a}: paso {mm} mm": "{a}: pitch {mm} mm",

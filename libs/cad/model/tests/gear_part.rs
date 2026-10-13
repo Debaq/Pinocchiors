@@ -117,6 +117,8 @@ fn avisos_y_errores() {
         g.spec.kind = GearKind::Rack;
         g.spec.helix_angle = 15.0;
         g.outer = 6.0;
+        assert!(build(g.clone()).is_ok(), "la cremallera helicoidal ya se talla");
+        g.width = 0.0;
         assert!(build(g).is_err());
         assert!(build(GearPart { bore: 40.0, ..spur(20) }).is_err());
         assert!(build(GearPart { bore: 5.0, keyway: true, ..spur(20) }).is_err());
@@ -153,7 +155,7 @@ fn helicoidal_vale_area_por_ancho_y_gira_a_la_derecha() {
         return;
     }
     for beta in [20.0, -20.0] {
-        let g = helical(24, beta);
+        let g = helical(12, beta);
         let c = g.spec.circles().unwrap();
         let area = poly_area(&g.spec.profile().unwrap().points);
         let b = part(g.clone());
@@ -161,13 +163,11 @@ fn helicoidal_vale_area_por_ancho_y_gira_a_la_derecha() {
         // Arriba el diente quedó girado w·tanβ/r: coincide con el engrane recto girado así
         let turn = 10.0 * beta.to_radians().tan() / c.pitch;
         let top = |a: f64| {
-            let mut s = spur(24);
+            let mut s = spur(12);
             s.width = 0.5;
             let frame = occt::Frame { origin: [0.0, 0.0, 9.5], z: [0.0, 0.0, 1.0], x: [a.cos(), a.sin(), 0.0] };
             cad_model::gear_part::gear(frame, &s).unwrap()
         };
-        let slab = b.intersect(&top(0.0).clone()).ok();
-        let _ = slab;
         let hit = |a: f64| top(a).intersect(&b).ok().and_then(|x| x.mass().ok()).map(|m| m.volume).unwrap_or(0.0);
         assert!(hit(turn) > hit(-turn), "β={beta}: el giro va al revés ({} vs {})", hit(turn), hit(-turn));
     }
@@ -179,27 +179,40 @@ fn espina_de_pescado() {
         return;
     }
     let area = |g: &GearPart| poly_area(&g.spec.profile().unwrap().points);
-    let g = GearPart { herringbone: true, ..helical(24, 20.0) };
+    let g = GearPart { herringbone: true, ..helical(12, 20.0) };
     assert_relative_eq!(vol(&part(g.clone())), area(&g) * 10.0, max_relative = 3e-3);
     // Con canal: sale el volumen de las dos mitades más el núcleo del canal
+    // Con pocos dientes el pie socavado baja del círculo de pie y el volumen deja de ser ese: z=24
     let c = GearPart { herringbone: true, groove: 2.0, ..helical(24, 20.0) };
     let root = c.spec.circles().unwrap().root;
     let esperado = area(&c) * 8.0 + PI * root * root * 2.0;
     assert_relative_eq!(vol(&part(c.clone())), esperado, max_relative = 4e-3);
-    assert!(build(GearPart { groove: 2.0, ..helical(24, 0.0) }).is_ok());
-    assert!(build(GearPart { herringbone: true, ..helical(24, 0.0) }).is_err());
+    assert!(build(GearPart { groove: 2.0, ..helical(12, 0.0) }).is_ok());
+    assert!(build(GearPart { herringbone: true, ..helical(12, 0.0) }).is_err());
 }
 
 #[test]
-fn corona_helicoidal_y_cremallera() {
+fn corona_helicoidal() {
     if !occt::available() {
         return;
     }
-    let mut ring = GearPart { spec: GearSpec { kind: GearKind::Internal, teeth: 40, module: 2.0, helix_angle: 15.0, ..Default::default() }, width: 10.0, outer: 100.0, ..Default::default() };
-    let area = PI * 2500.0 - poly_area(&ring.spec.profile().unwrap().points);
+    let ring = GearPart { spec: GearSpec { kind: GearKind::Internal, teeth: 24, module: 2.0, helix_angle: 15.0, ..Default::default() }, width: 10.0, outer: 60.0, ..Default::default() };
+    let area = PI * 900.0 - poly_area(&ring.spec.profile().unwrap().points);
     assert_relative_eq!(vol(&part(ring.clone())), area * 10.0, max_relative = 4e-3);
-    ring.spec.kind = GearKind::Rack;
-    assert!(build(ring).is_err());
+}
+
+#[test]
+fn corona_en_espina_de_pescado_con_canal() {
+    if !occt::available() {
+        return;
+    }
+    let ring = GearPart { spec: GearSpec { kind: GearKind::Internal, teeth: 24, module: 2.0, helix_angle: 15.0, ..Default::default() }, width: 10.0, outer: 60.0, herringbone: true, ..Default::default() };
+    let cavity = poly_area(&ring.spec.profile().unwrap().points);
+    assert_relative_eq!(vol(&part(ring.clone())), (PI * 900.0 - cavity) * 10.0, max_relative = 4e-3);
+    // Canal de alivio en medio: un cilindro hasta el círculo de pie, sin dientes
+    let grooved = GearPart { groove: 2.0, ..ring };
+    let root = grooved.spec.circles().unwrap().root;
+    assert_relative_eq!(vol(&part(grooved)), PI * 900.0 * 10.0 - cavity * 8.0 - PI * root * root * 2.0, max_relative = 4e-3);
 }
 
 fn bevel(z: u32, cone: f64) -> GearPart {

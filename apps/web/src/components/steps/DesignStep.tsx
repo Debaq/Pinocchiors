@@ -127,6 +127,7 @@ import { axisToVertical, faceToFloor, faceToFront, pointToOrigin, type Mat4 } fr
 import { Button, Checkbox, IconButton, NumberInput, Select, Slider, Tooltip } from "../ui";
 import * as Icons from "../icons";
 import { t as tl, locale, tn } from "../../lib/i18n";
+import { tBackend } from "../../lib/i18nBackend";
 
 export interface DesignStepProps {
   store: CadStore;
@@ -5801,9 +5802,10 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
                 size="sm"
                 disabled={(asm()?.mates.length ?? 0) < 2}
                 onClick={() =>
-                  void store.assemblySuggest().then((found) => {
-                    if (found.length === 0) return setNote(tl("No hay engranes enlazados con una unión giratoria cada uno"));
-                    setNote(undefined);
+                  void Promise.all([store.assemblySuggest(), store.assemblyGearWarnings()]).then(([found, warnings]) => {
+                    const alert = warnings.map(tBackend).join(" ");
+                    if (found.length === 0) return setNote(alert || tl("No hay engranes enlazados con una unión giratoria cada uno"));
+                    setNote(alert || undefined);
                     void store.editAssembly((a) => {
                       a.relations = [...(a.relations ?? []), ...found];
                     });

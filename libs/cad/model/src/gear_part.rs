@@ -163,9 +163,6 @@ impl GearPart {
         if self.herringbone && (s.helix_angle == 0.0 || self.groove < 0.0 || self.groove >= self.width) {
             return Err("la espina de pescado pide ángulo de hélice y un canal menor que el ancho".into());
         }
-        if self.herringbone && self.groove > 0.0 && s.kind != GearKind::External {
-            return Err("el canal central solo va en engranes exteriores".into());
-        }
         if self.bore < 0.0 || self.hub_diameter < 0.0 || self.hub_length < 0.0 || self.print_clearance < 0.0 {
             return Err("las medidas no pueden ser negativas".into());
         }
@@ -320,17 +317,38 @@ fn helical(curves: &[Curve], l: &Local, spec: &GearSpec, g: &GearPart, z0: f64, 
     }
     // El ancho de verdad es [0, width]; la herramienta de una corona la excede
     let (w, groove) = (g.width, g.groove);
+    if groove == 0.0 {
+        return vee(curves, l, z0.min(0.0), z1.max(w), w, rate);
+    }
     let half = (w - groove) / 2.0;
     let lower = twisted(curves, l, z0.min(0.0), half - z0.min(0.0), rate * z0.min(0.0), rate * (half - z0.min(0.0)))?;
     let top0 = half + groove;
     let upper_end = z1.max(w);
     let upper = twisted(curves, l, top0, upper_end - top0, rate * (w - top0), -rate * (upper_end - top0))?;
-    let mut parts = vec![lower, upper];
-    if groove > 0.0 {
-        // Canal: el núcleo hasta el círculo de pie
-        parts.push(Shape::cylinder(l.at(half - MARGIN, false), root, groove + 2.0 * MARGIN).map_err(e)?);
-    }
-    Shape::fuse_all(&parts).map_err(e)
+    // Canal: el núcleo hasta el círculo de pie
+    let core = Shape::cylinder(l.at(half - MARGIN, false), root, groove + 2.0 * MARGIN).map_err(e)?;
+    Shape::fuse_all(&[lower, upper, core]).map_err(e)
+}
+
+/// Espina de pescado sin canal de `z0` a `z1`: el giro sube `rate` rad/mm hasta la mitad de `w` y
+/// baja después. Un solo loft por secciones (con el vértice en medio) en vez de dos mitades unidas:
+/// unir dos superficies libres que se tocan por una cara tardaba segundos.
+fn vee(curves: &[Curve], l: &Local, z0: f64, z1: f64, w: f64, rate: f64) -> R<Shape> {
+    let apex = w / 2.0;
+    let turn = |z: f64| rate * (apex - (z - apex).abs());
+    // Secciones cada ~4° como en `twisted`; el loft suave pasa por el vértice sin pasarse (< 0,01 % de volumen)
+    let per_mm = rate.abs() / (PI / 45.0);
+    let half = |a: f64, b: f64| ((b - a).abs() * per_mm).ceil().max(1.0) as usize;
+    let mut zs: Vec<f64> = (0..=half(z0, apex)).map(|i| z0 + (apex - z0) * i as f64 / half(z0, apex) as f64).collect();
+    zs.extend((1..=half(apex, z1)).map(|i| apex + (z1 - apex) * i as f64 / half(apex, z1) as f64));
+    let sections = zs
+        .iter()
+        .map(|&z| {
+            let rotated: Vec<Curve> = curves.iter().map(|c| shift(&to_world(l, &gears::rotate_curve(c, turn(z))), crate::geom::scale(l.z, z))).collect();
+            Shape::wire(&rotated).map_err(e)
+        })
+        .collect::<R<Vec<_>>>()?;
+    Shape::loft(&sections, true, false).map_err(e)
 }
 
 fn shift(c: &Curve, v: P3) -> Curve {

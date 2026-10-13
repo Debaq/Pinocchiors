@@ -12,6 +12,12 @@ Lo hecho el 2026-10-13 después de cerrar F8 (todo con prueba de `cargo test`/`n
 cremallera helicoidal; aviso de autobloqueo y rendimiento del sin fin; diseñar el par por relación o distancia (`design_teeth`);
 arrastrar piezas del ensamble en el visor y acoplamientos a mano; rayos, prisionero y paso diametral; cota entre bolas de la corona,
 círculos da/df/db en la hoja y aviso de engranes borrados.
+Problemas conocidos resueltos el 2026-10-13 (con `cargo test`, nada probado en la app real): punto muerto de 180° del solver
+(el residuo se envolvía justo en ±π y el jacobiano numérico salía basura: ahora se fija la vuelta al derivar); detección de
+uniones por eje paralelo al del engrane; trenes de 3 y 4 engranes y **planetarios con brazo que gira** (`Relation::Gear.carrier`
++ `carrier_ratio`, fórmula de Willis, detectado solo); canal central también en coronas; avisos de ejes no paralelos y de
+helicoidales cruzados (`assembly::gear_axis_warnings`, comando `cad_assembly_gear_warnings`, salen al «Detectar engranes»);
+espina de pescado sin canal como un solo loft con el vértice en medio (17 s → 1,4 s por par) y pruebas con menos dientes.
 **Lo que falta, en orden de utilidad:** (1) correr el e2e en la app real de todo lo anterior (lo corre el usuario primero);
 (2) nombres de cara y módulo transversal elegible; (3) clic en el visor para la dirección del par y cremallera/rueda como fuente;
 (4) elegir la unión al arrastrar cuando hay varias y arrastrar deslizantes; (5) cónicos con extremos cónicos y cono del primero calculado;
@@ -185,7 +191,7 @@ Lo que quedó fuera de cada fase, por área. Nada de esto impide usar lo hecho.
 
 **Pruebas y verificación**
 - Nada de F2–F8 se probó en la app real ni con e2e en el navegador (solo `cargo test` y `node --test`). Correr e2e de lo nuevo cuando se pida: botón «Engrane», panel de propiedades (tipos, «Engranar con», cónico, sin fin), «Detectar engranes» en el ensamble, «Traer» perfil en el sketch y engranes en la hoja.
-- Las pruebas de choque de `gear_mesh`/`gear_part` tardan minutos (booleanas pesadas de corona y helicoidales): acortarlas o marcarlas lentas.
+- Las pruebas de choque de `gear_mesh`/`gear_part` siguen tardando (booleanas de superficies libres; ~1–1,5 min cada suite): ya con menos dientes. La espina de pescado CON canal sigue usando una unión pesada.
 
 **Geometría y piezas (F1–F2)**
 - (Hechos 2026-10-13, sin probar en la app real: paso diametral —campo en el cuadro que convierte a módulo = 25,4/DP—, rayos de aligeramiento `spokes/spoke_width/rim` y prisionero `set_screw` radial en el cubo a 90° del chavetero.) Falta: rayos en cónicos, prisionero en cónicos/sin fin, rayos curvos.
@@ -196,17 +202,15 @@ Lo que quedó fuera de cada fase, por área. Nada de esto impide usar lo hecho.
 - (Diseñar por relación: hecho 2026-10-13, `gear_part::design_teeth` + `cad_gear_design`; campo «Relación» y botón de distancia en «Engranar con». Sin probar en la app real.)
 - Elegir la dirección del centro con un clic en el visor (hoy es un ángulo).
 - Cremallera como fuente (hoy el piñón va primero).
-- Avisar de ejes no paralelos y de helicoidales cruzados.
+- (Avisos de ejes no paralelos y helicoidales cruzados: hechos 2026-10-13, en el ensamble.) Falta avisar al enlazar en el árbol.
 
 **Helicoidales (F4)**
 - (Cremallera helicoidal: hecha 2026-10-13, sección transversal corrida por z·tanβ; probada con choque en las dos manos.)
-- Espina de pescado: canal central solo en exteriores.
+- (Canal central en coronas: hecho 2026-10-13.) Espina de pescado con canal sigue uniendo tres sólidos (lento).
 
 **Ensamble (F5)**
 - (Hechos 2026-10-13, sin probar en la app real: arrastrar una pieza en el visor del ensamble gira la revoluta/cilíndrica que la sostiene —`lib/assemblyDrag.ts`, un solo paso de deshacer por gesto— y «Agregar acoplamiento» crea relaciones a mano. Falta: elegir la unión cuando una pieza tiene varias, y arrastrar uniones deslizantes.)
-- Trenes de más de dos engranes y planetarios sin probar.
-- El solver no sale del punto muerto de 180° exactos desde cero.
-- La detección toma la primera revoluta/cilíndrica de cada engrane.
+- (Hechos 2026-10-13: trenes de 3–4 engranes, planetario con brazo móvil, punto muerto de 180° y elección de la bisagra por eje.) Falta: planetario con satélites repetidos (condición de montaje) y piezas con más de un brazo.
 
 **Cónicos (F6)**
 - Extremos planos en vez de cónicos (la versión por booleanas con los conos fallaba con δ ≥ 55°): revisar si se puede volver a conos de atrás/adelante.

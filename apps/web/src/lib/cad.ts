@@ -1074,7 +1074,7 @@ export interface Assembly {
 
 /** Acopla el movimiento de dos uniones: la que tiene el ángulo o la distancia impuestos manda */
 export type Relation =
-  | { type: "gear"; a: number; b: number; ratio: number; phase?: number }
+  | { type: "gear"; a: number; b: number; ratio: number; phase?: number; carrier?: number; carrier_ratio?: number }
   | { type: "rack_pinion"; revolute: number; slider: number; per_turn: number; phase?: number }
   | { type: "screw"; cylindrical: number; pitch: number; phase?: number };
 
@@ -4442,6 +4442,7 @@ export function createCadStore() {
     assemblyClearance: (minGap?: number) => invoke<[number, number, number][]>("cad_assembly_clearance", { minGap: minGap ?? null }),
     /** Acoplamientos de los engranes enlazados que están en el ensamble */
     assemblySuggest: () => invoke<Relation[]>("cad_assembly_suggest"),
+    assemblyGearWarnings: () => invoke<string[]>("cad_assembly_gear_warnings"),
     /** Cambia el ensamble (deshacible); lo crea si no hay */
     editAssembly(mutate: (a: Assembly) => void, join = false) {
       return commit((d) => {

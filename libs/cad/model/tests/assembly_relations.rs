@@ -57,7 +57,7 @@ fn engranes_sugeridos_con_su_razon_real() {
     let sol = solve(&asm);
     let rel = suggest_gear_relations(&ev, &asm, &sol);
     assert_eq!(rel.len(), 1);
-    let Relation::Gear { a, b, ratio, phase } = rel[0].clone() else { panic!() };
+    let Relation::Gear { a, b, ratio, phase, .. } = rel[0].clone() else { panic!() };
     assert_eq!((a, b), (1, 2));
     assert_relative_eq!(ratio, -12.0 / 18.0, epsilon = 1e-12);
     assert_relative_eq!(phase, 0.0, epsilon = 1e-6);
@@ -214,7 +214,7 @@ fn tornillo_acopla_giro_y_avance() {
 #[test]
 fn json_de_las_relaciones() {
     let r: Relation = serde_json::from_value(serde_json::json!({ "type": "gear", "a": 1, "b": 2, "ratio": -0.5 })).unwrap();
-    assert_eq!(r, Relation::Gear { a: 1, b: 2, ratio: -0.5, phase: 0.0 });
+    assert_eq!(r, Relation::Gear { a: 1, b: 2, ratio: -0.5, phase: 0.0, carrier: None, carrier_ratio: 0.0 });
     let old: Assembly = serde_json::from_value(serde_json::json!({ "instances": [], "mates": [], "next_id": 1 })).unwrap();
     assert!(old.relations.is_empty());
     assert!(serde_json::to_value(&old).unwrap().get("relations").is_none());
@@ -269,4 +269,171 @@ fn sin_fin_y_rueda_en_el_ensamble() {
             assert!(hits.iter().any(|h| h.2 > 0.1 * tooth), "el control debe chocar: {hits:?}");
         }
     }
+}
+
+#[test]
+fn sale_del_punto_muerto_de_180_grados() {
+    // Dientes iguales: razón -1; los dos a 90° dejan la relación desfasada justo 180°
+    let (ev, mut asm) = train(gear(GearKind::External, 12), 0.0);
+    let sol = solve(&asm);
+    asm.relations = suggest_gear_relations(&ev, &asm, &sol);
+    asm.instances[1].rotation = [0.0, 0.0, std::f64::consts::FRAC_PI_2];
+    asm.instances[2].rotation = [0.0, 0.0, std::f64::consts::FRAC_PI_2];
+    let sol = solve(&asm);
+    assert!(sol.converged, "residuo {}", sol.residual);
+    let (ta, _) = measure(&asm, &sol, 1).unwrap();
+    let (tb, _) = measure(&asm, &sol, 2).unwrap();
+    assert_relative_eq!(tb, -ta, epsilon = 1e-4);
+}
+
+/// Carcasa fija + engranes encadenados (cada uno enlazado al anterior), todos con bisagra a la carcasa.
+/// `parts`: (engrane, ángulo del centro respecto del anterior).
+fn chain(parts: Vec<(GearPart, f64)>, extra_hinge_first: bool) -> (Evaluation, Assembly) {
+    let mut doc = Document::new();
+    doc.add(prim(PrimitiveShape::Box { dx: 10.0, dy: 10.0, dz: 2.0, centered: false, centered_z: false }));
+    let mut prev = None;
+    for (mut g, angle) in parts {
+        if let Some(feature) = prev {
+            g.link = Some(GearLink { feature, angle, offset: 0.0, distance: None });
+        }
+        prev = Some(doc.add(prim(PrimitiveShape::Gear(g))));
+    }
+    let ev = doc.evaluate();
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    let n = ev.gears.len();
+    let mut instances = vec![Instance { id: 1, part: ev.parts[0].id, name: "C".into(), position: [0.0; 3], rotation: [0.0; 3], fixed: true }];
+    let mut mates = Vec::new();
+    for (k, g) in ev.gears.iter().enumerate() {
+        let id = k as u32 + 2;
+        instances.push(Instance { id, part: ev.parts[k + 1].id, name: format!("G{id}"), position: [0.0; 3], rotation: [0.0; 3], fixed: false });
+        if extra_hinge_first && k == 1 {
+            // Una bisagra de eje perpendicular (otra pieza) antes de la buena: no debe confundir la detección
+            mates.push(hinge(100, MateKind::Revolute, conn(1, g.origin, g.x, g.z), conn(id, g.origin, g.x, g.z)));
+        }
+        mates.push(hinge(k as u32 + 1, MateKind::Revolute, conn(1, g.origin, g.z, g.x), conn(id, g.origin, g.z, g.x)));
+    }
+    let _ = n;
+    (ev, Assembly { instances, mates, next_id: 200, ..Default::default() })
+}
+
+#[test]
+fn tren_de_tres_engranes_con_loco() {
+    let (ev, mut asm) = chain(vec![(gear(GearKind::External, 12), 0.0), (gear(GearKind::External, 18), 0.0), (gear(GearKind::External, 24), 90.0)], false);
+    let sol = solve(&asm);
+    asm.relations = suggest_gear_relations(&ev, &asm, &sol);
+    assert_eq!(asm.relations.len(), 2);
+    asm.mates[0].angle = Some(36.0);
+    let sol = solve(&asm);
+    assert!(sol.converged);
+    // 12→18: -2/3; 18→24: -3/4; total +1/2
+    assert_relative_eq!(z_turn(&sol, 3), -24.0, epsilon = 1e-6);
+    assert_relative_eq!(z_turn(&sol, 4), 18.0, epsilon = 1e-6);
+    // Imponer el último gira todo el tren hacia atrás
+    asm.mates[0].angle = None;
+    asm.mates[2].angle = Some(-10.0);
+    let sol = solve(&asm);
+    assert_relative_eq!(z_turn(&sol, 2), -20.0, epsilon = 1e-6);
+}
+
+#[test]
+fn la_deteccion_elige_la_bisagra_del_eje_del_engrane() {
+    let (ev, mut asm) = chain(vec![(gear(GearKind::External, 12), 0.0), (gear(GearKind::External, 18), 0.0)], true);
+    let sol = solve(&asm);
+    let rel = suggest_gear_relations(&ev, &asm, &sol);
+    assert_eq!(rel.len(), 1);
+    let Relation::Gear { a, b, .. } = rel[0] else { panic!() };
+    assert_eq!((a, b), (1, 2), "{rel:?}");
+    asm.relations = rel;
+}
+
+#[test]
+fn tren_con_corona_de_cuatro_engranes() {
+    // Sol 12 → satélite 12 → corona 36 (carro fijo): la corona gira 12/36 del sol y en el mismo sentido
+    let (ev, mut asm) = chain(vec![(gear(GearKind::External, 12), 0.0), (gear(GearKind::External, 12), 0.0), (gear(GearKind::Internal, 36), 0.0)], false);
+    let sol = solve(&asm);
+    asm.relations = suggest_gear_relations(&ev, &asm, &sol);
+    assert_eq!(asm.relations.len(), 2);
+    asm.mates[0].angle = Some(90.0);
+    let sol = solve(&asm);
+    assert!(sol.converged);
+    assert_relative_eq!(z_turn(&sol, 3), -90.0, epsilon = 1e-6);
+    assert_relative_eq!(z_turn(&sol, 4), -30.0, epsilon = 1e-6);
+}
+
+#[test]
+fn planetario_con_brazo_que_gira() {
+    // Sol 12 → satélite 12 (montado en el brazo) → corona 36. Willis: ω_c − c = −(z_s/z_c)·(ω_s − c)
+    let mut doc = Document::new();
+    doc.add(prim(PrimitiveShape::Box { dx: 10.0, dy: 10.0, dz: 2.0, centered: false, centered_z: false }));
+    let sun = doc.add(prim(PrimitiveShape::Gear(gear(GearKind::External, 12))));
+    let mut planet = gear(GearKind::External, 12);
+    planet.link = Some(GearLink { feature: sun, angle: 0.0, offset: 0.0, distance: None });
+    let planet = doc.add(prim(PrimitiveShape::Gear(planet)));
+    let mut ring = gear(GearKind::Internal, 36);
+    ring.link = Some(GearLink { feature: planet, angle: 0.0, offset: 0.0, distance: None });
+    doc.add(prim(PrimitiveShape::Gear(ring)));
+    let ev = doc.evaluate();
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    let inst = |id: u32, k: usize, fixed: bool| Instance { id, part: ev.parts[k].id, name: format!("P{id}"), position: [0.0; 3], rotation: [0.0; 3], fixed };
+    let (gs, gp, gr) = (&ev.gears[0], &ev.gears[1], &ev.gears[2]);
+    let mut asm = Assembly {
+        instances: vec![inst(1, 0, true), inst(2, 1, false), inst(3, 0, false), inst(4, 2, false), inst(5, 3, false)],
+        mates: vec![
+            hinge(1, MateKind::Revolute, conn(1, gs.origin, gs.z, gs.x), conn(2, gs.origin, gs.z, gs.x)),
+            hinge(2, MateKind::Revolute, conn(1, gs.origin, gs.z, gs.x), conn(3, gs.origin, gs.z, gs.x)),
+            hinge(3, MateKind::Revolute, conn(3, gp.origin, gp.z, gp.x), conn(4, gp.origin, gp.z, gp.x)),
+            hinge(4, MateKind::Revolute, conn(1, gr.origin, gr.z, gr.x), conn(5, gr.origin, gr.z, gr.x)),
+        ],
+        next_id: 10,
+        ..Default::default()
+    };
+    let sol = solve(&asm);
+    asm.relations = suggest_gear_relations(&ev, &asm, &sol);
+    assert_eq!(asm.relations.len(), 2, "{:?}", asm.relations);
+    assert!(asm.relations.iter().any(|r| matches!(r, Relation::Gear { carrier: Some(2), .. })));
+    // Sol a 60° y brazo a 30°: satélite (relativo al brazo) −30°, corona 20°
+    asm.mates[0].angle = Some(60.0);
+    asm.mates[1].angle = Some(30.0);
+    let sol = solve(&asm);
+    assert!(sol.converged, "residuo {}", sol.residual);
+    assert_relative_eq!(measure(&asm, &sol, 3).unwrap().0, -30.0, epsilon = 1e-6);
+    assert_relative_eq!(measure(&asm, &sol, 4).unwrap().0, 20.0, epsilon = 1e-6);
+    // Brazo parado: como el tren fijo, la corona gira −1/3 del sol
+    asm.mates[1].angle = Some(0.0);
+    let sol = solve(&asm);
+    assert_relative_eq!(measure(&asm, &sol, 4).unwrap().0, -20.0, epsilon = 1e-6);
+    // Al revés: imponer la corona y el brazo mueve el sol
+    asm.mates[0].angle = None;
+    asm.mates[1].angle = Some(30.0);
+    asm.mates[3].angle = Some(20.0);
+    let sol = solve(&asm);
+    assert_relative_eq!(measure(&asm, &sol, 1).unwrap().0, 60.0, epsilon = 1e-6);
+    // Sin imponer nada, el solver los acopla: quedan 2 grados libres (4 uniones − 2 relaciones)
+    asm.mates.iter_mut().for_each(|m| m.angle = None);
+    let sol = solve(&asm);
+    assert!(sol.converged);
+    assert_eq!(sol.dof, 2);
+}
+
+#[test]
+fn avisa_de_ejes_no_paralelos_y_de_helicoidales_cruzados() {
+    use cad_model::assembly::gear_axis_warnings;
+    let (ev, mut asm) = chain(vec![(gear(GearKind::External, 12), 0.0), (gear(GearKind::External, 18), 0.0)], false);
+    let sol = solve(&asm);
+    assert!(gear_axis_warnings(&ev, &asm, &sol).is_empty());
+    // Se tumba el segundo engrane 90°: ejes perpendiculares
+    asm.instances[2].rotation = [std::f64::consts::FRAC_PI_2, 0.0, 0.0];
+    asm.instances[2].fixed = true;
+    let sol = solve(&asm);
+    let w = gear_axis_warnings(&ev, &asm, &sol);
+    assert_eq!(w.len(), 1, "{w:?}");
+    assert!(w[0].contains("90.0°") && !w[0].contains("cruzados"), "{}", w[0]);
+    // Con los dos helicoidales avisa también de los cruzados
+    let helical = |z, beta| GearPart { spec: GearSpec { teeth: z, module: 2.0, helix_angle: beta, ..Default::default() }, width: 10.0, outer: 6.0, ..Default::default() };
+    let (ev, mut asm) = chain(vec![(helical(12, 15.0), 0.0), (helical(18, -15.0), 0.0)], false);
+    asm.instances[2].rotation = [std::f64::consts::FRAC_PI_2, 0.0, 0.0];
+    asm.instances[2].fixed = true;
+    let sol = solve(&asm);
+    let w = gear_axis_warnings(&ev, &asm, &sol);
+    assert!(w.len() == 1 && w[0].contains("cruzados"), "{w:?}");
 }
