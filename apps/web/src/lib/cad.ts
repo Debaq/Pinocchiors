@@ -552,7 +552,111 @@ export type PrimitiveShape =
   /** Tornillo métrico: largo bajo la cabeza (el total en el avellanado) */
   | { type: "bolt"; size: string; length: number; head?: BoltHead; modeled?: boolean }
   | { type: "nut"; size: string; modeled?: boolean }
-  | { type: "washer"; size: string };
+  | { type: "washer"; size: string }
+  | ({ type: "gear" } & GearPart);
+
+export type GearKind = "external" | "internal" | "rack" | "bevel" | "worm";
+
+export interface GearSpec {
+  kind: GearKind;
+  /** Módulo normal (mm) */
+  module: number;
+  teeth: number;
+  /** Ángulo de presión normal (°) */
+  pressure_angle: number;
+  helix_angle: number;
+  /** Corrección de perfil x */
+  shift: number;
+  backlash: number;
+  addendum: number;
+  dedendum: number;
+  root_fillet: number;
+  /** Cónico: semiángulo del cono primitivo y ángulo entre los ejes del par (°) */
+  cone_angle: number;
+  shaft_angle: number;
+  /** Sin fin: diámetro primitivo (0: 10·módulo), mano izquierda; «dientes» son las entradas */
+  worm_diameter: number;
+  left_hand: boolean;
+}
+
+/** Engrane de evolvente (`PrimitiveShape` «gear»): eje Z, cara de abajo en Z=0 */
+export interface GearPart {
+  spec: GearSpec;
+  width: number;
+  bore: number;
+  hub_diameter: number;
+  hub_length: number;
+  keyway: boolean;
+  /** Corona: diámetro exterior; cremallera: alto del cuerpo */
+  outer: number;
+  hole_count: number;
+  hole_diameter: number;
+  hole_circle: number;
+  print_clearance: number;
+  /** Doble helicoidal (espina de pescado), con un canal central opcional */
+  herringbone?: boolean;
+  groove?: number;
+  /** Rueda de sin fin: distancia entre centros (la pone el engrane enlazado) */
+  throat?: number;
+  /** Engranar con otro engrane anterior */
+  link?: GearLink | null;
+}
+
+/** Engrane coordinado con otro: módulo y ángulo del otro, distancia entre centros y fase */
+export interface GearLink {
+  feature: number;
+  /** Dirección de este engrane visto desde el otro (°, desde su X) */
+  angle: number;
+  /** Corrimiento axial (mm) */
+  offset: number;
+  /** Distancia entre centros pedida: ajusta la corrección de perfil */
+  distance?: number | null;
+}
+
+/** Engrane calculado (para engranar otros con él) */
+export interface GearAxis {
+  feature: number;
+  part: GearPart;
+  origin: P3;
+  z: P3;
+  x: P3;
+  pitch_radius: number;
+  /** Distancia al engrane con el que engrana (0: ninguno) */
+  center_distance: number;
+}
+
+export interface GearInfo {
+  pitch_diameter: number;
+  base_diameter: number;
+  tip_diameter: number;
+  root_diameter: number;
+  module_t: number;
+  pressure_angle_t: number;
+  min_teeth: number;
+  warnings: string[];
+  /** Cota sobre dientes y sobre bolas (0: no aplica) */
+  span_teeth: number;
+  span: number;
+  pin_diameter: number;
+  over_pins: number;
+  error: string | null;
+}
+
+export const defaultGear = (kind: GearKind = "external"): GearPart => ({
+  spec: { kind, module: 2, teeth: kind === "rack" ? 6 : kind === "worm" ? 1 : 20, pressure_angle: 20, helix_angle: 0, shift: 0, backlash: 0, addendum: 1, dedendum: 1.25, root_fillet: 0.25, cone_angle: 45, shaft_angle: 90, worm_diameter: 0, left_hand: false },
+  width: kind === "bevel" ? 6 : kind === "worm" ? 40 : 10,
+  bore: kind === "external" || kind === "bevel" || kind === "worm" ? 8 : 0,
+  hub_diameter: 0,
+  hub_length: 0,
+  keyway: false,
+  outer: kind === "internal" ? 100 : kind === "rack" ? 8 : 0,
+  hole_count: 0,
+  hole_diameter: 0,
+  hole_circle: 0,
+  print_clearance: 0,
+  herringbone: false,
+  groove: 0,
+});
 
 /** Hexagonal (ISO 4017), Allen (ISO 4762) o avellanada Allen (ISO 10642) */
 export type BoltHead = "hex" | "socket" | "countersunk";
@@ -947,8 +1051,16 @@ export interface Configuration {
 export interface Assembly {
   instances: AsmInstance[];
   mates: Mate[];
+  /** Acoplamientos entre uniones (engranes, piñón-cremallera, tornillo) */
+  relations?: Relation[];
   next_id: number;
 }
+
+/** Acopla el movimiento de dos uniones: la que tiene el ángulo o la distancia impuestos manda */
+export type Relation =
+  | { type: "gear"; a: number; b: number; ratio: number; phase?: number }
+  | { type: "rack_pinion"; revolute: number; slider: number; per_turn: number; phase?: number }
+  | { type: "screw"; cylindrical: number; pitch: number; phase?: number };
 
 /** Una pieza puesta en el ensamble: posición (mm) y giro como vector (eje × ángulo en rad) */
 export interface AsmInstance {
@@ -1347,6 +1459,8 @@ export interface CadResult {
   assembly: AssemblyView | null;
   /** Roscas, para coordinarlas */
   threads?: ThreadAxis[];
+  /** Engranes, para engranar otros con ellos */
+  gears?: GearAxis[];
 }
 
 export interface CadStatus {
@@ -1737,6 +1851,7 @@ const PRIMITIVE_LABELS: Record<PrimitiveShape["type"], string> = {
   get bolt() { return tr("Tornillo"); },
   get nut() { return tr("Tuerca"); },
   get washer() { return tr("Arandela"); },
+  get gear() { return tr("Engrane"); },
 };
 
 /** Operación que se edita con el editor de sketch (en un plano, o envuelto sobre una cara) */
@@ -3823,6 +3938,10 @@ export function createCadStore() {
     flatPattern: (part?: PartId) => invoke<FlatPattern>("cad_flat_pattern", { part: part ?? null }),
     /** Apoyo para una pieza estándar en el borde circular `edge` */
     edgeSeat: (edge: number) => invoke<Seat>("cad_edge_seat", { edge }),
+    /** Círculos, avisos y error de medidas de un engrane */
+    gearInfo: (part: GearPart) => invoke<GearInfo>("cad_gear_info", { part }),
+    /** El perfil del engrane como bloque del sketch */
+    gearBlock: (part: GearPart) => invoke<SketchBlock>("cad_gear_block", { part }),
     resolveRefs: (faces: FaceRef[], edges: EdgeRef[]) => invoke<ResolvedRefs>("cad_resolve_refs", { faces, edges }),
     /** Eje x que tendría el sketch `feature` con esa horizontal (null: la del plano) */
     sketchX: (feature: number, xAxis: AxisSpec | null) => invoke<P3>("cad_sketch_x", { feature, x_axis: xAxis }),
@@ -4287,6 +4406,8 @@ export function createCadStore() {
     assemblyFaces: () => invoke<[number, number, number][]>("cad_assembly_faces"),
     assemblyConnector: (face: number) => invoke<Connector>("cad_assembly_connector", { face }),
     assemblyInterference: () => invoke<[number, number, number][]>("cad_assembly_interference"),
+    /** Acoplamientos de los engranes enlazados que están en el ensamble */
+    assemblySuggest: () => invoke<Relation[]>("cad_assembly_suggest"),
     /** Cambia el ensamble (deshacible); lo crea si no hay */
     editAssembly(mutate: (a: Assembly) => void) {
       return commit((d) => {

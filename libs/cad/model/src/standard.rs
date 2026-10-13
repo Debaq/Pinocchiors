@@ -178,36 +178,36 @@ impl MetricSize {
 }
 
 /// Marco local: origen, Z y X ortonormales.
-struct Local {
-    o: P3,
-    z: P3,
-    x: P3,
-    y: P3,
+pub(crate) struct Local {
+    pub o: P3,
+    pub z: P3,
+    pub x: P3,
+    pub y: P3,
 }
 
 impl Local {
-    fn new(f: Frame) -> Self {
+    pub(crate) fn new(f: Frame) -> Self {
         let z = normalize(f.z);
         let x = normalize(sub(f.x, scale(z, crate::geom::dot(f.x, z))));
         Local { o: f.origin, z, x, y: cross(z, x) }
     }
     /// Punto en coordenadas locales
-    fn p(&self, u: f64, v: f64, w: f64) -> P3 {
+    pub(crate) fn p(&self, u: f64, v: f64, w: f64) -> P3 {
         add(self.o, add(scale(self.x, u), add(scale(self.y, v), scale(self.z, w))))
     }
     /// Marco con origen en la altura `w` (mismo Z, o el opuesto con `down`)
-    fn at(&self, w: f64, down: bool) -> Frame {
+    pub(crate) fn at(&self, w: f64, down: bool) -> Frame {
         Frame { origin: self.p(0.0, 0.0, w), z: if down { scale(self.z, -1.0) } else { self.z }, x: self.x }
     }
     /// Marco de una hélice que arranca en la altura `w` (con X propia)
-    fn helix(&self, w: f64, x: P3) -> Frame {
+    pub(crate) fn helix(&self, w: f64, x: P3) -> Frame {
         Frame { origin: self.p(0.0, 0.0, w), z: self.z, x }
     }
 }
 
 type R<T> = Result<T, String>;
 
-fn e(x: cad_occt::Error) -> String {
+pub(crate) fn e(x: cad_occt::Error) -> String {
     x.to_string()
 }
 
@@ -238,7 +238,7 @@ fn chamfered_hex(l: &Local, s: f64, w0: f64, w1: f64, both: bool) -> R<Shape> {
 
 /// Margen para que las herramientas no compartan caras con lo que cortan.
 /// (La caña entra un cuarto de la cabeza: así la rosca no roza su cara de abajo.)
-const MARGIN: f64 = 1e-3;
+pub(crate) const MARGIN: f64 = 1e-3;
 
 /// Caña de `w0` (punta) a `w1`, con la punta achaflanada a 45° del diámetro
 /// menor al nominal; roscada desde la punta (2·d + 6) con `thread`.
@@ -364,6 +364,7 @@ pub fn describe(shape: &crate::feature::PrimitiveShape) -> Option<String> {
         }
         P::Nut { size, .. } => Some(format!("Tuerca {size}")),
         P::Washer { size } => Some(format!("Arandela {size}")),
+        P::Gear(g) => Some(crate::gear_part::describe(g)),
         _ => None,
     }
 }

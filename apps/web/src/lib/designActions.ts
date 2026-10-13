@@ -28,6 +28,7 @@ import {
   type RefPick,
   type Sketch,
   type PrimitiveShape,
+  defaultGear,
   type RegionSelection,
 } from "./cad";
 import type { CadUi } from "./cadUi";
@@ -747,9 +748,32 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     void store.addFeature({ type: "primitive", shape, ...place, op: "new" });
   };
 
+  /** Engrane nuevo: apoyado sobre la cara plana elegida, o en el origen */
+  const addGear = async () => {
+    const face = ui.picks().find((p) => p.kind === "face");
+    let place: { origin: P3; z: P3; x: P3 } = { origin: [0, 0, 0], z: [0, 0, 1], x: [1, 0, 0] };
+    if (face?.kind === "face") {
+      try {
+        const f = await invoke<{ surface: string; point: P3; normal: P3 }>("cad_face_info", { face: face.face });
+        if (f.surface === "plane") {
+          const n = f.normal;
+          const a: P3 = Math.abs(n[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+          const c: P3 = [a[1] * n[2] - a[2] * n[1], a[2] * n[0] - a[0] * n[2], a[0] * n[1] - a[1] * n[0]];
+          const l = Math.hypot(...c);
+          place = { origin: f.point, z: n, x: [c[0] / l, c[1] / l, c[2] / l] };
+        }
+      } catch (e) {
+        return say(String(e));
+      }
+      ui.clearPicks();
+    }
+    void store.addFeature({ type: "primitive", shape: { type: "gear", ...defaultGear() }, ...place, op: face ? "join" : "new" });
+  };
+
   return {
     notice,
     say,
+    addGear,
     startSketch,
     pasteSketch,
     addExtrude,

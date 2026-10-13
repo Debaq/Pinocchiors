@@ -339,6 +339,14 @@ export const Washer = (p: IconProps) => (
   </DesignIcon>
 );
 
+export const Gear = (p: IconProps) => (
+  <DesignIcon {...p}>
+    <circle cx="12" cy="12" r="6.5" {...soft} />
+    <path d="M19.00 12.00 L22.00 12.00 M16.95 16.95 L19.07 19.07 M12.00 19.00 L12.00 22.00 M7.05 16.95 L4.93 19.07 M5.00 12.00 L2.00 12.00 M7.05 7.05 L4.93 4.93 M12.00 5.00 L12.00 2.00 M16.95 7.05 L19.07 4.93" />
+    <circle cx="12" cy="12" r="2.2" />
+  </DesignIcon>
+);
+
 export const Rib = (p: IconProps) => (
   <DesignIcon {...p}>
     <path d="M3 20 H21 M5 20 V6 H8 V20" />

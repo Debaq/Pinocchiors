@@ -140,6 +140,7 @@ pub struct CadResult {
     /// Roscas (agujeros roscados, roscas, tornillos y tuercas): para
     /// coordinarlas entre sí
     pub threads: Vec<cad_model::ThreadAxis>,
+    pub gears: Vec<cad_model::GearAxis>,
     /// Piezas que reemplazó un corte que las partió o una unión (se ven tachadas)
     pub replaced: Vec<ReplacedView>,
 }
@@ -456,6 +457,7 @@ fn evaluate_doc(state: &AppState, doc: &Document) -> Result<CadResult, String> {
         version: hash,
         recomputed: eval.recomputed,
         threads: eval.threads.clone(),
+        gears: eval.gears.clone(),
     })
 }
 
@@ -553,6 +555,18 @@ pub fn cad_solve_sketch(mut sketch: Sketch, drag: Option<(u32, [f64; 2])>) -> Re
     .map_err(|e| e.to_string())?;
     let regions = cad_model::find_regions(&sketch).map_err(|e| e.to_string())?;
     Ok(SolvedSketch { sketch, report, regions })
+}
+
+/// Círculos, avisos y error de medidas de un engrane (para el diálogo).
+#[tauri::command]
+pub fn cad_gear_info(part: cad_model::GearPart) -> cad_model::gear_part::GearInfo {
+    cad_model::gear_part::info(&part)
+}
+
+/// El perfil de un engrane como bloque del sketch (origen en su centro).
+#[tauri::command]
+pub fn cad_gear_block(part: cad_model::GearPart) -> Result<cad_model::sketch::SketchBlock, String> {
+    cad_model::gear_part::sketch_block(&part)
 }
 
 /// Restricciones que le faltan al sketch (casi cumplidas o cotas de tamaño).
@@ -702,7 +716,30 @@ fn assembly_connector_impl(state: &AppState, face: usize) -> Result<cad_model::C
 /// Pares de instancias que se pisan y cuánto volumen comparten (mm³).
 #[tauri::command]
 pub async fn cad_assembly_interference(app: AppHandle) -> Result<Vec<(u32, u32, f64)>, String> {
-    in_background(app, |state| assembly_shapes(state).map(|(_, s)| cad_model::assembly::interferences(&s))).await
+    in_background(app, assembly_interference_impl).await
+}
+
+fn assembly_interference_impl(state: &AppState) -> Result<Vec<(u32, u32, f64)>, String> {
+    let (asm, shapes) = assembly_shapes(state)?;
+    let cache = state.cad_cache.lock().unwrap();
+    let ev = &cache.as_ref().ok_or("El diseño todavía no tiene un sólido")?.eval;
+    Ok(cad_model::assembly::interferences_for(ev, &asm, &shapes))
+}
+
+/// Acoplamientos que piden los engranes enlazados que están en el ensamble.
+#[tauri::command]
+pub async fn cad_assembly_suggest(app: AppHandle) -> Result<Vec<cad_model::Relation>, String> {
+    in_background(app, assembly_suggest_impl).await
+}
+
+fn assembly_suggest_impl(state: &AppState) -> Result<Vec<cad_model::Relation>, String> {
+    let doc = state.cad_document.lock().unwrap().clone().ok_or("No hay un diseño abierto")?;
+    let asm = doc.assembly.ok_or("El diseño no tiene ensamble")?;
+    evaluate_committed(state)?;
+    let cache = state.cad_cache.lock().unwrap();
+    let ev = &cache.as_ref().ok_or("El diseño todavía no tiene un sólido")?.eval;
+    let sol = cad_model::assembly::solve(&asm);
+    Ok(cad_model::assembly::suggest_gear_relations(ev, &asm, &sol))
 }
 
 fn mesh_impl(state: &AppState) -> Result<Vec<u8>, String> {
@@ -2091,6 +2128,8 @@ pub mod bridge {
             "cad_evaluate" => ok(evaluate(state)?),
             "cad_solve_sketch" => ok(cad_solve_sketch(arg(args, "sketch")?, arg(args, "drag")?)?),
             "cad_sketch_suggest" => ok(cad_sketch_suggest(arg(args, "sketch")?)?),
+            "cad_gear_info" => ok(cad_gear_info(arg(args, "part")?)),
+            "cad_gear_block" => ok(cad_gear_block(arg(args, "part")?)?),
             "cad_sketch_define" => ok(cad_sketch_define(arg(args, "sketch")?, arg(args, "relations")?)?),
             "cad_mesh" => mesh_impl(state).map(Reply::Bytes),
             "cad_tool_mesh" => tool_mesh_impl(state, arg(args, "feature")?).map(Reply::Bytes),
@@ -2107,7 +2146,8 @@ pub mod bridge {
             "cad_assembly_mesh" => assembly_mesh_impl(state).map(Reply::Bytes),
             "cad_assembly_faces" => ok(assembly_faces_impl(state)?),
             "cad_assembly_connector" => ok(assembly_connector_impl(state, arg(args, "face")?)?),
-            "cad_assembly_interference" => ok(assembly_shapes(state).map(|(_, s)| cad_model::assembly::interferences(&s))?),
+            "cad_assembly_interference" => ok(assembly_interference_impl(state)?),
+            "cad_assembly_suggest" => ok(assembly_suggest_impl(state)?),
             "cad_drawing" => ok(drawing_impl(state, &arg::<Vec<DrawingViewSpec>>(args, "views")?)?),
             "cad_write_pdf" => {
                 let (path, svg): (String, String) = (arg(args, "path")?, arg(args, "svg")?);

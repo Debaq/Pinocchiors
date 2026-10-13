@@ -2609,9 +2609,14 @@ CadShape* cad_make_helix(const double* origin, const double* dir, double radius,
     });
 }
 
-CadShape* cad_make_thread(const double* origin, const double* dir, const double* xdir, double r_minor, double r_major,
-                          double pitch, double length, int32_t left, int32_t chamfer) {
+// Filete de perfil trapecial (semiancho `hw_in` en r_minor y `hw_out` en r_major, medidos a lo largo
+// del eje), de `starts` entradas con avance `lead` por vuelta (el paso entre filetes es lead/starts)
+static CadShape* thread_impl(const double* origin, const double* dir, const double* xdir, double r_minor, double r_major,
+                             double lead, int32_t starts, double hw_in, double hw_out, double length, int32_t left,
+                             int32_t chamfer) {
+    const double pitch = lead;
     return guard("rosca", (CadShape*)nullptr, [&] {
+        if (starts < 1 || starts > 8) throw Standard_Failure("las entradas van de 1 a 8");
         if (!(r_minor > 0 && r_major > r_minor && pitch > 0 && length > 0))
             throw Standard_Failure("la rosca necesita radio menor < mayor, paso y largo positivos");
         gp_Dir z(dir[0], dir[1], dir[2]);
@@ -2646,24 +2651,36 @@ CadShape* cad_make_thread(const double* origin, const double* dir, const double*
         TopoDS_Wire spine = wire.Wire();
         // Perfil ISO básico en el plano que contiene al eje: flancos de 60°,
         // cresta de P/8 en el radio mayor y fondo de P/4 entre filetes
-        double t30 = std::tan(M_PI / 6);
-        double top = pitch / 8, bottom = top + 2 * (r_major - rh) * t30;
+        double slope = (hw_in - hw_out) / (r_major - r_minor);
+        double hw_rh = hw_in + slope * (r_minor - rh);
         gp_Pnt c0 = ax.Location();
         gp_Vec x(ax.XDirection()), zv(z);
-        auto at = [&](double r, double a) { return c0.Translated(x * r + zv * a); };
-        BRepBuilderAPI_MakePolygon poly;
-        poly.Add(at(rh, -bottom / 2));
-        poly.Add(at(r_major, -top / 2));
-        poly.Add(at(r_major, top / 2));
-        poly.Add(at(rh, bottom / 2));
-        poly.Close();
-        BRepOffsetAPI_MakePipeShell mk(spine);
-        // Binormal fija en el eje: el perfil no se tuerce a lo largo de la hélice
-        mk.SetMode(z);
-        mk.Add(poly.Wire(), Standard_False, Standard_False);
-        mk.Build();
-        if (!mk.IsDone()) throw Standard_Failure("no se pudo barrer el filete");
-        if (!mk.MakeSolid()) throw Standard_Failure("el filete no cierra un sólido");
+        // Cada entrada es la misma hélice corrida un paso entre filetes a lo largo del eje
+        std::vector<TopoDS_Shape> starts_shapes;
+        for (int32_t j = 0; j < starts; j++) {
+            gp_Vec shift = zv * (j * lead / starts);
+            TopoDS_Wire sp = spine;
+            if (j > 0) {
+                gp_Trsf t;
+                t.SetTranslation(shift);
+                sp = TopoDS::Wire(BRepBuilderAPI_Transform(spine, t, Standard_True).Shape());
+            }
+            auto at = [&](double r, double a) { return c0.Translated(x * r + zv * a + shift); };
+            BRepBuilderAPI_MakePolygon poly;
+            poly.Add(at(rh, -hw_rh));
+            poly.Add(at(r_major, -hw_out));
+            poly.Add(at(r_major, hw_out));
+            poly.Add(at(rh, hw_rh));
+            poly.Close();
+            BRepOffsetAPI_MakePipeShell mk(sp);
+            // Binormal fija en el eje: el perfil no se tuerce a lo largo de la hélice
+            mk.SetMode(z);
+            mk.Add(poly.Wire(), Standard_False, Standard_False);
+            mk.Build();
+            if (!mk.IsDone()) throw Standard_Failure("no se pudo barrer el filete");
+            if (!mk.MakeSolid()) throw Standard_Failure("el filete no cierra un sólido");
+            starts_shapes.push_back(mk.Shape());
+        }
         gp_Ax2 core_ax(ax.Location(), z, ax.XDirection());
         TopoDS_Shape core = BRepPrimAPI_MakeCylinder(core_ax, r_minor, length + 2 * pitch).Shape();
         // La unión hélice-núcleo es lo caro (cada flanco corta al cilindro en
@@ -2672,7 +2689,7 @@ CadShape* cad_make_thread(const double* origin, const double* dir, const double*
         {
             TopTools_ListOfShape args, tools;
             args.Append(core);
-            tools.Append(mk.Shape());
+            for (auto& s : starts_shapes) tools.Append(s);
             fu.SetArguments(args);
             fu.SetTools(tools);
             fu.SetRunParallel(Standard_True);
@@ -2707,6 +2724,19 @@ CadShape* cad_make_thread(const double* origin, const double* dir, const double*
         }
         return wrap_checked(BRepAlgoAPI_Common(rod, clip).Shape(), "rosca");
     });
+}
+
+CadShape* cad_make_thread(const double* origin, const double* dir, const double* xdir, double r_minor, double r_major,
+                          double pitch, double length, int32_t left, int32_t chamfer) {
+    // Perfil ISO básico: flancos de 60°, cresta de P/8 y fondo de P/4
+    double top = pitch / 8;
+    return thread_impl(origin, dir, xdir, r_minor, r_major, pitch, 1, top / 2 + (r_major - r_minor) * std::tan(M_PI / 6), top / 2, length,
+                       left, chamfer);
+}
+
+CadShape* cad_make_thread_trapezoid(const double* origin, const double* dir, const double* xdir, double r_minor, double r_major,
+                                    double lead, int32_t starts, double hw_in, double hw_out, double length, int32_t left) {
+    return thread_impl(origin, dir, xdir, r_minor, r_major, lead, starts, hw_in, hw_out, length, left, 0);
 }
 
 CadShape* cad_thicken(const CadShape* faces, double thickness) {
@@ -3052,6 +3082,17 @@ int32_t cad_mass_info(const CadShape* s, CadMassInfo* out) {
             out->bbox_max[1] = y1;
             out->bbox_max[2] = z1;
         }
+        return 1;
+    });
+}
+
+// Solo la caja (sin volumen ni inercia: en superficies libres esas integrales tardan segundos)
+int32_t cad_bounds(const CadShape* s, double* out6) {
+    return guard("caja", 0, [&] {
+        Bnd_Box box;
+        BRepBndLib::AddOptimal(s->s, box, Standard_False, Standard_False);
+        if (box.IsVoid()) return 0;
+        box.Get(out6[0], out6[1], out6[2], out6[3], out6[4], out6[5]);
         return 1;
     });
 }

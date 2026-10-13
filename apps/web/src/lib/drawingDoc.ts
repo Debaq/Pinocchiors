@@ -64,6 +64,8 @@ export interface DrawingSheet {
   /** Lo dibujado encima de una vista (se mueve y se escala con ella) */
   owners?: SheetOwner[];
   sketchHidden?: boolean;
+  /** Engranes (ids de sus operaciones) con círculo primitivo y tabla de datos */
+  gears?: number[];
 }
 
 /** Lo que se guarda en `doc.drawing` (la forma vieja también se acepta) */

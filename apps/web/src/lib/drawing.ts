@@ -5,6 +5,7 @@
 // hoja con Y hacia arriba desde la esquina de abajo a la izquierda.
 
 import type { Sketch } from "./cad.ts";
+import { gearTableBoxes, GEAR_TABLE } from "./gearSheet.ts";
 import { t as tr } from "./i18n.ts";
 import { polylineOf } from "./sketchCheck.ts";
 
@@ -231,6 +232,9 @@ export interface CutMarks {
   lines?: { view: string; points: P2[]; arrow: P2; label: string }[];
   centers?: { view: string; a: P2; b: P2 }[];
   breaks?: { view: string; index: number; points: P2[] }[];
+  /** Círculos primitivos de engranes (trazo y punto) y sus tablas de datos */
+  gears?: { view: string; center: P2; radius: number }[];
+  tables?: { title: string; rows: [string, string][] }[];
 }
 
 /**
@@ -1182,6 +1186,31 @@ export function sheetSvg(
     const [a, b] = [c.a, c.b].map((p): P2 => [v.x + p[0] * v.scale, v.y - p[1] * v.scale]);
     out.push(`<line data-center-line="${esc(c.view)}" x1="${n(a[0])}" y1="${n(a[1])}" x2="${n(b[0])}" y2="${n(b[1])}" stroke="#000" stroke-width="0.25" stroke-dasharray="8 1.5 1.5 1.5"/>`);
   }
+  // Engranes: el círculo primitivo en trazo y punto con su cruz, y las tablas de datos
+  for (const c of opts.marks?.gears ?? []) {
+    const v = at(c.view);
+    if (!v) continue;
+    const [cx, cy, r] = [v.x + c.center[0] * v.scale, v.y - c.center[1] * v.scale, c.radius * v.scale];
+    out.push(
+      `<g data-pitch-circle="${esc(c.view)}" fill="none" stroke="#000" stroke-width="0.25" stroke-dasharray="8 1.5 1.5 1.5"><circle cx="${n(cx)}" cy="${n(cy)}" r="${n(r)}"/>` +
+        `<line x1="${n(cx - r - 3)}" y1="${n(cy)}" x2="${n(cx + r + 3)}" y2="${n(cy)}"/><line x1="${n(cx)}" y1="${n(cy - r - 3)}" x2="${n(cx)}" y2="${n(cy + r + 3)}"/></g>`,
+    );
+  }
+  for (const b of gearTableBoxes(opts.marks?.tables ?? [], sheet.width, sheet.height, MARGIN, TITLE_H)) {
+    const g = GEAR_TABLE;
+    out.push(`<g data-gear-table="${esc(b.table.title)}" fill="none" stroke="#000" stroke-width="0.35">`);
+    out.push(`<rect x="${n(b.x)}" y="${n(b.y)}" width="${n(b.w)}" height="${n(b.h)}"/>`);
+    out.push(`<line x1="${n(b.x)}" y1="${n(b.y + g.title)}" x2="${n(b.x + b.w)}" y2="${n(b.y + g.title)}"/>`);
+    out.push(`<text x="${n(b.x + 1.5)}" y="${n(b.y + 3.6)}" font-size="3.4" fill="#000" stroke="none">${esc(b.table.title)}</text>`);
+    b.table.rows.forEach(([label, value], i) => {
+      const y = b.y + g.title + i * g.row;
+      if (i > 0) out.push(`<line x1="${n(b.x)}" y1="${n(y)}" x2="${n(b.x + b.w)}" y2="${n(y)}" stroke-width="0.15"/>`);
+      out.push(`<text x="${n(b.x + 1.5)}" y="${n(y + 3)}" font-size="2.6" fill="#000" stroke="none">${esc(label)}</text>`);
+      out.push(`<text x="${n(b.x + b.w - 1.5)}" y="${n(y + 3)}" font-size="2.6" fill="#000" stroke="none" text-anchor="end">${esc(value)}</text>`);
+    });
+    out.push(`<line x1="${n(b.x + g.labelWidth + 4)}" y1="${n(b.y + g.title)}" x2="${n(b.x + g.labelWidth + 4)}" y2="${n(b.y + b.h)}" stroke-width="0.15"/>`);
+    out.push("</g>");
+  }
   for (const c of opts.marks?.breaks ?? []) {
     const v = at(c.view);
     if (!v || c.points.length < 3) continue;
@@ -1521,7 +1550,48 @@ export function sheetDxf(
         const pts = c.points.map((p) => S(v, p));
         for (let i = 0; i < pts.length; i++) line("CORTES", pts[i], pts[(i + 1) % pts.length]);
       }
+      // Círculo primitivo de los engranes (con su cruz)
+      for (const c of opts.marks?.gears ?? []) {
+        const v = view(c.view);
+        if (!v) continue;
+        const [cx, cy] = S(v, c.center);
+        const r = c.radius * v.scale;
+        pair(0, "CIRCLE");
+        pair(8, "CORTES");
+        pair(10, cx);
+        pair(20, cy);
+        pair(30, 0);
+        pair(40, r);
+        line("CORTES", [cx - r - 3, cy], [cx + r + 3, cy]);
+        line("CORTES", [cx, cy - r - 3], [cx, cy + r + 3]);
+      }
     }
+    // Tablas de datos de los engranes (en la hoja entera)
+    if (!opts.view)
+      for (const b of gearTableBoxes(opts.marks?.tables ?? [], sheet.width, sheet.height, MARGIN, TITLE_H)) {
+        const g = GEAR_TABLE;
+        const P = (x: number, y: number): P2 => [x, sheet.height - y];
+        const text = (x: number, y: number, size: number, value: string) => {
+          pair(0, "TEXT");
+          pair(8, "COTAS");
+          pair(10, x);
+          pair(20, sheet.height - y);
+          pair(30, 0);
+          pair(40, size);
+          pair(1, value);
+        };
+        line("COTAS", P(b.x, b.y), P(b.x + b.w, b.y));
+        line("COTAS", P(b.x + b.w, b.y), P(b.x + b.w, b.y + b.h));
+        line("COTAS", P(b.x + b.w, b.y + b.h), P(b.x, b.y + b.h));
+        line("COTAS", P(b.x, b.y + b.h), P(b.x, b.y));
+        line("COTAS", P(b.x, b.y + g.title), P(b.x + b.w, b.y + g.title));
+        text(b.x + 1.5, b.y + 3.6, 3.4, b.table.title);
+        b.table.rows.forEach(([label, value], i) => {
+          const y = b.y + g.title + i * g.row;
+          text(b.x + 1.5, y + 3, 2.6, label);
+          text(b.x + b.w - 1.5 - value.length * 1.4, y + 3, 2.6, value);
+        });
+      }
     // Rótulos de las vistas con escala propia
     if (!opts.view)
       for (const [v, at] of viewLabels(placed, opts.dimensions, false)) {

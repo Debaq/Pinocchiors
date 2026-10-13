@@ -60,6 +60,7 @@ int32_t cad_edge_faces(const CadShape* s, int32_t e, int32_t* o) { (void)s; (voi
 int32_t cad_closest_face(const CadShape* s, const double* p, const double* n, double c, double* d) { (void)s; (void)p; (void)n; (void)c; (void)d; return -1; }
 int32_t cad_closest_edge(const CadShape* s, const double* p, const double* n, double c, double* d) { (void)s; (void)p; (void)n; (void)c; (void)d; return -1; }
 int32_t cad_mass_info(const CadShape* s, CadMassInfo* o) { (void)s; (void)o; FAIL_INT; }
+int32_t cad_bounds(const CadShape* s, double* o) { (void)s; (void)o; FAIL_INT; }
 int32_t cad_tessellate(const CadShape* s, double l, double a, CadMesh* o) { (void)s; (void)l; (void)a; memset(o, 0, sizeof(*o)); FAIL_INT; }
 void cad_mesh_free(CadMesh* m) { (void)m; }
 int32_t cad_write_step(const CadShape* s, uint8_t** o, size_t* l) { (void)s; (void)o; (void)l; FAIL_INT; }
@@ -78,6 +79,7 @@ double cad_ray_hit(const CadShape* s, const double* o, const double* d) { (void)
 int32_t cad_wire_sample(const CadShape* w, int32_t n, double* p, double* t) { (void)w; (void)n; (void)p; (void)t; FAIL_INT; }
 CadShape* cad_make_helix(const double* o, const double* d, double r, double p, double t, int32_t l) { (void)o; (void)d; (void)r; (void)p; (void)t; (void)l; FAIL_PTR; }
 CadShape* cad_make_thread(const double* o, const double* d, const double* x, double a, double b, double p, double l, int32_t h, int32_t c) { (void)o; (void)d; (void)x; (void)a; (void)b; (void)p; (void)l; (void)h; (void)c; FAIL_PTR; }
+CadShape* cad_make_thread_trapezoid(const double* o, const double* d, const double* x, double a, double b, double lead, int32_t n, double hi, double ho, double l, int32_t h) { (void)o; (void)d; (void)x; (void)a; (void)b; (void)lead; (void)n; (void)hi; (void)ho; (void)l; (void)h; FAIL_PTR; }
 CadShape* cad_thicken(const CadShape* f, double t) { (void)f; (void)t; FAIL_PTR; }
 CadShape* cad_offset_shape(const CadShape* s, double d) { (void)s; (void)d; FAIL_PTR; }
 CadShape* cad_fill(const CadShape* const* e, const CadShape* const* f, int32_t n, const double* p, int32_t np) { (void)e; (void)f; (void)n; (void)p; (void)np; FAIL_PTR; }

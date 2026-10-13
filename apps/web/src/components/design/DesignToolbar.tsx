@@ -127,6 +127,7 @@ export function designToolSets(a: DesignActions, ui: CadUi) {
     { label: "Tornillo", icon: D.Bolt, run: () => void a.addStandard("bolt"), tip: "Tornillo métrico ISO; con el borde de un agujero elegido se coloca ahí con la medida y el largo que calzan" },
     { label: "Tuerca", icon: D.Nut, run: () => void a.addStandard("nut"), tip: "Tuerca hexagonal ISO 4032; en el borde de un agujero elegido" },
     { label: "Arandela", icon: D.Washer, run: () => void a.addStandard("washer"), tip: "Arandela plana ISO 7089; en el borde de un agujero elegido" },
+    { label: "Engrane", icon: D.Gear, run: () => a.addGear(), tip: "Engrane de evolvente (recto, corona o cremallera) con módulo, dientes, agujero, cubo y chavetero" },
     "-",
     { label: "STEP...", icon: D.Import, run: () => void a.importStep(), tip: "Traer un sólido de un archivo STEP" },
   ];

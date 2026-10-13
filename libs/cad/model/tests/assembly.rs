@@ -27,7 +27,7 @@ fn stack(kind: MateKind) -> Assembly {
         angle: None,
         distance: None,
     };
-    Assembly { instances: vec![a, b], mates: vec![mate], next_id: 3 }
+    Assembly { instances: vec![a, b], mates: vec![mate], next_id: 3, ..Default::default() }
 }
 
 fn apply(m: [[f64; 4]; 3], p: P3) -> P3 {
@@ -100,7 +100,7 @@ fn instances_and_interference() {
     a.rotation = [0.0; 3];
     let mut b = inst(2, [9.0, 0.0, 0.0], true);
     b.rotation = [0.0; 3];
-    let asm = Assembly { instances: vec![a, b], mates: vec![], next_id: 3 };
+    let asm = Assembly { instances: vec![a, b], mates: vec![], next_id: 3, ..Default::default() };
     let sol = solve(&asm);
     let shapes = instance_shapes(&ev, &asm, &sol);
     assert_eq!(shapes.len(), 2);

@@ -482,6 +482,8 @@ pub enum PrimitiveShape {
     },
     /// Arandela plana métrica.
     Washer { size: String },
+    /// Engrane de evolvente (ver [`crate::gear_part`]).
+    Gear(crate::gear_part::GearPart),
 }
 
 /// Cabeza del tornillo.
@@ -1406,7 +1408,10 @@ impl FeatureKind {
             }
             FeatureKind::SurfaceLoft { sections, .. } => sections.iter().map(|s| s.sketch).collect(),
             FeatureKind::Hole(h) => [vec![h.sketch], h.link.iter().map(|l| l.feature).collect()].concat(),
-            FeatureKind::Primitive(p) => p.link.iter().map(|l| l.feature).collect(),
+            FeatureKind::Primitive(p) => {
+                let gear = if let PrimitiveShape::Gear(g) = &p.shape { g.link.map(|l| l.feature) } else { None };
+                p.link.iter().map(|l| l.feature).chain(gear).collect()
+            }
             FeatureKind::Thread { link, .. } => link.iter().map(|l| l.feature).collect(),
             FeatureKind::Rib { sketch, .. } => vec![*sketch],
             FeatureKind::ScanBody(b) => b.region.iter().map(|r| r.sketch).collect(),
@@ -1480,7 +1485,7 @@ impl FeatureKind {
             FeatureKind::SurfaceSketch { .. } => "Sketch envuelto",
             FeatureKind::Extrude(_) => "Extrusión",
             FeatureKind::Revolve(_) => "Revolución",
-            FeatureKind::Primitive(p) => match p.shape {
+            FeatureKind::Primitive(p) => match &p.shape {
                 PrimitiveShape::Box { .. } => "Caja",
                 PrimitiveShape::Cylinder { .. } => "Cilindro",
                 PrimitiveShape::Cone { .. } => "Cono",
@@ -1489,6 +1494,13 @@ impl FeatureKind {
                 PrimitiveShape::Bolt { .. } => "Tornillo",
                 PrimitiveShape::Nut { .. } => "Tuerca",
                 PrimitiveShape::Washer { .. } => "Arandela",
+                PrimitiveShape::Gear(g) => match g.spec.kind {
+                    crate::gears::GearKind::External => "Engrane",
+                    crate::gears::GearKind::Internal => "Corona",
+                    crate::gears::GearKind::Rack => "Cremallera",
+                    crate::gears::GearKind::Bevel => "Engrane cónico",
+                    crate::gears::GearKind::Worm => "Sin fin",
+                },
             },
             FeatureKind::Fillet { .. } => "Redondeo",
             FeatureKind::Chamfer { .. } => "Chaflán",

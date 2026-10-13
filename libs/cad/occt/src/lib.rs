@@ -873,6 +873,17 @@ impl Shape {
         })
     }
 
+    /// Husillo de filete trapecial (tornillo sin fin): núcleo de `r_minor`, filete hasta
+    /// `r_major` con semiancho `hw_in` en el núcleo y `hw_out` en la cresta (a lo largo del
+    /// eje), de `starts` entradas y `lead` de avance por vuelta; largo `length` desde el
+    /// origen del marco. La X del marco es la fase de la hélice.
+    #[allow(clippy::too_many_arguments)]
+    pub fn thread_trapezoid(frame: Frame, r_minor: f64, r_major: f64, lead: f64, starts: u32, hw_in: f64, hw_out: f64, length: f64, left: bool) -> Result<Shape> {
+        wrap(unsafe {
+            ffi::cad_make_thread_trapezoid(frame.origin.as_ptr(), frame.z.as_ptr(), frame.x.as_ptr(), r_minor, r_major, lead, starts as i32, hw_in, hw_out, length, left as i32)
+        })
+    }
+
     /// Sólido de espesor `thickness` a partir de esta cara (o caras), hacia su normal.
     pub fn thicken(&self, thickness: f64) -> Result<Shape> {
         wrap(unsafe { ffi::cad_thicken(self.ptr(), thickness) })
@@ -1050,6 +1061,15 @@ impl Shape {
         let t = dir.as_ref().map_or(std::ptr::null(), |t| t.as_ptr());
         let i = unsafe { ffi::cad_closest_edge(self.ptr(), point.as_ptr(), t, min_cos, &mut d) };
         (i >= 0).then_some((i as usize, d))
+    }
+
+    /// Caja que contiene la forma (mín, máx), sin calcular volumen ni inercia
+    pub fn bounds(&self) -> Result<(P3, P3)> {
+        let mut b = [0.0f64; 6];
+        if unsafe { ffi::cad_bounds(self.ptr(), b.as_mut_ptr()) } == 0 {
+            return Err(last_error());
+        }
+        Ok(([b[0], b[1], b[2]], [b[3], b[4], b[5]]))
     }
 
     pub fn mass(&self) -> Result<MassInfo> {

@@ -10,6 +10,7 @@ use crate::eval::Evaluation;
 use crate::feature::PartId;
 use crate::geom::*;
 use cad_occt::Shape;
+use std::f64::consts::{PI, TAU};
 
 /// Ensamble guardado en el documento.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -18,8 +19,53 @@ pub struct Assembly {
     pub instances: Vec<Instance>,
     #[serde(default)]
     pub mates: Vec<Mate>,
+    /// Acoplamientos entre uniones (engranes, piñón-cremallera, tornillo).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub relations: Vec<Relation>,
     #[serde(default)]
     pub next_id: u32,
+}
+
+/// Acopla el movimiento de dos uniones ya existentes (`Mate`): una ecuación
+/// extra en el solver. Si una de las dos tiene su ángulo o distancia impuestos
+/// (la que se anima), la otra sale de ahí; si ninguna, el solver las acopla.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Relation {
+    /// Dos revolutas: `ángulo_b = razón · ángulo_a + fase` (° ). La razón lleva
+    /// el signo: negativa si giran al revés (engranes exteriores).
+    Gear {
+        a: u32,
+        b: u32,
+        ratio: f64,
+        #[serde(default)]
+        phase: f64,
+    },
+    /// Revoluta y deslizante: `distancia = por_vuelta · ángulo/360 + fase` (mm)
+    RackPinion {
+        revolute: u32,
+        slider: u32,
+        per_turn: f64,
+        #[serde(default)]
+        phase: f64,
+    },
+    /// Cilíndrica: `distancia = paso · ángulo/360 + fase` (mm)
+    Screw {
+        cylindrical: u32,
+        pitch: f64,
+        #[serde(default)]
+        phase: f64,
+    },
+}
+
+impl Relation {
+    pub fn mates(&self) -> Vec<u32> {
+        match self {
+            Relation::Gear { a, b, .. } => vec![*a, *b],
+            Relation::RackPinion { revolute, slider, .. } => vec![*revolute, *slider],
+            Relation::Screw { cylindrical, .. } => vec![*cylindrical],
+        }
+    }
 }
 
 /// Una pieza del diseño puesta en el ensamble.
@@ -160,6 +206,72 @@ fn residuals(m: &Mate, a: (P3, P3, P3), b: (P3, P3, P3), out: &mut Vec<f64>) {
     }
 }
 
+fn wrap(a: f64) -> f64 {
+    (a + PI).rem_euclid(TAU) - PI
+}
+
+/// Ángulo (rad) de `b` respecto de `a` alrededor de Z de `a`, y distancia (mm)
+/// a lo largo de ese Z, de una unión con los conectores en el mundo.
+fn measure_mate(m: &Mate, a: (P3, P3, P3), b: (P3, P3, P3)) -> (f64, f64) {
+    let (oa, za, xa) = a;
+    let (ob, _, xb) = b;
+    let _ = m;
+    (dot(xb, cross(za, xa)).atan2(dot(xb, xa)), dot(sub(ob, oa), za))
+}
+
+/// Pasa a las uniones impuestas lo que las relaciones dicen: la unión que se
+/// anima (ángulo o distancia dados) fija la otra. Quedan abiertas las relaciones
+/// sin ninguna impuesta, que resuelve el solver.
+fn propagate(asm: &Assembly) -> (Vec<Mate>, Vec<Relation>) {
+    let mut mates = asm.mates.clone();
+    let mut open = asm.relations.clone();
+    loop {
+        let before = open.len();
+        open.retain(|r| !impose(r, &mut mates));
+        if open.len() == before {
+            break;
+        }
+    }
+    (mates, open)
+}
+
+/// ¿La relación quedó resuelta imponiendo valores en las uniones?
+fn impose(r: &Relation, mates: &mut [Mate]) -> bool {
+    let idx = |id: u32| mates.iter().position(|m| m.id == id);
+    match r {
+        Relation::Gear { a, b, ratio, phase } => {
+            let (Some(i), Some(j)) = (idx(*a), idx(*b)) else { return true };
+            match (mates[i].angle, mates[j].angle) {
+                (Some(x), None) => mates[j].angle = Some(ratio * x + phase),
+                (None, Some(y)) if ratio.abs() > 1e-12 => mates[i].angle = Some((y - phase) / ratio),
+                (None, None) => return false,
+                _ => {}
+            }
+            true
+        }
+        Relation::RackPinion { revolute, slider, per_turn, phase } => {
+            let (Some(i), Some(j)) = (idx(*revolute), idx(*slider)) else { return true };
+            match (mates[i].angle, mates[j].distance) {
+                (Some(t), None) => mates[j].distance = Some(per_turn * t / 360.0 + phase),
+                (None, Some(d)) if per_turn.abs() > 1e-12 => mates[i].angle = Some((d - phase) / per_turn * 360.0),
+                (None, None) => return false,
+                _ => {}
+            }
+            true
+        }
+        Relation::Screw { cylindrical, pitch, phase } => {
+            let Some(i) = idx(*cylindrical) else { return true };
+            match (mates[i].angle, mates[i].distance) {
+                (Some(t), None) => mates[i].distance = Some(pitch * t / 360.0 + phase),
+                (None, Some(d)) if pitch.abs() > 1e-12 => mates[i].angle = Some((d - phase) / pitch * 360.0),
+                (None, None) => return false,
+                _ => {}
+            }
+            true
+        }
+    }
+}
+
 /// Resultado del solver.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AssemblySolution {
@@ -175,6 +287,7 @@ pub struct AssemblySolution {
 /// Mueve las instancias libres para cumplir las relaciones (Levenberg-Marquardt
 /// con jacobiano numérico). Si ninguna está fija, la primera queda quieta.
 pub fn solve(asm: &Assembly) -> AssemblySolution {
+    let (mates, open) = propagate(asm);
     let anchor = if asm.instances.iter().any(|i| i.fixed) { None } else { asm.instances.first().map(|i| i.id) };
     let free: Vec<usize> = asm.instances.iter().enumerate().filter(|(_, i)| !i.fixed && Some(i.id) != anchor).map(|(k, _)| k).collect();
     let mut x = DVector::<f64>::zeros(free.len() * 6);
@@ -194,9 +307,35 @@ pub fn solve(asm: &Assembly) -> AssemblySolution {
     };
     let eval = |x: &DVector<f64>| -> DVector<f64> {
         let mut r = Vec::new();
-        for m in &asm.mates {
+        for m in &mates {
             let (Some((pa, ra)), Some((pb, rb))) = (pose(x, m.a.instance), pose(x, m.b.instance)) else { continue };
             residuals(m, world(&m.a, pa, ra), world(&m.b, pb, rb), &mut r);
+        }
+        // Relaciones que ninguna unión impuesta resuelve: ecuaciones del solver
+        let measure = |id: u32| -> Option<(f64, f64)> {
+            let m = mates.iter().find(|m| m.id == id)?;
+            let (pa, ra) = pose(x, m.a.instance)?;
+            let (pb, rb) = pose(x, m.b.instance)?;
+            Some(measure_mate(m, world(&m.a, pa, ra), world(&m.b, pb, rb)))
+        };
+        for rel in &open {
+            match rel {
+                Relation::Gear { a, b, ratio, phase } => {
+                    if let (Some((ta, _)), Some((tb, _))) = (measure(*a), measure(*b)) {
+                        r.push(wrap(tb - ratio * ta - phase.to_radians()));
+                    }
+                }
+                Relation::RackPinion { revolute, slider, per_turn, phase } => {
+                    if let (Some((t, _)), Some((_, d))) = (measure(*revolute), measure(*slider)) {
+                        r.push(d - per_turn * t / TAU - phase);
+                    }
+                }
+                Relation::Screw { cylindrical, pitch, phase } => {
+                    if let Some((t, d)) = measure(*cylindrical) {
+                        r.push(d - pitch * t / TAU - phase);
+                    }
+                }
+            }
         }
         DVector::from_vec(r)
     };
@@ -293,4 +432,119 @@ pub fn interferences(shapes: &[(u32, Shape)]) -> Vec<(u32, u32, f64)> {
         }
     }
     out
+}
+
+/// Medida actual de una unión en la solución: (ángulo en grados, distancia en mm)
+pub fn measure(asm: &Assembly, sol: &AssemblySolution, mate: u32) -> Option<(f64, f64)> {
+    let m = asm.mates.iter().find(|m| m.id == mate)?;
+    let pose = |id: u32| sol.poses.iter().find(|p| p.0 == id).map(|p| (p.1, p.2));
+    let (pa, ra) = pose(m.a.instance)?;
+    let (pb, rb) = pose(m.b.instance)?;
+    let (t, d) = measure_mate(m, world(&m.a, pa, ra), world(&m.b, pb, rb));
+    Some((t.to_degrees(), d))
+}
+
+/// Eje del engrane de una instancia en el mundo, y el giro de la instancia
+fn gear_world(ev: &Evaluation, asm: &Assembly, sol: &AssemblySolution, instance: u32) -> Option<(crate::gear_part::GearAxis, P3, [[f64; 3]; 3])> {
+    let inst = asm.instances.iter().find(|i| i.id == instance)?;
+    let g = ev.gears.iter().find(|g| g.feature == inst.part.feature)?;
+    let rot = sol.poses.iter().find(|p| p.0 == instance)?.2;
+    let r = rotation_matrix(rot);
+    let axis = mul(&r, normalize(g.z));
+    Some((g.clone(), axis, r))
+}
+
+/// Relaciones que piden los engranes enlazados (`GearLink`) que están en el
+/// ensamble, con la razón real z₂/z₁ y la fase de como están ahora. Cada
+/// engrane tiene que estar unido por una revoluta (o cilíndrica) a otra
+/// pieza; las parejas que ya tienen relación no se repiten.
+pub fn suggest_gear_relations(ev: &Evaluation, asm: &Assembly, sol: &AssemblySolution) -> Vec<Relation> {
+    use crate::gears::GearKind::*;
+    let mut out = Vec::new();
+    // La unión giratoria de una instancia (la primera que la tenga de un lado)
+    let hinge = |inst: u32| -> Option<(&Mate, f64)> {
+        asm.mates.iter().find_map(|m| {
+            (matches!(m.kind, MateKind::Revolute | MateKind::Cylindrical) && (m.a.instance == inst || m.b.instance == inst)).then(|| (m, if m.b.instance == inst { 1.0 } else { -1.0 }))
+        })
+    };
+    let slide = |inst: u32| -> Option<(&Mate, f64)> {
+        asm.mates.iter().find_map(|m| {
+            (matches!(m.kind, MateKind::Slider | MateKind::Cylindrical) && (m.a.instance == inst || m.b.instance == inst)).then(|| (m, if m.b.instance == inst { 1.0 } else { -1.0 }))
+        })
+    };
+    let exists = |a: u32, b: u32| {
+        asm.relations.iter().any(|r| matches!(r, Relation::Gear { a: x, b: y, .. } | Relation::RackPinion { revolute: x, slider: y, .. } if (*x, *y) == (a, b) || (*x, *y) == (b, a)))
+    };
+    for b_inst in &asm.instances {
+        let Some(gb) = ev.gears.iter().find(|g| g.feature == b_inst.part.feature) else { continue };
+        let Some(link) = gb.part.link else { continue };
+        for a_inst in asm.instances.iter().filter(|i| i.part.feature == link.feature) {
+            let (Some((ga, axis_a, _)), Some((_, axis_b, _))) = (gear_world(ev, asm, sol, a_inst.id), gear_world(ev, asm, sol, b_inst.id)) else { continue };
+            let (ka, kb) = (ga.part.spec.kind, gb.part.spec.kind);
+            let Some((ma, side_a)) = hinge(a_inst.id) else { continue };
+            let sign_a = side_a * dot(axis_a, normalize(world(&ma.a, [0.0; 3], rot_of(sol, ma.a.instance)).1)).signum();
+            let (za, zb) = (ga.part.spec.teeth as f64, gb.part.spec.teeth as f64);
+            match (ka, kb) {
+                (Rack, _) => continue,
+                (_, Rack) => {
+                    let Some((ms, side_s)) = slide(b_inst.id) else { continue };
+                    if exists(ma.id, ms.id) {
+                        continue;
+                    }
+                    // La cremallera se mueve a lo largo de su X (el de su marco)
+                    let e = mul(&rotation_matrix(rot_of(sol, b_inst.id)), normalize(gb.x));
+                    let zs = normalize(world(&ms.a, [0.0; 3], rot_of(sol, ms.a.instance)).1);
+                    let per_turn = TAU * ga.pitch_radius * sign_a * dot(e, zs) * side_s;
+                    let (Some((t, _)), Some((_, d))) = (measure(asm, sol, ma.id), measure(asm, sol, ms.id)) else { continue };
+                    out.push(Relation::RackPinion { revolute: ma.id, slider: ms.id, per_turn, phase: d - per_turn * t / 360.0 });
+                }
+                _ => {
+                    let Some((mb, side_b)) = hinge(b_inst.id) else { continue };
+                    if ma.id == mb.id || exists(ma.id, mb.id) {
+                        continue;
+                    }
+                    let sign_b = side_b * dot(axis_b, normalize(world(&mb.a, [0.0; 3], rot_of(sol, mb.a.instance)).1)).signum();
+                    // φ_b = k·φ_a sobre los ejes de los engranes; la corona gira con el piñón
+                    let outer = |k| matches!(k, External | Bevel);
+                    // Sin fin con su rueda: gira -(entradas/dientes) con el signo de la mano
+                    let k = if ka == Worm {
+                        if ga.part.spec.left_hand { za / zb } else { -za / zb }
+                    } else if outer(ka) && outer(kb) {
+                        -za / zb
+                    } else {
+                        za / zb
+                    };
+                    let ratio = sign_a * sign_b * k;
+                    let (Some((ta, _)), Some((tb, _))) = (measure(asm, sol, ma.id), measure(asm, sol, mb.id)) else { continue };
+                    out.push(Relation::Gear { a: ma.id, b: mb.id, ratio, phase: tb - ratio * ta });
+                }
+            }
+        }
+    }
+    out
+}
+
+fn rot_of(sol: &AssemblySolution, instance: u32) -> P3 {
+    sol.poses.iter().find(|p| p.0 == instance).map(|p| p.2).unwrap_or([0.0; 3])
+}
+
+/// Choques entre instancias, sin contar los de engranes que engranan: a
+/// los dientes en contacto les sobra un polvo de volumen, no es un choque.
+pub fn interferences_for(ev: &Evaluation, asm: &Assembly, shapes: &[(u32, Shape)]) -> Vec<(u32, u32, f64)> {
+    let tooth = |inst: u32| -> Option<f64> {
+        let i = asm.instances.iter().find(|i| i.id == inst)?;
+        let g = ev.gears.iter().find(|g| g.feature == i.part.feature)?;
+        let vol = shapes.iter().find(|s| s.0 == inst)?.1.mass().ok()?.volume;
+        Some(vol / g.part.spec.teeth.max(1) as f64)
+    };
+    let linked = |a: u32, b: u32| {
+        let feat = |id: u32| asm.instances.iter().find(|i| i.id == id).map(|i| i.part.feature);
+        let (Some(fa), Some(fb)) = (feat(a), feat(b)) else { return false };
+        let l = |x, y| ev.gears.iter().any(|g| g.feature == x && g.part.link.is_some_and(|l| l.feature == y));
+        l(fa, fb) || l(fb, fa)
+    };
+    interferences(shapes)
+        .into_iter()
+        .filter(|&(a, b, v)| !(linked(a, b) && tooth(a).zip(tooth(b)).is_some_and(|(x, y)| v < 0.005 * x.min(y))))
+        .collect()
 }

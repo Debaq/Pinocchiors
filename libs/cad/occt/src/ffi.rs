@@ -164,6 +164,7 @@ unsafe extern "C" {
     pub fn cad_wire_sample(wire: *const CadShape, n: i32, out_p: *mut f64, out_t: *mut f64) -> i32;
     pub fn cad_make_helix(origin: *const f64, dir: *const f64, radius: f64, pitch: f64, turns: f64, left: i32) -> *mut CadShape;
     pub fn cad_make_thread(origin: *const f64, dir: *const f64, xdir: *const f64, r_minor: f64, r_major: f64, pitch: f64, length: f64, left: i32, chamfer: i32) -> *mut CadShape;
+    pub fn cad_make_thread_trapezoid(origin: *const f64, dir: *const f64, xdir: *const f64, r_minor: f64, r_major: f64, lead: f64, starts: i32, hw_in: f64, hw_out: f64, length: f64, left: i32) -> *mut CadShape;
     pub fn cad_thicken(faces: *const CadShape, thickness: f64) -> *mut CadShape;
     pub fn cad_offset_shape(s: *const CadShape, distance: f64) -> *mut CadShape;
     pub fn cad_fill(edges: *const *const CadShape, faces: *const *const CadShape, n: i32, points: *const f64, n_points: i32) -> *mut CadShape;
@@ -184,6 +185,7 @@ unsafe extern "C" {
     pub fn cad_make_vertex(p: *const f64) -> *mut CadShape;
     pub fn cad_min_distance(a: *const CadShape, b: *const CadShape, pa: *mut f64, pb: *mut f64) -> f64;
     pub fn cad_mass_info(s: *const CadShape, out: *mut CadMassInfo) -> i32;
+    pub fn cad_bounds(s: *const CadShape, out6: *mut f64) -> i32;
 
     pub fn cad_tessellate(s: *const CadShape, linear: f64, angular: f64, out: *mut CadMesh) -> i32;
     pub fn cad_mesh_free(m: *mut CadMesh);

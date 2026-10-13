@@ -1,8 +1,9 @@
-import { Component, For, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack, type JSX } from "solid-js";
+import { Component, For, Match, Show, Switch, createEffect, createMemo, createResource, createSignal, on, onCleanup, onMount, untrack, type JSX } from "solid-js";
 import { clsx } from "clsx";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
-import { partMaterial, type CadStore } from "../../lib/cad";
+import { partMaterial, type CadStore, type GearPart } from "../../lib/cad";
+import { gearMarks, gearTable } from "../../lib/gearSheet";
 import type { CadUi, DrawingTool } from "../../lib/cadUi";
 import * as D from "../icons/design";
 import * as SketchIcons from "../icons/sketch";
@@ -303,6 +304,12 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
     const all = [...r.placed, ...extras].map(dress);
     return { ...r, placed: [...all, ...placeDetails(all, s.details.filter((x) => !x.hidden), sheet())] };
   });
+  // Engranes que pidió el plano (con lo que se mide de cada uno)
+  const pickedGears = createMemo(() => (d()?.gears ?? []).flatMap((id) => store.result()?.gears?.filter((g) => g.feature === id) ?? []));
+  const [gearInfos] = createResource(
+    () => JSON.stringify(pickedGears().map((g) => g.part)),
+    (key) => Promise.all((JSON.parse(key) as GearPart[]).map((p) => store.gearInfo(p).catch(() => undefined))),
+  );
   // Marcas de los cortes en las vistas: líneas de corte, la central del medio corte, las roturas
   const marks = createMemo((): CutMarks => {
     const s = d();
@@ -319,7 +326,16 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
       return [{ view: name, a: [c[0], b.min[1] - 3 / v.scale] as P2, b: [c[0], b.max[1] + 3 / v.scale] as P2 }];
     });
     const breaks = Object.entries(s.breaks ?? {}).flatMap(([view, list]) => (list ?? []).map((br, index) => ({ view, index, points: br.points })));
-    return { lines, centers, breaks };
+    // Engranes elegidos: círculo primitivo donde el eje apunta a quien mira, y su tabla
+    const picked = pickedGears();
+    const views = r.placed.filter((p) => !p.detail && !isPictorial(p.name)).flatMap((p) => {
+      const dir = viewDirOf(s, p.name);
+      return dir ? [{ name: p.name, dir }] : [];
+    });
+    const gears = gearMarks(picked, views);
+    const infos = gearInfos() ?? [];
+    const tables = picked.flatMap((g, i) => (infos[i] ? [gearTable(g, infos[i]!, store.doc()?.features.find((f) => f.id === g.feature)?.name ?? `#${g.feature}`)] : []));
+    return { lines, centers, breaks, gears, tables };
   });
   // Lo dibujado a mano sobre la hoja (un sketch en mm de hoja), con lo ligado
   // a las vistas donde están hoy sus líneas
@@ -950,6 +966,7 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
               if (x.kind === "radius") return `R${dimText(x.value)}`;
               return `${x.prefix ?? ""}${dimText(x.value)}`;
             }}
+            gearList={(store.result()?.gears ?? []).map((g) => ({ id: g.feature, name: store.doc()?.features.find((f) => f.id === g.feature)?.name ?? `#${g.feature}` }))}
             update={upd}
             close={() => ui.setDrawingSel(undefined)}
             editDrawing={() => void startDrawing()}
@@ -1009,6 +1026,8 @@ const ElementWindow: Component<{
   hasImage: (name: string) => boolean;
   savePng: (name: string) => void;
   dimValue: (index: number) => string | undefined;
+  /** Engranes del diseño, para ponerles círculo primitivo y tabla */
+  gearList: { id: number; name: string }[];
   update: (change: (s: DrawingSheet) => void) => void;
   close: () => void;
   editDrawing: () => void;
@@ -1144,6 +1163,23 @@ const ElementWindow: Component<{
               {check(t("Ocultas"), props.sheet.hiddenLines, (v) => props.update((s) => (s.hiddenLines = v)))}
               {check(t("Tangentes"), props.sheet.smooth, (v) => props.update((s) => (s.smooth = v)))}
             </div>
+            <Show when={props.gearList.length > 0}>
+              <div class="space-y-0.5" aria-label={t("Engranes en el plano")}>
+                <p class="text-[11px] text-text-dim">{t("Engranes con círculo primitivo y tabla de datos")}</p>
+                <For each={props.gearList}>
+                  {(g) =>
+                    check(g.name, !!props.sheet.gears?.includes(g.id), (on) =>
+                      props.update((s) => {
+                        const ids = new Set(s.gears ?? []);
+                        if (on) ids.add(g.id);
+                        else ids.delete(g.id);
+                        s.gears = [...ids];
+                      }),
+                    )
+                  }
+                </For>
+              </div>
+            </Show>
             {check(t("Rayado según el material"), props.sheet.hatchByMaterial !== false, (on) => props.update((s) => (s.hatchByMaterial = on)))}
             <Show when={props.sheet.hatchByMaterial === false}>{hatchControls(props.sheet.hatch ?? DEFAULT_HATCH, (h) => props.update((s) => (s.hatch = h)))}</Show>
             {row(t("Título"), <input aria-label={t("Título del plano")} class={input} value={props.sheet.title} onChange={(e) => props.update((s) => (s.title = e.currentTarget.value))} />)}

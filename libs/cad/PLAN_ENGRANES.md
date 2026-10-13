@@ -6,6 +6,8 @@ complementen, que tengan relaciones, rectos, helicoidales y otros».
 > **No borrar en limpiezas de planes** (pedido del usuario, 2026-10-10). Aunque se pida
 > «eliminar cualquier plan previo», este se conserva salvo que el usuario lo nombre.
 
+Estado (2026-10-13): **F1–F8 hechas**; queda «Más adelante» y lo pendiente anotado en cada fase.
+
 Leyenda: ✅ hecho · 🟡 a medias · ❌ falta · (F*n*) fase que lo cubre.
 
 ## ¿Sketch u otra cosa? Cómo lo hacen otros
@@ -39,17 +41,24 @@ se volvería lento con 40 dientes). Lo que funciona mejor es la combinación de 
   distancia impuestos, LM con jacobiano numérico, choques.
 - ✅ OCCT: `Curve::BSpline` (perfil exacto), `face`, `prism`, `loft`, `MakePipeShell` con
   binormal fija (rosca), hélices, booleanas, STEP.
-- ❌ Todo lo de engranes: geometría, operación, pares, relaciones, tipos.
+- ✅ F1 (2026-10-12): `cad_model::gears` — evolvente exacta, pie por trocoide de la herramienta, avisos, datos del par (`pair`), cremallera (`rack_outline`), helicoidal transversal. 15 pruebas en `model/tests/gears.rs`.
+- ✅ F2 (2026-10-12): `PrimitiveShape::Gear(GearPart)` (`cad_model::gear_part`): exterior, corona y cremallera; agujero, cubo, chavetero DIN 6885, aligeramientos en círculo, holgura de impresión. Botón «Engrane» en Sólidos, campos en el cuadro de propiedades con Ø y avisos (`cad_gear_info`). Pruebas en `model/tests/gear_part.rs`. Falta: rayos (aligeramiento), nombres de cara («diente», «flanco»), e2e.
+- ✅ F3 (2026-10-12): `GearPart.link: GearLink { feature, angle, offset, distance }` + `Evaluation.gears` (`GearAxis`). El engrane copia módulo y ángulo del otro, se ubica a la distancia entre centros (`gear_part::mesh`) y gira para calzar; con `distance` pedida ajusta su corrección de perfil. Exterior-exterior, piñón-corona (en ambos sentidos) y piñón→cremallera; avisos de interferencia y razón de contacto < 1,1. Pruebas con choque de volúmenes en `model/tests/gear_mesh.rs`. Cuadro «Engranar con» en las propiedades. Falta: diseñar por relación (calcular dientes), clic en el visor para la dirección, cremallera como fuente, ejes no paralelos (aviso), hélice contraria sin probar (F4).
+- ✅ F4 (2026-10-12): helicoidales (`helix_angle` ±, módulo normal; perfil transversal) y doble helicoidal con canal central. Construcción por `Shape::loft` de secciones giradas cada ~4° (no hizo falta C++ de torsión: `sweep_twisted` daba 9 s con 60 dientes; el loft ~1,8 s). `Shape::bounds` (C++ `cad_bounds`) reemplaza a `mass()` en `touching`/`diag`: la integral de volumen sobre superficies libres tardaba segundos en cada operación. `gears::pair` exige manos contrarias (exterior-exterior) o iguales (corona); `mesh` invierte la mano sola. Pruebas: choque de volúmenes con helicoidal y espina de pescado. Falta: módulo transversal elegible, cremallera helicoidal, helicoidales cruzados.
+- ✅ F5 (2026-10-12): `Assembly.relations: Vec<Relation>` (`Gear`, `RackPinion`, `Screw`) sobre uniones existentes. La unión con ángulo/distancia impuestos manda y la otra sale de ahí (`propagate`, sin incógnitas nuevas, multivuelta sin saltos); sin ninguna impuesta, el solver agrega la ecuación con el ángulo medido (`wrap`). `suggest_gear_relations` crea las relaciones de los `GearLink` con la razón real ±z₁/z₂ (signo por la geometría de las uniones) y la fase de la pose actual; `interferences_for` ignora el polvo de contacto entre engranes que engranan. Panel «Acoplamientos» con «Detectar engranes» y comando `cad_assembly_suggest`. Pruebas en `model/tests/assembly_relations.rs` (giran 0°/17°/95° sin chocar; el control con fase corrida sí choca). Falta: arrastrar un engrane en el visor (hoy: casilla Ángulo de la unión), relaciones a mano (solo se detectan), tren con más de dos y 180° exactos (el solver no sale de ese punto muerto).
+- ✅ F6 (2026-10-12): `GearKind::Bevel` (cónico recto, Tredgold): perfil recto virtual de z/cos δ dientes en el cono de atrás llevado al plano del extremo grande por rectas que pasan por el vértice (`GearSpec::bevel_map`); sólido = tronco de cono por el vértice (`loft` ruled de dos secciones planas, sin booleanas). Los extremos quedan planos (perpendiculares al eje) y no cónicos: la versión con cono de atrás/adelante por booleanas fallaba (resultado vacío) según el ángulo. `GearSpec.cone_angle` (δ) y `shaft_angle` (Σ, en el segundo del par). `mesh_bevel`: vértices coincidentes, eje del segundo a Σ, cono del segundo = Σ − δ₁, fase por la fórmula del recto con los radios primitivos; avisa si δ₁ no es atan(senΣ/(z₂/z₁+cosΣ)). Con agujero, cubo y chavetero. Pruebas: choque nulo 20/20, 16/32 y 18/27 a 75°, control con medio paso choca. Panel con «Cónico recto». Falta: espiral e hipoides, cálculo automático del cono del primero, aligeramientos.
+- ✅ F7 (2026-10-13): `GearKind::Worm` (`teeth` = entradas, `module` axial, `worm_diameter` primitivo —0: 10·m—, `left_hand`): filete trapecial de flancos 2α de `thread_impl` (C++ generalizado: `cad_make_thread_trapezoid`, varias entradas = la misma hélice corrida un paso entre filetes; `cad_make_thread` pasó a ser el caso ISO de 1 entrada). Rueda = engrane exterior helicoidal con hélice = ángulo de avance γ (misma mano), módulo normal m_x·cosγ, α_n = atan(tanα_x·cosγ) y garganta (`GearPart.throat` = distancia entre centros: dientes más altos hacia las caras y corte por un toro de radio a − r_cabeza, centrado en la cara media). `mesh_worm`: ejes cruzados a 90°, rueda a d₁/2 + r₂ en la dirección u, eje z_b = z_sinfin × u, fase por la posición axial del filete en esa dirección. Relación del ensamble: ∓entradas/dientes según la mano (verificada con choque y control de signo invertido para las dos manos). Pruebas: volumen del sin fin contra Pappus, 1 y 2 entradas, derecho e izquierdo, choque nulo y control. Falta: rueda como fuente (hoy el sin fin va primero), tallado exacto de la rueda por simulación del sin fin, autobloqueo (aviso) y rendimiento, globoide/doble envolvente, hoja (F8).
+- ✅ F8 (2026-10-13): **Sketch:** `gear_part::sketch_block` (comando `cad_gear_block`) deja el contorno como `SketchBlock` rígido (origen = centro; arcos de pie/cabeza con centro en el origen y splines de flancos con manijas de tangente exacta; cremallera: líneas), que se inserta con las copias de bloque ya existentes (`insertBlock`, rígidas con su ancla, rápidas con cientos de entidades). «Traer» en Organización → Bloques elige un engrane del diseño y activa «Insertar»; si el bloque ya existe se actualiza (y sus copias). **Hoja:** `DrawingSheet.gears` (ids de engranes elegidos en el panel de la hoja) → círculo primitivo en trazo y punto con cruz en las vistas que miran a lo largo del eje (`gearMarks`) y tabla de datos apilada sobre el cajetín (`gearTable`/`gearTableBoxes`; SVG y DXF). `GearInfo` trae cota sobre k dientes y sobre bolas (`gear_part::measurements`: W = m·cosα[π(k−½)+z·invα_t]+2xm·senα, M por invα_M; engranes exteriores, helicoidales en el plano transversal; coincide con la tabla W₃=7,6604 para m=1, z=20). Pruebas: `model/tests/gear_part.rs` (bloque: 7·z entidades, una sola región con el área del engrane; cotas) y `e2e/gearSheet.test.mjs` (node, sin navegador). Falta: cota sobre bolas de la corona (entre bolas), valores con juego/helicoidal ISO exactos, rotular el círculo base/de pie en las vistas, y perfil de la rueda de sin fin.
 
 ## Cobertura
 
 | Qué | Estado |
 |---|---|
-| Recto exterior (evolvente, módulo o paso diametral, ángulo de presión 14,5/20/25°) | ❌ (F1, F2) |
-| Corrección de perfil (desplazamiento x), juego entre dientes, socavado del pie (trocoide) | ❌ (F1) |
-| Cubo, agujero del eje, chavetero, prisionero, aligeramientos | ❌ (F2) |
-| Interno (corona de anillo) | ❌ (F2) |
-| Cremallera | ❌ (F2) |
+| Recto exterior (evolvente, módulo o paso diametral, ángulo de presión 14,5/20/25°) | ✅ F1+F2 (módulo; paso diametral no) |
+| Corrección de perfil (desplazamiento x), juego entre dientes, socavado del pie (trocoide) | ✅ F1 |
+| Cubo, agujero del eje, chavetero, prisionero, aligeramientos | 🟡 F2 (hecho: agujero, cubo, chavetero, agujeros; faltan prisionero y rayos) |
+| Interno (corona de anillo) | ✅ F2 |
+| Cremallera | ✅ F2 |
 | Par coordinado: distancia entre centros, fase, relación, avisos (interferencia, módulo distinto) | ❌ (F3) |
 | Helicoidal (mano, ángulo de hélice, módulo normal/transversal) | ❌ (F4) |
 | Doble helicoidal / espina de pescado | ❌ (F4) |
@@ -59,7 +68,7 @@ se volvería lento con 40 dientes). Lo que funciona mejor es la combinación de 
 | Cónico recto (eje a 90° u otro ángulo) | ❌ (F6) |
 | Tornillo sin fin + corona | ❌ (F7) |
 | Perfil del engrane en el sketch (bloque), tabla de datos en la hoja | ❌ (F8) |
-| Holgura para impresión 3D (juego extra por boquilla) | ❌ (F2, opción) |
+| Holgura para impresión 3D (juego extra por boquilla) | ✅ F2 |
 | Tren planetario (sol, satélites, corona) de una vez | ❌ (más adelante) |
 | Cicloidal, poleas dentadas (GT2/HTD), piñones de cadena, no circulares | ❌ (más adelante) |
 | Cálculo de resistencia (Lewis / AGMA / ISO 6336) | ❌ (más adelante) |
@@ -160,6 +169,55 @@ nuevo. Campos nuevos con `#[serde(default)]`.
   sketch) para extruir a mano, cortar con láser o exportar DXF. No se ata al solver (bloque rígido).
 - En la hoja: tabla de datos del engrane (m, z, α, β, x, Ø primitivo, cota sobre dientes / sobre
   bolas) al elegir una vista de un engrane; círculo primitivo en línea de trazo y punto.
+
+## Pendientes (anotados el 2026-10-13, al cerrar F8)
+
+Lo que quedó fuera de cada fase, por área. Nada de esto impide usar lo hecho.
+
+**Pruebas y verificación**
+- Nada de F2–F8 se probó en la app real ni con e2e en el navegador (solo `cargo test` y `node --test`). Correr e2e de lo nuevo cuando se pida: botón «Engrane», panel de propiedades (tipos, «Engranar con», cónico, sin fin), «Detectar engranes» en el ensamble, «Traer» perfil en el sketch y engranes en la hoja.
+- Las pruebas de choque de `gear_mesh`/`gear_part` tardan minutos (booleanas pesadas de corona y helicoidales): acortarlas o marcarlas lentas.
+- Sin commit todavía de todo el plan (Rust, C++ `cad_bounds`/`cad_make_thread_trapezoid`, web, docs).
+
+**Geometría y piezas (F1–F2)**
+- Paso diametral (solo hay módulo).
+- Aligeramientos con rayos (hoy solo agujeros en círculo) y prisionero junto al chavetero.
+- Nombres de cara («diente», «flanco», «agujero»): hoy las caras van por índice.
+- Módulo transversal elegible (hoy el módulo es siempre el normal).
+
+**Pares y enlaces (F3)**
+- Diseñar por relación: calcular dientes desde «1:3» o la distancia entre centros.
+- Elegir la dirección del centro con un clic en el visor (hoy es un ángulo).
+- Cremallera como fuente (hoy el piñón va primero).
+- Avisar de ejes no paralelos y de helicoidales cruzados.
+
+**Helicoidales (F4)**
+- Cremallera helicoidal (da error).
+- Espina de pescado: canal central solo en exteriores.
+
+**Ensamble (F5)**
+- Arrastrar un engrane en el visor para girar todo el tren (hoy: casilla Ángulo de la unión).
+- Crear relaciones a mano (hoy solo «Detectar engranes»).
+- Trenes de más de dos engranes y planetarios sin probar.
+- El solver no sale del punto muerto de 180° exactos desde cero.
+- La detección toma la primera revoluta/cilíndrica de cada engrane.
+
+**Cónicos (F6)**
+- Extremos planos en vez de cónicos (la versión por booleanas con los conos fallaba con δ ≥ 55°): revisar si se puede volver a conos de atrás/adelante.
+- Calcular solo el cono del primer cónico según los dientes y Σ (hoy solo avisa).
+- Aligeramientos en cónicos; ancho de cara óptimo (hoy solo se valida < 0,6 de la generatriz).
+- Espirales e hipoides.
+
+**Sin fin y rueda (F7)**
+- La rueda no puede ser la fuente (el sin fin va primero).
+- Tallado exacto de la rueda por simulación del sin fin (hoy: helicoidal con garganta).
+- Aviso de autobloqueo y rendimiento; sin fin globoide (doble envolvente).
+
+**Sketch y hoja (F8)**
+- Cota entre bolas de la corona; cotas ISO exactas con juego y helicoidales (hoy: nominales, bola de 1,7·m).
+- Rotular los círculos de pie, base y cabeza en las vistas.
+- Bloque de sketch de la rueda de sin fin (hoy sale como helicoidal normal) y del sin fin (sección axial).
+- La tabla de la hoja usa la vista del diseño actual: no hay aviso si el engrane cambió y el plano quedó viejo.
 
 ## Más adelante
 

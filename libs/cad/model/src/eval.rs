@@ -224,6 +224,8 @@ pub struct Evaluation {
     pub recomputed: usize,
     /// Roscas (agujeros roscados, roscas, tornillos y tuercas), en orden.
     pub threads: Vec<ThreadAxis>,
+    /// Engranes, en orden (para engranar otros con ellos).
+    pub gears: Vec<crate::gear_part::GearAxis>,
     /// Dobleces de las pestañas, en orden (para los alivios de esquina).
     pub bends: Vec<BendInfo>,
     /// Piezas reemplazadas por cortes que las parten y uniones, en orden.
@@ -294,6 +296,7 @@ struct CacheEntry {
     curve: Option<Shape>,
     tool: Option<(Tagged, BodyOp)>,
     threads: Vec<ThreadAxis>,
+    gears: Vec<crate::gear_part::GearAxis>,
     bends: Vec<BendInfo>,
     replaced: Vec<Replaced>,
     auto_scope: Vec<PartId>,
@@ -478,7 +481,7 @@ impl Evaluation {
     }
 
     fn diag(&self) -> f64 {
-        self.body.as_ref().and_then(|b| b.mass().ok()).map_or(1.0, |m| norm(sub(m.bbox_max, m.bbox_min)).max(1.0))
+        self.body.as_ref().and_then(|b| b.bounds().ok()).map_or(1.0, |(lo, hi)| norm(sub(hi, lo)).max(1.0))
     }
 
     /// Índice de la cara del cuerpo que corresponde a la referencia.
@@ -701,6 +704,8 @@ struct Ctx<'a> {
     auto_scope: Vec<PartId>,
     /// Flechas de la operación en curso (las de la última herramienta calculada).
     handles: RefCell<Vec<Handle>>,
+    /// Distancia entre centros del engrane que se engranó en la operación en curso.
+    mesh_distance: std::cell::Cell<f64>,
 }
 
 pub fn evaluate(doc: &Document) -> Evaluation {
@@ -720,6 +725,7 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
         scope: Vec::new(),
         auto_scope: Vec::new(),
         handles: RefCell::default(),
+        mesh_distance: Default::default(),
     };
     let limit = doc.rollback.unwrap_or(usize::MAX);
     let mut key = 0u64;
@@ -748,6 +754,7 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
                 ctx.ev.tools.insert(f.id, t.clone());
             }
             ctx.ev.threads.extend(e.threads.iter().cloned());
+            ctx.ev.gears.extend(e.gears.iter().cloned());
             ctx.ev.bends.extend(e.bends.iter().cloned());
             ctx.ev.replaced.extend(e.replaced.iter().cloned());
             ctx.ev.status.push(FeatureStatus { id: f.id, state: e.state.clone(), ms: e.ms, auto_scope: e.auto_scope.clone(), handles: e.handles.clone() });
@@ -789,6 +796,7 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
                 curve: ctx.ev.curves.get(&f.id).cloned(),
                 tool: ctx.ev.tools.get(&f.id).cloned(),
                 threads: ctx.ev.threads.iter().filter(|t| t.feature == f.id).cloned().collect(),
+                gears: ctx.ev.gears.iter().filter(|g| g.feature == f.id).cloned().collect(),
                 bends: ctx.ev.bends.iter().filter(|b| b.feature == f.id).cloned().collect(),
                 replaced: ctx.ev.replaced.iter().filter(|r| r.feature == f.id).cloned().collect(),
                 auto_scope: ctx.auto_scope.clone(),
@@ -839,8 +847,8 @@ impl Ctx<'_> {
 
     /// Piezas que la forma toca (se cruzan o se apoyan).
     fn touching(&self, tool: &Shape) -> Vec<usize> {
-        let Ok(tm) = tool.mass() else { return vec![] };
-        let tol = self.diag().max(norm(sub(tm.bbox_max, tm.bbox_min))) * 1e-7;
+        let Ok((tmin, tmax)) = tool.bounds() else { return vec![] };
+        let tol = self.diag().max(norm(sub(tmax, tmin))) * 1e-7;
         // Las superficies solo cambian si se eligen en el alcance
         self.ev
             .parts
@@ -848,8 +856,8 @@ impl Ctx<'_> {
             .enumerate()
             .filter(|(_, p)| !p.is_surface())
             .filter(|(_, p)| {
-                let Ok(pm) = p.shape.mass() else { return false };
-                let apart = (0..3).any(|k| pm.bbox_min[k] > tm.bbox_max[k] + tol || tm.bbox_min[k] > pm.bbox_max[k] + tol);
+                let Ok((pmin, pmax)) = p.shape.bounds() else { return false };
+                let apart = (0..3).any(|k| pmin[k] > tmax[k] + tol || tmin[k] > pmax[k] + tol);
                 !apart && p.shape.min_distance(tool).is_some_and(|(d, _, _)| d <= tol)
             })
             .map(|(i, _)| i)
@@ -1797,6 +1805,25 @@ impl Ctx<'_> {
     /// girado para calzar; también devuelve el paso y la mano de la rosca.
     fn place_standard(&self, p: &Primitive) -> R<(Frame, PrimitiveShape, Threading)> {
         let frame = Frame { origin: p.origin, z: p.z, x: p.x };
+        if let PrimitiveShape::Gear(g) = &p.shape
+            && let Some(gl) = &g.link
+        {
+            let src = self.ev.gears.iter().find(|s| s.feature == gl.feature).ok_or_else(|| match self.doc.get(gl.feature) {
+                None => "el engrane asociado ya no existe".to_string(),
+                Some(f) => format!("{} no es un engrane calculado antes de este: el engrane asociado tiene que ir antes", f.name),
+            })?;
+            let (frame, part, info) = crate::gear_part::mesh(src, g, gl)?;
+            if let Some(note) = info.note {
+                self.warn(note.into());
+            }
+            if info.interference {
+                self.warn("los dientes interfieren al engranar: sube los dientes del piñón o agrega corrección de perfil".into());
+            } else if info.contact_ratio != 0.0 && info.contact_ratio < 1.1 {
+                self.warn(format!("razón de contacto {:.2}: baja de 1,1 y el engrane se traba al girar", info.contact_ratio));
+            }
+            self.mesh_distance.set(info.center_distance);
+            return Ok((frame, PrimitiveShape::Gear(part), Threading::default()));
+        }
         let Some(link) = &p.link else {
             return Ok((frame, p.shape.clone(), Threading::default()));
         };
@@ -2367,12 +2394,18 @@ impl Ctx<'_> {
                     }
                     PrimitiveShape::Nut { size, modeled } => Ok(crate::standard::nut_with(frame, size, modeled.then_some(threading))?),
                     PrimitiveShape::Washer { size } => Ok(crate::standard::washer(frame, size)?),
+                    PrimitiveShape::Gear(g) => Ok(crate::gear_part::gear(frame, g)?),
                 }
                 .map_err(err)?;
                 let tool = Tagged { tags: primitive_tags(f.id, p, &tool), shape: tool };
                 self.ev.tools.insert(f.id, (tool.clone(), p.op));
                 self.apply(f.id, tool, p.op)?;
                 self.ev.threads.extend(standard_thread(f.id, &shape, frame, threading, p.link));
+                if let PrimitiveShape::Gear(g) = &shape {
+                    let pitch_radius = g.effective_spec().circles().map(|c| c.pitch).unwrap_or(0.0);
+                    let center_distance = if g.link.is_some() { self.mesh_distance.take() } else { 0.0 };
+                    self.ev.gears.push(crate::gear_part::GearAxis { feature: f.id, part: g.clone(), origin: frame.origin, z: frame.z, x: frame.x, pitch_radius, center_distance });
+                }
                 Ok(())
             }
             FeatureKind::Import { format, data, op } => {
@@ -4537,7 +4570,7 @@ fn primitive_tags(id: FeatureId, p: &Primitive, shape: &Shape) -> Vec<Vec<FaceTa
     let y = cross(z, x);
     // Las piezas estándar se nombran por índice: sin medir cada cara (el área
     // de las caras de una rosca se integra y tardaba segundos)
-    if matches!(p.shape, PrimitiveShape::Bolt { .. } | PrimitiveShape::Nut { .. } | PrimitiveShape::Washer { .. }) {
+    if matches!(p.shape, PrimitiveShape::Bolt { .. } | PrimitiveShape::Nut { .. } | PrimitiveShape::Washer { .. } | PrimitiveShape::Gear(_)) {
         return (0..shape.face_count()).map(|i| vec![tag(id, format!("cara:{i}"))]).collect();
     }
     (0..shape.face_count())
@@ -4560,7 +4593,7 @@ fn primitive_tags(id: FeatureId, p: &Primitive, shape: &Shape) -> Vec<Vec<FaceTa
                     .to_string(),
                 ),
                 PrimitiveShape::Sphere { .. } | PrimitiveShape::Torus { .. } => Some("lado".to_string()),
-                PrimitiveShape::Bolt { .. } | PrimitiveShape::Nut { .. } | PrimitiveShape::Washer { .. } => unreachable!(),
+                PrimitiveShape::Bolt { .. } | PrimitiveShape::Nut { .. } | PrimitiveShape::Washer { .. } | PrimitiveShape::Gear(_) => unreachable!(),
             };
             name.map(|n| vec![tag(id, n)]).unwrap_or_default()
         })

@@ -77,6 +77,10 @@ import {
   type PartView,
   type PatternKind,
   type PrimitiveShape,
+  type GearInfo,
+  type GearKind,
+  type GearPart,
+  type GearSpec,
   type RegionSelection,
   type PlaneSpec,
   type ScanPick,
@@ -116,7 +120,7 @@ import { chamferCorner, closeContour, joinEntities, mergeOverlaps, offsetChain, 
 import { GLYPHS, isDimension } from "../../lib/sketchGlyphs";
 import { sampleCurve } from "../../lib/sketchFormula";
 import { addShapes, parseCoordinates, parseDxf, sketchToDxf, sketchToSvg } from "../../lib/sketchFiles";
-import { addLayer, createBlock, explodeBlock, removeLayer, setLayer } from "../../lib/sketchBlocks";
+import { addLayer, createBlock, explodeBlock, refreshBlock, removeLayer, setLayer } from "../../lib/sketchBlocks";
 import { partKey } from "../../lib/objects";
 import { axisToVertical, faceToFloor, faceToFront, pointToOrigin, type Mat4 } from "../../lib/scanAlign";
 import { Button, Checkbox, IconButton, NumberInput, Select, Slider, Tooltip } from "../ui";
@@ -1821,6 +1825,7 @@ export const FeatureEditor: Component<{
                 bolt: [["length", tl("Largo")]],
                 nut: [],
                 washer: [],
+                gear: [],
               };
               type Standard = Extract<PrimitiveShape, { type: "bolt" | "nut" | "washer" }>;
               const standard = () => (["bolt", "nut", "washer"].includes(k().shape.type) ? (k().shape as Standard) : undefined);
@@ -1864,6 +1869,9 @@ export const FeatureEditor: Component<{
               };
               return (
                 <>
+                  <Show when={k().shape.type === "gear" && (k().shape as Extract<PrimitiveShape, { type: "gear" }>)}>
+                    {(g) => <GearFields store={props.store} feature={f().id} shape={g()} field={field} update={update} />}
+                  </Show>
                   {/* Pieza estándar: medida, cabeza y rosca */}
                   <Show when={threaded()}>
                     <ThreadLinkBox
@@ -4894,6 +4902,202 @@ const PROMPTS = {
  * el visor va ahí (y se ve el sólido de antes de la operación); la lista
  * resalta cada ítem al pasar el mouse y lo quita con ✗.
  */
+/**
+ * Engranar con otro engrane: toma su módulo y ángulo de presión, se pone a la
+ * distancia entre centros y gira para que los dientes calcen.
+ */
+const GearLinkBox: Component<{
+  store: CadStore;
+  feature: number;
+  shape: Extract<PrimitiveShape, { type: "gear" }>;
+  field: (label: string, rel: string, raw: number, write: (k: FeatureKind, v: number) => void, suffix?: string) => JSX.Element;
+  update: (mutate: (k: FeatureKind) => void) => void;
+}> = (props) => {
+  const sources = createMemo(() => {
+    const doc = props.store.doc();
+    const order = new Map((doc?.features ?? []).map((f, i) => [f.id, i]));
+    const at = order.get(props.feature) ?? Infinity;
+    return (props.store.result()?.gears ?? []).filter((x) => x.feature !== props.feature && (order.get(x.feature) ?? Infinity) < at);
+  });
+  const name = (id: number) => props.store.doc()?.features.find((f) => f.id === id)?.name ?? `#${id}`;
+  const gear = (x: FeatureKind) => (x.type === "primitive" && x.shape.type === "gear" ? x.shape : undefined);
+  const link = () => props.shape.link ?? undefined;
+  const own = () => props.store.result()?.gears?.find((x) => x.feature === props.feature);
+  return (
+    <Show when={link() || sources().length > 0}>
+      <Row label={tl("Engranar con")}>
+        <Select
+          options={[{ value: "", label: tl("Ninguno") }, ...sources().map((x) => ({ value: String(x.feature), label: name(x.feature) }))]}
+          value={link() ? String(link()!.feature) : ""}
+          onChange={(v) =>
+            props.update((x) => {
+              const s = gear(x);
+              if (!s) return;
+              if (!v) {
+                // Soltar: queda donde está
+                const o = own();
+                if (o && x.type === "primitive") [x.origin, x.z, x.x] = [o.origin, o.z, o.x];
+                s.link = null;
+              } else {
+                s.link = { feature: Number(v), angle: s.link?.angle ?? 0, offset: s.link?.offset ?? 0, distance: s.link?.distance ?? null };
+              }
+            })
+          }
+        />
+      </Row>
+      <Show when={link()}>
+        {(l) => (
+          <>
+            {props.field(tl("Dirección del centro"), "kind.shape.link.angle", l().angle, (x, v) => { const s = gear(x); if (s?.link) s.link.angle = v; }, "°")}
+            {props.field(tl("Corrimiento axial"), "kind.shape.link.offset", l().offset, (x, v) => { const s = gear(x); if (s?.link) s.link.offset = v; }, "mm")}
+            <Row label={tl("Distancia entre centros")}>
+              <NumberInput
+                value={l().distance ?? own()?.center_distance ?? 0}
+                onChange={(v) => props.update((x) => { const s = gear(x); if (s?.link) s.link.distance = v > 0 ? v : null; })}
+              />
+            </Row>
+            <Show when={l().distance != null}>
+              <Button onClick={() => props.update((x) => { const s = gear(x); if (s?.link) s.link.distance = null; })}>
+                {tl("Usar la distancia de las correcciones")}
+              </Button>
+            </Show>
+            <p class="text-[11px] text-text-dim">
+              {tl("El módulo y el ángulo de presión se toman del otro engrane; con una distancia pedida, la corrección de perfil se ajusta sola.")}
+            </p>
+          </>
+        )}
+      </Show>
+    </Show>
+  );
+};
+
+/** Medidas de un engrane (cuadro de propiedades de su operación) */
+const GearFields: Component<{
+  store: CadStore;
+  feature: number;
+  shape: Extract<PrimitiveShape, { type: "gear" }>;
+  field: (label: string, rel: string, raw: number, write: (k: FeatureKind, v: number) => void, suffix?: string) => JSX.Element;
+  update: (mutate: (k: FeatureKind) => void) => void;
+}> = (props) => {
+  const [info, setInfo] = createSignal<GearInfo | null>(null);
+  let seq = 0;
+  createEffect(() => {
+    const { type: _t, ...part } = props.shape;
+    const mine = ++seq;
+    void props.store.gearInfo(JSON.parse(JSON.stringify(part)) as GearPart).then((i) => mine === seq && setInfo(i));
+  });
+  const g = (x: FeatureKind) => (x.type === "primitive" && x.shape.type === "gear" ? x.shape : undefined);
+  const num = (label: string, key: keyof GearPart, suffix = "mm") =>
+    props.field(label, `kind.shape.${key}`, props.shape[key] as number, (x, v) => {
+      const s = g(x);
+      if (s) (s[key] as number) = v;
+    }, suffix);
+  const spec = (label: string, key: keyof GearSpec, suffix?: string) =>
+    props.field(label, `kind.shape.spec.${key}`, props.shape.spec[key] as number, (x, v) => {
+      const s = g(x);
+      if (s) (s.spec[key] as number) = v;
+    }, suffix);
+  const kind = () => props.shape.spec.kind;
+  return (
+    <>
+      <GearLinkBox store={props.store} feature={props.feature} shape={props.shape} field={props.field} update={props.update} />
+      <Row label={tl("Tipo")}>
+        <Select
+          options={[
+            { value: "external", label: tl("Engrane exterior") },
+            { value: "internal", label: tl("Corona (dientes por dentro)") },
+            { value: "rack", label: tl("Cremallera") },
+            { value: "bevel", label: tl("Cónico recto") },
+            { value: "worm", label: tl("Tornillo sin fin") },
+          ]}
+          value={kind()}
+          onChange={(v) =>
+            props.update((x) => {
+              const s = g(x);
+              if (!s) return;
+              s.spec.kind = v as GearKind;
+              if (v === "internal" && s.outer <= 0) s.outer = Math.ceil(s.spec.module * (s.spec.teeth + 6) + 4);
+              if (v === "rack" && s.outer <= 0) s.outer = 8;
+              if (v !== "external") s.hole_count = 0;
+              if (v !== "external" && v !== "bevel" && v !== "worm") [s.hub_length, s.hub_diameter, s.bore] = [0, 0, 0];
+              if (v === "worm") [s.spec.teeth, s.width, s.hub_length, s.hub_diameter, s.spec.helix_angle] = [Math.min(s.spec.teeth, 4), Math.max(s.width, 6 * s.spec.module * Math.PI), 0, 0, 0];
+              if (v === "bevel") [s.spec.helix_angle, s.herringbone] = [0, false];
+              s.keyway = false;
+            })
+          }
+        />
+      </Row>
+      {spec(tl("Módulo"), "module", "mm")}
+      {spec(kind() === "worm" ? tl("Entradas") : tl("Dientes"), "teeth", "")}
+      <Show when={kind() === "worm"}>
+        {spec(tl("Diámetro primitivo (0: 10·módulo)"), "worm_diameter", "mm")}
+        <Checkbox
+          small
+          label={tl("Mano izquierda")}
+          checked={props.shape.spec.left_hand}
+          onChange={(c) => props.update((x) => { const s = g(x); if (s) s.spec.left_hand = c; })}
+        />
+      </Show>
+      {num(tl("Ancho"), "width")}
+      {spec(tl("Ángulo de presión"), "pressure_angle", "°")}
+      <Show when={kind() === "bevel"}>
+        {spec(tl("Ángulo del cono primitivo"), "cone_angle", "°")}
+        <Show when={props.shape.link}>{spec(tl("Ángulo entre ejes"), "shaft_angle", "°")}</Show>
+      </Show>
+      <Show when={kind() !== "rack" && kind() !== "bevel" && kind() !== "worm"}>
+        {spec(tl("Ángulo de hélice (+ derecha, − izquierda)"), "helix_angle", "°")}
+        <Show when={props.shape.spec.helix_angle !== 0}>
+          <Checkbox
+            small
+            label={tl("Doble helicoidal (espina de pescado)")}
+            checked={!!props.shape.herringbone}
+            onChange={(c) => props.update((x) => { const s = g(x); if (s) s.herringbone = c; })}
+          />
+          <Show when={props.shape.herringbone && kind() === "external"}>{num(tl("Canal central"), "groove")}</Show>
+        </Show>
+      </Show>
+      {spec(tl("Corrección de perfil"), "shift", "")}
+      {spec(tl("Juego entre dientes"), "backlash", "mm")}
+      {num(tl("Holgura de impresión"), "print_clearance")}
+      <Show when={kind() === "internal"}>{num(tl("Diámetro exterior"), "outer")}</Show>
+      <Show when={kind() === "rack"}>{num(tl("Alto del cuerpo"), "outer")}</Show>
+      <Show when={kind() === "external" || kind() === "bevel" || kind() === "worm"}>
+        {num(tl("Agujero del eje"), "bore")}
+        <Show when={kind() !== "worm"}>
+          {num(tl("Diámetro del cubo"), "hub_diameter")}
+          {num(tl("Largo del cubo"), "hub_length")}
+        </Show>
+        <Checkbox
+          small
+          label={tl("Chavetero (DIN 6885)")}
+          checked={props.shape.keyway}
+          onChange={(c) => props.update((x) => { const s = g(x); if (s) s.keyway = c; })}
+        />
+        <Show when={kind() === "external"}>
+          {num(tl("Aligeramientos (cantidad)"), "hole_count", "")}
+          <Show when={props.shape.hole_count > 0}>
+            {num(tl("Ø de cada agujero"), "hole_diameter")}
+            {num(tl("Ø del círculo de agujeros"), "hole_circle")}
+          </Show>
+        </Show>
+      </Show>
+      <Show when={info()}>
+        {(i) => (
+          <div class="space-y-0.5 text-[11px] text-text-dim">
+            <Show when={kind() !== "rack"}>
+              <p>
+                {tl("Ø primitivo")} {+i().pitch_diameter.toFixed(3)} · {tl("Ø exterior")} {+i().tip_diameter.toFixed(3)} · {tl("Ø de pie")} {+i().root_diameter.toFixed(3)} mm
+              </p>
+            </Show>
+            <For each={i().warnings}>{(w) => <p class="text-warning">{tl(w)}</p>}</For>
+            <Show when={i().error}>{(e) => <p class="text-error">{e()}</p>}</Show>
+          </div>
+        )}
+      </Show>
+    </>
+  );
+};
+
 /** Operaciones a las que ya se les contestó "no" a coordinar la rosca (no se vuelve a preguntar) */
 const [threadDeclined, setThreadDeclined] = createSignal<number[]>([]);
 
@@ -5303,6 +5507,7 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
   const [hits, setHits] = createSignal<[number, number, number][] | null>(null);
   const partKey = (p: PartView) => `${p.id.feature}:${p.id.index}`;
   const instName = (id: number) => asm()?.instances.find((i) => i.id === id)?.name ?? `#${id}`;
+  const [note, setNote] = createSignal<string>();
 
   const insert = () => {
     const p = parts().find((x) => partKey(x) === (part() || (parts()[0] && partKey(parts()[0]))));
@@ -5474,6 +5679,49 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
             );
           }}
         </For>
+        <div class="space-y-1 border-t border-border pt-1.5" data-relations>
+          <div class="flex items-center gap-1.5">
+            <span class="flex-1 text-[11px] text-text-dim">{tl("Acoplamientos (engranes, cremallera, tornillo)")}</span>
+            <Tooltip content={tl("Busca los engranes enlazados que están en el ensamble y acopla sus uniones con la razón real de dientes")}>
+              <Button
+                size="sm"
+                disabled={(asm()?.mates.length ?? 0) < 2}
+                onClick={() =>
+                  void store.assemblySuggest().then((found) => {
+                    if (found.length === 0) return setNote(tl("No hay engranes enlazados con una unión giratoria cada uno"));
+                    setNote(undefined);
+                    void store.editAssembly((a) => {
+                      a.relations = [...(a.relations ?? []), ...found];
+                    });
+                  })
+                }
+              >
+                {tl("Detectar engranes")}
+              </Button>
+            </Tooltip>
+          </div>
+          <Show when={note()}>{(n) => <p class="text-[11px] text-warning">{n()}</p>}</Show>
+          <For each={asm()?.relations ?? []}>
+            {(r, i) => {
+              const mateName = (id: number) => asm()?.mates.find((m) => m.id === id)?.name ?? `#${id}`;
+              const text = () =>
+                r.type === "gear"
+                  ? tl("{a} ↔ {b}: razón {ratio}", { a: mateName(r.a), b: mateName(r.b), ratio: fmt(r.ratio, 4) })
+                  : r.type === "rack_pinion"
+                    ? tl("{a} ↔ {b}: {mm} mm por vuelta", { a: mateName(r.revolute), b: mateName(r.slider), mm: fmt(Math.abs(r.per_turn), 3) })
+                    : tl("{a}: paso {mm} mm", { a: mateName(r.cylindrical), mm: fmt(r.pitch, 3) });
+              return (
+                <div class="flex items-center gap-1.5 rounded border border-border px-1.5 py-1 text-xs" data-relation={i()}>
+                  <span class="flex-1 truncate" title={text()}>{text()}</span>
+                  <IconButton aria-label={tl("Quitar acoplamiento")} size="sm" variant="ghost" onClick={() => void store.editAssembly((a) => (a.relations = (a.relations ?? []).filter((_, k) => k !== i())))}>
+                    <Icons.Trash size={11} />
+                  </IconButton>
+                </div>
+              );
+            }}
+          </For>
+          <p class="text-[11px] text-text-dim">{tl("Con el ángulo de una unión marcado, la otra lo sigue.")}</p>
+        </div>
         <Show when={sol()}>
           {(s) => (
             <p class={clsx("text-[11px]", s().converged ? "text-text-dim" : "text-warning")} aria-label={tl("Estado del ensamble")}>
@@ -7223,7 +7471,7 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
       <SketchEntities ui={ui} />
 
       <SketchFiles ui={ui} store={props.store} />
-      <SketchOrganize ui={ui} />
+      <SketchOrganize ui={ui} store={props.store} />
 
       <Section title={tl("Restricciones")}>
         <Show when={sketch().constraints.length > 0} fallback={<p class="text-xs text-text-dim">{tl("Sin restricciones")}</p>}>
@@ -7793,8 +8041,9 @@ const SketchFiles: Component<{ ui: CadUi; store: CadStore }> = (props) => {
 };
 
 /** Capas, bloques y copiar el sketch entero */
-const SketchOrganize: Component<{ ui: CadUi }> = (props) => {
+const SketchOrganize: Component<{ ui: CadUi; store: CadStore }> = (props) => {
   const ui = props.ui;
+  const [gearPick, setGearPick] = createSignal<string>("");
   const sketch = () => ui.session()!.sketch;
   const [blockName, setBlockName] = createSignal("");
   const [insertAngle, setInsertAngle] = createSignal(0);
@@ -7947,6 +8196,52 @@ const SketchOrganize: Component<{ ui: CadUi }> = (props) => {
             </div>
           )}
         </For>
+        <Show when={(props.store.result()?.gears ?? []).length > 0}>
+          <div class="flex items-center gap-1.5 text-xs" aria-label={tl("Perfil de engrane")}>
+            <div class="flex-1 min-w-0">
+              <Select
+                options={[
+                  { value: "", label: tl("Perfil de un engrane…") },
+                  ...(props.store.result()?.gears ?? []).filter((x) => x.part.spec.kind !== "worm").map((x) => ({ value: String(x.feature), label: props.store.doc()?.features.find((f) => f.id === x.feature)?.name ?? `#${x.feature}` })),
+                ]}
+                value={gearPick()}
+                onChange={setGearPick}
+              />
+            </div>
+            <Button
+              size="sm"
+              disabled={!gearPick()}
+              title={tl("Trae el contorno del engrane (flancos exactos, pie y cabeza) como un bloque rígido: para cortar con láser, extruir a mano o exportar a DXF")}
+              onClick={() => {
+                const g = (props.store.result()?.gears ?? []).find((x) => String(x.feature) === gearPick());
+                if (!g) return;
+                void props.store.gearBlock(g.part).then(
+                  (block) => {
+                    let id = 0;
+                    ui.change((sk) => {
+                      const same = (sk.blocks ?? []).find((b) => b.name === block.name);
+                      if (same) {
+                        // Mismo engrane: se actualiza el bloque (y sus copias) con las medidas de ahora
+                        Object.assign(same, { points: block.points, entities: block.entities, constraints: block.constraints });
+                        refreshBlock(sk, same.id);
+                        id = same.id;
+                      } else {
+                        id = Math.max(0, ...(sk.blocks ?? []).map((b) => b.id)) + 1;
+                        sk.blocks = [...(sk.blocks ?? []), { ...block, id }];
+                      }
+                    });
+                    ui.setBlockToInsert({ block: id, angle: insertAngle(), scale: 1 });
+                    ui.setTool("block_insert");
+                    ui.setMessage(tl("Clic donde va el centro de «{name}» (Esc termina)", { name: block.name }));
+                  },
+                  (e) => ui.setMessage(String(e)),
+                );
+              }}
+            >
+              {tl("Traer")}
+            </Button>
+          </div>
+        </Show>
         <Show when={(sketch().blocks?.length ?? 0) > 0}>
           <div class="space-y-1" aria-label={tl("Copias nuevas")}>
             <Num label={tl("Giro")} suffix="°" step={15} value={insertAngle()} onCommit={(v) => {

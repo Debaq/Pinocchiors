@@ -223,6 +223,8 @@ CadShape* cad_make_helix(const double* origin, const double* dir, double radius,
  *  la cresta pasa por `origin + r·xdir` (la fase de la hélice) */
 CadShape* cad_make_thread(const double* origin, const double* dir, const double* xdir, double r_minor, double r_major, double pitch,
                           double length, int32_t left, int32_t chamfer);
+CadShape* cad_make_thread_trapezoid(const double* origin, const double* dir, const double* xdir, double r_minor, double r_major,
+                                    double lead, int32_t starts, double hw_in, double hw_out, double length, int32_t left);
 CadShape* cad_thicken(const CadShape* faces, double thickness);
 // Copia de la forma desfasada `distance` sobre la normal de sus caras (de un sólido, su piel).
 CadShape* cad_offset_shape(const CadShape* s, double distance);
@@ -284,6 +286,7 @@ typedef struct {
 } CadMassInfo;
 
 int32_t cad_mass_info(const CadShape* s, CadMassInfo* out);
+int32_t cad_bounds(const CadShape* s, double* out6);
 
 // ---------------------------------------------------------------------------
 // Teselado
