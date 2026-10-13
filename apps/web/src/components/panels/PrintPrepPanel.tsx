@@ -39,6 +39,7 @@ export interface Readiness {
   components: number;
   overhang_fraction: number;
   support_volume_max: number;
+  support_volume: number;
   bed_contact_area: number;
   min_thickness: number | null;
   thin_fraction: number;
@@ -55,6 +56,7 @@ export interface OrientationOption {
   contact_area: number;
   height: number;
   support_volume_max: number;
+  support_volume: number;
   score: number;
 }
 
@@ -217,8 +219,8 @@ export const ReadinessSection: Component<{ readiness?: Readiness; busy?: boolean
           <Show when={r().min_thickness !== null}>
             <Row label={t("Pared más fina")} value={`${fmtNumber(r().min_thickness!, { maximumFractionDigits: 2 })} mm`} />
           </Show>
-          <Show when={r().support_volume_max > 0}>
-            <Row label={t("Soporte (máx.)")} value={`${cm3(r().support_volume_max)} cm³`} />
+          <Show when={r().support_volume > 0}>
+            <Row label={t("Soporte (estimado)")} value={`${cm3(r().support_volume)} cm³`} />
           </Show>
           <For each={r().issues}>
             {(issue) => (
@@ -261,7 +263,7 @@ export const OrientationSection: Component<{
                   {i() === 0 ? t("Mejor") : t("Opción {n}", { n: i() + 1 })} · {mm(o.height)} mm {t("de alto")}
                 </div>
                 <div class="text-text-dim">
-                  {t("voladizo")} {fmtNumber(o.overhang_area / 100, { maximumFractionDigits: 1 })} cm² · {t("base")} {fmtNumber(o.contact_area / 100, { maximumFractionDigits: 1 })} cm²
+                  {t("soporte")} {cm3(o.support_volume)} cm³ · {t("voladizo")} {fmtNumber(o.overhang_area / 100, { maximumFractionDigits: 1 })} cm² · {t("base")} {fmtNumber(o.contact_area / 100, { maximumFractionDigits: 1 })} cm²
                 </div>
               </div>
               <Button size="sm" variant={i() === 0 ? "primary" : "ghost"} onClick={() => props.onApply?.(o.down)} disabled={props.busy}>

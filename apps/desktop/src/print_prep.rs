@@ -116,6 +116,7 @@ pub(crate) fn check_print_readiness_impl(state: &AppState, printer: &PrinterProf
                 acc.is_watertight &= report.is_watertight;
                 acc.overhang_area += report.overhang_area;
                 acc.support_volume_max += report.support_volume_max;
+                acc.support_volume += report.support_volume;
                 acc.bed_contact_area += report.bed_contact_area;
                 acc.min_thickness = match (acc.min_thickness, report.min_thickness) {
                     (Some(a), Some(b)) => Some(a.min(b)),
@@ -148,6 +149,7 @@ pub struct OrientationInfo {
     pub contact_area: f64,
     pub height: f64,
     pub support_volume_max: f64,
+    pub support_volume: f64,
     pub score: f64,
 }
 
@@ -158,6 +160,7 @@ fn orientation_info(c: &OrientationCandidate) -> OrientationInfo {
         contact_area: c.contact_area,
         height: c.height,
         support_volume_max: c.support_volume_max,
+        support_volume: c.support_volume,
         score: c.score,
     }
 }

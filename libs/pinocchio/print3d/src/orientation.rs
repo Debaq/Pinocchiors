@@ -8,6 +8,7 @@ use std::collections::HashMap;
 
 use pinocchio_math::{Real, Vector3};
 use pinocchio_mesh::Mesh;
+use pinocchio_spatial::{Bvh, Triangle};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Print3dError, Result};
@@ -27,6 +28,8 @@ pub struct OrientationCandidate {
     pub height: Real,
     /// Cota superior del volumen de soporte (mm³)
     pub support_volume_max: Real,
+    /// Volumen de soporte estimado (mm³): cada columna baja hasta lo primero que hay debajo
+    pub support_volume: Real,
     pub score: Real,
 }
 
@@ -75,7 +78,7 @@ fn evaluate(faces: &[Face], d: Vector3, config: &PrintabilityConfig, diag: Real,
         }
     }
     let score = overhang_area - 0.5 * contact_area + 0.1 * total_area * (height / diag.max(1e-9));
-    OrientationCandidate { down: [d.x(), d.y(), d.z()], overhang_area, contact_area, height, support_volume_max: support, score }
+    OrientationCandidate { down: [d.x(), d.y(), d.z()], overhang_area, contact_area, height, support_volume_max: support, support_volume: support, score }
 }
 
 /// Las mejores orientaciones (hasta `max`), de mejor a peor
@@ -120,6 +123,25 @@ pub fn suggest_orientations(mesh: &Mesh, config: &PrintabilityConfig, max: usize
     }
     let mut out: Vec<OrientationCandidate> = unique.into_iter().map(|d| evaluate(&faces, d, config, diag, total_area)).collect();
     out.sort_by(|a, b| a.score.total_cmp(&b.score));
+    // Los mejores se afinan con el soporte real (rayos hacia la cama) y se reordenan
+    let refine = out.len().min(8);
+    let bvh = Bvh::build(faces.iter().map(|f| Triangle::new(f.verts[0], f.verts[1], f.verts[2])).collect());
+    let sin_max = config.max_overhang_deg.to_radians().sin();
+    for cand in out.iter_mut().take(refine) {
+        let d = Vector3::new(cand.down[0], cand.down[1], cand.down[2]);
+        let hi = faces.iter().flat_map(|f| f.verts.iter()).map(|v| d.dot(v)).fold(Real::NEG_INFINITY, Real::max);
+        let overhangs: Vec<(Vector3, Real, Real)> = faces
+            .iter()
+            .filter(|f| {
+                let lowest = f.verts.iter().map(|v| d.dot(v)).fold(Real::INFINITY, Real::min);
+                d.dot(&f.n) > sin_max && lowest < hi - config.bed_tolerance
+            })
+            .map(|f| (f.center, f.area * d.dot(&f.n), hi - d.dot(&f.center)))
+            .collect();
+        cand.support_volume = crate::printability::support_estimate(&bvh, &overhangs, d, diag);
+        cand.score += cand.support_volume / (0.25 * diag.max(1e-9));
+    }
+    out[..refine].sort_by(|a, b| a.score.total_cmp(&b.score));
     out.truncate(max.max(1));
     Ok(out)
 }

@@ -93,6 +93,8 @@ pub struct PrintabilityReport {
     pub overhang_fraction: Real,
     /// Cota superior del volumen de soporte (mm³): columnas hasta la cama
     pub support_volume_max: Real,
+    /// Volumen de soporte estimado (mm³): columnas hasta lo primero que hay debajo
+    pub support_volume: Real,
     /// Área apoyada en la cama (mm²)
     pub bed_contact_area: Real,
     /// Grosor mínimo medido (mm); `None` si no se pudo medir
@@ -195,6 +197,7 @@ pub fn check_printability_with(mesh: &Mesh, printer: &PrinterProfile, config: &P
     let zmin = positions.iter().map(|p| p.z()).fold(Real::INFINITY, Real::min);
     let sin_max = config.max_overhang_deg.to_radians().sin();
     let (mut total_area, mut overhang_area, mut support_volume_max, mut bed_contact_area) = (0.0, 0.0, 0.0, 0.0);
+    let mut overhang_faces: Vec<(Vector3, Real, Real)> = Vec::new();
     for t in &live {
         let (a, b, c) = (positions[t[0]], positions[t[1]], positions[t[2]]);
         let Some((n, area)) = normal_area(a, b, c) else { continue };
@@ -208,10 +211,19 @@ pub fn check_printability_with(mesh: &Mesh, printer: &PrinterProfile, config: &P
                 overhang_area += area;
                 let zc = (a.z() + b.z() + c.z()) / 3.0;
                 support_volume_max += area * -n.z() * (zc - zmin);
+                overhang_faces.push(((a + b + c) * (1.0 / 3.0), area * -n.z(), zc - zmin));
             }
         }
     }
     let overhang_fraction = if total_area > 0.0 { overhang_area / total_area } else { 0.0 };
+
+    // Soporte real: cada columna baja hasta lo primero que haya debajo
+    let support_volume = if overhang_faces.is_empty() {
+        0.0
+    } else {
+        let bvh = Bvh::build(live.iter().map(|t| Triangle::new(positions[t[0]], positions[t[1]], positions[t[2]])).collect());
+        support_estimate(&bvh, &overhang_faces, Vector3::new(0.0, 0.0, -1.0), diag)
+    };
 
     // ── Paredes finas ──
     let (min_thickness, thin_fraction, thin_points) = if is_watertight && !inverted {
@@ -285,6 +297,7 @@ pub fn check_printability_with(mesh: &Mesh, printer: &PrinterProfile, config: &P
         overhang_area,
         overhang_fraction,
         support_volume_max,
+        support_volume,
         bed_contact_area,
         min_thickness,
         thin_fraction,
@@ -293,6 +306,24 @@ pub fn check_printability_with(mesh: &Mesh, printer: &PrinterProfile, config: &P
         issues,
         printable,
     })
+}
+
+/// Volumen de soporte de caras en voladizo: (centro, área proyectada, altura hasta la cama).
+/// Cada columna baja en `dir` hasta la primera superficie; sin nada debajo llega a la cama.
+/// Con muchas caras se muestrea (y se reescala) para acotar el costo
+pub(crate) fn support_estimate(bvh: &Bvh, faces: &[(Vector3, Real, Real)], dir: Vector3, diag: Real) -> Real {
+    const MAX_RAYS: usize = 20_000;
+    let stride = (faces.len() / MAX_RAYS).max(1);
+    let eps = (diag * 1e-5).max(1e-6);
+    let mut total = 0.0;
+    for (center, proj_area, to_bed) in faces.iter().step_by(stride) {
+        let height = match bvh.ray_hit(&(*center + dir * eps), &dir, 0.0, Real::INFINITY) {
+            Some((t, _)) => (t + eps).min(*to_bed),
+            None => *to_bed,
+        };
+        total += proj_area * height;
+    }
+    total * stride as Real
 }
 
 /// Mide el grosor lanzando rayos hacia adentro desde una muestra de caras;
@@ -423,5 +454,7 @@ pub(crate) mod tests {
         assert!(r.overhang_fraction > 0.05);
         assert!(r.issues.iter().any(|i| i.code == "overhang"));
         assert!(r.bed_contact_area > 0.0);
+        // El soporte real es menor que la columna hasta la cama (la pata ocupa parte)
+        assert!(r.support_volume > 0.0 && r.support_volume <= r.support_volume_max + 1e-9, "{} vs {}", r.support_volume, r.support_volume_max);
     }
 }
