@@ -118,6 +118,14 @@ export const defaultPrep: PrepSettings = {
   plate: { format: "stl", spacing: 5, orient: true, hollowWall: null },
 };
 
+export interface PlatePreview {
+  bed: [number, number];
+  plates: Array<Array<{ label: string; x: number; y: number; w: number; h: number; height: number }>>;
+  utilization: number[];
+  unplaced: string[];
+  too_tall: string[];
+}
+
 /** La forma del backend (`PlanarShape`) a partir de lo que se elige en el panel */
 export function jointShapeConfig(s: JointSettings) {
   switch (s.shape) {
@@ -384,10 +392,12 @@ export const PlatesSection: Component<{
   settings: PlateSettings;
   onSettings: (s: PlateSettings) => void;
   result?: PlateResult;
+  preview?: PlatePreview;
   busy?: boolean;
   disabled?: boolean;
   hasPieces: boolean;
   onExport?: () => void;
+  onPreview?: () => void;
 }> = (props) => {
   const set = (patch: Partial<PlateSettings>) => props.onSettings({ ...props.settings, ...patch });
   const [open, setOpen] = createSignal(true);
@@ -415,6 +425,10 @@ export const PlatesSection: Component<{
           onChange={(v) => set({ orient: v })}
           hint={t("Gira cada pieza para que tenga la menor cantidad de voladizos antes de acomodarla en la cama.")}
         />
+        <Button onClick={props.onPreview} disabled={props.disabled || props.busy} fullWidth size="sm" icon={<Icons.Cube size={14} />}>
+          {t("Ver cómo quedan en la cama")}
+        </Button>
+        <Show when={props.preview}>{(p) => <PlatePreviewView preview={p()} />}</Show>
         <Button onClick={props.onExport} disabled={props.disabled || props.busy} loading={props.busy} fullWidth size="sm" variant="primary" icon={<Icons.Download size={14} />}>
           {props.hasPieces ? t("Exportar placas") : t("Exportar para imprimir")}
         </Button>
@@ -433,6 +447,51 @@ export const PlatesSection: Component<{
             </div>
           )}
         </Show>
+      </Show>
+    </div>
+  );
+};
+
+/** Las camas vistas desde arriba, con cada pieza como un rectángulo */
+export const PlatePreviewView: Component<{ preview: PlatePreview }> = (props) => {
+  const [w, h] = props.preview.bed;
+  return (
+    <div class="space-y-2">
+      <For each={props.preview.plates}>
+        {(pieces, i) => (
+          <div class="space-y-0.5">
+            <p class="text-[10px] text-text-dim">
+              {t("Placa {n}", { n: i() + 1 })} · {fmtNumber((props.preview.utilization[i()] ?? 0) * 100, { maximumFractionDigits: 0 })} %
+            </p>
+            <svg viewBox={`0 0 ${w} ${h}`} class="w-full rounded border border-border bg-surface/30" style={{ "aspect-ratio": `${w} / ${h}` }}>
+              <For each={pieces}>
+                {(p) => (
+                  <g>
+                    <rect
+                      x={p.x}
+                      y={h - p.y - p.h}
+                      width={p.w}
+                      height={p.h}
+                      fill="var(--accent, #6cf)"
+                      fill-opacity="0.35"
+                      stroke="var(--accent, #6cf)"
+                      stroke-width={Math.max(w, h) / 300}
+                    />
+                    <text x={p.x + p.w / 2} y={h - p.y - p.h / 2} font-size={String(Math.max(Math.min(p.w, p.h) / 3, w / 40))} text-anchor="middle" dominant-baseline="middle" fill="currentColor">
+                      {p.label}
+                    </text>
+                  </g>
+                )}
+              </For>
+            </svg>
+          </div>
+        )}
+      </For>
+      <Show when={props.preview.unplaced.length > 0}>
+        <p class="text-[11px] text-red">{t("No caben en la cama: {names}", { names: props.preview.unplaced.join(", ") })}</p>
+      </Show>
+      <Show when={props.preview.too_tall.length > 0}>
+        <p class="text-[11px] text-warning">{t("Más altas que la impresora: {names}", { names: props.preview.too_tall.join(", ") })}</p>
       </Show>
     </div>
   );

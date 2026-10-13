@@ -369,6 +369,60 @@ fn plate_path(path: &str, index: usize, count: usize) -> String {
     p.with_file_name(name).to_string_lossy().into_owned()
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct PreviewPiece {
+    pub label: String,
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+    pub height: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PlatePreview {
+    /// Ancho y fondo de la cama (mm)
+    pub bed: [f64; 2],
+    pub plates: Vec<Vec<PreviewPiece>>,
+    pub utilization: Vec<f64>,
+    pub unplaced: Vec<String>,
+    pub too_tall: Vec<String>,
+}
+
+/// Cómo quedarían las piezas en las camas, sin exportar ni vaciar
+#[tauri::command]
+pub async fn preview_print_plates(app: AppHandle, input: PlateInput) -> Result<PlatePreview, String> {
+    in_background(app, move |state| preview_print_plates_impl(state, input)).await
+}
+
+pub(crate) fn preview_print_plates_impl(state: &AppState, mut input: PlateInput) -> Result<PlatePreview, String> {
+    // El vaciado no cambia la huella: se omite para que la vista sea rápida
+    input.hollow_wall = None;
+    let plan = plan_plates(sources(state)?, &input)?;
+    let plates = plan
+        .plates
+        .iter()
+        .map(|plate| {
+            plate
+                .meshes
+                .iter()
+                .map(|(label, mesh)| {
+                    let bb = p3d::compute_bounding_box(mesh);
+                    let d = bb.dimensions();
+                    PreviewPiece { label: label.clone(), x: bb.min[0], y: bb.min[1], w: d[0], h: d[1], height: d[2] }
+                })
+                .collect()
+        })
+        .collect();
+    Ok(PlatePreview {
+        bed: [input.printer.build_volume[0], input.printer.build_volume[1]],
+        plates,
+        utilization: plan.utilization,
+        unplaced: plan.unplaced,
+        too_tall: plan.too_tall,
+    })
+}
+
 /// Reparte las piezas en placas del tamaño de la cama y las exporta, una por archivo
 #[tauri::command]
 pub async fn export_print_plates(app: AppHandle, input: PlateInput) -> Result<PlateInfo, String> {

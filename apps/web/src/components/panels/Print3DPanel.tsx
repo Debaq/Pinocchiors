@@ -17,6 +17,7 @@ import {
   type MaterialProfile,
   type OrientationOption,
   type PlateResult,
+  type PlatePreview,
   type PlateSettings,
   type PrintPresets,
   type PrinterProfile,
@@ -24,6 +25,7 @@ import {
 } from "./PrintPrepPanel";
 
 export type {
+  PlatePreview,
   PrepSettings,
   JointSettings,
   JointsReport,
@@ -91,6 +93,8 @@ export interface Print3DPanelProps {
   materialEstimate?: MaterialEstimate;
   onEstimate?: (material: MaterialProfile, infill: number, hollowWall: number | null) => void;
   plateResult?: PlateResult;
+  platePreview?: PlatePreview;
+  onPreviewPlates?: (printer: PrinterProfile, material: MaterialProfile, settings: PlateSettings) => void;
   onExportPlates?: (printer: PrinterProfile, material: MaterialProfile, settings: PlateSettings) => void;
 }
 
@@ -404,6 +408,8 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
           settings={plate()}
           onSettings={setPlate}
           result={props.plateResult}
+          preview={props.platePreview}
+          onPreview={() => props.onPreviewPlates?.(printer(), material(), plate())}
           busy={props.isProcessing}
           disabled={!props.canAnalyze}
           hasPieces={!!props.subdivideResult}

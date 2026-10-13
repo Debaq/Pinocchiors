@@ -291,6 +291,7 @@ import type {
   MaterialEstimate,
   PlateSettings,
   PlateResult,
+  PlatePreview,
   PrepSettings,
 } from "./components/panels/Print3DPanel";
 import { defaultPrep, jointShapeConfig } from "./components/panels/PrintPrepPanel";
@@ -1576,6 +1577,7 @@ export const App: Component = () => {
   const [jointsReport, setJointsReport] = createSignal<JointsReport | undefined>();
   const [materialEstimate, setMaterialEstimate] = createSignal<MaterialEstimate | undefined>();
   const [plateResult, setPlateResult] = createSignal<PlateResult | undefined>();
+  const [platePreview, setPlatePreview] = createSignal<PlatePreview | undefined>();
 
   // Viewer ref
   let viewerRef: Viewer3D | undefined;
@@ -2666,6 +2668,7 @@ export const App: Component = () => {
     setJointsReport(undefined);
     setMaterialEstimate(undefined);
     setPlateResult(undefined);
+    setPlatePreview(undefined);
     if (!keepClips) {
       setClips([]);
       setActiveClipId(undefined);
@@ -6818,6 +6821,7 @@ export const App: Component = () => {
         setSubdivideResult(result);
         setJointsReport(undefined);
         setPlateResult(undefined);
+        setPlatePreview(undefined);
         setIsProcessing(false);
         setStatusMessage(t("Subdivisión completada: {n} piezas", { n: result.piece_count }));
         pipeline.markCompleted("print3d");
@@ -6941,6 +6945,12 @@ export const App: Component = () => {
       invoke<MaterialEstimate>("estimate_print_material", { material, infill, hollowWall }),
     );
     if (result) setMaterialEstimate(result);
+  };
+
+  const handlePreviewPlates = async (printer: PrinterProfile, material: MaterialProfile, settings: PlateSettings) => {
+    const input = { printer, material, format: settings.format, spacing: settings.spacing, orient: settings.orient, hollow_wall: null, path: "" };
+    const result = await printTask(t("Acomodando las piezas..."), () => invoke<PlatePreview>("preview_print_plates", { input }));
+    if (result) setPlatePreview(result);
   };
 
   const handleExportPlates = async (printer: PrinterProfile, material: MaterialProfile, settings: PlateSettings) => {
@@ -8848,6 +8858,8 @@ export const App: Component = () => {
               materialEstimate: materialEstimate(),
               onEstimate: handleEstimateMaterial,
               plateResult: plateResult(),
+              platePreview: platePreview(),
+              onPreviewPlates: handlePreviewPlates,
               onExportPlates: handleExportPlates,
               selection: {
                 objects: selectedObjects().map((o) => ({ id: o.id, name: o.name })),
