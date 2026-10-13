@@ -1,6 +1,6 @@
 import { Component, For, Show, createEffect, createSignal, on, onCleanup } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
-import { Button, Checkbox, NumberInput } from "../ui";
+import { Button, Checkbox, NumberInput, Select } from "../ui";
 import * as Icons from "../icons";
 import { fmtNumber, t, tx } from "../../lib/i18n";
 
@@ -32,9 +32,33 @@ export interface SkinImageSettings {
   invert: boolean;
   contrast: number;
   blur: number;
+  /** Lado de la baldosa de la imagen en la superficie (mm) */
+  tile_mm: number;
+  /** Altura entre el negro y el blanco (mm) */
+  amplitude: number;
+  offset: "outward" | "centered" | "inward";
+  rotation_deg: number;
 }
 
-export const defaultSkinImage: SkinImageSettings = { image: "leather", invert: false, contrast: 1, blur: 0 };
+export const defaultSkinImage: SkinImageSettings = {
+  image: "leather",
+  invert: false,
+  contrast: 1,
+  blur: 0,
+  tile_mm: 20,
+  amplitude: 0.6,
+  offset: "outward",
+  rotation_deg: 0,
+};
+
+/** Lo que cuesta aplicar la piel con estos valores (backend) */
+export interface SkinEstimate {
+  has_uv: boolean;
+  edge_mm: number;
+  triangles: number;
+  zone_area_mm2: number;
+  warnings: string[];
+}
 
 export interface SkinPanelProps {
   zone?: SkinZone;
@@ -49,6 +73,8 @@ export interface SkinPanelProps {
   onSettings: (s: SkinImageSettings) => void;
   onImport: () => void;
   onRemove: (id: string) => void;
+  estimate?: SkinEstimate;
+  onApply: () => void;
   busy?: boolean;
 }
 
@@ -193,7 +219,48 @@ export const SkinPanel: Component<SkinPanelProps> = (props) => {
         </Show>
       </div>
 
-      <p class="text-[10px] text-text-dim leading-snug">{t("Todavía no genera el relieve: aquí se prepara la zona y la imagen que se usarán.")}</p>
+      <div class="space-y-2">
+        <p class="text-[11px] font-medium text-text">{t("3. Relieve")}</p>
+        <div class="grid grid-cols-2 gap-1.5">
+          <NumberInput label={t("Baldosa")} value={props.settings.tile_mm} onChange={(v) => set({ tile_mm: Math.max(1, Math.min(500, v)) })} min={1} max={500} step={1} suffix="mm" />
+          <NumberInput label={t("Altura")} value={props.settings.amplitude} onChange={(v) => set({ amplitude: Math.max(0, Math.min(5, v)) })} min={0} max={5} step={0.1} suffix="mm" />
+          <NumberInput label={t("Giro")} value={props.settings.rotation_deg} onChange={(v) => set({ rotation_deg: v })} min={-180} max={180} step={5} suffix="°" />
+          <Select
+            label={t("Crece")}
+            options={[
+              { value: "outward", label: t("Hacia afuera") },
+              { value: "centered", label: t("Centrado") },
+              { value: "inward", label: t("Hacia adentro") },
+            ]}
+            value={props.settings.offset}
+            onChange={(v) => set({ offset: v as SkinImageSettings["offset"] })}
+          />
+        </div>
+        <p class="text-[10px] text-text-dim leading-snug">
+          {props.settings.offset === "outward"
+            ? t("La superficie queda como el fondo del relieve: el blanco sobresale.")
+            : props.settings.offset === "inward"
+              ? t("La superficie queda como la cima del relieve: el negro se hunde.")
+              : t("La superficie queda en el gris medio: sube y baja la mitad.")}
+        </p>
+        <Show when={props.estimate}>
+          {(e) => (
+            <div class="space-y-1 p-2 rounded-md bg-surface/30 border border-border text-[11px]">
+              <p class="text-text">
+                {t("Unos {n} triángulos · detalle de {d} mm", { n: fmtNumber(e().triangles), d: fmtNumber(e().edge_mm, { maximumFractionDigits: 2 }) })}
+              </p>
+              <Show when={!e().has_uv}>
+                <p class="text-warning">{t("El modelo no tiene UV: despliégalo primero en UV / Piel.")}</p>
+              </Show>
+              <For each={e().warnings}>{(w) => <p class="text-warning">{t(w)}</p>}</For>
+            </div>
+          )}
+        </Show>
+        <Button size="sm" fullWidth variant="primary" onClick={props.onApply} disabled={props.busy || count() === 0 || props.estimate?.has_uv === false} loading={props.busy}>
+          {t("Aplicar piel a la zona")}
+        </Button>
+        <p class="text-[10px] text-text-dim leading-snug">{t("El modelo pasa a ser solo geometría (sin UV, texturas ni rig). Se puede deshacer desde el historial.")}</p>
+      </div>
     </div>
   );
 };

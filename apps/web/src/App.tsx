@@ -296,7 +296,7 @@ import type {
   PrepSettings,
 } from "./components/panels/Print3DPanel";
 import { defaultPrep, jointShapeConfig } from "./components/panels/PrintPrepPanel";
-import { defaultSkinImage, type SkinImageSettings, type SkinPattern, type SkinZone } from "./components/panels/SkinPanel";
+import { defaultSkinImage, type SkinEstimate, type SkinImageSettings, type SkinPattern, type SkinZone } from "./components/panels/SkinPanel";
 import { DESIGN_FORMATS, IMAGE_FORMATS, SKELETON_FORMATS, defaultExportOptions, formatBytes, type ExportOptions } from "./components/steps/ExportStep";
 import { defaultUvConfig, type UvConfig, type UvInfo, type UvPreview } from "./components/steps/UvStep";
 import type { SkeletonFitInfo } from "./components/steps/SkeletonStep";
@@ -1579,6 +1579,7 @@ export const App: Component = () => {
   const [skinPicking, setSkinPicking] = createSignal(false);
   const [skinLibrary, setSkinLibrary] = createSignal<SkinPattern[]>([]);
   const [skinImage, setSkinImage] = createSignal<SkinImageSettings>(defaultSkinImage);
+  const [skinEstimate, setSkinEstimate] = createSignal<SkinEstimate | undefined>();
   const [fabInfo, setFabInfo] = createSignal<FabInfo | undefined>();
   const [printReadiness, setPrintReadiness] = createSignal<Readiness | undefined>();
   const [printOrientations, setPrintOrientations] = createSignal<OrientationOption[] | undefined>();
@@ -7015,6 +7016,67 @@ export const App: Component = () => {
     setSkinImage({ ...skinImage(), image: added.id });
     setStatusMessage(t("Imagen importada: {name}", { name: added.name }));
   };
+  /** Lo que se manda al backend para estimar y aplicar la piel */
+  const skinParams = () => {
+    const s = skinImage();
+    return {
+      image: s.image,
+      ops: { invert: s.invert, contrast: s.contrast, blur: s.blur },
+      tile_mm: s.tile_mm,
+      amplitude: s.amplitude,
+      offset: s.offset,
+      rotation_deg: s.rotation_deg,
+      edge_mm: null,
+      feather_mm: null,
+    };
+  };
+  // La estimación sigue a la zona y a los valores (con una pausa mientras se escribe)
+  let skinEstimateRequest = 0;
+  createEffect(() => {
+    const params = skinParams();
+    const faces = skinZone()?.faces.length ?? 0;
+    const loaded = meshLoaded();
+    const mine = ++skinEstimateRequest;
+    if (!loaded || faces === 0) {
+      setSkinEstimate(undefined);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      try {
+        const e = await invoke<SkinEstimate>("skin_estimate", { params });
+        if (mine === skinEstimateRequest) setSkinEstimate(e);
+      } catch {
+        if (mine === skinEstimateRequest) setSkinEstimate(undefined);
+      }
+    }, 250);
+    onCleanup(() => clearTimeout(timer));
+  });
+  const applySkin = () =>
+    undoable(async (done) => {
+      try {
+        setIsProcessing(true);
+        setStatusMessage(t("Aplicando la piel..."));
+        const r = await busy(t("Aplicando la piel..."), () => invoke<{ triangles_after: number; max_displacement_mm: number; warnings: string[] }>("apply_print_skin", { params: skinParams() }));
+        done(t("Piel imprimible"));
+        // La geometría cambió: el rig, la retopología y lo calculado sobre la malla de antes ya no valen
+        setAutorigComplete(false);
+        setWeightsData(undefined);
+        clearQuadMesh();
+        setSubdivideResult(undefined);
+        setPrintReadiness(undefined);
+        setPrintOrientations(undefined);
+        setJointsReport(undefined);
+        setSkinPicking(false);
+        setMeshData(await fetchMeshData());
+        if (meshAnalysis()) setMeshAnalysis(await invoke<TauriPrint3dAnalysis>("analyze_print3d").catch(() => undefined));
+        setStatusMessage(t("Piel aplicada: {n} triángulos, relieve de hasta {h} mm", { n: r.triangles_after.toLocaleString(locale()), h: r.max_displacement_mm.toFixed(2) }));
+      } catch (e) {
+        console.error("Skin error:", e);
+        setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
+      } finally {
+        setIsProcessing(false);
+      }
+    });
   const removeSkinImage = async (id: string) => {
     const library = await skinCall("Skin remove", () => invoke<SkinPattern[]>("skin_remove_image", { id }));
     if (!library) return;
@@ -8972,6 +9034,8 @@ export const App: Component = () => {
                 onSettings: setSkinImage,
                 onImport: importSkinImage,
                 onRemove: removeSkinImage,
+                estimate: skinEstimate(),
+                onApply: applySkin,
               },
               fab: fabInfo(),
               onFabNeeded: handleFabNeeded,

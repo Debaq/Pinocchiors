@@ -101,7 +101,7 @@ Decisiones tomadas (2026-10-13):
 - **Imágenes de fábrica**, pocas y sin costuras (se generan por código, sin archivos): grano de cuero, líneas,
   rejilla, puntos, rombos, panal. Más las que el usuario importe (PNG/JPG a grises, con invertir, contraste y desenfoque).
 
-Estado (2026-10-13): **fases 1 y 2 hechas** (zonas e imágenes, sin generar relieve todavía); faltan la 3 a la 6.
+Estado (2026-10-13): **fases 1 a 4 hechas**, y de la 5 los avisos de antes de aplicar; falta la revisión después de aplicar (voladizos y paredes finas) y la vista previa del relieve (6).
 
 Fases:
 
@@ -109,19 +109,20 @@ Fases:
    proyecto como máscara por cara. Las caras de corte y de uniones se excluyen solas.
 2. **Imagen** ✅: biblioteca de fábrica (`texture.rs`: patrones procedurales de altura, sin costuras, 256–512 px) e
    importar; muestreo bilineal con repetición.
-3. **Desplazamiento** (`skin.rs`): subdividir solo las caras de la zona hasta que el lado sea ≤ la mitad del píxel en mm;
+3. **Desplazamiento** ✅ (`skin.rs`): subdividir solo las caras de la zona hasta que el lado sea ≤ la mitad del píxel en mm;
    altura muestreada en el UV; se desplaza a lo largo de la normal suave del vértice con `amplitud` (mm) y `desfase`
    (hacia afuera / centrado / hacia adentro). Los vértices del borde de la zona quedan fijos y la altura se funde
    hacia ahí (para no abrir grietas). Los vértices que comparten posición pero no UV (costuras) toman la misma altura,
    para que la malla siga cerrada.
-4. **Escala en mm**: tamaño de la baldosa en mm (la relación UV→mm sale del área de la zona), rotación e inversión.
-5. **Revisión**: el límite físico lo da la boquilla (relieve útil de 0,2 a 1 mm; detalle mínimo ≈ una boquilla). Avisar
+4. **Escala en mm** ✅: tamaño de la baldosa en mm (la relación UV→mm sale del área de la zona), rotación e inversión.
+5. **Revisión** 🟡 (hecho: `skin_estimate` avisa de relieve menor que una capa, mayor que 2 mm, detalle bajo la boquilla y malla muy pesada, antes de aplicar; falta volver a pasar `check_printability` tras aplicar y decimar): el límite físico lo da la boquilla (relieve útil de 0,2 a 1 mm; detalle mínimo ≈ una boquilla). Avisar
    si la imagen pide más detalle del que se imprime, si aparecen voladizos o paredes finas (se vuelve a pasar
    `check_printability`), y cuántos triángulos salen (decimar al final si pasa de un tope).
 6. **Interfaz**: panel «Texturas imprimibles» con zona, imagen, tamaño, amplitud, desfase, rotación y una vista previa
    (sombreado con la altura) antes de generar la geometría. Hecho: zona (elegir en el visor con clic o recuadro, crecer por
-   ángulo, invertir, quitar), biblioteca con miniaturas, importar, invertir / contraste / suavizar. Falta: tamaño, amplitud,
-   desfase, rotación y la vista previa del relieve.
+   ángulo, invertir, quitar), biblioteca con miniaturas, importar, invertir / contraste / suavizar. Además: baldosa en mm, altura, giro, 
+   «crece» (hacia afuera / centrado / hacia adentro), estimación de triángulos y «Aplicar piel a la zona». Falta la vista
+   previa del relieve en el visor.
 
 Dónde está: `texture.rs` y `zones.rs` (lib), `print_skin.rs` (comandos y estado; la zona y las imágenes van en el
 .pinocchio y la zona viaja con su objeto), `SkinPanel.tsx` (interfaz). La elección de caras reutiliza la del visor
@@ -136,3 +137,12 @@ Preguntas abiertas:
 - **Amplitud y compensación**: el relieve debe quedar dentro de la medida de la pieza (desfase hacia adentro o centrado)
   para no romper ajustes; la compensación de contracción se aplica después, al exportar.
 - **Texturas con color**: esta fase solo usa la altura (grises); el color de la imagen se ignora.
+
+Cómo se aplica (decisiones de la fase 3): se unen los vértices por posición y las aristas largas de la zona se parten
+por bisección, arrastrando a los vecinos (la malla sigue cerrada); el lado objetivo sale del detalle del mapa
+(`baldosa / píxeles`, sin bajar de 0,2 mm). Cada vértice toma la altura del mapa por UV (la baldosa mide `tile_mm`; la
+relación UV→mm es el promedio de la zona) y se mueve por su normal suave, con el borde de la zona fijo y el relieve
+fundido en tres alturas. Los vértices de una costura de UV toman la misma altura (así no se abre). El resultado
+reemplaza la malla del modelo y la escena queda como geometría sola; la copia para deshacer es la del historial.
+Límite conocido: una sola escala de UV para toda la zona (si las islas tienen estiramientos distintos, la baldosa
+cambia de tamaño entre ellas) y la zona se pierde si se corta antes, mientras el cortador no lleve el UV.
