@@ -69,7 +69,7 @@ fn run(a: AnimationSettings, skip: impl Fn(u32) -> bool, cancel: &AtomicBool) ->
 }
 
 fn base() -> AnimationSettings {
-    AnimationSettings { animation: Some(0), fps: 4.0, first_frame: 0, last_frame: 4, shutter: 0.0, motion_samples: 1 }
+    AnimationSettings { animation: Some(0), fps: 4.0, first_frame: 0, last_frame: 4, shutter: 0.0, motion_samples: 1, studio: None }
 }
 
 #[test]

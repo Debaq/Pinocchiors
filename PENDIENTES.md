@@ -209,6 +209,10 @@ real, denoise, progreso en la app). Falta o es aproximado:
   temporal (misma semilla en todos los cuadros para que el ruido no baile), BVH
   reconstruido entero por cuadro, sin desenfoque de movimiento con cámara animada,
   una animación por render (no la secuencia de clips de la barra de reproducción).
+- 🧪 **Estudio fotográfico (fase 4)**: hecho el fondo de estudio (ciclorama blanco o de color, brillo
+  del piso; GeppettoRay, motor rápido y visor en vivo en el espacio Render). Faltan 4b (luces de
+  estudio: softbox, aro, contraluz, 3 puntos) y 4c (presets de fotografía con cámara, lente,
+  profundidad de campo, luces y fondo). Ver `libs/PLAN_RENDER.md`.
 - ✅ **Suelo con sombra** en GeppettoRay (`ShadowCatcher`: disco invisible bajo la
   escena que solo ven los rayos de cámara; su opacidad = luz que le falta por la
   sombra de sol/luces/área/entorno × 0,7). Con GeppettoRay siguen desactivadas

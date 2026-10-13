@@ -7,6 +7,7 @@ use crate::image_out::Image;
 use crate::progressive::{Frame, ProgressiveOptions, render_progressive};
 use crate::render::Settings;
 use crate::scene::AnimatedScene;
+use crate::studio::Studio;
 use converter_scene::Scene;
 use glam::Vec3;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -25,6 +26,8 @@ pub struct AnimationSettings {
     pub shutter: f32,
     /// Instantes dentro del obturador que se promedian (1 = sin desenfoque de movimiento)
     pub motion_samples: u32,
+    /// Fondo de estudio que acompaña a todos los cuadros
+    pub studio: Option<Studio>,
 }
 
 impl AnimationSettings {
@@ -107,7 +110,10 @@ pub fn render_animation(
     mut on_frame: impl FnMut(u32, &Frame),
 ) -> AnimationOutcome {
     let frames = a.frame_count();
-    let animated = AnimatedScene::new(scene);
+    let mut animated = AnimatedScene::new(scene);
+    if let Some(studio) = a.studio {
+        animated = animated.with_studio(studio);
+    }
     let fps = if a.fps > 0.0 { a.fps } else { 24.0 };
     let blur = a.shutter > 0.0 && a.motion_samples > 1 && a.animation.is_some();
     let k = if blur { a.motion_samples } else { 1 };

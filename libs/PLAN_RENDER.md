@@ -99,6 +99,18 @@ cámara, luces y mundo de la fase 2. Los materiales ya son los de glTF, así que
 
 Aproximaciones y límites de la conexión: las luces del visor pasan como sol principal + relleno (+ luz de cámara) y un cielo uniforme que resume ambiente y entorno (el visor usa una imagen de estudio para reflejos: no coinciden exacto); sin el tono ACES del visor (sale lineal→sRGB); la escena es la de `AppState.scene` (sin pose de esqueleto: eso es 3h). Tests: render progresivo (6), comandos de Rust (4: corre y entrega PNG con alfa, cancelar, escena vacía, validación) y `e2e/rayRender.test.mjs` (8: luces, campo de visión, petición, avance, cancelar, error).
 
+## Fase 4 — Estudio fotográfico (pedido 2026-10-13)
+
+Motivo: el suelo solo recibía sombra (no se veía), las 4 luces solo movían la principal y el relleno, y las cámaras eran solo direcciones sin lente. Va en GeppettoRay, en el motor rápido y en el visor (con interruptor).
+
+| Paso | Qué |
+|---|---|
+| 4a | **Fondo de estudio** (ciclorama): piso que sube en curva hasta un muro, sin costuras, bajo el punto más bajo del modelo y detrás de él según la cámara; color y brillo del piso. HECHO (2026-10-13). |
+| 4b | **Luces de estudio** reales: softbox de área, aro, contraluz, 3 puntos (GeppettoRay: emisores invisibles a la cámara; visor: aproximación con luces del rig). |
+| 4c | **Presets de fotografía**: cámara (dirección, focal, apertura, profundidad de campo) + luces + fondo en uno (producto, retrato, macro, catálogo 3/4…). |
+
+**4a hecha (2026-10-13), sin commitear:** `geppettoray::Studio` (`studio.rs`: perfil piso→curva (16 pasos)→muro, medidas relativas a la diagonal del modelo: 7× al frente, 2,5× al muro, 9× de semiancho, radio 0,9×, alto 7×; una cara, así que desde abajo no tapa) + `RayMaterial::casts_shadow` (el estudio recibe sin proyectar: la luz llega al modelo aunque venga de detrás del muro) + `AnimatedScene::with_studio` y `AnimationSettings.studio` (todos los cuadros). App: `RayRequest.studio {color, gloss}` (mide la escena en reposo; desactiva el suelo con sombra); TS: `lib/studioSet.ts` (misma geometría en three para el motor rápido), `Viewer3D.setStudio` (visor en vivo mientras se está en Render; el muro mira según la cámara actual y se rehace al cambiar de cámara) y tarjeta "Estudio" (fondo de estudio, color, brillo del piso). Con estudio el fondo es el ciclorama (sin transparencia ni degradado) y las sombras del motor rápido se activan solas. Tests: `tests/estudio.rs` (4), `ray_render.rs` (1), `e2e/rayRender.test.mjs` (1). Verificado a ojo con Fox.glb (mate y brillante).
+
 Decisiones abiertas (para cuando lleguemos):
 - ~~BVH propia o el crate `bvh`/`embree`~~ → propia (decidido en 3a); antes: `bvh`/`embree` (Embree es rapidísimo pero trae dependencia C++; la
   compilación a wasm y el empaquetado pesan).

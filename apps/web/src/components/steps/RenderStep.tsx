@@ -30,6 +30,11 @@ export interface RenderSettings {
   lightPreset: string;
   /** Suelo invisible que recibe la sombra del modelo */
   groundShadow: boolean;
+  /** Fondo de estudio: un piso que sube en curva hasta un muro (ciclorama), del color elegido */
+  studio: boolean;
+  studioColor: string;
+  /** Brillo del piso de estudio (0 = mate) */
+  studioGloss: number;
   /** Motor: el del visor (rápido) o GeppettoRay (path tracing, luz global) */
   engine: RenderEngine;
   /** Muestras por píxel de GeppettoRay */
@@ -87,6 +92,9 @@ export const defaultRenderSettings: RenderSettings = {
   color2: "#9aa4b5",
   lightPreset: "viewer",
   groundShadow: false,
+  studio: false,
+  studioColor: "#ffffff",
+  studioGloss: 0,
   engine: "viewer",
   raySamples: 128,
   rayDenoise: true,
@@ -378,6 +386,25 @@ export const RenderOptions: Component<RenderOptionsProps> = (props) => {
           </Show>
         </div>
       </Show>
+
+      {/* Estudio */}
+      <div class="space-y-2 p-3 rounded-md bg-surface/30 border border-border break-inside-avoid mb-3">
+        <span class="text-xs font-medium text-text-muted">{t("Estudio")}</span>
+        <Tooltip content={t("Pone bajo el modelo un piso que sube en curva hasta un muro, sin costuras, como el fondo de las fotos de producto. Recibe sus sombras y reemplaza al fondo y al suelo con sombra. Se ve también en el visor mientras estás en Render.")} placement="left">
+          <Checkbox label={t("Fondo de estudio")} checked={s().studio} disabled={busy()} onChange={(v) => set({ studio: v })} />
+        </Tooltip>
+        <Show when={s().studio}>
+          <input
+            type="color"
+            value={s().studioColor}
+            disabled={busy()}
+            aria-label={t("Color del fondo de estudio")}
+            class="h-8 w-full rounded border border-border bg-surface/30 cursor-pointer"
+            onInput={(e) => set({ studioColor: e.currentTarget.value })}
+          />
+          <Slider label={t("Brillo del piso")} min={0} max={1} step={0.05} value={s().studioGloss} onChange={(v) => set({ studioGloss: v })} showValue />
+        </Show>
+      </div>
 
       {/* Luz */}
       <div class="flex flex-col items-start gap-2 p-3 rounded-md bg-surface/30 border border-border break-inside-avoid mb-3">

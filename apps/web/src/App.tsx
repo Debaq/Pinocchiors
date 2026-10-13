@@ -5556,12 +5556,26 @@ export const App: Component = () => {
     onCleanup(() => v.setRenderFrame(null));
   });
   /** Lleva el visor a una cámara del render, encuadrada para la imagen que saldrá */
+  /** Fondo de estudio en el visor mientras se está en Render: se ve como saldrá en la imagen */
+  const liveStudio = () => {
+    const s = renderSettings();
+    return inRender() && s.studio && meshLoaded() ? { color: s.studioColor, gloss: s.studioGloss } : null;
+  };
+  createEffect(() => {
+    const v = viewer();
+    // Depende de la malla: si se reemplaza, el set se mide de nuevo
+    meshData();
+    if (v) v.setStudio(liveStudio());
+  });
+
   const previewRenderCamera = (id: string, zoom?: number) => {
     const v = viewer();
     const camera = renderCameraById(id);
     if (!v || !camera?.direction) return;
     const { cell } = renderLayout(renderSettings(), v.getViewSize());
     v.setRenderCamera(camera.direction, cell.width / cell.height, zoom ?? cameraZoom(renderSettings(), id));
+    // El muro queda detrás del modelo según la nueva cámara
+    if (liveStudio()) v.setStudio(liveStudio());
   };
 
   /** Flechas de la cámara del render, como en Inkscape: 2 px, Alt 1 px y Shift 10 veces más */
@@ -5630,11 +5644,12 @@ export const App: Component = () => {
         {
           width,
           height,
-          background: s.background,
-          color: s.color,
+          background: s.studio ? "color" : s.background,
+          color: s.studio ? s.studioColor : s.color,
           color2: s.color2,
           lights: renderLightById(s.lightPreset)?.lights ?? null,
           groundShadow: s.groundShadow,
+          studio: s.studio ? { color: s.studioColor, gloss: s.studioGloss } : null,
           samples: s.samples,
           format: "png",
           quality: 1,
@@ -5642,7 +5657,7 @@ export const App: Component = () => {
           hideSkeleton: s.hideSkeleton,
           hideGizmos: s.hideGizmos,
           hideSelection: s.hideSelection,
-          shadows: s.shadows,
+          shadows: s.shadows || s.studio,
           ambientOcclusion: s.ambientOcclusion,
         },
         s,
@@ -5723,11 +5738,12 @@ export const App: Component = () => {
         {
           width,
           height,
-          background: s.background,
-          color: s.color,
+          background: s.studio ? "color" : s.background,
+          color: s.studio ? s.studioColor : s.color,
           color2: s.color2,
           lights,
           groundShadow: s.groundShadow,
+          studio: s.studio ? { color: s.studioColor, gloss: s.studioGloss } : null,
           samples: s.samples,
           format: "png",
           quality: 1,
@@ -5735,7 +5751,7 @@ export const App: Component = () => {
           hideSkeleton: s.hideSkeleton,
           hideGizmos: s.hideGizmos,
           hideSelection: s.hideSelection,
-          shadows: s.shadows,
+          shadows: s.shadows || s.studio,
           ambientOcclusion: s.ambientOcclusion,
         },
         { samples: s.raySamples, denoise: s.rayDenoise, hdri },
@@ -5830,11 +5846,12 @@ export const App: Component = () => {
           {
             width: layout.cell.width,
             height: layout.cell.height,
-            background: s.background,
-            color: s.color,
+            background: s.studio ? "color" : s.background,
+            color: s.studio ? s.studioColor : s.color,
             color2: s.color2,
             lights: renderLightById(s.lightPreset)?.lights ?? null,
             groundShadow: s.groundShadow,
+            studio: s.studio ? { color: s.studioColor, gloss: s.studioGloss } : null,
             samples: s.samples,
             // En la hoja las celdas van sin pérdida y el formato es el de la hoja
             format: layout.sheet ? "png" : s.format,
@@ -5843,7 +5860,7 @@ export const App: Component = () => {
             hideSkeleton: s.hideSkeleton,
             hideGizmos: s.hideGizmos,
             hideSelection: s.hideSelection,
-            shadows: s.shadows,
+            shadows: s.shadows || s.studio,
             ambientOcclusion: s.ambientOcclusion,
           },
           s,

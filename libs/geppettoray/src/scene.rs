@@ -1,6 +1,7 @@
 //! Escena lista para trazar: triángulos en mundo + materiales + texturas + BVH.
 
 use crate::bvh::{Aabb, Bvh, Hit, Ray};
+use crate::studio::Studio;
 use crate::texture::Texture;
 use converter_scene::{AlphaMode, Scene, TextureRef};
 use glam::{Vec2, Vec3, Vec4};
@@ -43,6 +44,9 @@ pub struct RayMaterial {
     /// absorbe a lo largo de este recorrido (Beer–Lambert). 0: lámina delgada, sin
     /// refracción, que solo tiñe con el color base
     pub thickness: f32,
+    /// ¿Tapa la luz a lo demás? El fondo de estudio solo recibe: la luz llega al modelo
+    /// aunque venga de detrás del muro
+    pub casts_shadow: bool,
 }
 
 impl RayMaterial {
@@ -85,6 +89,7 @@ impl Default for RayMaterial {
             transmission: 0.0,
             ior: 1.5,
             thickness: 0.0,
+            casts_shadow: true,
         }
     }
 }
@@ -342,6 +347,9 @@ impl RayScene {
             RayAlpha::Mask(cut) => self.alpha_at(tri, mat, u, v) >= cut,
             RayAlpha::Blend => rng.next_f32() < self.alpha_at(tri, mat, u, v),
         };
+        if shadow && !mat.casts_shadow {
+            return false;
+        }
         if solid && shadow && mat.transmission > 0.0 {
             let tint = mat.base_color.truncate();
             let pass = mat.transmission * (tint.x + tint.y + tint.z) / 3.0;
@@ -356,6 +364,7 @@ impl RayScene {
 /// nodos en esa pose) y su BVH.
 pub struct AnimatedScene<'a> {
     scene: &'a Scene,
+    studio: Option<Studio>,
     materials: Vec<RayMaterial>,
     default_material: u32,
     textures: Arc<Vec<Option<Texture>>>,
@@ -395,12 +404,19 @@ impl<'a> AnimatedScene<'a> {
                     transmission: m.transmission_factor,
                     ior: m.ior,
                     thickness: m.thickness_factor,
+                    casts_shadow: true,
                 }
             })
             .collect();
         let default_material = materials.len() as u32;
         materials.push(RayMaterial::default());
-        AnimatedScene { scene, materials, default_material, textures: Arc::new(textures) }
+        AnimatedScene { scene, studio: None, materials, default_material, textures: Arc::new(textures) }
+    }
+
+    /// Agrega un fondo de estudio (ciclorama) a todos los cuadros
+    pub fn with_studio(mut self, studio: Studio) -> Self {
+        self.studio = Some(studio);
+        self
     }
 
     /// Cuántas animaciones trae la escena
@@ -434,6 +450,12 @@ impl<'a> AnimatedScene<'a> {
                 tris.push(tri);
             }
         }
-        RayScene::with_shared_textures(tris, self.materials.clone(), self.textures.clone())
+        let mut materials = self.materials.clone();
+        if let Some(studio) = &self.studio {
+            let id = materials.len() as u32;
+            materials.push(studio.material());
+            tris.extend(studio.triangles(id));
+        }
+        RayScene::with_shared_textures(tris, materials, self.textures.clone())
     }
 }

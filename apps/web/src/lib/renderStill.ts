@@ -3,6 +3,7 @@ import { GTAOPass } from "three/addons/postprocessing/GTAOPass.js";
 import { GlowHalo } from "./glowHalo";
 import { t } from "./i18n.ts";
 import type { LightSettings } from "./lightRig";
+import type { StudioOptions } from "./studioSet";
 
 export type StillFormat = "png" | "jpeg" | "webp";
 export type StillBackground = "transparent" | "viewer" | "color" | "gradient";
@@ -20,6 +21,8 @@ export interface RenderStillOptions {
   lights: LightSettings | null;
   /** Suelo invisible bajo el modelo que solo recibe su sombra (pide `shadows`) */
   groundShadow: boolean;
+  /** Fondo de estudio (ciclorama) bajo y detrás del modelo; reemplaza al suelo con sombra */
+  studio?: StudioOptions | null;
   /** Cuadros sacudidos medio píxel que se promedian: 1, 4 o 16 */
   samples: number;
   format: StillFormat;

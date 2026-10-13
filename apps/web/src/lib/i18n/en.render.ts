@@ -130,6 +130,11 @@ export const en_render: Catalog = {
   "El video no guarda transparencia: elige un fondo de color o degradado. Quedó la secuencia de imágenes.":
     "The video does not keep transparency: choose a color or gradient background. The image sequence was kept.",
   "No se encontró ffmpeg: quedó la secuencia de imágenes.": "ffmpeg was not found: the image sequence was kept.",
+  "Fondo de estudio": "Studio backdrop",
+  "Color del fondo de estudio": "Studio backdrop color",
+  "Brillo del piso": "Floor gloss",
+  "Pone bajo el modelo un piso que sube en curva hasta un muro, sin costuras, como el fondo de las fotos de producto. Recibe sus sombras y reemplaza al fondo y al suelo con sombra. Se ve también en el visor mientras estás en Render.":
+    "Puts under the model a floor that curves up into a wall, seamless, like the backdrop of product photos. It catches the model's shadows and replaces the background and the shadow floor. It also shows in the viewport while you are in Render.",
   "Ya hay un render en curso": "A render is already running",
   "No se pudo crear la imagen": "Could not create the image",
   "Esta ventana no puede guardar {f}; prueba con PNG": "This window can't save {f}; try PNG",

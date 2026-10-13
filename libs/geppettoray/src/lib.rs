@@ -16,6 +16,7 @@ mod progressive;
 mod render;
 mod rng;
 mod scene;
+mod studio;
 mod texture;
 
 pub use bsdf::Bsdf;
@@ -30,4 +31,5 @@ pub use animation::{AnimationOutcome, AnimationSettings, FrameProgress, render_a
 pub use progressive::{Frame, Outcome, PassInfo, ProgressiveOptions, render_progressive};
 pub use render::{Aov, Light, Settings, ShadowCatcher, Sun, render, render_aov};
 pub use scene::{AnimatedScene, AreaLights, RayAlpha, RayMaterial, RayScene, Triangle, quad};
+pub use studio::Studio;
 pub use texture::Texture;

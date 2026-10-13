@@ -178,3 +178,18 @@ test("renderRayAnimation: manda el clip y el degradado, sigue los cuadros y devu
   assert.deepEqual(result, { frames: 4, skipped: 1, video: "/tmp/x/anim.mp4", note: null });
   assert.equal(calls.filter(([c]) => c === "ray_render_start").length, 0);
 });
+
+test("renderRay: el fondo de estudio llena el cuadro (sin alfa ni suelo con sombra)", async () => {
+  const { invoke, calls } = fakeInvoke({ steps: [{ phase: "done", pass: 4, samples: 32, version: 1 }] });
+  await renderRay(
+    invoke,
+    view,
+    { ...opts, background: "gradient", groundShadow: true, studio: { color: "#ffffff", gloss: 0.5 } },
+    { samples: 8, denoise: false },
+  ).catch(() => {});
+  const req = calls.find(([c]) => c === "ray_render_start")[1].request;
+  assert.deepEqual(req.studio, { color: [1, 1, 1], gloss: 0.5 });
+  assert.equal(req.transparent, false);
+  assert.equal(req.background, null);
+  assert.equal(req.shadowFloor, null);
+});

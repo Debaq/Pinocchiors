@@ -163,10 +163,14 @@ function buildRequest(view: RayView, opts: RenderStillOptions, extras: RayExtras
     view.target[2] - view.position[2],
   ];
   const { suns, ambient } = raySun(view.lights, forward);
-  const gradient = opts.background === "gradient";
+  // El fondo de estudio llena el cuadro (piso y muro): no hay transparencia ni degradado debajo
+  const studio = opts.studio ?? null;
+  const gradient = !studio && opts.background === "gradient";
   // JPG no guarda alfa: el fondo "transparente" sale blanco, como en el render del visor
-  const transparent = (opts.background === "transparent" && opts.format !== "jpeg") || gradient;
-  const background = transparent
+  const transparent = !studio && ((opts.background === "transparent" && opts.format !== "jpeg") || gradient);
+  const background = studio
+    ? null
+    : transparent
     ? null
     : opts.background === "color" || opts.background === "transparent"
       ? hexToLinear(opts.background === "color" ? opts.color : "#ffffff")
@@ -186,7 +190,8 @@ function buildRequest(view: RayView, opts: RenderStillOptions, extras: RayExtras
     sunAngularRadius: SUN_ANGULAR_RADIUS,
     // Misma curva de tono que el visor, para que el motor y el visor den el mismo tono
     toneMap: true,
-    shadowFloor: opts.groundShadow ? SHADOW_FLOOR_STRENGTH : null,
+    shadowFloor: opts.groundShadow && !studio ? SHADOW_FLOOR_STRENGTH : null,
+    studio: studio ? { color: hexToLinear(studio.color), gloss: studio.gloss } : null,
     hdri: extras.hdri ?? null,
   };
   return { request, gradient };

@@ -6,6 +6,7 @@
 import * as THREE from "three";
 import { GlowHalo } from "./glowHalo";
 import type { RayView } from "./rayRender";
+import { disposeStudioSet, makeStudioSet, type StudioOptions } from "./studioSet";
 import { makeShadowGround, renderFrameRect, renderStillImage, type RenderStillOptions, type StillImage } from "./renderStill";
 import { THEME_EVENT, themeHex } from "./theme";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
@@ -4815,6 +4816,28 @@ export class Viewer3D {
     style.height = `${rect.h}px`;
   }
 
+  private studioMesh: THREE.Mesh | null = null;
+
+  /**
+   * Muestra el fondo de estudio en el visor (como saldrá en el render) o lo quita con `null`.
+   * El muro queda detrás del modelo según hacia dónde mira la cámara ahora; al cambiar de
+   * cámara se vuelve a llamar.
+   */
+  setStudio(opts: StudioOptions | null): void {
+    if (this.studioMesh) {
+      this.scene.remove(this.studioMesh);
+      disposeStudioSet(this.studioMesh);
+      this.studioMesh = null;
+    }
+    const mesh = this.rig?.mesh ?? this.currentMesh;
+    if (!opts || !mesh) return;
+    const box = new THREE.Box3().setFromObject(mesh);
+    if (box.isEmpty()) return;
+    this.studioMesh = makeStudioSet(box, this.camera.getWorldDirection(new THREE.Vector3()), opts);
+    this.scene.add(this.studioMesh);
+    this.requestRender();
+  }
+
   /** La cámara tal como se ve y las luces del visor, para renderizar con GeppettoRay */
   getRayView(): RayView {
     const cam = this.camera;
@@ -4864,8 +4887,19 @@ export class Viewer3D {
       this.lightRig.set(opts.lights);
       this.placeLights();
     }
+    // Fondo de estudio: orientado según la cámara de esta imagen (el del visor, si lo hay, se oculta)
+    let studio: THREE.Mesh | null = null;
+    const liveStudioVisible = this.studioMesh?.visible ?? false;
+    if (this.studioMesh) this.studioMesh.visible = false;
+    if (opts.studio && mesh) {
+      const box = new THREE.Box3().setFromObject(mesh);
+      if (!box.isEmpty()) {
+        studio = makeStudioSet(box, camera.getWorldDirection(new THREE.Vector3()), opts.studio);
+        this.scene.add(studio);
+      }
+    }
     let ground: THREE.Mesh | null = null;
-    const groundBox = opts.groundShadow && opts.shadows && mesh ? new THREE.Box3().setFromObject(mesh) : null;
+    const groundBox = !studio && opts.groundShadow && opts.shadows && mesh ? new THREE.Box3().setFromObject(mesh) : null;
     if (groundBox && !groundBox.isEmpty()) {
       ground = makeShadowGround(groundBox);
       this.scene.add(ground);
@@ -4892,6 +4926,11 @@ export class Viewer3D {
         signal,
       );
     } finally {
+      if (studio) {
+        this.scene.remove(studio);
+        disposeStudioSet(studio);
+      }
+      if (this.studioMesh) this.studioMesh.visible = liveStudioVisible;
       if (ground) {
         this.scene.remove(ground);
         ground.geometry.dispose();

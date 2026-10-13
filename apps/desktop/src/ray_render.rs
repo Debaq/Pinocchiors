@@ -123,9 +123,22 @@ pub struct RayRequest {
     /// Suelo invisible que recibe la sombra, con esta opacidad máxima (None = sin suelo)
     #[serde(default)]
     pub shadow_floor: Option<f32>,
+    /// Fondo de estudio (ciclorama) bajo y detrás del modelo
+    #[serde(default)]
+    pub studio: Option<StudioDto>,
     /// Imagen HDR de entorno (un `builtin:id` de los incluidos o la ruta a un .hdr): reemplaza al cielo uniforme
     #[serde(default)]
     pub hdri: Option<HdriDto>,
+}
+
+#[derive(Deserialize, Clone, Copy)]
+#[serde(rename_all = "camelCase")]
+pub struct StudioDto {
+    /// Color lineal del ciclorama
+    pub color: [f32; 3],
+    /// 0 = piso mate; 1 = brillante
+    #[serde(default)]
+    pub gloss: f32,
 }
 
 #[derive(Deserialize, Clone)]
@@ -141,6 +154,21 @@ pub struct HdriDto {
 
 fn one() -> f32 {
     1.0
+}
+
+/// El fondo de estudio, medido con la escena en reposo: el piso bajo su punto más bajo y el muro
+/// detrás del modelo según hacia dónde mira la cámara
+fn studio_from(req: &RayRequest, scene: &gr::RayScene) -> Option<gr::Studio> {
+    let st = req.studio?;
+    let b = scene.bvh.bounds();
+    let view = Vec3::from(req.camera.target) - Vec3::from(req.camera.position);
+    Some(gr::Studio {
+        color: Vec3::from(st.color),
+        floor_center: Vec3::new((b.min.x + b.max.x) * 0.5, b.min.y, (b.min.z + b.max.z) * 0.5),
+        toward_wall: Vec3::new(view.x, 0.0, view.z),
+        size: scene.extent,
+        gloss: st.gloss.clamp(0.0, 1.0),
+    })
 }
 
 fn tone_of(req: &RayRequest) -> gr::ToneMap {
@@ -192,7 +220,7 @@ fn settings_from(req: &RayRequest, scene: &gr::RayScene) -> Result<gr::Settings,
         None => gr::Environment::uniform(Vec3::from(req.ambient)),
     };
     // Mismo suelo que el visor: bajo la caja de la escena, ancho 8 veces su diagonal
-    let shadow_catcher = req.shadow_floor.map(|strength| {
+    let shadow_catcher = req.shadow_floor.filter(|_| req.studio.is_none()).map(|strength| {
         let b = scene.bvh.bounds();
         gr::ShadowCatcher {
             center: Vec3::new((b.min.x + b.max.x) * 0.5, b.min.y, (b.min.z + b.max.z) * 0.5),
@@ -237,16 +265,17 @@ fn camera_from(req: &RayRequest) -> gr::Camera {
 
 fn run(scene: converter_scene::Scene, req: RayRequest, cancel: Arc<AtomicBool>, status: Arc<Mutex<Status>>) {
     let set = |f: &mut dyn FnMut(&mut Status)| f(&mut status.lock().unwrap());
-    let ray_scene = gr::RayScene::from_scene(&scene);
-    drop(scene);
-    if ray_scene.triangles.is_empty() {
+    let animated = gr::AnimatedScene::new(&scene);
+    // La escena sola: de ella salen el tamaño del fondo de estudio y del suelo con sombra
+    let probe = animated.at(None, 0.0);
+    if probe.triangles.is_empty() {
         set(&mut |s| {
             s.phase = Phase::Error;
             s.error = Some("La escena no tiene geometría para renderizar".to_string());
         });
         return;
     }
-    let settings = match settings_from(&req, &ray_scene) {
+    let settings = match settings_from(&req, &probe) {
         Ok(s) => s,
         Err(e) => {
             set(&mut |s| {
@@ -256,6 +285,11 @@ fn run(scene: converter_scene::Scene, req: RayRequest, cancel: Arc<AtomicBool>, 
             return;
         }
     };
+    let ray_scene = match studio_from(&req, &probe) {
+        Some(studio) => animated.with_studio(studio).at(None, 0.0),
+        None => probe,
+    };
+    drop(scene);
     let tone = tone_of(&req);
     let camera = camera_from(&req);
     let options = gr::ProgressiveOptions {
@@ -400,6 +434,7 @@ fn run_animation(
         Ok(s) => s,
         Err(e) => return fail(e),
     };
+    let studio = studio_from(&req, &probe);
     drop(probe);
     let camera = camera_from(&req);
     let tone = tone_of(&req);
@@ -415,6 +450,7 @@ fn run_animation(
         last_frame: anim.last_frame,
         shutter: anim.shutter.clamp(0.0, 1.0),
         motion_samples: anim.motion_samples.clamp(1, 32),
+        studio,
     };
     let frames = settings_a.frame_count();
     set(&mut |s| {
@@ -664,6 +700,7 @@ mod tests {
             sun_angular_radius: 0.0,
             tone_map: false,
             shadow_floor: None,
+            studio: None,
             hdri: None,
         }
     }
@@ -895,6 +932,27 @@ mod tests {
             let top = (0..32).map(|x| lit(x, 0)).sum::<u32>() / 32;
             assert!(top > 6, "{id}: el entorno se ve de fondo ({top})");
         }
+    }
+
+    #[test]
+    fn el_fondo_de_estudio_cubre_el_cuadro_y_ya_no_hay_suelo_invisible() {
+        let mut r = request();
+        r.width = 48;
+        r.height = 32;
+        r.samples = 16;
+        r.transparent = false;
+        r.camera = CameraDto { position: [0.0, 1.5, 6.0], target: [0.0, 0.0, 0.0], up: [0.0, 1.0, 0.0], vfov_deg: 45.0 };
+        r.suns = vec![SunDto { direction: [0.3, 1.0, 0.4], color: [3.0; 3] }];
+        r.ambient = [0.4; 3];
+        r.shadow_floor = Some(0.7);
+        r.studio = Some(StudioDto { color: [0.9; 3], gloss: 0.0 });
+        let (phase, err, img) = run_png(r);
+        assert!(phase == Phase::Done, "{err:?}");
+        let img = img.unwrap();
+        // Todo el cuadro es piso o muro iluminados: nada transparente ni oscuro
+        assert!(img.pixels().all(|p| p.0[3] == 255), "sin huecos");
+        let dark = img.pixels().filter(|p| p.0[0] < 60).count();
+        assert!(dark < 48 * 32 / 4, "el set se ve claro ({dark} píxeles oscuros)");
     }
 
     #[test]
