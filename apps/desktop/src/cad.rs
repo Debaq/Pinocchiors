@@ -770,6 +770,22 @@ fn assembly_suggest_impl(state: &AppState) -> Result<Vec<cad_model::Relation>, S
     Ok(cad_model::assembly::suggest_gear_relations(ev, &asm, &sol))
 }
 
+/// Avisos de los engranes enlazados del ensamble (ejes no paralelos, helicoidales cruzados).
+#[tauri::command]
+pub async fn cad_assembly_gear_warnings(app: AppHandle) -> Result<Vec<String>, String> {
+    in_background(app, assembly_gear_warnings_impl).await
+}
+
+fn assembly_gear_warnings_impl(state: &AppState) -> Result<Vec<String>, String> {
+    let doc = state.cad_document.lock().unwrap().clone().ok_or("No hay un diseño abierto")?;
+    let asm = doc.assembly.ok_or("El diseño no tiene ensamble")?;
+    evaluate_committed(state)?;
+    let cache = state.cad_cache.lock().unwrap();
+    let ev = &cache.as_ref().ok_or("El diseño todavía no tiene un sólido")?.eval;
+    let sol = cad_model::assembly::solve(&asm);
+    Ok(cad_model::assembly::gear_axis_warnings(ev, &asm, &sol))
+}
+
 fn mesh_impl(state: &AppState) -> Result<Vec<u8>, String> {
     evaluate(state)?;
     let scale = 1.0 / mm_per_unit(state);
@@ -2214,6 +2230,7 @@ pub mod bridge {
             "cad_assembly_interference" => ok(assembly_interference_impl(state)?),
             "cad_assembly_clearance" => ok(assembly_clearance_impl(state, arg::<Option<f64>>(args, "min_gap")?)?),
             "cad_assembly_suggest" => ok(assembly_suggest_impl(state)?),
+            "cad_assembly_gear_warnings" => ok(assembly_gear_warnings_impl(state)?),
             "cad_drawing" => ok(drawing_impl(state, &arg::<Vec<DrawingViewSpec>>(args, "views")?)?),
             "cad_write_pdf" => {
                 let (path, svg): (String, String) = (arg(args, "path")?, arg(args, "svg")?);

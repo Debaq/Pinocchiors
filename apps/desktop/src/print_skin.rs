@@ -257,6 +257,99 @@ pub fn skin_zone_clear(state: tauri::State<'_, AppState>) -> Result<ZoneInfo, St
     zone_info(&state)
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// APLICAR
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Cómo se aplica la piel a la zona
+#[derive(Debug, Clone, Deserialize)]
+pub struct SkinParams {
+    /// Patrón de fábrica o imagen importada
+    pub image: String,
+    #[serde(default)]
+    pub ops: SkinOps,
+    /// Lado de la baldosa en la superficie (mm)
+    pub tile_mm: f64,
+    /// Altura entre el negro y el blanco (mm)
+    pub amplitude: f64,
+    #[serde(default)]
+    pub offset: p3d::SkinOffset,
+    #[serde(default)]
+    pub rotation_deg: f64,
+    /// Lado de los triángulos (mm); sin él, lo da el detalle del mapa
+    pub edge_mm: Option<f64>,
+    pub feather_mm: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SkinApplied {
+    pub triangles_before: usize,
+    pub triangles_after: usize,
+    pub edge_mm: f64,
+    pub max_displacement_mm: f64,
+    pub warnings: Vec<String>,
+}
+
+/// Un UV por vértice de la malla activa, en el orden de la escena (el de `scene_to_mesh`)
+fn scene_uvs(scene: &converter_scene::Scene) -> Result<Vec<[f32; 2]>, String> {
+    let mut out = Vec::new();
+    for prim in scene.world_primitives() {
+        match &prim.uvs {
+            Some(uv) if uv.len() == prim.positions.len() => out.extend_from_slice(uv),
+            _ => return Err("El modelo no tiene UV: despliégalo primero en UV / Piel".into()),
+        }
+    }
+    Ok(out)
+}
+
+/// Desplaza la zona elegida con el mapa de altura. El modelo pasa a ser geometría sola (sin UV, texturas ni rig);
+/// la copia para deshacer la saca el llamador
+#[tauri::command]
+pub async fn apply_print_skin(app: AppHandle, params: SkinParams) -> Result<SkinApplied, String> {
+    in_background(app, move |state| apply_skin_impl(state, &params)).await
+}
+
+pub(crate) fn apply_skin_impl(state: &AppState, params: &SkinParams) -> Result<SkinApplied, String> {
+    let zone = zone_info(state)?;
+    if zone.faces.is_empty() {
+        return Err("Elige primero la zona donde va la piel".into());
+    }
+    let scene = state.scene.lock().unwrap().clone().ok_or("No hay escena cargada")?;
+    let mesh = state.mesh.lock().unwrap().clone().ok_or("No hay malla cargada")?;
+    let uvs = scene_uvs(&scene)?;
+    if uvs.len() != mesh.vertices.len() {
+        return Err("La malla ya no coincide con el modelo desplegado: vuelve a desplegar el UV".into());
+    }
+    let map = height_map(state, &params.image, &params.ops)?;
+    let k = mm_per_unit(state);
+    let cfg = p3d::SkinConfig {
+        tile_mm: params.tile_mm,
+        amplitude: params.amplitude,
+        offset: params.offset,
+        rotation_deg: params.rotation_deg,
+        edge_mm: params.edge_mm,
+        feather_mm: params.feather_mm,
+        unit_mm: k,
+        ..Default::default()
+    };
+    let faces: Vec<usize> = zone.faces.iter().map(|&f| f as usize).collect();
+    let result = p3d::apply_skin(&mesh, &uvs, &faces, &map, &cfg).map_err(|e| format!("No se pudo aplicar la piel: {e}"))?;
+    let new_scene = crate::commands::mesh_to_scene(&result.mesh, "Piel", Some(&scene));
+    *state.mesh.lock().unwrap() = Some(result.mesh);
+    *state.scene.lock().unwrap() = Some(new_scene);
+    *state.print_skin_zone.lock().unwrap() = Default::default();
+    *state.print3d_pieces.lock().unwrap() = None;
+    *state.print3d_pieces_plain.lock().unwrap() = None;
+    state.geometry_changed();
+    Ok(SkinApplied {
+        triangles_before: result.triangles_before,
+        triangles_after: result.triangles_after,
+        edge_mm: result.edge_mm,
+        max_displacement_mm: result.max_displacement_mm,
+        warnings: result.warnings,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,6 +399,58 @@ mod tests {
         assert_eq!(grow_zone(&state, 100.0).unwrap().faces.len(), 12);
         let ts = edit_zone(&state, &[2, 3], ZoneMode::Set).unwrap();
         assert_eq!(ts.faces.len(), 2);
+    }
+
+    /// Escena de una caja de 40 × 40 × 10 con UV planos en la tapa (x, y) / 40
+    fn box_scene() -> converter_scene::Scene {
+        use converter_scene::{IndexData, Mesh as SceneMesh, Node, Primitive, Scene, Transform, VertexAttribute};
+        let c = |x: f32, y: f32, z: f32| [x * 40.0, y * 40.0, z * 10.0];
+        let v = [c(0., 0., 0.), c(1., 0., 0.), c(1., 1., 0.), c(0., 1., 0.), c(0., 0., 1.), c(1., 0., 1.), c(1., 1., 1.), c(0., 1., 1.)];
+        let f: [[usize; 3]; 12] = [[0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7], [0, 1, 5], [0, 5, 4], [1, 2, 6], [1, 6, 5], [2, 3, 7], [2, 7, 6], [3, 0, 4], [3, 4, 7]];
+        let positions: Vec<[f32; 3]> = f.iter().flatten().map(|&k| v[k]).collect();
+        let uvs: Vec<[f32; 2]> = positions.iter().map(|p| [p[0] / 40.0, p[1] / 40.0]).collect();
+        let indices: Vec<u32> = (0..positions.len() as u32).collect();
+        let prim = Primitive {
+            attributes: vec![VertexAttribute::Positions(positions), VertexAttribute::TexCoords(0, uvs)],
+            indices: Some(IndexData::U32(indices)),
+            material: None,
+        };
+        let mut scene = Scene::new();
+        scene.meshes.push(SceneMesh { name: "caja".into(), primitives: vec![prim] });
+        scene.nodes.push(Node { name: "caja".into(), transform: Transform::identity(), mesh: Some(0), skin: None, children: Vec::new() });
+        scene.root_nodes.push(0);
+        scene.meters_per_unit = 0.001;
+        scene
+    }
+
+    #[test]
+    fn aplicar_la_piel_cambia_la_malla_y_limpia_la_zona() {
+        let state = AppState::new();
+        let scene = box_scene();
+        *state.mesh.lock().unwrap() = Some(crate::commands::scene_to_pinocchio_mesh(&scene).unwrap());
+        *state.scene.lock().unwrap() = Some(scene);
+        let params = SkinParams {
+            image: "dots".into(),
+            ops: SkinOps::default(),
+            tile_mm: 10.0,
+            amplitude: 0.8,
+            offset: p3d::SkinOffset::Outward,
+            rotation_deg: 0.0,
+            edge_mm: Some(1.0),
+            feather_mm: Some(2.0),
+        };
+        assert!(apply_skin_impl(&state, &params).is_err(), "sin zona no hay piel");
+        edit_zone(&state, &[2, 3], ZoneMode::Set).unwrap();
+        let r = apply_skin_impl(&state, &params).unwrap();
+        assert!(r.triangles_after > 1000 && r.max_displacement_mm > 0.7, "{r:?}");
+        let mesh = state.mesh.lock().unwrap().clone().unwrap();
+        assert!(mesh.is_closed() && mesh.num_faces() == r.triangles_after);
+        assert!(state.print_skin_zone.lock().unwrap().faces.is_empty(), "la zona de antes ya no vale");
+        // La escena es la nueva geometría
+        assert_eq!(state.scene.lock().unwrap().as_ref().unwrap().meshes.len(), 1);
+        // Ya sin UV: no se puede volver a aplicar
+        edit_zone(&state, &[0], ZoneMode::Set).unwrap();
+        assert!(apply_skin_impl(&state, &params).unwrap_err().contains("UV"));
     }
 
     #[test]
