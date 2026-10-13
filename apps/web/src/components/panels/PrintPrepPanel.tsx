@@ -1,7 +1,7 @@
 import { Component, For, Show, createSignal } from "solid-js";
 import { Button, Checkbox, NumberInput, Select } from "../ui";
 import * as Icons from "../icons";
-import { fmtNumber, t } from "../../lib/i18n";
+import { fmtNumber, t, tx } from "../../lib/i18n";
 import { tBackend } from "../../lib/i18nBackend.ts";
 import { customPrinters, removeCustomPrinter, saveCustomPrinter } from "../../lib/settings.ts";
 
@@ -14,12 +14,33 @@ export interface PrinterProfile {
   build_volume: [number, number, number];
   nozzle: number;
   layer_height: number;
+  /** Holgura de base de un ajuste (mm); sigue a la boquilla si falta */
+  fit_clearance?: number;
+  /** Cuánto más chico sale un agujero, por lado (mm) */
+  hole_comp?: number;
 }
 
 export interface MaterialProfile {
   name: string;
   density: number;
   max_overhang_deg: number;
+  /** Contracción lineal por eje (fracción: 0,004 = 0,4 %) */
+  shrink?: [number, number, number];
+  /** Multiplica la holgura de base */
+  clearance_factor?: number;
+}
+
+export type FitKind = "tight" | "normal" | "loose";
+
+/** Holguras que salen de la impresora y el material (backend) */
+export interface FabInfo {
+  clearance: number;
+  hole_comp: number;
+  shrink: [number, number, number];
+  min_wall: number;
+  tight: number;
+  normal: number;
+  loose: number;
 }
 
 export interface PrintPresets {
@@ -74,6 +95,8 @@ export interface JointSettings {
   depth: number;
   tolerance: number;
   count: number;
+  /** Ajuste: la holgura sale de la impresora y el material (si no, vale `tolerance`) */
+  fit?: FitKind | "manual";
   /** Giro de la unión dentro de la cara (grados): hacia dónde corre el riel */
   angle: number;
 }
@@ -89,6 +112,8 @@ export interface PlateSettings {
   format: string;
   spacing: number;
   orient: boolean;
+  /** Agrandar por eje lo que se encoge el material */
+  compensate: boolean;
   /** Acomodar por el contorno de cada pieza y no por su caja */
   contour: boolean;
   hollowWall: number | null;
@@ -104,6 +129,8 @@ export interface PlateResult {
   unplaced: string[];
   too_tall: string[];
   total_bytes: number;
+  /** Factor por eje aplicado por la contracción (1 = sin compensar) */
+  shrink_scale?: [number, number, number];
 }
 
 /** Todo lo que se elige en la preparación (va al proyecto) */
@@ -121,13 +148,13 @@ export interface PrepSettings {
 }
 
 export const defaultPrep: PrepSettings = {
-  joint: { shape: "round", size: 6, depth: 10, tolerance: -0.4, count: 2, angle: 0 },
+  joint: { shape: "round", size: 6, depth: 10, tolerance: -0.4, count: 2, angle: 0, fit: "normal" },
   infill: 1,
   hollow: false,
   wall: 2,
   drain: false,
   drainDiameter: 4,
-  plate: { format: "stl", spacing: 5, orient: true, contour: true, hollowWall: null, drain: null },
+  plate: { format: "stl", spacing: 5, orient: true, compensate: true, contour: true, hollowWall: null, drain: null },
 };
 
 export interface PlatePreview {
@@ -251,6 +278,26 @@ export const PrinterMaterial: Component<{
         step={0.1}
         suffix="mm"
       />
+      <div class="grid grid-cols-2 gap-1.5">
+        <NumberInput
+          label={t("Holgura")}
+          value={props.printer.fit_clearance ?? props.printer.nozzle}
+          onChange={(v) => props.onPrinter({ ...props.printer, fit_clearance: Math.max(0, v) })}
+          min={0}
+          max={2}
+          step={0.05}
+          suffix="mm"
+        />
+        <NumberInput
+          label={t("Agujeros")}
+          value={props.printer.hole_comp ?? props.printer.nozzle * 0.25}
+          onChange={(v) => props.onPrinter({ ...props.printer, hole_comp: Math.max(0, v) })}
+          min={0}
+          max={1}
+          step={0.05}
+          suffix="mm"
+        />
+      </div>
       <Select
         label={t("Material")}
         options={materials().map((m) => ({ value: m.name, label: m.name }))}
@@ -259,6 +306,15 @@ export const PrinterMaterial: Component<{
           const m = materials().find((x) => x.name === name);
           if (m) props.onMaterial(m);
         }}
+      />
+      <NumberInput
+        label={t("Contracción")}
+        value={Number(((props.material.shrink?.[0] ?? 0) * 100).toFixed(2))}
+        onChange={(v) => props.onMaterial({ ...props.material, shrink: [v / 100, v / 100, v / 100] })}
+        min={0}
+        max={5}
+        step={0.1}
+        suffix="%"
       />
     </div>
   );
@@ -337,6 +393,7 @@ export const OrientationSection: Component<{
 );
 
 export const JointsSection: Component<{
+  fab?: FabInfo;
   settings: JointSettings;
   onSettings: (s: JointSettings) => void;
   report?: JointsReport;
@@ -363,7 +420,27 @@ export const JointsSection: Component<{
       <div class="grid grid-cols-2 gap-1.5">
         <NumberInput label={t("Tamaño")} value={props.settings.size} onChange={(v) => set({ size: v })} min={2} max={40} step={0.5} suffix="mm" />
         <NumberInput label={t("Hondo")} value={props.settings.depth} onChange={(v) => set({ depth: v })} min={3} max={60} step={1} suffix="mm" />
-        <NumberInput label={t("Holgura")} value={props.settings.tolerance} onChange={(v) => set({ tolerance: v })} min={-1.5} max={0} step={0.05} suffix="mm" />
+        <Select
+          label={t("Ajuste")}
+          options={[
+            { value: "tight", label: t("Justo") },
+            { value: "normal", label: t("Normal") },
+            { value: "loose", label: tx("ajuste", "Libre") },
+            { value: "manual", label: t("A mano") },
+          ]}
+          value={props.settings.fit ?? "normal"}
+          onChange={(v) => set({ fit: v as FitKind | "manual" })}
+        />
+        <Show when={(props.settings.fit ?? "normal") === "manual"}>
+          <NumberInput label={t("Holgura")} value={props.settings.tolerance} onChange={(v) => set({ tolerance: v })} min={-1.5} max={0} step={0.05} suffix="mm" />
+        </Show>
+        <Show when={(props.settings.fit ?? "normal") !== "manual" && props.fab}>
+          {(f) => (
+            <p class="col-span-2 text-[10px] text-text-dim">
+              {t("Holgura de {v} mm según la impresora y el material", { v: fmtNumber(f()[(props.settings.fit ?? "normal") as FitKind], { maximumFractionDigits: 2 }) })}
+            </p>
+          )}
+        </Show>
         <NumberInput label={t("Por cara")} value={props.settings.count} onChange={(v) => set({ count: Math.max(1, Math.round(v)) })} min={1} max={8} step={1} />
         <NumberInput label={t("Giro")} value={props.settings.angle ?? 0} onChange={(v) => set({ angle: v })} min={-180} max={180} step={5} suffix="°" />
       </div>
@@ -495,6 +572,13 @@ export const PlatesSection: Component<{
         />
         <Checkbox
           small
+          label={t("Compensar la contracción del material")}
+          checked={props.settings.compensate !== false}
+          onChange={(v) => set({ compensate: v })}
+          hint={t("Agranda cada pieza lo que se va a encoger al enfriar, para que salga a la medida diseñada. El diseño no cambia: solo el archivo que exportas.")}
+        />
+        <Checkbox
+          small
           label={t("Acomodar por el contorno")}
           checked={props.settings.contour !== false}
           onChange={(v) => set({ contour: v })}
@@ -511,6 +595,9 @@ export const PlatesSection: Component<{
           {(r) => (
             <div class="space-y-1 p-2 rounded-md bg-surface/30 border border-border">
               <Row label={t("Placas")} value={String(r().plates)} />
+              <Show when={r().shrink_scale && r().shrink_scale!.some((x) => Math.abs(x - 1) > 1e-9)}>
+                <Row label={t("Compensación")} value={r().shrink_scale!.map((x) => `×${fmtNumber(x, { maximumFractionDigits: 4 })}`).join(" ")} />
+              </Show>
               <Row label={t("Piezas")} value={String(r().pieces)} />
               <Row label={t("Cama ocupada")} value={r().utilization.map((u) => `${fmtNumber(u * 100, { maximumFractionDigits: 0 })} %`).join(" · ")} />
               <Show when={r().unplaced.length > 0}>

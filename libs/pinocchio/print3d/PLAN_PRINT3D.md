@@ -43,3 +43,24 @@ planos reales entre piezas.
 - Venteo (segundo agujero) y drenaje sin cara plana.
 - Orientación por pieza visible antes de exportar.
 - Tope en la ranura (un extremo ciego) y puzzles.
+
+## Tolerancias de fabricación y su conexión con Diseñar (CAD)
+
+Hecho (lado impresión): `FabTolerances::derive(impresora, material)` en `fab.rs` es la única fuente de
+holguras y compensaciones: holgura de base (parte de la boquilla × factor del material), `Fit`
+(justo / normal / libre), compensación de agujeros por lado, contracción por eje y pared mínima.
+Las uniones toman su holgura de ahí (selector «Ajuste») y las placas se agrandan por la contracción
+al exportar (el diseño queda en medidas nominales). Comando `get_fab_tolerances`.
+
+Por hacer (lado CAD; se hace cuando el trabajo de engranes esté commiteado):
+
+1. **Perfil de fabricación en el documento de CAD** (`Document.fabrication`: impresora, material, ajuste
+   por defecto), guardado en el `.pinocchio` y compartido con Fabricar: elegirlo en un lado lo elige en el otro.
+2. **Operaciones que lo leen**: la holgura de impresión de `GearPart` (`print_clearance`) parte de
+   `fit_clearance(Fit)`; agujeros, chaveteros y roscas ofrecen «Ajustar a la impresora» (`compensated_hole`);
+   `Shell`/paredes avisan al bajar de `min_wall`.
+3. **Ensambles**: `interferences` pasa a medir también la holgura (pares más cerca que `fit_clearance`
+   se marcan, no solo los que chocan) y sugiere el ajuste entre piezas conectadas.
+4. **Exportar desde Diseñar** con la misma compensación de contracción que las placas.
+5. La compensación de **agujeros** al exportar solo es posible en el CAD (cara cilíndrica conocida); en una
+   malla suelta no se detectan agujeros, por eso allí solo se aplica la contracción.

@@ -292,6 +292,7 @@ import type {
   PlateSettings,
   PlateResult,
   PlatePreview,
+  FabInfo,
   PrepSettings,
 } from "./components/panels/Print3DPanel";
 import { defaultPrep, jointShapeConfig } from "./components/panels/PrintPrepPanel";
@@ -1572,6 +1573,7 @@ export const App: Component = () => {
   const [subdivideResult, setSubdivideResult] = createSignal<SubdivideResult | undefined>();
   const [printPresets, setPrintPresets] = createSignal<PrintPresets | undefined>();
   const [printPrep, setPrintPrep] = createSignal<PrepSettings>(defaultPrep);
+  const [fabInfo, setFabInfo] = createSignal<FabInfo | undefined>();
   const [printReadiness, setPrintReadiness] = createSignal<Readiness | undefined>();
   const [printOrientations, setPrintOrientations] = createSignal<OrientationOption[] | undefined>();
   const [jointsReport, setJointsReport] = createSignal<JointsReport | undefined>();
@@ -2038,7 +2040,7 @@ export const App: Component = () => {
         // Las uniones eran de las piezas viejas: se ponen de nuevo en las regeneradas
         if (subdivided && lastJointConfig && jointsReport()) {
           try {
-            setJointsReport(await rawInvoke("add_print_joints", { config: lastJointConfig }) as JointsReport);
+            setJointsReport(await rawInvoke("add_print_joints", lastJointConfig) as JointsReport);
           } catch (e) {
             setJointsReport(undefined);
             setStatusMessage(t("No se pudieron rehacer las uniones: {e}", { e: tBackend(String(e)) }));
@@ -6920,9 +6922,21 @@ export const App: Component = () => {
   };
 
   /** Las últimas uniones puestas: se rehacen cuando el diseño cambia y se regeneran las piezas */
-  let lastJointConfig: object | undefined;
+  let lastJointConfig: { config: object; fit: object | null } | undefined;
 
-  const handleAddJoints = async (s: JointSettings) => {
+  /** Las holguras de la impresora y el material elegidos (se piden al cambiarlos) */
+  let fabRequest = 0;
+  const handleFabNeeded = async (printer: PrinterProfile, material: MaterialProfile) => {
+    const request = ++fabRequest;
+    try {
+      const info = await invoke<FabInfo>("get_fab_tolerances", { printer, material });
+      if (request === fabRequest) setFabInfo(info);
+    } catch (e) {
+      console.error("Fab tolerances error:", e);
+    }
+  };
+
+  const handleAddJoints = async (s: JointSettings, printer: PrinterProfile, material: MaterialProfile) => {
     const config = {
       shape: jointShapeConfig(s),
       depth: s.depth,
@@ -6933,9 +6947,10 @@ export const App: Component = () => {
       min_contact_area: 50,
       rotation_deg: s.angle ?? 0,
     };
-    const result = await printTask(t("Poniendo uniones..."), () => invoke<JointsReport>("add_print_joints", { config }));
+    const fit = s.fit && s.fit !== "manual" ? { printer, material, fit: s.fit } : null;
+    const result = await printTask(t("Poniendo uniones..."), () => invoke<JointsReport>("add_print_joints", { config, fit }));
     if (!result) return;
-    lastJointConfig = config;
+    lastJointConfig = { config, fit };
     setJointsReport(result);
     setStatusMessage(result.joints_placed === 1 ? t("1 unión puesta") : t("{n} uniones puestas", { n: result.joints_placed }));
   };
@@ -6948,7 +6963,7 @@ export const App: Component = () => {
   };
 
   const handlePreviewPlates = async (printer: PrinterProfile, material: MaterialProfile, settings: PlateSettings) => {
-    const input = { printer, material, format: settings.format, spacing: settings.spacing, orient: settings.orient, contour: settings.contour !== false, hollow_wall: null, path: "" };
+    const input = { printer, material, format: settings.format, spacing: settings.spacing, orient: settings.orient, contour: settings.contour !== false, hollow_wall: null, compensate: settings.compensate !== false, path: "" };
     const result = await printTask(t("Acomodando las piezas..."), () => invoke<PlatePreview>("preview_print_plates", { input }));
     if (result) setPlatePreview(result);
   };
@@ -6960,7 +6975,7 @@ export const App: Component = () => {
         filters: [{ name: settings.format.toUpperCase(), extensions: [settings.format] }],
       });
       if (!path) return;
-      const input = { printer, material, format: settings.format, spacing: settings.spacing, orient: settings.orient, contour: settings.contour !== false, hollow_wall: settings.hollowWall, drain: settings.drain, path };
+      const input = { printer, material, format: settings.format, spacing: settings.spacing, orient: settings.orient, contour: settings.contour !== false, hollow_wall: settings.hollowWall, drain: settings.drain, compensate: settings.compensate !== false, path };
       const result = await printTask(t("Preparando las placas..."), () => invoke<PlateResult>("export_print_plates", { input }));
       if (!result) return;
       setPlateResult(result);
@@ -8846,6 +8861,8 @@ export const App: Component = () => {
               onSubdivide: handleSubdivide,
               onExportPiece: handleExportPiece,
               presets: printPresets(),
+              fab: fabInfo(),
+              onFabNeeded: handleFabNeeded,
               prep: printPrep(),
               onPrep: setPrintPrep,
               readiness: printReadiness(),

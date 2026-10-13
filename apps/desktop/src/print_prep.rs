@@ -8,7 +8,7 @@ use crate::commands::{in_background, mesh_reoriented, mesh_to_scene, mm_per_unit
 use crate::state::AppState;
 use pinocchio_mesh::Mesh;
 use pinocchio_print3d::{
-    self as p3d, HollowConfig, JointsReport, MaterialProfile, NestItem, OrientationCandidate, PlanarJointConfig, PrintabilityConfig, PrintabilityReport, PrinterProfile,
+    self as p3d, FabTolerances, Fit, HollowConfig, JointsReport, MaterialProfile, NestItem, OrientationCandidate, PlanarJointConfig, PrintabilityConfig, PrintabilityReport, PrinterProfile,
 };
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
@@ -70,6 +70,23 @@ pub struct PrintPresets {
 #[tauri::command]
 pub fn get_print_presets() -> PrintPresets {
     PrintPresets { printers: PrinterProfile::presets(), materials: MaterialProfile::presets() }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FabInfo {
+    #[serde(flatten)]
+    pub tolerances: FabTolerances,
+    /// Holgura total de cada tipo de ajuste (mm)
+    pub tight: f64,
+    pub normal: f64,
+    pub loose: f64,
+}
+
+/// Holguras y compensaciones que salen de la impresora y el material elegidos
+#[tauri::command]
+pub fn get_fab_tolerances(printer: PrinterProfile, material: MaterialProfile) -> FabInfo {
+    let t = FabTolerances::derive(&printer, &material);
+    FabInfo { tight: t.fit_clearance(Fit::Tight), normal: t.fit_clearance(Fit::Normal), loose: t.fit_clearance(Fit::Loose), tolerances: t }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -184,13 +201,26 @@ pub(crate) fn suggest_print_orientation_impl(state: &AppState, printer: &Printer
 // UNIONES
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Pone pernos y huecos en las caras de corte de las piezas (parte de las piezas sin uniones)
-#[tauri::command]
-pub async fn add_print_joints(app: AppHandle, config: PlanarJointConfig) -> Result<JointsReport, String> {
-    in_background(app, move |state| add_print_joints_impl(state, &config)).await
+/// Ajuste elegido: la holgura sale de la impresora y el material en vez de la del cuadro
+#[derive(Debug, Clone, Deserialize)]
+pub struct FitInput {
+    pub printer: PrinterProfile,
+    pub material: MaterialProfile,
+    pub fit: Fit,
 }
 
-pub(crate) fn add_print_joints_impl(state: &AppState, config: &PlanarJointConfig) -> Result<JointsReport, String> {
+/// Pone pernos y huecos en las caras de corte de las piezas (parte de las piezas sin uniones)
+#[tauri::command]
+pub async fn add_print_joints(app: AppHandle, config: PlanarJointConfig, fit: Option<FitInput>) -> Result<JointsReport, String> {
+    in_background(app, move |state| add_print_joints_impl(state, &config, fit.as_ref())).await
+}
+
+pub(crate) fn add_print_joints_impl(state: &AppState, config: &PlanarJointConfig, fit: Option<&FitInput>) -> Result<JointsReport, String> {
+    let mut config = config.clone();
+    if let Some(f) = fit {
+        config.tolerance = FabTolerances::derive(&f.printer, &f.material).joint_tolerance(f.fit);
+    }
+    let config = &config;
     let k = mm_per_unit(state);
     let plain = state.print3d_pieces_plain.lock().unwrap().clone().ok_or("Primero divide el modelo en piezas")?;
     let mut work: Vec<p3d::LabeledPiece> = plain
@@ -281,12 +311,17 @@ pub struct PlateInput {
     /// Agujero de drenaje de este diámetro en la cara de abajo (mm), al vaciar
     #[serde(default)]
     pub drain: Option<f64>,
+    /// Agrandar por eje lo que se encoge el material al enfriar
+    #[serde(default)]
+    pub compensate: bool,
     pub path: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PlateInfo {
     pub files: Vec<String>,
+    /// Factor por eje por contracción del material (1 = sin compensar)
+    pub shrink_scale: [f64; 3],
     pub plates: usize,
     pub pieces: usize,
     pub utilization: Vec<f64>,
@@ -303,6 +338,8 @@ pub(crate) struct Plate {
 }
 
 pub(crate) struct PlatePlan {
+    /// Factor por eje aplicado a las piezas por la contracción (1 si no se compensó)
+    pub shrink_scale: [f64; 3],
     pub plates: Vec<Plate>,
     pub utilization: Vec<f64>,
     pub unplaced: Vec<String>,
@@ -312,6 +349,7 @@ pub(crate) struct PlatePlan {
 /// Prepara las piezas (vaciar, orientar) y las reparte en camas
 pub(crate) fn plan_plates(list: Vec<(String, Mesh)>, input: &PlateInput) -> Result<PlatePlan, String> {
     let config = PrintabilityConfig::from_profiles(&input.printer, &input.material);
+    let tolerances = FabTolerances::derive(&input.printer, &input.material);
     let mut prepared: Vec<(String, Mesh)> = Vec::new();
     for (label, mut mesh) in list {
         // Primero se apoya: el drenaje va en la cara de abajo de esa posición
@@ -323,6 +361,9 @@ pub(crate) fn plan_plates(list: Vec<(String, Mesh)>, input: &PlateInput) -> Resu
         if let Some(wall) = input.hollow_wall {
             let hollow = HollowConfig { wall, drain_diameter: input.drain, ..Default::default() };
             mesh = p3d::hollow(&mesh, &hollow).map_err(|e| format!("Pieza {label}: {e}"))?.mesh;
+        }
+        if input.compensate {
+            p3d::compensate_shrink(&mut mesh, &tolerances);
         }
         prepared.push((label, mesh));
     }
@@ -350,7 +391,8 @@ pub(crate) fn plan_plates(list: Vec<(String, Mesh)>, input: &PlateInput) -> Resu
         plates[p.bed].meshes.push((prepared[p.id].0.clone(), meshes[p.id].clone()));
     }
     let unplaced = result.unplaced.iter().map(|&i| prepared[i].0.clone()).collect();
-    Ok(PlatePlan { plates, utilization: result.utilization, unplaced, too_tall })
+    let shrink_scale = if input.compensate { tolerances.shrink_scale() } else { [1.0; 3] };
+    Ok(PlatePlan { shrink_scale, plates, utilization: result.utilization, unplaced, too_tall })
 }
 
 /// Escena de una placa: las piezas como objetos, en mm (se exporta con Z arriba)
@@ -458,7 +500,7 @@ pub(crate) fn export_print_plates_impl(state: &AppState, input: PlateInput) -> R
         files.push(path);
     }
     let total_bytes = files.iter().filter_map(|f| std::fs::metadata(f).ok()).map(|m| m.len()).sum();
-    Ok(PlateInfo { plates: plan.plates.len(), files, pieces, utilization: plan.utilization, unplaced: plan.unplaced, too_tall: plan.too_tall, total_bytes })
+    Ok(PlateInfo { shrink_scale: plan.shrink_scale, plates: plan.plates.len(), files, pieces, utilization: plan.utilization, unplaced: plan.unplaced, too_tall: plan.too_tall, total_bytes })
 }
 
 #[cfg(test)]
@@ -483,6 +525,7 @@ mod tests {
             contour: false,
             hollow_wall: None,
             drain: None,
+            compensate: false,
             path: "x.stl".into(),
         }
     }
@@ -536,6 +579,22 @@ mod tests {
                 assert!(bb.min[0] >= -1e-6 && bb.max[0] <= 100.0 + 1e-6 && bb.max[1] <= 100.0 + 1e-6);
             }
         }
+    }
+
+    #[test]
+    fn la_contraccion_agranda_las_piezas_exportadas() {
+        let abs = MaterialProfile::presets().into_iter().find(|m| m.name == "ABS").unwrap();
+        let mut inp = input(2.0);
+        inp.material = abs;
+        inp.compensate = true;
+        let plan = plan_plates(vec![("a".into(), cube(40.0))], &inp).unwrap();
+        let bb = p3d::compute_bounding_box(&plan.plates[0].meshes[0].1);
+        // Un cubo de 40 mm sale 40 / (1 − 0,008) = 40,32 mm
+        assert!((bb.dimensions()[0] - 40.0 / 0.992).abs() < 1e-9);
+        assert!((plan.shrink_scale[0] - 1.0 / 0.992).abs() < 1e-12);
+        inp.compensate = false;
+        let plain = plan_plates(vec![("a".into(), cube(40.0))], &inp).unwrap();
+        assert!((p3d::compute_bounding_box(&plain.plates[0].meshes[0].1).dimensions()[0] - 40.0).abs() < 1e-9);
     }
 
     #[test]

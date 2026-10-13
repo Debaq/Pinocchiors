@@ -13,11 +13,26 @@ pub struct PrinterProfile {
     pub nozzle: Real,
     /// Altura de capa habitual (mm)
     pub layer_height: Real,
+    /// Holgura de base entre una pieza y su alojamiento, en la medida total (mm); parte de la boquilla
+    #[serde(default = "default_fit_clearance")]
+    pub fit_clearance: Real,
+    /// Cuánto más chico sale un agujero de lo diseñado, por lado (mm)
+    #[serde(default = "default_hole_comp")]
+    pub hole_comp: Real,
+}
+
+fn default_fit_clearance() -> Real {
+    0.4
+}
+
+fn default_hole_comp() -> Real {
+    0.1
 }
 
 impl PrinterProfile {
     pub fn new(name: &str, build_volume: [Real; 3], nozzle: Real, layer_height: Real) -> Self {
-        Self { name: name.to_string(), build_volume, nozzle, layer_height }
+        // La holgura de base sigue a la boquilla (una pasada); los agujeros salen ~0,25 de boquilla más chicos
+        Self { name: name.to_string(), build_volume, nozzle, layer_height, fit_clearance: nozzle, hole_comp: nozzle * 0.25 }
     }
 
     /// Perfiles de impresoras comunes
@@ -57,20 +72,37 @@ pub struct MaterialProfile {
     pub density: Real,
     /// Voladizo máximo sin soporte, medido desde la vertical (grados)
     pub max_overhang_deg: Real,
+    /// Contracción lineal al enfriar por eje [x, y, z] (fracción: 0,004 = 0,4 %)
+    #[serde(default)]
+    pub shrink: [Real; 3],
+    /// Cuánto se multiplica la holgura de base (los materiales que ceden o hacen hilos necesitan más)
+    #[serde(default = "default_clearance_factor")]
+    pub clearance_factor: Real,
+}
+
+fn default_clearance_factor() -> Real {
+    1.0
 }
 
 impl MaterialProfile {
     pub fn new(name: &str, density: Real, max_overhang_deg: Real) -> Self {
-        Self { name: name.to_string(), density, max_overhang_deg }
+        Self { name: name.to_string(), density, max_overhang_deg, shrink: [0.0; 3], clearance_factor: 1.0 }
+    }
+
+    /// El mismo material con contracción `shrink` (igual en los tres ejes) y factor de holgura
+    pub fn with_fit(mut self, shrink: Real, clearance_factor: Real) -> Self {
+        self.shrink = [shrink; 3];
+        self.clearance_factor = clearance_factor;
+        self
     }
 
     pub fn presets() -> Vec<MaterialProfile> {
         vec![
-            Self::new("PLA", 1.24, 50.0),
-            Self::new("PETG", 1.27, 45.0),
-            Self::new("ABS", 1.04, 45.0),
-            Self::new("ASA", 1.07, 45.0),
-            Self::new("TPU", 1.21, 35.0),
+            Self::new("PLA", 1.24, 50.0).with_fit(0.003, 1.0),
+            Self::new("PETG", 1.27, 45.0).with_fit(0.004, 1.1),
+            Self::new("ABS", 1.04, 45.0).with_fit(0.008, 1.1),
+            Self::new("ASA", 1.07, 45.0).with_fit(0.006, 1.1),
+            Self::new("TPU", 1.21, 35.0).with_fit(0.010, 1.5),
         ]
     }
 }

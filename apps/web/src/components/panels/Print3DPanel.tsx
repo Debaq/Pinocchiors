@@ -1,4 +1,4 @@
-import { Component, Show, For, createSignal } from "solid-js";
+import { Component, Show, For, createEffect, createSignal } from "solid-js";
 import { Button, Select, NumberInput } from "../ui";
 import * as Icons from "../icons";
 import { fmtNumber, t } from "../../lib/i18n";
@@ -11,6 +11,7 @@ import {
   PlatesSection,
   PrinterMaterial,
   ReadinessSection,
+  type FabInfo,
   type JointSettings,
   type JointsReport,
   type MaterialEstimate,
@@ -25,6 +26,7 @@ import {
 } from "./PrintPrepPanel";
 
 export type {
+  FabInfo,
   PlatePreview,
   PrepSettings,
   JointSettings,
@@ -80,6 +82,9 @@ export interface Print3DPanelProps {
   isProcessing?: boolean;
   /** Impresoras y materiales de fábrica */
   presets?: PrintPresets;
+  /** Holguras derivadas de la impresora y el material */
+  fab?: FabInfo;
+  onFabNeeded?: (printer: PrinterProfile, material: MaterialProfile) => void;
   /** Lo elegido (impresora, material, uniones...): si falta, el panel lo guarda él */
   prep?: PrepSettings;
   onPrep?: (s: PrepSettings) => void;
@@ -89,7 +94,7 @@ export interface Print3DPanelProps {
   onSuggestOrientation?: (printer: PrinterProfile, material: MaterialProfile) => void;
   onApplyOrientation?: (down: [number, number, number]) => void;
   jointsReport?: JointsReport;
-  onAddJoints?: (settings: JointSettings) => void;
+  onAddJoints?: (settings: JointSettings, printer: PrinterProfile, material: MaterialProfile) => void;
   materialEstimate?: MaterialEstimate;
   onEstimate?: (material: MaterialProfile, infill: number, hollowWall: number | null) => void;
   plateResult?: PlateResult;
@@ -152,6 +157,7 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
     prep().material ?? props.presets?.materials[0] ?? { name: "PLA", density: 1.24, max_overhang_deg: 50 };
   const setPrinterChoice = (printer: PrinterProfile) => patch({ printer });
   const setMaterialChoice = (material: MaterialProfile) => patch({ material });
+  createEffect(() => props.onFabNeeded?.(printer(), material()));
   const joint = () => prep().joint;
   const setJoint = (joint: JointSettings) => patch({ joint });
   const infill = () => prep().infill;
@@ -388,12 +394,13 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
       <Show when={props.analysis}>
         <Show when={props.subdivideResult}>
           <JointsSection
+            fab={props.fab}
             settings={joint()}
             onSettings={setJoint}
             report={props.jointsReport}
             busy={props.isProcessing}
             hasPieces={!!props.subdivideResult}
-            onAdd={() => props.onAddJoints?.(joint())}
+            onAdd={() => props.onAddJoints?.(joint(), printer(), material())}
           />
         </Show>
         <MaterialSection

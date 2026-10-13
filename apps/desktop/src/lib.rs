@@ -166,6 +166,7 @@ pub fn run() {
             commands::subdivide_mesh,
             commands::export_print3d_piece,
             print_prep::get_print_presets,
+            print_prep::get_fab_tolerances,
             print_prep::check_print_readiness,
             print_prep::suggest_print_orientation,
             print_prep::add_print_joints,
