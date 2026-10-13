@@ -114,6 +114,8 @@ export interface Print3DPanelProps {
 export interface ScaleParams {
   mode: string;
   factor?: number;
+  /** Con el modo `axes`: factor por eje (X, Y, Z con Z arriba) */
+  factors?: [number, number, number];
   target_size?: [number, number, number];
   target_volume?: number;
 }
@@ -152,6 +154,33 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
   // Scale state
   const [scaleFactor, setScaleFactor] = createSignal(1.0);
   const [targetSize, setTargetSize] = createSignal<[number, number, number]>([100, 100, 100]);
+  // Candado de proporción: con él, cambiar una medida cambia las tres con el mismo factor
+  const [lockRatio, setLockRatio] = createSignal(true);
+  const currentDims = () => props.analysis?.dimensions;
+  // La medida final parte de la actual y se rehace cuando el modelo cambia (se escala, se deshace...)
+  createEffect(() => {
+    const d = currentDims();
+    if (d) setTargetSize([d[0], d[1], d[2]]);
+  });
+  const setAxis = (axis: number, value: number) => {
+    const d = currentDims();
+    if (!d || !(value > 0)) return;
+    if (lockRatio()) {
+      const f = value / d[axis];
+      setTargetSize([d[0] * f, d[1] * f, d[2] * f]);
+    } else {
+      const next = [...targetSize()] as [number, number, number];
+      next[axis] = value;
+      setTargetSize(next);
+    }
+  };
+  /** Cuánto hay que escalar cada eje para llegar a la medida final */
+  const targetFactors = (): [number, number, number] | undefined => {
+    const d = currentDims();
+    if (!d || d.some((x) => !(x > 1e-9))) return undefined;
+    const t3 = targetSize();
+    return [t3[0] / d[0], t3[1] / d[1], t3[2] / d[2]];
+  };
 
   // Impresora y material, y lo demás de la preparación (viven en el proyecto)
   const [localPrep, setLocalPrep] = createSignal<PrepSettings>(defaultPrep);
@@ -301,38 +330,57 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
               </Button>
             </div>
 
-            <p class="text-[10px] text-text-dim">{t("Dimensiones objetivo (mm):")}</p>
-            <div class="flex gap-1.5">
-              <NumberInput
-                label="X"
-                value={targetSize()[0]}
-                onChange={(v) => setTargetSize([v, targetSize()[1], targetSize()[2]])}
-                min={1}
-                step={1}
-              />
-              <NumberInput
-                label="Y"
-                value={targetSize()[1]}
-                onChange={(v) => setTargetSize([targetSize()[0], v, targetSize()[2]])}
-                min={1}
-                step={1}
-              />
-              <NumberInput
-                label="Z"
-                value={targetSize()[2]}
-                onChange={(v) => setTargetSize([targetSize()[0], targetSize()[1], v])}
-                min={1}
-                step={1}
-              />
+            <div class="flex items-center justify-between">
+              <p class="text-[10px] text-text-dim">{t("Medida final (mm):")}</p>
+              <button
+                class={`flex items-center gap-1 px-1.5 h-5 rounded text-[10px] border ${lockRatio() ? "border-accent text-accent bg-accent/10" : "border-border text-text-muted hover:text-text"}`}
+                onClick={() => setLockRatio(!lockRatio())}
+                title={lockRatio() ? t("Las tres medidas cambian juntas, con la misma proporción") : t("Cada medida cambia sola: el modelo se estira")}
+                aria-pressed={lockRatio()}
+              >
+                <Icons.Lock size={10} />
+                {lockRatio() ? t("Proporción fija") : t("Proporción libre")}
+              </button>
             </div>
+            <div class="flex gap-1.5">
+              <For each={["X", "Y", "Z"]}>
+                {(axis, i) => (
+                  <NumberInput label={axis} value={Number(targetSize()[i()].toFixed(2))} onChange={(v) => setAxis(i(), v)} min={0.1} step={1} />
+                )}
+              </For>
+            </div>
+            <Show when={targetFactors()}>
+              {(f) => (
+                <p class="text-[10px] text-text-dim">
+                  {lockRatio() ? t("Escala ×{f}", { f: fmtNumber(f()[0], { maximumFractionDigits: 3 }) }) : t("Escala ×{x} · ×{y} · ×{z}", { x: fmtNumber(f()[0], { maximumFractionDigits: 3 }), y: fmtNumber(f()[1], { maximumFractionDigits: 3 }), z: fmtNumber(f()[2], { maximumFractionDigits: 3 }) })}
+                </p>
+              )}
+            </Show>
             <Button
-              onClick={() => props.onScale?.({ mode: "fit", target_size: targetSize() })}
-              disabled={props.isProcessing}
+              onClick={() => {
+                const f = targetFactors();
+                if (!f) return;
+                props.onScale?.(lockRatio() ? { mode: "uniform", factor: f[0] } : { mode: "axes", factors: f });
+              }}
+              disabled={props.isProcessing || !targetFactors() || targetFactors()!.every((x) => Math.abs(x - 1) < 1e-6)}
               variant="default"
               size="sm"
               fullWidth
             >
-              {t("Ajustar a medida")}
+              {t("Escalar a esa medida")}
+            </Button>
+            <Button
+              onClick={() => {
+                const bv = printer().build_volume;
+                const m = margin();
+                props.onScale?.({ mode: "fit", target_size: [bv[0] - 2 * m, bv[1] - 2 * m, bv[2] - 2 * m] });
+              }}
+              disabled={props.isProcessing}
+              variant="ghost"
+              size="sm"
+              fullWidth
+            >
+              {t("Reducir para que quepa en la cama")}
             </Button>
             <Button
               onClick={() => props.onUndoScale?.()}

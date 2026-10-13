@@ -3683,6 +3683,9 @@ pub struct Print3dAnalysisInfo {
 pub struct ScalePrintInput {
     pub mode: String,
     pub factor: Option<f64>,
+    /// Con el modo `axes`: factor por eje como se muestran (X, Y, Z con Z arriba)
+    #[serde(default)]
+    pub factors: Option<[f64; 3]>,
     pub target_size: Option<[f64; 3]>,
     pub target_volume: Option<f64>,
 }
@@ -3961,6 +3964,14 @@ pub(crate) fn scale_mesh_for_print_impl(params: ScalePrintInput, state: &AppStat
             }
             pinocchio_print3d::scale(&mut mesh, factor);
         }
+        "axes" => {
+            // Estirar cada eje por su lado (sin candado de proporción): X, Y, Z de la vista; la malla es Y arriba
+            let [fx, fy, fz] = params.factors.ok_or("Faltan los factores de escala")?;
+            if ![fx, fy, fz].iter().all(|f| f.is_finite() && *f > 0.001 && *f < 1000.0) {
+                return Err(format!("Factores de escala inválidos: {fx}, {fy}, {fz}"));
+            }
+            pinocchio_print3d::scale_non_uniform(&mut mesh, [fx, fz, fy]);
+        }
         "fit" => {
             // La UI da ancho, fondo y alto (Z arriba); la malla es Y arriba
             let [w, d, h] = params.target_size.ok_or("Falta tamaño objetivo")?;
@@ -3986,7 +3997,10 @@ pub(crate) fn scale_mesh_for_print_impl(params: ScalePrintInput, state: &AppStat
     let new_scene = {
         let scene_lock = state.scene.lock().unwrap();
         let scene = scene_lock.as_ref().ok_or("No hay escena cargada")?;
-        if scene.skeletons.is_empty() {
+        if scene.skeletons.is_empty() && params.mode == "axes" {
+            let [fx, fy, fz] = params.factors.unwrap_or([1.0; 3]);
+            scale_scene_axes(scene, [fx, fz, fy], before.center())
+        } else if scene.skeletons.is_empty() {
             scale_scene_about(scene, factor, before.center())
         } else {
             // Los joints no cuelgan de scene.nodes: se exporta geometría estática
@@ -4381,6 +4395,15 @@ fn scale_scene_about(scene: &Scene, factor: f64, center: Vector3) -> Scene {
 
     let c = Vec3::new(center.x() as f32, center.y() as f32, center.z() as f32);
     let matrix = Mat4::from_translation(c) * Mat4::from_scale(Vec3::splat(factor as f32)) * Mat4::from_translation(-c);
+    wrap_scene(scene, matrix, "print_scale")
+}
+
+/// Escala la escena por eje (en los ejes de la escena) respecto de `center`, conservando materiales, UVs y texturas
+fn scale_scene_axes(scene: &Scene, factors: [f64; 3], center: Vector3) -> Scene {
+    use converter_scene::glam::{Mat4, Vec3};
+
+    let c = Vec3::new(center.x() as f32, center.y() as f32, center.z() as f32);
+    let matrix = Mat4::from_translation(c) * Mat4::from_scale(Vec3::new(factors[0] as f32, factors[1] as f32, factors[2] as f32)) * Mat4::from_translation(-c);
     wrap_scene(scene, matrix, "print_scale")
 }
 

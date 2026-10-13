@@ -798,6 +798,42 @@ mod tests {
     }
 
     #[test]
+    fn estirar_cada_eje_por_separado() {
+        use crate::commands::{scale_mesh_for_print_impl, ScalePrintInput};
+        // Caja de 10 × 20 × 30 en la escena (x, y, z con Y arriba): en la vista es 10 de ancho, 30 de fondo, 20 de alto
+        let mut m = cube(10.0);
+        for v in &mut m.vertices {
+            v.position = Vector3::new(v.position.x(), v.position.y() * 2.0, v.position.z() * 3.0);
+        }
+        let mut scene = mesh_to_scene(&m, "caja", None);
+        scene.meters_per_unit = 0.001;
+        let state = AppState::new();
+        *state.mesh.lock().unwrap() = Some(crate::commands::scene_to_pinocchio_mesh(&scene).unwrap());
+        *state.scene.lock().unwrap() = Some(scene);
+        // Ancho ×2, fondo ×0,5, alto ×1,5 (ejes de la vista, Z arriba)
+        let info = scale_mesh_for_print_impl(
+            ScalePrintInput { mode: "axes".into(), factor: None, factors: Some([2.0, 0.5, 1.5]), target_size: None, target_volume: None },
+            &state,
+        )
+        .unwrap();
+        let [w, d, h] = info.dimensions;
+        assert!((w - 20.0).abs() < 1e-6 && (d - 15.0).abs() < 1e-6 && (h - 30.0).abs() < 1e-6, "{:?}", info.dimensions);
+        // La escena se escaló igual que la malla
+        let scene_bb = {
+            let scene = state.scene.lock().unwrap();
+            let prims = scene.as_ref().unwrap().world_primitives();
+            let ys: Vec<f32> = prims.iter().flat_map(|p| p.positions.iter().map(|q| q[1])).collect();
+            ys.iter().cloned().fold(f32::MIN, f32::max) - ys.iter().cloned().fold(f32::MAX, f32::min)
+        };
+        assert!((scene_bb - 30.0).abs() < 1e-3, "{scene_bb}");
+        // Factores imposibles
+        let bad = ScalePrintInput { mode: "axes".into(), factor: None, factors: Some([0.0, 1.0, 1.0]), target_size: None, target_volume: None };
+        assert!(scale_mesh_for_print_impl(bad, &state).is_err());
+        let none = ScalePrintInput { mode: "axes".into(), factor: None, factors: None, target_size: None, target_volume: None };
+        assert!(scale_mesh_for_print_impl(none, &state).is_err());
+    }
+
+    #[test]
     fn nombres_de_placa() {
         assert_eq!(plate_path("/a/b.stl", 0, 1), "/a/b.stl");
         assert_eq!(plate_path("/a/b.stl", 1, 3), "/a/b_2.stl");

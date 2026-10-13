@@ -227,3 +227,11 @@ Leyenda: ⬜ falta · 🧪 falta probarlo de verdad · ⚠ límite conocido (fun
   el modelo ya quepa. En la interfaz: lista de planos con eje, distancia y giro; se dibujan en el visor mientras se eligen.
 - **Piezas en el visor**: «Ver las piezas separadas» las muestra de colores y separadas del centro (control de separación).
 - El cortador ya no se rompe con planos que pasan justo por vértices de la malla (ver fase 8).
+
+## Fase 10: escala con candado de proporción (hecha)
+
+- «Medida final (mm)» parte de la actual y se rehace cuando el modelo cambia. Con **proporción fija** (el candado, por defecto) cambiar
+  una medida mueve las tres con el mismo factor y se escala uniforme; con **proporción libre** cada medida cambia sola y el modelo se
+  estira (modo `axes` del backend: un factor por eje de la vista, Z arriba; malla y escena se escalan igual).
+- «Reducir para que quepa en la cama» es el antiguo «Ajustar a medida»: solo reduce, al volumen de la impresora menos el margen.
+- Límite: estirar con proporción libre un modelo con rig lo deja como geometría sola (igual que el escalado uniforme con esqueleto).
