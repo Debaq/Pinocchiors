@@ -59,15 +59,15 @@ se volvería lento con 40 dientes). Lo que funciona mejor es la combinación de 
 | Cubo, agujero del eje, chavetero, prisionero, aligeramientos | 🟡 F2 (hecho: agujero, cubo, chavetero, agujeros; faltan prisionero y rayos) |
 | Interno (corona de anillo) | ✅ F2 |
 | Cremallera | ✅ F2 |
-| Par coordinado: distancia entre centros, fase, relación, avisos (interferencia, módulo distinto) | ❌ (F3) |
-| Helicoidal (mano, ángulo de hélice, módulo normal/transversal) | ❌ (F4) |
-| Doble helicoidal / espina de pescado | ❌ (F4) |
-| Relación de engrane (giro ↔ giro) en el ensamble | ❌ (F5) |
-| Piñón-cremallera (giro ↔ deslizamiento) y tornillo (giro ↔ avance) | ❌ (F5) |
-| Animar el mecanismo arrastrando un engrane | ❌ (F5) |
-| Cónico recto (eje a 90° u otro ángulo) | ❌ (F6) |
-| Tornillo sin fin + corona | ❌ (F7) |
-| Perfil del engrane en el sketch (bloque), tabla de datos en la hoja | ❌ (F8) |
+| Par coordinado: distancia entre centros, fase, relación, avisos (interferencia, módulo distinto) | ✅ F3 |
+| Helicoidal (mano, ángulo de hélice, módulo normal/transversal) | ✅ F4 (módulo normal; transversal no) |
+| Doble helicoidal / espina de pescado | ✅ F4 |
+| Relación de engrane (giro ↔ giro) en el ensamble | ✅ F5 |
+| Piñón-cremallera (giro ↔ deslizamiento) y tornillo (giro ↔ avance) | ✅ F5 |
+| Animar el mecanismo arrastrando un engrane | 🟡 F5 (por la casilla Ángulo; arrastrar en el visor falta) |
+| Cónico recto (eje a 90° u otro ángulo) | ✅ F6 |
+| Tornillo sin fin + corona | ✅ F7 |
+| Perfil del engrane en el sketch (bloque), tabla de datos en la hoja | ✅ F8 |
 | Holgura para impresión 3D (juego extra por boquilla) | ✅ F2 |
 | Tren planetario (sol, satélites, corona) de una vez | ❌ (más adelante) |
 | Cicloidal, poleas dentadas (GT2/HTD), piñones de cadena, no circulares | ❌ (más adelante) |
@@ -177,7 +177,6 @@ Lo que quedó fuera de cada fase, por área. Nada de esto impide usar lo hecho.
 **Pruebas y verificación**
 - Nada de F2–F8 se probó en la app real ni con e2e en el navegador (solo `cargo test` y `node --test`). Correr e2e de lo nuevo cuando se pida: botón «Engrane», panel de propiedades (tipos, «Engranar con», cónico, sin fin), «Detectar engranes» en el ensamble, «Traer» perfil en el sketch y engranes en la hoja.
 - Las pruebas de choque de `gear_mesh`/`gear_part` tardan minutos (booleanas pesadas de corona y helicoidales): acortarlas o marcarlas lentas.
-- Sin commit todavía de todo el plan (Rust, C++ `cad_bounds`/`cad_make_thread_trapezoid`, web, docs).
 
 **Geometría y piezas (F1–F2)**
 - Paso diametral (solo hay módulo).
