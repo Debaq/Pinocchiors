@@ -28,7 +28,7 @@ fn train(second: GearPart, angle: f64) -> (Evaluation, Assembly) {
     doc.add(prim(PrimitiveShape::Box { dx: 10.0, dy: 10.0, dz: 2.0, centered: false, centered_z: false }));
     let ia = doc.add(prim(PrimitiveShape::Gear(gear(GearKind::External, 12))));
     let mut b = second;
-    b.link = Some(GearLink { feature: ia, angle, offset: 0.0, distance: None });
+    b.link = Some(GearLink { feature: ia, angle, offset: 0.0, distance: None, along: 0.0 });
     doc.add(prim(PrimitiveShape::Gear(b)));
     let ev = doc.evaluate();
     assert!(ev.errors().is_empty(), "{:?}", ev.errors());
@@ -127,7 +127,7 @@ fn corona_gira_con_el_piñon() {
     doc.add(prim(PrimitiveShape::Box { dx: 10.0, dy: 10.0, dz: 2.0, centered: false, centered_z: false }));
     let ia = doc.add(prim(PrimitiveShape::Gear(gear(GearKind::External, 12))));
     let mut ring = gear(GearKind::Internal, 30);
-    ring.link = Some(GearLink { feature: ia, angle: 0.0, offset: 0.0, distance: None });
+    ring.link = Some(GearLink { feature: ia, angle: 0.0, offset: 0.0, distance: None, along: 0.0 });
     doc.add(prim(PrimitiveShape::Gear(ring)));
     let ev = doc.evaluate();
     assert!(ev.errors().is_empty(), "{:?}", ev.errors());
@@ -154,7 +154,7 @@ fn piñon_y_cremallera() {
     doc.add(prim(PrimitiveShape::Box { dx: 10.0, dy: 10.0, dz: 2.0, centered: false, centered_z: false }));
     let ia = doc.add(prim(PrimitiveShape::Gear(gear(GearKind::External, 12))));
     let mut rack = GearPart { spec: GearSpec { kind: GearKind::Rack, teeth: 8, module: 2.0, ..Default::default() }, width: 10.0, outer: 6.0, ..Default::default() };
-    rack.link = Some(GearLink { feature: ia, angle: -90.0, offset: 0.0, distance: None });
+    rack.link = Some(GearLink { feature: ia, angle: -90.0, offset: 0.0, distance: None, along: 0.0 });
     doc.add(prim(PrimitiveShape::Gear(rack)));
     let ev = doc.evaluate();
     assert!(ev.errors().is_empty(), "{:?}", ev.errors());
@@ -229,7 +229,7 @@ fn sin_fin_y_rueda_en_el_ensamble() {
         let ia = doc.add(prim(PrimitiveShape::Gear(worm)));
         let mut wheel = gear(GearKind::External, 20);
         wheel.width = 12.0;
-        wheel.link = Some(GearLink { feature: ia, angle: 0.0, offset: 0.0, distance: None });
+        wheel.link = Some(GearLink { feature: ia, angle: 0.0, offset: 0.0, distance: None, along: 0.0 });
         doc.add(prim(PrimitiveShape::Gear(wheel)));
         let ev = doc.evaluate();
         assert!(ev.errors().is_empty(), "{:?}", ev.errors());
@@ -294,7 +294,7 @@ fn chain(parts: Vec<(GearPart, f64)>, extra_hinge_first: bool) -> (Evaluation, A
     let mut prev = None;
     for (mut g, angle) in parts {
         if let Some(feature) = prev {
-            g.link = Some(GearLink { feature, angle, offset: 0.0, distance: None });
+            g.link = Some(GearLink { feature, angle, offset: 0.0, distance: None, along: 0.0 });
         }
         prev = Some(doc.add(prim(PrimitiveShape::Gear(g))));
     }
@@ -367,10 +367,10 @@ fn planetario_con_brazo_que_gira() {
     doc.add(prim(PrimitiveShape::Box { dx: 10.0, dy: 10.0, dz: 2.0, centered: false, centered_z: false }));
     let sun = doc.add(prim(PrimitiveShape::Gear(gear(GearKind::External, 12))));
     let mut planet = gear(GearKind::External, 12);
-    planet.link = Some(GearLink { feature: sun, angle: 0.0, offset: 0.0, distance: None });
+    planet.link = Some(GearLink { feature: sun, angle: 0.0, offset: 0.0, distance: None, along: 0.0 });
     let planet = doc.add(prim(PrimitiveShape::Gear(planet)));
     let mut ring = gear(GearKind::Internal, 36);
-    ring.link = Some(GearLink { feature: planet, angle: 0.0, offset: 0.0, distance: None });
+    ring.link = Some(GearLink { feature: planet, angle: 0.0, offset: 0.0, distance: None, along: 0.0 });
     doc.add(prim(PrimitiveShape::Gear(ring)));
     let ev = doc.evaluate();
     assert!(ev.errors().is_empty(), "{:?}", ev.errors());
@@ -436,4 +436,129 @@ fn avisa_de_ejes_no_paralelos_y_de_helicoidales_cruzados() {
     let sol = solve(&asm);
     let w = gear_axis_warnings(&ev, &asm, &sol);
     assert!(w.len() == 1 && w[0].contains("cruzados"), "{w:?}");
+}
+
+#[test]
+fn cremallera_primero_y_piñon_despues_en_el_ensamble() {
+    let mut doc = Document::new();
+    doc.add(prim(PrimitiveShape::Box { dx: 10.0, dy: 10.0, dz: 2.0, centered: false, centered_z: false }));
+    let rack = GearPart { spec: GearSpec { kind: GearKind::Rack, teeth: 8, module: 2.0, ..Default::default() }, width: 10.0, outer: 6.0, ..Default::default() };
+    let ir = doc.add(prim(PrimitiveShape::Gear(rack)));
+    let mut pinion = gear(GearKind::External, 12);
+    pinion.link = Some(GearLink { feature: ir, angle: 0.0, offset: 0.0, distance: None, along: 5.0 });
+    doc.add(prim(PrimitiveShape::Gear(pinion)));
+    let ev = doc.evaluate();
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    let inst = |id: u32, k: usize, fixed: bool| Instance { id, part: ev.parts[k].id, name: String::new(), position: [0.0; 3], rotation: [0.0; 3], fixed };
+    let (gr, gp) = (&ev.gears[0], &ev.gears[1]);
+    let mut asm = Assembly {
+        instances: vec![inst(1, 0, true), inst(2, 1, false), inst(3, 2, false)],
+        mates: vec![
+            hinge(1, MateKind::Slider, conn(1, gr.origin, gr.x, gr.z), conn(2, gr.origin, gr.x, gr.z)),
+            hinge(2, MateKind::Revolute, conn(1, gp.origin, gp.z, gp.x), conn(3, gp.origin, gp.z, gp.x)),
+        ],
+        next_id: 4,
+        ..Default::default()
+    };
+    let sol = solve(&asm);
+    let rel = suggest_gear_relations(&ev, &asm, &sol);
+    assert_eq!(rel.len(), 1, "{rel:?}");
+    let Relation::RackPinion { revolute, slider, per_turn, .. } = rel[0] else { panic!() };
+    assert_eq!((revolute, slider), (2, 1));
+    assert_relative_eq!(per_turn.abs(), std::f64::consts::TAU * 12.0, epsilon = 1e-9);
+    asm.relations = rel;
+    asm.mates[1].angle = Some(36.0);
+    let sol = solve(&asm);
+    assert!(sol.converged);
+    assert_relative_eq!(measure(&asm, &sol, 1).unwrap().1.abs(), 0.1 * per_turn.abs(), epsilon = 1e-6);
+    if occt::available() {
+        let hits_for = |asm: &Assembly| {
+            let sol = solve(asm);
+            let shapes: Vec<_> = instance_shapes(&ev, asm, &sol).into_iter().filter(|(id, _)| *id != 1).collect();
+            (shapes[1].1.mass().unwrap().volume / 12.0, cad_model::assembly::interferences(&shapes))
+        };
+        let (tooth, hits) = hits_for(&asm);
+        assert!(hits.iter().all(|h| h.2 < 5e-3 * tooth), "choca: {hits:?}");
+        // Control: con el sentido de la relación al revés, el avance sale para el otro lado y choca
+        let mut bad = asm.clone();
+        if let Relation::RackPinion { per_turn, phase, .. } = &mut bad.relations[0] {
+            *per_turn = -*per_turn;
+            *phase = 0.0;
+        }
+        let (tooth, hits) = hits_for(&bad);
+        assert!(hits.iter().any(|h| h.2 > 0.05 * tooth), "el control debe chocar: {hits:?}");
+    }
+}
+
+#[test]
+fn rueda_primero_y_sin_fin_despues_en_el_ensamble() {
+    for left in [false, true] {
+        // La rueda como la deja el sin fin, pero va primero
+        let mut forward = Document::new();
+        let worm = GearPart { spec: GearSpec { kind: GearKind::Worm, teeth: 1, module: 2.0, left_hand: left, ..Default::default() }, width: 45.0, ..Default::default() };
+        let iw = forward.add(prim(PrimitiveShape::Gear(worm.clone())));
+        let mut wheel = gear(GearKind::External, 20);
+        wheel.width = 12.0;
+        wheel.link = Some(GearLink { feature: iw, angle: 0.0, offset: 0.0, distance: None, along: 0.0 });
+        forward.add(prim(PrimitiveShape::Gear(wheel)));
+        let mut first = forward.evaluate().gears[1].part.clone();
+        first.link = None;
+        let mut doc = Document::new();
+        doc.add(prim(PrimitiveShape::Box { dx: 10.0, dy: 10.0, dz: 2.0, centered: false, centered_z: false }));
+        let ia = doc.add(prim(PrimitiveShape::Gear(first)));
+        let mut w = worm;
+        w.link = Some(GearLink { feature: ia, angle: 30.0, offset: 0.0, distance: None, along: 0.0 });
+        doc.add(prim(PrimitiveShape::Gear(w)));
+        let ev = doc.evaluate();
+        assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+        let inst = |id: u32, k: usize, fixed: bool| Instance { id, part: ev.parts[k].id, name: String::new(), position: [0.0; 3], rotation: [0.0; 3], fixed };
+        let (ga, gb) = (&ev.gears[0], &ev.gears[1]);
+        let mut asm = Assembly {
+            instances: vec![inst(1, 0, true), inst(2, 1, false), inst(3, 2, false)],
+            mates: vec![
+                hinge(1, MateKind::Revolute, conn(1, ga.origin, ga.z, ga.x), conn(2, ga.origin, ga.z, ga.x)),
+                hinge(2, MateKind::Revolute, conn(1, gb.origin, gb.z, gb.x), conn(3, gb.origin, gb.z, gb.x)),
+            ],
+            next_id: 4,
+            ..Default::default()
+        };
+        let sol = solve(&asm);
+        asm.relations = suggest_gear_relations(&ev, &asm, &sol);
+        let Relation::Gear { ratio, .. } = asm.relations[0] else { panic!() };
+        // El sin fin gira 20 vueltas por vuelta de la rueda
+        assert_relative_eq!(ratio.abs(), 20.0, epsilon = 1e-9);
+        asm.mates[0].angle = Some(4.5);
+        let sol = solve(&asm);
+        assert!(sol.converged);
+        if occt::available() {
+            let hits_for = |asm: &Assembly| {
+                let sol = solve(asm);
+                let shapes: Vec<_> = instance_shapes(&ev, asm, &sol).into_iter().filter(|(id, _)| *id != 1).collect();
+                (shapes[0].1.mass().unwrap().volume / 20.0, cad_model::assembly::interferences(&shapes))
+            };
+            let (tooth, hits) = hits_for(&asm);
+            assert!(hits.iter().all(|h| h.2 < 0.03 * tooth), "choca girando 4,5°: {hits:?}");
+            let mut bad = asm.clone();
+            if let Relation::Gear { ratio, phase, .. } = &mut bad.relations[0] {
+                *ratio = -*ratio;
+                *phase = 0.0;
+            }
+            let (tooth, hits) = hits_for(&bad);
+            assert!(hits.iter().any(|h| h.2 > 0.1 * tooth), "el control debe chocar: {hits:?}");
+        }
+    }
+}
+
+#[test]
+fn un_angulo_impuesto_de_180_grados_converge() {
+    let (_, mut asm) = train(gear(GearKind::External, 18), 0.0);
+    asm.mates[0].angle = Some(180.0);
+    let sol = solve(&asm);
+    assert!(sol.converged, "residuo {}", sol.residual);
+    assert_relative_eq!(measure(&asm, &sol, 1).unwrap().0.abs(), 180.0, epsilon = 1e-4);
+    // Y un conjunto imposible sigue sin converger (no se inventa una solución)
+    asm.mates[1].angle = Some(10.0);
+    asm.mates.push(Mate { id: 9, name: String::new(), kind: MateKind::Fastened, a: asm.mates[1].a, b: asm.mates[1].b, flip: false, angle: None, distance: None });
+    asm.mates.push(Mate { id: 10, name: String::new(), kind: MateKind::Fastened, a: asm.mates[1].a, b: Connector { origin: [5.0, 0.0, 0.0], ..asm.mates[1].b }, flip: false, angle: None, distance: None });
+    assert!(!solve(&asm).converged);
 }

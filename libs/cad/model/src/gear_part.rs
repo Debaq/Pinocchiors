@@ -81,6 +81,13 @@ pub struct GearLink {
     /// este engrane que la cumple (sin ella, la que sale de las correcciones)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub distance: Option<f64>,
+    /// Con una cremallera como fuente: dónde queda el piñón a lo largo de ella (mm desde su centro)
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub along: f64,
+}
+
+fn is_zero(x: &f64) -> bool {
+    *x == 0.0
 }
 
 /// Un engrane ya calculado: su marco (origen en el centro de la cara de
@@ -755,9 +762,9 @@ pub fn mesh(src: &GearAxis, g: &GearPart, link: &GearLink) -> Result<(Frame, Gea
     if (ka == Bevel) != (kb == Bevel) {
         return Err("un cónico solo engrana con otro cónico".into());
     }
-    if matches!((ka, kb), (Rack, _) | (Internal, Internal) | (Internal, Rack)) {
+    if matches!((ka, kb), (Internal, Internal) | (Internal, Rack)) || (ka == Rack && kb != External) {
         return Err(match ka {
-            Rack => "una cremallera no puede ser la fuente: elige el piñón como fuente y engrana la cremallera con él".to_string(),
+            Rack => "una cremallera solo engrana con un engrane exterior (el piñón)".to_string(),
             _ => "esa combinación no engrana (corona con corona o con cremallera)".to_string(),
         });
     }
@@ -766,8 +773,14 @@ pub fn mesh(src: &GearAxis, g: &GearPart, link: &GearLink) -> Result<(Frame, Gea
     let ya = cross(z, xa);
     let theta = link.angle.to_radians();
     let u = add(scale(xa, theta.cos()), scale(ya, theta.sin()));
+    if ka == External && kb == Worm {
+        return mesh_worm_from_wheel(src, b, link, [z, xa, ya, u], theta);
+    }
     if ka == Worm || kb == Worm {
         return mesh_worm(src, b, link, [z, xa, ya, u], theta);
+    }
+    if ka == Rack {
+        return mesh_from_rack(src, b, link, [z, xa, ya]);
     }
     if ka == Bevel || kb == Bevel {
         return mesh_bevel(src, b, link, [z, xa, ya, u], theta);
@@ -789,7 +802,9 @@ pub fn mesh(src: &GearAxis, g: &GearPart, link: &GearLink) -> Result<(Frame, Gea
         let e = cross(z, u);
         let q = add(src.origin, scale(u, d));
         let n = b.spec.teeth as f64;
-        let origin = add(add(sub(q, scale(e, ca.pitch * theta)), scale(e, -(n / 2.0).floor() * p)), level);
+        // La cremallera helicoidal se corre en X con la altura: la base del piñón está `offset` más abajo
+        let skew = b.spec.helix_angle.to_radians().tan() * link.offset;
+        let origin = add(add(sub(q, scale(e, ca.pitch * theta + skew)), scale(e, -(n / 2.0).floor() * p)), level);
         let info = MeshInfo { center_distance: d, contact_ratio: 0.0, interference: false, note: None };
         return Ok((Frame { origin, z, x: e }, b, info));
     }
@@ -835,6 +850,33 @@ pub fn mesh(src: &GearAxis, g: &GearPart, link: &GearLink) -> Result<(Frame, Gea
     let origin = add(add(src.origin, scale(u, dist)), level);
     let x = add(scale(xa, psi.cos()), scale(ya, psi.sin()));
     let info = MeshInfo { center_distance: dist, contact_ratio: pair.contact_ratio, interference: pair.interference, note: None };
+    Ok((Frame { origin, z, x }, b, info))
+}
+
+/// Piñón engranado con una cremallera que va primero: queda del lado de las cabezas, a la distancia
+/// del círculo primitivo de la línea de rodadura, en la posición `link.along` a lo largo de ella, y
+/// gira lo que hace falta para que sus dientes entren en los huecos.
+fn mesh_from_rack(src: &GearAxis, mut b: GearPart, link: &GearLink, [z, xa, ya]: [P3; 3]) -> Result<(Frame, GearPart, MeshInfo), String> {
+    if link.distance.is_some() {
+        return Err("la cremallera no tiene distancia entre centros: el piñón va a su línea primitiva".into());
+    }
+    let a = &src.part;
+    let (ea, eb) = (a.effective_spec(), b.effective_spec());
+    let r = eb.circles().map_err(|e| e.to_string())?.pitch;
+    let p = PI * ea.circles().map_err(|e| e.to_string())?.module_t;
+    let d = r + eb.shift * eb.module;
+    // Posición del contacto: el centro de la cremallera (el primer diente está en 0) más el corrimiento
+    let s_q = (a.spec.teeth as f64 - 1.0) * p / 2.0 + link.along;
+    // Con hélice, el diente se corre en X con la altura; el piñón empieza `offset` arriba de la base
+    let s_eff = s_q + ea.helix_angle.to_radians().tan() * link.offset;
+    let theta = s_eff / r;
+    let u = scale(ya, -1.0);
+    let e = xa;
+    let origin = add(add(add(src.origin, scale(e, s_q)), scale(ya, d)), scale(z, link.offset));
+    // x del piñón: u girado -θ alrededor del eje (u apunta del piñón a la cremallera)
+    let x = sub(scale(u, theta.cos()), scale(cross(z, u), theta.sin()));
+    let info = MeshInfo { center_distance: d, contact_ratio: 0.0, interference: false, note: None };
+    let _ = &mut b;
     Ok((Frame { origin, z, x }, b, info))
 }
 
@@ -976,6 +1018,61 @@ fn mesh_worm(src: &GearAxis, mut b: GearPart, link: &GearLink, [z, _xa, _ya, u]:
     let note = worm_efficiency_note(gamma, ea.pressure_angle.to_radians());
     let info = MeshInfo { center_distance: center, contact_ratio: 0.0, interference: false, note };
     Ok((Frame { origin, z: z_b, x: x_face }, b, info))
+}
+
+/// Sin fin engranado con su rueda, que va primero: el sin fin copia el módulo axial y el ángulo de
+/// presión que la rueda trae (módulo normal = m_x·cos γ), toma la mano de su hélice, queda a
+/// `d₁/2 + r₂` en la dirección `link.angle` con el eje cruzado a 90°, y gira lo que hace falta
+/// para que el filete caiga en un hueco. Avisa si la rueda no trae el avance ni la garganta que pide.
+fn mesh_worm_from_wheel(src: &GearAxis, mut b: GearPart, link: &GearLink, [z, xa, _ya, q]: [P3; 4], theta: f64) -> Result<(Frame, GearPart, MeshInfo), String> {
+    let a = &src.part;
+    if a.spec.kind != GearKind::External || b.spec.kind != GearKind::Worm {
+        return Err("la rueda del sin fin es un engrane exterior".into());
+    }
+    if link.distance.is_some() {
+        return Err("la distancia entre centros del sin fin sale de su diámetro primitivo y la rueda".into());
+    }
+    let ea = a.effective_spec();
+    if ea.helix_angle == 0.0 {
+        return Err("la rueda de un sin fin lleva hélice (el ángulo de avance del sin fin)".into());
+    }
+    let beta = ea.helix_angle.to_radians();
+    b.spec.left_hand = beta < 0.0;
+    b.spec.helix_angle = 0.0;
+    b.transverse_module = false;
+    b.spec.module = ea.module / beta.cos();
+    b.spec.pressure_angle = (ea.pressure_angle.to_radians().tan() / beta.cos()).atan().to_degrees();
+    b.herringbone = false;
+    let eb = b.effective_spec();
+    let (d1, gamma, lead) = eb.worm_dims();
+    let ca = ea.circles().map_err(|e| e.to_string())?;
+    let center = d1 / 2.0 + ca.pitch + ea.shift * ea.module;
+    let s_h = if b.spec.left_hand { -1.0 } else { 1.0 };
+    // Ejes cruzados: el del sin fin es perpendicular al de la rueda y a la dirección del centro
+    let z_wm = cross(z, q);
+    let c_wm = add(add(src.origin, scale(z, a.width / 2.0 + link.offset)), scale(q, center));
+    let origin = sub(c_wm, scale(z_wm, b.width / 2.0));
+    // Fase: la x de la rueda en su plano central, y de ahí cuánto avanza el filete en ese plano
+    let turn = beta.tan() / ca.pitch * a.width / 2.0;
+    let x_center = add(scale(xa, turn.cos()), scale(cross(z, xa), turn.sin()));
+    let phi = (-dot(x_center, z_wm)).atan2(dot(x_center, q));
+    let z_c = b.width / 2.0 - phi * ca.pitch;
+    let th = z_c * TAU / (s_h * lead);
+    let u_f = scale(q, -1.0);
+    let x = sub(scale(u_f, th.cos()), scale(cross(z_wm, u_f), th.sin()));
+    let mut notes = Vec::new();
+    if (gamma.to_degrees() - beta.abs().to_degrees()).abs() > 0.5 {
+        notes.push(format!("el ángulo de avance del sin fin ({:.1}°) no es la hélice de la rueda ({:.1}°): ajusta las entradas o el diámetro primitivo", gamma.to_degrees(), beta.abs().to_degrees()));
+    }
+    if (a.throat - center).abs() > 0.01 {
+        notes.push(format!("pon la garganta de la rueda en {center:.3} mm para que abrace al sin fin"));
+    }
+    if let Some(n) = worm_efficiency_note(gamma, eb.pressure_angle.to_radians()) {
+        notes.push(n);
+    }
+    let _ = theta;
+    let info = MeshInfo { center_distance: center, contact_ratio: 0.0, interference: false, note: (!notes.is_empty()).then(|| notes.join("; ")) };
+    Ok((Frame { origin, z: z_wm, x }, b, info))
 }
 
 /// Dientes que debe tener un engrane de tipo `kind_b` para engranar con `src`

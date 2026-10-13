@@ -42,3 +42,32 @@ test("el ángulo medido es el giro de b respecto de a", async () => {
   const a = measuredAngle(m, [[1, [0, 0, 0], [0, 0, 0]], [2, [5, 0, 0], [0, 0, Math.PI / 6]]]);
   assert.ok(Math.abs(a - 30) < 1e-9, String(a));
 });
+
+test("una pieza con varias uniones ofrece cada forma de moverla y se elige por clave", async () => {
+  const { dragJointOf, jointKey, jointsOf } = await import("../src/lib/assemblyDrag.ts");
+  // La 2 gira en la 1 (con la fija), desliza en la 2 y gira otra vez en la 3
+  const a = asm([mate(1, 1, 2), mate(2, 2, 3, "slider"), mate(3, 2, 3)]);
+  const all = jointsOf(a, 2).map(jointKey);
+  assert.deepEqual(all, ["1:turn", "3:turn", "2:slide"]);
+  // Sin preferencia, la de siempre (la que la sostiene contra la fija)
+  assert.equal(jointKey(dragJointOf(a, 2)), "1:turn");
+  // Con una clave válida, esa; con una que ya no existe, vuelve a la primera
+  assert.equal(jointKey(dragJointOf(a, 2, "2:slide")), "2:slide");
+  assert.equal(jointKey(dragJointOf(a, 2, "9:turn")), "1:turn");
+  // Una cilíndrica se puede girar o deslizar
+  const c = asm([mate(1, 1, 2, "cylindrical")]);
+  assert.deepEqual(jointsOf(c, 2).map(jointKey), ["1:turn", "1:slide"]);
+  // La pieza `a` cuenta el sentido al revés
+  assert.equal(dragJointOf(asm([mate(1, 1, 2, "slider")]), 1).sign, -1);
+  assert.equal(dragJointOf(asm([mate(1, 1, 2, "fastened")]), 2), undefined);
+});
+
+test("la distancia medida y la nueva distancia al deslizar", async () => {
+  const { measuredDistance, nextDistance } = await import("../src/lib/assemblyDrag.ts");
+  const m = mate(1, 1, 2, "slider");
+  // b está 7 mm arriba de a, a lo largo del Z de a (a girado 90° alrededor de X: su Z mira a -Y... aquí sin giro)
+  const d = measuredDistance(m, [[1, [0, 0, 0], [0, 0, 0]], [2, [3, 4, 7], [0, 0, 0.5]]]);
+  assert.ok(Math.abs(d - 7) < 1e-9, String(d));
+  assert.equal(nextDistance(7, 2.5, 1), 9.5);
+  assert.equal(nextDistance(7, 2.5, -1), 4.5);
+});

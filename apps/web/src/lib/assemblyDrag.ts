@@ -52,6 +52,55 @@ export function jointOf(asm: Assembly, instance: number): { mate: Mate; sign: 1 
   return { mate: m, sign: m.b.instance === instance ? 1 : -1 };
 }
 
+/** Una forma de mover la pieza agarrada: girar una unión (revoluta o cilíndrica) o deslizar por otra (deslizante o cilíndrica) */
+export interface Joint {
+  mate: Mate;
+  /** +1 si la pieza es `b` de la unión */
+  sign: 1 | -1;
+  mode: "turn" | "slide";
+}
+
+/** Clave estable de una forma de mover (para guardar la que eligió la persona) */
+export const jointKey = (j: Joint) => `${j.mate.id}:${j.mode}`;
+
+/**
+ * Todas las formas de mover una pieza arrastrándola, la de siempre primero (giros, la que la sostiene
+ * contra una fija antes) y después los deslizamientos.
+ */
+export function jointsOf(asm: Assembly, instance: number): Joint[] {
+  const out: Joint[] = [];
+  const first = jointOf(asm, instance);
+  const sign = (m: Mate): 1 | -1 => (m.b.instance === instance ? 1 : -1);
+  if (first) out.push({ mate: first.mate, sign: first.sign, mode: "turn" });
+  for (const m of asm.mates) {
+    if ((m.a.instance !== instance && m.b.instance !== instance) || m === first?.mate) continue;
+    if (m.kind === "revolute" || m.kind === "cylindrical") out.push({ mate: m, sign: sign(m), mode: "turn" });
+  }
+  for (const m of asm.mates) {
+    if ((m.a.instance === instance || m.b.instance === instance) && (m.kind === "slider" || m.kind === "cylindrical")) out.push({ mate: m, sign: sign(m), mode: "slide" });
+  }
+  return out;
+}
+
+/** La forma de mover que se usa al agarrar la pieza: la elegida (`prefer`, una clave) o la primera */
+export function dragJointOf(asm: Assembly, instance: number, prefer?: string): Joint | undefined {
+  const all = jointsOf(asm, instance);
+  return all.find((j) => jointKey(j) === prefer) ?? all[0];
+}
+
+/** Distancia (mm) con que está ahora la unión: de `b` respecto de `a` a lo largo del Z de `a` */
+export function measuredDistance(mate: Mate, poses: Pose[]): number | undefined {
+  const a = mateAxis(mate, poses);
+  const pb = poses.find((p) => p[0] === mate.b.instance);
+  if (!a || !pb) return undefined;
+  const ob = apply(rotationMatrix(pb[2]), mate.b.origin);
+  const w: P3 = [ob[0] + pb[1][0] - a.origin[0], ob[1] + pb[1][1] - a.origin[1], ob[2] + pb[1][2] - a.origin[2]];
+  return dot(w, a.z);
+}
+
+/** Distancia nueva de la unión tras correr el puntero `delta` mm a lo largo del eje */
+export const nextDistance = (start: number, delta: number, sign: 1 | -1) => start + sign * delta;
+
 /** Plano perpendicular al eje, para leer el puntero (formato de `Plane` del visor) */
 export const dragPlane = (axis: { origin: P3; z: P3; x: P3 }) => ({ origin: axis.origin, normal: axis.z, x_dir: axis.x });
 

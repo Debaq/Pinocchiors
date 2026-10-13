@@ -386,34 +386,58 @@ pub fn solve(asm: &Assembly) -> AssemblySolution {
         }
         j
     };
-    let mut f = eval(&x);
-    let mut lambda = 1e-3;
-    let mut converged = f.norm() < 1e-10;
-    for _ in 0..200 {
-        if converged || x.is_empty() {
-            break;
-        }
-        let j = jac(&x, &f);
-        let jt = j.transpose();
-        let mut a = &jt * &j;
-        let g = &jt * &f;
-        let diag = a.diagonal();
-        for k in 0..a.nrows() {
-            a[(k, k)] += lambda * (1.0 + diag[k]);
-        }
-        let Some(step) = a.lu().solve(&(-g)) else { break };
-        let xn = &x + &step;
-        let fnew = eval(&xn);
-        if fnew.norm() < f.norm() {
-            x = xn;
-            f = fnew;
-            lambda = (lambda * 0.3).max(1e-12);
-            converged = f.norm() < 1e-10 || step.norm() < 1e-14;
-        } else {
-            lambda *= 10.0;
-            if lambda > 1e12 {
+    let lm = |mut x: DVector<f64>| -> (DVector<f64>, DVector<f64>) {
+        let mut f = eval(&x);
+        let mut lambda = 1e-3;
+        let mut converged = f.norm() < 1e-10;
+        for _ in 0..200 {
+            if converged || x.is_empty() {
                 break;
             }
+            let j = jac(&x, &f);
+            let jt = j.transpose();
+            let mut a = &jt * &j;
+            let g = &jt * &f;
+            let diag = a.diagonal();
+            for k in 0..a.nrows() {
+                a[(k, k)] += lambda * (1.0 + diag[k]);
+            }
+            let Some(step) = a.lu().solve(&(-g)) else { break };
+            let xn = &x + &step;
+            let fnew = eval(&xn);
+            if fnew.norm() < f.norm() {
+                x = xn;
+                f = fnew;
+                lambda = (lambda * 0.3).max(1e-12);
+                converged = f.norm() < 1e-10 || step.norm() < 1e-14;
+            } else {
+                lambda *= 10.0;
+                if lambda > 1e12 {
+                    break;
+                }
+            }
+        }
+        (x, f)
+    };
+    let (mut x, mut f) = lm(x.clone());
+    // Un ángulo pedido justo al otro lado (180°) deja el arranque en un punto muerto del que el
+    // descenso no sale: se reintenta desde arranques corridos (siempre los mismos)
+    let start = x.clone();
+    let mut seed = 0x9e3779b97f4a7c15u64;
+    for _ in 0..6 {
+        if f.norm() < 1e-6 || start.is_empty() {
+            break;
+        }
+        let mut kick = start.clone();
+        for k in 0..free.len() {
+            for c in 0..3 {
+                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                kick[k * 6 + 3 + c] += ((seed >> 40) as f64 / (1u64 << 24) as f64 - 0.5) * 1.2;
+            }
+        }
+        let (xt, ft) = lm(kick);
+        if ft.norm() < f.norm() {
+            (x, f) = (xt, ft);
         }
     }
     // Grados libres: incógnitas menos el rango del jacobiano en la solución
@@ -554,6 +578,23 @@ pub fn suggest_gear_relations(ev: &Evaluation, asm: &Assembly, sol: &AssemblySol
         for a_inst in asm.instances.iter().filter(|i| i.part.feature == link.feature) {
             let (Some((ga, axis_a, _)), Some((_, axis_b, _))) = (gear_world(ev, asm, sol, a_inst.id), gear_world(ev, asm, sol, b_inst.id)) else { continue };
             let (ka, kb) = (ga.part.spec.kind, gb.part.spec.kind);
+            if ka == Rack {
+                // La cremallera va primero: el piñón es el segundo
+                if kb != External {
+                    continue;
+                }
+                let (Some((mp, side_p)), Some((ms, side_s))) = (hinge(b_inst.id), slide(a_inst.id)) else { continue };
+                if exists(mp.id, ms.id) {
+                    continue;
+                }
+                let sign_p = side_p * dot(axis_b, normalize(world(&mp.a, [0.0; 3], rot_of(sol, mp.a.instance)).1)).signum();
+                let e = mul(&rotation_matrix(rot_of(sol, a_inst.id)), normalize(ga.x));
+                let zs = normalize(world(&ms.a, [0.0; 3], rot_of(sol, ms.a.instance)).1);
+                let per_turn = TAU * gb.pitch_radius * sign_p * dot(e, zs) * side_s;
+                let (Some((t, _)), Some((_, d))) = (measure(asm, sol, mp.id), measure(asm, sol, ms.id)) else { continue };
+                out.push(Relation::RackPinion { revolute: mp.id, slider: ms.id, per_turn, phase: d - per_turn * t / 360.0 });
+                continue;
+            }
             let Some((ma, side_a)) = hinge(a_inst.id) else { continue };
             let sign_a = side_a * dot(axis_a, normalize(world(&ma.a, [0.0; 3], rot_of(sol, ma.a.instance)).1)).signum();
             let (za, zb) = (ga.part.spec.teeth as f64, gb.part.spec.teeth as f64);
@@ -582,6 +623,9 @@ pub fn suggest_gear_relations(ev: &Evaluation, asm: &Assembly, sol: &AssemblySol
                     // Sin fin con su rueda: gira -(entradas/dientes) con el signo de la mano
                     let k = if ka == Worm {
                         if ga.part.spec.left_hand { za / zb } else { -za / zb }
+                    } else if kb == Worm {
+                        // La rueda va primero: el sin fin gira (dientes/entradas) veces más
+                        if gb.part.spec.left_hand { za / zb } else { -za / zb }
                     } else if outer(ka) && outer(kb) {
                         -za / zb
                     } else {

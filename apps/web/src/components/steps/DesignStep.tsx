@@ -128,6 +128,7 @@ import { Button, Checkbox, IconButton, NumberInput, Select, Slider, Tooltip } fr
 import * as Icons from "../icons";
 import { t as tl, locale, tn } from "../../lib/i18n";
 import { tBackend } from "../../lib/i18nBackend";
+import { jointKey, jointsOf } from "../../lib/assemblyDrag";
 
 export interface DesignStepProps {
   store: CadStore;
@@ -1926,7 +1927,7 @@ export const FeatureEditor: Component<{
               return (
                 <>
                   <Show when={k().shape.type === "gear" && (k().shape as Extract<PrimitiveShape, { type: "gear" }>)}>
-                    {(g) => <GearFields store={props.store} feature={f().id} shape={g()} field={field} update={update} />}
+                    {(g) => <GearFields store={props.store} ui={props.ui} feature={f().id} shape={g()} field={field} update={update} />}
                   </Show>
                   {/* Pieza estándar: medida, cabeza y rosca */}
                   <Show when={threaded()}>
@@ -4971,6 +4972,7 @@ const PROMPTS = {
  */
 const GearLinkBox: Component<{
   store: CadStore;
+  ui: CadUi;
   feature: number;
   shape: Extract<PrimitiveShape, { type: "gear" }>;
   field: (label: string, rel: string, raw: number, write: (k: FeatureKind, v: number) => void, suffix?: string) => JSX.Element;
@@ -4988,6 +4990,25 @@ const GearLinkBox: Component<{
   const own = () => props.store.result()?.gears?.find((x) => x.feature === props.feature);
   const source = () => sources().find((x) => x.feature === link()?.feature);
   const [designError, setDesignError] = createSignal("");
+  const dotP = (a: P3, b: P3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  /** Clic en el visor sobre el plano del primer engrane: `use` recibe el punto relativo a su centro y su marco (x, y en el plano) */
+  const pickPoint = (use: (d: P3, frame: { x: P3; y: P3 }) => void) => {
+    const src = source();
+    if (!src) return;
+    const nz = Math.hypot(...src.z) || 1;
+    const z: P3 = [src.z[0] / nz, src.z[1] / nz, src.z[2] / nz];
+    const k = dotP(src.x, z);
+    const xr: P3 = [src.x[0] - z[0] * k, src.x[1] - z[1] * k, src.x[2] - z[2] * k];
+    const nx = Math.hypot(...xr) || 1;
+    const x: P3 = [xr[0] / nx, xr[1] / nx, xr[2] / nx];
+    const y: P3 = [z[1] * x[2] - z[2] * x[1], z[2] * x[0] - z[0] * x[2], z[0] * x[1] - z[1] * x[0]];
+    props.ui.setPick({
+      kind: "plane_point",
+      prompt: tl("Clic donde quieres este engrane (se toma el punto sobre el plano de la cara de abajo del primero)"),
+      plane: { origin: src.origin, normal: z, x_dir: x },
+      done: (at) => use([at[0] - src.origin[0], at[1] - src.origin[1], at[2] - src.origin[2]], { x, y }),
+    });
+  };
   /** Calcula los dientes de este engrane por relación o por distancia entre centros y los escribe */
   const design = (ratio: number | null, distance: number | null) => {
     const src = source();
@@ -5028,7 +5049,32 @@ const GearLinkBox: Component<{
       <Show when={link()}>
         {(l) => (
           <>
-            {props.field(tl("Dirección del centro"), "kind.shape.link.angle", l().angle, (x, v) => { const s = gear(x); if (s?.link) s.link.angle = v; }, "°")}
+            <Show
+              when={source()?.part.spec.kind === "rack"}
+              fallback={
+                <>
+                  {props.field(tl("Dirección del centro"), "kind.shape.link.angle", l().angle, (x, v) => { const s = gear(x); if (s?.link) s.link.angle = v; }, "°")}
+                  <Button onClick={() => pickPoint((d, frame) => {
+                    const angle = (Math.atan2(dotP(d, frame.y), dotP(d, frame.x)) * 180) / Math.PI;
+                    props.update((x) => { const s = gear(x); if (s?.link) s.link.angle = +angle.toFixed(2); });
+                  })}>
+                    {tl("Elegir la dirección en el visor")}
+                  </Button>
+                </>
+              }
+            >
+              {props.field(tl("Posición sobre la cremallera"), "kind.shape.link.along", l().along ?? 0, (x, v) => { const s = gear(x); if (s?.link) s.link.along = v; }, "mm")}
+              <Button onClick={() => pickPoint((d, frame) => {
+                const sp = source()!.part.spec;
+                const beta = (sp.helix_angle * Math.PI) / 180;
+                const mn = source()!.part.transverse_module ? sp.module * Math.cos(beta) : sp.module;
+                const pitch = (Math.PI * mn) / Math.cos(beta);
+                const along = dotP(d, frame.x) - ((sp.teeth - 1) * pitch) / 2;
+                props.update((x) => { const s = gear(x); if (s?.link) s.link.along = +along.toFixed(2); });
+              })}>
+                {tl("Elegir la posición en el visor")}
+              </Button>
+            </Show>
             {props.field(tl("Corrimiento axial"), "kind.shape.link.offset", l().offset, (x, v) => { const s = gear(x); if (s?.link) s.link.offset = v; }, "mm")}
             <Row label={tl("Distancia entre centros")}>
               <NumberInput
@@ -5066,6 +5112,7 @@ const GearLinkBox: Component<{
 /** Medidas de un engrane (cuadro de propiedades de su operación) */
 const GearFields: Component<{
   store: CadStore;
+  ui: CadUi;
   feature: number;
   shape: Extract<PrimitiveShape, { type: "gear" }>;
   field: (label: string, rel: string, raw: number, write: (k: FeatureKind, v: number) => void, suffix?: string) => JSX.Element;
@@ -5092,7 +5139,7 @@ const GearFields: Component<{
   const kind = () => props.shape.spec.kind;
   return (
     <>
-      <GearLinkBox store={props.store} feature={props.feature} shape={props.shape} field={props.field} update={props.update} />
+      <GearLinkBox store={props.store} ui={props.ui} feature={props.feature} shape={props.shape} field={props.field} update={props.update} />
       <Row label={tl("Tipo")}>
         <Select
           options={[
@@ -5160,6 +5207,9 @@ const GearFields: Component<{
             hint={tl("Con hélice, el módulo de arriba suele ser el normal (el de la herramienta). Marca esto si tu dato es el del plano de giro: el normal sale de mt·cos β.")}
           />
         </Show>
+      </Show>
+      <Show when={kind() === "external" && props.shape.spec.helix_angle !== 0 && !props.shape.link}>
+        {num(tl("Garganta: distancia al sin fin (0: sin ella)"), "throat")}
       </Show>
       {spec(tl("Corrección de perfil"), "shift", "")}
       {spec(tl("Juego entre dientes"), "backlash", "mm")}
@@ -5722,6 +5772,21 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
                   <Icons.Trash size={11} />
                 </IconButton>
               </div>
+              <Show when={asm() && jointsOf(asm()!, inst.id).length > 1}>
+                {(_) => {
+                  const joints = () => jointsOf(asm()!, inst.id);
+                  const label = (j: ReturnType<typeof jointsOf>[number]) => `${j.mate.name || `#${j.mate.id}`} · ${j.mode === "turn" ? tl("gira") : tl("desliza")}`;
+                  return (
+                    <Row label={tl("Al arrastrar mueve por")}>
+                      <Select
+                        options={joints().map((j) => ({ value: jointKey(j), label: label(j) }))}
+                        value={props.ui.dragJoints()[inst.id] ?? jointKey(joints()[0])}
+                        onChange={(v) => props.ui.setDragJoints({ ...props.ui.dragJoints(), [inst.id]: v })}
+                      />
+                    </Row>
+                  );
+                }}
+              </Show>
               <span class="text-[10px] text-text-dim">{tl("Posición (mm)")}</span>
               <div class="grid grid-cols-3 gap-1">
                 <For each={["X", "Y", "Z"]}>

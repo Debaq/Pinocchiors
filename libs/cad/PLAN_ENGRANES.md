@@ -18,9 +18,13 @@ uniones por eje paralelo al del engrane; trenes de 3 y 4 engranes y **planetario
 + `carrier_ratio`, fórmula de Willis, detectado solo); canal central también en coronas; avisos de ejes no paralelos y de
 helicoidales cruzados (`assembly::gear_axis_warnings`, comando `cad_assembly_gear_warnings`, salen al «Detectar engranes»);
 espina de pescado sin canal como un solo loft con el vértice en medio (17 s → 1,4 s por par) y pruebas con menos dientes.
+Hecho también el 2026-10-13 (puntos 2–4 de la lista anterior): módulo transversal elegible (`GearPart.transverse_module`), caras
+del engrane con nombre de función (`face_roles`, `cad_face_classes` en OCCT, se ve en el panel de medidas), clic en el visor para
+la dirección del par y la posición sobre la cremallera (`plane_point`), cremallera y rueda de sin fin como fuente
+(`mesh_from_rack`, `mesh_worm_from_wheel`, `GearLink.along`), elegir la unión al arrastrar y arrastrar deslizantes
+(`jointsOf`/`dragJointOf`, `lineParam`), y el solver reintenta desde arranques corridos (un ángulo impuesto de 180°).
 **Lo que falta, en orden de utilidad:** (1) correr el e2e en la app real de todo lo anterior (lo corre el usuario primero);
-(2) nombres de cara y módulo transversal elegible; (3) clic en el visor para la dirección del par y cremallera/rueda como fuente;
-(4) elegir la unión al arrastrar cuando hay varias y arrastrar deslizantes; (5) cónicos con extremos cónicos y cono del primero calculado;
+(5) cónicos con extremos cónicos y cono del primero calculado;
 (6) cotas ISO exactas; (7) lo de «Más adelante» (planetario, cicloidales, poleas, resistencia, sin fin globoide).
 
 Leyenda: ✅ hecho · 🟡 a medias · ❌ falta · (F*n*) fase que lo cubre.
@@ -195,13 +199,11 @@ Lo que quedó fuera de cada fase, por área. Nada de esto impide usar lo hecho.
 
 **Geometría y piezas (F1–F2)**
 - (Hechos 2026-10-13, sin probar en la app real: paso diametral —campo en el cuadro que convierte a módulo = 25,4/DP—, rayos de aligeramiento `spokes/spoke_width/rim` y prisionero `set_screw` radial en el cubo a 90° del chavetero.) Falta: rayos en cónicos, prisionero en cónicos/sin fin, rayos curvos.
-- Nombres de cara («diente», «flanco», «agujero»): hoy las caras van por índice.
-- Módulo transversal elegible (hoy el módulo es siempre el normal).
+- (Nombres de cara y módulo transversal elegible: hechos 2026-10-13.)
 
 **Pares y enlaces (F3)**
 - (Diseñar por relación: hecho 2026-10-13, `gear_part::design_teeth` + `cad_gear_design`; campo «Relación» y botón de distancia en «Engranar con». Sin probar en la app real.)
-- Elegir la dirección del centro con un clic en el visor (hoy es un ángulo).
-- Cremallera como fuente (hoy el piñón va primero).
+- (Dirección del centro con clic en el visor y cremallera como fuente: hechos 2026-10-13.)
 - (Avisos de ejes no paralelos y helicoidales cruzados: hechos 2026-10-13, en el ensamble.) Falta avisar al enlazar en el árbol.
 
 **Helicoidales (F4)**
@@ -209,7 +211,7 @@ Lo que quedó fuera de cada fase, por área. Nada de esto impide usar lo hecho.
 - (Canal central en coronas: hecho 2026-10-13.) Espina de pescado con canal sigue uniendo tres sólidos (lento).
 
 **Ensamble (F5)**
-- (Hechos 2026-10-13, sin probar en la app real: arrastrar una pieza en el visor del ensamble gira la revoluta/cilíndrica que la sostiene —`lib/assemblyDrag.ts`, un solo paso de deshacer por gesto— y «Agregar acoplamiento» crea relaciones a mano. Falta: elegir la unión cuando una pieza tiene varias, y arrastrar uniones deslizantes.)
+- (Hechos 2026-10-13, sin probar en la app real: arrastrar una pieza en el visor del ensamble gira la revoluta/cilíndrica que la sostiene —`lib/assemblyDrag.ts`, un solo paso de deshacer por gesto— y «Agregar acoplamiento» crea relaciones a mano. Después se hizo también: elegir la unión por la que se arrastra y arrastrar deslizantes, 2026-10-13.)
 - (Hechos 2026-10-13: trenes de 3–4 engranes, planetario con brazo móvil, punto muerto de 180° y elección de la bisagra por eje.) Falta: planetario con satélites repetidos (condición de montaje) y piezas con más de un brazo.
 
 **Cónicos (F6)**
@@ -219,7 +221,7 @@ Lo que quedó fuera de cada fase, por área. Nada de esto impide usar lo hecho.
 - Espirales e hipoides.
 
 **Sin fin y rueda (F7)**
-- La rueda no puede ser la fuente (el sin fin va primero).
+- (La rueda como fuente: hecha 2026-10-13; avisa si falta la garganta o el avance no coincide.)
 - Tallado exacto de la rueda por simulación del sin fin (hoy: helicoidal con garganta).
 - Sin fin globoide (doble envolvente). (Autobloqueo y rendimiento: hecho, aviso en el árbol con μ = 0,1.)
 

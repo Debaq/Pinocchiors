@@ -621,6 +621,8 @@ export interface GearLink {
   offset: number;
   /** Distancia entre centros pedida: ajusta la corrección de perfil */
   distance?: number | null;
+  /** Con una cremallera como fuente: posición del piñón a lo largo de ella, desde su centro (mm) */
+  along?: number;
 }
 
 /** Engrane calculado (para engranar otros con él) */

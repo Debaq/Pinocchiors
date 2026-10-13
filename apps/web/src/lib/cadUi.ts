@@ -184,6 +184,8 @@ export type PickMode =
   | { kind: "parts"; prompt: string; owner?: string; toggle: (part: PartId) => void }
   /** Dónde va un agujero: una cara plana y el punto del clic (mm) */
   | { kind: "hole"; prompt: string; done: (face: number, at: P3) => void }
+  /** Un punto sobre un plano (mm del CAD): donde cae el clic en ese plano, haya o no sólido */
+  | { kind: "plane_point"; prompt: string; plane: Plane; done: (at: P3) => void }
   /** Una cara de la malla del ensamble (su índice) */
   | { kind: "asm_face"; prompt: string; done: (face: number) => void }
   /** Sketch 3D: clic en un punto o una curva del sketch, un vértice del sólido o el plano activo; `from` es donde arranca lo que se dibuja */
@@ -385,6 +387,8 @@ export function createCadUi(store: CadStore) {
   const [deviation, setDeviation] = createSignal<ScanDeviation | null>(null);
   // Ensamble: el visor muestra las instancias en vez del diseño
   const [assemblyMode, setAssemblyMode] = createSignal(false);
+  // Ensamble: por cuál unión se mueve cada pieza al arrastrarla (instancia → clave de `jointKey`)
+  const [dragJoints, setDragJoints] = createSignal<Record<number, string>>({});
   // Plano 2D abierto sobre el visor: cuál y lo elegido en él (con su ventana de propiedades)
   const [drawingOpen, setDrawingOpen] = createSignal(false);
   const [activeDrawing, setActiveDrawing] = createSignal<number>();
@@ -593,6 +597,8 @@ export function createCadUi(store: CadStore) {
     setFlatOpen,
     assemblyMode,
     setAssemblyMode,
+    dragJoints,
+    setDragJoints,
     deviation,
     setDeviation,
     /** Acciones del panel con lo elegido (las registra DesignStep) */

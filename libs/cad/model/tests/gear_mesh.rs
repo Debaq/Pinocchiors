@@ -41,7 +41,7 @@ fn overlap(a: &Shape, b: &Shape) -> f64 {
 }
 
 fn link(angle: f64) -> GearLink {
-    GearLink { feature: FeatureId(0), angle, offset: 0.0, distance: None }
+    GearLink { feature: FeatureId(0), angle, offset: 0.0, distance: None, along: 0.0 }
 }
 
 #[test]
@@ -92,7 +92,7 @@ fn distancia_pedida_ajusta_la_correccion() {
     let mut doc = Document::new();
     let ia = doc.add(prim(gear(GearKind::External, 20), BodyOp::New));
     let mut b = gear(GearKind::External, 30);
-    b.link = Some(GearLink { feature: ia, angle: 0.0, offset: 0.0, distance: Some(40.0) });
+    b.link = Some(GearLink { feature: ia, angle: 0.0, offset: 0.0, distance: Some(40.0), along: 0.0 });
     doc.add(prim(b, BodyOp::New));
     assert!(!doc.evaluate().errors().is_empty());
 }
@@ -154,7 +154,7 @@ fn errores_de_enlace() {
     let mut doc = Document::new();
     let ia = doc.add(prim(gear(GearKind::Internal, 50), BodyOp::New));
     let mut b = gear(GearKind::Internal, 40);
-    b.link = Some(GearLink { feature: ia, angle: 0.0, offset: 0.0, distance: None });
+    b.link = Some(GearLink { feature: ia, angle: 0.0, offset: 0.0, distance: None, along: 0.0 });
     doc.add(prim(b, BodyOp::New));
     if occt::available() {
         assert!(!doc.evaluate().errors().is_empty());
@@ -162,7 +162,7 @@ fn errores_de_enlace() {
     // Engranar con algo que viene después
     let mut doc = Document::new();
     let mut a = gear(GearKind::External, 20);
-    a.link = Some(GearLink { feature: FeatureId(99), angle: 0.0, offset: 0.0, distance: None });
+    a.link = Some(GearLink { feature: FeatureId(99), angle: 0.0, offset: 0.0, distance: None, along: 0.0 });
     doc.add(prim(a, BodyOp::New));
     if occt::available() {
         assert!(!doc.evaluate().errors().is_empty());
@@ -263,7 +263,7 @@ fn conico_con_cono_equivocado_avisa() {
     let mut doc = Document::new();
     let ia = doc.add(prim(bevel(16, 45.0, 90.0), BodyOp::New));
     let mut b = bevel(32, 45.0, 90.0);
-    b.link = Some(GearLink { feature: ia, angle: 0.0, offset: 0.0, distance: None });
+    b.link = Some(GearLink { feature: ia, angle: 0.0, offset: 0.0, distance: None, along: 0.0 });
     doc.add(prim(b, BodyOp::New));
     let ev = doc.evaluate();
     if occt::available() {
@@ -273,7 +273,7 @@ fn conico_con_cono_equivocado_avisa() {
     let mut doc = Document::new();
     let ia = doc.add(prim(gear(GearKind::External, 20), BodyOp::New));
     let mut b = bevel(20, 45.0, 90.0);
-    b.link = Some(GearLink { feature: ia, angle: 0.0, offset: 0.0, distance: None });
+    b.link = Some(GearLink { feature: ia, angle: 0.0, offset: 0.0, distance: None, along: 0.0 });
     doc.add(prim(b, BodyOp::New));
     if occt::available() {
         assert!(!doc.evaluate().errors().is_empty());
@@ -318,16 +318,88 @@ fn sin_fin_y_rueda_calzan() {
 }
 
 #[test]
-fn rueda_como_fuente_o_con_otro_tipo_falla() {
-    if !occt::available() {
-        return;
-    }
+fn rueda_sin_helice_no_sirve_de_fuente_del_sin_fin() {
     let mut doc = Document::new();
     let ia = doc.add(prim(gear(GearKind::External, 20), BodyOp::New));
     let mut b = worm(1, false);
-    b.link = Some(GearLink { feature: ia, angle: 0.0, offset: 0.0, distance: None });
+    b.link = Some(GearLink { feature: ia, angle: 0.0, offset: 0.0, distance: None, along: 0.0 });
     doc.add(prim(b, BodyOp::New));
-    assert!(!doc.evaluate().errors().is_empty());
+    let errors = doc.evaluate().errors().iter().map(|e| format!("{e:?}")).collect::<Vec<_>>().join(" ");
+    assert!(errors.contains("lleva hélice"), "{errors}");
+}
+
+#[test]
+fn sin_fin_se_engrana_con_una_rueda_que_va_primero() {
+    if !occt::available() {
+        return;
+    }
+    for (starts, left, z, angle, offset) in [(1u32, false, 14u32, 0.0, 0.0), (2, true, 16, 70.0, 1.5)] {
+        // La rueda como la deja el sin fin (módulo, presión, hélice, garganta) pero ahora va primero
+        let mut wheel = gear(GearKind::External, z);
+        wheel.width = 12.0;
+        wheel.bore = 8.0;
+        let (_, g) = pair(worm(starts, left), wheel, link(0.0));
+        let mut first = g[1].part.clone();
+        first.link = None;
+        let center = g[1].center_distance;
+        let mut doc = Document::new();
+        let iw = doc.add(prim(first, BodyOp::New));
+        let mut w = worm(starts, left);
+        w.link = Some(GearLink { feature: iw, angle, offset, distance: None, along: 0.0 });
+        doc.add(prim(w, BodyOp::New));
+        let ev = doc.evaluate();
+        assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+        let (wh, wm) = (&ev.gears[0], &ev.gears[1]);
+        assert_relative_eq!(wm.center_distance, center, epsilon = 1e-9);
+        // La mano sale de la hélice de la rueda y los ejes se cruzan a 90°
+        assert_eq!(wm.part.spec.left_hand, left);
+        let dot = wh.z[0] * wm.z[0] + wh.z[1] * wm.z[1] + wh.z[2] * wm.z[2];
+        assert!(dot.abs() < 1e-9);
+        let (sr, sw) = (solid(wh), solid(wm));
+        let tooth = sr.mass().unwrap().volume / z as f64;
+        let hit = overlap(&sw, &sr);
+        assert!(hit < 0.02 * tooth, "{starts} entradas z={z}: choque de {hit} (diente {tooth})");
+        // Control: el sin fin girado medio paso del filete choca
+        let mut off = wm.clone();
+        let (d1, _, lead) = wm.part.effective_spec().worm_dims();
+        let _ = d1;
+        let h = PI / starts as f64;
+        let y = [wm.z[1] * wm.x[2] - wm.z[2] * wm.x[1], wm.z[2] * wm.x[0] - wm.z[0] * wm.x[2], wm.z[0] * wm.x[1] - wm.z[1] * wm.x[0]];
+        off.x = [wm.x[0] * h.cos() + y[0] * h.sin(), wm.x[1] * h.cos() + y[1] * h.sin(), wm.x[2] * h.cos() + y[2] * h.sin()];
+        let _ = lead;
+        assert!(overlap(&sr, &solid(&off)) > 0.1 * tooth, "el control debe chocar");
+    }
+}
+
+#[test]
+fn piñon_se_engrana_con_una_cremallera_que_va_primero() {
+    if !occt::available() {
+        return;
+    }
+    let rack = |helix: f64| GearPart { spec: GearSpec { kind: GearKind::Rack, teeth: 6, module: 2.0, helix_angle: helix, ..Default::default() }, width: 10.0, outer: 6.0, ..Default::default() };
+    for (helix, along, offset) in [(0.0, 0.0, 0.0), (0.0, 7.3, 0.0), (20.0, -4.1, 0.0), (-20.0, 3.0, 2.0)] {
+        let mut doc = Document::new();
+        let ir = doc.add(prim(rack(helix), BodyOp::New));
+        let mut p = gear(GearKind::External, 12);
+        p.link = Some(GearLink { feature: ir, angle: 0.0, offset, distance: None, along });
+        doc.add(prim(p, BodyOp::New));
+        let ev = doc.evaluate();
+        assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+        let (r, pi) = (&ev.gears[0], &ev.gears[1]);
+        // La hélice del piñón es la contraria y queda a un radio primitivo (transversal) de la línea de rodadura
+        assert_relative_eq!(pi.part.spec.helix_angle, -helix, epsilon = 1e-9);
+        assert_relative_eq!(pi.center_distance, pi.pitch_radius, epsilon = 1e-9);
+        let (sr, sp) = (solid(r), solid(pi));
+        let tooth = sp.mass().unwrap().volume / 12.0;
+        let hit = overlap(&sp, &sr);
+        assert!(hit < 1e-3 * tooth, "hélice {helix}° a {along} mm (corrido {offset}): choque {hit}");
+        // Control: el piñón girado medio paso choca
+        let mut off = pi.clone();
+        let h = PI / 12.0;
+        let y = [pi.z[1] * pi.x[2] - pi.z[2] * pi.x[1], pi.z[2] * pi.x[0] - pi.z[0] * pi.x[2], pi.z[0] * pi.x[1] - pi.z[1] * pi.x[0]];
+        off.x = [pi.x[0] * h.cos() + y[0] * h.sin(), pi.x[1] * h.cos() + y[1] * h.sin(), pi.x[2] * h.cos() + y[2] * h.sin()];
+        assert!(overlap(&sr, &solid(&off)) > 0.05 * tooth, "el control debe chocar");
+    }
 }
 
 #[test]

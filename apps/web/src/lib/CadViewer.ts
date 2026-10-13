@@ -852,6 +852,19 @@ export class CadViewer {
     return ((b * v.dot(w) - d.dot(w)) / den) * this.mmPerUnit;
   }
 
+  /** Punto de la recta (`origin`, `dir`, en mm del CAD) más cercano al rayo del puntero, como distancia (mm) desde `origin` */
+  lineParam(clientX: number, clientY: number, origin: P3, dir: P3): number | null {
+    this.setRay(clientX, clientY);
+    const o = this.toView(origin);
+    const d = this.dirToView(dir);
+    const { origin: r, direction: v } = this.raycaster.ray;
+    const w = o.clone().sub(r);
+    const b = d.dot(v);
+    const den = 1 - b * b;
+    if (den < 1e-4) return null;
+    return ((b * v.dot(w) - d.dot(w)) / den) * this.mmPerUnit;
+  }
+
   /**
    * Comparación con una versión: lo agregado desde entonces en verde y lo
    * quitado en rojo, translúcidos sobre el sólido.

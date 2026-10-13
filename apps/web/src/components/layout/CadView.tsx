@@ -6,7 +6,7 @@ import type { LightSettings } from "../../lib/lightRig";
 import type { CameraPose } from "../../lib/cameraRig";
 import { parse as parseFont, type Font } from "opentype.js";
 import { layoutText, type Contour } from "../../lib/sketchText";
-import { dragPlane, jointOf, mateAxis, measuredAngle, nextAngle, turned } from "../../lib/assemblyDrag";
+import { dragJointOf, dragPlane, mateAxis, measuredAngle, measuredDistance, nextAngle, nextDistance, turned } from "../../lib/assemblyDrag";
 import { CONSTRAINT_LABELS, editsAsSketch, geometryPoints, type Report3d, type Sketch3d, type Plane, addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, curvePolyline, constraintValue, isReference, isLoosePoint, isSolidPoint, removeLoosePoint, leavingDirection, placeSnap, tangentArc, type CadStore, designMass, dragByHandle, flipByHandle, handleField, handleValue, partColor, partHidden, samePart, type FeatureHandle, type FeatureKind, type MeasureItem, type Measurement, type P2, type P3, type ScanOutline, type Sketch, type SketchConstraint } from "../../lib/cad";
 import { infer, solidRefs, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
 import { angleView, applyFrame, clipCenter, invertFrame, measureConstraint, rotation, scaling, selectedEntities, splitEntityAt, transformSelection, translation, type Frame, type Xform } from "../../lib/sketchTransform";
@@ -1019,7 +1019,10 @@ export const CadView: Component<CadViewProps> = (props) => {
   // Arrastre en curso: la flecha del comienzo, su número, y el valor de antes y dónde
   // se pinchó (las que van con la pieza suman la diferencia)
   // Ensamble: arrastrar una pieza gira la unión que la sostiene (un paso de deshacer por gesto)
-  let partDrag: { mate: number; sign: 1 | -1; plane: Plane; from: [number, number]; start: number; started: boolean; busy: boolean; latest?: number } | undefined;
+  let partDrag:
+    | { mate: number; sign: 1 | -1; mode: "turn"; plane: Plane; from: [number, number]; start: number; started: boolean; busy: boolean; latest?: number }
+    | { mate: number; sign: 1 | -1; mode: "slide"; line: { origin: P3; dir: P3 }; from: number; start: number; started: boolean; busy: boolean; latest?: number }
+    | undefined;
   let handleDrag: { id: number; h: FeatureHandle; index: number; x: number; y: number; moved: boolean; canDrag: boolean; base: number; from?: number } | undefined;
   const [dragAt, setDragAt] = createSignal<{ index: number; h: FeatureHandle; t: number; base: number }>();
   createEffect(() => {
@@ -2580,6 +2583,11 @@ export const CadView: Component<CadViewProps> = (props) => {
         const [cx, cy] = viewer.screenOf(info.point);
         ui.setPick({ kind: "none" });
         mode.done(hit.face, Math.hypot(cx - e.clientX, cy - e.clientY) <= 16 ? info.point : at);
+      } else if (mode.kind === "plane_point") {
+        const at = viewer.planePoint3(e.clientX, e.clientY, mode.plane);
+        if (!at) return;
+        ui.setPick({ kind: "none" });
+        mode.done(at);
       } else if (mode.kind === "asm_face") {
         const hit = viewer.pick(e.clientX, e.clientY, { faces: true });
         if (hit?.kind !== "face") return;
@@ -2641,24 +2649,40 @@ export const CadView: Component<CadViewProps> = (props) => {
     const asm = store.doc()?.assembly;
     const poses = store.result()?.assembly?.solution.poses;
     if (instance === undefined || !asm || !poses) return false;
-    const joint = jointOf(asm, instance);
+    const joint = dragJointOf(asm, instance, ui.dragJoints()[instance]);
     const axis = joint && mateAxis(joint.mate, poses);
     if (!joint || !axis) return false;
-    const plane = dragPlane(axis);
-    const from = viewer!.planePoint(e.clientX, e.clientY, plane);
-    if (!from) return false;
-    partDrag = { mate: joint.mate.id, sign: joint.sign, plane, from, start: joint.mate.angle ?? measuredAngle(joint.mate, poses) ?? 0, started: false, busy: false };
+    if (joint.mode === "slide") {
+      // Deslizar: el puntero se lee como la distancia sobre el eje de la unión
+      const from = viewer!.lineParam(e.clientX, e.clientY, axis.origin, axis.z);
+      if (from === null) return false;
+      partDrag = { mate: joint.mate.id, sign: joint.sign, mode: "slide", line: { origin: axis.origin, dir: axis.z }, from, start: joint.mate.distance ?? measuredDistance(joint.mate, poses) ?? 0, started: false, busy: false };
+    } else {
+      const plane = dragPlane(axis);
+      const from = viewer!.planePoint(e.clientX, e.clientY, plane);
+      if (!from) return false;
+      partDrag = { mate: joint.mate.id, sign: joint.sign, mode: "turn", plane, from, start: joint.mate.angle ?? measuredAngle(joint.mate, poses) ?? 0, started: false, busy: false };
+    }
     container.setPointerCapture(e.pointerId);
     return true;
   };
 
   const movePartDrag = (e: PointerEvent) => {
     const d = partDrag;
-    const p = d && viewer?.planePoint(e.clientX, e.clientY, d.plane);
-    if (!d || !p) return;
-    const delta = turned(d.from, p);
-    if (!d.started && Math.abs(delta) < 1) return;
-    d.latest = Math.round(nextAngle(d.start, delta, d.sign) * 10) / 10;
+    if (!d || !viewer) return;
+    if (d.mode === "slide") {
+      const t = viewer.lineParam(e.clientX, e.clientY, d.line.origin, d.line.dir);
+      if (t === null) return;
+      const delta = t - d.from;
+      if (!d.started && Math.abs(delta) < 0.2) return;
+      d.latest = Math.round(nextDistance(d.start, delta, d.sign) * 100) / 100;
+    } else {
+      const p = viewer.planePoint(e.clientX, e.clientY, d.plane);
+      if (!p) return;
+      const delta = turned(d.from, p);
+      if (!d.started && Math.abs(delta) < 1) return;
+      d.latest = Math.round(nextAngle(d.start, delta, d.sign) * 10) / 10;
+    }
     void pumpPartDrag();
   };
 
@@ -2666,7 +2690,7 @@ export const CadView: Component<CadViewProps> = (props) => {
   const pumpPartDrag = async () => {
     const d = partDrag;
     if (!d || d.busy || d.latest === undefined) return;
-    const angle = d.latest;
+    const value = d.latest;
     d.latest = undefined;
     d.busy = true;
     const join = d.started;
@@ -2674,7 +2698,7 @@ export const CadView: Component<CadViewProps> = (props) => {
     try {
       await store.editAssembly((a) => {
         const m = a.mates.find((x) => x.id === d.mate);
-        if (m) m.angle = angle;
+        if (m) m[d.mode === "slide" ? "distance" : "angle"] = value;
       }, join);
     } finally {
       d.busy = false;
