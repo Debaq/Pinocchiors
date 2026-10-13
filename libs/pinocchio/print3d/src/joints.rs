@@ -611,27 +611,32 @@ pub fn generate_pyramid(config: &PyramidConfig, placement: &JointPlacement) -> R
     )
 }
 
-/// Aplica joints entre dos piezas
+/// Aplica clavijas entre dos piezas que comparten una cara de corte plana
 ///
-/// Modifica las mallas in-place, añadiendo/restando geometría de joints.
-pub fn apply_joints_between_pieces(
-    _piece_a: &mut Mesh,
-    _piece_b: &mut Mesh,
-    _config: &DowelConfig,
-) -> Result<()> {
-    // Requiere operaciones booleanas CSG que no están implementadas aún.
-    // Se necesitaría integrar una librería como `csgrs` o implementar
-    // operaciones booleanas propias.
-    //
-    // Algoritmo:
-    // 1. Detectar la cara de contacto entre las piezas
-    // 2. Calcular posiciones de joints
-    // 3. Generar geometría de joints
-    // 4. Boolean subtract (hembra) o add (macho) a cada pieza
+/// Pone `config.count` clavijas en la pieza A y los huecos correspondientes en B,
+/// con la holgura de `config.tolerance`. Falla si no se pudo poner ninguna.
+pub fn apply_joints_between_pieces(piece_a: &mut Mesh, piece_b: &mut Mesh, config: &DowelConfig) -> Result<()> {
+    use crate::{apply_joints, LabeledPiece, PlanarJointConfig, PlanarShape};
 
-    Err(Print3dError::JointError(
-        "apply_joints_between_pieces requiere operaciones CSG (pendiente)".to_string(),
-    ))
+    let mut pieces = vec![
+        LabeledPiece { mesh: piece_a.clone(), id: 0, ..Default::default() },
+        LabeledPiece { mesh: piece_b.clone(), id: 1, ..Default::default() },
+    ];
+    let planar = PlanarJointConfig {
+        shape: PlanarShape::Round { diameter: config.diameter },
+        depth: config.depth,
+        tolerance: config.tolerance,
+        count: config.count.max(1),
+        ..Default::default()
+    };
+    let report = apply_joints(&mut pieces, &planar)?;
+    if report.joints_placed == 0 {
+        let why = report.connections.first().and_then(|c| c.notes.first().cloned()).unwrap_or_else(|| "las piezas no comparten una cara plana".to_string());
+        return Err(Print3dError::JointError(why));
+    }
+    *piece_b = pieces.pop().expect("dos piezas").mesh;
+    *piece_a = pieces.pop().expect("dos piezas").mesh;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -842,5 +847,29 @@ mod tests {
         assert_eq!(config.base_size, 10.0);
         assert_eq!(config.top_size, 0.0); // Punta
         assert_eq!(config.height, 8.0);
+    }
+
+    #[test]
+    fn clavijas_entre_dos_piezas() {
+        use crate::printability::tests::make_box;
+        use crate::slicer::{slice_by_plane, Plane};
+        let b = make_box(60.0, 60.0, 40.0);
+        let (x, y) = slice_by_plane(&b, &Plane::xy_at_z(20.0)).unwrap();
+        let (mut lo, mut hi) = (x, y);
+        let (v0, v1) = (crate::compute_volume(&lo), crate::compute_volume(&hi));
+        apply_joints_between_pieces(&mut lo, &mut hi, &DowelConfig::default()).unwrap();
+        assert!(lo.is_closed() && hi.is_closed());
+        assert!((crate::compute_volume(&lo) - v0).abs() > 1.0 || (crate::compute_volume(&hi) - v1).abs() > 1.0);
+    }
+
+    #[test]
+    fn sin_cara_comun_falla() {
+        use crate::printability::tests::make_box;
+        let mut a = make_box(10.0, 10.0, 10.0);
+        let mut b = make_box(10.0, 10.0, 10.0);
+        for v in &mut b.vertices {
+            v.position += Vector3::new(100.0, 0.0, 0.0);
+        }
+        assert!(apply_joints_between_pieces(&mut a, &mut b, &DowelConfig::default()).is_err());
     }
 }

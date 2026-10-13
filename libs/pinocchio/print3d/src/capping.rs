@@ -31,7 +31,7 @@ pub(crate) fn cap_triangles(segments: &[(Vector3, Vector3)], normal: Vector3, or
         .collect();
 
     let mut out = Vec::new();
-    for outer in (0..loops.len()).filter(|&i| depth[i] % 2 == 0) {
+    for outer in (0..loops.len()).filter(|&i| depth[i].is_multiple_of(2)) {
         // Huecos directos: un nivel más hondo y contenidos en este contorno
         let holes: Vec<usize> = (0..loops.len())
             .filter(|&h| depth[h] == depth[outer] + 1 && point_in_polygon(pts2[h][0], &pts2[outer]) && areas[h].abs() < areas[outer].abs())
@@ -94,8 +94,7 @@ fn build_loops(segments: &[(Vector3, Vector3)], tol: Real) -> Vec<Vec<Vector3>> 
 
     let mut loops = Vec::new();
     for start in 0..nodes.len() {
-        loop {
-            let Some(first) = adj[start].iter().position(|e| !e.1) else { break };
+        while let Some(first) = adj[start].iter().position(|e| !e.1) {
             adj[start][first].1 = true;
             let mut path = vec![start];
             let mut cur = adj[start][first].0;
