@@ -3,6 +3,7 @@ import { Button, Checkbox, Select, NumberInput } from "../ui";
 import * as Icons from "../icons";
 import { fmtNumber, t } from "../../lib/i18n";
 import { CalibrationWizard, type CalibrationApply } from "../layout/CalibrationWizard";
+import { SkinPanel, type SkinPanelProps } from "./SkinPanel";
 import { saveCustomMaterial, saveCustomPrinter } from "../../lib/settings.ts";
 import {
   JointsSection,
@@ -88,6 +89,8 @@ export interface Print3DPanelProps {
   fab?: FabInfo;
   onFabNeeded?: (printer: PrinterProfile, material: MaterialProfile) => void;
   /** Lo elegido (impresora, material, uniones...): si falta, el panel lo guarda él */
+  /** Pieles y texturas imprimibles (zona e imagen) */
+  skin?: SkinPanelProps;
   prep?: PrepSettings;
   onPrep?: (s: PrepSettings) => void;
   readiness?: Readiness;
@@ -423,6 +426,7 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
             onAdd={() => props.onAddJoints?.(joint(), printer(), material())}
           />
         </Show>
+        <Show when={props.skin}>{(skin) => <SkinPanel {...skin()} busy={props.isProcessing} />}</Show>
         <MaterialSection
           infill={infill()}
           onInfill={setInfill}

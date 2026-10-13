@@ -296,6 +296,7 @@ import type {
   PrepSettings,
 } from "./components/panels/Print3DPanel";
 import { defaultPrep, jointShapeConfig } from "./components/panels/PrintPrepPanel";
+import { defaultSkinImage, type SkinImageSettings, type SkinPattern, type SkinZone } from "./components/panels/SkinPanel";
 import { DESIGN_FORMATS, IMAGE_FORMATS, SKELETON_FORMATS, defaultExportOptions, formatBytes, type ExportOptions } from "./components/steps/ExportStep";
 import { defaultUvConfig, type UvConfig, type UvInfo, type UvPreview } from "./components/steps/UvStep";
 import type { SkeletonFitInfo } from "./components/steps/SkeletonStep";
@@ -1573,6 +1574,11 @@ export const App: Component = () => {
   const [subdivideResult, setSubdivideResult] = createSignal<SubdivideResult | undefined>();
   const [printPresets, setPrintPresets] = createSignal<PrintPresets | undefined>();
   const [printPrep, setPrintPrep] = createSignal<PrepSettings>(defaultPrep);
+  // Pieles imprimibles: la zona de caras (la guarda el backend), la biblioteca de imágenes y la elegida
+  const [skinZone, setSkinZone] = createSignal<SkinZone | undefined>();
+  const [skinPicking, setSkinPicking] = createSignal(false);
+  const [skinLibrary, setSkinLibrary] = createSignal<SkinPattern[]>([]);
+  const [skinImage, setSkinImage] = createSignal<SkinImageSettings>(defaultSkinImage);
   const [fabInfo, setFabInfo] = createSignal<FabInfo | undefined>();
   const [printReadiness, setPrintReadiness] = createSignal<Readiness | undefined>();
   const [printOrientations, setPrintOrientations] = createSignal<OrientationOption[] | undefined>();
@@ -6959,6 +6965,63 @@ export const App: Component = () => {
     untrack(() => setPrintPrep({ ...printPrep(), printer: fab.printer, material: fab.material, joint: { ...printPrep().joint, fit: fab.fit ?? "normal" }, compensateAll: !!fab.compensate_all }));
   });
 
+  // ── Pieles imprimibles ──
+  const loadSkin = async () => {
+    try {
+      setSkinLibrary(await invoke<SkinPattern[]>("skin_library"));
+      setSkinZone(await invoke<SkinZone>("skin_zone_get"));
+    } catch (e) {
+      setSkinZone(undefined);
+      console.error("Skin load error:", e);
+    }
+  };
+  // Otra malla: la zona de antes ya no vale, se vuelve a pedir
+  createEffect(on(meshData, (data) => (data ? void loadSkin() : setSkinZone(undefined)), { defer: false }));
+  // La elección de caras solo vale mientras se está en Fabricar
+  createEffect(() => {
+    if (pipeline.activeStep() !== "print3d" || animating()) setSkinPicking(false);
+  });
+  const skinCall = async <T,>(label: string, run: () => Promise<T>): Promise<T | undefined> => {
+    try {
+      return await run();
+    } catch (e) {
+      console.error(label, e);
+      setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
+      return undefined;
+    }
+  };
+  const pickSkinFaces = async (faces: number[], mode: "set" | "add" | "remove" | "toggle") => {
+    const zone = await skinCall("Skin zone", () => invoke<SkinZone>("skin_zone_edit", { faces, mode }));
+    if (zone) setSkinZone(zone);
+  };
+  const growSkinZone = async (angle: number) => {
+    const zone = await skinCall("Skin grow", () => busy(t("Ampliando la zona..."), () => invoke<SkinZone>("skin_zone_grow", { angle })));
+    if (zone) setSkinZone(zone);
+  };
+  const invertSkinZone = async () => {
+    const zone = await skinCall("Skin invert", () => invoke<SkinZone>("skin_zone_invert"));
+    if (zone) setSkinZone(zone);
+  };
+  const clearSkinZone = async () => {
+    const zone = await skinCall("Skin clear", () => invoke<SkinZone>("skin_zone_clear"));
+    if (zone) setSkinZone(zone);
+  };
+  const importSkinImage = async () => {
+    const path = await open({ multiple: false, filters: [{ name: t("Imágenes"), extensions: ["png", "jpg", "jpeg", "webp", "bmp"] }] });
+    if (!path || Array.isArray(path)) return;
+    const added = await skinCall("Skin import", () => busy(t("Importando la imagen..."), () => invoke<SkinPattern>("skin_import_image", { path })));
+    if (!added) return;
+    setSkinLibrary(await invoke<SkinPattern[]>("skin_library"));
+    setSkinImage({ ...skinImage(), image: added.id });
+    setStatusMessage(t("Imagen importada: {name}", { name: added.name }));
+  };
+  const removeSkinImage = async (id: string) => {
+    const library = await skinCall("Skin remove", () => invoke<SkinPattern[]>("skin_remove_image", { id }));
+    if (!library) return;
+    setSkinLibrary(library);
+    if (skinImage().image === id) setSkinImage({ ...skinImage(), image: defaultSkinImage.image });
+  };
+
   /** Las holguras de la impresora y el material elegidos (se piden al cambiarlos) */
   let fabRequest = 0;
   const handleFabNeeded = async (printer: PrinterProfile, material: MaterialProfile) => {
@@ -7662,7 +7725,7 @@ export const App: Component = () => {
         result: repairResult(),
         canUndo: canUndoRepair(),
       },
-      print3d: { analysis: meshAnalysis(), subdivide: subdivideResult(), canUndoScale: canUndoPrintScale(), prep: printPrep() },
+      print3d: { analysis: meshAnalysis(), subdivide: subdivideResult(), canUndoScale: canUndoPrintScale(), prep: printPrep(), skin: skinImage() },
       export: { includeRig: exportIncludeRig(), useRetopology: exportUseRetopology(), options: exportOptions() },
       animation: { clips: clips(), activeClipId: activeClipId(), frame: frame(), autoKey: autoKey(), interpolation: keyInterpolation() },
       rig: rigSettings(),
@@ -7766,6 +7829,7 @@ export const App: Component = () => {
     setSubdivideResult(ui.print3d?.subdivide);
     setCanUndoPrintScale(ui.print3d?.canUndoScale === true);
     setPrintPrep(ui.print3d?.prep ? { ...defaultPrep, ...ui.print3d.prep } : defaultPrep);
+    setSkinImage(ui.print3d?.skin ? { ...defaultSkinImage, ...ui.print3d.skin } : defaultSkinImage);
     if (ui.export) {
       setExportIncludeRig(ui.export.includeRig !== false);
       setExportUseRetopology(ui.export.useRetopology === true);
@@ -8491,9 +8555,9 @@ export const App: Component = () => {
               onPlacementPick={handlePlacementPick}
               nodePicking={["prepare", "materials"].includes(pipeline.workspace()?.id ?? "") && !animating()}
               onNodesPicked={pickNodes}
-              facePicking={faceMode() && materialEditorVisible() && materialEditorTab() === "materials" && !animating() && !displayQuad()}
-              pickedFaces={pickedFaces()}
-              onFacesPicked={pickFaces}
+              facePicking={(faceMode() && materialEditorVisible() && materialEditorTab() === "materials" && !animating() && !displayQuad()) || (skinPicking() && !displayQuad())}
+              pickedFaces={skinPicking() ? (skinZone()?.faces ?? []) : pickedFaces()}
+              onFacesPicked={skinPicking() ? pickSkinFaces : pickFaces}
               onNodePicked={(node) => {
                 setExtraFileNodes([]);
                 setSelectedFileNode(node);
@@ -8896,6 +8960,19 @@ export const App: Component = () => {
               onSubdivide: handleSubdivide,
               onExportPiece: handleExportPiece,
               presets: printPresets(),
+              skin: {
+                zone: skinZone(),
+                picking: skinPicking(),
+                onTogglePicking: () => setSkinPicking(!skinPicking()),
+                onGrow: growSkinZone,
+                onInvert: invertSkinZone,
+                onClear: clearSkinZone,
+                library: skinLibrary(),
+                settings: skinImage(),
+                onSettings: setSkinImage,
+                onImport: importSkinImage,
+                onRemove: removeSkinImage,
+              },
               fab: fabInfo(),
               onFabNeeded: handleFabNeeded,
               prep: printPrep(),

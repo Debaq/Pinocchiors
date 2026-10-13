@@ -101,11 +101,13 @@ Decisiones tomadas (2026-10-13):
 - **Imágenes de fábrica**, pocas y sin costuras (se generan por código, sin archivos): grano de cuero, líneas,
   rejilla, puntos, rombos, panal. Más las que el usuario importe (PNG/JPG a grises, con invertir, contraste y desenfoque).
 
+Estado (2026-10-13): **fases 1 y 2 hechas** (zonas e imágenes, sin generar relieve todavía); faltan la 3 a la 6.
+
 Fases:
 
-1. **Zonas**: elegir caras (pincel / por clic y crecer por ángulo, como el pincel de pesos) y guardarlas en el
+1. **Zonas** ✅: elegir caras (pincel / por clic y crecer por ángulo, como el pincel de pesos) y guardarlas en el
    proyecto como máscara por cara. Las caras de corte y de uniones se excluyen solas.
-2. **Imagen**: biblioteca de fábrica (`texture.rs`: patrones procedurales de altura, sin costuras, 256–512 px) e
+2. **Imagen** ✅: biblioteca de fábrica (`texture.rs`: patrones procedurales de altura, sin costuras, 256–512 px) e
    importar; muestreo bilineal con repetición.
 3. **Desplazamiento** (`skin.rs`): subdividir solo las caras de la zona hasta que el lado sea ≤ la mitad del píxel en mm;
    altura muestreada en el UV; se desplaza a lo largo de la normal suave del vértice con `amplitud` (mm) y `desfase`
@@ -117,7 +119,13 @@ Fases:
    si la imagen pide más detalle del que se imprime, si aparecen voladizos o paredes finas (se vuelve a pasar
    `check_printability`), y cuántos triángulos salen (decimar al final si pasa de un tope).
 6. **Interfaz**: panel «Texturas imprimibles» con zona, imagen, tamaño, amplitud, desfase, rotación y una vista previa
-   (sombreado con la altura) antes de generar la geometría.
+   (sombreado con la altura) antes de generar la geometría. Hecho: zona (elegir en el visor con clic o recuadro, crecer por
+   ángulo, invertir, quitar), biblioteca con miniaturas, importar, invertir / contraste / suavizar. Falta: tamaño, amplitud,
+   desfase, rotación y la vista previa del relieve.
+
+Dónde está: `texture.rs` y `zones.rs` (lib), `print_skin.rs` (comandos y estado; la zona y las imágenes van en el
+.pinocchio y la zona viaja con su objeto), `SkinPanel.tsx` (interfaz). La elección de caras reutiliza la del visor
+(las caras se numeran como las dibuja, que es el orden de la malla activa).
 
 Preguntas abiertas:
 
