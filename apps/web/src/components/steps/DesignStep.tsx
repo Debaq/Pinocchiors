@@ -2738,6 +2738,29 @@ export const FeatureEditor: Component<{
                 </Show>
                 </Show>
                 </Show>
+                <Checkbox
+                  small
+                  label={tl("Cada copia cambia de tamaño")}
+                  checked={!!k().vary}
+                  onChange={(c) => update((x) => x.type === "pattern" && (x.vary = c ? { scale: 20, axis: null } : null))}
+                />
+                <Show when={k().vary}>
+                  {(v) => (
+                    <>
+                      {field(tl("Cambio por copia"), "kind.pattern.vary.scale", v().scale, (x, n) => x.type === "pattern" && x.vary && (x.vary.scale = n), "%")}
+                      <Row label={tl("Cambia")}>
+                        <Select
+                          options={[
+                            { value: "all", label: tl("Todo el tamaño") },
+                            ...["x", "y", "z"].map((a) => ({ value: a, label: tl("Solo a lo largo de {a}", { a: a.toUpperCase() }) })),
+                          ]}
+                          value={v().axis ? (Object.entries(AXIS_DIRS).find(([, d]) => d.every((c, i) => Math.abs(c - v().axis![i]) < 1e-9))?.[0] ?? "all") : "all"}
+                          onChange={(a) => update((x) => x.type === "pattern" && x.vary && (x.vary.axis = a === "all" ? null : AXIS_DIRS[a]))}
+                        />
+                      </Row>
+                    </>
+                  )}
+                </Show>
                 <SkipCopies value={k().skip ?? []} onChange={(v) => update((x) => x.type === "pattern" && (x.skip = v.length ? v : undefined))} />
               </>
             )}

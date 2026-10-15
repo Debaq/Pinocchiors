@@ -36,7 +36,7 @@ fn sample() -> Document {
     doc.add(FeatureKind::Pattern {
         features: vec![hole],
         pattern: PatternKind::Linear { direction: [0.0, 1.0, 0.0], count: 2, spacing: 10.0, second: None },
-        skip: vec![],
+        skip: vec![], vary: None,
     });
     let ev = doc.evaluate();
     let body = ev.body.as_ref().unwrap();

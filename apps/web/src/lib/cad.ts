@@ -860,7 +860,8 @@ export type FeatureKind =
   | { type: "delete_face"; faces: FaceRef[] }
   | { type: "draft"; faces: FaceRef[]; neutral: PlaneSpec; angle: number }
   /** `skip`: copias que no se hacen (1 es la primera copia) */
-  | { type: "pattern"; features: number[]; pattern: PatternKind; skip?: number[] }
+  /** Con `vary`, la copia k crece `scale` % por copia (en todas las direcciones o solo a lo largo de `axis`) */
+  | { type: "pattern"; features: number[]; pattern: PatternKind; skip?: number[]; vary?: { scale: number; axis?: P3 | null } | null }
   /** `op` "new": con todo el cuerpo, cada reflejo queda como pieza aparte */
   | { type: "mirror"; features: number[]; plane: PlaneSpec; op?: BodyOp }
   /** Mueve o gira piezas enteras (vacío = todas); `copy` deja las originales y agrega las copias */

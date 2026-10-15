@@ -145,7 +145,7 @@ fn pattern_skips_copies() {
     let p = doc.add(FeatureKind::Pattern {
         features: vec![hole],
         pattern: PatternKind::Linear { direction: [1.0, 0.0, 0.0], count: 4, spacing: 20.0, second: None },
-        skip: vec![2],
+        skip: vec![2], vary: None,
     });
     let (_, _, v) = bbox(&eval_ok(&doc));
     assert_relative_eq!(v, 12000.0 - 3.0 * HOLE, max_relative = 1e-6);
@@ -171,7 +171,7 @@ fn linear_pattern_in_two_directions() {
             spacing: 20.0,
             second: Some(LinearSecond { direction: [0.0, 1.0, 0.0], count: 2, spacing: 30.0 }),
         },
-        skip: vec![],
+        skip: vec![], vary: None,
     });
     let (_, _, v) = bbox(&eval_ok(&doc));
     assert_relative_eq!(v, 12000.0 - 6.0 * HOLE, max_relative = 1e-6);
@@ -274,7 +274,7 @@ fn pattern_on_sketch_points() {
     // El primer punto está sobre el agujero original: ahí no se copia
     let (s, ids) = points_sketch(&[[10.0, 10.0], [40.0, 10.0], [70.0, 30.0], [90.0, 50.0]]);
     let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 0.0, sketch: s });
-    let p = doc.add(FeatureKind::Pattern { features: vec![hole], pattern: PatternKind::Points { sketch: sk, points: vec![] }, skip: vec![] });
+    let p = doc.add(FeatureKind::Pattern { features: vec![hole], pattern: PatternKind::Points { sketch: sk, points: vec![] }, skip: vec![], vary: None });
     let (_, _, v) = bbox(&eval_ok(&doc));
     assert_relative_eq!(v, 12000.0 - 4.0 * HOLE, max_relative = 1e-6);
     // Solo dos de los puntos (el del original y otro)
@@ -1263,7 +1263,7 @@ fn translate_has_three_arrows_and_patterns_more_handles() {
             spacing: 20.0,
             second: Some(LinearSecond { direction: [0.0, 1.0, 0.0], count: 2, spacing: 30.0 }),
         },
-        skip: vec![],
+        skip: vec![], vary: None,
     });
     let hs = handles_of(&eval_ok(&doc), p);
     assert_eq!(hs.iter().map(|h| (h.slot, h.length)).collect::<Vec<_>>(), vec![(0, 20.0), (1, 30.0)]);
@@ -1271,7 +1271,7 @@ fn translate_has_three_arrows_and_patterns_more_handles() {
     doc.get_mut(p).unwrap().kind = FeatureKind::Pattern {
         features: vec![hole],
         pattern: PatternKind::Circular { axis: AxisSpec::Custom { origin: [50.0, 30.0, 0.0], direction: [0.0, 0.0, 1.0] }, count: 4, angle: 180.0, rings: None },
-        skip: vec![],
+        skip: vec![], vary: None,
     };
     let h = handles_of(&eval_ok(&doc), p).remove(0);
     assert!(h.axis.is_some());

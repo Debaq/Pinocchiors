@@ -42,7 +42,7 @@ fn table_pattern_copies_by_offsets() {
         return;
     }
     let (mut doc, hole) = plate_with_hole();
-    doc.add(FeatureKind::Pattern { features: vec![hole], pattern: PatternKind::Table { offsets: vec![[30.0, 0.0, 0.0], [0.0, 25.0, 0.0], [70.0, 40.0, 0.0]] }, skip: vec![] });
+    doc.add(FeatureKind::Pattern { features: vec![hole], pattern: PatternKind::Table { offsets: vec![[30.0, 0.0, 0.0], [0.0, 25.0, 0.0], [70.0, 40.0, 0.0]] }, skip: vec![], vary: None });
     assert_relative_eq!(volume(&doc), 12000.0 - 4.0 * PI * 4.0 * 2.0, max_relative = 1e-6);
 }
 
@@ -58,7 +58,7 @@ fn fill_pattern_square_and_hex() {
         doc.add(FeatureKind::Pattern {
             features: vec![hole],
             pattern: PatternKind::Fill { sketch: region, regions: RegionSelection::All, spacing: 10.0, hex, margin: 3.0 },
-            skip: vec![],
+            skip: vec![], vary: None,
         });
         assert_relative_eq!(volume(&doc), 12000.0 - holes * PI * 4.0 * 2.0, max_relative = 1e-6);
     }
@@ -75,7 +75,7 @@ fn circular_pattern_in_rings() {
     let p = doc.add(FeatureKind::Pattern {
         features: vec![hole],
         pattern: PatternKind::Circular { axis: axis.clone(), count: 2, angle: 360.0, rings: Some(CircularRings { count: 2, spacing: 5.0 }) },
-        skip: vec![],
+        skip: vec![], vary: None,
     });
     // Original, su opuesto y los dos del anillo de afuera (todavía dentro de la placa)
     assert_relative_eq!(volume(&doc), 12000.0 - 4.0 * PI * 4.0 * 2.0, max_relative = 1e-6);
@@ -89,7 +89,34 @@ fn circular_pattern_in_rings() {
     doc.add(FeatureKind::Pattern {
         features: vec![hole],
         pattern: PatternKind::Circular { axis: AxisSpec::Custom { origin: [10.0, 10.0, 0.0], direction: [0.0, 0.0, 1.0] }, count: 2, angle: 360.0, rings: Some(CircularRings { count: 2, spacing: 5.0 }) },
-        skip: vec![],
+        skip: vec![], vary: None,
     });
+    assert!(!doc.evaluate().errors().is_empty());
+}
+
+#[test]
+fn variable_pattern_grows_each_copy() {
+    if !occt() {
+        return;
+    }
+    let (mut doc, hole) = plate_with_hole();
+    let p = doc.add(FeatureKind::Pattern {
+        features: vec![hole],
+        pattern: PatternKind::Linear { direction: [1.0, 0.0, 0.0], count: 3, spacing: 20.0, second: None },
+        skip: vec![],
+        vary: Some(PatternVary { scale: 50.0, axis: None }),
+    });
+    // Radios 2, 3 y 4: el agujero crece la mitad del original en cada copia
+    assert_relative_eq!(volume(&doc), 12000.0 - PI * (4.0 + 9.0 + 16.0) * 2.0, max_relative = 1e-6);
+    // Solo a lo largo de X: elipses de semiejes (2·f, 2)
+    if let FeatureKind::Pattern { vary, .. } = &mut doc.get_mut(p).unwrap().kind {
+        *vary = Some(PatternVary { scale: 50.0, axis: Some([1.0, 0.0, 0.0]) });
+    }
+    // La transformación no uniforme aproxima la superficie: tolerancia más suelta
+    assert_relative_eq!(volume(&doc), 12000.0 - PI * (4.0 + 6.0 + 8.0) * 2.0, max_relative = 1e-3);
+    // Si encoge hasta cero, avisa
+    if let FeatureKind::Pattern { vary, .. } = &mut doc.get_mut(p).unwrap().kind {
+        *vary = Some(PatternVary { scale: -60.0, axis: None });
+    }
     assert!(!doc.evaluate().errors().is_empty());
 }

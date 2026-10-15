@@ -575,6 +575,17 @@ pub struct LinearSecond {
     pub spacing: f64,
 }
 
+/// Regla de un patrón variable: la copia `k` (1 es la primera) se escala
+/// alrededor del centro de lo que se copia por `1 + scale/100 · k`, en todas
+/// las direcciones o solo a lo largo de `axis`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct PatternVary {
+    /// Porcentaje que crece (o achica, si es negativo) cada copia sobre la anterior
+    pub scale: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub axis: Option<P3>,
+}
+
 /// Anillos extra de un patrón circular: `count` en total (el original es el
 /// primero), cada uno `spacing` mm más lejos del eje, con las mismas copias.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -847,6 +858,10 @@ pub enum FeatureKind {
         pattern: PatternKind,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         skip: Vec<u32>,
+        /// Cada copia cambia de tamaño según una regla (nervios cada vez más
+        /// largos, agujeros que crecen).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        vary: Option<PatternVary>,
     },
     /// Refleja las herramientas de `features` (vacío = todo el cuerpo). Con
     /// todo el cuerpo, `op` `New` deja cada reflejo como pieza aparte en vez

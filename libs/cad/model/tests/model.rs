@@ -280,7 +280,7 @@ fn circular_pattern_of_holes_and_mirror() {
     doc.add(FeatureKind::Pattern {
         features: vec![hole],
         pattern: PatternKind::Circular { axis: AxisSpec::Z, count: 6, angle: 360.0, rings: None },
-        skip: vec![],
+        skip: vec![], vary: None,
     });
     let ev = doc.evaluate();
     assert_all_ok(&ev);
@@ -334,7 +334,7 @@ fn shell_split_and_linear_pattern() {
     doc.add(FeatureKind::Pattern {
         features: vec![pin],
         pattern: PatternKind::Linear { direction: [1.0, 0.0, 0.0], count: 5, spacing: 3.0, second: None },
-        skip: vec![],
+        skip: vec![], vary: None,
     });
     let ev = doc.evaluate();
     assert_all_ok(&ev);

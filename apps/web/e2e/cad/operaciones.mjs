@@ -181,6 +181,43 @@ export const escenarios = {
     await accept(b);
   },
 
+  async "operaciones: patrón variable: cada copia crece"(b) {
+    await begin(b);
+    const doc = await call("cad_get_document");
+    const id = () => doc.next_id++;
+    const P = [[0, 0], [100, 0], [100, 60], [0, 60]];
+    const plate = id();
+    doc.features.push({
+      id: plate, name: "Placa", suppressed: false,
+      kind: { type: "sketch", plane: { type: "xy" }, offset: 0, sketch: { points: [{ id: 0, x: 0, y: 0 }, ...P.map(([x, y], i) => ({ id: i + 1, x, y }))], entities: P.map((_, i) => ({ id: 11 + i, geometry: { type: "line", start: i + 1, end: ((i + 1) % 4) + 1 } })), constraints: [], next_id: 20, origin: 0 } },
+    });
+    doc.features.push({ id: id(), name: "Extrusión", suppressed: false, kind: { type: "extrude", sketch: plate, regions: { type: "all" }, extent: { type: "blind", distance: 2 }, reverse: false, op: "join", draft: 0, thin: null } });
+    const hs = id();
+    doc.features.push({ id: hs, name: "Círculo", suppressed: false, kind: { type: "sketch", plane: { type: "xy" }, offset: 0, sketch: { points: [{ id: 0, x: 0, y: 0 }, { id: 1, x: 10, y: 10 }], entities: [{ id: 2, geometry: { type: "circle", center: 1, radius: 2 } }], constraints: [], next_id: 3, origin: 0 } } });
+    const hole = id();
+    doc.features.push({ id: hole, name: "Agujero", suppressed: false, kind: { type: "extrude", sketch: hs, regions: { type: "all" }, extent: { type: "through_all" }, reverse: false, op: "cut", draft: 0, thin: null } });
+    // Patrón circular ya hecho: eje en el centro de la placa, dos copias a 180°
+    doc.features.push({ id: id(), name: "Patrón", suppressed: false, kind: { type: "pattern", features: [hole], pattern: { type: "linear", direction: [1, 0, 0], count: 3, spacing: 20 } } });
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    const holeV = Math.PI * 4 * 2;
+    near((await body()).volume, 12000 - 3 * holeV, 1e-3, "tres agujeros iguales");
+    await clickRow(b, "Patrón");
+    await sleep(1200);
+    await b.clickText("Cada copia cambia de tamaño");
+    await sleep(1500);
+    // 20 % por copia (por defecto): radios 2, 2,4 y 2,8
+    near((await body()).volume, 12000 - holeV * (1 + 1.2 ** 2 + 1.4 ** 2), 1e-3, "20 % por copia");
+    await setInput(b, "Cambio por copia", 50);
+    await sleep(2000);
+    near((await body()).volume, 12000 - holeV * (1 + 1.5 ** 2 + 2 ** 2), 1e-3, "50 % por copia");
+    const k = await lastKind(b);
+    if (k.vary?.scale !== 50) throw new Error(`variable: ${JSON.stringify(k.vary)}`);
+    await b.shot("operaciones_patron_variable");
+    await accept(b);
+  },
+
   async "operaciones: revolución simétrica y a dos ángulos"(b) {
     await begin(b);
     // En el frente: rectángulo x 10..15, z 0..20; gira alrededor de Z

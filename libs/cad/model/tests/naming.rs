@@ -181,7 +181,7 @@ fn pattern_copies_get_their_own_names() {
     doc.add(FeatureKind::Pattern {
         features: vec![pin],
         pattern: PatternKind::Linear { direction: [1.0, 0.0, 0.0], count: 3, spacing: 20.0, second: None },
-        skip: vec![],
+        skip: vec![], vary: None,
     });
     let ev = doc.evaluate();
     assert!(ev.errors().is_empty(), "{:?}", ev.errors());

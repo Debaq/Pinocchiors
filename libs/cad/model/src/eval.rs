@@ -2656,7 +2656,7 @@ impl Ctx<'_> {
                 let groups = self.by_part(&idx, false);
                 self.per_part(groups, |s, fs| s.draft(fs, p.normal, angle.to_radians(), p.origin, p.normal), |_| None)
             }
-            FeatureKind::Pattern { features, pattern, skip } => {
+            FeatureKind::Pattern { features, pattern, skip, vary } => {
                 // Dónde está lo que se copia: el centro de la primera operación (o del sólido)
                 let seed = match features.first() {
                     Some(id) => self.tool(*id)?.0.shape.mass().map_err(err)?,
@@ -2681,8 +2681,32 @@ impl Ctx<'_> {
                     _ => {}
                 }
                 // Las omitidas no se hacen; las demás conservan su número (y sus nombres)
-                let transforms: Vec<(usize, ShapeFn)> =
+                let mut transforms: Vec<(usize, ShapeFn)> =
                     self.pattern_transforms(pattern, seed)?.into_iter().enumerate().filter(|(k, _)| !skip.contains(&(*k as u32 + 1))).collect();
+                // Variable: antes de moverla, la copia k crece alrededor del centro de la original
+                if let Some(v) = vary.filter(|v| v.scale != 0.0) {
+                    let dir = v.axis.filter(|a| norm(*a) > 1e-12).map(normalize);
+                    for (k, t) in transforms.iter_mut() {
+                        let f = 1.0 + v.scale / 100.0 * (*k as f64 + 1.0);
+                        if f < 0.01 {
+                            return Err(format!("la copia {} quedaría con tamaño {:.0}% o menos: el cambio por copia es demasiado grande", *k + 1, f.max(0.0) * 100.0));
+                        }
+                        // M = f·I (o f solo a lo largo de `dir`); el centro queda en su lugar
+                        let mut m = [[0.0; 4]; 3];
+                        for i in 0..3 {
+                            for j in 0..3 {
+                                let along = dir.map_or(if i == j { 1.0 } else { 0.0 }, |d| d[i] * d[j]);
+                                let id = if i == j { 1.0 } else { 0.0 };
+                                m[i][j] = if dir.is_some() { id + (f - 1.0) * along } else { f * id };
+                            }
+                        }
+                        for i in 0..3 {
+                            m[i][3] = seed[i] - (0..3).map(|j| m[i][j] * seed[j]).sum::<f64>();
+                        }
+                        let inner = std::mem::replace(t, Box::new(|s: &Shape| Ok(s.clone())));
+                        *t = Box::new(move |s: &Shape| inner(&s.transform(m).map_err(err)?));
+                    }
+                }
                 if transforms.is_empty() {
                     return Ok(());
                 }
