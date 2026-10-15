@@ -610,6 +610,65 @@ export const escenarios = {
     near(parseFloat(mayor.replace(",", ".")), 20, 0.2, "radio mayor");
     near(parseFloat(text.match(/radio menor\s*([\d.,]+)/)?.[1].replace(",", ".")), 4, 0.2, "radio menor");
   },
+
+  async "escaneo: revolución y recubrimiento desde cortes"(b) {
+    // Jarrón de revolución (hueco de punta a punta) como STL: perfil (radio, altura) girado alrededor de Z
+    const profile = [[4, 0], [12, 0], [12, 6], [8, 14], [8, 22], [10, 30], [4, 30]];
+    const segs = 96;
+    const at = ([r, z], j) => [r * Math.cos((2 * Math.PI * j) / segs), r * Math.sin((2 * Math.PI * j) / segs), z];
+    let stl = "solid jarron\n";
+    const facet = (a, c, d) => (stl += `facet normal 0 0 0\nouter loop\nvertex ${a.join(" ")}\nvertex ${c.join(" ")}\nvertex ${d.join(" ")}\nendloop\nendfacet\n`);
+    for (let k = 0; k < profile.length; k++) {
+      const [a, c] = [profile[k], profile[(k + 1) % profile.length]];
+      for (let j = 0; j < segs; j++) {
+        facet(at(a, j), at(c, j), at(c, j + 1));
+        facet(at(a, j), at(c, j + 1), at(a, j + 1));
+      }
+    }
+    const path = `${process.env.E2E_OUT ?? "/tmp/pinocchio-e2e"}/escaneo-jarron.stl`;
+    writeFileSync(path, stl + "endsolid jarron\n");
+    // Volumen por Pappus: 2π · x̄ · área del perfil
+    let [area, mx] = [0, 0];
+    profile.forEach(([x0, y0], k) => {
+      const [x1, y1] = profile[(k + 1) % profile.length];
+      const cross = x0 * y1 - x1 * y0;
+      area += cross / 2;
+      mx += ((x0 + x1) * cross) / 6;
+    });
+    const volume = 2 * Math.PI * Math.abs(mx) ;
+
+    await importModel(b, path);
+    await begin(b);
+    await tab(b, "Desde el escaneo");
+    await b.eval(`window.__cadViewer.lookFrom([0, -1, 0.2])`);
+    await sleep(800);
+    await b.clickText("Cilindro / agujero");
+    await b.click(...(await b.eval(`window.__cadViewer.screenOf([0, -8, 18])`)), { wait: 2500 });
+    await b.clickText("Revolución desde el corte");
+    let res;
+    for (let t = 0; t < 240; t++) {
+      res = await evaluate();
+      if (res.status?.length === 2 && ["ok", "error"].includes(res.status[1].state?.type ?? res.status[1].state)) break;
+      await sleep(250);
+    }
+    if ((res.status?.[1]?.state?.type ?? res.status?.[1]?.state) !== "ok") throw new Error(`revolución: ${JSON.stringify(res.status)}`);
+    near(res.parts[0].volume, volume, volume * 0.03, "volumen del jarrón torneado");
+    await b.shot("escaneo-torneado");
+
+    // Recubrimiento: 8 cortes perpendiculares al mismo eje
+    await b.clickText("Cilindro / agujero");
+    await b.click(...(await b.eval(`window.__cadViewer.screenOf([0, -8, 18])`)), { wait: 2500 });
+    await b.clickText("Recubrir cortes");
+    for (let t = 0; t < 480; t++) {
+      res = await evaluate();
+      const last = res.status?.[res.status.length - 1];
+      if (res.status?.length === 11 && ["ok", "error"].includes(last.state?.type ?? last.state)) break;
+      await sleep(250);
+    }
+    const bad = res.status.filter((x) => (x.state?.type ?? x.state) === "error");
+    if (bad.length) throw new Error(`recubrimiento: ${JSON.stringify(bad)}`);
+    if (res.parts.length !== 2) throw new Error(`piezas: ${res.parts.length}`);
+  },
 };
 
 siEsPrincipal(import.meta.url, escenarios);

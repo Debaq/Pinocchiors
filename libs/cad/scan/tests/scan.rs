@@ -749,3 +749,61 @@ fn scan_detects_cone_torus_and_fillet() {
         found.iter().map(|d| &d.shape).collect::<Vec<_>>()
     );
 }
+
+/// Jarrón de revolución inclinado, escaneado: el corte por el eje y la revolución lo
+/// reconstruyen con el mismo volumen.
+#[test]
+fn scan_turned_part_is_rebuilt_by_revolution() {
+    if !occt::available() {
+        return;
+    }
+    // Perfil (radio, altura) con cuello, una panza y hueco de punta a punta: 0 → 30 de alto
+    let profile = [[4.0, 0.0], [12.0, 0.0], [12.0, 6.0], [8.0, 14.0], [8.0, 22.0], [10.0, 30.0], [4.0, 30.0]];
+    let mut sketch = Sketch::default();
+    let ids: Vec<u32> = profile.iter().map(|p| sketch.add_point(p[0], p[1])).collect();
+    for k in 0..ids.len() {
+        sketch.add_line(ids[k], ids[(k + 1) % ids.len()]);
+    }
+    let mut original = Document::new();
+    let sk = original.add(FeatureKind::Sketch { plane: PlaneSpec::Xz, offset: 0.0, sketch });
+    original.add(FeatureKind::Revolve(Revolve {
+        sketch: sk,
+        regions: RegionSelection::All,
+        axis: AxisSpec::Z,
+        angle: 360.0,
+        op: BodyOp::New,
+        extent: Default::default(),
+        thin: None,
+    }));
+    let ev = original.evaluate();
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    let body = ev.body.unwrap();
+    let volume = body.mass().unwrap().volume;
+    let t = body.tessellate(0.02, 0.05).unwrap();
+    let scan = ScanMesh::new(&t.positions, &t.triangles);
+
+    let mut doc = Document::new();
+    let rev = add_turned(&mut doc, &scan, [0.0; 3], [0.0, 0.0, 1.0], &OutlineOptions::default(), BodyOp::New).expect("revolución");
+    let rebuilt = doc.evaluate();
+    assert!(rebuilt.errors().is_empty(), "{:?}", rebuilt.errors());
+    assert!(doc.features.iter().any(|f| f.id == rev));
+    assert_relative_eq!(rebuilt.body.unwrap().mass().unwrap().volume, volume, max_relative = 0.02);
+}
+
+/// Una esfera recubierta con nueve cortes paralelos.
+#[test]
+fn scan_skin_through_parallel_cuts() {
+    if !occt::available() {
+        return;
+    }
+    let t = Shape::sphere([0.0; 3], 20.0).unwrap().tessellate(0.02, 0.05).unwrap();
+    let scan = ScanMesh::new(&t.positions, &t.triangles);
+    let mut doc = Document::new();
+    add_skin(&mut doc, &scan, [0.0, 0.0, 1.0], 9, &OutlineOptions::default(), false, BodyOp::New).expect("recubrimiento");
+    let ev = doc.evaluate();
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    // Entre el 2 % y el 98 % de la altura: casi toda la esfera
+    let ball = 4.0 / 3.0 * PI * 20.0f64.powi(3);
+    let v = ev.body.unwrap().mass().unwrap().volume;
+    assert!(v > ball * 0.9 && v < ball * 1.02, "volumen {v} contra {ball}");
+}

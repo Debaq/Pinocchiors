@@ -2168,6 +2168,41 @@ fn scan_mold_impl(state: &AppState, o: cad_scan::MoldOptions) -> Result<CadResul
     evaluate(state)
 }
 
+/// Revolución del perfil del escaneo cortado por un plano que contiene el eje
+/// (`origin`, `direction`): para piezas torneadas.
+#[tauri::command]
+pub async fn cad_scan_turned(app: AppHandle, origin: P3, direction: P3, op: Option<BodyOp>) -> Result<CadResult, String> {
+    require_occt()?;
+    in_background(app, move |state| scan_turned_impl(state, origin, direction, op.unwrap_or(BodyOp::New))).await
+}
+
+fn scan_turned_impl(state: &AppState, origin: P3, direction: P3, op: BodyOp) -> Result<CadResult, String> {
+    *state.cad_preview.lock().unwrap() = None;
+    with_scan(state, |scan| {
+        let mut lock = state.cad_document.lock().unwrap();
+        let doc = lock.get_or_insert_with(Document::new);
+        cad_scan::add_turned(doc, &scan.mesh, origin, direction, &ScanPickOptions::default().outline(&scan.mesh), op).map(|_| ())
+    })?;
+    evaluate(state)
+}
+
+/// Recubrimiento por `count` cortes paralelos, perpendiculares a `direction`.
+#[tauri::command]
+pub async fn cad_scan_skin(app: AppHandle, direction: P3, count: usize, ruled: Option<bool>, op: Option<BodyOp>) -> Result<CadResult, String> {
+    require_occt()?;
+    in_background(app, move |state| scan_skin_impl(state, direction, count, ruled.unwrap_or(false), op.unwrap_or(BodyOp::New))).await
+}
+
+fn scan_skin_impl(state: &AppState, direction: P3, count: usize, ruled: bool, op: BodyOp) -> Result<CadResult, String> {
+    *state.cad_preview.lock().unwrap() = None;
+    with_scan(state, |scan| {
+        let mut lock = state.cad_document.lock().unwrap();
+        let doc = lock.get_or_insert_with(Document::new);
+        cad_scan::add_skin(doc, &scan.mesh, direction, count, &ScanPickOptions::default().outline(&scan.mesh), ruled, op).map(|_| ())
+    })?;
+    evaluate(state)
+}
+
 /// Convierte lo elegido en el escaneo en operaciones del diseño.
 #[tauri::command]
 pub async fn cad_scan_add(app: AppHandle, feature: ScanFeature, options: Option<ScanPickOptions>) -> Result<CadResult, String> {
@@ -2423,6 +2458,14 @@ pub mod bridge {
                 let points: Vec<(u32, P3)> = arg(args, "points")?;
                 ok(with_scan(state, |scan| Ok(points.iter().filter_map(|(t, at)| scan.mesh.dab(*t, *at)).collect::<Vec<_>>()))?)
             }
+            "cad_scan_turned" => ok(scan_turned_impl(state, arg(args, "origin")?, arg(args, "direction")?, arg::<Option<BodyOp>>(args, "op")?.unwrap_or(BodyOp::New))?),
+            "cad_scan_skin" => ok(scan_skin_impl(
+                state,
+                arg(args, "direction")?,
+                arg(args, "count")?,
+                arg::<Option<bool>>(args, "ruled")?.unwrap_or(false),
+                arg::<Option<BodyOp>>(args, "op")?.unwrap_or(BodyOp::New),
+            )?),
             "cad_scan_mold" => ok(scan_mold_impl(state, arg(args, "options")?)?),
             "cad_scan_add" => ok(scan_add_impl(state, arg(args, "feature")?, arg::<Option<ScanPickOptions>>(args, "options")?.unwrap_or_default())?),
             "import_model" => {

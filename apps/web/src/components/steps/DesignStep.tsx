@@ -408,6 +408,17 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
     }
   };
 
+  /** Comandos que arman operaciones desde el escaneo (revolución, recubrimiento) */
+  const runScan = async (go: () => Promise<unknown>) => {
+    try {
+      await go();
+      setScanResult(undefined);
+      ui.setScanHighlight([]);
+    } catch (e) {
+      say(String(e));
+    }
+  };
+
   // Alinear el escaneo: una cara, un eje o un punto y se mueve el escaneo
   const align = (how: "floor" | "front" | "axis" | "origin") => {
     setScanResult(undefined);
@@ -739,7 +750,7 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                     </Show>
                   </div>
                   <Show when={scanResult()}>
-                    {(r) => <ScanResultCard result={r()} onAdd={addScan} />}
+                    {(r) => <ScanResultCard result={r()} onAdd={addScan} onTurned={(o, d) => void runScan(() => store.scanTurned(o, d))} onSkin={(d, n) => void runScan(() => store.scanSkin(d, n))} />}
                   </Show>
                   <div class="space-y-1.5">
                     <span class="text-xs text-text-muted">{tl("Corte del modelo por un plano")}</span>
@@ -6646,8 +6657,19 @@ const DeviationCard: Component<{ store: CadStore; ui: CadUi }> = (props) => {
   );
 };
 
-const ScanResultCard: Component<{ result: { pick: ScanPick; triangle: number }; onAdd: (f: Parameters<CadStore["scanAdd"]>[0]) => void }> = (props) => {
+const ScanResultCard: Component<{
+  result: { pick: ScanPick; triangle: number };
+  onAdd: (f: Parameters<CadStore["scanAdd"]>[0]) => void;
+  onTurned: (origin: P3, direction: P3) => void;
+  onSkin: (direction: P3, count: number) => void;
+}> = (props) => {
   const [depth, setDepth] = createSignal<number>();
+  const [cuts, setCuts] = createSignal(8);
+  /** Eje de revolución de la zona (cilindro, cono o toro) */
+  const axisOf = (): { origin: P3; direction: P3 } | undefined => {
+    const p = props.result.pick;
+    return p.kind === "cylinder" ? { origin: p.origin, direction: p.direction } : p.kind === "cone" ? { origin: p.apex, direction: p.direction } : p.kind === "torus" ? { origin: p.center, direction: p.axis } : undefined;
+  };
   const [op, setOp] = createSignal<BodyOp>("join");
   return (
     <div class="rounded-md border border-cyan/50 p-2 space-y-2 text-xs">
@@ -6727,6 +6749,27 @@ const ScanResultCard: Component<{ result: { pick: ScanPick; triangle: number }; 
               </Button>
             </div>
           </>
+        )}
+      </Show>
+      <Show when={axisOf()}>
+        {(ax) => (
+          <div class="space-y-1.5 border-t border-border pt-1.5">
+            <Button
+              size="sm"
+              variant="ghost"
+              fullWidth
+              title={tl("Corta el escaneo por un plano que pasa por este eje y gira el perfil (piezas torneadas)")}
+              onClick={() => props.onTurned(ax().origin, ax().direction)}
+            >
+              {tl("Revolución desde el corte")}
+            </Button>
+            <div class="flex items-end gap-1.5">
+              <Num label={tl("Cortes")} value={cuts()} step={1} onCommit={(v) => setCuts(Math.max(2, Math.round(v)))} />
+              <Button size="sm" variant="ghost" title={tl("Cortes paralelos perpendiculares a este eje y el recubrimiento que pasa por todos")} onClick={() => props.onSkin(ax().direction, cuts())}>
+                {tl("Recubrir cortes")}
+              </Button>
+            </div>
+          </div>
         )}
       </Show>
     </div>

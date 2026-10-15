@@ -308,11 +308,23 @@ Partes: E4.1 carcasa y parche bajo un sketch, E4.2 región pintada con pincel, E
   plana ya da el contorno (sketch) y el espesor medido (`PlanePick::depth`), y «Sketch y extruir» crea la
   extrusión con ese largo.
 
-### E8 — Revolución y recubrimiento desde cortes
+### E8 — Revolución y recubrimiento desde cortes ✅ (2026-10-15, sin probar en la app real)
 
-- Corte por un plano que contiene el eje de un cilindro/cono → perfil → revolución (piezas
-  torneadas, el espéculo).
-- N cortes paralelos → recubrimiento.
+- `cad_scan::add_turned` (comando `cad_scan_turned`): corta el escaneo por un plano que contiene un eje (el de un
+  cilindro, cono o toro elegido con un clic), recorta los contornos cerrados a un lado del eje (x ≥ 0, cerrados
+  sobre el eje), los pasa a sketch sin reconocer círculos (son perfil) y agrega la revolución de 360° alrededor
+  del eje. Sirve para piezas torneadas (el espéculo, jarrones, poleas).
+- `cad_scan::add_skin` (comando `cad_scan_skin`): `count` cortes paralelos perpendiculares a una dirección,
+  entre el 2 % y el 98 % del escaneo, cada uno con su contorno exterior más grande como sketch, y el recubrimiento
+  (`Loft`) que pasa por todos.
+- UI: la tarjeta de «Cilindro / agujero», «Cono» o «Toro» tiene «Revolución desde el corte» y «Recubrir cortes»
+  (con la cantidad de cortes). Los dos quedan como operaciones editables del árbol.
+- Pruebas: `scan_turned_part_is_rebuilt_by_revolution` (jarrón con panza, cuello y hueco: mismo volumen ±2 %),
+  `scan_skin_through_parallel_cuts` (esfera con 9 cortes: 90–102 % de su volumen) y e2e «escaneo: revolución y
+  recubrimiento desde cortes» (jarrón en STL: volumen por Pappus ±3 %).
+- Falta: elegir el plano de corte a mano (hoy es uno cualquiera por el eje; si la pieza no es de revolución el
+  perfil sale de ese plano), varios lazos por corte en el recubrimiento (hoy solo el exterior más grande), perfil
+  con líneas y arcos reconocidos en vez de segmentos simplificados, y revolución parcial (sector).
 
 ### E9 — Asistente de reconstrucción
 

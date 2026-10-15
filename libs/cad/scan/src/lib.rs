@@ -21,6 +21,7 @@ mod outline;
 mod pick;
 mod quadric;
 mod refs;
+mod turned;
 
 use cad_model::geom::{P2, P3, Plane, add, dot, norm, normalize, scale, sub};
 use cad_model::{BodyOp, Extent, Extrude, FeatureId, FeatureKind, PlaneSpec, Primitive, PrimitiveShape, RegionSelection};
@@ -34,6 +35,7 @@ pub use mold::{MoldOptions, add_mold};
 pub use outline::{OutlineOptions, Section, fit_circle, outline_sketch, simplify_closed, simplify_open, slice};
 pub use pick::{CylinderPick, PickError, PickOptions, PlanePick, boundary_loops, pick_cylinder, pick_plane};
 pub use quadric::{ConeFit, ConePick, TorusFit, TorusPick, fit_cone, fit_torus, pick_cone, pick_torus};
+pub use turned::{add_skin, add_turned};
 pub use refs::{ScanGeom, fit_reference};
 
 pub(crate) fn regions_area(p: &[P2]) -> f64 {
@@ -135,7 +137,7 @@ impl TorusPick {
     }
 }
 
-fn perpendicular(d: P3) -> P3 {
+pub(crate) fn perpendicular(d: P3) -> P3 {
     let w = if d[0].abs() < 0.9 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] };
     normalize(sub(w, scale(d, dot(w, d))))
 }

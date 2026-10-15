@@ -4739,13 +4739,19 @@ export function createCadStore() {
     },
 
     /** Molde de dos mitades alrededor del escaneo (cavidad, llaves y bebedero) */
-    async scanMold(options: MoldOptions) {
+    scanMold: (options: MoldOptions) => store.scanCommand("cad_scan_mold", { options }),
+    /** Revolución del perfil del escaneo cortado por un plano que contiene el eje (piezas torneadas) */
+    scanTurned: (origin: P3, direction: P3) => store.scanCommand("cad_scan_turned", { origin, direction, op: "new" }),
+    /** Recubrimiento por `count` cortes paralelos, perpendiculares a `direction` */
+    scanSkin: (direction: P3, count: number) => store.scanCommand("cad_scan_skin", { direction, count, ruled: false, op: "new" }),
+    /** Un comando del backend que agrega operaciones desde el escaneo y devuelve el resultado */
+    async scanCommand(command: string, args: Record<string, unknown>) {
       setDraft(undefined);
       setSelected(undefined);
       const before = committed();
       setBusy(true);
       try {
-        await apply(await invoke<CadResult>("cad_scan_mold", { options }));
+        await apply(await invoke<CadResult>(command, args));
         if (before) {
           undoStack.push(before);
           redoStack.length = 0;
