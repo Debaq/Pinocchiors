@@ -236,8 +236,15 @@ Partes: E4.1 carcasa y parche bajo un sketch, E4.2 región pintada con pincel, E
   del escaneo (arrastrar con el botón izquierdo; toques cada medio radio, máx. 80; comando `cad_scan_dabs`).
   Prueba: `scan_paint_patch_follows_the_brush` (esfera: volumen de la tapa de radio 8). Falta: e2e, campo por
   vértice con borde suave (hoy son cilindros), borrar/editar los toques después, geodésica en vez de cilindro.
-- E4.3 molde: caja − escaneo desfasado, partido por plano o por la línea de mayor contorno,
-  con llaves de registro (`print3d` ya tiene tarugos) y bebedero.
+- E4.3 molde ✅ (2026-10-15, sin probar en la app real): `cad_scan::add_mold` (comando `cad_scan_mold`) agrega al
+  diseño, como operaciones normales y editables: dos cajas alrededor del escaneo partidas en un plano (eje y
+  porcentaje a elegir), «Molde: cavidad» (`ScanBody` restado con la holgura), tres llaves de registro en tres de las
+  cuatro esquinas, a mitad de pared (así la tapa solo calza de una forma; perno en la de abajo que entra 1 mm en su
+  pared, hueco con 0,2 mm de juego en la de arriba, cada una con su alcance) y un bebedero cilíndrico al centro de
+  la de arriba. UI: «Crear molde» en la pestaña del escaneo. Prueba: `scan_mold_makes_two_halves_with_keys_and_sprue`
+  (esfera: volumen de las dos mitades, cada una de su lado del plano, pernos que salen). Falta: partir por la línea
+  de mayor contorno (hoy solo plano), respiraderos, bebedero que llegue a la cavidad si el centro no la toca,
+  escalones de la cavidad por encima del plano (rebajes) y la colocación de las llaves en el contorno.
 
 ### E5 — Curvas sobre la piel
 

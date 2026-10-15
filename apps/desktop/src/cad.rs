@@ -2112,6 +2112,24 @@ pub async fn cad_scan_dabs(app: AppHandle, points: Vec<(u32, P3)>) -> Result<Vec
     .await
 }
 
+/// Molde de dos mitades alrededor del escaneo (ver [`cad_scan::add_mold`]).
+#[tauri::command]
+pub async fn cad_scan_mold(app: AppHandle, options: cad_scan::MoldOptions) -> Result<CadResult, String> {
+    require_occt()?;
+    in_background(app, move |state| scan_mold_impl(state, options)).await
+}
+
+fn scan_mold_impl(state: &AppState, o: cad_scan::MoldOptions) -> Result<CadResult, String> {
+    let (lo, hi) = with_scan(state, |scan| Ok((scan.mesh.bbox_min, scan.mesh.bbox_max)))?;
+    *state.cad_preview.lock().unwrap() = None;
+    {
+        let mut lock = state.cad_document.lock().unwrap();
+        let doc = lock.get_or_insert_with(Document::new);
+        cad_scan::add_mold(doc, lo, hi, &o)?;
+    }
+    evaluate(state)
+}
+
 /// Convierte lo elegido en el escaneo en operaciones del diseño.
 #[tauri::command]
 pub async fn cad_scan_add(app: AppHandle, feature: ScanFeature, options: Option<ScanPickOptions>) -> Result<CadResult, String> {

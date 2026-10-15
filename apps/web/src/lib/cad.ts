@@ -1984,6 +1984,16 @@ const PRIMITIVE_LABELS: Record<PrimitiveShape["type"], string> = {
   get gear() { return tr("Engrane"); },
 };
 
+/** Cómo se arma el molde (eje 0 = X, 1 = Y, 2 = Z; `at` de 0 a 1; mm) */
+export interface MoldOptions {
+  axis: number;
+  at: number;
+  wall: number;
+  gap: number;
+  keys: boolean;
+  sprue: number;
+}
+
 /** Un toque del pincel sobre el escaneo (lo que la app devuelve de `cad_scan_dabs`) */
 export interface ScanDab {
   seed: { triangle: number; bary: [number, number, number]; at: P3; topology: number };
@@ -4614,6 +4624,25 @@ export function createCadStore() {
       setBusy(true);
       try {
         await apply(await invoke<CadResult>("cad_scan_add", { feature, options: null }));
+        if (before) {
+          undoStack.push(before);
+          redoStack.length = 0;
+          setHistoryVersion((v) => v + 1);
+        }
+        await store.syncDocument();
+      } finally {
+        setBusy(false);
+      }
+    },
+
+    /** Molde de dos mitades alrededor del escaneo (cavidad, llaves y bebedero) */
+    async scanMold(options: MoldOptions) {
+      setDraft(undefined);
+      setSelected(undefined);
+      const before = committed();
+      setBusy(true);
+      try {
+        await apply(await invoke<CadResult>("cad_scan_mold", { options }));
         if (before) {
           undoStack.push(before);
           redoStack.length = 0;

@@ -15,6 +15,7 @@
 mod body;
 mod deviation;
 mod mesh;
+mod mold;
 mod outline;
 mod pick;
 mod refs;
@@ -27,6 +28,7 @@ use serde::{Deserialize, Serialize};
 pub use body::{BodyMesh, BodyOptions, MAX_FACES, MIN_FACES, open_edges, prepare_body, solid_problems};
 pub use deviation::{Deviation, DeviationStats, deviation};
 pub use mesh::ScanMesh;
+pub use mold::{MoldOptions, add_mold};
 pub use outline::{OutlineOptions, Section, fit_circle, outline_sketch, simplify_closed, simplify_open, slice};
 pub use pick::{CylinderPick, PickError, PickOptions, PlanePick, boundary_loops, pick_cylinder, pick_plane};
 pub use refs::{ScanGeom, fit_reference};

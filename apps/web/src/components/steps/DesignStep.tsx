@@ -63,6 +63,7 @@ import {
   type P2,
   type P3,
   type ScanDab,
+  type MoldOptions,
   type AxisDef,
   type Connector,
   type Mate,
@@ -360,6 +361,15 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
   const [sliceBase, setSliceBase] = createSignal<"xy" | "xz" | "yz">("xy");
   const [sliceOffset, setSliceOffset] = createSignal(0);
   const [brushRadius, setBrushRadius] = createSignal(5);
+  const [mold, setMold] = createSignal<MoldOptions>({ axis: 2, at: 0.5, wall: 8, gap: 0.2, keys: true, sprue: 3 });
+  const setMoldField = <K extends keyof MoldOptions>(k: K, v: MoldOptions[K]) => setMold({ ...mold(), [k]: v });
+  const makeMold = async () => {
+    try {
+      await store.scanMold(mold());
+    } catch (e) {
+      say(String(e));
+    }
+  };
   const [detections, setDetections] = createSignal<Detection[]>();
 
   const actions = props.actions;
@@ -608,6 +618,37 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                         onClick={paintPatch}
                       >
                         {tl("Pincel")}
+                      </Button>
+                    </div>
+                    <div class="space-y-1.5" aria-label={tl("Molde")}>
+                      <span class="text-xs text-text-muted">{tl("Molde de dos mitades")}</span>
+                      <div class="grid grid-cols-2 gap-1.5">
+                        <Select
+                          options={[
+                            { value: "2", label: tl("Parte en Z") },
+                            { value: "1", label: tl("Parte en Y") },
+                            { value: "0", label: tl("Parte en X") },
+                          ]}
+                          value={String(mold().axis)}
+                          onChange={(v) => setMoldField("axis", Number(v))}
+                        />
+                        <Num label={tl("Partir en")} value={mold().at * 100} onCommit={(v) => v > 0 && v < 100 && setMoldField("at", v / 100)} suffix="%" />
+                        <Num label={tl("Pared")} value={mold().wall} onCommit={(v) => v > 0 && setMoldField("wall", v)} suffix="mm" />
+                        <Num label={tl("Holgura")} value={mold().gap} onCommit={(v) => setMoldField("gap", v)} suffix="mm" />
+                        <Num label={tl("Bebedero (radio)")} value={mold().sprue} onCommit={(v) => v >= 0 && setMoldField("sprue", v)} suffix="mm" />
+                        <label class="flex items-center gap-1.5 text-xs text-text-muted">
+                          <input type="checkbox" checked={mold().keys} onChange={(e) => setMoldField("keys", e.currentTarget.checked)} />
+                          {tl("Llaves de registro")}
+                        </label>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        fullWidth
+                        title={tl("Dos cajas alrededor del escaneo partidas por un plano, con la cavidad del escaneo, llaves de registro y bebedero")}
+                        onClick={() => void makeMold()}
+                      >
+                        {tl("Crear molde")}
                       </Button>
                     </div>
                     <p class="text-[11px] text-text-dim leading-relaxed">

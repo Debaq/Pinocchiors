@@ -530,3 +530,41 @@ fn scan_paint_patch_follows_the_brush() {
     assert_relative_eq!(m.volume, cap(r2) - cap(r1), max_relative = 0.04);
     assert!(m.bbox_min[2] > 15.0, "solo la tapa de arriba: {:?}", m.bbox_min);
 }
+
+/// Molde de una esfera escaneada: dos mitades que no se tocan por dentro, la
+/// cavidad esférica (con la holgura), llaves solo en su mitad y bebedero.
+#[test]
+fn scan_mold_makes_two_halves_with_keys_and_sprue() {
+    if !occt::available() {
+        return;
+    }
+    let t = Shape::sphere([0.0; 3], 20.0).unwrap().tessellate(0.02, 0.05).unwrap();
+    let scan = ScanMesh::new(&t.positions, &t.triangles);
+    let gap = 0.3;
+    let body = prepare_body(&scan.vertices, &scan.triangles, &BodyOptions { faces: 20000, offset: gap, thickness: 0.0 }).unwrap();
+    let mesh = ScanBodyMesh { hash: 7, data: std::sync::Arc::new((body.vertices, body.triangles)), error: None };
+    let wall = 6.0;
+    let options = MoldOptions { axis: 2, at: 0.5, wall, gap, keys: true, sprue: 2.0 };
+    let mut doc = Document::new();
+    add_mold(&mut doc, scan.bbox_min, scan.bbox_max, &options).unwrap();
+    for f in &mut doc.features {
+        if let FeatureKind::ScanBody(b) = &mut f.kind {
+            b.mesh = Some(mesh.clone());
+        }
+    }
+    let ev = doc.evaluate();
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    assert_eq!(ev.parts.len(), 2, "dos mitades");
+    let side = 40.0 + 2.0 * wall;
+    let boxes = side * side * (40.0 + 2.0 * wall);
+    let ball = 4.0 / 3.0 * PI * (20.0 + gap).powi(3);
+    let total: f64 = ev.parts.iter().map(|p| p.shape.mass().unwrap().volume).sum();
+    // Menos el bebedero (r 2 sobre la mitad de arriba), más las llaves que sobresalen: poco
+    let sprue = PI * 4.0 * (20.0 + wall);
+    assert_relative_eq!(total, boxes - ball - sprue, max_relative = 0.03);
+    // Cada mitad queda de su lado del plano de partición (las llaves entran en la otra)
+    let (lower, upper) = (ev.parts[0].shape.mass().unwrap(), ev.parts[1].shape.mass().unwrap());
+    assert!(lower.bbox_min[2] < -20.0 && upper.bbox_max[2] > 20.0);
+    assert!(upper.bbox_min[2] > -0.01, "arriba no pasa del plano: {:?}", upper.bbox_min);
+    assert!(lower.bbox_max[2] > 0.5, "los pernos de abajo salen del plano: {:?}", lower.bbox_max);
+}
