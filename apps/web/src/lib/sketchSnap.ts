@@ -42,6 +42,8 @@ export type SnapKind =
   | "solid_midpoint"
   /** Sobre una arista del sólido que está en el plano del sketch */
   | "on_edge"
+  /** La línea que se dibuja desde `from` cae en un ángulo múltiplo del paso elegido */
+  | "angle"
   /** Nada cerca */
   | "free";
 
@@ -62,6 +64,8 @@ export interface Snap {
   axis?: "horizontal" | "vertical";
   /** Dirección de la línea que se dibuja desde `from` respecto de otra entidad */
   direction?: { kind: "parallel" | "perpendicular" | "tangent"; entity: number };
+  /** Ángulo fijo (°, desde +X) de la línea que se dibuja desde `from` */
+  angle?: number;
   /** Líneas guía punteadas (para dibujar) */
   guides?: [P2, P2][];
 }
@@ -73,6 +77,8 @@ export interface InferOptions {
   from?: number;
   /** Puntos con los que no alinearse (los de la forma en curso) */
   noAlign?: number[];
+  /** Con `from`: la línea salta a ángulos múltiplos de este paso (°; 0 o sin valor, apagado) */
+  angleStep?: number;
   /** Geometría del sólido proyectada al plano (`solidRefs`) */
   solid?: SolidRefs;
 }
@@ -107,6 +113,7 @@ const PRIORITY: Record<SnapKind, number> = {
   parallel: 8,
   perpendicular: 8,
   tangent: 8,
+  angle: 8,
   solid_vertex: 4,
   solid_center: 4,
   solid_midpoint: 5,
@@ -129,6 +136,7 @@ export const SNAP_GLYPHS: Record<SnapKind, { glyph: string; label: string }> = {
   parallel: { glyph: "∥", get label() { return tr("Paralela"); } },
   perpendicular: { glyph: "⊥", get label() { return tr("Perpendicular"); } },
   tangent: { glyph: "◡", get label() { return tr("Tangente"); } },
+  angle: { glyph: "∠", get label() { return tr("Ángulo"); } },
   solid_vertex: { glyph: "●", get label() { return tr("Vértice del sólido"); } },
   solid_center: { glyph: "⊙", get label() { return tr("Centro de la arista"); } },
   solid_midpoint: { glyph: "△", get label() { return tr("Medio de la arista"); } },
@@ -370,6 +378,24 @@ function axisSnap(s: Sketch, pt: Map<number, P2>, cursor: P2, tol: number, from:
   return { p, kind: axis, axis, guides, ...(best ? { align: axis === "horizontal" ? { v: best.id } : { h: best.id } } : {}) };
 }
 
+/** Línea desde `from` a un ángulo múltiplo de `step` (°) si el cursor queda a `tol` de ese rayo */
+function angleSnap(pt: Map<number, P2>, cursor: P2, tol: number, from: number, step: number): Snap | undefined {
+  const f = pt.get(from);
+  if (!f || !(step > 0)) return undefined;
+  const v: P2 = [cursor[0] - f[0], cursor[1] - f[1]];
+  const len = Math.hypot(v[0], v[1]);
+  if (len <= tol) return undefined;
+  const deg = Math.round(((Math.atan2(v[1], v[0]) * 180) / Math.PI) / step) * step;
+  const u: P2 = [Math.cos((deg * Math.PI) / 180), Math.sin((deg * Math.PI) / 180)];
+  const t = v[0] * u[0] + v[1] * u[1];
+  const p: P2 = [f[0] + t * u[0], f[1] + t * u[1]];
+  if (t <= tol || dist(cursor, p) > tol) return undefined;
+  // Los ejes ya los resuelve la restricción horizontal / vertical
+  if (Math.abs(u[0]) < 1e-9 || Math.abs(u[1]) < 1e-9) return undefined;
+  const norm = ((deg % 360) + 360) % 360;
+  return { p, kind: "angle", angle: norm, guides: [[f, p]] };
+}
+
 /** Alineación horizontal o vertical con los puntos existentes (las dos a la vez si hay) */
 function alignSnap(s: Sketch, cursor: P2, tol: number, skip: Set<number>, from?: P2): Snap | undefined {
   let h: { id: number; q: P2; d: number } | undefined;
@@ -483,7 +509,10 @@ export function infer(s: Sketch, cursor: P2, tol: number, opts: InferOptions = {
   // Sin nada cerca: horizontal/vertical o dirección de la línea en curso, o alineación con puntos
   const skip = new Set([...exclude, ...(opts.noAlign ?? []), ...(opts.from !== undefined ? [opts.from] : [])]);
   if (opts.from !== undefined) {
-    const d = axisSnap(s, pt, cursor, tol, opts.from, skip) ?? directionSnap(s, pt, cursor, tol, opts.from);
+    const d =
+      axisSnap(s, pt, cursor, tol, opts.from, skip) ??
+      directionSnap(s, pt, cursor, tol, opts.from) ??
+      angleSnap(pt, cursor, tol, opts.from, opts.angleStep ?? 0);
     if (d) return d;
   }
   return alignSnap(s, cursor, tol, skip, opts.from !== undefined ? pt.get(opts.from) : undefined) ?? { p: cursor, kind: "free" };

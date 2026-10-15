@@ -1058,6 +1058,8 @@ export const en_ui_steps: Catalog = {
   "Cantidad 2": "Count 2",
   "También en anillos más grandes": "Also in larger rings",
   "Anillos": "Rings",
+  "Ángulos fijos": "Fixed angles",
+  "Paso del ángulo": "Angle step",
   "Cada copia cambia de tamaño": "Each copy changes size",
   "Cambio por copia": "Change per copy",
   "Cambia": "Changes",

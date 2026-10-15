@@ -74,10 +74,11 @@ Decisiones (2026-10-05):
       elegir caras/aristas en el visor, redondeo. Textos sin mencionar Blender.
 - [~] **F7 — Distribución**: `scripts/build-occt.sh` + workflow manual `release-cad.yml` (no
       toca `release.yml`). Linux probado en local; Windows y macOS escritos pero sin correr.
-- [~] **F8 — Sketch completo**: portar herramientas de cad-blender. Revisado el 2026-10-15
-      contra `cad-blender` (sus 20 capacidades de sketch, A1–A20): todas están, salvo el
-      **ajuste de ángulo** al dibujar una línea (saltos de 15°/30°/45°; hoy hay horizontal/vertical,
-      paralelo/perpendicular/tangente y el ángulo se escribe a mano). Hecho: polígono, ranura,
+- [x] **F8 — Sketch completo** (cerrada el 2026-10-15): portar herramientas de cad-blender.
+      Revisado contra `cad-blender` (sus 20 capacidades de sketch, A1–A20): todas están. La
+      última, el **ajuste de ángulo** al dibujar una línea, se agregó como «Ángulos fijos» en
+      las ayudas del sketch (paso elegible, 15° por defecto; apagado por defecto; Mayús lo
+      salta). Hecho: polígono, ranura,
       cotas en el visor, enganche a puntos y curvas, horizontal/vertical automáticos, regiones
       elegidas con clic, puntos libres marcados, recortar (líneas, círculos y arcos), extender,
       equidistante, redondear esquinas, arcos tangentes encadenados, gestor de restricciones

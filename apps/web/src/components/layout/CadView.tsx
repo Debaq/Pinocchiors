@@ -429,7 +429,7 @@ export const CadView: Component<CadViewProps> = (props) => {
   // Estirar: los puntos tomados con la caja
   const [stretchPts, setStretchPts] = createSignal<number[]>();
   // Anclaje bajo el cursor: punto resaltado y su glifo junto al puntero
-  const [snapView, setSnapView] = createSignal<{ kind: SnapKind; p: P2; x: number; y: number; guides: [P2, P2][]; refs: number[] }>();
+  const [snapView, setSnapView] = createSignal<{ kind: SnapKind; p: P2; x: number; y: number; guides: [P2, P2][]; refs: number[]; angle?: number }>();
   const [polygonSides, setPolygonSides] = createSignal(6);
   // Cónica: factor rho (0,5 = parábola); spline por polos: grado
   const [conicRho, setConicRho] = createSignal(0.5);
@@ -1447,6 +1447,7 @@ export const CadView: Component<CadViewProps> = (props) => {
     const r = infer(withoutLayers(s.sketch, false), p, viewer.pixelSizeMm() * 8, {
       exclude: dragging !== undefined ? [dragging] : [],
       from,
+      angleStep: as.angleStep,
       solid: solid(),
       // Un rectángulo alineado con su primera esquina (o su centro) tendría ancho o alto cero
       noAlign: ui.tool() === "rect" || ui.tool() === "rect_center" ? anchor().flatMap((a) => (a.id !== undefined ? [a.id] : [])) : [],
@@ -2852,6 +2853,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       const rect = container.getBoundingClientRect();
       setSnapView({
         kind: hit.kind,
+        angle: hit.angle,
         p: hit.p,
         x: e.clientX - rect.left,
         y: e.clientY - rect.top,
@@ -3830,7 +3832,7 @@ export const CadView: Component<CadViewProps> = (props) => {
             class="absolute pointer-events-none px-1 rounded text-[11px] bg-bg-lighter/90 border border-border text-cyan"
             style={{ left: `${v().x + 14}px`, top: `${v().y + 14}px` }}
           >
-            {SNAP_GLYPHS[v().kind].glyph} {tr(SNAP_GLYPHS[v().kind].label)}
+            {SNAP_GLYPHS[v().kind].glyph} {tr(SNAP_GLYPHS[v().kind].label)}{v().angle !== undefined ? ` ${Math.round(v().angle! * 100) / 100}°` : ""}
           </span>
         )}
       </Show>

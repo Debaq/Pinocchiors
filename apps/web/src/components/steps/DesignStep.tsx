@@ -7762,6 +7762,12 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
             <Checkbox small label={tl("Rejilla")} checked={ui.assist().grid} onChange={(c) => ui.setAssist({ grid: c })} />
             <Checkbox small label={tl("Anclar a la rejilla")} checked={ui.assist().gridSnap} onChange={(c) => ui.setAssist({ gridSnap: c })} />
           </div>
+          <div class="flex flex-wrap gap-x-3">
+            <Checkbox small label={tl("Ángulos fijos")} checked={ui.assist().angleStep > 0} onChange={(c) => ui.setAssist({ angleStep: c ? 15 : 0 })} />
+          </div>
+          <Show when={ui.assist().angleStep > 0}>
+            <Num label={tl("Paso del ángulo")} suffix="°" step={5} min={1} value={ui.assist().angleStep} onCommit={(v) => v > 0 && v <= 90 && ui.setAssist({ angleStep: v })} />
+          </Show>
           <Num label={tl("Paso de la rejilla")} suffix="mm" step={1} min={0} value={ui.assist().spacing} onCommit={(v) => v > 0 && ui.setAssist({ spacing: v })} />
           <div class="flex flex-wrap gap-x-3">
             <Show when={!s().sheet}>

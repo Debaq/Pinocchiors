@@ -272,6 +272,8 @@ export interface SketchAssist {
   gridSnap: boolean;
   /** Paso de la rejilla, en mm */
   spacing: number;
+  /** Las líneas saltan a ángulos múltiplos de este paso, en ° (0 = apagado) */
+  angleStep: number;
   /** Al dibujar: corte en el plano del sketch (se ve lo de atrás) */
   section: boolean;
   /** Al dibujar: el modelo oculto */
@@ -279,7 +281,7 @@ export interface SketchAssist {
 }
 const ASSIST_KEY = "pinocchio.sketchAssist";
 function loadAssist(): SketchAssist {
-  const base: SketchAssist = { infer: true, grid: false, gridSnap: false, spacing: 5, section: false, hideModel: false };
+  const base: SketchAssist = { infer: true, grid: false, gridSnap: false, spacing: 5, angleStep: 0, section: false, hideModel: false };
   try {
     const v = JSON.parse(localStorage.getItem(ASSIST_KEY) ?? "null");
     return v && typeof v === "object" ? { ...base, ...v } : base;

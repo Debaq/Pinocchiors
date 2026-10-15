@@ -283,3 +283,24 @@ test("sketch en otro plano: vértices y centros proyectados, sin aristas", () =>
   assert.equal(r.centers.length, 1);
   assert.equal(infer(empty(), [39.6, 0.2], 1, { solid: r }).kind, "solid_vertex");
 });
+
+test("ángulos fijos: la línea salta a múltiplos del paso", () => {
+  const s = { origin: 0, points: [{ id: 0, x: 0, y: 0 }, { id: 1, x: 100, y: 100 }], entities: [], constraints: [] };
+  // 31° a 50 mm: cerca del rayo de 30°
+  const c = [50 * Math.cos((31 * Math.PI) / 180), 50 * Math.sin((31 * Math.PI) / 180)];
+  const a = infer(s, c, 1, { from: 1, angleStep: 15 });
+  assert.equal(a.kind, "free"); // el desde es el punto (100, 100): otro rayo
+  const b = infer(s, [c[0], c[1]], 1, { from: 0, angleStep: 15 });
+  assert.equal(b.kind, "angle");
+  assert.equal(b.angle, 30);
+  assert.ok(Math.abs(Math.atan2(b.p[1], b.p[0]) - Math.PI / 6) < 1e-9);
+  // Apagado (sin paso) o lejos del rayo: libre
+  assert.equal(infer(s, c, 1, { from: 0 }).kind, "free");
+  assert.equal(infer(s, [50 * Math.cos((38 * Math.PI) / 180), 50 * Math.sin((38 * Math.PI) / 180)], 1, { from: 0, angleStep: 15 }).kind, "free");
+  // Horizontal y vertical los da la restricción de eje, no el ángulo
+  assert.equal(infer(s, [50, 0.4], 1, { from: 0, angleStep: 15 }).kind, "horizontal");
+  // Ángulo negativo: 315°
+  const d = infer(s, [40, -40.3], 1, { from: 0, angleStep: 15 });
+  assert.equal(d.kind, "angle");
+  assert.equal(d.angle, 315);
+});
