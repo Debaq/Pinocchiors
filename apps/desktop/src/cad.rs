@@ -78,6 +78,8 @@ pub struct ScanCache {
     pub mm_per_unit: f64,
     /// Referencias ajustadas contra este escaneo (por el JSON de su `ScanFit`)
     pub fits: Mutex<HashMap<String, Option<cad_scan::ScanGeom>>>,
+    /// Zonas libres ajustadas (borde, puntos de adentro) por el JSON de su semilla y ángulo
+    pub zones: Mutex<HashMap<String, Option<(Vec<P3>, Vec<P3>)>>>,
     /// Caminos sobre la piel ya trazados (por el JSON de sus semillas)
     pub paths: Mutex<HashMap<String, Option<Vec<P3>>>>,
     /// Cuerpos del escaneo preparados (por holgura, espesor y triángulos)
@@ -318,6 +320,30 @@ fn fit_scan_references(state: &AppState, doc: &Document) -> Option<Document> {
                     }
                     b.mesh = Some(scan_body_mesh(scan, b.offset, b.thickness, b.faces));
                 }
+                FeatureKind::ScanSurface(sf) if !f.suppressed => {
+                    let key = serde_json::to_string(&(&sf.seed, sf.angle)).unwrap_or_default();
+                    let zone = scan
+                        .zones
+                        .lock()
+                        .unwrap()
+                        .entry(key)
+                        .or_insert_with(|| {
+                            let (t, _) = scan.mesh.locate(&sf.seed)?;
+                            let mut z = scan.mesh.free_zone(t, sf.angle, 150)?;
+                            z.fit_surface(&scan.mesh)?;
+                            Some((z.boundary, z.interior))
+                        })
+                        .clone();
+                    if let Some((b, i)) = zone {
+                        (sf.boundary, sf.interior) = (b, i);
+                    }
+                    if let Some(seed) = &sf.close
+                        && let Some((t, _)) = scan.mesh.locate(seed)
+                        && let Ok(p) = cad_scan::pick_plane(&scan.mesh, t, &PickOptions::default())
+                    {
+                        sf.close_plane = Some(p.plane);
+                    }
+                }
                 FeatureKind::Curve { def: cad_model::CurveDef::ScanPath { seeds, closed, points } } => {
                     let key = serde_json::to_string(&(&*seeds, *closed)).unwrap_or_default();
                     let traced = scan
@@ -361,6 +387,7 @@ fn uses_scan(kind: &FeatureKind) -> bool {
             | FeatureKind::FaceToScan { .. }
             | FeatureKind::Rib { scan: Some(_), .. }
             | FeatureKind::Curve { def: cad_model::CurveDef::ScanPath { .. } | cad_model::CurveDef::ScanProjected { .. } }
+            | FeatureKind::ScanSurface(_)
     )
 }
 
@@ -1984,7 +2011,7 @@ fn with_scan<T>(state: &AppState, f: impl FnOnce(&ScanCache) -> Result<T, String
             vertices.extend(prim.positions.iter().map(|p| [p[0] as f64 * mm, p[1] as f64 * mm, p[2] as f64 * mm]));
             triangles.extend(prim.triangles.iter().map(|t| t.map(|i| i + base)));
         }
-        *cache = Some(ScanCache { scene_hash: hash, mesh: ScanMesh::new(&vertices, &triangles), mm_per_unit: mm, fits: Mutex::default(), paths: Mutex::default(), bodies: Mutex::default() });
+        *cache = Some(ScanCache { scene_hash: hash, mesh: ScanMesh::new(&vertices, &triangles), mm_per_unit: mm, fits: Mutex::default(), paths: Mutex::default(), zones: Mutex::default(), bodies: Mutex::default() });
     }
     f(cache.as_ref().unwrap())
 }
@@ -2137,6 +2164,8 @@ pub enum ScanFeature {
     RefPlanePoints { points: Vec<(u32, P3)> },
     RefAxis { triangle: u32, at: P3 },
     RefPoint { triangle: u32, at: P3 },
+    /// Superficie libre ajustada a la zona suave del clic (`close`: cara plana del escaneo contra la que cerrar el sólido)
+    FreeSurface { triangle: u32, at: P3, angle: f64, thickness: f64, close: Option<(u32, P3)> },
     /// Curva por el camino más corto sobre la piel entre los puntos tocados
     PathCurve { points: Vec<(u32, P3)>, closed: bool },
 }
@@ -2296,6 +2325,27 @@ fn scan_add_impl(state: &AppState, feature: ScanFeature, options: ScanPickOption
                     let fit = cad_model::ScanFit::Points { seeds };
                     let geom = cad_scan::fit_reference(mesh, &fit, &options.pick()).map_err(|e| e.to_string())?;
                     vec![(scan_reference(fit, geom), Some("Plano del escaneo".to_string()))]
+                }
+                ScanFeature::FreeSurface { triangle, at, angle, thickness, close } => {
+                    let seed = mesh.seed(*triangle, *at).ok_or("Ese lugar no es del escaneo")?;
+                    let mut zone = mesh.free_zone(*triangle, *angle, 150).ok_or("La zona no tiene un borde cerrado: elegir una zona suave rodeada de aristas vivas o del borde del escaneo")?;
+                    zone.fit_surface(mesh).ok_or("No se pudo ajustar una superficie a esa zona")?;
+                    let close_seed = close.as_ref().and_then(|(t, a)| mesh.seed(*t, *a));
+                    let close_plane = match &close_seed {
+                        Some(sd) => Some(cad_scan::pick_plane(mesh, sd.triangle, &options.pick()).map_err(|e| e.to_string())?.plane),
+                        None => None,
+                    };
+                    let surface = cad_model::ScanSurface {
+                        seed,
+                        angle: *angle,
+                        thickness: *thickness,
+                        close: close_seed,
+                        op: BodyOp::New,
+                        boundary: zone.boundary,
+                        interior: zone.interior,
+                        close_plane,
+                    };
+                    vec![(FeatureKind::ScanSurface(surface), Some("Superficie libre del escaneo".to_string()))]
                 }
                 ScanFeature::PathCurve { points, closed } => {
                     let seeds: Vec<_> = points.iter().filter_map(|(t, at)| mesh.seed(*t, *at)).collect();

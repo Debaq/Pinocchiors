@@ -881,6 +881,22 @@ export type FeatureKind =
       /** Solo lo pintado con el pincel (manda sobre `region`); la app completa `point` y `normal` */
       paint?: { radius: number; dabs: ScanDab[] } | null;
     }
+  /**
+   * Superficie libre ajustada a la zona suave del escaneo bajo `seed`; sola es una superficie, con
+   * `thickness` una cáscara y con `close` (clic en una cara plana del escaneo) un sólido cerrado contra ese plano.
+   * La app completa `boundary`, `interior` y `close_plane`
+   */
+  | {
+      type: "scan_surface";
+      seed: ScanSeed;
+      angle: number;
+      thickness?: number;
+      close?: ScanSeed | null;
+      op: BodyOp;
+      boundary?: P3[];
+      interior?: P3[];
+      close_plane?: Plane | null;
+    }
   /** Entre piezas: unir todas en la primera, restar `tools` de `targets` o dejar lo común */
   | { type: "boolean"; op: "union" | "subtract" | "intersect"; targets: PartId[]; tools: PartId[]; keep_tools: boolean }
   /** Separa los sólidos sueltos de cada pieza (vacío = todas) */
@@ -1833,7 +1849,9 @@ export type ScanFeature =
   | { kind: "ref_axis"; triangle: number; at: P3 }
   | { kind: "ref_point"; triangle: number; at: P3 }
   /** Curva por el camino más corto sobre la piel entre los puntos tocados (triángulo y punto de cada uno) */
-  | { kind: "path_curve"; points: [number, P3][]; closed: boolean };
+  | { kind: "path_curve"; points: [number, P3][]; closed: boolean }
+  /** Superficie libre de la zona suave bajo el clic; `close`: clic en la cara plana contra la que cerrar el sólido */
+  | { kind: "free_surface"; triangle: number; at: P3; angle: number; thickness: number; close: [number, P3] | null };
 
 // ─── Utilidades del documento ─────────────────────────────────────────────
 
@@ -1853,6 +1871,7 @@ export const FEATURE_LABELS: Record<FeatureKind["type"], string> = {
   get split() { return tx("cad", "Corte"); },
   get import() { return tr("Importado"); },
   get scan_body() { return tr("Cuerpo del escaneo"); },
+  get scan_surface() { return tr("Superficie libre del escaneo"); },
   get boolean() { return tr("Booleana"); },
   get split_parts() { return tr("Separar piezas"); },
   get delete_parts() { return tr("Borrar pieza"); },
@@ -2132,6 +2151,7 @@ export function editsAsSketch(kind: FeatureKind): kind is Extract<FeatureKind, {
 export function kindLabel(kind: FeatureKind): string {
   if (kind.type === "curve" && kind.def.type === "scan_path") return tr("Curva sobre el escaneo");
   if (kind.type === "curve" && kind.def.type === "scan_projected") return tr("Curva proyectada al escaneo");
+  if (kind.type === "scan_surface") return kind.close || kind.thickness ? tr("Sólido libre del escaneo") : tr("Superficie libre del escaneo");
   if (kind.type === "scan_body" && (kind.region || kind.paint)) return tr("Parche del escaneo");
   if (kind.type === "scan_body" && kind.thickness) return tr("Carcasa del escaneo");
   return kind.type === "primitive" ? PRIMITIVE_LABELS[kind.shape.type] : FEATURE_LABELS[kind.type];

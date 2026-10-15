@@ -514,6 +514,21 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
     void store.addFeature({ type: "curve", def: { type: "scan_projected", sketch: sketch.id, entities: [], flip: false, offset: 0 } });
   };
 
+  /** Superficie libre de una zona suave; sola, con espesor o cerrada contra una cara plana (2.º clic) */
+  const [freeThickness, setFreeThickness] = createSignal(0);
+  const [freeClose, setFreeClose] = createSignal(false);
+  const freeSurface = () =>
+    ui.setPick({
+      kind: "scan_point",
+      prompt: tl("Clic en la zona suave del escaneo (libre, sin forma geométrica) que se vuelve superficie"),
+      done: (at, triangle) => {
+        const make = (close: [number, P3] | null) =>
+          void addScan({ kind: "free_surface", triangle, at, angle: 25, thickness: freeThickness(), close });
+        if (!freeClose()) return make(null);
+        ui.setPick({ kind: "scan_point", prompt: tl("Clic en la cara plana del escaneo contra la que se cierra"), done: (a2, t2) => make([t2, a2]) });
+      },
+    });
+
   /** Asistente de reconstrucción: propuesta, pasos marcados y desviación al final */
   const [proposal, setProposal] = createSignal<ReconstructProposal>();
   const [marked, setMarked] = createSignal<number[]>([]);
@@ -753,6 +768,16 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                     <Button size="sm" onClick={() => pickScan("torus")}>
                       {tl("Toro")}
                     </Button>
+                  </div>
+                  <div class="space-y-1.5" aria-label={tl("Superficie libre")}>
+                    <span class="text-xs text-text-muted">{tl("Superficie libre (zonas sin forma geométrica)")}</span>
+                    <div class="flex items-end gap-1.5">
+                      <Num label={tl("Espesor")} value={freeThickness()} step={0.5} suffix="mm" onCommit={setFreeThickness} />
+                      <Button size="sm" variant="ghost" title={tl("Ajusta una superficie suave a la zona bajo el clic: sola, con espesor o cerrada contra una cara plana")} onClick={freeSurface}>
+                        {tl("Elegir la zona")}
+                      </Button>
+                    </div>
+                    <Checkbox small label={tl("Cerrar contra una cara plana (sólido)")} checked={freeClose()} onChange={setFreeClose} />
                   </div>
                   <div class="space-y-1.5 rounded-md border border-border p-2" aria-label={tl("Asistente de reconstrucción")}>
                     <span class="text-xs text-text-muted">{tl("Asistente de reconstrucción")}</span>

@@ -2535,6 +2535,34 @@ impl Ctx<'_> {
                 self.ev.tools.insert(f.id, (tool.clone(), b.op));
                 self.apply(f.id, tool, b.op)
             }
+            FeatureKind::ScanSurface(sf) => {
+                if sf.boundary.len() < 6 {
+                    return Err("la superficie libre no tiene borde (¿hay un escaneo y una zona con borde?)".into());
+                }
+                // Borde: polilínea cerrada (una spline se pasaría en las esquinas)
+                let ring = |pts: &[P3]| -> R<Shape> {
+                    let n = pts.len();
+                    let lines: Vec<Curve> = (0..n).map(|k| Curve::Line(pts[k], pts[(k + 1) % n])).collect();
+                    Shape::wire(&lines).map_err(err)
+                };
+                let wire = ring(&sf.boundary)?;
+                let face = Shape::fill(&[(wire.clone(), None)], &sf.interior).map_err(err)?;
+                let shape = if let Some(plane) = &sf.close_plane {
+                    let n = normalize(plane.normal);
+                    let flat: Vec<P3> = sf.boundary.iter().map(|p| sub(*p, scale(n, dot(sub(*p, plane.origin), n)))).collect();
+                    let floor = ring(&flat)?;
+                    let side = Shape::loft(&[wire.clone(), floor.clone()], false, true).map_err(err)?;
+                    let base = Shape::fill(&[(floor, None)], &[]).map_err(err)?;
+                    let size = sf.boundary.iter().fold(0.0f64, |m, p| m.max(norm(sub(*p, sf.boundary[0]))));
+                    Shape::sew(&[face, side, base], (size * 1e-3).max(0.02), true).map_err(err)?
+                } else if sf.thickness != 0.0 {
+                    face.thicken(sf.thickness).map_err(err)?
+                } else {
+                    face
+                };
+                let tags = (0..shape.face_count()).map(|k| vec![tag(f.id, format!("cara:{k}"))]).collect();
+                self.apply(f.id, Tagged { shape, tags }, sf.op)
+            }
             FeatureKind::Fillet { edges, radius, radius2, points } => {
                 if edges.is_empty() {
                     return Err("elegir al menos una arista".into());

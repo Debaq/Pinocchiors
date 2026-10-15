@@ -718,6 +718,47 @@ export const escenarios = {
     if (!(within > 90)) throw new Error(`dentro de tolerancia: ${dev}`);
     await b.shot("escaneo-asistente");
   },
+
+  async "escaneo: superficie libre de una cúpula cerrada contra una cara plana"(b) {
+    // Placa de r 25 × 3, pedestal de r 19 hasta z = 6 y una cúpula de r 12 encima (STL de revolución)
+    const segs = 96;
+    const dome = Array.from({ length: 13 }, (_, k) => [12 * Math.cos(((Math.PI / 2) * k) / 12), 6 + 12 * Math.sin(((Math.PI / 2) * k) / 12)]);
+    const profile = [[0, 0], [25, 0], [25, 3], [19, 3], [19, 6], ...dome];
+    const at = ([r, z], j) => [r * Math.cos((2 * Math.PI * j) / segs), r * Math.sin((2 * Math.PI * j) / segs), z];
+    let stl = "solid cupula\n";
+    const facet = (a, c, d) => (stl += `facet normal 0 0 0\nouter loop\nvertex ${a.join(" ")}\nvertex ${c.join(" ")}\nvertex ${d.join(" ")}\nendloop\nendfacet\n`);
+    for (let k = 0; k < profile.length - 1; k++) {
+      const [p0, p1] = [profile[k], profile[k + 1]];
+      for (let j = 0; j < segs; j++) {
+        if (p1[0] > 1e-9) facet(at(p0, j), at(p1, j + 1), at(p1, j));
+        if (p0[0] > 1e-9) facet(at(p0, j), at(p0, j + 1), at(p1, j + 1));
+      }
+    }
+    const path = `${process.env.E2E_OUT ?? "/tmp/pinocchio-e2e"}/escaneo-cupula.stl`;
+    writeFileSync(path, stl + "endsolid cupula\n");
+    // Bajo la cúpula, del plano z = 3 al borde de la cúpula en z = 6, más la cúpula (media esfera de r 12)
+    const volume = Math.PI * 144 * 3 + (2 / 3) * Math.PI * 1728;
+
+    await importModel(b, path);
+    await begin(b);
+    await tab(b, "Desde el escaneo");
+    await b.eval(`window.__cadViewer.lookFrom([0.001, -0.001, 1])`);
+    await sleep(800);
+    await b.clickText("Cerrar contra una cara plana (sólido)");
+    await b.clickText("Elegir la zona");
+    await b.click(...(await b.eval(`window.__cadViewer.screenOf([4, 0, ${6 + Math.sqrt(128)}])`)), { wait: 800 });
+    await b.click(...(await b.eval(`window.__cadViewer.screenOf([22, 0, 3])`)), { wait: 1500 });
+    let res;
+    for (let t = 0; t < 240; t++) {
+      res = await evaluate();
+      if (res.status?.length === 1 && ["ok", "error"].includes(res.status[0].state?.type ?? res.status[0].state)) break;
+      await sleep(250);
+    }
+    const st = res.status?.[0]?.state;
+    if ((st?.type ?? st) !== "ok") throw new Error(`superficie libre: ${JSON.stringify(res.status)}`);
+    near(res.parts[0].volume, volume, volume * 0.05, "volumen de la cúpula cerrada");
+    await b.shot("escaneo-superficie-libre");
+  },
 };
 
 siEsPrincipal(import.meta.url, escenarios);

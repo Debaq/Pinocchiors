@@ -15,6 +15,7 @@
 mod assistant;
 mod body;
 mod deviation;
+mod freeform;
 mod geodesic;
 mod mesh;
 mod mold;
@@ -32,6 +33,7 @@ use serde::{Deserialize, Serialize};
 pub use assistant::{Proposal, Step, StepKind, apply as apply_proposal, propose};
 pub use body::{BodyMesh, BodyOptions, MAX_FACES, MIN_FACES, open_edges, prepare_body, solid_problems};
 pub use deviation::{Deviation, DeviationStats, deviation};
+pub use freeform::FreeZone;
 pub use mesh::ScanMesh;
 pub use mold::{MoldOptions, add_mold};
 pub use outline::{OutlineOptions, Section, fit_circle, outline_sketch, simplify_closed, simplify_open, slice};

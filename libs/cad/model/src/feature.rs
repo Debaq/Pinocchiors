@@ -667,6 +667,37 @@ pub struct ScanDab {
     pub normal: P3,
 }
 
+/// Superficie de forma libre ajustada a una zona suave del escaneo (una
+/// empuñadura, una tapa abombada): la zona crece desde el clic (`seed`) por
+/// normales vecinas hasta `angle` grados; su borde y puntos de adentro los
+/// pone la app contra el escaneo de hoy y la superficie los atraviesa (relleno
+/// de OpenCASCADE). Sola es una superficie; con `thickness` una cáscara; con
+/// `close` (un plano del escaneo) un sólido cerrado contra ese plano.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScanSurface {
+    pub seed: ScanSeed,
+    #[serde(default = "scan_surface_angle")]
+    pub angle: f64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub thickness: f64,
+    /// Cerrar contra la cara plana del escaneo bajo este clic
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub close: Option<ScanSeed>,
+    #[serde(default)]
+    pub op: BodyOp,
+    /// Lo último ajustado por la app: borde cerrado (mm), puntos de adentro y plano de cierre
+    #[serde(default)]
+    pub boundary: Vec<P3>,
+    #[serde(default)]
+    pub interior: Vec<P3>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub close_plane: Option<Plane>,
+}
+
+fn scan_surface_angle() -> f64 {
+    25.0
+}
+
 /// Regiones de un sketch proyectadas sobre el escaneo.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ScanRegion {
@@ -835,6 +866,8 @@ pub enum FeatureKind {
     },
     /// El escaneo como cuerpo, para encajes, cunas y negativos.
     ScanBody(ScanBody),
+    /// Superficie libre ajustada a una zona del escaneo que no es plano, cilindro ni cono
+    ScanSurface(ScanSurface),
     /// Booleana entre piezas: unir todas en la primera de `targets`, restar
     /// `tools` de cada una de `targets` (conservándolas o no) o dejar lo común.
     Boolean {
@@ -1569,6 +1602,8 @@ impl FeatureKind {
             FeatureKind::ScanBody(b) if b.region.is_some() || b.paint.is_some() => "Parche del escaneo",
             FeatureKind::ScanBody(b) if b.thickness != 0.0 => "Carcasa del escaneo",
             FeatureKind::ScanBody(_) => "Cuerpo del escaneo",
+            FeatureKind::ScanSurface(s) if s.close.is_some() || s.thickness != 0.0 => "Sólido libre del escaneo",
+            FeatureKind::ScanSurface(_) => "Superficie libre del escaneo",
             FeatureKind::Boolean { .. } => "Booleana",
             FeatureKind::SplitParts { .. } => "Separar piezas",
             FeatureKind::DeleteParts { .. } => "Borrar pieza",

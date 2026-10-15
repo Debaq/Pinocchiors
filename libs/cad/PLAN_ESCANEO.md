@@ -349,10 +349,29 @@ Partes: E4.1 carcasa y parche bajo un sketch, E4.2 región pintada con pincel, E
   primitivas sueltas; no reconoce patrones (varios agujeros iguales) ni simetrías; los redondeos no se crean; nada
   de piezas de varias caras de apoyo. Para piezas torneadas usar «Revolución desde el corte» (E8).
 
-### E10 — Superficies libres
+### E10 — Superficies libres ✅ (2026-10-15, por relleno de OpenCASCADE; sin probar en la app real)
 
-- Ajustar una B-spline a una zona (`GeomAPI_PointsToBSplineSurface` / `GeomPlate`) con borde en
-  las zonas vecinas, coser con las caras analíticas → sólido. La más difícil, al final.
+- `FeatureKind::ScanSurface { seed, angle, thickness, close, op, boundary, interior, close_plane }`: la zona suave
+  (normales vecinas a menos de `angle`°, 25 por defecto) bajo un clic, ajustada con una superficie de forma libre.
+  Sola es una superficie; con `thickness` una cáscara (`thicken`); con `close` (clic en una cara plana del
+  escaneo) un **sólido cerrado contra ese plano**: la superficie, una pared reglada entre su borde y su proyección
+  sobre el plano y el fondo plano, cosidos (`sew`).
+- `ScanMesh::free_zone` (`scan/src/freeform.rs`): crece la zona, toma su lazo de borde más largo y lo reparte en
+  12–40 puntos (más segmentos hacen el relleno de OCC 40 veces más lento: 120 → 9 s por intento, 40 → 0,25 s), y
+  puntos de adentro. `FreeZone::fit_surface` prueba 12…100 puntos de adentro (los más lejanos entre sí) y se queda con
+  la cara **válida** de menor desviación contra los triángulos de la zona: con puntos de más o de menos
+  `BRepOffsetAPI_MakeFilling` entrega caras inválidas o apartadas. Los puntos quedan guardados en la operación (se
+  rehace igual aunque cambie el algoritmo) y la app los vuelve a ajustar si el escaneo cambia (`zones`, en caché).
+- UI («Superficie libre» en la pestaña del escaneo): espesor, casilla «Cerrar contra una cara plana (sólido)» y
+  «Elegir la zona» (clic en la zona; con la casilla, segundo clic en la cara plana). `ScanFeature::FreeSurface`.
+- Pruebas: `scan_free_surface_closes_into_a_solid` (casquete de esfera: zona entera, desviación < 0,8 mm, superficie
+  sola y sólido cerrado con el volumen ±4 %) y e2e «escaneo: superficie libre de una cúpula cerrada contra una cara
+  plana» (cúpula sobre pedestal y placa: volumen ±5 %).
+- Límites: es relleno por restricciones, no un ajuste de mínimos cuadrados (`GeomAPI_PointsToBSplineSurface` pide una
+  grilla de puntos que una zona cualquiera no tiene); el borde exterior se aproxima con una polilínea de ≤ 40
+  tramos (se pierden esquinas finas); solo el lazo exterior (los huecos de la zona se rellenan); no ata la superficie
+  a las vecinas analíticas con tangencia; cerrar exige un plano debajo de todo el borde (un borde que se cruza con su
+  proyección da un sólido inválido); la desviación se mide sobre vértices de la cara, no en todo el parche.
 
 ## Riesgos
 

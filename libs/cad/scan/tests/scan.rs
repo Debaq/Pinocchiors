@@ -837,3 +837,56 @@ fn assistant_proposes_and_rebuilds_the_plate() {
     apply_proposal(&mut only, &mesh, &opts, &outline, &[1]).unwrap();
     assert_eq!(only.features.len(), 1);
 }
+
+/// Casquete de esfera escaneado (z ≥ 5): la superficie libre ajustada a su zona,
+/// cerrada contra el plano z = 0, es un sólido con el volumen de la pieza.
+#[test]
+fn scan_free_surface_closes_into_a_solid() {
+    if !occt::available() {
+        return;
+    }
+    let t = Shape::sphere([0.0; 3], 20.0).unwrap().tessellate(0.05, 0.1).unwrap();
+    let keep: Vec<[u32; 3]> = t.triangles.iter().copied().filter(|tri| tri.iter().all(|&i| t.positions[i as usize][2] >= 5.0)).collect();
+    let scan = ScanMesh::new(&t.positions, &keep);
+    let seed = (0..scan.face_count() as u32).filter(|&f| scan.face_areas[f as usize] > 1e-6).max_by(|&a, &b| scan.face_centroids[a as usize][2].total_cmp(&scan.face_centroids[b as usize][2])).unwrap();
+    let mut zone = scan.free_zone(seed, 25.0, 150).expect("zona con borde");
+    assert!(zone.faces.len() as f64 > scan.face_count() as f64 * 0.99, "todo el casquete es una zona ({} de {})", zone.faces.len(), scan.face_count());
+    assert!(zone.boundary.len() >= 12 && zone.boundary.iter().all(|p| p[2] >= 4.99 && p[2] < 7.5));
+    let zb = zone.boundary.iter().map(|p| p[2]).sum::<f64>() / zone.boundary.len() as f64;
+
+    let rms = zone.fit_surface(&scan).expect("una superficie válida");
+    assert!(rms < 0.8, "la superficie se aparta {rms} mm del escaneo");
+    assert!(!zone.interior.is_empty() && zone.interior.len() <= 100);
+
+    let surface = |thickness: f64, close: Option<Plane>| {
+        let click = scan.seed(seed, scan.face_centroids[seed as usize]).unwrap();
+        FeatureKind::ScanSurface(ScanSurface {
+            seed: click.clone(),
+            angle: 25.0,
+            thickness,
+            close: close.map(|_| click),
+            op: BodyOp::New,
+            boundary: zone.boundary.clone(),
+            interior: zone.interior.clone(),
+            close_plane: close,
+        })
+    };
+    // Solo la superficie: una pieza sin volumen
+    let mut doc = Document::new();
+    doc.add(surface(0.0, None));
+    let ev = doc.evaluate();
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    assert_eq!(doc.features[0].kind.label(), "Superficie libre del escaneo");
+
+    // Cerrada contra z = 0: cilindro de 5 de alto bajo el casquete de 15
+    let mut doc = Document::new();
+    doc.add(surface(0.0, Some(Plane::XY)));
+    let ev = doc.evaluate();
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    assert_eq!(doc.features[0].kind.label(), "Sólido libre del escaneo");
+    // Borde a la altura media zb: cilindro de zb de alto bajo un casquete de 20 − zb
+    let (r2, h) = (400.0 - zb * zb, 20.0 - zb);
+    let expected = PI * r2 * zb + PI * h / 6.0 * (3.0 * r2 + h * h);
+    let v = ev.body.unwrap().mass().unwrap().volume;
+    assert_relative_eq!(v, expected, max_relative = 0.04);
+}
