@@ -282,6 +282,8 @@ pub fn run() {
             cad::cad_scan_add,
             cad::cad_scan_dabs,
             cad::cad_scan_mold,
+            cad::cad_scan_propose,
+            cad::cad_scan_apply,
             cad::cad_scan_turned,
             cad::cad_scan_skin,
             cad::cad_scan_use,

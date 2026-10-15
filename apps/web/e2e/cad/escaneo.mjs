@@ -669,6 +669,55 @@ export const escenarios = {
     if (bad.length) throw new Error(`recubrimiento: ${JSON.stringify(bad)}`);
     if (res.parts.length !== 2) throw new Error(`piezas: ${res.parts.length}`);
   },
+
+  async "escaneo: asistente de reconstrucción propone base y tetón"(b) {
+    // Disco de R 30 × 10 con un tetón de r 12 × 15 encima, como STL
+    const segs = 96;
+    const at = (r, z, j) => [r * Math.cos((2 * Math.PI * j) / segs), r * Math.sin((2 * Math.PI * j) / segs), z];
+    let stl = "solid disco\n";
+    const facet = (a, c, d) => (stl += `facet normal 0 0 0\nouter loop\nvertex ${a.join(" ")}\nvertex ${c.join(" ")}\nvertex ${d.join(" ")}\nendloop\nendfacet\n`);
+    const strip = (r0, z0, r1, z1) => {
+      for (let j = 0; j < segs; j++) {
+        // Normales hacia afuera (el perfil se recorre fondo → pared → arriba → tetón)
+        // Sin los triángulos de área cero del abanico del centro (r = 0)
+        if (r1 > 0) facet(at(r0, z0, j), at(r1, z1, j + 1), at(r1, z1, j));
+        if (r0 > 0) facet(at(r0, z0, j), at(r0, z0, j + 1), at(r1, z1, j + 1));
+      }
+    };
+    strip(0, 0, 30, 0); // fondo (abanico: el primer anillo es un punto)
+    strip(30, 0, 30, 10); // pared del disco
+    strip(30, 10, 12, 10); // cara de arriba del disco
+    strip(12, 10, 12, 25); // pared del tetón
+    strip(12, 25, 0, 25); // tapa del tetón
+    const path = `${process.env.E2E_OUT ?? "/tmp/pinocchio-e2e"}/escaneo-disco.stl`;
+    writeFileSync(path, stl + "endsolid disco\n");
+    const volume = Math.PI * 900 * 10 + Math.PI * 144 * 15;
+
+    await importModel(b, path);
+    await begin(b);
+    await tab(b, "Desde el escaneo");
+    await b.clickText("Proponer un árbol");
+    for (let t = 0; t < 60 && !(await b.eval(`document.body.innerText.includes("Crear lo marcado")`)); t++) await sleep(500);
+    const text = await b.eval(`document.querySelector('[aria-label="Asistente de reconstrucción"]')?.innerText ?? ""`);
+    if (!text.includes("Base:") || !text.includes("Tetón")) throw new Error(`la propuesta: ${text}`);
+    if (text.includes("Ø60") || (text.match(/Tetón/g) ?? []).length !== 1) throw new Error(`el borde del disco no se descartó: ${text}`);
+    await b.clickText("Crear lo marcado");
+    let res;
+    for (let t = 0; t < 240; t++) {
+      res = await evaluate();
+      if (res.status?.length === 3 && res.status.every((x) => ["ok", "error"].includes(x.state?.type ?? x.state))) break;
+      await sleep(250);
+    }
+    const bad = res.status.filter((x) => (x.state?.type ?? x.state) !== "ok");
+    if (bad.length) throw new Error(`operaciones: ${JSON.stringify(bad)}`);
+    near(res.parts[0].volume, volume, volume * 0.02, "volumen reconstruido");
+    // Al final compara con el escaneo y lo muestra
+    for (let t = 0; t < 60 && !(await b.eval(`document.body.innerText.includes("Dentro de tolerancia")`)); t++) await sleep(500);
+    const dev = await b.eval(`document.querySelector('[aria-label="Comparar con el escaneo"]')?.innerText ?? ""`);
+    const within = parseFloat((dev.match(/Dentro de tolerancia\s+([\d,]+)/) ?? [])[1]?.replace(",", "."));
+    if (!(within > 90)) throw new Error(`dentro de tolerancia: ${dev}`);
+    await b.shot("escaneo-asistente");
+  },
 };
 
 siEsPrincipal(import.meta.url, escenarios);

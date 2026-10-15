@@ -807,3 +807,33 @@ fn scan_skin_through_parallel_cuts() {
     let v = ev.body.unwrap().mass().unwrap().volume;
     assert!(v > ball * 0.9 && v < ball * 1.02, "volumen {v} contra {ball}");
 }
+
+/// El asistente propone base + tetón para la placa con agujero y tetón (el agujero
+/// pasante ya está en el contorno de la base) y lo aceptado reconstruye el volumen.
+#[test]
+fn assistant_proposes_and_rebuilds_the_plate() {
+    if !occt::available() {
+        return;
+    }
+    let mesh = scan_of(&part(), 0.02);
+    let opts = PickOptions { tolerance: Some(0.1), ..Default::default() };
+    let outline = OutlineOptions { tolerance: 0.15, ..Default::default() };
+    let proposal = propose(&mesh, &opts, &outline);
+    let kinds: Vec<_> = proposal.steps.iter().map(|s| s.kind).collect();
+    assert_eq!(kinds, vec![StepKind::Base, StepKind::Boss], "pasos: {:?} avisos {:?}", proposal.steps.iter().map(|s| &s.label).collect::<Vec<_>>(), proposal.notes);
+    assert!(proposal.covered > 0.85, "cubre {}", proposal.covered);
+    assert!(proposal.steps.iter().all(|s| s.on && s.creates));
+
+    let ids: Vec<u32> = proposal.steps.iter().filter(|s| s.on).map(|s| s.id).collect();
+    let mut doc = Document::new();
+    let added = apply_proposal(&mut doc, &mesh, &opts, &outline, &ids).unwrap();
+    assert_eq!(added, 3, "sketch + extrusión + tetón");
+    let ev = doc.evaluate();
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    assert_relative_eq!(ev.body.unwrap().mass().unwrap().volume, part_volume(), max_relative = 0.02);
+
+    // Solo el tetón no tiene base: ninguna operación de la base
+    let mut only = Document::new();
+    apply_proposal(&mut only, &mesh, &opts, &outline, &[1]).unwrap();
+    assert_eq!(only.features.len(), 1);
+}

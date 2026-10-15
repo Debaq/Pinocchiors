@@ -2203,6 +2203,33 @@ fn scan_skin_impl(state: &AppState, direction: P3, count: usize, ruled: bool, op
     evaluate(state)
 }
 
+/// Árbol de operaciones propuesto para reconstruir el escaneo (base, agujeros, tetones…).
+#[tauri::command]
+pub async fn cad_scan_propose(app: AppHandle, options: Option<ScanPickOptions>) -> Result<cad_scan::Proposal, String> {
+    in_background(app, move |state| scan_propose_impl(state, options.unwrap_or_default())).await
+}
+
+fn scan_propose_impl(state: &AppState, options: ScanPickOptions) -> Result<cad_scan::Proposal, String> {
+    with_scan(state, |scan| Ok(cad_scan::propose(&scan.mesh, &options.pick(), &options.outline(&scan.mesh))))
+}
+
+/// Agrega al diseño las operaciones de los pasos elegidos de la propuesta.
+#[tauri::command]
+pub async fn cad_scan_apply(app: AppHandle, steps: Vec<u32>, options: Option<ScanPickOptions>) -> Result<CadResult, String> {
+    require_occt()?;
+    in_background(app, move |state| scan_apply_impl(state, steps, options.unwrap_or_default())).await
+}
+
+fn scan_apply_impl(state: &AppState, steps: Vec<u32>, options: ScanPickOptions) -> Result<CadResult, String> {
+    *state.cad_preview.lock().unwrap() = None;
+    with_scan(state, |scan| {
+        let mut lock = state.cad_document.lock().unwrap();
+        let doc = lock.get_or_insert_with(Document::new);
+        cad_scan::apply_proposal(doc, &scan.mesh, &options.pick(), &options.outline(&scan.mesh), &steps).map(|_| ())
+    })?;
+    evaluate(state)
+}
+
 /// Convierte lo elegido en el escaneo en operaciones del diseño.
 #[tauri::command]
 pub async fn cad_scan_add(app: AppHandle, feature: ScanFeature, options: Option<ScanPickOptions>) -> Result<CadResult, String> {
@@ -2466,6 +2493,8 @@ pub mod bridge {
                 arg::<Option<bool>>(args, "ruled")?.unwrap_or(false),
                 arg::<Option<BodyOp>>(args, "op")?.unwrap_or(BodyOp::New),
             )?),
+            "cad_scan_propose" => ok(scan_propose_impl(state, arg::<Option<ScanPickOptions>>(args, "options")?.unwrap_or_default())?),
+            "cad_scan_apply" => ok(scan_apply_impl(state, arg(args, "steps")?, arg::<Option<ScanPickOptions>>(args, "options")?.unwrap_or_default())?),
             "cad_scan_mold" => ok(scan_mold_impl(state, arg(args, "options")?)?),
             "cad_scan_add" => ok(scan_add_impl(state, arg(args, "feature")?, arg::<Option<ScanPickOptions>>(args, "options")?.unwrap_or_default())?),
             "import_model" => {

@@ -2085,6 +2085,27 @@ const PRIMITIVE_LABELS: Record<PrimitiveShape["type"], string> = {
   get gear() { return tr("Engrane"); },
 };
 
+/** Un paso del árbol que propone el asistente de reconstrucción */
+export interface ReconstructStep {
+  id: number;
+  kind: "base" | "hole" | "boss" | "cone" | "torus" | "fillet";
+  label: string;
+  detail: string;
+  /** Triángulos del escaneo que explica */
+  faces: number[];
+  area: number;
+  on: boolean;
+  /** Crea operaciones (los redondeos solo informan) */
+  creates: boolean;
+}
+
+export interface ReconstructProposal {
+  steps: ReconstructStep[];
+  /** Fracción del área del escaneo que explican los pasos que crean algo */
+  covered: number;
+  notes: string[];
+}
+
 /** Cómo se arma el molde (eje 0 = X, 1 = Y, 2 = Z; `at` de 0 a 1; mm) */
 export interface MoldOptions {
   axis: number;
@@ -4740,6 +4761,10 @@ export function createCadStore() {
 
     /** Molde de dos mitades alrededor del escaneo (cavidad, llaves y bebedero) */
     scanMold: (options: MoldOptions) => store.scanCommand("cad_scan_mold", { options }),
+    /** El árbol que propone el asistente para reconstruir el escaneo */
+    scanPropose: () => invoke<ReconstructProposal>("cad_scan_propose", { options: null }),
+    /** Crea las operaciones de los pasos elegidos de la propuesta */
+    scanApply: (steps: number[]) => store.scanCommand("cad_scan_apply", { steps, options: null }),
     /** Revolución del perfil del escaneo cortado por un plano que contiene el eje (piezas torneadas) */
     scanTurned: (origin: P3, direction: P3) => store.scanCommand("cad_scan_turned", { origin, direction, op: "new" }),
     /** Recubrimiento por `count` cortes paralelos, perpendiculares a `direction` */

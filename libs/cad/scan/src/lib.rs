@@ -12,6 +12,7 @@
 //! - [`prepare_body`]: el escaneo como cuerpo para booleanas (vóxeles con holgura);
 //! - [`fit_reference`]: referencias del diseño ligadas al escaneo ([`cad_model::ScanFit`]).
 
+mod assistant;
 mod body;
 mod deviation;
 mod geodesic;
@@ -28,6 +29,7 @@ use cad_model::{BodyOp, Extent, Extrude, FeatureId, FeatureKind, PlaneSpec, Prim
 use cad_solver::fitting::{self, PrimitiveParams, PrimitiveType};
 use serde::{Deserialize, Serialize};
 
+pub use assistant::{Proposal, Step, StepKind, apply as apply_proposal, propose};
 pub use body::{BodyMesh, BodyOptions, MAX_FACES, MIN_FACES, open_edges, prepare_body, solid_problems};
 pub use deviation::{Deviation, DeviationStats, deviation};
 pub use mesh::ScanMesh;

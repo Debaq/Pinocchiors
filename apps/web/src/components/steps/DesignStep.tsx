@@ -65,6 +65,7 @@ import {
   type ScanDab,
   FIT_COLORS,
   type MoldOptions,
+  type ReconstructProposal,
   type AxisDef,
   type Connector,
   type Mate,
@@ -513,6 +514,38 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
     void store.addFeature({ type: "curve", def: { type: "scan_projected", sketch: sketch.id, entities: [], flip: false, offset: 0 } });
   };
 
+  /** Asistente de reconstrucción: propuesta, pasos marcados y desviación al final */
+  const [proposal, setProposal] = createSignal<ReconstructProposal>();
+  const [marked, setMarked] = createSignal<number[]>([]);
+  const [assistBusy, setAssistBusy] = createSignal(false);
+  const propose = async () => {
+    setAssistBusy(true);
+    try {
+      const p = await store.scanPropose();
+      setProposal(p);
+      setMarked(p.steps.filter((s) => s.on).map((s) => s.id));
+    } catch (e) {
+      say(String(e));
+    } finally {
+      setAssistBusy(false);
+    }
+  };
+  const buildProposal = async () => {
+    setAssistBusy(true);
+    try {
+      await store.scanApply(marked());
+      setProposal(undefined);
+      ui.setScanHighlight([]);
+      // Al final, qué tanto se parece lo creado al escaneo
+      ui.setFit(null);
+      ui.setDeviation(await store.deviation(0.2));
+    } catch (e) {
+      say(String(e));
+    } finally {
+      setAssistBusy(false);
+    }
+  };
+
   /** Pincel: lo que se pinta sobre el escaneo queda como parche (carcasa de 2 mm, pieza nueva) */
   const paintPatch = () =>
     ui.setPick({
@@ -720,6 +753,40 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                     <Button size="sm" onClick={() => pickScan("torus")}>
                       {tl("Toro")}
                     </Button>
+                  </div>
+                  <div class="space-y-1.5 rounded-md border border-border p-2" aria-label={tl("Asistente de reconstrucción")}>
+                    <span class="text-xs text-text-muted">{tl("Asistente de reconstrucción")}</span>
+                    <Button size="sm" fullWidth disabled={assistBusy()} onClick={() => void propose()} title={tl("Detecta las zonas del escaneo y propone un árbol de operaciones: la base, agujeros, tetones, conos y toros")}>
+                      {assistBusy() ? tl("Pensando…") : tl("Proponer un árbol")}
+                    </Button>
+                    <Show when={proposal()}>
+                      {(p) => (
+                        <div class="space-y-1">
+                          <p class="text-[11px] text-text-dim">{tl("Explica el {v1} % del escaneo", { v1: fmt(p().covered * 100, 0) })}</p>
+                          <For each={p().notes}>{(n) => <p class="text-[11px] text-warning">{n}</p>}</For>
+                          <For each={p().steps}>
+                            {(s) => (
+                              <div class="flex items-start gap-1.5">
+                                <input
+                                  type="checkbox"
+                                  class="mt-0.5"
+                                  disabled={!s.creates}
+                                  checked={marked().includes(s.id)}
+                                  onChange={(e) => setMarked(e.currentTarget.checked ? [...marked(), s.id] : marked().filter((x) => x !== s.id))}
+                                />
+                                <button class="flex-1 text-left" title={s.detail} onClick={() => ui.setScanHighlight(s.faces)}>
+                                  <span class={s.creates ? "text-xs text-text" : "text-xs text-text-dim"}>{s.label}</span>
+                                  <span class="block text-[10px] text-text-dim">{s.detail}</span>
+                                </button>
+                              </div>
+                            )}
+                          </For>
+                          <Button size="sm" variant="primary" fullWidth disabled={assistBusy() || marked().length === 0} onClick={() => void buildProposal()}>
+                            {tl("Crear lo marcado")}
+                          </Button>
+                        </div>
+                      )}
+                    </Show>
                   </div>
                   <div class="space-y-1.5" aria-label={tl("Curvas sobre la piel")}>
                     <span class="text-xs text-text-muted">{tl("Curvas sobre la piel (caminos, bordes, nervios)")}</span>

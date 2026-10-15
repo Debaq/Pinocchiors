@@ -326,10 +326,28 @@ Partes: E4.1 carcasa y parche bajo un sketch, E4.2 región pintada con pincel, E
   perfil sale de ese plano), varios lazos por corte en el recubrimiento (hoy solo el exterior más grande), perfil
   con líneas y arcos reconocidos en vez de segmentos simplificados, y revolución parcial (sector).
 
-### E9 — Asistente de reconstrucción
+### E9 — Asistente de reconstrucción ✅ (2026-10-15, prismáticas y de revolución simples; sin probar en la app real)
 
-- `detect_all` propone un árbol (base, agujeros, tetones, redondeos) que se acepta por partes y
-  queda editable; desviación al final.
+- `cad_scan::propose` / `apply_proposal` (`scan/src/assistant.rs`; comandos `cad_scan_propose` y `cad_scan_apply`): del
+  `detect_all` arma pasos numerados y deterministas, con lo que cubre cada uno:
+  - **Base**: la cara plana más grande, su contorno como sketch y la extrusión hacia adentro hasta el espesor medido.
+  - **Agujeros** y **tetones** (cilindros), **conos** y **toros** como primitivas con su eje y medidas.
+  - **Redondeos**: solo informan (radio y ángulo; los de eje paralelo a la base ya vienen en el contorno).
+  - No repite lo que ya está en otro paso: un agujero pasante que es un lazo interior del contorno de la base, o el
+    borde redondo de una base circular. Los cilindros que cubren menos de 0,3 de la vuelta se ignoran.
+  - `covered`: fracción del área del escaneo que explican los pasos (la base cuenta sus paredes y la cara de enfrente).
+- UI («Asistente de reconstrucción» en la pestaña del escaneo): «Proponer un árbol» lista los pasos con casilla (los
+  toros vienen sin marcar), el detalle y, al tocar uno, resalta sus triángulos en el escaneo; «Crear lo marcado» agrega
+  las operaciones (sketch, extrusión, primitivas: normales y editables) y **al final compara con el escaneo**
+  (colores de desviación y «Dentro de tolerancia»).
+- Pruebas: `assistant_proposes_and_rebuilds_the_plate` (placa con agujero pasante y tetón: pasos Base + Tetón, cubre
+  > 85 %, volumen reconstruido ±2 %, un paso suelto no arrastra la base) y e2e «escaneo: asistente de reconstrucción
+  propone base y tetón» (disco con tetón: el borde del disco se descarta; volumen ±2 %; desviación > 90 % dentro de
+  tolerancia; 4/4 corridas).
+- Límites: una sola base (la cara plana más grande); el espesor es la mediana de rayos desde esa cara, así que con
+  un tetón grande debajo de la cara el espesor puede mezclar los dos niveles; agujeros ciegos y escalones salen como
+  primitivas sueltas; no reconoce patrones (varios agujeros iguales) ni simetrías; los redondeos no se crean; nada
+  de piezas de varias caras de apoyo. Para piezas torneadas usar «Revolución desde el corte» (E8).
 
 ### E10 — Superficies libres
 
