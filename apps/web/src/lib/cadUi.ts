@@ -46,6 +46,8 @@ import {
   type SketchUse,
   type Region,
   type ScanDeviation,
+  type FitRange,
+  type FitReport,
   type ScanPick,
   type Sketch,
   type SketchConstraint,
@@ -390,6 +392,9 @@ export function createCadUi(store: CadStore) {
   const [section, setSection] = createSignal<SectionView | null>(null);
   // Desviación del escaneo mostrada en colores (null = color de siempre)
   const [deviation, setDeviation] = createSignal<ScanDeviation | null>(null);
+  // Verificar el calce: con rango, el escaneo se colorea por clases de holgura y sale el informe
+  const [fit, setFit] = createSignal<FitRange | null>(null);
+  const [fitReport, setFitReport] = createSignal<FitReport | null>(null);
   // Ensamble: el visor muestra las instancias en vez del diseño
   const [assemblyMode, setAssemblyMode] = createSignal(false);
   // Ensamble: por cuál unión se mueve cada pieza al arrastrarla (instancia → clave de `jointKey`)
@@ -606,6 +611,10 @@ export function createCadUi(store: CadStore) {
     setDragJoints,
     deviation,
     setDeviation,
+    fit,
+    setFit,
+    fitReport,
+    setFitReport,
     /** Acciones del panel con lo elegido (las registra DesignStep) */
     actions,
     setActions,

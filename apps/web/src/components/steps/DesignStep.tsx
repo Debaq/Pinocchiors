@@ -63,6 +63,7 @@ import {
   type P2,
   type P3,
   type ScanDab,
+  FIT_COLORS,
   type MoldOptions,
   type AxisDef,
   type Connector,
@@ -6449,13 +6450,19 @@ const BomSection: Component<{ store: CadStore }> = (props) => {
 /** Comparar el escaneo con el diseño: colores en el visor y resumen */
 const DeviationCard: Component<{ store: CadStore; ui: CadUi }> = (props) => {
   const [tolerance, setTolerance] = createSignal(0.2);
+  // Calce: holgura pedida entre la pieza y la piel del escaneo
+  const [calce, setCalce] = createSignal(false);
+  const [gapMin, setGapMin] = createSignal(0.1);
+  const [gapMax, setGapMax] = createSignal(0.5);
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string>();
   const run = async () => {
     setBusy(true);
     setError(undefined);
     try {
-      props.ui.setDeviation(await props.store.deviation(tolerance()));
+      const dev = await props.store.deviation(calce() ? Math.max(gapMax(), 0.001) : tolerance());
+      props.ui.setFit(calce() ? { min: gapMin(), max: Math.max(gapMax(), gapMin()) } : null);
+      props.ui.setDeviation(dev);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -6463,19 +6470,58 @@ const DeviationCard: Component<{ store: CadStore; ui: CadUi }> = (props) => {
     }
   };
   // Si cambia el diseño, los colores viejos ya no valen
-  createEffect(on(() => props.store.result()?.version, () => props.ui.setDeviation(null), { defer: true }));
+  createEffect(on(() => props.store.result()?.version, () => (props.ui.setDeviation(null), props.ui.setFit(null)), { defer: true }));
   const d = () => props.ui.deviation();
   return (
     <div class="space-y-1.5 rounded-md border border-border p-2" aria-label={tl("Comparar con el escaneo")}>
       <span class="text-xs text-text-muted">{tl("Comparar el diseño con el escaneo")}</span>
-      <Num label={tl("Tolerancia")} value={tolerance()} step={0.05} suffix="mm" onCommit={(v) => setTolerance(Math.max(0.001, v))} />
+      <label class="flex items-center gap-1.5 text-xs text-text-muted" title={tl("Colorea el escaneo por la holgura con la pieza: choque, apretado, en rango o suelto")}>
+        <input type="checkbox" checked={calce()} onChange={(e) => setCalce(e.currentTarget.checked)} />
+        {tl("Verificar el calce (holgura)")}
+      </label>
+      <Show
+        when={calce()}
+        fallback={<Num label={tl("Tolerancia")} value={tolerance()} step={0.05} suffix="mm" onCommit={(v) => setTolerance(Math.max(0.001, v))} />}
+      >
+        <div class="grid grid-cols-2 gap-1.5">
+          <Num label={tl("Holgura mínima")} value={gapMin()} step={0.05} suffix="mm" onCommit={(v) => setGapMin(Math.max(0, v))} />
+          <Num label={tl("Holgura máxima")} value={gapMax()} step={0.05} suffix="mm" onCommit={(v) => setGapMax(Math.max(0.001, v))} />
+        </div>
+      </Show>
       <Button size="sm" fullWidth disabled={busy() || !props.store.result()?.body} onClick={() => void run()}>
         {busy() ? tl("Midiendo…") : tl("Comparar")}
       </Button>
       <Show when={error()}>
         <p class="text-[11px] text-error">{error()}</p>
       </Show>
-      <Show when={d()}>
+      <Show when={props.ui.fit() && props.ui.fitReport()}>
+        {(rep) => (
+          <div class="space-y-0.5 text-xs" aria-label={tl("Informe del calce")}>
+            <div class="flex h-2 overflow-hidden rounded">
+              <For each={(["interference", "tight", "ok", "loose"] as const).filter((k) => rep().share[k] > 0)}>
+                {(k) => <div style={{ width: `${rep().share[k] * 100}%`, background: `rgb(${FIT_COLORS[k].map((c) => Math.round(c * 255)).join(",")})` }} />}
+              </For>
+            </div>
+            <Line label={tl("Choca")}>{fmt(rep().share.interference * 100, 1)} %</Line>
+            <Line label={tl("Apretado")}>{fmt(rep().share.tight * 100, 1)} %</Line>
+            <Line label={tl("En rango")}>{fmt(rep().share.ok * 100, 1)} %</Line>
+            <Line label={tl("Suelto")}>{fmt(rep().share.loose * 100, 1)} %</Line>
+            <Line label={tl("Menor holgura")}>{fmt(rep().min.value, 3)} mm</Line>
+            <p class="text-[10px] text-text-dim font-mono">{rep().min.at.map((v) => fmt(v, 1)).join(", ")}</p>
+            <Line label={tl("Mayor holgura")}>{fmt(rep().max.value, 3)} mm</Line>
+            <p class="text-[10px] text-text-dim font-mono">{rep().max.at.map((v) => fmt(v, 1)).join(", ")}</p>
+            <Show when={rep().interference.length > 0}>
+              <Button size="sm" variant="ghost" fullWidth onClick={() => props.ui.setScanHighlight(rep().interference)}>
+                {tl("Marcar los choques")}
+              </Button>
+            </Show>
+            <Button size="sm" variant="ghost" fullWidth onClick={() => (props.ui.setDeviation(null), props.ui.setFit(null))}>
+              {tl("Quitar los colores")}
+            </Button>
+          </div>
+        )}
+      </Show>
+      <Show when={!props.ui.fit() && d()}>
         {(dev) => (
           <div class="space-y-0.5 text-xs">
             <div class="h-2 rounded" style={{ background: "linear-gradient(to right, rgb(51,89,242), rgb(77,191,230), rgb(64,191,89), rgb(242,204,51), rgb(230,51,38))" }} />

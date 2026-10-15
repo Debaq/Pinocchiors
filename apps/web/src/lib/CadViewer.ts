@@ -15,7 +15,7 @@ import { CameraRig, type CameraPose } from "./cameraRig";
 import { buildGridLines } from "./gridLines";
 import { LightRig, configureRenderer, type LightSettings } from "./lightRig";
 import { THEME_EVENT, themeHex } from "./theme";
-import { deviationColor, ellipsePolyline, curvePolyline, splineOf, type BodyOp, type ScanDeviation, type CadMesh, type P2, type P3, type Plane, type RefView, type Region, type Sketch, type Sketch3d, type SketchImage } from "./cad";
+import { FIT_COLORS, fitClass, deviationColor, type FitRange, ellipsePolyline, curvePolyline, splineOf, type BodyOp, type ScanDeviation, type CadMesh, type P2, type P3, type Plane, type RefView, type Region, type Sketch, type Sketch3d, type SketchImage } from "./cad";
 import type { MeshData } from "./Viewer3D";
 
 export type BasePlane = "xy" | "xz" | "yz";
@@ -484,7 +484,7 @@ export class CadViewer {
    * Colorea el escaneo con la desviación por triángulo (promediada en cada
    * vértice) o le devuelve su color con `null`.
    */
-  setScanDeviation(dev: ScanDeviation | null) {
+  setScanDeviation(dev: ScanDeviation | null, fit?: FitRange | null) {
     if (!this.scan) return;
     const g = this.scan.geometry;
     const m = this.scan.material as THREE.MeshStandardMaterial;
@@ -510,16 +510,47 @@ export class CadViewer {
     const tol = dev.stats.tolerance;
     const range = Math.max(dev.stats.p95, tol * 3);
     const colors = new Float32Array(nv * 3);
-    for (let v = 0; v < nv; v++) {
-      const [r, gg, b] = deviationColor(cnt[v] ? sum[v] / cnt[v] : 0, tol, range);
-      colors.set([r, gg, b], v * 3);
-    }
+    if (fit) {
+      // Calce: por clases; en cada vértice manda el triángulo con menos holgura (el choque no se diluye)
+      const worst = new Float32Array(nv).fill(Infinity);
+      for (let t = 0; t < dev.perFace.length && t * 3 + 2 < idx.count; t++)
+        for (let c = 0; c < 3; c++) {
+          const v = idx.getX(t * 3 + c);
+          worst[v] = Math.min(worst[v], dev.perFace[t]);
+        }
+      for (let v = 0; v < nv; v++) colors.set(FIT_COLORS[fitClass(Number.isFinite(worst[v]) ? worst[v] : 0, fit)], v * 3);
+    } else
+      for (let v = 0; v < nv; v++) {
+        const [r, gg, b] = deviationColor(cnt[v] ? sum[v] / cnt[v] : 0, tol, range);
+        colors.set([r, gg, b], v * 3);
+      }
     g.setAttribute("color", new THREE.BufferAttribute(colors, 3));
     m.vertexColors = true;
     m.color.set(0xffffff);
     m.opacity = Math.max(this.scanOpacity, 0.9);
     m.needsUpdate = true;
     this.requestRender();
+  }
+
+  /** Área y centro (mm del CAD) de cada triángulo del escaneo, en el orden de su malla */
+  scanTriangles(): { areas: Float64Array; centroids: P3[] } | null {
+    if (!this.scan) return null;
+    const g = this.scan.geometry;
+    const pos = g.getAttribute("position") as THREE.BufferAttribute;
+    const idx = g.getIndex()!;
+    const n = idx.count / 3;
+    const areas = new Float64Array(n);
+    const centroids: P3[] = [];
+    const [a, b, c] = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
+    const s = this.mmPerUnit;
+    for (let t = 0; t < n; t++) {
+      a.fromBufferAttribute(pos, idx.getX(t * 3));
+      b.fromBufferAttribute(pos, idx.getX(t * 3 + 1));
+      c.fromBufferAttribute(pos, idx.getX(t * 3 + 2));
+      areas[t] = (b.clone().sub(a).cross(c.clone().sub(a)).length() / 2) * s * s;
+      centroids.push(this.fromView(a.add(b).add(c).multiplyScalar(1 / 3)));
+    }
+    return { areas, centroids };
   }
 
   setScanVisible(visible: boolean, opacity?: number) {

@@ -7,7 +7,7 @@ import type { CameraPose } from "../../lib/cameraRig";
 import { parse as parseFont, type Font } from "opentype.js";
 import { layoutText, type Contour } from "../../lib/sketchText";
 import { dragJointOf, dragPlane, mateAxis, measuredAngle, measuredDistance, nextAngle, nextDistance, turned } from "../../lib/assemblyDrag";
-import { CONSTRAINT_LABELS, editsAsSketch, geometryPoints, type Report3d, type Sketch3d, type Plane, addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, curvePolyline, constraintValue, isReference, isLoosePoint, isSolidPoint, removeLoosePoint, leavingDirection, placeSnap, tangentArc, type CadStore, designMass, dragByHandle, flipByHandle, handleField, handleValue, partColor, partHidden, samePart, type FeatureHandle, type FeatureKind, type MeasureItem, type Measurement, type P2, type P3, type ScanOutline, type Sketch, type SketchConstraint } from "../../lib/cad";
+import { fitReport, CONSTRAINT_LABELS, editsAsSketch, geometryPoints, type Report3d, type Sketch3d, type Plane, addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, curvePolyline, constraintValue, isReference, isLoosePoint, isSolidPoint, removeLoosePoint, leavingDirection, placeSnap, tangentArc, type CadStore, designMass, dragByHandle, flipByHandle, handleField, handleValue, partColor, partHidden, samePart, type FeatureHandle, type FeatureKind, type MeasureItem, type Measurement, type P2, type P3, type ScanOutline, type Sketch, type SketchConstraint } from "../../lib/cad";
 import { infer, solidRefs, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
 import { angleView, applyFrame, clipCenter, invertFrame, measureConstraint, rotation, scaling, selectedEntities, splitEntityAt, transformSelection, translation, type Frame, type Xform } from "../../lib/sketchTransform";
 import { mergeDuplicate, rejoinSplit, sameEntities, trimByStroke, trimRemoved } from "../../lib/sketchEdit";
@@ -1045,7 +1045,15 @@ export const CadView: Component<CadViewProps> = (props) => {
   createEffect(() => viewer?.setScanHighlight(ui.scanHighlight()));
   createEffect(() => {
     props.scanMesh;
-    viewer?.setScanDeviation(ui.deviation());
+    viewer?.setScanDeviation(ui.deviation(), ui.fit());
+  });
+  // Informe del calce: sobre los triángulos del escaneo que muestra el visor
+  createEffect(() => {
+    props.scanMesh;
+    const dev = ui.deviation();
+    const range = ui.fit();
+    const tri = dev && range ? viewer?.scanTriangles() : null;
+    ui.setFitReport(dev && range && tri ? fitReport(dev.perFace, tri.areas, tri.centroids, range) : null);
   });
   createEffect(() => viewer?.setScanVisible(scanVisible() && !onSheet(), scanOpacity()));
 

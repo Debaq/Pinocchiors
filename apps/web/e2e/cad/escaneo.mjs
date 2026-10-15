@@ -444,6 +444,53 @@ export const escenarios = {
     await sleep(800);
     await b.shot("escaneo-molde");
   },
+
+  async "escaneo: verificar el calce de una pieza con holgura"(b) {
+    const [R, cz] = [20, 40];
+    await importModel(b, sphereStl(R, cz, "escaneo-calce"));
+    await begin(b);
+    // Bloque de 50 con el hueco de la esfera a `gap` mm de holgura
+    const withGap = async (gap) => {
+      const doc = await call("cad_get_document");
+      doc.features = [
+        { id: 1, name: "Bloque", suppressed: false, kind: { type: "primitive", shape: { type: "box", dx: 50, dy: 50, dz: 50, centered: true, centered_z: true }, origin: [0, 0, cz], z: [0, 0, 1], x: [1, 0, 0], op: "new" } },
+        { id: 2, name: "Hueco", suppressed: false, kind: { type: "scan_body", offset: gap, faces: 20000, op: "cut" } },
+      ];
+      doc.next_id = 3;
+      await call("cad_set_document", { document: doc });
+      await b.eval(`window.__cadStore.reload()`);
+      for (let t = 0; t < 240; t++) {
+        const r = await evaluate();
+        if (r.status?.length === 2 && ["ok", "error"].includes(r.status[1].state?.type ?? r.status[1].state)) {
+          if ((r.status[1].state?.type ?? r.status[1].state) !== "ok") throw new Error(`hueco: ${JSON.stringify(r.status[1])}`);
+          return;
+        }
+        await sleep(250);
+      }
+      throw new Error("el hueco no terminó de calcularse");
+    };
+    const share = (text, label) => parseFloat((text.match(new RegExp(`${label}\\s+([\\d,.]+)`)) ?? [])[1]?.replace(",", "."));
+    const report = async () => {
+      await b.eval(`[...document.querySelectorAll('[aria-label="Comparar con el escaneo"] button')].find((x) => x.textContent.trim() === "Comparar").click()`);
+      for (let t = 0; t < 80 && !(await b.eval(`!!document.querySelector('[aria-label="Informe del calce"]')`)); t++) await sleep(500);
+      return b.eval(`document.querySelector('[aria-label="Informe del calce"]')?.innerText ?? ""`);
+    };
+    await tab(b, "Desde el escaneo");
+    await withGap(0.3);
+    await b.clickText("Verificar el calce (holgura)");
+    let text = await report();
+    // 0,3 mm de holgura en todo el contorno: casi todo en rango (0,1 a 0,5) y nada choca
+    if (!(share(text, "En rango") > 80)) throw new Error(`en rango con 0,3 mm: ${text}`);
+    if (share(text, "Choca") > 1) throw new Error(`choca con 0,3 mm: ${text}`);
+    if (!(await b.eval(`!!window.__cadViewer.scan.geometry.getAttribute("color")`))) throw new Error("el escaneo no se coloreó");
+    await b.shot("escaneo-calce-ok");
+    // Con −0,3 mm el hueco es más chico que el escaneo: choca casi todo
+    await withGap(-0.3);
+    text = await report();
+    if (!(share(text, "Choca") > 80)) throw new Error(`choque con −0,3 mm: ${text}`);
+    if (!text.includes("Marcar los choques")) throw new Error("falta marcar los choques");
+    await b.shot("escaneo-calce-choca");
+  },
 };
 
 siEsPrincipal(import.meta.url, escenarios);

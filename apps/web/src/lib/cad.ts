@@ -1612,6 +1612,62 @@ export interface ScanDeviation {
   perFace: Float32Array;
 }
 
+// ─── Calce pieza ↔ escaneo ────────────────────────────────────────────────
+
+/** Holgura pedida (mm): de `min` a `max` entre la pieza y la piel del escaneo */
+export interface FitRange {
+  min: number;
+  max: number;
+}
+
+/** Choca (el escaneo entra en el material), apretado (menos que `min`), en rango o suelto (más que `max`) */
+export type FitClass = "interference" | "tight" | "ok" | "loose";
+
+/** La desviación firmada (+ afuera del sólido = holgura) clasificada contra el rango pedido */
+export function fitClass(d: number, r: FitRange): FitClass {
+  if (d < 0) return "interference";
+  if (d < r.min) return "tight";
+  return d <= r.max ? "ok" : "loose";
+}
+
+export const FIT_COLORS: Record<FitClass, [number, number, number]> = {
+  interference: [0.9, 0.2, 0.15],
+  tight: [0.95, 0.6, 0.2],
+  ok: [0.25, 0.75, 0.35],
+  loose: [0.3, 0.55, 0.95],
+};
+
+export interface FitReport {
+  /** Fracción del área del escaneo en cada clase */
+  share: Record<FitClass, number>;
+  /** La menor holgura (negativa = choque) y la mayor, con el centro del triángulo donde están (mm) */
+  min: { value: number; at: P3 };
+  max: { value: number; at: P3 };
+  /** Triángulos del escaneo que chocan */
+  interference: number[];
+}
+
+/** Resumen del calce: por triángulo del escaneo su desviación, su área y su centro */
+export function fitReport(perFace: ArrayLike<number>, areas: ArrayLike<number>, centroids: P3[], r: FitRange): FitReport | null {
+  const n = Math.min(perFace.length, areas.length, centroids.length);
+  if (n === 0) return null;
+  const share: Record<FitClass, number> = { interference: 0, tight: 0, ok: 0, loose: 0 };
+  const interference: number[] = [];
+  let total = 0;
+  let [lo, hi] = [0, 0];
+  for (let t = 0; t < n; t++) {
+    const c = fitClass(perFace[t], r);
+    share[c] += areas[t];
+    total += areas[t];
+    if (c === "interference") interference.push(t);
+    if (perFace[t] < perFace[lo]) lo = t;
+    if (perFace[t] > perFace[hi]) hi = t;
+  }
+  if (total <= 0) return null;
+  for (const k of Object.keys(share) as FitClass[]) share[k] /= total;
+  return { share, min: { value: perFace[lo], at: centroids[lo] }, max: { value: perFace[hi], at: centroids[hi] }, interference };
+}
+
 /** Color de una desviación: verde dentro de ±tol; azul hacia adentro, rojo hacia afuera hasta `range` */
 export function deviationColor(v: number, tol: number, range: number): [number, number, number] {
   const green: [number, number, number] = [0.25, 0.75, 0.35];

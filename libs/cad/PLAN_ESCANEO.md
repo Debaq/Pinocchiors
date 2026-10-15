@@ -253,11 +253,20 @@ Partes: E4.1 carcasa y parche bajo un sketch, E4.2 región pintada con pincel, E
 - Usarlas como borde de región (E4) y como recorrido de barrido (canal, reborde, nervio que
   sigue la forma).
 
-### E6 — Verificar el calce
+### E6 — Verificar el calce ✅ (2026-10-15, holgura firmada; falta el corte vivo)
 
-- Holgura e interferencia firmadas pieza ↔ escaneo: rojo donde choca, verde dentro del rango
-  pedido, azul donde sobra; mínimo/máximo y dónde.
-- Corte vivo que muestra pieza y escaneo juntos.
+- Reusa `cad_deviation` (distancia con signo del centro de cada triángulo del escaneo al sólido: + afuera del
+  sólido = holgura, − = el escaneo entra en el material). En la tarjeta «Comparar el diseño con el escaneo»,
+  «Verificar el calce (holgura)» pide holgura mínima y máxima y clasifica cada triángulo (`fitClass` en `cad.ts`):
+  **choca** (rojo, < 0), **apretado** (naranja, < mínima), **en rango** (verde) y **suelto** (azul, > máxima). En
+  cada vértice manda el triángulo con menos holgura, así el choque no se diluye.
+- Informe (`fitReport`, pesado por área): % en cada clase, menor y mayor holgura con el punto (mm) donde están y
+  «Marcar los choques» (resalta los triángulos que chocan). Los triángulos y áreas salen del visor
+  (`CadViewer.scanTriangles`).
+- Pruebas: `e2e/scanFit.test.mjs` (node: clases y informe) y e2e «escaneo: verificar el calce de una pieza con
+  holgura» (bloque con el hueco de una esfera a +0,3 mm: casi todo en rango y sin choques; a −0,3 mm: choca casi
+  todo). Falta: corte vivo que muestre pieza y escaneo juntos, el informe por pieza (hoy contra todo el sólido) y
+  la holgura medida por la normal del escaneo en vez de la distancia al punto más cercano.
 
 ## Fases — A (reconstruir la pieza)
 
