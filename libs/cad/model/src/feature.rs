@@ -616,6 +616,15 @@ pub enum PatternKind {
     },
     /// Copias repartidas a lo largo de un camino (de punta a punta), trasladadas.
     Curve { path: SweepPath, count: u32 },
+    /// Eslabones a `spacing` mm uno del otro medidos sobre el camino, girando
+    /// con su tangente (cadena, oruga). Lo que se copia está en el comienzo
+    /// del camino. `count` 0 llena todo el camino.
+    Chain {
+        path: SweepPath,
+        spacing: f64,
+        #[serde(default)]
+        count: u32,
+    },
     /// Copias trasladadas según una tabla de desplazamientos (mm).
     Table { offsets: Vec<P3> },
     /// Una copia en cada punto suelto de un sketch (o en los de `points`),
@@ -1568,8 +1577,8 @@ impl FeatureKind {
                 let mut d = features.clone();
                 match pattern {
                     PatternKind::Circular { axis, .. } => d.extend(axis_dep(axis)),
-                    PatternKind::Curve { path: SweepPath::Sketch { sketch, .. }, .. } => d.push(*sketch),
-                    PatternKind::Curve { path: SweepPath::Curve { feature }, .. } => d.push(*feature),
+                    PatternKind::Curve { path: SweepPath::Sketch { sketch, .. }, .. } | PatternKind::Chain { path: SweepPath::Sketch { sketch, .. }, .. } => d.push(*sketch),
+                    PatternKind::Curve { path: SweepPath::Curve { feature }, .. } | PatternKind::Chain { path: SweepPath::Curve { feature }, .. } => d.push(*feature),
                     PatternKind::Fill { sketch, .. } | PatternKind::Points { sketch, .. } => d.push(*sketch),
                     _ => {}
                 }

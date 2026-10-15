@@ -2603,28 +2603,35 @@ export const FeatureEditor: Component<{
                 </Show>
                 <Show when={k().pattern.type !== "table" && k().pattern.type !== "fill" && k().pattern.type !== "points"}>
                 <Show
-                  when={k().pattern.type !== "curve"}
+                  when={k().pattern.type !== "curve" && k().pattern.type !== "chain"}
                   fallback={
                     <>
                       <Row label={tl("A lo largo de")}>
                         <Select
                           options={[...sketchOptions(), ...refOptions(props.store, "curve").map((o) => ({ value: o.value.replace("ref:", "curve:"), label: o.label }))]}
                           value={(() => {
-                            const p = (k().pattern as Extract<PatternKind, { type: "curve" }>).path;
+                            const p = (k().pattern as Extract<PatternKind, { type: "curve" | "chain" }>).path;
                             return p.type === "sketch" ? String(p.sketch) : `curve:${p.feature}`;
                           })()}
                           onChange={(v) =>
                             update(
                               (x) =>
                                 x.type === "pattern" &&
-                                x.pattern.type === "curve" &&
+                                (x.pattern.type === "curve" || x.pattern.type === "chain") &&
                                 (x.pattern.path = v.startsWith("curve:") ? { type: "curve", feature: +v.slice(6) } : { type: "sketch", sketch: +v, entities: [] }),
                             )
                           }
                         />
                       </Row>
+                      <Show when={k().pattern.type === "chain"}>
+                        {field(tl("Separación"), "kind.pattern.spacing", (k().pattern as { spacing: number }).spacing, (x, v) => x.type === "pattern" && x.pattern.type === "chain" && (x.pattern.spacing = v), "mm")}
+                        {field(tl("Cantidad (0 = todo el camino)"), "kind.pattern.count", (k().pattern as { count: number }).count, (x, v) => x.type === "pattern" && x.pattern.type === "chain" && (x.pattern.count = Math.max(0, Math.round(v))))}
+                        <p class="text-[11px] text-text-dim">{tl("Cada eslabón queda a esa distancia medida sobre el camino y gira con él. Lo que se copia va en el comienzo del camino.")}</p>
+                      </Show>
+                      <Show when={k().pattern.type === "curve"}>
                       {field(tl("Cantidad"), "kind.pattern.count", (k().pattern as { count: number }).count, (x, v) => x.type === "pattern" && "count" in x.pattern && (x.pattern.count = Math.max(2, Math.round(v))))}
                       <p class="text-[11px] text-text-dim">{tl("Las copias se reparten de punta a punta del camino, sin girar.")}</p>
+                      </Show>
                     </>
                   }
                 >

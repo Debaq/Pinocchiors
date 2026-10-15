@@ -212,3 +212,49 @@ fn variable_fillet() {
     let removed = |r: f64| (1.0 - std::f64::consts::PI / 4.0) * r * r * 10.0;
     assert!(v < 1000.0 - removed(1.0) && v > 1000.0 - removed(3.0), "{v}");
 }
+
+#[test]
+fn chain_links_follow_the_path_and_turn() {
+    if !occt() {
+        return;
+    }
+    // Barra de 6 × 2 × 2 en el comienzo de un camino en L (30 en X, 10 en Y): un eslabón cada 7
+    let mut doc = Document::new();
+    let c = doc.add(FeatureKind::Primitive(Primitive {
+        shape: PrimitiveShape::Box { dx: 6.0, dy: 2.0, dz: 2.0, centered: true, centered_z: true },
+        origin: [0.0; 3],
+        z: [0.0, 0.0, 1.0],
+        x: [1.0, 0.0, 0.0],
+        op: BodyOp::Join,
+        link: None,
+    }));
+    let mut s = Sketch::default();
+    let a = s.add_point(0.0, 0.0);
+    let b = s.add_point(30.0, 0.0);
+    let d = s.add_point(30.0, 10.0);
+    s.add_line(a, b);
+    s.add_line(b, d);
+    let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 0.0, sketch: s });
+    let p = doc.add(FeatureKind::Pattern {
+        features: vec![c],
+        pattern: PatternKind::Chain { path: SweepPath::Sketch { sketch: sk, entities: vec![] }, spacing: 7.0, count: 0 },
+        skip: vec![], vary: None,
+    });
+    let m = eval_ok(&doc).body.unwrap().mass().unwrap();
+    // 6 eslabones (0, 7, 14, 21, 28 y 35 de recorrido); el último, ya en el tramo vertical, gira a lo largo de Y
+    assert_relative_eq!(m.volume, 6.0 * 24.0, max_relative = 1e-6);
+    assert_relative_eq!(m.bbox_max[0], 31.0, epsilon = 1e-3);
+    assert_relative_eq!(m.bbox_max[1], 8.0, epsilon = 1e-3);
+    // Con cantidad fija, solo esos
+    if let FeatureKind::Pattern { pattern: PatternKind::Chain { count, .. }, .. } = &mut doc.get_mut(p).unwrap().kind {
+        *count = 3;
+    }
+    let m = eval_ok(&doc).body.unwrap().mass().unwrap();
+    assert_relative_eq!(m.volume, 3.0 * 24.0, max_relative = 1e-6);
+    assert_relative_eq!(m.bbox_max[1], 1.0, epsilon = 1e-3);
+    // Separación mayor que el camino
+    if let FeatureKind::Pattern { pattern: PatternKind::Chain { spacing, .. }, .. } = &mut doc.get_mut(p).unwrap().kind {
+        *spacing = 100.0;
+    }
+    assert!(!doc.evaluate().errors().is_empty());
+}

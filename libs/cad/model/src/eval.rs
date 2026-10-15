@@ -4079,6 +4079,52 @@ impl Ctx<'_> {
                     out.push(Box::new(move |s: &Shape| s.translate(v).map_err(err)));
                 }
             }
+            PatternKind::Chain { path, spacing, count } => {
+                if *spacing <= 1e-9 {
+                    return Err("la separación tiene que ser mayor que cero".into());
+                }
+                let wire = self.path_wire(path, None)?;
+                // Muestreo fino a distancias iguales: de ahí se leen las posiciones por distancia recorrida
+                const N: usize = 2001;
+                let pts = wire.sample_curve(N).map_err(err)?;
+                let length: f64 = pts.windows(2).map(|w| norm(sub(w[1].0, w[0].0))).sum();
+                let step = length / (N - 1) as f64;
+                if step < 1e-12 {
+                    return Err("el camino no tiene largo".into());
+                }
+                let fit = (length / spacing + 1e-9).floor() as u32 + 1;
+                let links = if *count == 0 { fit } else { (*count).min(fit) };
+                if links < 2 {
+                    return Err("el camino es más corto que la separación: no entra ni una copia".into());
+                }
+                let at = |d: f64| -> (P3, P3) {
+                    let f = (d / step).clamp(0.0, (N - 1) as f64);
+                    let i = (f.floor() as usize).min(N - 2);
+                    let u = f - i as f64;
+                    let (a, b) = (pts[i], pts[i + 1]);
+                    (add(scale(a.0, 1.0 - u), scale(b.0, u)), normalize(add(scale(normalize(a.1), 1.0 - u), scale(normalize(b.1), u))))
+                };
+                let (p0, t0) = at(0.0);
+                for k in 1..links {
+                    let (pk, tk) = at(*spacing * k as f64);
+                    let c = dot(t0, tk).clamp(-1.0, 1.0);
+                    let angle = c.acos();
+                    let mut dir = cross(t0, tk);
+                    if norm(dir) < 1e-9 {
+                        // Misma dirección: no gira; al revés: media vuelta sobre cualquier perpendicular
+                        dir = if c > 0.0 {
+                            [0.0, 0.0, 1.0]
+                        } else if t0[0].abs() < 0.9 {
+                            cross(t0, [1.0, 0.0, 0.0])
+                        } else {
+                            cross(t0, [0.0, 1.0, 0.0])
+                        };
+                    }
+                    let ax = Axis { origin: p0, dir };
+                    let v = sub(pk, p0);
+                    out.push(Box::new(move |s: &Shape| s.rotate(ax, angle).map_err(err)?.translate(v).map_err(err)));
+                }
+            }
             PatternKind::Table { offsets } => {
                 if offsets.is_empty() {
                     return Err("la tabla no tiene filas".into());

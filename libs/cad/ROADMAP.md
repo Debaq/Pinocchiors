@@ -83,11 +83,10 @@ Decisiones (2026-10-05):
       plano 2D sigue en [PLAN_PLANO_2D.md](PLAN_PLANO_2D.md).
 - [ ] **F10 — Patrones que faltan** (anotado el 2026-10-09). Hechos: lineal (con segunda
       dirección), circular (con anillos), en curva, por tabla, de relleno, **por puntos del sketch**,
-      **saltar copias** y **variable** (cada copia crece un % sobre la anterior, en todo
+      **saltar copias** y **cadena** (eslabones a distancia fija sobre un camino, girando con su tangente) y
+      **variable** (cada copia crece un % sobre la anterior, en todo
       el tamaño o a lo largo de un eje; otras cotas como la altura de un nervio no), más la simetría. Orden propuesto de lo que falta:
-  1. **Cadena**: eslabones que siguen un camino guardando la distancia entre ellos (cadena,
-     oruga).
-  2. Menos usados: **en espiral** (copias sobre una espiral plana), **sobre superficie** (siguen
+  1. Menos usados: **en espiral** (copias sobre una espiral plana), **sobre superficie** (siguen
      una cara curva y su normal: textura en una carcasa) y **patrón de patrón** (repetir un patrón
      hecho como un bloque).
 

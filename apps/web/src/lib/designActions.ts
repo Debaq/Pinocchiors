@@ -325,6 +325,15 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     void store.addFeature({ type: "pattern", features, pattern: { type: "curve", path: { type: "sketch", sketch: path.id, entities: [] }, count: 4 } });
   };
 
+  /** Cadena: eslabones a distancia fija sobre el último sketch, girando con el camino */
+  const addChainPattern = () => {
+    const sel = selectedFeature();
+    const features = sel && toolFeatures().includes(sel) ? [sel.id] : [];
+    const path = [...sketches()].pop();
+    if (!path) return say(tr("Primero un sketch con el camino (líneas o arcos)"));
+    void store.addFeature({ type: "pattern", features, pattern: { type: "chain", path: { type: "sketch", sketch: path.id, entities: [] }, spacing: 10, count: 0 } });
+  };
+
   /** Agujero M6 pasante en los puntos del sketch elegido (o el último) */
   /** Sketch con centros para agujeros: puntos sueltos o círculos */
   const hasCenters = (f: Feature) =>
@@ -803,6 +812,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     addPattern,
     addMirror,
     addCurvePattern,
+    addChainPattern,
     addBoolean,
     pickedParts,
     addReference,

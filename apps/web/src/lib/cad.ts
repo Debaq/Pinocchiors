@@ -813,6 +813,8 @@ export type PatternKind =
   | { type: "circular"; axis: AxisSpec; count: number; angle: number; rings?: { count: number; spacing: number } | null }
   /** Copias repartidas de punta a punta de un camino */
   | { type: "curve"; path: { type: "sketch"; sketch: number; entities: number[] } | { type: "curve"; feature: number }; count: number }
+  /** Eslabones a `spacing` mm sobre un camino, girando con su tangente; `count` 0 llena el camino */
+  | { type: "chain"; path: { type: "sketch"; sketch: number; entities: number[] } | { type: "curve"; feature: number }; spacing: number; count: number }
   /** Copias trasladadas según una tabla de desplazamientos (mm) */
   | { type: "table"; offsets: P3[] }
   /** Copias en grilla (cuadrada o hexagonal) que llenan regiones de un sketch */
@@ -2255,7 +2257,7 @@ export function dependencies(kind: FeatureKind): number[] {
       const extra =
         p.type === "circular"
           ? axis(p.axis)
-          : p.type === "curve"
+          : p.type === "curve" || p.type === "chain"
             ? [p.path.type === "sketch" ? p.path.sketch : p.path.feature]
             : p.type === "fill" || p.type === "points"
               ? [p.sketch]
