@@ -4771,6 +4771,21 @@ fn fuse_tagged(mut parts: Vec<Tagged>) -> R<Tagged> {
     Ok(Tagged { shape, tags })
 }
 
+/// Unir las polilíneas de las aristas de una cadena en una sola, dándolas vuelta si hace falta
+fn chain_polylines(edges: Vec<Vec<P3>>) -> Vec<P3> {
+    let mut out: Vec<P3> = Vec::new();
+    for mut e in edges.into_iter().filter(|e| e.len() >= 2) {
+        if let Some(&last) = out.last()
+            && norm(sub(last, e[0])) > norm(sub(last, e[e.len() - 1]))
+        {
+            e.reverse();
+        }
+        let skip = usize::from(out.last().is_some_and(|&l| norm(sub(l, e[0])) < 1e-9));
+        out.extend(e.into_iter().skip(skip));
+    }
+    out
+}
+
 fn fuse(mut shapes: Vec<Shape>) -> R<Shape> {
     match shapes.len() {
         0 => Err("nada que unir".into()),
@@ -5035,6 +5050,54 @@ impl Ctx<'_> {
                     if pts.len() < 3 {
                         return Err("una curva cerrada necesita al menos tres puntos".into());
                     }
+                    pts.push(pts[0]);
+                }
+                Shape::wire(&[Curve::Spline(pts)]).map_err(err)
+            }
+            CurveDef::ScanPath { closed, points, .. } => {
+                if points.len() < 2 {
+                    return Err("el camino sobre el escaneo no tiene puntos (¿hay escaneo?)".into());
+                }
+                let mut pts = points.clone();
+                if *closed {
+                    if pts.len() < 3 {
+                        return Err("una curva cerrada necesita al menos tres puntos".into());
+                    }
+                    pts.push(pts[0]);
+                }
+                Shape::wire(&[Curve::Spline(pts)]).map_err(err)
+            }
+            CurveDef::ScanProjected { sketch, entities, flip, mesh, .. } => {
+                let plane = self.ev.sketches.get(sketch).ok_or("el sketch no está calculado")?.plane;
+                let wires = self.curve_wires(*sketch, entities)?;
+                if wires.len() != 1 {
+                    return Err("las curvas del sketch tienen que formar una sola cadena".into());
+                }
+                let skin = scan_solid(mesh.as_ref())?;
+                let m = skin.mass().map_err(err)?;
+                let n = if *flip { scale(normalize(plane.normal), -1.0) } else { normalize(plane.normal) };
+                let corners = (0..8).map(|k| [0, 1, 2].map(|a| if k >> a & 1 == 0 { m.bbox_min[a] } else { m.bbox_max[a] }));
+                let reach = corners.map(|c| dot(sub(c, plane.origin), n).abs()).fold(0.0, f64::max) * 1.1 + 1.0;
+                let samples = chain_polylines(wires[0].tessellate(0.05, 0.1).map_err(err)?.edges);
+                let closed = samples.len() > 2 && norm(sub(samples[0], samples[samples.len() - 1])) < 1e-6;
+                let mut pts: Vec<P3> = Vec::new();
+                for p in &samples {
+                    let from = add(*p, scale(n, reach));
+                    let Some(t) = skin.ray_hit(from, scale(n, -1.0)) else { continue };
+                    let hit = add(from, scale(n, -t));
+                    if pts.last().is_none_or(|q| norm(sub(hit, *q)) > 0.05) {
+                        pts.push(hit);
+                    }
+                }
+                if pts.len() < 2 {
+                    return Err("las curvas del sketch no caen sobre el escaneo".into());
+                }
+                // Una spline por demasiados puntos oscila: a lo sumo 150
+                if pts.len() > 150 {
+                    let step = pts.len() as f64 / 150.0;
+                    pts = (0..150).map(|k| pts[(k as f64 * step) as usize]).chain(std::iter::once(pts[pts.len() - 1])).collect();
+                }
+                if closed && pts.len() >= 3 && norm(sub(pts[0], pts[pts.len() - 1])) > 1e-9 {
                     pts.push(pts[0]);
                 }
                 Shape::wire(&[Curve::Spline(pts)]).map_err(err)

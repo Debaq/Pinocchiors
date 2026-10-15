@@ -491,6 +491,65 @@ export const escenarios = {
     if (!text.includes("Marcar los choques")) throw new Error("falta marcar los choques");
     await b.shot("escaneo-calce-choca");
   },
+
+  async "escaneo: curvas sobre la piel (camino y sketch proyectado)"(b) {
+    const [R, cz] = [20, 40];
+    await importModel(b, sphereStl(R, cz, "escaneo-curvas"));
+    await begin(b);
+    await tab(b, "Desde el escaneo");
+    // Camino por tres clics sobre la esfera, vista desde arriba: la curva queda sobre la piel
+    await b.eval(`window.__cadViewer.lookFrom([0.001, -0.001, 1])`);
+    await sleep(800);
+    await b.clickText("Camino por puntos");
+    const top = (x, y) => [x, y, cz + Math.sqrt(R * R - x * x - y * y)];
+    for (const [x, y] of [[-8, 0], [0, 6], [8, 0]]) {
+      await b.click(...(await b.eval(`window.__cadViewer.screenOf(${JSON.stringify(top(x, y))})`)), { wait: 400 });
+    }
+    await b.clickText("Terminar");
+    let doc;
+    for (let t = 0; t < 40; t++) {
+      doc = await call("cad_get_document");
+      if (doc.features.some((f) => f.kind.type === "curve")) break;
+      await sleep(250);
+    }
+    const curve = doc.features.find((f) => f.kind.type === "curve");
+    if (!curve || curve.kind.def.type !== "scan_path") throw new Error(`no hay camino: ${JSON.stringify(doc.features.map((f) => f.kind.type))}`);
+    const pts = curve.kind.def.points;
+    if (!(pts.length >= 4)) throw new Error(`camino con ${pts.length} puntos`);
+    for (const p of pts) {
+      const r = Math.hypot(p[0], p[1], p[2] - cz);
+      if (Math.abs(r - R) > 0.5) throw new Error(`punto fuera de la piel: ${p} (r = ${r})`);
+    }
+    // Más largo que la cuerda y no mucho más (el arco de 16 mm de cuerda mide poco más)
+    const len = pts.slice(1).reduce((a, p, i) => a + Math.hypot(p[0] - pts[i][0], p[1] - pts[i][1], p[2] - pts[i][2]), 0);
+    if (!(len > 16 && len < 30)) throw new Error(`largo del camino ${len}`);
+    await b.shot("escaneo-camino");
+
+    // Un círculo de un sketch a 70 mm, llevado a la piel
+    const sketch = {
+      points: [{ id: 0, x: 0, y: 0 }, { id: 1, x: 0, y: 0 }],
+      entities: [{ id: 2, geometry: { type: "circle", center: 1, radius: 5 } }],
+      constraints: [],
+      next_id: 3,
+      origin: 0,
+    };
+    doc.features.push({ id: 90, name: "Sketch 1", suppressed: false, kind: { type: "sketch", plane: { type: "xy" }, offset: 70, sketch } });
+    doc.next_id = 91;
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1000);
+    await b.clickText("Sketch a la piel");
+    let res;
+    for (let t = 0; t < 240; t++) {
+      res = await evaluate();
+      const last = res.status?.[res.status.length - 1];
+      if (res.status?.length === 3 && ["ok", "error"].includes(last.state?.type ?? last.state)) break;
+      await sleep(250);
+    }
+    const st = res.status?.[2]?.state;
+    if ((st?.type ?? st) !== "ok") throw new Error(`curva proyectada: ${JSON.stringify(res.status)}`);
+    if (!res.references.length) throw new Error("no hay curvas de referencia");
+  },
 };
 
 siEsPrincipal(import.meta.url, escenarios);

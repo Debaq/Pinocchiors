@@ -78,6 +78,8 @@ pub struct ScanCache {
     pub mm_per_unit: f64,
     /// Referencias ajustadas contra este escaneo (por el JSON de su `ScanFit`)
     pub fits: Mutex<HashMap<String, Option<cad_scan::ScanGeom>>>,
+    /// Caminos sobre la piel ya trazados (por el JSON de sus semillas)
+    pub paths: Mutex<HashMap<String, Option<Vec<P3>>>>,
     /// Cuerpos del escaneo preparados (por holgura, espesor y triángulos)
     pub bodies: Mutex<HashMap<(u64, u64, usize), cad_model::ScanBodyMesh>>,
 }
@@ -316,6 +318,25 @@ fn fit_scan_references(state: &AppState, doc: &Document) -> Option<Document> {
                     }
                     b.mesh = Some(scan_body_mesh(scan, b.offset, b.thickness, b.faces));
                 }
+                FeatureKind::Curve { def: cad_model::CurveDef::ScanPath { seeds, closed, points } } => {
+                    let key = serde_json::to_string(&(&*seeds, *closed)).unwrap_or_default();
+                    let traced = scan
+                        .paths
+                        .lock()
+                        .unwrap()
+                        .entry(key)
+                        .or_insert_with(|| {
+                            let stops = seeds.iter().map(|s| scan.mesh.locate(s)).collect::<Option<Vec<_>>>()?;
+                            scan.mesh.geodesic(&stops, *closed)
+                        })
+                        .clone();
+                    if let Some(p) = traced {
+                        *points = p;
+                    }
+                }
+                FeatureKind::Curve { def: cad_model::CurveDef::ScanProjected { offset, mesh, .. } } if !f.suppressed => {
+                    *mesh = Some(scan_body_mesh(scan, *offset, 0.0, SCAN_FACES));
+                }
                 FeatureKind::Extrude(cad_model::Extrude { extent: cad_model::Extent::UpToScan { offset, mesh }, .. }) if !f.suppressed => {
                     *mesh = Some(scan_body_mesh(scan, *offset, 0.0, SCAN_FACES));
                 }
@@ -339,6 +360,7 @@ fn uses_scan(kind: &FeatureKind) -> bool {
             | FeatureKind::Extrude(cad_model::Extrude { extent: cad_model::Extent::UpToScan { .. }, .. })
             | FeatureKind::FaceToScan { .. }
             | FeatureKind::Rib { scan: Some(_), .. }
+            | FeatureKind::Curve { def: cad_model::CurveDef::ScanPath { .. } | cad_model::CurveDef::ScanProjected { .. } }
     )
 }
 
@@ -1962,7 +1984,7 @@ fn with_scan<T>(state: &AppState, f: impl FnOnce(&ScanCache) -> Result<T, String
             vertices.extend(prim.positions.iter().map(|p| [p[0] as f64 * mm, p[1] as f64 * mm, p[2] as f64 * mm]));
             triangles.extend(prim.triangles.iter().map(|t| t.map(|i| i + base)));
         }
-        *cache = Some(ScanCache { scene_hash: hash, mesh: ScanMesh::new(&vertices, &triangles), mm_per_unit: mm, fits: Mutex::default(), bodies: Mutex::default() });
+        *cache = Some(ScanCache { scene_hash: hash, mesh: ScanMesh::new(&vertices, &triangles), mm_per_unit: mm, fits: Mutex::default(), paths: Mutex::default(), bodies: Mutex::default() });
     }
     f(cache.as_ref().unwrap())
 }
@@ -2101,6 +2123,8 @@ pub enum ScanFeature {
     RefPlanePoints { points: Vec<(u32, P3)> },
     RefAxis { triangle: u32, at: P3 },
     RefPoint { triangle: u32, at: P3 },
+    /// Curva por el camino más corto sobre la piel entre los puntos tocados
+    PathCurve { points: Vec<(u32, P3)>, closed: bool },
 }
 
 /// Toques del pincel sobre el escaneo (triángulo y punto en mm de cada uno).
@@ -2187,6 +2211,18 @@ fn scan_add_impl(state: &AppState, feature: ScanFeature, options: ScanPickOption
                     let fit = cad_model::ScanFit::Points { seeds };
                     let geom = cad_scan::fit_reference(mesh, &fit, &options.pick()).map_err(|e| e.to_string())?;
                     vec![(scan_reference(fit, geom), Some("Plano del escaneo".to_string()))]
+                }
+                ScanFeature::PathCurve { points, closed } => {
+                    let seeds: Vec<_> = points.iter().filter_map(|(t, at)| mesh.seed(*t, *at)).collect();
+                    if seeds.len() < 2 || seeds.len() != points.len() || (*closed && seeds.len() < 3) {
+                        return Err("Hacen falta al menos dos puntos del escaneo (tres si la curva es cerrada)".into());
+                    }
+                    let stops = points.to_vec();
+                    let traced = mesh.geodesic(&stops, *closed).ok_or("No se pudo trazar el camino sobre la piel")?;
+                    vec![(
+                        FeatureKind::Curve { def: cad_model::CurveDef::ScanPath { seeds, closed: *closed, points: traced } },
+                        Some("Camino sobre el escaneo".to_string()),
+                    )]
                 }
                 ScanFeature::WorkPlane { triangle } => {
                     let pick = cad_scan::pick_plane(mesh, *triangle, &options.pick()).map_err(|e| e.to_string())?;

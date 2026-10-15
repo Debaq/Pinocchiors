@@ -463,6 +463,37 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
     next();
   };
 
+  /** Curva sobre la piel: puntos con clic y camino más corto entre ellos */
+  const [pathPts, setPathPts] = createSignal<[number, P3][] | null>(null);
+  const nextPathPoint = () =>
+    ui.setPick({
+      kind: "scan_point",
+      prompt: tl("Clic en los puntos del camino sobre el escaneo ({v1} puestos); después «Terminar»", { v1: pathPts()?.length ?? 0 }),
+      done: (at, triangle) => {
+        setPathPts([...(pathPts() ?? []), [triangle, at]]);
+        nextPathPoint();
+      },
+    });
+  const startPath = () => {
+    setPathPts([]);
+    nextPathPoint();
+  };
+  const endPath = (closed: boolean | null) => {
+    const pts = pathPts();
+    setPathPts(null);
+    ui.setPick({ kind: "none" });
+    if (closed === null) return;
+    if (!pts || pts.length < (closed ? 3 : 2)) return say(tl("Hacen falta al menos dos puntos (tres si es cerrada)"));
+    void addScan({ kind: "path_curve", points: pts, closed });
+  };
+  /** Curvas del sketch elegido (o del último) llevadas a la piel del escaneo */
+  const projectToSkin = () => {
+    const sel = store.doc()?.features.find((f) => f.id === store.selected());
+    const sketch = sel?.kind.type === "sketch" ? sel : [...(store.doc()?.features ?? [])].reverse().find((f) => f.kind.type === "sketch");
+    if (!sketch) return say(tl("Primero un sketch con las curvas, en un plano que mire al escaneo"));
+    void store.addFeature({ type: "curve", def: { type: "scan_projected", sketch: sketch.id, entities: [], flip: false, offset: 0 } });
+  };
+
   /** Pincel: lo que se pinta sobre el escaneo queda como parche (carcasa de 2 mm, pieza nueva) */
   const paintPatch = () =>
     ui.setPick({
@@ -664,6 +695,34 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                     <Button size="sm" onClick={() => pickScan("cylinder")}>
                       {tl("Cilindro / agujero")}
                     </Button>
+                  </div>
+                  <div class="space-y-1.5" aria-label={tl("Curvas sobre la piel")}>
+                    <span class="text-xs text-text-muted">{tl("Curvas sobre la piel (caminos, bordes, nervios)")}</span>
+                    <Show
+                      when={pathPts()}
+                      fallback={
+                        <div class="grid grid-cols-2 gap-1.5">
+                          <Button size="sm" variant="ghost" title={tl("Clic en varios puntos del escaneo: la curva sigue el camino más corto por la piel")} onClick={startPath}>
+                            {tl("Camino por puntos")}
+                          </Button>
+                          <Button size="sm" variant="ghost" title={tl("Lleva las curvas de un sketch a la piel del escaneo, a lo largo de su normal")} onClick={projectToSkin}>
+                            {tl("Sketch a la piel")}
+                          </Button>
+                        </div>
+                      }
+                    >
+                      <div class="grid grid-cols-3 gap-1.5">
+                        <Button size="sm" onClick={() => endPath(false)}>
+                          {tl("Terminar")}
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => endPath(true)}>
+                          {tl("Cerrada")}
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => endPath(null)}>
+                          {tl("Cancelar")}
+                        </Button>
+                      </div>
+                    </Show>
                   </div>
                   <Show when={scanResult()}>
                     {(r) => <ScanResultCard result={r()} onAdd={addScan} />}
@@ -2599,6 +2658,24 @@ export const FeatureEditor: Component<{
                         <>
                           <SelectionBox store={props.store} ui={props.ui} owner={`${f().id}:a`} kind="faces" label={tl("Caras")} lost={lost("a")} refs={d().a} onChange={(refs) => setDef({ ...d(), a: refs as FaceRef[] })} />
                           <SelectionBox store={props.store} ui={props.ui} owner={`${f().id}:b`} kind="faces" label={tl("Con las caras")} lost={lost("b")} refs={d().b} onChange={(refs) => setDef({ ...d(), b: refs as FaceRef[] })} />
+                        </>
+                      )}
+                    </Match>
+                    <Match when={def().type === "scan_projected" && (def() as Extract<CurveDef, { type: "scan_projected" }>)}>
+                      {(d) => (
+                        <>
+                          <Num label={tl("Holgura")} value={d().offset} step={0.1} suffix="mm" onCommit={(v) => setDef({ ...d(), offset: v })} />
+                          <Checkbox small label={tl("Desde el otro lado del sketch")} checked={d().flip} onChange={(c) => setDef({ ...d(), flip: c })} />
+                        </>
+                      )}
+                    </Match>
+                    <Match when={def().type === "scan_path" && (def() as Extract<CurveDef, { type: "scan_path" }>)}>
+                      {(d) => (
+                        <>
+                          <p class="text-[11px] text-text-dim leading-relaxed">
+                            {tl("Camino más corto sobre la piel del escaneo por {v1} puntos; sigue al escaneo si se alinea o se repara.", { v1: d().seeds.length })}
+                          </p>
+                          <Checkbox small label={tl("Cerrada")} checked={d().closed} onChange={(c) => setDef({ ...d(), closed: c })} />
                         </>
                       )}
                     </Match>

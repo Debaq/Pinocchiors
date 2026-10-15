@@ -118,7 +118,7 @@ pub fn fit_reference(mesh: &ScanMesh, fit: &ScanFit, opts: &PickOptions) -> Resu
 
 /// Baricéntricas del punto del triángulo más cercano a `p` (Ericson,
 /// «Real-Time Collision Detection» 5.1.5)
-fn closest_on_triangle(p: P3, a: P3, b: P3, c: P3) -> [f64; 3] {
+pub(crate) fn closest_on_triangle(p: P3, a: P3, b: P3, c: P3) -> [f64; 3] {
     let (ab, ac, ap) = (sub(b, a), sub(c, a), sub(p, a));
     let (d1, d2) = (dot(ab, ap), dot(ac, ap));
     if d1 <= 0.0 && d2 <= 0.0 {

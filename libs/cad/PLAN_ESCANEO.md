@@ -246,12 +246,26 @@ Partes: E4.1 carcasa y parche bajo un sketch, E4.2 región pintada con pincel, E
   de mayor contorno (hoy solo plano), respiraderos, bebedero que llegue a la cavidad si el centro no la toca,
   escalones de la cavidad por encima del plano (rebajes) y la colocación de las llaves en el contorno.
 
-### E5 — Curvas sobre la piel
+### E5 — Curvas sobre la piel ✅ (2026-10-15, sin el borde de región; sin probar en la app real)
 
-- Proyectar un sketch sobre la malla (polilínea 3D sobre la piel) y curva por puntos sobre la
-  malla (geodésica).
-- Usarlas como borde de región (E4) y como recorrido de barrido (canal, reborde, nervio que
-  sigue la forma).
+- `CurveDef::ScanPath { seeds, closed, points }`: camino más corto (geodésica) por la piel entre los puntos tocados.
+  `ScanMesh::geodesic` (`scan/src/geodesic.rs`): Dijkstra por las aristas y después se endereza (puntos parejos
+  corridos al punto de la piel más cercano a la mitad de sus vecinos, ≤ 100 por tramo). Las semillas son las de
+  E1.3, así que sigue al escaneo si se alinea o se repara (la app lo vuelve a trazar en `fit_scan_references`,
+  con caché por semillas). Cerrada con `closed`. Es una spline por esos puntos: sirve de camino de barrido,
+  de patrón en curva y de herramienta de partición como cualquier curva del historial.
+- `CurveDef::ScanProjected { sketch, entities, flip, offset, mesh }`: las curvas de un sketch (una cadena) llevadas a
+  la piel del escaneo cerrado (a `offset` de ella) a lo largo de la normal del sketch; lo primero que se ve desde el
+  plano. Muestrea la curva, tira un rayo por punto contra el cuerpo del escaneo y une los impactos en una spline
+  (≤ 150 puntos).
+- UI (pestaña del escaneo, «Curvas sobre la piel»): «Camino por puntos» (clics, «Terminar» / «Cerrada» /
+  «Cancelar») y «Sketch a la piel» (el sketch elegido o el último). Comando: `ScanFeature::PathCurve` por `cad_scan_add`.
+- Pruebas: `scan_geodesic_follows_the_great_circle` (cuarto de círculo máximo ±1,5 %, anillo de 3 puntos = 2πR),
+  `scan_curves_project_and_path` y e2e «escaneo: curvas sobre la piel».
+- Falta: usarlas como borde de región del parche (E4: hoy el borde sale de un sketch o del pincel), probar el
+  barrido de un perfil a lo largo del camino sobre un escaneo real (el barrido por curva ya existe), curva por
+  puntos con geodésica entre los puntos de otra referencia, y la geodésica exacta (hoy es una aproximación por
+  enderezado; en mallas muy irregulares puede quedar algo larga).
 
 ### E6 — Verificar el calce ✅ (2026-10-15, holgura firmada; falta el corte vivo)
 

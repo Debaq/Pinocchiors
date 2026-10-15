@@ -568,3 +568,67 @@ fn scan_mold_makes_two_halves_with_keys_and_sprue() {
     assert!(upper.bbox_min[2] > -0.01, "arriba no pasa del plano: {:?}", upper.bbox_min);
     assert!(lower.bbox_max[2] > 0.5, "los pernos de abajo salen del plano: {:?}", lower.bbox_max);
 }
+
+/// Camino más corto sobre una esfera escaneada: un cuarto de círculo máximo.
+#[test]
+fn scan_geodesic_follows_the_great_circle() {
+    if !occt::available() {
+        return;
+    }
+    let t = Shape::sphere([0.0; 3], 20.0).unwrap().tessellate(0.02, 0.05).unwrap();
+    let scan = ScanMesh::new(&t.positions, &t.triangles);
+    let stop = |p: [f64; 3]| {
+        let (tri, bary) = scan.closest(p).unwrap();
+        let [a, b, c] = scan.triangles[tri as usize].map(|i| scan.vertices[i as usize]);
+        (tri, add(add(scale(a, bary[0]), scale(b, bary[1])), scale(c, bary[2])))
+    };
+    let (a, b) = (stop([20.0, 0.0, 0.0]), stop([0.0, 20.0, 0.0]));
+    let path = scan.geodesic(&[a, b], false).expect("camino");
+    assert!(path.len() >= 4);
+    assert_eq!(path[0], a.1);
+    assert_eq!(path[path.len() - 1], b.1);
+    let length: f64 = path.windows(2).map(|w| dot(sub(w[1], w[0]), sub(w[1], w[0])).sqrt()).sum();
+    assert_relative_eq!(length, 20.0 * PI / 2.0, max_relative = 0.015);
+    // Sobre la piel (la teselación queda apenas adentro de la esfera) y en el plano del ecuador
+    for p in &path {
+        assert!((dot(*p, *p).sqrt() - 20.0).abs() < 0.1, "fuera de la piel: {p:?}");
+        assert!(p[2].abs() < 0.3, "se aparta del ecuador: {p:?}");
+    }
+    // Cerrada por tres puntos: un círculo máximo entero no (tres puntos del ecuador a 120°): perímetro ≈ 2πR
+    let ring: Vec<_> = [0.0f64, 120.0, 240.0].iter().map(|d| stop([20.0 * d.to_radians().cos(), 20.0 * d.to_radians().sin(), 0.0])).collect();
+    let closed = scan.geodesic(&ring, true).expect("camino cerrado");
+    let length: f64 = closed.windows(2).map(|w| dot(sub(w[1], w[0]), sub(w[1], w[0])).sqrt()).sum();
+    assert_relative_eq!(length, 2.0 * PI * 20.0, max_relative = 0.015);
+}
+
+/// Un círculo de un sketch llevado a la piel de la esfera escaneada, y un camino
+/// sobre el escaneo como curva del diseño.
+#[test]
+fn scan_curves_project_and_path() {
+    if !occt::available() {
+        return;
+    }
+    let t = Shape::sphere([0.0; 3], 20.0).unwrap().tessellate(0.02, 0.05).unwrap();
+    let scan = ScanMesh::new(&t.positions, &t.triangles);
+    let body = prepare_body(&scan.vertices, &scan.triangles, &BodyOptions { faces: 20000, offset: 0.0, thickness: 0.0 }).unwrap();
+    let mesh = ScanBodyMesh { hash: 9, data: std::sync::Arc::new((body.vertices, body.triangles)), error: None };
+    let mut sketch = Sketch::default();
+    sketch.circle([0.0, 0.0], 5.0);
+    let mut doc = Document::new();
+    let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 30.0, sketch });
+    let proj = doc.add(FeatureKind::Curve { def: CurveDef::ScanProjected { sketch: sk, entities: vec![], flip: false, offset: 0.0, mesh: Some(mesh) } });
+    let points = vec![[20.0, 0.0, 0.0], [14.1, 14.1, 0.0], [0.0, 20.0, 0.0]];
+    let path = doc.add(FeatureKind::Curve { def: CurveDef::ScanPath { seeds: vec![], closed: false, points } });
+    let ev = doc.evaluate();
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    assert_eq!(doc.features[1].kind.label(), "Curva proyectada al escaneo");
+    let Some(RefGeom::Curves { lines }) = ev.references.get(&proj) else { panic!("sin curva proyectada") };
+    let pts: Vec<_> = lines.iter().flatten().collect();
+    assert!(pts.len() > 8);
+    for p in &pts {
+        // Sobre la esfera, bajo el círculo (la proyección conserva x e y)
+        assert!((dot(**p, **p).sqrt() - 20.0).abs() < 0.2, "fuera de la piel: {p:?}");
+        assert!(((p[0] * p[0] + p[1] * p[1]).sqrt() - 5.0).abs() < 0.15, "se corrió del círculo: {p:?}");
+    }
+    assert!(matches!(ev.references.get(&path), Some(RefGeom::Curves { lines }) if !lines.is_empty()));
+}

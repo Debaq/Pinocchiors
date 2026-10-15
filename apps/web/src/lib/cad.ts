@@ -94,7 +94,19 @@ export type CurveDef =
   /** Donde se cruzan unas caras con otras */
   | { type: "intersection"; a: FaceRef[]; b: FaceRef[] }
   /** Spline por los puntos (cerrada con `closed`) */
-  | { type: "points"; points: PointSpec[]; closed: boolean };
+  | { type: "points"; points: PointSpec[]; closed: boolean }
+  /** Camino más corto sobre la piel del escaneo entre los puntos tocados (`points`: lo último trazado, mm) */
+  | { type: "scan_path"; seeds: ScanSeed[]; closed: boolean; points?: P3[] }
+  /** Curvas de un sketch llevadas a la piel del escaneo a lo largo de la normal del sketch (con `flip`, desde el otro lado) */
+  | { type: "scan_projected"; sketch: number; entities: number[]; flip: boolean; offset: number };
+
+/** Dónde se hizo clic sobre el escaneo (lo guarda la app; ver `ScanFit`) */
+export interface ScanSeed {
+  triangle: number;
+  bary: [number, number, number];
+  at: P3;
+  topology: number;
+}
 
 /** Algo del modelo elegido con un clic para armar un plano, un eje o un punto de referencia */
 export type RefPick =
@@ -1788,7 +1800,9 @@ export type ScanFeature =
   | { kind: "ref_plane"; triangle: number; at: P3 }
   | { kind: "ref_plane_points"; points: [number, P3][] }
   | { kind: "ref_axis"; triangle: number; at: P3 }
-  | { kind: "ref_point"; triangle: number; at: P3 };
+  | { kind: "ref_point"; triangle: number; at: P3 }
+  /** Curva por el camino más corto sobre la piel entre los puntos tocados (triángulo y punto de cada uno) */
+  | { kind: "path_curve"; points: [number, P3][]; closed: boolean };
 
 // ─── Utilidades del documento ─────────────────────────────────────────────
 
@@ -2052,7 +2066,7 @@ export interface MoldOptions {
 
 /** Un toque del pincel sobre el escaneo (lo que la app devuelve de `cad_scan_dabs`) */
 export interface ScanDab {
-  seed: { triangle: number; bary: [number, number, number]; at: P3; topology: number };
+  seed: ScanSeed;
   point?: P3;
   normal?: P3;
 }
@@ -2064,6 +2078,8 @@ export function editsAsSketch(kind: FeatureKind): kind is Extract<FeatureKind, {
 
 /** Nombre del tipo de operación (las primitivas, por su forma) */
 export function kindLabel(kind: FeatureKind): string {
+  if (kind.type === "curve" && kind.def.type === "scan_path") return tr("Curva sobre el escaneo");
+  if (kind.type === "curve" && kind.def.type === "scan_projected") return tr("Curva proyectada al escaneo");
   if (kind.type === "scan_body" && (kind.region || kind.paint)) return tr("Parche del escaneo");
   if (kind.type === "scan_body" && kind.thickness) return tr("Carcasa del escaneo");
   return kind.type === "primitive" ? PRIMITIVE_LABELS[kind.shape.type] : FEATURE_LABELS[kind.type];
@@ -2140,7 +2156,7 @@ export function dependencies(kind: FeatureKind): number[] {
       return point(kind.vertex);
     case "curve": {
       const d = kind.def;
-      return d.type === "composite" ? d.curves : d.type === "projected" ? [d.sketch] : d.type === "points" ? d.points.flatMap(point) : [];
+      return d.type === "composite" ? d.curves : d.type === "projected" || d.type === "scan_projected" ? [d.sketch] : d.type === "points" ? d.points.flatMap(point) : [];
     }
     case "loft": {
       const p = (s?: SweepPathSpec | null) => (s ? [s.type === "sketch" ? s.sketch : s.feature] : []);

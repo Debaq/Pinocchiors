@@ -14,6 +14,7 @@
 
 mod body;
 mod deviation;
+mod geodesic;
 mod mesh;
 mod mold;
 mod outline;

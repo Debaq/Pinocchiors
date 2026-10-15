@@ -206,6 +206,31 @@ pub enum CurveDef {
         #[serde(default)]
         closed: bool,
     },
+    /// Camino más corto sobre la piel del escaneo entre los puntos tocados
+    /// (geodésica). La app lo vuelve a trazar contra el escaneo de hoy y deja
+    /// el resultado en `points` (mm), que se usa si no hay escaneo.
+    ScanPath {
+        seeds: Vec<ScanSeed>,
+        #[serde(default)]
+        closed: bool,
+        #[serde(default)]
+        points: Vec<P3>,
+    },
+    /// Curvas de un sketch (vacío = todas) llevadas a la piel del escaneo
+    /// (cerrado, a `offset` de ella) a lo largo de la normal del sketch: lo
+    /// primero que se ve desde el plano (con `flip`, desde el otro lado).
+    ScanProjected {
+        sketch: FeatureId,
+        #[serde(default)]
+        entities: Vec<u32>,
+        #[serde(default)]
+        flip: bool,
+        #[serde(default)]
+        offset: f64,
+        /// El escaneo corrido `offset`, que pone la app (como en [`ScanBody`]).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mesh: Option<ScanBodyMesh>,
+    },
 }
 
 /// Algo del modelo elegido con un clic para armar un plano, un eje o un
@@ -1420,6 +1445,8 @@ impl FeatureKind {
                 CurveDef::Projected { sketch, .. } => vec![*sketch],
                 CurveDef::Intersection { .. } => vec![],
                 CurveDef::Points { points, .. } => points.iter().flat_map(point_deps).collect(),
+                CurveDef::ScanPath { .. } => vec![],
+                CurveDef::ScanProjected { sketch, .. } => vec![*sketch],
             },
             FeatureKind::Scale { center, .. } => point_deps(center),
             FeatureKind::Loft(l) => {
@@ -1573,6 +1600,8 @@ impl FeatureKind {
             FeatureKind::Curve { def: CurveDef::Projected { .. } } => "Curva proyectada",
             FeatureKind::Curve { def: CurveDef::Intersection { .. } } => "Curva de cruce",
             FeatureKind::Curve { def: CurveDef::Points { .. } } => "Curva por puntos",
+            FeatureKind::Curve { def: CurveDef::ScanPath { .. } } => "Curva sobre el escaneo",
+            FeatureKind::Curve { def: CurveDef::ScanProjected { .. } } => "Curva proyectada al escaneo",
             FeatureKind::SurfaceOffset { .. } => "Superficie desfasada",
             FeatureKind::SurfaceRevolve { .. } => "Superficie de revolución",
             FeatureKind::Fill { .. } => "Relleno",
