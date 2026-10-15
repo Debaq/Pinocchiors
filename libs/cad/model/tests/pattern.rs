@@ -120,3 +120,105 @@ fn variable_pattern_grows_each_copy() {
     }
     assert!(!doc.evaluate().errors().is_empty());
 }
+
+#[test]
+fn spiral_pattern_turns_and_moves_in() {
+    if !occt() {
+        return;
+    }
+    let axis = AxisSpec::Custom { origin: [50.0, 30.0, 0.0], direction: [0.0, 0.0, 1.0] };
+    let hole_v = PI * 4.0 * 2.0;
+    // Sin giro: una fila hacia el eje (el agujero queda a 44,7 del eje, cada copia 10 mm más cerca)
+    let (mut doc, hole) = plate_with_hole();
+    let p = doc.add(FeatureKind::Pattern {
+        features: vec![hole],
+        pattern: PatternKind::Spiral { axis: axis.clone(), count: 3, angle: 0.0, step: -10.0 },
+        skip: vec![],
+        vary: None,
+    });
+    assert_relative_eq!(volume(&doc), 12000.0 - 3.0 * hole_v, max_relative = 1e-6);
+    // Con media vuelta por copia, la segunda sale del otro lado del eje
+    if let FeatureKind::Pattern { pattern, .. } = &mut doc.get_mut(p).unwrap().kind {
+        *pattern = PatternKind::Spiral { axis: axis.clone(), count: 2, angle: 180.0, step: -10.0 };
+    }
+    let ev = doc.evaluate();
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    let m = ev.body.unwrap().mass().unwrap();
+    assert_relative_eq!(m.volume, 12000.0 - 2.0 * hole_v, max_relative = 1e-6);
+    // Sobre el eje no hay hacia dónde abrirla
+    let (mut doc, hole) = plate_with_hole();
+    doc.add(FeatureKind::Pattern {
+        features: vec![hole],
+        pattern: PatternKind::Spiral { axis: AxisSpec::Custom { origin: [10.0, 10.0, 0.0], direction: [0.0, 0.0, 1.0] }, count: 3, angle: 30.0, step: 5.0 },
+        skip: vec![],
+        vary: None,
+    });
+    assert!(!doc.evaluate().errors().is_empty());
+}
+
+#[test]
+fn surface_pattern_follows_a_curved_wall() {
+    if !occt() {
+        return;
+    }
+    let mut doc = Document::new();
+    doc.add(FeatureKind::Primitive(Primitive {
+        shape: PrimitiveShape::Cylinder { radius: 10.0, height: 20.0 },
+        origin: [0.0; 3],
+        z: [0.0, 0.0, 1.0],
+        x: [1.0, 0.0, 0.0],
+        op: BodyOp::Join,
+        link: None,
+    }));
+    let ev = doc.evaluate();
+    let (i, _) = ev.body.as_ref().unwrap().closest_face([10.0, 0.0, 10.0], Some([1.0, 0.0, 0.0]), 0.99).unwrap();
+    let wall = ev.face_ref(i).unwrap();
+    let cyl = PI * 100.0 * 20.0;
+    // Un taco de 2 × 2 × 2 clavado en la pared, del lado +X
+    let stud = doc.add(FeatureKind::Primitive(Primitive {
+        shape: PrimitiveShape::Box { dx: 2.0, dy: 2.0, dz: 2.0, centered: true, centered_z: true },
+        origin: [10.5, 0.0, 10.0],
+        z: [0.0, 0.0, 1.0],
+        x: [1.0, 0.0, 0.0],
+        op: BodyOp::Join,
+        link: None,
+    }));
+    let one = volume(&doc) - cyl;
+    assert!(one > 1.0 && one < 8.0, "{one}");
+    // Cuatro alrededor: giran con la pared, todos iguales por simetría
+    let p = doc.add(FeatureKind::Pattern {
+        features: vec![stud],
+        pattern: PatternKind::Surface { face: wall.clone(), count_u: 4, count_v: 1 },
+        skip: vec![],
+        vary: None,
+    });
+    assert_relative_eq!(volume(&doc) - cyl, 4.0 * one, max_relative = 1e-4);
+    // Omitir una copia
+    if let FeatureKind::Pattern { skip, .. } = &mut doc.get_mut(p).unwrap().kind {
+        *skip = vec![2];
+    }
+    assert_relative_eq!(volume(&doc) - cyl, 3.0 * one, max_relative = 1e-4);
+}
+
+#[test]
+fn pattern_of_a_pattern_repeats_the_block() {
+    if !occt() {
+        return;
+    }
+    let (mut doc, hole) = plate_with_hole();
+    let row = doc.add(FeatureKind::Pattern {
+        features: vec![hole],
+        pattern: PatternKind::Linear { direction: [1.0, 0.0, 0.0], count: 3, spacing: 20.0, second: None },
+        skip: vec![],
+        vary: None,
+    });
+    assert_relative_eq!(volume(&doc), 12000.0 - 3.0 * PI * 4.0 * 2.0, max_relative = 1e-6);
+    // La fila entera, repetida 30 mm más arriba
+    doc.add(FeatureKind::Pattern {
+        features: vec![row],
+        pattern: PatternKind::Linear { direction: [0.0, 1.0, 0.0], count: 2, spacing: 30.0, second: None },
+        skip: vec![],
+        vary: None,
+    });
+    assert_relative_eq!(volume(&doc), 12000.0 - 6.0 * PI * 4.0 * 2.0, max_relative = 1e-6);
+}

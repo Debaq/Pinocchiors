@@ -813,6 +813,10 @@ export type PatternKind =
   | { type: "circular"; axis: AxisSpec; count: number; angle: number; rings?: { count: number; spacing: number } | null }
   /** Copias repartidas de punta a punta de un camino */
   | { type: "curve"; path: { type: "sketch"; sketch: number; entities: number[] } | { type: "curve"; feature: number }; count: number }
+  /** Espiral plana: cada copia gira `angle`° y se aleja `step` mm del eje */
+  | { type: "spiral"; axis: AxisSpec; count: number; angle: number; step: number }
+  /** Grilla `count_u` × `count_v` sobre una cara curva, cada copia apoyada en su normal */
+  | { type: "surface"; face: FaceRef; count_u: number; count_v: number }
   /** Eslabones a `spacing` mm sobre un camino, girando con su tangente; `count` 0 llena el camino */
   | { type: "chain"; path: { type: "sketch"; sketch: number; entities: number[] } | { type: "curve"; feature: number }; spacing: number; count: number }
   /** Copias trasladadas según una tabla de desplazamientos (mm) */

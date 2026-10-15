@@ -85,14 +85,16 @@ Decisiones (2026-10-05):
       que resalta y elige lo que restringe.
 - [~] **F9 — Más adelante**: ensambles y chapa hechos en una primera versión (ver abajo). El
       plano 2D sigue en [PLAN_PLANO_2D.md](PLAN_PLANO_2D.md).
-- [ ] **F10 — Patrones que faltan** (anotado el 2026-10-09). Hechos: lineal (con segunda
-      dirección), circular (con anillos), en curva, por tabla, de relleno, **por puntos del sketch**,
-      **saltar copias** y **cadena** (eslabones a distancia fija sobre un camino, girando con su tangente) y
-      **variable** (cada copia crece un % sobre la anterior, en todo
-      el tamaño o a lo largo de un eje; otras cotas como la altura de un nervio no), más la simetría. Orden propuesto de lo que falta:
-  1. Menos usados: **en espiral** (copias sobre una espiral plana), **sobre superficie** (siguen
-     una cara curva y su normal: textura en una carcasa) y **patrón de patrón** (repetir un patrón
-     hecho como un bloque).
+- [x] **F10 — Patrones que faltan** (anotado el 2026-10-09, cerrada el 2026-10-15). Hay lineal
+      (con segunda dirección), circular (con anillos), en curva, por tabla, de relleno, por
+      puntos del sketch, en espiral (plana, cada copia gira y se aleja del eje), sobre superficie
+      (grilla en u y v de una cara curva, cada copia sobre su normal), cadena (eslabones a
+      distancia fija que giran con el camino), variable (cada copia crece un % sobre la anterior,
+      en todo el tamaño o a lo largo de un eje) y saltar copias; patrón de patrón (un patrón puede
+      repetir a otro: se repite el bloque entero, original y copias), más la simetría.
+      Límites: «variable» solo cambia el tamaño (no una cota como la altura de un nervio); la
+      cadena gira por la mínima rotación entre tangentes (exacta en caminos planos); sobre
+      superficie reparte por parámetros u y v, no por distancia en mm.
 
 ## Compilar
 

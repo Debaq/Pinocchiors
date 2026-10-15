@@ -616,6 +616,15 @@ pub enum PatternKind {
     },
     /// Copias repartidas a lo largo de un camino (de punta a punta), trasladadas.
     Curve { path: SweepPath, count: u32 },
+    /// Copias en espiral plana alrededor de `axis`: cada una gira `angle` grados
+    /// y se aleja `step` mm del eje respecto de la anterior (con `step` 0 es un
+    /// circular de paso fijo; con `angle` 0, una fila que sale del eje).
+    Spiral { axis: AxisSpec, count: u32, angle: f64, step: f64 },
+    /// Copias repartidas en una grilla de `count_u` × `count_v` sobre una cara
+    /// curva (en sus parámetros u y v), cada una apoyada en la superficie con
+    /// su normal: textura en una carcasa, remaches en un casquete. La grilla
+    /// parte de donde está lo que se repite y reparte la cara entera.
+    Surface { face: FaceRef, count_u: u32, count_v: u32 },
     /// Eslabones a `spacing` mm uno del otro medidos sobre el camino, girando
     /// con su tangente (cadena, oruga). Lo que se copia está en el comienzo
     /// del camino. `count` 0 llena todo el camino.

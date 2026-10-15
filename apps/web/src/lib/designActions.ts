@@ -41,7 +41,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
   const features = () => store.doc()?.features ?? [];
   const selectedFeature = () => features().find((f) => f.id === store.selected());
   const sketches = () => features().filter((f) => f.kind.type === "sketch");
-  const toolFeatures = () => features().filter((f) => ["extrude", "revolve", "primitive", "import", "sweep", "loft"].includes(f.kind.type));
+  const toolFeatures = () => features().filter((f) => ["extrude", "revolve", "primitive", "import", "sweep", "loft", "pattern"].includes(f.kind.type));
 
   const say = (msg: string) => {
     setNotice(msg);
@@ -325,6 +325,17 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     void store.addFeature({ type: "pattern", features, pattern: { type: "curve", path: { type: "sketch", sketch: path.id, entities: [] }, count: 4 } });
   };
 
+  /** Patrón sobre superficie: la cara curva elegida, con una grilla de 4 × 2 copias */
+  const addSurfacePattern = async () => {
+    const sel = selectedFeature();
+    const features = sel && toolFeatures().includes(sel) ? [sel.id] : [];
+    const face = ui.picks().flatMap((p) => (p.kind === "face" ? [p.face] : []))[0];
+    if (face === undefined) return say(tr("Elige primero la cara curva donde van las copias"));
+    const ref = await store.faceRef(face);
+    ui.clearPicks();
+    void store.addFeature({ type: "pattern", features, pattern: { type: "surface", face: ref, count_u: 4, count_v: 1 } });
+  };
+
   /** Cadena: eslabones a distancia fija sobre el último sketch, girando con el camino */
   const addChainPattern = () => {
     const sel = selectedFeature();
@@ -558,7 +569,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     draft: () => void startFaces("draft"),
   });
 
-  const addPattern = (kind: "linear" | "circular" | "table" | "fill" | "points") => {
+  const addPattern = (kind: "linear" | "circular" | "spiral" | "table" | "fill" | "points") => {
     const sel = selectedFeature();
     const features = sel && toolFeatures().includes(sel) ? [sel.id] : [];
     if (kind === "points") {
@@ -591,6 +602,8 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
           ? { type: "linear", direction: [1, 0, 0], count: 3, spacing: 10 }
           : kind === "circular"
             ? { type: "circular", axis: { type: "z" }, count: 6, angle: 360 }
+            : kind === "spiral"
+              ? { type: "spiral", axis: { type: "z" }, count: 6, angle: 30, step: 5 }
             : { type: "table", offsets: [[20, 0, 0], [0, 20, 0]] },
     });
   };
@@ -813,6 +826,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     addMirror,
     addCurvePattern,
     addChainPattern,
+    addSurfacePattern,
     addBoolean,
     pickedParts,
     addReference,

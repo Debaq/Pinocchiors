@@ -2601,7 +2601,16 @@ export const FeatureEditor: Component<{
                     );
                   }}
                 </Show>
-                <Show when={k().pattern.type !== "table" && k().pattern.type !== "fill" && k().pattern.type !== "points"}>
+                <Show when={k().pattern.type === "surface" && (k().pattern as Extract<PatternKind, { type: "surface" }>)}>
+                  {(sf) => (
+                    <>
+                      {field(tl("Copias en u"), "kind.pattern.count_u", sf().count_u, (x, v) => x.type === "pattern" && x.pattern.type === "surface" && (x.pattern.count_u = Math.max(1, Math.round(v))))}
+                      {field(tl("Copias en v"), "kind.pattern.count_v", sf().count_v, (x, v) => x.type === "pattern" && x.pattern.type === "surface" && (x.pattern.count_v = Math.max(1, Math.round(v))))}
+                      <p class="text-[11px] text-text-dim">{tl("Las copias se reparten por toda la cara curva a partir de la original y quedan apoyadas en su normal (u: alrededor o a lo ancho, v: a lo largo).")}</p>
+                    </>
+                  )}
+                </Show>
+                <Show when={k().pattern.type !== "table" && k().pattern.type !== "fill" && k().pattern.type !== "points" && k().pattern.type !== "surface"}>
                 <Show
                   when={k().pattern.type !== "curve" && k().pattern.type !== "chain"}
                   fallback={
@@ -2650,13 +2659,19 @@ export const FeatureEditor: Component<{
                             update(
                               (x) =>
                                 x.type === "pattern" &&
-                                x.pattern.type === "circular" &&
+                                (x.pattern.type === "circular" || x.pattern.type === "spiral") &&
                                 (x.pattern.axis = isRefValue(v) ? axisOfValue(v) : { type: v as "x" | "y" | "z" }),
                             )
                           }
                         />
                       </Row>
                       {field(tl("Cantidad"), "kind.pattern.count", (k().pattern as { count: number }).count, (x, v) => x.type === "pattern" && "count" in x.pattern && (x.pattern.count = Math.max(2, Math.round(v))))}
+                      <Show when={k().pattern.type === "spiral"}>
+                        {field(tl("Giro por copia"), "kind.pattern.angle", (k().pattern as { angle: number }).angle, (x, v) => x.type === "pattern" && x.pattern.type === "spiral" && (x.pattern.angle = v), "°")}
+                        {field(tl("Alejamiento por copia"), "kind.pattern.step", (k().pattern as { step: number }).step, (x, v) => x.type === "pattern" && x.pattern.type === "spiral" && (x.pattern.step = v), "mm")}
+                        <p class="text-[11px] text-text-dim">{tl("Cada copia gira y se aleja del eje (o se acerca, si es negativo) respecto de la anterior.")}</p>
+                      </Show>
+                      <Show when={k().pattern.type === "circular"}>
                       {field(tl("Ángulo total"), "kind.pattern.angle", (k().pattern as { angle: number }).angle, (x, v) => x.type === "pattern" && x.pattern.type === "circular" && (x.pattern.angle = v), "°")}
                       <Checkbox
                         small
@@ -2687,6 +2702,7 @@ export const FeatureEditor: Component<{
                             )}
                           </>
                         )}
+                      </Show>
                       </Show>
                     </>
                   }

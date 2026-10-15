@@ -256,6 +256,78 @@ export const escenarios = {
     await accept(b);
   },
 
+  async "operaciones: patrón en espiral: gira y se acerca al eje"(b) {
+    await begin(b);
+    const doc = await call("cad_get_document");
+    const id = () => doc.next_id++;
+    const P = [[0, 0], [100, 0], [100, 60], [0, 60]];
+    const plate = id();
+    doc.features.push({
+      id: plate, name: "Placa", suppressed: false,
+      kind: { type: "sketch", plane: { type: "xy" }, offset: 0, sketch: { points: [{ id: 0, x: 0, y: 0 }, ...P.map(([x, y], i) => ({ id: i + 1, x, y }))], entities: P.map((_, i) => ({ id: 11 + i, geometry: { type: "line", start: i + 1, end: ((i + 1) % 4) + 1 } })), constraints: [], next_id: 20, origin: 0 } },
+    });
+    doc.features.push({ id: id(), name: "Extrusión", suppressed: false, kind: { type: "extrude", sketch: plate, regions: { type: "all" }, extent: { type: "blind", distance: 2 }, reverse: false, op: "join", draft: 0, thin: null } });
+    const hs = id();
+    doc.features.push({ id: hs, name: "Círculo", suppressed: false, kind: { type: "sketch", plane: { type: "xy" }, offset: 0, sketch: { points: [{ id: 0, x: 0, y: 0 }, { id: 1, x: 10, y: 10 }], entities: [{ id: 2, geometry: { type: "circle", center: 1, radius: 2 } }], constraints: [], next_id: 3, origin: 0 } } });
+    const hole = id();
+    doc.features.push({ id: hole, name: "Agujero", suppressed: false, kind: { type: "extrude", sketch: hs, regions: { type: "all" }, extent: { type: "through_all" }, reverse: false, op: "cut", draft: 0, thin: null } });
+    // Espiral alrededor del centro de la placa: sin giro, 3 copias cada 10 mm hacia el eje
+    doc.features.push({ id: id(), name: "Patrón", suppressed: false, kind: { type: "pattern", features: [hole], pattern: { type: "spiral", axis: { type: "custom", origin: [50, 30, 0], direction: [0, 0, 1] }, count: 3, angle: 0, step: -10 } } });
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    const holeV = Math.PI * 4 * 2;
+    near((await body()).volume, 12000 - 3 * holeV, 1e-3, "tres agujeros hacia el eje");
+    await clickRow(b, "Patrón");
+    await sleep(1200);
+    await setInput(b, "Cantidad", 2);
+    await setInput(b, "Giro por copia", 180);
+    await sleep(2000);
+    // Media vuelta: la segunda sale del otro lado del eje
+    near((await body()).volume, 12000 - 2 * holeV, 1e-3, "media vuelta");
+    const k = await lastKind(b);
+    if (k.pattern.type !== "spiral" || k.pattern.angle !== 180) throw new Error(`espiral: ${JSON.stringify(k.pattern)}`);
+    await b.shot("operaciones_patron_espiral");
+    await accept(b);
+  },
+
+  async "operaciones: patrón de patrón: repetir la fila como un bloque"(b) {
+    await begin(b);
+    const doc = await call("cad_get_document");
+    const id = () => doc.next_id++;
+    const P = [[0, 0], [100, 0], [100, 60], [0, 60]];
+    const plate = id();
+    doc.features.push({
+      id: plate, name: "Placa", suppressed: false,
+      kind: { type: "sketch", plane: { type: "xy" }, offset: 0, sketch: { points: [{ id: 0, x: 0, y: 0 }, ...P.map(([x, y], i) => ({ id: i + 1, x, y }))], entities: P.map((_, i) => ({ id: 11 + i, geometry: { type: "line", start: i + 1, end: ((i + 1) % 4) + 1 } })), constraints: [], next_id: 20, origin: 0 } },
+    });
+    doc.features.push({ id: id(), name: "Extrusión", suppressed: false, kind: { type: "extrude", sketch: plate, regions: { type: "all" }, extent: { type: "blind", distance: 2 }, reverse: false, op: "join", draft: 0, thin: null } });
+    const hs = id();
+    doc.features.push({ id: hs, name: "Círculo", suppressed: false, kind: { type: "sketch", plane: { type: "xy" }, offset: 0, sketch: { points: [{ id: 0, x: 0, y: 0 }, { id: 1, x: 10, y: 10 }], entities: [{ id: 2, geometry: { type: "circle", center: 1, radius: 2 } }], constraints: [], next_id: 3, origin: 0 } } });
+    const hole = id();
+    doc.features.push({ id: hole, name: "Agujero", suppressed: false, kind: { type: "extrude", sketch: hs, regions: { type: "all" }, extent: { type: "through_all" }, reverse: false, op: "cut", draft: 0, thin: null } });
+    // Una fila de 3 agujeros (cada 20 mm) ya hecha
+    const row = id();
+    doc.features.push({ id: row, name: "Fila", suppressed: false, kind: { type: "pattern", features: [hole], pattern: { type: "linear", direction: [1, 0, 0], count: 3, spacing: 20 } } });
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    const holeV = Math.PI * 4 * 2;
+    near((await body()).volume, 12000 - 3 * holeV, 1e-3, "la fila");
+    // Con la fila elegida, un patrón lineal repite el bloque entero
+    await b.eval(`window.__cadStore.select(${row})`);
+    await b.clickText("Patrón lineal");
+    await lastIs(b, "pattern");
+    await sleep(1500);
+    await setInput(b, "Cantidad", 2);
+    await setInput(b, "Separación", 5);
+    await sleep(2000);
+    near((await body()).volume, 12000 - 6 * holeV, 1e-3, "fila y su copia");
+    const k = await lastKind(b);
+    if (JSON.stringify(k.features) !== JSON.stringify([row])) throw new Error(`bloque: ${JSON.stringify(k.features)}`);
+    await accept(b);
+  },
+
   async "operaciones: revolución simétrica y a dos ángulos"(b) {
     await begin(b);
     // En el frente: rectángulo x 10..15, z 0..20; gira alrededor de Z

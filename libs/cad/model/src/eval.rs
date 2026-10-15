@@ -4,7 +4,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use cad_occt::{Axis, Curve, Frame, History, Shape, SurfaceKind, with_history};
+use cad_occt::{Axis, Curve, Frame, History, Shape, SurfaceKind, SurfacePoint, with_history};
 use serde::{Deserialize, Serialize};
 
 use crate::document::{Document, ResolvedValue};
@@ -2734,9 +2734,22 @@ impl Ctx<'_> {
                     self.sync();
                     return Ok(());
                 }
+                // Lo repetido entero (originales y copias) queda como herramienta de este
+                // patrón: otro patrón puede repetirlo como un bloque
+                let mut block: Vec<Tagged> = Vec::new();
+                let mut block_op = None;
                 for id in features {
                     let (tool, op) = self.tool(*id)?;
-                    self.apply(f.id, fuse_tagged(copies_of(&tool)?)?, op)?;
+                    let copies = fuse_tagged(copies_of(&tool)?)?;
+                    if block_op.is_none_or(|b| b == op) {
+                        block_op = Some(op);
+                        block.push(tool);
+                        block.push(copies.clone());
+                    }
+                    self.apply(f.id, copies, op)?;
+                }
+                if let Some(op) = block_op {
+                    self.ev.tools.insert(f.id, (fuse_tagged(block)?, op));
                 }
                 Ok(())
             }
@@ -4079,6 +4092,69 @@ impl Ctx<'_> {
                     out.push(Box::new(move |s: &Shape| s.translate(v).map_err(err)));
                 }
             }
+            PatternKind::Spiral { axis, count, angle, step } => {
+                if *count < 2 {
+                    return Err("se necesitan al menos 2 instancias".into());
+                }
+                let ax = self.axis("axis", axis)?;
+                let dir = normalize(ax.dir);
+                let v = sub(seed, ax.origin);
+                let r = sub(v, scale(dir, dot(v, dir)));
+                if *step != 0.0 && norm(r) < 1e-9 {
+                    return Err("lo que se copia está sobre el eje: no hay hacia dónde abrir la espiral".into());
+                }
+                let radial = if norm(r) < 1e-9 { [0.0; 3] } else { normalize(r) };
+                for k in 1..*count {
+                    let v = scale(radial, step * k as f64);
+                    let a = (angle * k as f64).to_radians();
+                    out.push(Box::new(move |s: &Shape| s.translate(v).map_err(err)?.rotate(ax, a).map_err(err)));
+                }
+            }
+            PatternKind::Surface { face, count_u, count_v } => {
+                if *count_u < 1 || *count_v < 1 || count_u * count_v < 2 {
+                    return Err("se necesitan al menos 2 instancias".into());
+                }
+                let f = self.faces("face", std::slice::from_ref(face))?[0];
+                let body = self.body()?;
+                // La grilla parte de donde está lo que se copia y da la vuelta (una cara
+                // cerrada, como un cilindro, queda repartida pareja); en una plana se
+                // repite al otro lado de su borde
+                let (uv0, sp0, [u0, u1, v0, v1]) = self.face_uv_near(f, seed)?;
+                let (ru, rv) = (u1 - u0, v1 - v0);
+                let wrap = |x: f64, lo: f64, r: f64| lo + (x - lo).rem_euclid(r.max(1e-12));
+                let cells: Vec<[f64; 2]> = (0..*count_v)
+                    .flat_map(|j| {
+                        (0..*count_u).map(move |i| [wrap(uv0[0] + ru * i as f64 / *count_u as f64, u0, ru), wrap(uv0[1] + rv * j as f64 / *count_v as f64, v0, rv)])
+                    })
+                    .collect();
+                let (_, pts) = body.face_eval(f, &cells).map_err(err)?;
+                let frame = |sp: &SurfacePoint| -> R<[P3; 3]> {
+                    let n = normalize(sp.normal);
+                    for d in [sp.du, sp.dv] {
+                        let t = sub(d, scale(n, dot(d, n)));
+                        if norm(t) > 1e-9 {
+                            let t = normalize(t);
+                            return Ok([t, cross(n, t), n]);
+                        }
+                    }
+                    Err("la superficie se degenera en un punto de la grilla".to_string())
+                };
+                let f0 = frame(&sp0)?;
+                let p0 = sp0.point;
+                // La primera celda es la original
+                for sp in pts.iter().skip(1) {
+                    let fk = frame(sp)?;
+                    // R = Fk · F0ᵀ; x' = R (x − p0) + pk
+                    let mut m = [[0.0; 4]; 3];
+                    for i in 0..3 {
+                        for j in 0..3 {
+                            m[i][j] = (0..3).map(|c| fk[c][i] * f0[c][j]).sum();
+                        }
+                        m[i][3] = sp.point[i] - (0..3).map(|j| m[i][j] * p0[j]).sum::<f64>();
+                    }
+                    out.push(Box::new(move |s: &Shape| s.transform(m).map_err(err)));
+                }
+            }
             PatternKind::Chain { path, spacing, count } => {
                 if *spacing <= 1e-9 {
                     return Err("la separación tiene que ser mayor que cero".into());
@@ -5291,8 +5367,8 @@ impl Ctx<'_> {
         Ok((q, t, dist(q)))
     }
 
-    /// Punto de la cara más cercano a `p` y la normal ahí (Newton sobre la superficie).
-    fn face_point_normal(&self, face: usize, p: P3) -> R<(P3, P3)> {
+    /// Parámetros (u, v) del punto de la cara más cercano a `p`, con la superficie ahí (Newton).
+    fn face_uv_near(&self, face: usize, p: P3) -> R<([f64; 2], SurfacePoint, [f64; 4])> {
         let body = self.body()?;
         let (bounds, _) = body.face_eval(face, &[]).map_err(err)?;
         let [u0, u1, v0, v1] = bounds;
@@ -5313,6 +5389,12 @@ impl Ctx<'_> {
             uv = [(uv[0] + (b1 * a22 - b2 * a12) / det).clamp(u0, u1), (uv[1] + (a11 * b2 - a12 * b1) / det).clamp(v0, v1)];
             sp = body.face_eval(face, &[uv]).map_err(err)?.1[0];
         }
+        Ok((uv, sp, bounds))
+    }
+
+    /// Punto de la cara más cercano a `p` y la normal ahí.
+    fn face_point_normal(&self, face: usize, p: P3) -> R<(P3, P3)> {
+        let (_, sp, _) = self.face_uv_near(face, p)?;
         Ok((sp.point, normalize(sp.normal)))
     }
 

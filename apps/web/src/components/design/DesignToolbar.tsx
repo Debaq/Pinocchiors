@@ -160,6 +160,8 @@ export function designToolSets(a: DesignActions, ui: CadUi) {
     { label: "Simetría", icon: D.Mirror, run: a.addMirror, needsBody: true },
     { label: "Patrón en curva", icon: D.CurvePattern, run: a.addCurvePattern, needsBody: true, tip: "Copias a lo largo de un camino (sketch o hélice)" },
     { label: "Cadena", icon: D.CurvePattern, run: a.addChainPattern, needsBody: true, tip: "Eslabones a distancia fija sobre un camino, girando con él (cadena, oruga). El eslabón va al comienzo del camino" },
+    { label: "Patrón en espiral", icon: D.PatternCircular, run: () => a.addPattern("spiral"), needsBody: true, tip: "Copias que giran y se alejan del eje a cada paso (espiral plana)" },
+    { label: "Patrón sobre superficie", icon: D.PatternLinear, run: () => void a.addSurfacePattern(), needsBody: true, tip: "Copias en grilla sobre una cara curva elegida, apoyadas en su normal (textura, remaches)" },
     { label: "Patrón por tabla", icon: D.PatternLinear, run: () => a.addPattern("table"), needsBody: true, tip: "Copias en los desplazamientos de una tabla (X, Y, Z)" },
     { label: "Patrón de relleno", icon: D.PatternLinear, run: () => a.addPattern("fill"), needsBody: true, tip: "Copias en grilla que llenan una región de un sketch (rejillas, perforados)" },
     { label: "Patrón por puntos", icon: D.PatternLinear, run: () => a.addPattern("points"), needsBody: true, tip: "Una copia en cada punto suelto de un sketch" },
