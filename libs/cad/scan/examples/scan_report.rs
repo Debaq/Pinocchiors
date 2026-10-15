@@ -25,6 +25,9 @@ fn main() {
             DetectedShape::Plane { plane } => format!("plano   n=({:+.3},{:+.3},{:+.3})", plane.normal[0], plane.normal[1], plane.normal[2]),
             DetectedShape::Cylinder { radius, direction, .. } => format!("cilindro r={radius:.3} eje=({:+.2},{:+.2},{:+.2})", direction[0], direction[1], direction[2]),
             DetectedShape::Sphere { radius, .. } => format!("esfera  r={radius:.3}"),
+            DetectedShape::Cone { half_angle, .. } => format!("cono    {:.1}°", half_angle.to_degrees()),
+            DetectedShape::Torus { major, minor, .. } => format!("toro    R={major:.3} r={minor:.3}"),
+            DetectedShape::Fillet { radius, angle, .. } => format!("redondeo r={radius:.3} {angle:.0}°"),
         };
         println!("  {what:<44} {:5.1}% área  rms {:.4}  {} caras", d.area / total * 100.0, d.rms, d.faces.len());
     }
