@@ -387,6 +387,63 @@ export const escenarios = {
     const shell = res.parts.find((p) => Math.abs(p.volume - (ball(r2) - ball(r1))) < (ball(r2) - ball(r1)) * 0.03);
     if (!shell) throw new Error(`no hay una carcasa de ${(ball(r2) - ball(r1)).toFixed(0)} mm³: ${res.parts.map((p) => p.volume.toFixed(0))}`);
   },
+
+  async "escaneo: pincel pinta un parche sobre la piel"(b) {
+    const [R, cz] = [20, 40];
+    await importModel(b, sphereStl(R, cz, "escaneo-pincel"));
+    await begin(b);
+    await tab(b, "Desde el escaneo");
+    // Desde arriba, un trazo de 8 mm sobre la tapa de la esfera con el pincel de 5 mm de radio
+    await b.eval(`window.__cadViewer.lookFrom([0.001, -0.001, 1])`);
+    await sleep(800);
+    await b.clickText("Pincel");
+    await sleep(300);
+    const top = (x) => [x, 0, cz + Math.sqrt(R * R - x * x)];
+    const path = [];
+    for (const x of [-4, -2, 0, 2, 4]) path.push(await b.eval(`window.__cadViewer.screenOf(${JSON.stringify(top(x))})`));
+    await b.dragPath(path);
+    let res;
+    for (let t = 0; t < 240; t++) {
+      res = await evaluate();
+      if (res.status?.length === 1 && ["ok", "error"].includes(res.status[0].state?.type ?? res.status[0].state)) break;
+      await sleep(250);
+    }
+    const st = res.status?.[0]?.state;
+    if ((st?.type ?? st) !== "ok") throw new Error(`parche pintado: ${JSON.stringify(res.status)}`);
+    // Un trazo de 8 mm con pincel de 5 mm: entre el disco solo (r 5) y la pastilla completa, de 2 mm de espesor
+    const v = res.parts[0].volume;
+    if (!(v > 250 && v < 420)) throw new Error(`volumen del parche pintado: ${v}`);
+    if (res.body.bbox_min[2] < cz + R * 0.8) throw new Error(`el parche baja hasta ${res.body.bbox_min[2]}`);
+    await b.eval(`window.__cadViewer.lookFrom([1, -1, 0.8])`);
+    await sleep(800);
+    await b.shot("escaneo-pincel");
+  },
+
+  async "escaneo: molde de dos mitades con llaves y bebedero"(b) {
+    const [R, cz] = [20, 40];
+    await importModel(b, sphereStl(R, cz, "escaneo-molde"));
+    await begin(b);
+    await tab(b, "Desde el escaneo");
+    await b.clickText("Crear molde");
+    let res;
+    for (let t = 0; t < 480; t++) {
+      res = await evaluate();
+      const ok = res.status?.length >= 9 && res.status.every((x) => ["ok", "error"].includes(x.state?.type ?? x.state));
+      if (ok) break;
+      await sleep(250);
+    }
+    const bad = res.status.filter((x) => (x.state?.type ?? x.state) !== "ok");
+    if (bad.length) throw new Error(`operaciones del molde con error: ${JSON.stringify(bad)}`);
+    if (res.parts.length !== 2) throw new Error(`el molde tiene ${res.parts.length} piezas, no 2`);
+    // Cajas de (40 + 16)² × 56 menos la esfera (con 0,2 de holgura) y el bebedero, más las llaves: dentro del 3 %
+    const side = 2 * R + 16;
+    const expected = side * side * side - (4 / 3) * Math.PI * (R + 0.2) ** 3 - Math.PI * 9 * (R + 8);
+    const total = res.parts.reduce((a, p) => a + p.volume, 0);
+    near(total, expected, expected * 0.03, "volumen del molde");
+    await b.eval(`window.__cadViewer.lookFrom([1, -1, 0.8])`);
+    await sleep(800);
+    await b.shot("escaneo-molde");
+  },
 };
 
 siEsPrincipal(import.meta.url, escenarios);

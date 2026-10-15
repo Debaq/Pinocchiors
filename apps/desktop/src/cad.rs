@@ -2360,6 +2360,11 @@ pub mod bridge {
                 let plane: Plane = arg(args, "plane")?;
                 ok(with_scan(state, |scan| Ok(cad_scan::slice(&scan.mesh, &plane)))?)
             }
+            "cad_scan_dabs" => {
+                let points: Vec<(u32, P3)> = arg(args, "points")?;
+                ok(with_scan(state, |scan| Ok(points.iter().filter_map(|(t, at)| scan.mesh.dab(*t, *at)).collect::<Vec<_>>()))?)
+            }
+            "cad_scan_mold" => ok(scan_mold_impl(state, arg(args, "options")?)?),
             "cad_scan_add" => ok(scan_add_impl(state, arg(args, "feature")?, arg::<Option<ScanPickOptions>>(args, "options")?.unwrap_or_default())?),
             "import_model" => {
                 let channel = Channel::new(|_| Ok(()));
