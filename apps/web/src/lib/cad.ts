@@ -1773,13 +1773,42 @@ export interface CylinderPick {
   coverage: number;
 }
 
-export type ScanPick = PlanePick | CylinderPick;
+export interface ConePick {
+  kind: "cone";
+  apex: P3;
+  /** Hacia donde se abre */
+  direction: P3;
+  /** Semiángulo (radianes) */
+  half_angle: number;
+  /** Distancias del vértice a donde empieza y termina la zona, a lo largo del eje */
+  start: number;
+  end: number;
+  rms: number;
+  faces: number[];
+  hole: boolean;
+}
+
+export interface TorusPick {
+  kind: "torus";
+  center: P3;
+  axis: P3;
+  major: number;
+  minor: number;
+  rms: number;
+  faces: number[];
+}
+
+export type ScanPick = PlanePick | CylinderPick | ConePick | TorusPick;
 
 export interface Detection {
   shape:
     | { type: "plane"; plane: Plane }
     | { type: "cylinder"; origin: P3; direction: P3; radius: number }
-    | { type: "sphere"; center: P3; radius: number };
+    | { type: "sphere"; center: P3; radius: number }
+    | { type: "cone"; apex: P3; direction: P3; half_angle: number }
+    | { type: "torus"; center: P3; axis: P3; major: number; minor: number }
+    /** Tramo de cilindro tangente a dos planos: el radio de un redondeo (`angle` en grados) */
+    | { type: "fillet"; origin: P3; direction: P3; radius: number; angle: number };
   faces: number[];
   area: number;
   rms: number;
@@ -1794,6 +1823,8 @@ export interface ScanOutline {
 export type ScanFeature =
   | { kind: "plane_outline"; triangle: number; extrude: boolean; depth?: number | null; op?: BodyOp }
   | { kind: "cylinder"; triangle: number }
+  | { kind: "cone"; triangle: number }
+  | { kind: "torus"; triangle: number }
   | { kind: "slice"; plane: Plane }
   | { kind: "work_plane"; triangle: number }
   /** Referencias ligadas al escaneo (`at`: el punto del clic, mm) */
@@ -4686,7 +4717,7 @@ export function createCadStore() {
     },
 
     // Escaneo → CAD
-    scanPick: (kind: "plane" | "cylinder", triangle: number) => invoke<ScanPick>("cad_scan_pick", { kind, triangle, options: null }),
+    scanPick: (kind: "plane" | "cylinder" | "cone" | "torus", triangle: number) => invoke<ScanPick>("cad_scan_pick", { kind, triangle, options: null }),
     scanDetect: () => invoke<Detection[]>("cad_scan_detect", { options: null }),
 
     async scanAdd(feature: ScanFeature) {

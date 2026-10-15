@@ -112,6 +112,15 @@ impl ScanMesh {
         (pts, nrm)
     }
 
+    /// Solo los centroides con la normal de su cara (exactos: los vértices con la
+    /// normal de una cara vecina desvían la recta normal y arruinan los ajustes
+    /// por normales), a lo sumo `max`.
+    pub fn sample_centroids(&self, faces: &[u32], max: usize) -> (Vec<P3>, Vec<P3>) {
+        let step = (faces.len() as f64 / max as f64).max(1.0);
+        let idx = (0..faces.len().min(max)).map(|i| faces[(i as f64 * step) as usize] as usize);
+        idx.map(|f| (self.face_centroids[f], self.face_normals[f])).unzip()
+    }
+
     /// Primer impacto de un rayo (Möller–Trumbore), distancia > `min_t`.
     pub fn raycast(&self, origin: P3, dir: P3, min_t: f64) -> Option<(f64, u32)> {
         self.raycast_filtered(origin, dir, min_t, |_| true)

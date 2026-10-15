@@ -171,7 +171,7 @@ export type PickMode =
   /** Marcar/desmarcar caras: `toggle` con cada clic */
   | { kind: "faces"; prompt: string; owner?: string; toggle: (face: FaceRef, index: number) => void }
   /** Elegir una zona del escaneo */
-  | { kind: "scan"; prompt: string; shape: "plane" | "cylinder"; done: (pick: ScanPick, triangle: number, at: P3) => void }
+  | { kind: "scan"; prompt: string; shape: "plane" | "cylinder" | "cone" | "torus"; done: (pick: ScanPick, triangle: number, at: P3) => void }
   /** Un punto sobre el escaneo (mm) y su triángulo */
   | { kind: "scan_point"; prompt: string; done: (at: P3, triangle: number) => void }
   /**

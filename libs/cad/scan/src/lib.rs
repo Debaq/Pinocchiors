@@ -19,9 +19,10 @@ mod mesh;
 mod mold;
 mod outline;
 mod pick;
+mod quadric;
 mod refs;
 
-use cad_model::geom::{P2, P3, Plane, add, dot, normalize, scale, sub};
+use cad_model::geom::{P2, P3, Plane, add, dot, norm, normalize, scale, sub};
 use cad_model::{BodyOp, Extent, Extrude, FeatureId, FeatureKind, PlaneSpec, Primitive, PrimitiveShape, RegionSelection};
 use cad_solver::fitting::{self, PrimitiveParams, PrimitiveType};
 use serde::{Deserialize, Serialize};
@@ -32,6 +33,7 @@ pub use mesh::ScanMesh;
 pub use mold::{MoldOptions, add_mold};
 pub use outline::{OutlineOptions, Section, fit_circle, outline_sketch, simplify_closed, simplify_open, slice};
 pub use pick::{CylinderPick, PickError, PickOptions, PlanePick, boundary_loops, pick_cylinder, pick_plane};
+pub use quadric::{ConeFit, ConePick, TorusFit, TorusPick, fit_cone, fit_torus, pick_cone, pick_torus};
 pub use refs::{ScanGeom, fit_reference};
 
 pub(crate) fn regions_area(p: &[P2]) -> f64 {
@@ -105,6 +107,34 @@ impl CylinderPick {
     }
 }
 
+impl ConePick {
+    /// Tronco de cono: macizo se une, hueco se resta. Base en el extremo más angosto o ancho según el eje.
+    pub fn feature(&self) -> FeatureKind {
+        let tan = self.half_angle.tan();
+        FeatureKind::Primitive(Primitive {
+            shape: PrimitiveShape::Cone { r1: self.start * tan, r2: self.end * tan, height: self.end - self.start },
+            origin: add(self.apex, scale(self.direction, self.start)),
+            z: self.direction,
+            x: perpendicular(self.direction),
+            op: if self.hole { BodyOp::Cut } else { BodyOp::Join },
+            link: None,
+        })
+    }
+}
+
+impl TorusPick {
+    pub fn feature(&self) -> FeatureKind {
+        FeatureKind::Primitive(Primitive {
+            shape: PrimitiveShape::Torus { major: self.major, minor: self.minor },
+            origin: self.center,
+            z: self.axis,
+            x: perpendicular(self.axis),
+            op: BodyOp::Join,
+            link: None,
+        })
+    }
+}
+
 fn perpendicular(d: P3) -> P3 {
     let w = if d[0].abs() < 0.9 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] };
     normalize(sub(w, scale(d, dot(w, d))))
@@ -116,6 +146,12 @@ pub enum DetectedShape {
     Plane { plane: Plane },
     Cylinder { origin: P3, direction: P3, radius: f64 },
     Sphere { center: P3, radius: f64 },
+    /// `direction` = hacia donde se abre; `half_angle` en radianes
+    Cone { apex: P3, direction: P3, half_angle: f64 },
+    Torus { center: P3, axis: P3, major: f64, minor: f64 },
+    /// Tramo de cilindro tangente a dos planos paralelos a su eje: el radio de
+    /// un redondeo (o de un rincón redondeado), `angle` en grados
+    Fillet { origin: P3, direction: P3, radius: f64, angle: f64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -206,7 +242,15 @@ fn fit_region(mesh: &ScanMesh, mut faces: Vec<u32>, tol: f64) -> Option<Detectio
             DetectedShape::Cylinder { origin: point, direction: normalize(axis), radius }
         }
         (PrimitiveType::Sphere, PrimitiveParams::Sphere { center, radius }) => DetectedShape::Sphere { center, radius },
-        _ => return None,
+        // Ni plano, cilindro ni esfera: un cono o un toro (superficies de revolución)
+        _ => {
+            let (pts, nrm) = mesh.sample_centroids(&faces, 6000);
+            if let Some(c) = fit_cone(&pts, &nrm, tol) {
+                return Some(Detection { shape: DetectedShape::Cone { apex: c.apex, direction: c.direction, half_angle: c.half_angle }, faces, area, rms: c.rms });
+            }
+            let t = fit_torus(&pts, &nrm, tol)?;
+            return Some(Detection { shape: DetectedShape::Torus { center: t.center, axis: t.axis, major: t.major, minor: t.minor }, faces, area, rms: t.rms });
+        }
     };
     Some(Detection { shape, faces, area, rms: fit.rms_error })
 }
@@ -235,18 +279,97 @@ pub fn detect_all(mesh: &ScanMesh, opts: &DetectOptions) -> Vec<Detection> {
             .map(|&f| mesh.adjacency[f as usize].iter().filter_map(|g| local.get(g).copied()).collect())
             .collect();
         let seg = cad_solver::segmentation::segment_by_normals(&normals, &adjacency, opts.angle_threshold);
+        let mut taken: std::collections::HashSet<u32> = std::collections::HashSet::new();
         for r in seg.regions {
             let sub: Vec<u32> = r.face_indices.iter().map(|&i| faces[i]).collect();
             if big(&sub)
                 && let Some(d) = fit_region(mesh, sub, tol)
+            {
+                taken.extend(d.faces.iter().copied());
+                out.push(d);
+            }
+        }
+        // Lo que sobra entre los planos (un redondeo, un chaflán curvo): cada tramo conexo se ajusta aparte
+        let mut left: std::collections::HashSet<u32> = faces.iter().copied().filter(|f| !taken.contains(f)).collect();
+        while let Some(&start) = left.iter().next() {
+            let mut group = vec![start];
+            left.remove(&start);
+            let mut queue = std::collections::VecDeque::from([start]);
+            while let Some(f) = queue.pop_front() {
+                for &g in &mesh.adjacency[f as usize] {
+                    if left.remove(&g) {
+                        group.push(g);
+                        queue.push_back(g);
+                    }
+                }
+            }
+            if group.len() >= 12
+                && group.iter().map(|&f| mesh.face_areas[f as usize]).sum::<f64>() >= min_area * 0.5
+                && let Some(d) = fit_region(mesh, group, tol)
+                && !matches!(d.shape, DetectedShape::Plane { .. })
             {
                 out.push(d);
             }
         }
     }
     let mut out = merge_coplanar(mesh, out, tol);
+    label_fillets(mesh, &mut out);
     out.sort_by(|a, b| b.area.total_cmp(&a.area));
     out
+}
+
+/// Los tramos de cilindro que cubren poco de la vuelta y tocan dos planos
+/// paralelos a su eje son redondeos entre planos: se rotulan con su radio.
+fn label_fillets(mesh: &ScanMesh, dets: &mut [Detection]) {
+    let mut owner = vec![usize::MAX; mesh.face_count()];
+    for (i, d) in dets.iter().enumerate() {
+        for &f in &d.faces {
+            owner[f as usize] = i;
+        }
+    }
+    let mut changes: Vec<(usize, DetectedShape)> = Vec::new();
+    for (i, d) in dets.iter().enumerate() {
+        let DetectedShape::Cylinder { origin, direction, radius } = &d.shape else { continue };
+        let axis = normalize(*direction);
+        let u = normalize(if axis[0].abs() < 0.9 { cad_model::geom::cross(axis, [1.0, 0.0, 0.0]) } else { cad_model::geom::cross(axis, [0.0, 1.0, 0.0]) });
+        let v = cad_model::geom::cross(axis, u);
+        let mut sectors = [false; 36];
+        let mut planes: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+        let (mut t0, mut t1) = (f64::MAX, f64::MIN);
+        for &f in &d.faces {
+            let c = mesh.face_centroids[f as usize];
+            let rel = sub(c, *origin);
+            let radial = sub(rel, scale(axis, dot(rel, axis)));
+            // Solo las caras sobre el cilindro (las de los planos de al lado que se pegaron a la zona no cuentan)
+            if (norm(radial) - radius).abs() <= radius * 0.03 {
+                let ang = dot(radial, v).atan2(dot(radial, u));
+                sectors[((((ang + std::f64::consts::PI) / (2.0 * std::f64::consts::PI)) * 36.0) as usize).min(35)] = true;
+            }
+            for &vi in &mesh.triangles[f as usize] {
+                let t = dot(sub(mesh.vertices[vi as usize], *origin), axis);
+                t0 = t0.min(t);
+                t1 = t1.max(t);
+            }
+            for &g in &mesh.adjacency[f as usize] {
+                let j = owner[g as usize];
+                if j != usize::MAX
+                    && j != i
+                    && let DetectedShape::Plane { plane } = &dets[j].shape
+                    && dot(normalize(plane.normal), axis).abs() < 0.05
+                {
+                    planes.insert(j);
+                }
+            }
+        }
+        let angle = sectors.iter().filter(|&&s| s).count() as f64 * 10.0;
+        if planes.len() >= 2 && angle <= 190.0 {
+            changes.push((i, DetectedShape::Fillet { origin: add(*origin, scale(axis, t0)), direction: axis, radius: *radius, angle }));
+            let _ = t1;
+        }
+    }
+    for (i, shape) in changes {
+        dets[i].shape = shape;
+    }
 }
 
 /// Une los planos del mismo plano que se tocan, directo o por caras sin zona

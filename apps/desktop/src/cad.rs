@@ -2028,6 +2028,14 @@ pub enum ScanPick {
         #[serde(flatten)]
         pick: CylinderPick,
     },
+    Cone {
+        #[serde(flatten)]
+        pick: cad_scan::ConePick,
+    },
+    Torus {
+        #[serde(flatten)]
+        pick: cad_scan::TorusPick,
+    },
 }
 
 /// Elige una zona del modelo con un clic (`triangle` = índice del triángulo en
@@ -2049,6 +2057,8 @@ fn scan_pick_impl(state: &AppState, kind: &str, triangle: u32, options: ScanPick
                 let pick = cad_scan::pick_cylinder(&scan.mesh, triangle, &options.pick()).map_err(|e| e.to_string())?;
                 Ok(ScanPick::Cylinder { pick })
             }
+            "cone" => Ok(ScanPick::Cone { pick: cad_scan::pick_cone(&scan.mesh, triangle, &options.pick()).map_err(|e| e.to_string())? }),
+            "torus" => Ok(ScanPick::Torus { pick: cad_scan::pick_torus(&scan.mesh, triangle, &options.pick()).map_err(|e| e.to_string())? }),
             other => Err(format!("Tipo de zona desconocido: {other}")),
         })
     }
@@ -2112,6 +2122,10 @@ pub enum ScanFeature {
     PlaneOutline { triangle: u32, extrude: bool, depth: Option<f64>, op: Option<BodyOp> },
     /// Cilindro ajustado: agujero (resta) o tetón (une).
     Cylinder { triangle: u32 },
+    /// Cono (tronco) ajustado: macizo (une) o hueco (resta).
+    Cone { triangle: u32 },
+    /// Toro ajustado.
+    Torus { triangle: u32 },
     /// Sketch con el corte del modelo por un plano.
     Slice { plane: Plane },
     /// Plano de referencia (sketch vacío) sobre una zona plana.
@@ -2180,6 +2194,15 @@ fn scan_add_impl(state: &AppState, feature: ScanFeature, options: ScanPickOption
                     let pick = cad_scan::pick_cylinder(mesh, *triangle, &options.pick()).map_err(|e| e.to_string())?;
                     let name = if pick.hole { "Agujero escaneado" } else { "Cilindro escaneado" };
                     vec![(pick.feature(), Some(name.to_string()))]
+                }
+                ScanFeature::Cone { triangle } => {
+                    let pick = cad_scan::pick_cone(mesh, *triangle, &options.pick()).map_err(|e| e.to_string())?;
+                    let name = if pick.hole { "Cono hueco escaneado" } else { "Cono escaneado" };
+                    vec![(pick.feature(), Some(name.to_string()))]
+                }
+                ScanFeature::Torus { triangle } => {
+                    let pick = cad_scan::pick_torus(mesh, *triangle, &options.pick()).map_err(|e| e.to_string())?;
+                    vec![(pick.feature(), Some("Toro escaneado".to_string()))]
                 }
                 ScanFeature::Slice { plane } => {
                     let loops: Vec<Vec<[f64; 2]>> =

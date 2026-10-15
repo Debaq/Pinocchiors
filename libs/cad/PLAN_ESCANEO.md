@@ -284,10 +284,29 @@ Partes: E4.1 carcasa y parche bajo un sketch, E4.2 región pintada con pincel, E
 
 ## Fases — A (reconstruir la pieza)
 
-### E7 — Más ajustes
+### E7 — Más ajustes ✅ (2026-10-15, salvo la extrusión libre; sin probar en la app real)
 
-- Cono, toro, redondeo entre dos planos (radio), extrusión libre (zona de sección constante →
-  perfil + largo). Conos y toros también en `detect_all`.
+- `scan/src/quadric.rs`: **cono** y **toro** como superficies de revolución. El eje sale de que toda recta normal
+  corta al eje (Plücker: autovector menor de una matriz 6×6); con el eje cada punto pasa a (altura, radio) y el
+  perfil es una recta (cono: vértice y semiángulo) o un círculo (toro: radios mayor y menor). Descarta los puntos
+  que no calzan (la zona que se escapó a un plano tangente) y reajusta. Usa los centroides con la normal exacta de
+  su cara (los vértices con la normal de una cara vecina desvían la recta y el ajuste falla justo en el límite).
+- `pick_cone` / `pick_torus` (clic en la pared): botones «Cono» y «Toro» en «Tomar del escaneo», tarjeta con
+  semiángulo, radios y largo; «Agregar el cono» (macizo une, hueco resta) / «Agregar el toro» crean la primitiva con
+  su eje y medidas. `ScanFeature::Cone/Torus`.
+- `detect_all` ahora también devuelve conos y toros (`DetectedShape::Cone/Torus`) y **redondeos**: un tramo de
+  cilindro que cubre ≤ 190° y toca dos planos paralelos a su eje se rotula `Fillet { radius, angle }` («Redondeo r 5 ·
+  90°») para escribir ese radio en un redondeo del diseño. Lo que sobra entre planos (el redondeo que la zona
+  suave mezcla con las paredes) se ajusta aparte por tramos conexos.
+- Pruebas: `scan_picks_a_tilted_cone` (cono inclinado: eje, vértice, semiángulo, tramo y radios), `scan_picks_a_torus`,
+  `scan_detects_cone_torus_and_fillet` (toro de malla propia; el redondeo de un bloque r 5: radio ±0,1 y 90° ±15°)
+  y e2e «escaneo: cono y toro con un clic».
+- Límites: con triángulos más chicos que la tolerancia (teselado fino de CAD, tolerancia por defecto 0,2 % de la
+  diagonal) todas las normales son «poco confiables» y `detect_all` no segmenta: sube la tolerancia o usa el clic.
+  Un redondeo con facetas gruesas se pega a los planos de al lado. Redondeo sin botón de agregar: solo informa.
+- **Extrusión libre** (zona de sección constante → perfil + largo): no hizo falta código nuevo. Un clic en la tapa
+  plana ya da el contorno (sketch) y el espesor medido (`PlanePick::depth`), y «Sketch y extruir» crea la
+  extrusión con ese largo.
 
 ### E8 — Revolución y recubrimiento desde cortes
 

@@ -632,3 +632,120 @@ fn scan_curves_project_and_path() {
     }
     assert!(matches!(ev.references.get(&path), Some(RefGeom::Curves { lines }) if !lines.is_empty()));
 }
+
+fn mesh_of(shape: &Shape) -> ScanMesh {
+    let t = shape.tessellate(0.02, 0.05).unwrap();
+    ScanMesh::new(&t.positions, &t.triangles)
+}
+
+/// Cono inclinado: eje, semiángulo, vértice y tramo salen de un clic en su lado.
+#[test]
+fn scan_picks_a_tilted_cone() {
+    if !occt::available() {
+        return;
+    }
+    let axis = cad_model::geom::normalize([1.0, 1.0, 1.0]);
+    let x = cad_model::geom::normalize(cad_model::geom::cross(axis, [0.0, 0.0, 1.0]));
+    let origin = [5.0, 3.0, 2.0];
+    let cone = Shape::cone(Frame { origin, z: axis, x }, 10.0, 4.0, 30.0).unwrap();
+    let scan = mesh_of(&cone);
+    let seed = (0..scan.face_count() as u32)
+        .filter(|&f| dot(scan.face_normals[f as usize], axis).abs() < 0.5 && scan.face_areas[f as usize] > 1e-3)
+        .max_by(|&a, &b| scan.face_areas[a as usize].total_cmp(&scan.face_areas[b as usize]))
+        .unwrap();
+    let pick = pick_cone(&scan, seed, &PickOptions::default()).expect("cono");
+    // tan(α) = (10 − 4) / 30; el vértice está a 10 / tan(α) = 50 de la base, del lado de la punta
+    assert_relative_eq!(pick.half_angle, (6.0f64 / 30.0).atan(), epsilon = 0.01);
+    assert!(dot(pick.direction, axis).abs() > 0.999, "{:?}", pick.direction);
+    let expected_apex = add(origin, scale(axis, 50.0));
+    let gap = sub(pick.apex, expected_apex);
+    assert!(dot(gap, gap).sqrt() < 0.3, "vértice {:?} en vez de {:?}", pick.apex, expected_apex);
+    assert!(dot(pick.direction, axis) < 0.0, "se abre hacia la base");
+    assert_relative_eq!(pick.end - pick.start, 30.0, epsilon = 0.5);
+    assert!(!pick.hole);
+    // La primitiva del CAD: base de radio 10 y tapa de 4
+    let r_start = pick.start * pick.half_angle.tan();
+    let r_end = pick.end * pick.half_angle.tan();
+    assert_relative_eq!(r_start.min(r_end), 4.0, epsilon = 0.2);
+    assert_relative_eq!(r_start.max(r_end), 10.0, epsilon = 0.2);
+}
+
+/// Toro: el clic en cualquier lado da eje, radio mayor y menor.
+#[test]
+fn scan_picks_a_torus() {
+    if !occt::available() {
+        return;
+    }
+    let axis = cad_model::geom::normalize([0.0, 1.0, 1.0]);
+    let x = cad_model::geom::normalize(cad_model::geom::cross(axis, [1.0, 0.0, 0.0]));
+    let center = [1.0, -2.0, 3.0];
+    let torus = Shape::torus(Frame { origin: center, z: axis, x }, 20.0, 4.0).unwrap();
+    let scan = mesh_of(&torus);
+    let seed = (0..scan.face_count() as u32).max_by(|&a, &b| scan.face_areas[a as usize].total_cmp(&scan.face_areas[b as usize])).unwrap();
+    let pick = pick_torus(&scan, seed, &PickOptions::default()).expect("toro");
+    assert_relative_eq!(pick.major, 20.0, epsilon = 0.1);
+    assert_relative_eq!(pick.minor, 4.0, epsilon = 0.1);
+    assert!(dot(pick.axis, axis).abs() > 0.999, "{:?}", pick.axis);
+    let gap = sub(pick.center, center);
+    assert!(dot(gap, gap).sqrt() < 0.2, "{:?}", pick.center);
+}
+
+/// Detección de todo el escaneo: un cono, un toro y el redondeo de un bloque.
+#[test]
+fn scan_detects_cone_torus_and_fillet() {
+    if !occt::available() {
+        return;
+    }
+    // Teselado de CAD no más fino que la tolerancia: con triángulos más chicos que el ruido ninguna normal es confiable
+    let kinds_at = |shape: &Shape, deflection: f64, angle: f64| -> Vec<DetectedShape> {
+        let t = shape.tessellate(deflection, angle).unwrap();
+        detect_all(&ScanMesh::new(&t.positions, &t.triangles), &DetectOptions::default()).into_iter().map(|d| d.shape).collect()
+    };
+    let kinds = |shape: &Shape| kinds_at(shape, 0.02, 0.05);
+    let cone = Shape::cone(Frame { origin: [0.0; 3], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0] }, 10.0, 4.0, 30.0).unwrap();
+    assert!(
+        kinds(&cone).iter().any(|s| matches!(s, DetectedShape::Cone { half_angle, .. } if (half_angle - (6.0f64 / 30.0).atan()).abs() < 0.02)),
+        "cono: {:?}",
+        kinds(&cone)
+    );
+    // Toro de malla propia, de triángulos mayores que el ruido (el teselado fino de CAD los deja todos "poco confiables")
+    let (nu, nv) = (96usize, 48usize);
+    let mut pos = Vec::new();
+    for i in 0..nu {
+        for j in 0..nv {
+            let (u, v) = (i as f64 / nu as f64 * 2.0 * PI, j as f64 / nv as f64 * 2.0 * PI);
+            pos.push([(20.0 + 4.0 * v.cos()) * u.cos(), (20.0 + 4.0 * v.cos()) * u.sin(), 4.0 * v.sin()]);
+        }
+    }
+    let at = |i: usize, j: usize| ((i % nu) * nv + j % nv) as u32;
+    let mut tris = Vec::new();
+    for i in 0..nu {
+        for j in 0..nv {
+            tris.push([at(i, j), at(i + 1, j), at(i + 1, j + 1)]);
+            tris.push([at(i, j), at(i + 1, j + 1), at(i, j + 1)]);
+        }
+    }
+    let found = detect_all(&ScanMesh::new(&pos, &tris), &DetectOptions::default());
+    assert!(
+        found.iter().any(|d| matches!(&d.shape, DetectedShape::Torus { major, minor, .. } if (major - 20.0).abs() < 0.2 && (minor - 4.0).abs() < 0.2)),
+        "toro: {:?}",
+        found.iter().map(|d| &d.shape).collect::<Vec<_>>()
+    );
+    // Bloque de 40 × 30 × 20 con una arista vertical redondeada a r = 5
+    let block = Shape::make_box(Frame::at([0.0; 3]), 40.0, 30.0, 20.0).unwrap();
+    let edge = (0..block.edge_count())
+        .find(|&e| {
+            let i = block.edge_info(e).unwrap();
+            (i.length - 20.0).abs() < 1e-6 && (i.mid[0] - 40.0).abs() < 1e-6 && (i.mid[1] - 30.0).abs() < 1e-6
+        })
+        .expect("arista");
+    let rounded = block.fillet(&[edge], 5.0).unwrap();
+    // Con un teselado fino y la tolerancia a la medida (los lados de 10° se pegarían a los planos de al lado)
+    let t = rounded.tessellate(0.003, 0.03).unwrap();
+    let found = detect_all(&ScanMesh::new(&t.positions, &t.triangles), &DetectOptions { tolerance: Some(0.01), ..Default::default() });
+    assert!(
+        found.iter().any(|d| matches!(&d.shape, DetectedShape::Fillet { radius, angle, .. } if (radius - 5.0).abs() < 0.1 && (*angle - 90.0).abs() <= 15.0)),
+        "redondeo: {:?}",
+        found.iter().map(|d| &d.shape).collect::<Vec<_>>()
+    );
+}

@@ -378,12 +378,19 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
 
   // ─── Escaneo → CAD ────────────────────────────────────────────────────
 
-  const pickScan = (shape: "plane" | "cylinder") => {
+  const pickScan = (shape: "plane" | "cylinder" | "cone" | "torus") => {
     setScanResult(undefined);
     ui.setPick({
       kind: "scan",
       shape,
-      prompt: shape === "plane" ? tl("Clic sobre una zona plana del modelo") : tl("Clic sobre una pared cilíndrica (agujero o tetón)"),
+      prompt:
+        shape === "plane"
+          ? tl("Clic sobre una zona plana del modelo")
+          : shape === "cone"
+            ? tl("Clic sobre una pared cónica")
+            : shape === "torus"
+              ? tl("Clic sobre un redondeo o una pieza en anillo (toro)")
+              : tl("Clic sobre una pared cilíndrica (agujero o tetón)"),
       done: (pick, triangle) => {
         ui.setPick({ kind: "none" });
         setScanResult({ pick, triangle });
@@ -425,6 +432,7 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
       done: (pick) => {
         ui.setPick({ kind: "none" });
         if (pick.kind === "cylinder") return run(axisToVertical(pick.origin, pick.direction), "Escaneo: eje vertical", "");
+        if (pick.kind !== "plane") return;
         if (how === "floor") return run(faceToFloor(pick.plane), tl("Escaneo: cara al piso"), "");
         run(faceToFront(pick.plane), tl("Escaneo: cara al frente"), tl("Esa cara es horizontal: elegir una cara de costado"));
       },
@@ -695,6 +703,12 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                     <Button size="sm" onClick={() => pickScan("cylinder")}>
                       {tl("Cilindro / agujero")}
                     </Button>
+                    <Button size="sm" onClick={() => pickScan("cone")}>
+                      {tl("Cono")}
+                    </Button>
+                    <Button size="sm" onClick={() => pickScan("torus")}>
+                      {tl("Toro")}
+                    </Button>
                   </div>
                   <div class="space-y-1.5" aria-label={tl("Curvas sobre la piel")}>
                     <span class="text-xs text-text-muted">{tl("Curvas sobre la piel (caminos, bordes, nervios)")}</span>
@@ -753,19 +767,29 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                             <div class="group flex items-center gap-1 rounded hover:bg-surface">
                               <button class="flex-1 flex justify-between gap-2 px-2 py-1 text-xs text-left" onClick={() => ui.setScanHighlight(d.faces)}>
                                 <span class="text-text">
-                                  {d.shape.type === "plane" ? tl("Plano") : d.shape.type === "cylinder" ? tl("Cilindro r {v1}", { v1: fmt(d.shape.radius) }) : tl("Esfera r {v1}", { v1: fmt(d.shape.radius) })}
+                                  {d.shape.type === "plane"
+                                    ? tl("Plano")
+                                    : d.shape.type === "cylinder"
+                                      ? tl("Cilindro r {v1}", { v1: fmt(d.shape.radius) })
+                                      : d.shape.type === "cone"
+                                        ? tl("Cono {v1}°", { v1: fmt((d.shape.half_angle * 180) / Math.PI, 1) })
+                                        : d.shape.type === "torus"
+                                          ? tl("Toro R {v1} r {v2}", { v1: fmt(d.shape.major), v2: fmt(d.shape.minor) })
+                                          : d.shape.type === "fillet"
+                                            ? tl("Redondeo r {v1} · {v2}°", { v1: fmt(d.shape.radius), v2: fmt(d.shape.angle, 0) })
+                                            : tl("Esfera r {v1}", { v1: fmt(d.shape.radius) })}
                                 </span>
                                 <span class="text-text-dim font-mono">{fmt(d.area, 0)} mm²</span>
                               </button>
-                              <Show when={d.shape.type !== "sphere"}>
+                              <Show when={d.shape.type !== "sphere" && d.shape.type !== "fillet"}>
                                 <button
                                   class="hidden group-hover:block px-1.5 text-[11px] text-accent hover:text-accent-hover"
-                                  title={d.shape.type === "plane" ? tl("Agregar el contorno como sketch") : tl("Agregar el cilindro")}
+                                  title={d.shape.type === "plane" ? tl("Agregar el contorno como sketch") : d.shape.type === "cone" ? tl("Agregar el cono") : d.shape.type === "torus" ? tl("Agregar el toro") : tl("Agregar el cilindro")}
                                   onClick={() =>
                                     void addScan(
                                       d.shape.type === "plane"
                                         ? { kind: "plane_outline", triangle: d.faces[0], extrude: false }
-                                        : { kind: "cylinder", triangle: d.faces[0] },
+                                        : { kind: d.shape.type as "cylinder" | "cone" | "torus", triangle: d.faces[0] },
                                     )
                                   }
                                 >
@@ -6630,7 +6654,36 @@ const ScanResultCard: Component<{ result: { pick: ScanPick; triangle: number }; 
       <Show
         when={props.result.pick.kind === "plane" && props.result.pick}
         fallback={(() => {
-          const c = props.result.pick as Extract<ScanPick, { kind: "cylinder" }>;
+          const any = props.result.pick;
+          if (any.kind === "cone")
+            return (
+              <>
+                <p class="text-text">
+                  {any.hole ? tl("Cono hueco") : tl("Cono")} {tl("· semiángulo")} {fmt((any.half_angle * 180) / Math.PI, 2)}° {tl("· largo")} {fmt(any.end - any.start)} mm
+                </p>
+                <p class="text-text-dim">
+                  {tl("Radios")} {fmt(any.start * Math.tan(any.half_angle), 2)} → {fmt(any.end * Math.tan(any.half_angle), 2)} mm · {tl("Error")} {fmt(any.rms, 3)} mm
+                </p>
+                <Button size="sm" variant="primary" fullWidth onClick={() => props.onAdd({ kind: "cone", triangle: props.result.triangle })}>
+                  {any.hole ? tl("Agregar el cono hueco (resta)") : tl("Agregar el cono")}
+                </Button>
+              </>
+            );
+          if (any.kind === "torus")
+            return (
+              <>
+                <p class="text-text">
+                  {tl("Toro · radio mayor")} {fmt(any.major, 3)} {tl("mm · radio menor")} {fmt(any.minor, 3)} mm
+                </p>
+                <p class="text-text-dim">
+                  {tl("Error")} {fmt(any.rms, 3)} mm
+                </p>
+                <Button size="sm" variant="primary" fullWidth onClick={() => props.onAdd({ kind: "torus", triangle: props.result.triangle })}>
+                  {tl("Agregar el toro")}
+                </Button>
+              </>
+            );
+          const c = any as Extract<ScanPick, { kind: "cylinder" }>;
           return (
             <>
               <p class="text-text">

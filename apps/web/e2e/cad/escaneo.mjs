@@ -550,6 +550,66 @@ export const escenarios = {
     if ((st?.type ?? st) !== "ok") throw new Error(`curva proyectada: ${JSON.stringify(res.status)}`);
     if (!res.references.length) throw new Error("no hay curvas de referencia");
   },
+
+  async "escaneo: cono y toro con un clic"(b) {
+    const facets = (quads) => quads.map(([a, c, d]) => `facet normal 0 0 0\nouter loop\nvertex ${a.join(" ")}\nvertex ${c.join(" ")}\nvertex ${d.join(" ")}\nendloop\nendfacet\n`).join("");
+    const tris = [];
+    const quad = (a, c, d, e) => tris.push([a, c, d], [a, d, e]);
+    // Tronco de cono: base r 10 en z = 0, tapa r 4 en z = 30 (con tapas)
+    const segs = 96;
+    const ring = (r, z, j) => [r * Math.cos((2 * Math.PI * j) / segs), r * Math.sin((2 * Math.PI * j) / segs), z];
+    for (let j = 0; j < segs; j++) {
+      quad(ring(10, 0, j), ring(10, 0, j + 1), ring(4, 30, j + 1), ring(4, 30, j));
+      tris.push([[0, 0, 0], ring(10, 0, j + 1), ring(10, 0, j)], [[0, 0, 30], ring(4, 30, j), ring(4, 30, j + 1)]);
+    }
+    const cone = `${process.env.E2E_OUT ?? "/tmp/pinocchio-e2e"}/escaneo-cono.stl`;
+    writeFileSync(cone, `solid cono\n${facets(tris)}endsolid cono\n`);
+    await importModel(b, cone);
+    await begin(b);
+    await tab(b, "Desde el escaneo");
+    await b.eval(`window.__cadViewer.lookFrom([0, -1, 0.3])`);
+    await sleep(800);
+    await b.clickText("Cono");
+    await b.click(...(await b.eval(`window.__cadViewer.screenOf([0, -7, 15])`)), { wait: 2500 });
+    const card = await b.eval(`document.body.innerText`);
+    if (!card.includes("semiángulo")) throw new Error(`no salió el cono: ${card.slice(-400)}`);
+    await b.clickContains("Agregar el cono");
+    let doc;
+    for (let t = 0; t < 40; t++) {
+      doc = await call("cad_get_document");
+      if (doc.features.some((f) => f.kind.type === "primitive")) break;
+      await sleep(250);
+    }
+    const prim = doc.features.find((f) => f.kind.type === "primitive")?.kind;
+    if (prim?.shape?.type !== "cone") throw new Error(`no hay cono: ${JSON.stringify(doc.features.map((f) => f.kind.type))}`);
+    const radii = [prim.shape.r1, prim.shape.r2].sort((x, y) => x - y);
+    near(radii[0], 4, 0.3, "radio chico del cono");
+    near(radii[1], 10, 0.3, "radio grande del cono");
+    near(prim.shape.height, 30, 0.6, "altura del cono");
+
+    // Toro de R 20 y r 4 (malla propia de 96 × 48)
+    const t2 = [];
+    const [nu, nv] = [96, 48];
+    const p = (i, j) => {
+      const [u, v] = [((i % nu) / nu) * 2 * Math.PI, ((j % nv) / nv) * 2 * Math.PI];
+      return [(20 + 4 * Math.cos(v)) * Math.cos(u), (20 + 4 * Math.cos(v)) * Math.sin(u), 20 + 4 * Math.sin(v)];
+    };
+    for (let i = 0; i < nu; i++) for (let j = 0; j < nv; j++) t2.push([p(i, j), p(i + 1, j), p(i + 1, j + 1)], [p(i, j), p(i + 1, j + 1), p(i, j + 1)]);
+    const torus = `${process.env.E2E_OUT ?? "/tmp/pinocchio-e2e"}/escaneo-toro.stl`;
+    writeFileSync(torus, `solid toro\n${facets(t2)}endsolid toro\n`);
+    await importModel(b, torus);
+    await begin(b);
+    await tab(b, "Desde el escaneo");
+    await b.eval(`window.__cadViewer.lookFrom([0.001, -0.001, 1])`);
+    await sleep(800);
+    await b.clickText("Toro");
+    await b.click(...(await b.eval(`window.__cadViewer.screenOf([20, 0, 24])`)), { wait: 2500 });
+    const text = await b.eval(`document.body.innerText`);
+    const mayor = text.match(/radio mayor\s*([\d.,]+)/)?.[1];
+    if (!mayor) throw new Error(`no salió el toro: ${text.split("\n").filter((l) => /toro|zona|mayor|menor|Error/i.test(l)).join(" | ")}`);
+    near(parseFloat(mayor.replace(",", ".")), 20, 0.2, "radio mayor");
+    near(parseFloat(text.match(/radio menor\s*([\d.,]+)/)?.[1].replace(",", ".")), 4, 0.2, "radio menor");
+  },
 };
 
 siEsPrincipal(import.meta.url, escenarios);

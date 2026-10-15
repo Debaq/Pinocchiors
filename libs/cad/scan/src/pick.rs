@@ -136,6 +136,11 @@ fn grow(mesh: &ScanMesh, seed: u32, max: usize, accept: impl Fn(u32, u32) -> boo
     out
 }
 
+/// `grow` con el criterio como objeto (para los módulos que lo pasan entre funciones)
+pub(crate) fn grow_dyn(mesh: &ScanMesh, seed: u32, max: usize, accept: &dyn Fn(u32, u32) -> bool) -> Vec<u32> {
+    grow(mesh, seed, max, accept)
+}
+
 pub fn pick_plane(mesh: &ScanMesh, seed: u32, opts: &PickOptions) -> Result<PlanePick, PickError> {
     if seed as usize >= mesh.face_count() {
         return Err(PickError::NoFace(seed));
