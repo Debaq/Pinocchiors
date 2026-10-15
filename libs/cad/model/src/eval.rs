@@ -1995,6 +1995,54 @@ impl Ctx<'_> {
         }
     }
 
+    /// Lo del escaneo que pintó el pincel: la piel ∩ la unión de cilindros de
+    /// cada toque a lo largo de su normal (el borde queda perpendicular a la
+    /// piel); solo el pedazo que ve cada toque desde afuera.
+    fn scan_paint(&self, id: FeatureId, skin: Tagged, paint: &ScanPaint, reach: f64) -> R<Tagged> {
+        if paint.radius <= 0.0 {
+            return Err("el radio del pincel tiene que ser mayor que cero".into());
+        }
+        let dabs: Vec<&ScanDab> = paint.dabs.iter().filter(|d| norm(d.normal) > 0.5).collect();
+        if dabs.is_empty() {
+            return Err("el pincel no tiene toques sobre el escaneo".into());
+        }
+        let span = reach + paint.radius * 0.5 + 1.0;
+        let cylinders = dabs
+            .iter()
+            .map(|d| {
+                let n = normalize(d.normal);
+                let helper = if n[2].abs() < 0.9 { [0.0, 0.0, 1.0] } else { [1.0, 0.0, 0.0] };
+                let x = normalize(cross(helper, n));
+                Shape::cylinder(Frame { origin: sub(d.point, scale(n, span)), z: n, x }, paint.radius, 2.0 * span).map_err(err)
+            })
+            .collect::<R<Vec<_>>>()?;
+        let brush = fuse(cylinders)?;
+        let walls = vec![vec![tag(id, "borde")]; brush.face_count()];
+        let (cut, h) = with_history(|| skin.shape.intersect(&brush)).map_err(err)?;
+        let tags = propagate(&[&skin.tags, &walls], &h, cut.face_count()).0;
+        let pieces = cut.solids().map_err(err)?;
+        if pieces.is_empty() {
+            return Err("lo pintado no cae sobre el escaneo".into());
+        }
+        let mut keep = vec![false; pieces.len()];
+        for d in &dabs {
+            let n = normalize(d.normal);
+            let from = add(d.point, scale(n, span));
+            let first = pieces
+                .iter()
+                .enumerate()
+                .filter_map(|(k, s)| s.ray_hit(from, scale(n, -1.0)).map(|t| (k, t)))
+                .min_by(|a, b| a.1.total_cmp(&b.1));
+            if let Some((k, _)) = first {
+                keep[k] = true;
+            }
+        }
+        if !keep.contains(&true) {
+            return Err("desde lo pintado no se ve el escaneo".into());
+        }
+        self.keep_scan_pieces(id, cut, tags, pieces, keep)
+    }
+
     /// Lo del escaneo que cae bajo las regiones de un sketch: el prisma de las
     /// regiones (que lo atraviesa entero) ∩ el escaneo, y de los pedazos solo
     /// los primeros que encuentran los rayos desde el sketch hacia cada lado
@@ -2034,6 +2082,11 @@ impl Ctx<'_> {
         if !keep.contains(&true) {
             return Err("desde las regiones del sketch no se ve el escaneo".into());
         }
+        self.keep_scan_pieces(id, cut, tags, pieces, keep)
+    }
+
+    /// Se queda con los pedazos marcados; las caras que sobreviven conservan su nombre (por su centro)
+    fn keep_scan_pieces(&self, id: FeatureId, cut: Shape, tags: Vec<Vec<FaceTag>>, pieces: Vec<Shape>, keep: Vec<bool>) -> R<Tagged> {
         if keep.iter().all(|&k| k) {
             return Ok(Tagged { shape: cut, tags });
         }
@@ -2474,7 +2527,9 @@ impl Ctx<'_> {
                 // Todas sus caras son piel: entre ellas se elige por cercanía
                 let tags = vec![vec![tag(f.id, "piel")]; tool.face_count()];
                 let mut tool = Tagged { shape: tool, tags };
-                if let Some(r) = &b.region {
+                if let Some(p) = &b.paint {
+                    tool = self.scan_paint(f.id, tool, p, b.offset.abs() + b.thickness.abs())?;
+                } else if let Some(r) = &b.region {
                     tool = self.scan_patch(f.id, tool, r)?;
                 }
                 self.ev.tools.insert(f.id, (tool.clone(), b.op));

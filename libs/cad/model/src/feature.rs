@@ -614,10 +614,32 @@ pub struct ScanBody {
     /// plano: el primer tramo del escaneo hacia cada lado.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub region: Option<ScanRegion>,
+    /// Solo lo pintado con el pincel sobre el escaneo (manda sobre `region`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paint: Option<ScanPaint>,
     /// La malla preparada que pone la app antes de cada recálculo (no se
     /// guarda: de ella solo viaja la huella, que entra en la caché).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mesh: Option<ScanBodyMesh>,
+}
+
+/// Pincel sobre el escaneo: toques de `radius` mm de radio ligados a la piel.
+/// El borde del parche es perpendicular a la piel en cada toque.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScanPaint {
+    pub radius: f64,
+    pub dabs: Vec<ScanDab>,
+}
+
+/// Un toque del pincel: dónde cayó (`seed`) y, ajustados por la app contra el
+/// escaneo de hoy, el punto de la piel y su normal hacia afuera.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScanDab {
+    pub seed: ScanSeed,
+    #[serde(default)]
+    pub point: P3,
+    #[serde(default)]
+    pub normal: P3,
 }
 
 /// Regiones de un sketch proyectadas sobre el escaneo.
@@ -634,7 +656,7 @@ fn scan_body_faces() -> usize {
 
 impl Default for ScanBody {
     fn default() -> Self {
-        Self { offset: 0.0, faces: scan_body_faces(), op: BodyOp::New, thickness: 0.0, region: None, mesh: None }
+        Self { offset: 0.0, faces: scan_body_faces(), op: BodyOp::New, thickness: 0.0, region: None, paint: None, mesh: None }
     }
 }
 
@@ -1517,7 +1539,7 @@ impl FeatureKind {
             FeatureKind::Mirror { .. } => "Simetría",
             FeatureKind::Split { .. } => "Corte",
             FeatureKind::Import { .. } => "Importado",
-            FeatureKind::ScanBody(b) if b.region.is_some() => "Parche del escaneo",
+            FeatureKind::ScanBody(b) if b.region.is_some() || b.paint.is_some() => "Parche del escaneo",
             FeatureKind::ScanBody(b) if b.thickness != 0.0 => "Carcasa del escaneo",
             FeatureKind::ScanBody(_) => "Cuerpo del escaneo",
             FeatureKind::Boolean { .. } => "Booleana",

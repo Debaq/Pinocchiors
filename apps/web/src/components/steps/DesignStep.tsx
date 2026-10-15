@@ -62,6 +62,7 @@ import {
   type BlendSide,
   type P2,
   type P3,
+  type ScanDab,
   type AxisDef,
   type Connector,
   type Mate,
@@ -358,6 +359,7 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
   const [scanResult, setScanResult] = createSignal<{ pick: ScanPick; triangle: number }>();
   const [sliceBase, setSliceBase] = createSignal<"xy" | "xz" | "yz">("xy");
   const [sliceOffset, setSliceOffset] = createSignal(0);
+  const [brushRadius, setBrushRadius] = createSignal(5);
   const [detections, setDetections] = createSignal<Detection[]>();
 
   const actions = props.actions;
@@ -449,6 +451,24 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
       });
     next();
   };
+
+  /** Pincel: lo que se pinta sobre el escaneo queda como parche (carcasa de 2 mm, pieza nueva) */
+  const paintPatch = () =>
+    ui.setPick({
+      kind: "scan_brush",
+      prompt: tl("Arrastrar sobre el escaneo para pintar el parche"),
+      radius: brushRadius,
+      done: async (points) => {
+        try {
+          const dabs = await invoke<ScanDab[]>("cad_scan_dabs", { points });
+          if (!dabs.length) return say(tl("El pincel no tocó el escaneo"));
+          ui.setScanHighlight([]);
+          void store.addFeature({ type: "scan_body", offset: 0.2, thickness: 2, faces: 20000, op: "new", paint: { radius: brushRadius(), dabs } });
+        } catch (e) {
+          say(String(e));
+        }
+      },
+    });
 
   const detect = async () => {
     try {
@@ -577,6 +597,17 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                         onClick={() => actions.startScanShell(true)}
                       >
                         {tl("Parche desde sketch")}
+                      </Button>
+                    </div>
+                    <div class="flex items-end gap-1.5">
+                      <Num label={tl("Radio del pincel")} value={brushRadius()} onCommit={(v) => v > 0 && setBrushRadius(v)} suffix="mm" />
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        title={tl("Pintar con el pincel la zona del escaneo que será el parche (el borde queda perpendicular a la piel)")}
+                        onClick={paintPatch}
+                      >
+                        {tl("Pincel")}
                       </Button>
                     </div>
                     <p class="text-[11px] text-text-dim leading-relaxed">

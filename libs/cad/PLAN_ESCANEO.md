@@ -227,9 +227,15 @@ Partes: E4.1 carcasa y parche bajo un sketch, E4.2 región pintada con pincel, E
     `scan_body`.
   - Pendiente: la caja − cuerpo del conejo a −0,5 mm cortado a media altura sigue fallando
     (no eran las astillas); paredes del parche perpendiculares a la piel (llega con E4.2).
-- E4.2 región pintada: pincel sobre la malla (muestras ligadas al escaneo como las
-  referencias de E1.3), campo por vértice interpolado en el punto más cercano; bordes
-  perpendiculares a la piel.
+- E4.2 región pintada ✅ (2026-10-15, sin probar en la app real): `ScanBody.paint = ScanPaint { radius, dabs }`;
+  cada toque (`ScanDab`) guarda su `ScanSeed` (triángulo + baricéntricas, como las referencias de E1.3) y la app
+  rellena `point` y `normal` en `fit_scan_references` (`ScanMesh::fit_dab`), así sigue al escaneo si se alinea o
+  se repara. El parche es carcasa ∩ unión de cilindros de radio `radius` a lo largo de la normal de cada toque
+  (borde perpendicular a la piel), y de los pedazos solo los que cada toque ve desde afuera (`scan_paint`; la cola
+  de `scan_patch` pasó a `keep_scan_pieces`). `paint` manda sobre `region`. UI: «Pincel» + radio en la pestaña
+  del escaneo (arrastrar con el botón izquierdo; toques cada medio radio, máx. 80; comando `cad_scan_dabs`).
+  Prueba: `scan_paint_patch_follows_the_brush` (esfera: volumen de la tapa de radio 8). Falta: e2e, campo por
+  vértice con borde suave (hoy son cilindros), borrar/editar los toques después, geodésica en vez de cilindro.
 - E4.3 molde: caja − escaneo desfasado, partido por plano o por la línea de mayor contorno,
   con llaves de registro (`print3d` ya tiene tarugos) y bebedero.
 

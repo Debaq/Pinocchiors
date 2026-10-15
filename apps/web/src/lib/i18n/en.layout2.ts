@@ -110,6 +110,7 @@ export const en_layout2: Catalog = {
   "Clic en la curva (se toma toda su cadena)": "Click the curve (its whole chain is taken)",
   "Llevar el cursor al lado y a la distancia, y clic (o escribir la distancia)": "Move the cursor to the side and distance, then click (or type the distance)",
   "Empezar en el extremo de una línea o de un arco": "Start at the end of a line or an arc",
+  "Pincel: demasiados toques; usar un radio mayor": "Brush: too many dabs; use a larger radius",
   "Buscando la zona...": "Finding the region...",
   "Esa cara no es plana: elegir una cara plana": "That face isn't flat: pick a flat face",
   "Esa cara no es plana: elegir una cara plana o un plano base": "That face isn't flat: pick a flat face or a base plane",

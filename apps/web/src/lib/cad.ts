@@ -866,6 +866,8 @@ export type FeatureKind =
       op: BodyOp;
       thickness?: number;
       region?: { sketch: number; regions: RegionSelection } | null;
+      /** Solo lo pintado con el pincel (manda sobre `region`); la app completa `point` y `normal` */
+      paint?: { radius: number; dabs: ScanDab[] } | null;
     }
   /** Entre piezas: unir todas en la primera, restar `tools` de `targets` o dejar lo común */
   | { type: "boolean"; op: "union" | "subtract" | "intersect"; targets: PartId[]; tools: PartId[]; keep_tools: boolean }
@@ -1982,6 +1984,13 @@ const PRIMITIVE_LABELS: Record<PrimitiveShape["type"], string> = {
   get gear() { return tr("Engrane"); },
 };
 
+/** Un toque del pincel sobre el escaneo (lo que la app devuelve de `cad_scan_dabs`) */
+export interface ScanDab {
+  seed: { triangle: number; bary: [number, number, number]; at: P3; topology: number };
+  point?: P3;
+  normal?: P3;
+}
+
 /** Operación que se edita con el editor de sketch (en un plano, o envuelto sobre una cara) */
 export function editsAsSketch(kind: FeatureKind): kind is Extract<FeatureKind, { type: "sketch" | "surface_sketch" }> {
   return kind.type === "sketch" || kind.type === "surface_sketch";
@@ -1989,7 +1998,7 @@ export function editsAsSketch(kind: FeatureKind): kind is Extract<FeatureKind, {
 
 /** Nombre del tipo de operación (las primitivas, por su forma) */
 export function kindLabel(kind: FeatureKind): string {
-  if (kind.type === "scan_body" && kind.region) return tr("Parche del escaneo");
+  if (kind.type === "scan_body" && (kind.region || kind.paint)) return tr("Parche del escaneo");
   if (kind.type === "scan_body" && kind.thickness) return tr("Carcasa del escaneo");
   return kind.type === "primitive" ? PRIMITIVE_LABELS[kind.shape.type] : FEATURE_LABELS[kind.type];
 }

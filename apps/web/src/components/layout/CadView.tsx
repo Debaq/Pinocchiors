@@ -2726,13 +2726,38 @@ export const CadView: Component<CadViewProps> = (props) => {
       container.setPointerCapture(e.pointerId);
       return;
     }
+    if (ui.pick().kind === "scan_brush") {
+      brush = { points: [], tris: [] };
+      container.setPointerCapture(e.pointerId);
+      return brushAt(e);
+    }
     // Arrastrar desde cualquier lado elige por caja (como la herramienta de selección de
     // Blender); si no se arrastra queda el clic
     if (ui.pick().kind === "none") boxStart = { x: e.clientX, y: e.clientY, additive: e.shiftKey || e.ctrlKey || e.metaKey, before: ui.picks() };
     void pickClick(e);
   };
 
+  /** Pincel del escaneo: lo pintado desde que se apretó el botón */
+  let brush: { points: [number, P3][]; tris: number[] } | undefined;
+  const BRUSH_MAX_DABS = 80;
+  const brushAt = (e: PointerEvent) => {
+    const mode = ui.pick();
+    if (!brush || !viewer || mode.kind !== "scan_brush") return;
+    const hit = viewer.pick(e.clientX, e.clientY, { scan: true });
+    if (hit?.kind !== "scan") return;
+    const at = viewer.fromView(hit.point);
+    const last = brush.points[brush.points.length - 1];
+    // Toques separados un poco menos que el radio, para que se junten sin cilindros de más
+    const gap = Math.max(mode.radius() * 0.5, 1e-3);
+    if (last && Math.hypot(at[0] - last[1][0], at[1] - last[1][1], at[2] - last[1][2]) < gap) return;
+    if (brush.points.length >= BRUSH_MAX_DABS) return ui.setMessage(tr("Pincel: demasiados toques; usar un radio mayor"));
+    brush.points.push([hit.triangle, at]);
+    brush.tris.push(hit.triangle);
+    ui.setScanHighlight([...brush.tris]);
+  };
+
   const onPointerMove = (e: PointerEvent) => {
+    if (brush) return (e.buttons & 1) === 1 ? brushAt(e) : undefined;
     if (partDrag) return movePartDrag(e);
     if (e.buttons === 0) setOverCube(viewer?.cubeHover(e.clientX, e.clientY) ?? false);
     const rect0 = container.getBoundingClientRect();
@@ -3052,6 +3077,16 @@ export const CadView: Component<CadViewProps> = (props) => {
   let rightDown: { x: number; y: number } | undefined;
   const [menu, setMenu] = createSignal<{ x: number; y: number; items: MenuEntry[] }>();
   const onPointerUp = (e: PointerEvent) => {
+    if (brush) {
+      const done = brush;
+      brush = undefined;
+      const mode = ui.pick();
+      if (mode.kind === "scan_brush" && done.points.length) {
+        ui.setPick({ kind: "none" });
+        mode.done(done.points);
+      }
+      return;
+    }
     if (partDrag) {
       partDrag = undefined;
       return;

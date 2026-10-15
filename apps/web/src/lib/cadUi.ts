@@ -172,6 +172,11 @@ export type PickMode =
   | { kind: "scan"; prompt: string; shape: "plane" | "cylinder"; done: (pick: ScanPick, triangle: number, at: P3) => void }
   /** Un punto sobre el escaneo (mm) y su triángulo */
   | { kind: "scan_point"; prompt: string; done: (at: P3, triangle: number) => void }
+  /**
+   * Pincel sobre el escaneo: se arrastra con el botón izquierdo; `radius` (mm) separa los toques y
+   * `done` recibe lo pintado (triángulo y punto de cada toque) al soltar
+   */
+  | { kind: "scan_brush"; prompt: string; radius: () => number; done: (points: [number, P3][]) => void }
   /** Marcar/desmarcar regiones de un sketch con un clic dentro */
   | { kind: "region"; prompt: string; owner?: string; sketch: number; chosen: () => P2[]; toggle: (p: P2) => void }
   /** Un eje: una línea del sketch `sketch` o una arista del sólido */

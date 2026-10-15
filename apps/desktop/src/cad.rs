@@ -309,7 +309,13 @@ fn fit_scan_references(state: &AppState, doc: &Document) -> Option<Document> {
                     }
                 }
                 // Solo lo que no está suprimido ni vuelto atrás (prepararlo tarda)
-                FeatureKind::ScanBody(b) if !f.suppressed => b.mesh = Some(scan_body_mesh(scan, b.offset, b.thickness, b.faces)),
+                FeatureKind::ScanBody(b) if !f.suppressed => {
+                    // Los toques del pincel siguen al escaneo como las referencias
+                    if let Some(p) = &mut b.paint {
+                        p.dabs = std::mem::take(&mut p.dabs).into_iter().filter_map(|d| scan.mesh.fit_dab(d)).collect();
+                    }
+                    b.mesh = Some(scan_body_mesh(scan, b.offset, b.thickness, b.faces));
+                }
                 FeatureKind::Extrude(cad_model::Extrude { extent: cad_model::Extent::UpToScan { offset, mesh }, .. }) if !f.suppressed => {
                     *mesh = Some(scan_body_mesh(scan, *offset, 0.0, SCAN_FACES));
                 }
@@ -2095,6 +2101,15 @@ pub enum ScanFeature {
     RefPlanePoints { points: Vec<(u32, P3)> },
     RefAxis { triangle: u32, at: P3 },
     RefPoint { triangle: u32, at: P3 },
+}
+
+/// Toques del pincel sobre el escaneo (triángulo y punto en mm de cada uno).
+#[tauri::command]
+pub async fn cad_scan_dabs(app: AppHandle, points: Vec<(u32, P3)>) -> Result<Vec<cad_model::ScanDab>, String> {
+    in_background(app, move |state| {
+        with_scan(state, |scan| Ok(points.iter().filter_map(|(t, at)| scan.mesh.dab(*t, *at)).collect()))
+    })
+    .await
 }
 
 /// Convierte lo elegido en el escaneo en operaciones del diseño.

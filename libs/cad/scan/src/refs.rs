@@ -4,7 +4,7 @@
 //! punto más cercano al último lugar conocido.
 
 use cad_model::geom::{P3, Plane, add, cross, dot, norm, normalize, scale, sub};
-use cad_model::{ScanFit, ScanSeed};
+use cad_model::{ScanDab, ScanFit, ScanSeed};
 
 use crate::{PickError, PickOptions, ScanMesh, pick_cylinder, pick_plane};
 
@@ -72,6 +72,19 @@ impl ScanMesh {
         };
         let [a, b, c] = self.corners(t);
         Some((t, add(add(scale(a, bary[0]), scale(b, bary[1])), scale(c, bary[2]))))
+    }
+
+    /// Toque del pincel sobre el triángulo `triangle` en `at` (mm)
+    pub fn dab(&self, triangle: u32, at: P3) -> Option<ScanDab> {
+        let seed = self.seed(triangle, at)?;
+        self.fit_dab(ScanDab { seed, point: at, normal: [0.0; 3] })
+    }
+
+    /// El toque puesto de nuevo sobre el escaneo de hoy: punto de la piel y
+    /// su normal hacia afuera
+    pub fn fit_dab(&self, dab: ScanDab) -> Option<ScanDab> {
+        let (t, point) = self.locate(&dab.seed)?;
+        Some(ScanDab { seed: dab.seed, point, normal: self.face_normals[t as usize] })
     }
 }
 

@@ -498,3 +498,35 @@ fn scan_shell_and_patch_under_a_sketch() {
     assert!(m.bbox_min[2] > 15.0, "solo la tapa de arriba: {:?}", m.bbox_min);
     assert_relative_eq!(m.bbox_max[0], r, epsilon = 0.05);
 }
+
+/// Parche pintado con el pincel sobre una esfera escaneada: un toque arriba
+/// deja la tapa de ese radio (borde perpendicular a la piel = vertical aquí) y
+/// uno abajo no entra si no se pintó.
+#[test]
+fn scan_paint_patch_follows_the_brush() {
+    if !occt::available() {
+        return;
+    }
+    let t = Shape::sphere([0.0; 3], 20.0).unwrap().tessellate(0.02, 0.05).unwrap();
+    let scan = ScanMesh::new(&t.positions, &t.triangles);
+    let (gap, thick) = (0.5, 2.0);
+    let shell = prepare_body(&scan.vertices, &scan.triangles, &BodyOptions { faces: 20000, offset: gap, thickness: thick }).unwrap();
+    let mesh = ScanBodyMesh { hash: 6, data: std::sync::Arc::new((shell.vertices, shell.triangles)), error: None };
+    // El triángulo más alto de la esfera
+    let top = (0..scan.triangles.len() as u32).filter(|&f| scan.face_areas[f as usize] > 1e-6).max_by(|&a, &b| scan.face_centroids[a as usize][2].total_cmp(&scan.face_centroids[b as usize][2])).unwrap();
+    let at = scan.face_centroids[top as usize];
+    let dab = scan.dab(top, at).expect("toque");
+    assert!(dab.normal[2] > 0.99, "normal hacia afuera: {:?}", dab.normal);
+    let r = 8.0;
+    let mut doc = Document::new();
+    let paint = Some(ScanPaint { radius: r, dabs: vec![dab] });
+    doc.add(FeatureKind::ScanBody(ScanBody { offset: gap, thickness: thick, paint, mesh: Some(mesh), ..Default::default() }));
+    let ev = doc.evaluate();
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    assert_eq!(doc.features[0].kind.label(), "Parche del escaneo");
+    let m = ev.body.unwrap().mass().unwrap();
+    let (r1, r2) = (20.0 + gap, 20.0 + gap + thick);
+    let cap = |big: f64| 2.0 * PI / 3.0 * (big.powi(3) - (big * big - r * r).powf(1.5));
+    assert_relative_eq!(m.volume, cap(r2) - cap(r1), max_relative = 0.04);
+    assert!(m.bbox_min[2] > 15.0, "solo la tapa de arriba: {:?}", m.bbox_min);
+}
