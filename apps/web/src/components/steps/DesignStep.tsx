@@ -6343,6 +6343,24 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
   const partKey = (p: PartView) => `${p.id.feature}:${p.id.index}`;
   const instName = (id: number) => asm()?.instances.find((i) => i.id === id)?.name ?? `#${id}`;
   const [note, setNote] = createSignal<string>();
+  // Animación: la unión que se recorre, de dónde a dónde y cuántos cuadros
+  const movable = () => (asm()?.mates ?? []).filter((m) => m.kind === "revolute" || m.kind === "slider" || m.kind === "cylindrical" || m.kind === "pin_slot");
+  const [animMate, setAnimMate] = createSignal<number>();
+  const [animFrom, setAnimFrom] = createSignal(0);
+  const [animTo, setAnimTo] = createSignal(90);
+  const [animFrames, setAnimFrames] = createSignal(30);
+  const exportAnimation = async () => {
+    const m = movable().find((x) => x.id === (animMate() ?? movable()[0]?.id));
+    if (!m) return;
+    const path = await save({ filters: [{ name: "GLB", extensions: ["glb"] }], defaultPath: "ensamble_animado.glb" });
+    if (!path) return;
+    try {
+      const bytes = await store.exportAssemblyAnimation(path, m.id, m.kind === "slider" ? "distance" : "angle", animFrom(), animTo(), animFrames());
+      props.ui.setMessage(tl("Exportado ({kb} KB)", { kb: Math.max(1, Math.round(bytes / 1024)) }));
+    } catch (e) {
+      props.ui.setMessage(String(e));
+    }
+  };
 
   const insert = () => {
     const p = parts().find((x) => partKey(x) === (part() || (parts()[0] && partKey(parts()[0]))));
@@ -6478,6 +6496,31 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
           )}
         </For>
       </Section>
+      <Section title={tl("Animación")}>
+        <Show when={movable().length > 0} fallback={<p class="text-[11px] text-text-dim">{tl("Hace falta una bisagra, deslizante, cilíndrica o pasador en ranura para animar.")}</p>}>
+          <Select
+            options={movable().map((m) => ({ value: String(m.id), label: m.name || MATE_LABELS[m.kind] }))}
+            value={String(animMate() ?? movable()[0].id)}
+            onChange={(v) => setAnimMate(+v)}
+          />
+          <div class="flex gap-1.5">
+            <Num label={tl("Desde")} value={animFrom()} onCommit={setAnimFrom} />
+            <Num label={tl("Hasta")} value={animTo()} onCommit={setAnimTo} />
+          </div>
+          <Num label={tl("Cuadros")} value={animFrames()} step={1} min={2} onCommit={(v) => setAnimFrames(Math.max(2, Math.round(v)))} />
+          <Button size="sm" fullWidth onClick={exportAnimation}>
+            {tl("Exportar GLB animado")}
+          </Button>
+          <p class="text-[11px] text-text-dim">{tl("Bisagras: grados; deslizantes: mm. Cada pieza es un nodo que se mueve cuadro a cuadro.")}</p>
+        </Show>
+      </Section>
+      <Section title={tl("Vista explosionada")}>
+        <div class="flex items-center gap-2 text-[11px]">
+          <Slider value={props.ui.assemblyExplode()} min={0} max={2} step={0.05} onChange={(v) => props.ui.setAssemblyExplode(v)} />
+          <span class="w-10 text-right font-mono">{Math.round(props.ui.assemblyExplode() * 100)}%</span>
+        </div>
+        <p class="text-[11px] text-text-dim">{tl("Aleja las piezas del centro para ver cómo se arma. Solo en pantalla: no cambia el ensamble ni lo que se exporta.")}</p>
+      </Section>
       <Section title={tl("Relaciones")}>
         <div class="flex gap-1.5">
           <div class="flex-1">
@@ -6504,7 +6547,7 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
                 <p class="text-[11px] text-text-dim">
                   {instName(m.a.instance)} ↔ {instName(m.b.instance)}
                 </p>
-                <Show when={m.kind === "revolute" || m.kind === "cylindrical"}>
+                <Show when={m.kind === "revolute" || m.kind === "cylindrical" || m.kind === "pin_slot"}>
                   <div class="flex items-center gap-1.5">
                     <Checkbox small label={tl("Ángulo")} checked={m.angle != null} onChange={(c) => set((x) => (x.angle = c ? 0 : null))} />
                     <Show when={m.angle != null}>
@@ -6515,7 +6558,7 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
                     </Show>
                   </div>
                 </Show>
-                <Show when={m.kind === "slider" || m.kind === "cylindrical"}>
+                <Show when={m.kind === "slider" || m.kind === "cylindrical" || m.kind === "pin_slot"}>
                   <div class="flex items-center gap-1.5">
                     <Checkbox small label={tl("Distancia")} checked={m.distance != null} onChange={(c) => set((x) => (x.distance = c ? 0 : null))} />
                     <Show when={m.distance != null}>

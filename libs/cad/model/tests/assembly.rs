@@ -141,3 +141,55 @@ fn tight_gaps_report_pairs_closer_than_the_clearance() {
     // Con una holgura mayor entran las dos separaciones
     assert_eq!(cad_model::assembly::tight_gaps(&ev, &asm, &shapes, 1.0).len(), 2);
 }
+
+#[test]
+fn spherical_parallel_and_pin_slot_leave_their_degrees() {
+    // Rótula: los orígenes coinciden y quedan los 3 giros de B
+    let sol = solve(&stack(MateKind::Spherical));
+    assert!(sol.converged, "{sol:?}");
+    assert_eq!(sol.dof, 3, "rótula: 3 giros libres");
+    let (_, p, r) = sol.poses[1];
+    let o = apply(instance_matrix(p, r), [5.0, 5.0, 0.0]);
+    for (g, w) in o.iter().zip([5.0, 5.0, 10.0]) {
+        assert_relative_eq!(*g, w, epsilon = 1e-7);
+    }
+    // Paralela: solo ata las direcciones (3 traslaciones + 1 giro libres)
+    let sol = solve(&stack(MateKind::Parallel));
+    assert!(sol.converged, "{sol:?}");
+    assert_eq!(sol.dof, 4);
+    // Pasador en ranura: corre por X de A y gira alrededor de Z: 2 grados; con distancia, 1
+    let sol = solve(&stack(MateKind::PinSlot));
+    assert!(sol.converged, "{sol:?}");
+    assert_eq!(sol.dof, 2);
+    let mut asm = stack(MateKind::PinSlot);
+    asm.mates[0].distance = Some(6.0);
+    let sol = solve(&asm);
+    assert!(sol.converged, "{sol:?}");
+    assert_eq!(sol.dof, 1);
+    let (_, p, r) = sol.poses[1];
+    let o = apply(instance_matrix(p, r), [5.0, 5.0, 0.0]);
+    for (g, w) in o.iter().zip([11.0, 5.0, 10.0]) {
+        assert_relative_eq!(*g, w, epsilon = 1e-7);
+    }
+}
+
+#[test]
+fn sweeping_a_hinge_moves_the_part_continuously() {
+    use cad_model::assembly::{sweep, SweepVar};
+    let asm = stack(MateKind::Revolute);
+    let frames = sweep(&asm, 1, SweepVar::Angle, 0.0, 90.0, 4).unwrap();
+    assert_eq!(frames.len(), 4);
+    for (k, sol) in frames.iter().enumerate() {
+        let (_, p, r) = sol.poses[1];
+        let m = instance_matrix(p, r);
+        // X de B girado k·30° alrededor de Z
+        let want = (30.0 * k as f64).to_radians();
+        assert_relative_eq!(m[1][0], want.sin(), epsilon = 1e-6);
+        assert_relative_eq!(m[0][0], want.cos(), epsilon = 1e-6);
+    }
+    // Una deslizante no se anima por ángulo
+    assert!(sweep(&stack(MateKind::Slider), 1, SweepVar::Angle, 0.0, 90.0, 4).is_err());
+    let slid = sweep(&stack(MateKind::Slider), 1, SweepVar::Distance, 0.0, 6.0, 3).unwrap();
+    let (_, p, r) = slid[2].poses[1];
+    assert_relative_eq!(apply(instance_matrix(p, r), [5.0, 5.0, 0.0])[2], 16.0, epsilon = 1e-7);
+}

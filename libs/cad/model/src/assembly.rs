@@ -117,6 +117,13 @@ pub enum MateKind {
     Cylindrical,
     /// Apoyadas en el plano XY: se mueven en él y giran alrededor de Z.
     Planar,
+    /// Rótula: los orígenes coinciden y cada pieza gira libre (3 grados).
+    Spherical,
+    /// Los ejes Z quedan paralelos; las piezas se mueven y giran libres alrededor de él.
+    Parallel,
+    /// Pasador en ranura: el origen de B corre por la recta del eje X de A y B gira
+    /// alrededor de su Z, que se mantiene paralelo al de A (2 grados).
+    PinSlot,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -212,6 +219,22 @@ fn residuals(m: &Mate, a: (P3, P3, P3), b: (P3, P3, P3), out: &mut Vec<f64>) {
         MateKind::Planar => {
             out.push(dot(d, za));
             out.extend_from_slice(&sub(zb, za));
+        }
+        MateKind::Spherical => out.extend_from_slice(&d),
+        MateKind::Parallel => out.extend_from_slice(&sub(zb, za)),
+        MateKind::PinSlot => {
+            // Fuera de la recta de la ranura (eje X de A por su origen)
+            let off = sub(d, scale(xa, dot(d, xa)));
+            out.extend_from_slice(&off);
+            out.extend_from_slice(&sub(zb, za));
+            if let Some(dist) = m.distance {
+                out.push(dot(d, xa) - dist);
+            }
+            if let Some(angle) = m.angle {
+                let (s, c) = angle.to_radians().sin_cos();
+                let want = add(scale(xa, c), scale(cross(za, xa), s));
+                out.extend_from_slice(&sub(xb, want));
+            }
         }
     }
 }
@@ -457,6 +480,52 @@ pub fn solve(asm: &Assembly) -> AssemblySolution {
         })
         .collect();
     AssemblySolution { poses, residual: f.norm(), converged: f.norm() < 1e-6, dof }
+}
+
+/// Qué se recorre de una unión al animarla.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SweepVar {
+    /// El ángulo impuesto (°): bisagras, cilíndricas y pasadores en ranura.
+    Angle,
+    /// La distancia impuesta (mm): deslizantes, cilíndricas y pasadores en ranura.
+    Distance,
+}
+
+/// Recorre una unión de `from` a `to` en `frames` cuadros (mínimo 2) y resuelve el ensamble en
+/// cada uno, partiendo de la pose del cuadro anterior para que el movimiento sea continuo.
+pub fn sweep(asm: &Assembly, mate: u32, var: SweepVar, from: f64, to: f64, frames: usize) -> Result<Vec<AssemblySolution>, String> {
+    let frames = frames.max(2);
+    let i = asm.mates.iter().position(|m| m.id == mate).ok_or("la unión ya no existe")?;
+    let ok = match (asm.mates[i].kind, var) {
+        (MateKind::Revolute | MateKind::Cylindrical | MateKind::PinSlot, SweepVar::Angle) => true,
+        (MateKind::Slider | MateKind::Cylindrical | MateKind::PinSlot, SweepVar::Distance) => true,
+        _ => false,
+    };
+    if !ok {
+        return Err("esa unión no se mueve así: usa el ángulo en bisagras y el desplazamiento en deslizantes".into());
+    }
+    let mut cur = asm.clone();
+    let mut out = Vec::with_capacity(frames);
+    for k in 0..frames {
+        let v = from + (to - from) * k as f64 / (frames - 1) as f64;
+        match var {
+            SweepVar::Angle => cur.mates[i].angle = Some(v),
+            SweepVar::Distance => cur.mates[i].distance = Some(v),
+        }
+        let sol = solve(&cur);
+        if !sol.converged {
+            return Err(format!("el ensamble no se puede resolver con la unión en {v:.1} (cuadro {})", k + 1));
+        }
+        for (id, p, r) in &sol.poses {
+            if let Some(inst) = cur.instances.iter_mut().find(|x| x.id == *id) {
+                inst.position = *p;
+                inst.rotation = *r;
+            }
+        }
+        out.push(sol);
+    }
+    Ok(out)
 }
 
 /// Cada instancia como forma en su lugar (las piezas que ya no existen se saltean).

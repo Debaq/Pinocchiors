@@ -1235,7 +1235,7 @@ export interface Connector {
   x: P3;
 }
 
-export type MateKind = "fastened" | "revolute" | "slider" | "cylindrical" | "planar";
+export type MateKind = "fastened" | "revolute" | "slider" | "cylindrical" | "planar" | "spherical" | "parallel" | "pin_slot";
 
 export const MATE_LABELS: Record<MateKind, string> = {
   get fastened() { return tr("Fija"); },
@@ -1243,6 +1243,9 @@ export const MATE_LABELS: Record<MateKind, string> = {
   get slider() { return tr("Deslizante"); },
   get cylindrical() { return tr("Cilíndrica (gira y desliza)"); },
   get planar() { return tr("Plana (apoyada)"); },
+  get spherical() { return tr("Rótula (gira en todo)"); },
+  get parallel() { return tr("Paralela (ejes paralelos)"); },
+  get pin_slot() { return tr("Pasador en ranura"); },
 };
 
 export interface Mate {
@@ -4714,7 +4717,10 @@ export function createCadStore() {
       invoke<number>("cad_export", { path, format, part: part ?? null, assembly, compensate }),
 
     // ─── Ensamble ─────────────────────────────────────────────────────
-    assemblyMesh: async () => decodeCadMesh(await invoke<ArrayBuffer>("cad_assembly_mesh")),
+    /** La unión recorrida de `from` a `to` (° o mm) como GLB animado, una pose por cuadro */
+    exportAssemblyAnimation: (path: string, mate: number, v: "angle" | "distance", from: number, to: number, frames = 30, fps = 30) =>
+      invoke<number>("cad_export_assembly_animation", { path, mate, var: v, from, to, frames, fps }),
+    assemblyMesh: async (explode = 0) => decodeCadMesh(await invoke<ArrayBuffer>("cad_assembly_mesh", { explode })),
     assemblyFaces: () => invoke<[number, number, number][]>("cad_assembly_faces"),
     assemblyConnector: (face: number) => invoke<Connector>("cad_assembly_connector", { face }),
     assemblyInterference: () => invoke<[number, number, number][]>("cad_assembly_interference"),

@@ -399,6 +399,8 @@ export function createCadUi(store: CadStore) {
   const [fitReport, setFitReport] = createSignal<FitReport | null>(null);
   // Ensamble: el visor muestra las instancias en vez del diseño
   const [assemblyMode, setAssemblyMode] = createSignal(false);
+  // Ensamble: vista explosionada (0 = armado; 1 = cada pieza al doble de lejos del centro)
+  const [assemblyExplode, setAssemblyExplode] = createSignal(0);
   // Ensamble: por cuál unión se mueve cada pieza al arrastrarla (instancia → clave de `jointKey`)
   const [dragJoints, setDragJoints] = createSignal<Record<number, string>>({});
   // Plano 2D abierto sobre el visor: cuál y lo elegido en él (con su ventana de propiedades)
@@ -609,6 +611,8 @@ export function createCadUi(store: CadStore) {
     setFlatOpen,
     assemblyMode,
     setAssemblyMode,
+    assemblyExplode,
+    setAssemblyExplode,
     dragJoints,
     setDragJoints,
     deviation,

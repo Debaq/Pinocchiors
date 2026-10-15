@@ -4,7 +4,7 @@
 
 import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
 import { sleep } from "../cdp.mjs";
-import { call, near, begin, evaluate, sketchOn, body, accept, tab, setInput } from "./_comun.mjs";
+import { BRIDGE, call, near, begin, evaluate, sketchOn, body, accept, tab, setInput } from "./_comun.mjs";
 import { siEsPrincipal } from "./_ejecutor.mjs";
 
 export const escenarios = {
@@ -265,6 +265,68 @@ export const escenarios = {
       if (!names.every((n) => text.includes(n))) throw new Error(`${fmt} sin los nombres ${names}`);
       if (fmt === "3mf" && (text.match(/<object /g) ?? []).length !== 2) throw new Error("3MF sin un objeto por instancia");
     }
+  },
+
+  async "ensamble: animar una unión en GLB y vista explosionada"(b) {
+    await begin(b);
+    const doc = await call("cad_get_document");
+    const A = doc.next_id++;
+    const B = doc.next_id++;
+    doc.features.push({ id: A, name: "Caja", suppressed: false, kind: { type: "primitive", shape: { type: "box", dx: 20, dy: 20, dz: 20, centered: true, centered_z: true }, origin: [0, 0, 0], z: [0, 0, 1], x: [1, 0, 0], op: "new" } });
+    doc.features.push({ id: B, name: "Eje", suppressed: false, kind: { type: "primitive", shape: { type: "cylinder", radius: 4, height: 30 }, origin: [60, 0, 0], z: [0, 0, 1], x: [1, 0, 0], op: "new" } });
+    doc.assembly = {
+      instances: [
+        { id: 1, part: { feature: A, index: 0 }, name: "Caja", position: [0, 0, 0], rotation: [0, 0, 0], fixed: true },
+        { id: 2, part: { feature: B, index: 0 }, name: "Eje", position: [40, 0, 0], rotation: [0, 0, 0], fixed: false },
+      ],
+      mates: [],
+      next_id: 3,
+    };
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    const faces = await call("cad_assembly_faces");
+    const conn = async (inst, test) => {
+      const [, a, z] = faces.find((f) => f[0] === inst);
+      for (let k = a; k < z; k++) {
+        const c = await call("cad_assembly_connector", { face: k });
+        if (test(c)) return c;
+      }
+      throw new Error(`sin conector en la instancia ${inst}`);
+    };
+    const top = await conn(1, (c) => c.z[2] > 0.99 && Math.abs(c.origin[2] - 10) < 1e-6);
+    const side = await conn(2, (c) => Math.abs(c.z[2]) > 0.99 && Math.abs(c.origin[0] - 60) < 1e-6 && Math.abs(c.origin[2] - 15) < 1e-6);
+    const d2 = await call("cad_get_document");
+    d2.assembly.mates.push({ id: 3, name: "Bisagra 1", kind: "revolute", a: top, b: side, flip: false });
+    d2.assembly.next_id = 4;
+    await call("cad_set_document", { document: d2 });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    // GLB animado: 12 cuadros de 0 a 90°; dos nodos con traslación y giro cada uno
+    const out = process.env.E2E_OUT ?? "/tmp/pinocchio-e2e";
+    const path = `${out}/ensamble_animado.glb`;
+    rmSync(path, { force: true });
+    await call("cad_export_assembly_animation", { path, mate: 3, var: "angle", from: 0, to: 90, frames: 12, fps: 24 });
+    if (!existsSync(path)) throw new Error("no se exportó el GLB animado");
+    const buf = readFileSync(path);
+    const jsonLen = buf.readUInt32LE(12);
+    const gltf = JSON.parse(buf.subarray(20, 20 + jsonLen).toString("utf8"));
+    if (gltf.animations?.length !== 1) throw new Error(`animaciones: ${gltf.animations?.length}`);
+    const ch = gltf.animations[0].channels;
+    if (ch.length !== 4) throw new Error(`canales: ${ch.length}`);
+    const paths = ch.map((c) => c.target.path).sort().join(",");
+    if (paths !== "rotation,rotation,translation,translation") throw new Error(`rutas: ${paths}`);
+    // 12 cuadros por canal, a 24 cuadros por segundo
+    const sampler = gltf.animations[0].samplers[ch[0].sampler];
+    if (gltf.accessors[sampler.input].count !== 12) throw new Error(`cuadros: ${gltf.accessors[sampler.input].count}`);
+    // Una unión que no existe da error (el puente devuelve el texto del error)
+    const bad = await fetch(BRIDGE + "cad_export_assembly_animation", { method: "POST", body: JSON.stringify({ path, mate: 999, var: "angle", from: 0, to: 1, frames: 3 }) });
+    if (bad.ok) throw new Error("animó una unión que no existe");
+    // Vista explosionada: otra malla con las mismas caras
+    const mesh = async (explode) => Buffer.from(await (await fetch(BRIDGE + "cad_assembly_mesh", { method: "POST", body: JSON.stringify({ explode }) })).arrayBuffer());
+    const [flat, blown] = [await mesh(0), await mesh(1)];
+    if (flat.length !== blown.length) throw new Error("la vista explosionada cambió la cantidad de datos");
+    if (flat.equals(blown)) throw new Error("la vista explosionada no cambia la malla");
   },
 
   async "caja centrada y exportar el diseño"(b) {

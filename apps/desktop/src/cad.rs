@@ -19,7 +19,7 @@ use cad_model::{
 };
 use cad_model::geom::P3;
 use cad_scan::{CylinderPick, DetectOptions, Detection, OutlineOptions, PickOptions, PlanePick, ScanMesh, Section};
-use converter_scene::{IndexData, Mesh as SceneMesh, Node, Primitive, Scene, Transform, VertexAttribute};
+use converter_scene::{Animation, Channel as AnimChannel, IndexData, Interpolation, KeyframeValues, Mesh as SceneMesh, Node, Primitive, Scene, Transform, VertexAttribute};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::{Channel, Response};
 use tauri::AppHandle;
@@ -737,12 +737,35 @@ fn assembly_shapes(state: &AppState) -> Result<(cad_model::Assembly, Vec<(u32, c
 /// Malla del ensamble (como `cad_mesh`, con las instancias en orden: sus caras
 /// van seguidas, ver `AssemblyMeshInfo`).
 #[tauri::command]
-pub async fn cad_assembly_mesh(app: AppHandle) -> Result<Response, String> {
-    in_background(app, |state| assembly_mesh_impl(state).map(Response::new)).await
+pub async fn cad_assembly_mesh(app: AppHandle, explode: Option<f64>) -> Result<Response, String> {
+    in_background(app, move |state| assembly_mesh_impl(state, explode.unwrap_or(0.0)).map(Response::new)).await
 }
 
-fn assembly_mesh_impl(state: &AppState) -> Result<Vec<u8>, String> {
+/// Vista explosionada: cada instancia se corre desde el centro del conjunto en la dirección de su
+/// propio centro, `explode` veces la distancia que los separa (solo para mirar).
+fn explode_shapes(shapes: Vec<(u32, cad_model::Shape)>, explode: f64) -> Result<Vec<(u32, cad_model::Shape)>, String> {
+    if explode <= 0.0 || shapes.len() < 2 {
+        return Ok(shapes);
+    }
+    let centers: Vec<[f64; 3]> = shapes
+        .iter()
+        .map(|(_, s)| s.bounds().map(|(lo, hi)| [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, (lo[2] + hi[2]) / 2.0]).map_err(|e| e.to_string()))
+        .collect::<Result<_, _>>()?;
+    let n = centers.len() as f64;
+    let mid = [0, 1, 2].map(|k| centers.iter().map(|c| c[k]).sum::<f64>() / n);
+    shapes
+        .into_iter()
+        .zip(centers)
+        .map(|((id, s), c)| {
+            let v = [0, 1, 2].map(|k| (c[k] - mid[k]) * explode);
+            s.translate(v).map(|t| (id, t)).map_err(|e| e.to_string())
+        })
+        .collect()
+}
+
+fn assembly_mesh_impl(state: &AppState, explode: f64) -> Result<Vec<u8>, String> {
     let (_, shapes) = assembly_shapes(state)?;
+    let shapes = explode_shapes(shapes, explode)?;
     let scale = 1.0 / mm_per_unit(state);
     if shapes.is_empty() {
         return Ok(vec![0; 16]);
@@ -1844,6 +1867,83 @@ fn export_impl(state: &AppState, path: &str, format: &str, part: Option<cad_mode
     Ok(std::fs::metadata(p).map(|m| m.len()).unwrap_or(0))
 }
 
+/// Cuaternión (x, y, z, w) de una matriz de giro.
+fn quat_of(m: &[[f64; 3]; 3]) -> [f64; 4] {
+    let t = m[0][0] + m[1][1] + m[2][2];
+    let q = if t > 0.0 {
+        let s = (t + 1.0).sqrt() * 2.0;
+        [(m[2][1] - m[1][2]) / s, (m[0][2] - m[2][0]) / s, (m[1][0] - m[0][1]) / s, s / 4.0]
+    } else if m[0][0] > m[1][1] && m[0][0] > m[2][2] {
+        let s = (1.0 + m[0][0] - m[1][1] - m[2][2]).sqrt() * 2.0;
+        [s / 4.0, (m[0][1] + m[1][0]) / s, (m[0][2] + m[2][0]) / s, (m[2][1] - m[1][2]) / s]
+    } else if m[1][1] > m[2][2] {
+        let s = (1.0 + m[1][1] - m[0][0] - m[2][2]).sqrt() * 2.0;
+        [(m[0][1] + m[1][0]) / s, s / 4.0, (m[1][2] + m[2][1]) / s, (m[0][2] - m[2][0]) / s]
+    } else {
+        let s = (1.0 + m[2][2] - m[0][0] - m[1][1]).sqrt() * 2.0;
+        [(m[0][2] + m[2][0]) / s, (m[1][2] + m[2][1]) / s, s / 4.0, (m[1][0] - m[0][1]) / s]
+    };
+    let n = q.iter().map(|x| x * x).sum::<f64>().sqrt().max(1e-12);
+    q.map(|x| x / n)
+}
+
+/// El ensamble moviendo una unión de `from` a `to` como GLB animado: cada instancia es un nodo
+/// con su malla en la pose del primer cuadro y su movimiento (traslación y giro) por cuadro.
+#[tauri::command]
+pub async fn cad_export_assembly_animation(
+    app: AppHandle,
+    path: String,
+    mate: u32,
+    var: cad_model::assembly::SweepVar,
+    from: f64,
+    to: f64,
+    frames: Option<usize>,
+    fps: Option<f64>,
+) -> Result<u64, String> {
+    require_occt()?;
+    in_background(app, move |state| export_assembly_animation_impl(state, &path, mate, var, from, to, frames.unwrap_or(30), fps.unwrap_or(30.0))).await
+}
+
+#[allow(clippy::too_many_arguments)]
+fn export_assembly_animation_impl(state: &AppState, path: &str, mate: u32, var: cad_model::assembly::SweepVar, from: f64, to: f64, frames: usize, fps: f64) -> Result<u64, String> {
+    let doc = state.cad_document.lock().unwrap().clone().ok_or("No hay un diseño abierto")?;
+    let asm = doc.assembly.clone().ok_or("El diseño no tiene ensamble")?;
+    evaluate_committed(state)?;
+    let cache = state.cad_cache.lock().unwrap();
+    let ev = &cache.as_ref().ok_or("El diseño todavía no tiene un sólido")?.eval;
+    let sweep = cad_model::assembly::sweep(&asm, mate, var, from, to, frames.clamp(2, 600))?;
+    let shapes = cad_model::assembly::instance_shapes(ev, &asm, &sweep[0]);
+    let ids: Vec<u32> = shapes.iter().map(|(id, _)| *id).collect();
+    let items = assembly_items_of(&doc, &asm, shapes)?;
+    let mut scene = shapes_scene(&items.iter().map(|(s, n, _)| (s, n.clone())).collect::<Vec<_>>())?;
+    let times: Vec<f32> = (0..sweep.len()).map(|k| (k as f64 / fps.max(1.0)) as f32).collect();
+    let pose = |k: usize, id: u32| sweep[k].poses.iter().find(|p| p.0 == id).map(|p| (p.1, cad_model::assembly::rotation_matrix(p.2)));
+    let mut channels = Vec::new();
+    for (node, id) in ids.iter().enumerate() {
+        let Some((t0, r0)) = pose(0, *id) else { continue };
+        let (mut moves, mut turns) = (Vec::new(), Vec::new());
+        for k in 0..sweep.len() {
+            let Some((tk, rk)) = pose(k, *id) else { continue };
+            // Movimiento respecto del primer cuadro: x' = Rk·R0ᵀ·(x − t0) + tk
+            let d: [[f64; 3]; 3] = std::array::from_fn(|i| std::array::from_fn(|j| (0..3).map(|c| rk[i][c] * r0[j][c]).sum()));
+            let t: [f64; 3] = std::array::from_fn(|i| tk[i] - (0..3).map(|j| d[i][j] * t0[j]).sum::<f64>());
+            let q = quat_of(&d);
+            // Z arriba → Y arriba, como la geometría
+            let tv = converter_scene::z_up_to_y_up([t[0] as f32, t[1] as f32, t[2] as f32]);
+            let qv = converter_scene::z_up_to_y_up([q[0] as f32, q[1] as f32, q[2] as f32]);
+            moves.push(tv);
+            turns.push([qv[0], qv[1], qv[2], q[3] as f32]);
+        }
+        channels.push(AnimChannel { node, interpolation: Interpolation::Linear, times: times.clone(), values: KeyframeValues::Translation(moves) });
+        channels.push(AnimChannel { node, interpolation: Interpolation::Linear, times: times.clone(), values: KeyframeValues::Rotation(turns) });
+    }
+    let name = asm.mates.iter().find(|m| m.id == mate).map(|m| m.name.clone()).filter(|n| !n.is_empty()).unwrap_or_else(|| "Unión".into());
+    scene.animations.push(Animation { name, channels });
+    let p = std::path::Path::new(path);
+    export_scene(&scene, p, "glb")?;
+    Ok(std::fs::metadata(p).map(|m| m.len()).unwrap_or(0))
+}
+
 /// Malla del diseño a un archivo según el formato.
 pub(crate) fn export_scene(scene: &Scene, p: &std::path::Path, format: &str) -> Result<(), String> {
     match format {
@@ -2478,7 +2578,7 @@ pub mod bridge {
             "cad_face_edges" => ok(face_edges_impl(state, arg(args, "face")?)?),
             "cad_feature_faces" => ok(feature_faces_impl(state, arg(args, "feature")?)?),
             "cad_deviation" => deviation_impl(state, arg(args, "tolerance")?).map(Reply::Bytes),
-            "cad_assembly_mesh" => assembly_mesh_impl(state).map(Reply::Bytes),
+            "cad_assembly_mesh" => assembly_mesh_impl(state, arg::<Option<f64>>(args, "explode")?.unwrap_or(0.0)).map(Reply::Bytes),
             "cad_assembly_faces" => ok(assembly_faces_impl(state)?),
             "cad_assembly_connector" => ok(assembly_connector_impl(state, arg(args, "face")?)?),
             "cad_assembly_interference" => ok(assembly_interference_impl(state)?),
@@ -2521,6 +2621,16 @@ pub mod bridge {
                 let (path, format): (String, String) = (arg(args, "path")?, arg(args, "format")?);
                 ok(export_impl(state, &path, &format, arg::<Option<cad_model::PartId>>(args, "part")?, arg::<Option<bool>>(args, "assembly")?.unwrap_or(false), arg::<Option<bool>>(args, "compensate")?.unwrap_or(false))?)
             }
+            "cad_export_assembly_animation" => ok(export_assembly_animation_impl(
+                state,
+                &arg::<String>(args, "path")?,
+                arg(args, "mate")?,
+                arg(args, "var")?,
+                arg(args, "from")?,
+                arg(args, "to")?,
+                arg::<Option<usize>>(args, "frames")?.unwrap_or(30),
+                arg::<Option<f64>>(args, "fps")?.unwrap_or(30.0),
+            )?),
             "cad_eval_expr" => ok(cad_eval_expr(arg(args, "expr")?, arg(args, "parameters")?)?),
             "cad_scan_pick" => {
                 let kind: String = arg(args, "kind")?;

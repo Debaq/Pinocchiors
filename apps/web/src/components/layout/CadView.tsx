@@ -842,7 +842,7 @@ export const CadView: Component<CadViewProps> = (props) => {
   let asmSeq = 0;
   let asmFaceRanges: [number, number, number][] = [];
   createEffect(
-    on([() => ui.assemblyMode(), () => store.result()?.assembly?.version], async ([on_]) => {
+    on([() => ui.assemblyMode(), () => store.result()?.assembly?.version, () => ui.assemblyExplode()], async ([on_]) => {
       const n = ++asmSeq;
       if (!on_) {
         viewer?.setBody(store.mesh());
@@ -850,7 +850,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       }
       if (!store.result()?.assembly) return viewer?.setBody(null);
       try {
-        const [mesh, faces] = await Promise.all([store.assemblyMesh(), store.assemblyFaces()]);
+        const [mesh, faces] = await Promise.all([store.assemblyMesh(ui.assemblyExplode()), store.assemblyFaces()]);
         if (n !== asmSeq || !viewer) return;
         asmFaceRanges = faces;
         viewer.setBody(mesh);

@@ -267,6 +267,7 @@ pub fn run() {
             cad::cad_write_bytes,
             cad::cad_write_pdf,
             cad::cad_export,
+            cad::cad_export_assembly_animation,
             cad::cad_project_edge,
             cad::cad_project_face,
             cad::cad_project_model,
