@@ -1270,7 +1270,7 @@ fn translate_has_three_arrows_and_patterns_more_handles() {
     // Circular: arco del ángulo total alrededor del eje
     doc.get_mut(p).unwrap().kind = FeatureKind::Pattern {
         features: vec![hole],
-        pattern: PatternKind::Circular { axis: AxisSpec::Custom { origin: [50.0, 30.0, 0.0], direction: [0.0, 0.0, 1.0] }, count: 4, angle: 180.0 },
+        pattern: PatternKind::Circular { axis: AxisSpec::Custom { origin: [50.0, 30.0, 0.0], direction: [0.0, 0.0, 1.0] }, count: 4, angle: 180.0, rings: None },
         skip: vec![],
     };
     let h = handles_of(&eval_ok(&doc), p).remove(0);

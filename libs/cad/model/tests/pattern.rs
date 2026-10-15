@@ -63,3 +63,33 @@ fn fill_pattern_square_and_hex() {
         assert_relative_eq!(volume(&doc), 12000.0 - holes * PI * 4.0 * 2.0, max_relative = 1e-6);
     }
 }
+
+#[test]
+fn circular_pattern_in_rings() {
+    if !occt() {
+        return;
+    }
+    // Eje en el centro de la placa; el agujero (10, 10) y su opuesto (90, 50)
+    let axis = AxisSpec::Custom { origin: [50.0, 30.0, 0.0], direction: [0.0, 0.0, 1.0] };
+    let (mut doc, hole) = plate_with_hole();
+    let p = doc.add(FeatureKind::Pattern {
+        features: vec![hole],
+        pattern: PatternKind::Circular { axis: axis.clone(), count: 2, angle: 360.0, rings: Some(CircularRings { count: 2, spacing: 5.0 }) },
+        skip: vec![],
+    });
+    // Original, su opuesto y los dos del anillo de afuera (todavía dentro de la placa)
+    assert_relative_eq!(volume(&doc), 12000.0 - 4.0 * PI * 4.0 * 2.0, max_relative = 1e-6);
+    // Se puede omitir una copia del anillo (la 3: primera del anillo de afuera)
+    if let FeatureKind::Pattern { skip, .. } = &mut doc.get_mut(p).unwrap().kind {
+        *skip = vec![2];
+    }
+    assert_relative_eq!(volume(&doc), 12000.0 - 3.0 * PI * 4.0 * 2.0, max_relative = 1e-6);
+    // Sobre el eje no hay hacia dónde sacar los anillos
+    let (mut doc, hole) = plate_with_hole();
+    doc.add(FeatureKind::Pattern {
+        features: vec![hole],
+        pattern: PatternKind::Circular { axis: AxisSpec::Custom { origin: [10.0, 10.0, 0.0], direction: [0.0, 0.0, 1.0] }, count: 2, angle: 360.0, rings: Some(CircularRings { count: 2, spacing: 5.0 }) },
+        skip: vec![],
+    });
+    assert!(!doc.evaluate().errors().is_empty());
+}

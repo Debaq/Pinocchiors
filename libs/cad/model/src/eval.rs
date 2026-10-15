@@ -4125,16 +4125,45 @@ impl Ctx<'_> {
                     self.warn("no entra ninguna copia en la región".into());
                 }
             }
-            PatternKind::Circular { axis, count, angle } => {
-                if *count < 2 {
+            PatternKind::Circular { axis, count, angle, rings } => {
+                let (rings, ring_spacing) = rings.map_or((1, 0.0), |r| (r.count.max(1), r.spacing));
+                if *count < 2 && rings < 2 {
                     return Err("se necesitan al menos 2 instancias".into());
                 }
+                let count = (*count).max(1);
                 let ax = self.axis("axis", axis)?;
                 let full = (angle.abs() - 360.0).abs() < 1e-9;
-                let step = if full { angle / *count as f64 } else { angle / (*count - 1) as f64 };
-                for k in 1..*count {
-                    let a = (step * k as f64).to_radians();
-                    out.push(Box::new(move |s: &Shape| s.rotate(ax, a).map_err(err)));
+                let step = if count < 2 {
+                    0.0
+                } else if full {
+                    angle / count as f64
+                } else {
+                    angle / (count - 1) as f64
+                };
+                // Hacia afuera: de lo que se copia al eje, sin la parte a lo largo del eje
+                let radial = if rings > 1 {
+                    let dir = normalize(ax.dir);
+                    let v = sub(seed, ax.origin);
+                    let r = sub(v, scale(dir, dot(v, dir)));
+                    if norm(r) < 1e-9 {
+                        return Err("lo que se copia está sobre el eje: no hay hacia dónde sacar los anillos".into());
+                    }
+                    normalize(r)
+                } else {
+                    [0.0; 3]
+                };
+                for j in 0..rings {
+                    let v = scale(radial, ring_spacing * j as f64);
+                    for i in 0..count {
+                        if i == 0 && j == 0 {
+                            continue;
+                        }
+                        let a = (step * i as f64).to_radians();
+                        out.push(Box::new(move |s: &Shape| {
+                            let moved = if j > 0 { s.translate(v).map_err(err)? } else { s.clone() };
+                            if i > 0 { moved.rotate(ax, a).map_err(err) } else { Ok(moved) }
+                        }));
+                    }
                 }
             }
         }

@@ -142,6 +142,45 @@ export const escenarios = {
     await accept(b);
   },
 
+  async "operaciones: patrón circular en anillos"(b) {
+    await begin(b);
+    const doc = await call("cad_get_document");
+    const id = () => doc.next_id++;
+    const P = [[0, 0], [100, 0], [100, 60], [0, 60]];
+    const plate = id();
+    doc.features.push({
+      id: plate, name: "Placa", suppressed: false,
+      kind: { type: "sketch", plane: { type: "xy" }, offset: 0, sketch: { points: [{ id: 0, x: 0, y: 0 }, ...P.map(([x, y], i) => ({ id: i + 1, x, y }))], entities: P.map((_, i) => ({ id: 11 + i, geometry: { type: "line", start: i + 1, end: ((i + 1) % 4) + 1 } })), constraints: [], next_id: 20, origin: 0 } },
+    });
+    doc.features.push({ id: id(), name: "Extrusión", suppressed: false, kind: { type: "extrude", sketch: plate, regions: { type: "all" }, extent: { type: "blind", distance: 2 }, reverse: false, op: "join", draft: 0, thin: null } });
+    const hs = id();
+    doc.features.push({ id: hs, name: "Círculo", suppressed: false, kind: { type: "sketch", plane: { type: "xy" }, offset: 0, sketch: { points: [{ id: 0, x: 0, y: 0 }, { id: 1, x: 10, y: 10 }], entities: [{ id: 2, geometry: { type: "circle", center: 1, radius: 2 } }], constraints: [], next_id: 3, origin: 0 } } });
+    const hole = id();
+    doc.features.push({ id: hole, name: "Agujero", suppressed: false, kind: { type: "extrude", sketch: hs, regions: { type: "all" }, extent: { type: "through_all" }, reverse: false, op: "cut", draft: 0, thin: null } });
+    // Patrón circular ya hecho: eje en el centro de la placa, dos copias a 180°
+    doc.features.push({ id: id(), name: "Patrón", suppressed: false, kind: { type: "pattern", features: [hole], pattern: { type: "circular", axis: { type: "custom", origin: [50, 30, 0], direction: [0, 0, 1] }, count: 2, angle: 360 } } });
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    const holeV = Math.PI * 4 * 2;
+    near((await body()).volume, 12000 - 2 * holeV, 1e-3, "dos agujeros");
+    await clickRow(b, "Patrón");
+    await sleep(1200);
+    await b.clickText("También en anillos más grandes");
+    await sleep(1500);
+    // 2 anillos separados 5 mm: el de afuera sigue dentro de la placa
+    await setInput(b, "Separación entre anillos", 5);
+    await sleep(2000);
+    near((await body()).volume, 12000 - 4 * holeV, 1e-3, "dos anillos");
+    const k = await lastKind(b);
+    if (k.pattern.rings?.count !== 2) throw new Error(`anillos: ${JSON.stringify(k.pattern.rings)}`);
+    await setInput(b, "Anillos", 1);
+    await sleep(2000);
+    near((await body()).volume, 12000 - 2 * holeV, 1e-3, "un anillo");
+    await b.shot("operaciones_patron_anillos");
+    await accept(b);
+  },
+
   async "operaciones: revolución simétrica y a dos ángulos"(b) {
     await begin(b);
     // En el frente: rectángulo x 10..15, z 0..20; gira alrededor de Z

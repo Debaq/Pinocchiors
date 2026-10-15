@@ -809,7 +809,8 @@ export interface Seat {
 export type PatternKind =
   /** Con `second`, también en una segunda dirección (grilla) */
   | { type: "linear"; direction: P3; count: number; spacing: number; second?: { direction: P3; count: number; spacing: number } | null }
-  | { type: "circular"; axis: AxisSpec; count: number; angle: number }
+  /** Con `rings`, también en anillos más lejos del eje (una corona de agujeros) */
+  | { type: "circular"; axis: AxisSpec; count: number; angle: number; rings?: { count: number; spacing: number } | null }
   /** Copias repartidas de punta a punta de un camino */
   | { type: "curve"; path: { type: "sketch"; sketch: number; entities: number[] } | { type: "curve"; feature: number }; count: number }
   /** Copias trasladadas según una tabla de desplazamientos (mm) */

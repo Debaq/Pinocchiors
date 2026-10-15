@@ -2651,6 +2651,36 @@ export const FeatureEditor: Component<{
                       </Row>
                       {field(tl("Cantidad"), "kind.pattern.count", (k().pattern as { count: number }).count, (x, v) => x.type === "pattern" && "count" in x.pattern && (x.pattern.count = Math.max(2, Math.round(v))))}
                       {field(tl("Ángulo total"), "kind.pattern.angle", (k().pattern as { angle: number }).angle, (x, v) => x.type === "pattern" && x.pattern.type === "circular" && (x.pattern.angle = v), "°")}
+                      <Checkbox
+                        small
+                        label={tl("También en anillos más grandes")}
+                        checked={!!(k().pattern as Extract<PatternKind, { type: "circular" }>).rings}
+                        onChange={(c) =>
+                          update((x) => {
+                            if (x.type !== "pattern" || x.pattern.type !== "circular") return;
+                            x.pattern.rings = c ? { count: 2, spacing: 10 } : null;
+                          })
+                        }
+                      />
+                      <Show when={(k().pattern as Extract<PatternKind, { type: "circular" }>).rings}>
+                        {(r) => (
+                          <>
+                            {field(
+                              tl("Anillos"),
+                              "kind.pattern.rings.count",
+                              r().count,
+                              (x, v) => x.type === "pattern" && x.pattern.type === "circular" && x.pattern.rings && (x.pattern.rings.count = Math.max(1, Math.round(v))),
+                            )}
+                            {field(
+                              tl("Separación entre anillos"),
+                              "kind.pattern.rings.spacing",
+                              r().spacing,
+                              (x, v) => x.type === "pattern" && x.pattern.type === "circular" && x.pattern.rings && (x.pattern.rings.spacing = v),
+                              "mm",
+                            )}
+                          </>
+                        )}
+                      </Show>
                     </>
                   }
                 >

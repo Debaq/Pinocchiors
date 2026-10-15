@@ -81,16 +81,9 @@ Decisiones (2026-10-05):
       que resalta y elige lo que restringe.
 - [~] **F9 — Más adelante**: ensambles y chapa hechos en una primera versión (ver abajo). El
       plano 2D sigue en [PLAN_PLANO_2D.md](PLAN_PLANO_2D.md).
-- [ ] **F10 — Patrones que faltan** (anotado el 2026-10-09). Hay lineal, circular, en curva, por
-      tabla y de relleno, en el sketch y como operación, más la simetría. Orden propuesto (los más
-      usados y baratos primero):
-  1. **Por puntos del sketch**: una copia en cada punto dibujado (agujeros en posiciones libres
-     sin escribir tabla). En operaciones y en el sketch.
-  2. **Saltar copias**: marcar en el visor las que no van (el hueco de un conector en una
-     rejilla). Opción común a todos los patrones.
-  3. **Segunda dirección en operaciones**: lineal en dos direcciones (hoy una sola, la grilla se
-     arma con dos patrones; el sketch ya tiene filas) y circular en anillos (coronas de agujeros
-     de una brida).
+- [ ] **F10 — Patrones que faltan** (anotado el 2026-10-09). Hechos: lineal (con segunda
+      dirección), circular (con anillos), en curva, por tabla, de relleno, **por puntos del sketch**
+      y **saltar copias**, más la simetría. Orden propuesto de lo que falta:
   4. **Variable**: cada copia cambia una cota según una regla (nervios cada vez más largos,
      agujeros que crecen).
   5. **Cadena**: eslabones que siguen un camino guardando la distancia entre ellos (cadena,

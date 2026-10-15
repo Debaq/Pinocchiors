@@ -279,7 +279,7 @@ fn circular_pattern_of_holes_and_mirror() {
     }));
     doc.add(FeatureKind::Pattern {
         features: vec![hole],
-        pattern: PatternKind::Circular { axis: AxisSpec::Z, count: 6, angle: 360.0 },
+        pattern: PatternKind::Circular { axis: AxisSpec::Z, count: 6, angle: 360.0, rings: None },
         skip: vec![],
     });
     let ev = doc.evaluate();

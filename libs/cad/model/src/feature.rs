@@ -575,6 +575,14 @@ pub struct LinearSecond {
     pub spacing: f64,
 }
 
+/// Anillos extra de un patrón circular: `count` en total (el original es el
+/// primero), cada uno `spacing` mm más lejos del eje, con las mismas copias.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct CircularRings {
+    pub count: u32,
+    pub spacing: f64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PatternKind {
@@ -586,8 +594,15 @@ pub enum PatternKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         second: Option<LinearSecond>,
     },
-    /// `angle` total; 360 reparte las copias en la vuelta completa.
-    Circular { axis: AxisSpec, count: u32, angle: f64 },
+    /// `angle` total; 360 reparte las copias en la vuelta completa. Con
+    /// `rings`, también en anillos más grandes (una corona de agujeros).
+    Circular {
+        axis: AxisSpec,
+        count: u32,
+        angle: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rings: Option<CircularRings>,
+    },
     /// Copias repartidas a lo largo de un camino (de punta a punta), trasladadas.
     Curve { path: SweepPath, count: u32 },
     /// Copias trasladadas según una tabla de desplazamientos (mm).
