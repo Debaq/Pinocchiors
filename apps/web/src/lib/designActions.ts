@@ -515,6 +515,12 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     void store.addFeature({ type: "flange", edge: edge ?? null, length: 20, angle: 90, flip: false });
   };
 
+  /** El desarrollo de la chapa (la última pieza) como pieza nueva */
+  const addFlatSolid = () => {
+    if (!store.result()?.body) return say(tr("Primero hace falta una chapa"));
+    void store.addFeature({ type: "flat_solid", part: null });
+  };
+
   const addRevolve = () => {
     const picked = pickedRegions();
     const s = picked ? sketches().find((f) => f.id === picked.sketch) : targetSketch();
@@ -826,6 +832,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     addMirror,
     addCurvePattern,
     addChainPattern,
+    addFlatSolid,
     addSurfacePattern,
     addBoolean,
     pickedParts,

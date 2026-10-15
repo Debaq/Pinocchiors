@@ -3452,6 +3452,47 @@ impl Ctx<'_> {
                 self.ev.tools.insert(f.id, (tool.clone(), *op));
                 self.apply(f.id, tool, *op)
             }
+            FeatureKind::FlatSolid { part } => {
+                let (t, _, k) = self.sheet_params(f.id).ok_or("hace falta una chapa antes: el espesor y el factor K salen de ella")?;
+                self.body()?;
+                let source = match part {
+                    Some(id) => self.ev.parts.iter().find(|p| p.id == *id).ok_or("esa pieza ya no existe")?,
+                    None => self.ev.parts.last().ok_or("todavía no hay piezas")?,
+                };
+                let flat = crate::sheet::flat_pattern(&source.shape, k, Some(t), None)?;
+                let (lo, hi) = source.shape.bounds().map_err(err)?;
+                // A un lado del modelo (en X), apoyada en el plano XY
+                let shift = [hi[0] + 10.0 - flat.min[0], lo[1] - flat.min[1], 0.0];
+                let loops: Vec<Vec<Curve>> = crate::sheet::chain_loops(&flat.outline)
+                    .iter()
+                    .filter(|l| l.len() > 2)
+                    .map(|l| {
+                        let mut pts: Vec<P3> = l.iter().map(|q| [q[0] + shift[0], q[1] + shift[1], 0.0]).collect();
+                        if pts.first() != pts.last() {
+                            pts.push(pts[0]);
+                        }
+                        pts.windows(2).filter(|w| norm(sub(w[1], w[0])) > 1e-9).map(|w| Curve::Line(w[0], w[1])).collect()
+                    })
+                    .collect();
+                if loops.is_empty() {
+                    return Err("el desarrollo no tiene contorno".into());
+                }
+                // El borde es el lazo que más abarca; los demás son agujeros
+                let span = |l: &Vec<Curve>| {
+                    let pts: Vec<P3> = l.iter().filter_map(|c| if let Curve::Line(a, _) = c { Some(*a) } else { None }).collect();
+                    let (x0, x1) = pts.iter().fold((f64::MAX, f64::MIN), |a, p| (a.0.min(p[0]), a.1.max(p[0])));
+                    let (y0, y1) = pts.iter().fold((f64::MAX, f64::MIN), |a, p| (a.0.min(p[1]), a.1.max(p[1])));
+                    (x1 - x0) * (y1 - y0)
+                };
+                let mut loops = loops;
+                let big = (0..loops.len()).max_by(|&a, &b| span(&loops[a]).total_cmp(&span(&loops[b]))).unwrap();
+                loops.swap(0, big);
+                let face = Shape::face(&loops).map_err(err)?;
+                let shape = face.prism([0.0, 0.0, t]).map_err(err)?;
+                let tags = (0..shape.face_count()).map(|k| vec![tag(f.id, format!("plano:{k}"))]).collect();
+                self.new_part(f.id, Tagged { shape, tags });
+                Ok(())
+            }
             FeatureKind::Flange { edge, length, angle, flip, radius, relief, relief_width, corner_relief, corner_size, closed_corner, corner_gap } => {
                 let edge = edge.as_ref().ok_or("elegir la arista del borde de la chapa")?;
                 let (tool, part, g) = self.flange_tool(f.id, edge, *length, *angle, *flip, *radius)?;
@@ -4330,8 +4371,8 @@ impl Ctx<'_> {
     /// Doblez y pared de una pestaña desde la arista `edge` (recta, entre la
     /// cara grande de la chapa y su canto). Devuelve la herramienta y la pieza.
     fn flange_tool(&self, id: FeatureId, edge: &EdgeRef, length: f64, angle: f64, flip: bool, radius: Option<f64>) -> R<(Tagged, PartId, FlangeGeom)> {
-        if !(angle > 0.0 && angle < 180.0) {
-            return Err("el ángulo va entre 0 y 180°".into());
+        if !(angle > 0.0 && angle <= 180.0) {
+            return Err("el ángulo va entre 0 y 180° (180° es un dobladillo)".into());
         }
         if length < 0.0 {
             return Err("el largo no puede ser negativo".into());

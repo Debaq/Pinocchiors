@@ -284,3 +284,53 @@ fn closed_corner_between_two_flanges() {
     let flat = sheet::flat_pattern(&b, 0.44, Some(2.0), None).unwrap();
     assert_eq!(flat.bends.len(), 2);
 }
+
+#[test]
+fn hem_is_a_flange_folded_back_over_the_sheet() {
+    if !occt() {
+        return;
+    }
+    // Dobladillo: pestaña de 15 doblada 180° hacia arriba y vuelta sobre la chapa
+    let mut doc = plate();
+    flange(&mut doc, [50.0, 0.0, 2.0], 15.0, 180.0, false);
+    let b = body(&doc);
+    let bend = PI / 2.0 * (16.0 - 4.0) * 100.0;
+    assert_relative_eq!(b.mass().unwrap().volume, 10000.0 + bend + 3000.0, max_relative = 1e-6);
+    // La pared vuelve por arriba: el eje del doblez queda a z = 4 y la pared de 6 a 8
+    assert_relative_eq!(b.mass().unwrap().bbox_max[2], 8.0, epsilon = 1e-6);
+    // Desarrollo: 50 + media vuelta de doblez (π·(2 + 0,44·2)) + 15 de pared
+    let flat = sheet::flat_pattern(&b, 0.44, Some(2.0), None).unwrap();
+    let size = [flat.max[0] - flat.min[0], flat.max[1] - flat.min[1]];
+    assert_relative_eq!(size[0].min(size[1]), 50.0 + PI * (2.0 + 0.44 * 2.0) + 15.0, epsilon = 1e-5);
+    assert_eq!(flat.bends.len(), 1);
+    assert_relative_eq!(flat.bends[0].angle, 180.0, epsilon = 1e-6);
+}
+
+#[test]
+fn flat_solid_is_the_unfolded_sheet_as_a_new_part() {
+    if !occt() {
+        return;
+    }
+    let mut doc = plate();
+    flange(&mut doc, [50.0, 0.0, 2.0], 20.0, 90.0, false);
+    flange(&mut doc, [50.0, 50.0, 2.0], 20.0, 90.0, false);
+    let channel = doc.evaluate().body.unwrap().mass().unwrap().volume;
+    doc.add(FeatureKind::FlatSolid { part: None });
+    let ev = doc.evaluate();
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    assert_eq!(ev.parts.len(), 2, "el canal y el desarrollo");
+    // 100 × (50 + 2 dobleces de π/2·(2 + 0,44·2) + 2 paredes de 20) × 2 de espesor
+    let across = 50.0 + 2.0 * PI / 2.0 * (2.0 + 0.44 * 2.0) + 40.0;
+    let flat = ev.parts[1].shape.mass().unwrap();
+    assert_relative_eq!(flat.volume, 100.0 * across * 2.0, max_relative = 1e-4);
+    // A un lado del canal y apoyado en el plano XY
+    assert!(flat.bbox_min[0] > 100.0, "{:?}", flat.bbox_min);
+    assert_relative_eq!(flat.bbox_min[2], 0.0, epsilon = 1e-9);
+    assert_relative_eq!(flat.bbox_max[2], 2.0, epsilon = 1e-9);
+    // El canal no cambia
+    assert_relative_eq!(ev.parts[0].shape.mass().unwrap().volume, channel, max_relative = 1e-9);
+    // Sin chapa antes, avisa
+    let mut doc = Document::new();
+    doc.add(FeatureKind::FlatSolid { part: None });
+    assert!(!doc.evaluate().errors().is_empty());
+}

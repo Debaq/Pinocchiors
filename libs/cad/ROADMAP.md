@@ -83,8 +83,23 @@ Decisiones (2026-10-05):
       elegidas con clic, puntos libres marcados, recortar (líneas, círculos y arcos), extender,
       equidistante, redondear esquinas, arcos tangentes encadenados, gestor de restricciones
       que resalta y elige lo que restringe.
-- [~] **F9 — Más adelante**: ensambles y chapa hechos en una primera versión (ver abajo). El
-      plano 2D sigue en [PLAN_PLANO_2D.md](PLAN_PLANO_2D.md).
+- [x] **F9 — Ensambles y chapa** (cerrada el 2026-10-15; lo que no entró, abajo). El plano 2D
+      sigue en [PLAN_PLANO_2D.md](PLAN_PLANO_2D.md).
+      - Ensambles: además de fija, bisagra, deslizante, cilíndrica y plana, ahora **rótula**
+        (3 giros), **paralela** (ejes paralelos) y **pasador en ranura** (corre por el eje X de
+        la primera y gira; admite distancia y ángulo impuestos); **vista explosionada**
+        (deslizador en el panel; solo en pantalla, no cambia lo exportado); y **GLB animado** de
+        una unión (`cad_export_assembly_animation`: de un valor a otro en N cuadros, un nodo por
+        instancia con traslación y giro; `assembly::sweep` resuelve cada cuadro desde el anterior).
+        El arrastre en el visor ya existía para bisagras y deslizantes.
+      - Chapa: **dobladillo** (pestaña a 180°: la pared vuelve sobre la chapa; entra en el
+        desarrollo con su ángulo) y **desarrollo como pieza** (`FlatSolid`: la chapa desplegada
+        como pieza nueva, al espesor y a un lado del modelo).
+      - **Sin hacer** (ya no bloquean el cierre, quedan anotados): relación **tangente** entre
+        caras; arrastre libre de instancias con rótula, plana o paralela; **sub-ensambles**
+        (hoy se arma un bloque rígido con relaciones fijas); instancias de STEP importados;
+        **pestaña en arista curva** (cono o cilindro: haría falta además que el desarrollo
+        entienda conos); **volver a doblar** el desarrollo; dobladillo cerrado sin radio.
 - [x] **F10 — Patrones que faltan** (anotado el 2026-10-09, cerrada el 2026-10-15). Hay lineal
       (con segunda dirección), circular (con anillos), en curva, por tabla, de relleno, por
       puntos del sketch, en espiral (plana, cada copia gira y se aleja del eje), sobre superficie

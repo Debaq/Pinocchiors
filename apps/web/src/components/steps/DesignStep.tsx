@@ -3853,6 +3853,9 @@ export const FeatureEditor: Component<{
                   />
                   {field(tl("Largo"), "kind.length", k().length, (x, v) => x.type === "flange" && (x.length = v), "mm")}
                   {field(tl("Ángulo"), "kind.angle", k().angle, (x, v) => x.type === "flange" && (x.angle = v), "°")}
+                  <Show when={k().angle >= 180}>
+                    <p class="text-[11px] text-text-dim">{tl("180° deja un dobladillo: la pared vuelve sobre la chapa.")}</p>
+                  </Show>
                   {field(tl("Radio"), "kind.radius", k().radius ?? sheetRadius() ?? 0, (x, v) => x.type === "flange" && (x.radius = v), "mm")}
                   <Checkbox small label={tl("Doblar hacia el otro lado")} checked={k().flip} onChange={(c) => update((x) => x.type === "flange" && (x.flip = c))} />
                   <p class="text-[11px] text-text-dim">

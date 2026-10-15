@@ -1021,6 +1021,8 @@ export type FeatureKind =
   | { type: "thread"; face: FaceRef; pitch: number; length: number; flip: boolean; left: boolean; clearance: number; link?: ThreadLink | null }
   /** Chapa metálica: regiones de un sketch al espesor; radio interior de doblez y factor K para pestañas y desarrollo */
   | { type: "sheet_metal"; sketch: number; regions: RegionSelection; thickness: number; radius: number; k_factor: number; flip: boolean; op: BodyOp }
+  /** El desarrollo de una pieza de chapa (`part` vacío: la última) como pieza nueva, al espesor y a un lado del modelo */
+  | { type: "flat_solid"; part?: PartId | null }
   /** Pestaña: pared doblada desde una arista del borde de la chapa (`length` después del doblez) */
   | {
       type: "flange";
@@ -1902,6 +1904,7 @@ export const FEATURE_LABELS: Record<FeatureKind["type"], string> = {
   get thread() { return tr("Rosca"); },
   get sheet_metal() { return tr("Chapa"); },
   get flange() { return tr("Pestaña"); },
+  get flat_solid() { return tr("Desarrollo plano"); },
   get surface_extrude() { return tr("Superficie extruida"); },
   get surface_revolve() { return tr("Superficie de revolución"); },
   get fill() { return tr("Relleno"); },

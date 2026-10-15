@@ -1102,6 +1102,12 @@ pub enum FeatureKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         corner_gap: Option<f64>,
     },
+    /// Desarrollo de una pieza de chapa como pieza nueva: la chapa plana al
+    /// espesor (con sus agujeros), a un lado del modelo. `part` vacío: la última.
+    FlatSolid {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        part: Option<PartId>,
+    },
     /// Superficie (sin espesor) que deja una curva de un sketch empujada a lo
     /// largo de la normal del plano: ciega, simétrica o a los dos lados.
     SurfaceExtrude {
@@ -1671,6 +1677,7 @@ impl FeatureKind {
             FeatureKind::Thread { .. } => "Rosca",
             FeatureKind::SheetMetal { .. } => "Chapa",
             FeatureKind::Flange { .. } => "Pestaña",
+            FeatureKind::FlatSolid { .. } => "Desarrollo plano",
             FeatureKind::SurfaceExtrude { .. } => "Superficie extruida",
             FeatureKind::SurfacePlanar { .. } => "Superficie plana",
             FeatureKind::SurfaceSweep { .. } => "Superficie por barrido",

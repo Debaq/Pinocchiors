@@ -177,6 +177,7 @@ export function designToolSets(a: DesignActions, ui: CadUi) {
     { label: "Chapa", icon: D.SheetMetal, run: a.addSheetMetal, tip: "Las regiones elegidas (o el último sketch) como chapa: espesor, radio de doblez y factor K" },
     { label: "Pestaña", icon: D.Flange, run: () => void a.startFlange(), needsBody: true, tip: "Pared doblada desde una arista del borde de la chapa (elegir la arista)" },
     "-",
+    { label: "Desarrollo como pieza", icon: D.FlatPattern, run: a.addFlatSolid, needsBody: true, tip: "La chapa desplegada como una pieza nueva, al espesor y a un lado del modelo (para cortar, imprimir o comprobar medidas)" },
     { label: "Desarrollo", icon: D.FlatPattern, run: () => ui.setFlatOpen(true), needsBody: true, tip: "La chapa plana para cortar, con las líneas de doblez; DXF 1:1" },
   ];
   const surfaces: (Tool | "-")[] = [

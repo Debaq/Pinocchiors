@@ -60,6 +60,29 @@ impl PlaneMap {
     }
 }
 
+/// Une los tramos del contorno por sus extremos en lazos (los que no cierran quedan abiertos).
+pub fn chain_loops(pieces: &[Vec<P2>]) -> Vec<Vec<P2>> {
+    let near = |a: P2, b: P2| (a[0] - b[0]).abs() < 1e-6 && (a[1] - b[1]).abs() < 1e-6;
+    let mut left: Vec<Vec<P2>> = pieces.iter().filter(|p| p.len() > 1).cloned().collect();
+    let mut out = Vec::new();
+    while let Some(mut cur) = left.pop() {
+        loop {
+            if cur.len() > 2 && near(cur[0], *cur.last().unwrap()) {
+                break;
+            }
+            let end = *cur.last().unwrap();
+            let Some(k) = left.iter().position(|p| near(p[0], end) || near(*p.last().unwrap(), end)) else { break };
+            let mut next = left.remove(k);
+            if !near(next[0], end) {
+                next.reverse();
+            }
+            cur.extend(next.into_iter().skip(1));
+        }
+        out.push(cur);
+    }
+    out
+}
+
 /// Un doblez estirado: el ángulo alrededor del eje se vuelve distancia.
 #[derive(Debug, Clone, Copy)]
 struct BendMap {
