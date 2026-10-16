@@ -702,7 +702,7 @@ export const escenarios = {
     s = await sk();
     const made = s.entities.slice(before);
     if (made.length !== 6 || made.filter((e) => e.geometry.type === "arc").length !== 2) throw new Error(`equidistante: ${made.map((e) => e.geometry.type)}`);
-    const { checkSketch } = await import("../src/lib/sketchCheck.ts");
+    const { checkSketch } = await import("../../src/lib/sketchCheck.ts");
     if (checkSketch({ ...s, entities: made }).looseEnds.length) throw new Error("el contorno equidistante quedó abierto");
     if (!(await b.eval(`window.__cadUi.session().regions.length`))) throw new Error("el contorno equidistante no forma región");
 

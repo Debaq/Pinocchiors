@@ -360,7 +360,7 @@ export const escenarios = {
     };
     const of = async (type) => (await sk()).entities.filter((e) => e.geometry.type === type);
     const P = (s) => new Map(s.points.map((p) => [p.id, [p.x, p.y]]));
-    const { makeBSpline, evalAt, domain } = await import("../src/lib/sketchCurves.ts");
+    const { makeBSpline, evalAt, domain } = await import("../../src/lib/sketchCurves.ts");
     // Spline por polos: cuatro clics y Esc
     await tool("Spline por polos");
     for (const [x, y] of [[180, 520], [240, 400], [320, 540], [400, 420]]) await b.click(x, y, { wait: 250 });
