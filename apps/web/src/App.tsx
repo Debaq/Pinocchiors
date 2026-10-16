@@ -6999,7 +6999,7 @@ export const App: Component = () => {
   // ── Pieles imprimibles ──
   const loadSkin = async () => {
     try {
-      setSkinLibrary(await invoke<SkinPattern[]>("skin_library"));
+      setSkinLibrary((await invoke<SkinPattern[] | null>("skin_library")) ?? []);
       setSkinZone(await invoke<SkinZone>("skin_zone_get"));
     } catch (e) {
       setSkinZone(undefined);
@@ -7053,7 +7053,7 @@ export const App: Component = () => {
     if (!path || Array.isArray(path)) return;
     const added = await skinCall("Skin import", () => busy(t("Importando la imagen..."), () => invoke<SkinPattern>("skin_import_image", { path })));
     if (!added) return;
-    setSkinLibrary(await invoke<SkinPattern[]>("skin_library"));
+    setSkinLibrary((await invoke<SkinPattern[] | null>("skin_library")) ?? []);
     setSkinImage({ ...skinImage(), image: added.id });
     setStatusMessage(t("Imagen importada: {name}", { name: added.name }));
   };
