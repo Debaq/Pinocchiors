@@ -12,17 +12,19 @@ Leyenda: ✅ hecho · 🟡 a medias · ❌ falta · (F*n*) fase que lo cubre.
 ## Dónde estamos
 
 El plano (`components/layout/DrawingView.tsx`, `lib/drawing.ts`, comando `cad_drawing`) arma la
-hoja y la anota: frente, planta, lateral e isométrica con líneas ocultas exactas (HLR), primer o
-tercer diedro, escala normalizada, cajetín, cotas generales, cotas a mano (largo, Ø, radio,
-distancia entre paralelas, ángulo; recordadas por un punto y que siguen al modelo), detalles,
-corte A-A paralelo al frente con posición movible, y salida SVG / PDF / DXF.
+hoja y la anota: seis vistas más isométrica y vistas nuevas con líneas ocultas exactas (HLR),
+primer o tercer diedro, escala normalizada (también por vista), cajetín, cotas generales, cotas a
+mano (largo, Ø, radio, distancia entre paralelas, ángulo; recordadas por un punto y que siguen al
+modelo), detalles, cortes (A-A, por línea, escalonados, medio corte, rotura, sombreados y con
+rayado según el material), varios planos por documento, una capa de dibujo con el editor del
+sketch, la tabla y las marcas de los engranes (F8 de PLAN_ENGRANES), y salida SVG / PDF / DXF.
 
-**No tiene entidades 2D propias**: todo sale de proyectar el sólido. Por eso casi toda la lista
-falta (no hay qué recortar, desfasar ni restringir), no hay selección, ni Esc, ni atajos, ni
-arrastre. Las vistas tienen lugar fijo (`layout`) y la isométrica, orientación fija
-(`viewSpec("iso")`). El backend ya acepta cualquier dirección de vista (`eye`, `xdir`) y
-cualquier plano de corte (`DrawingSection { origin, normal }`): girar vistas y cortar por
-otros planos no necesita C++ nuevo.
+El resto de este documento es el avance fase por fase. Estado al 2026-10-15: F1–F4 hechas, F5
+a medias (lo que falta del editor está en la tabla de cobertura) y F6 con sus tres puntos
+hechos; «Después, más del plano» sigue sin definir con el usuario. El backend ya acepta
+cualquier dirección de vista (`eye`, `xdir`) y cualquier plano de corte
+(`DrawingSection { origin, normal }`): girar vistas y cortar por otros planos no necesitó C++
+nuevo.
 
 ## Decisión (usuario, 2026-10-10): reutilizar el editor del sketch
 
@@ -284,6 +286,12 @@ medida al dibujar sobre la hoja…"):
 
 Después, más del plano (a revisar con el usuario).
 
+Lo que entró al sketch después de F5 y sirve también en la hoja (commits 9d6c9af, 03b5ac1 y
+d08fea9): ángulos con referencia y sentido, avisos en un desplegable, aviso de cota que
+sobre-define (Esc, aceptar y volver a verlo), elegir entre lo encimado y ángulos fijos al dibujar
+líneas. De la hoja de engranes (118e678): los círculos da / df / db salen rotulados en las vistas
+que miran a lo largo del eje.
+
 ## Cobertura de la lista (editor del sketch, que es el de la hoja)
 
 Revisada en el código el 2026-10-10, **después de F5** (`C` = `components/layout/CadView.tsx`,
@@ -304,7 +312,7 @@ restricción que espera dicen el paso; las de dibujo —arco, elipse, ranura…�
 
 **Entrada de valores** — ✅ escribir sin clic (cota recién dibujada y campo flotante), Tab entre
 las cotas pedidas, rueda en la cota y en el panel. 🟡 campo flotante (cota al terminar una forma
-—no sobre la hoja: `dim()` da -1—, mover/copiar/girar/escalar y Equidistante; no en redondeo,
+—sobre la hoja queda pendiente en `sheetPending`, F6—, mover/copiar/girar/escalar y Equidistante; no en redondeo,
 chaflán ni patrones); expresiones, parámetros y unidades (en cotas sí; el panel usa `Num`
 numérico, y las coordenadas y el campo flotante solo aceptan números); recordar el último valor
 (entre sesiones radio, partes, veces, copias y distancia del equidistante, chaflán y patrón; solo
@@ -383,9 +391,9 @@ sueltos, colores, marcas de cruces, rótulo de la herramienta activa (solo el no
 paso).
 
 **Hoja (fuera de la lista)** — ✅ las cotas de lo dibujado salen en SVG/PDF/DXF (`sheetSketchDims`).
-🟡 solo largo, distancia, H/V, radio, diámetro y ángulo, con corrimiento fijo de 7 mm (ignora
-dónde dejó la cota el usuario, `opts.offset`); letras encimadas (solo se separan las de cortes
-en el mismo lugar; nada para cotas o textos del sketch de la hoja que se pisan).
+Desde F6 respetan dónde dejó la cota el usuario (`opts.offset`) y la medida se pide al terminar la forma (ver F6). 🟡 solo largo, distancia, H/V, radio, diámetro y ángulo; letras encimadas (solo se separan las de cortes
+en el mismo lugar; las cotas y textos que se pisan se separan solos desde F6, pero no esquivan las
+líneas de las vistas).
 
 ## Pruebas
 

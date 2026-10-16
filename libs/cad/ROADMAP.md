@@ -753,3 +753,16 @@ cargo test -p cad-model
   circular, girar cara y girar cuerpo; tres flechas que van con la pieza al desplazar
   (`HandleKind::Move`) y segunda flecha del patrón lineal. Pruebas en `model/tests/reference.rs`
   y `operations.rs`; e2e «operaciones: sistema de coordenadas…» y «…arco de la revolución…».
+- **2026-10-12 a 2026-10-15 Engranes** ([PLAN_ENGRANES.md](PLAN_ENGRANES.md)): engranes y pares
+  coordinados con relaciones en el ensamble, hoja de engranes, resistencia (flexión del pie y Hertz),
+  tren planetario, poleas dentadas y piñones de cadena. El detalle y lo que falta están en el plan.
+- **2026-10-15 Escaneo E4.2 a E10** ([PLAN_ESCANEO.md](PLAN_ESCANEO.md)): pincel sobre el escaneo,
+  molde de dos mitades, curvas sobre la piel, verificar el calce con holgura firmada, cono, toro y
+  redondeos ajustados, revolución y recubrimiento desde cortes, asistente de reconstrucción y
+  superficies libres. Cada una con prueba Rust y escenario e2e; **ninguna probada aún en la app real**.
+- **2026-10-15 F8, F10 y F9 cerradas**: F8 con el ajuste de ángulo al dibujar líneas (revisada contra
+  cad-blender: sus 20 capacidades están); F10 con patrón en espiral, sobre superficie, cadena, variable y
+  de patrón; F9 con rótula, paralela, pasador en ranura, vista explosionada, GLB animado de una unión,
+  dobladillo y desarrollo como pieza (`tests/sheet.rs::hem_is_a_flange_folded_back_over_the_sheet`, e2e
+  «ensamble: animar una unión en GLB y vista explosionada»). Lo que no entró de F9 está en su ítem de
+  Fases (tangente, sub-ensambles, STEP importados, etc.).

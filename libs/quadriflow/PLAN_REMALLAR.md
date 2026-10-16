@@ -135,7 +135,7 @@ queda como costura, sin rajarse) y reparte los triángulos de vuelta; UV, normal
 colores se conservan porque cada vértice es uno del original. Comandos `remesh_preview` (guarda
 la vista previa con la huella de la malla), `get_remesh_preview_data`, `remesh_discard` y
 `remesh_apply` (reusa la vista previa si la malla y los parámetros son los mismos; si no,
-recalcula: así se rehace sola en los objetos de Diseñar, está en `REPLAYABLE`). Deshacer = copia
+recalcula: así se rehace sola en los objetos de Diseñar, está en `REPLAYABLE` de `apps/web/src/App.tsx`). Deshacer = copia
 del historial (`undoable`). Visor: "Original / Resultado / Los dos" en la barra del visor
 mientras hay vista previa; "Los dos" dibuja el resultado en alambre despegado un poco por las
 normales. Sin Cancelar: meshoptimizer es una sola llamada y tarda poco. Prueba e2e
@@ -231,7 +231,7 @@ ahora cuenta la nueva. Prueba e2e "objetos: el remallado se rehace si cambia el 
 de radio 20 → 40 con Isótropo automático: tamaño 80, aristas parejas otra vez, "1
 modificación rehecha", Outliner y barra al día).
 
-**Plan terminado el 2026-10-08.**
+**Plan terminado el 2026-10-08.** Las pruebas e2e citadas viven en `apps/web/e2e/cad/fabricar.mjs`; el motor, en `libs/quadriflow/core/src/remesh/` (`simplify`, `smooth`, `isotropic`, `voxel`, `quads`, `deviation`) con pruebas en `libs/quadriflow/core/tests/`; los comandos, en `apps/desktop/src/remesh.rs`. Desde entonces la retopología ganó el modo «por objeto» (ver PLAN_OBJETOS).
 
 1. **Sección y estructura**.
    - Pestaña Remallar con el selector de modos y la Retopología adentro.

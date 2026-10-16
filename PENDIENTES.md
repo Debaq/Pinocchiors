@@ -27,11 +27,9 @@ Verificado por lectura y búsqueda en el código; no se ejecutaron pruebas.
 - 🧪 Correr `cargo test --workspace`. Hay Rust escrito sin compilar (nube, sesión
   del 2026-10-11 con `cargo` bloqueado). Para PLAN_OPERACIONES: `cargo test -p
   cad-model` (`--test operations --test hole`), luego `cad_http` + `vite` +
-  `node apps/web/e2e/cad.mjs operaciones`. Dos pruebas de `cad-model` fallaban
-  desde el commit `80f7a83` (`gear_part::avisos_y_errores`,
-  `corona_helicoidal_y_cremallera`); sin confirmar.
-- ⬜ `libs/converter/.ROADMAP.md.kate-swp` es un swap de Kate versionado en git:
-  borrarlo.
+  `node apps/web/e2e/cad.mjs operaciones`. Las dos pruebas de `cad-model` que
+  fallaban desde `80f7a83` ya no existen o cambiaron (`gear_part::avisos_y_errores`
+  ahora espera la cremallera helicoidal tallada); falta correrlas.
 
 ## 1. Errores comprobados
 
@@ -141,8 +139,8 @@ escaneos y comparación con referencia, atajos reasignables por área
 
 ### Conversor (`libs/converter`)
 - ⬜ FBX; morph targets reales; emulación de doble cara en USD por duplicado
-  (hoy `doubleSided` nativo); exportar PLY (importa ASCII y binario, solo falta
-  exportar).
+  (hoy `doubleSided` nativo). PLY ya importa (ASCII y binario) y exporta
+  (`export_ply`).
 
 ### Reparación (`libs/pinocchio/repair`)
 - ✅ Cuerpos solapados y auto-intersecciones: `resolve_intersections`, opción
@@ -212,21 +210,19 @@ sombra, HDRI elegible, ACES, luz de área texturizada) y 4a (fondo de estudio).
 
 ## 9. CAD (`libs/cad`)
 
-Fases F0–F6 y F8–F10 cerradas; E0–E10 del escaneo con sección ✅ (el cuadro
-«Punto de partida» de `PLAN_ESCANEO.md` está viejo y marca E4–E10 como ❌/🟡:
-corregirlo).
+Fases F0–F6 y F8–F10 cerradas (F9 se cerró el 2026-10-15); E0–E10 del escaneo
+con sección ✅.
 
 - 🟨 **F7 distribución:** `release-cad.yml` en Windows y macOS escrito, nunca
   corrió; pueden faltar librerías. Linux probado en local.
-- ⬜ **Ensambles y chapa (F9, sin hacer):** relación tangente; arrastre libre de
-  instancias con rótula, plana o paralela; sub-ensambles; instancias de STEP
-  importados; pestaña en arista curva (el desarrollo no entiende conos); volver
-  a doblar el desarrollo; dobladillo cerrado sin radio; canvas único del visor.
+- ⬜ **Ensambles y chapa (queda de F9, ya cerrada):** relación tangente; arrastre
+  libre de instancias con rótula, plana o paralela; sub-ensambles; instancias de
+  STEP importados; pestaña en arista curva (el desarrollo no entiende conos);
+  volver a doblar el desarrollo; dobladillo cerrado sin radio.
 - ⬜ **Operaciones:** 🟨 desfasar/mover cara solo en caras planas; reemplazar cara
   solo hasta un plano; omitir instancias de patrón solo por diálogo (falta
   clic en el visor); recubrimiento tangente a la cara vecina; redondeo de cara
-  en esquinas de tres redondeos y cantos vivos; redondeo completo general;
-  revolución a dos ángulos.
+  en esquinas de tres redondeos y cantos vivos; redondeo completo general.
 - ⬜ **Escaneo → CAD** (todo sin probar en la app real salvo E0–E3):
   - E1: centro de esfera como referencia; tramos abiertos del corte.
   - E2: superficie si el escaneo no cierra (OCCT falla en algunos casos).

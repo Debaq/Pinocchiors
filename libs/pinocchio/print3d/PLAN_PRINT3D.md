@@ -148,7 +148,8 @@ Leyenda: ⬜ falta · 🧪 falta probarlo de verdad · ⚠ límite conocido (fun
 - 🧪 Nada de esto se ha probado en la app abierta ni con una impresora: solo pruebas de Rust (lib y escritorio),
   `tsc` y `vite build`. Falta recorrer con un modelo real: dividir, uniones, vaciar con drenaje, exportar placas,
   elegir zona y ver el relieve, y el asistente de calibración.
-- 🧪 Sin e2e de la sincronía impresora ↔ diseño, de la selección de zona ni del asistente de calibración.
+- 🧪 Sin e2e de la sincronía impresora ↔ diseño, de la selección de zona ni del asistente de calibración. El único e2e de
+  Fabricar es `apps/web/e2e/printCuts.test.mjs` (las cuentas de los planos de corte a mano).
 - 🧪 Los modelos de calibración y las uniones (clavija, cuarto de vuelta, riel) son geometría correcta y cerrada,
   pero no se ha verificado cómo los corta un slicer ni cómo ajustan impresos. Los presets de holgura y de
   contracción son valores típicos, no medidos.
@@ -189,8 +190,6 @@ Leyenda: ⬜ falta · 🧪 falta probarlo de verdad · ⚠ límite conocido (fun
   mismo (0,3 % en PLA).
 - ⬜ Contracción distinta por eje solo está en el modelo y el asistente; el material de la interfaz admite los tres
   ejes pero los presets los traen iguales.
-- 🧪 Dos pruebas de `cad-model` fallan desde antes (`gear_part::avisos_y_errores` y
-  `corona_helicoidal_y_cremallera`): esperan error con cremallera helicoidal, que el commit `80f7a83` permite.
 
 ### Calibración (asistente)
 

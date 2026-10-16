@@ -1,8 +1,10 @@
 # Entornos HDR incluidos
 
-Imágenes de 1K de [Poly Haven](https://polyhaven.com/hdris), licencia CC0 (dominio público).
-Se embeben en el binario (`src/hdri.rs`) y el render con GeppettoRay las ofrece como
-entornos predeterminados.
+Imágenes de 1K (1024×512, formato Radiance `.hdr`) de [Poly Haven](https://polyhaven.com/hdris),
+licencia CC0 (dominio público). Se embeben en el binario (`src/hdri.rs`) y el render con
+GeppettoRay las ofrece como entornos predeterminados. Se referencian con el prefijo
+`builtin:` más el id (por ejemplo `builtin:studio`). Para agregar uno, ponga el `.hdr` aquí y
+añádalo a la lista `BUILTIN` de `src/hdri.rs`.
 
 | id | archivo | autor/origen |
 |---|---|---|

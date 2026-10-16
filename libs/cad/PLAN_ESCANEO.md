@@ -13,6 +13,9 @@ Leyenda: ✅ hecho · 🟡 a medias · ❌ falta.
 
 ## Punto de partida (lo que ya hay)
 
+Al día el 2026-10-15: E0–E10 tienen su sección abajo, con sus límites. Todo lo de E4.2 en adelante
+(y E4.3) está sin probar en la app real; tiene prueba Rust y escenario e2e.
+
 | Función | Estado |
 |---|---|
 | Escaneo visible translúcido en Diseñar | ✅ (`CadViewer.setScan`) |
@@ -28,13 +31,13 @@ Leyenda: ✅ hecho · 🟡 a medias · ❌ falta.
 | Referencias (punto, plano, eje) tomadas de la malla | ✅ ligadas al escaneo (E1.3) |
 | Sketch anclado a la malla | ✅ corte como guía, anclajes y «Usar el corte» (E1.4) |
 | Extruir hasta el escaneo | ✅ extrusión, cara y nervio (E3) |
-| Formas que siguen la piel (engrosar parche, carcasa, molde) | 🟡 carcasa y parche bajo sketch (E4.1) |
-| Curvas sobre la malla | ❌ (E5) |
-| Verificar calce (choque/holgura firmada) | 🟡 desviación sin signo de calce (E6) |
-| Ajuste de cono, toro, redondeos | ❌ (E7) |
-| Revolución / recubrimiento desde cortes | ❌ (E8) |
-| Asistente de reconstrucción | ❌ (E9) |
-| Superficies libres ajustadas a la malla | ❌ (E10) |
+| Formas que siguen la piel (engrosar parche, carcasa, molde) | ✅ carcasa y parche bajo sketch (E4.1), pincel (E4.2) y molde (E4.3) |
+| Curvas sobre la malla | ✅ camino más corto y sketch proyectado (E5) |
+| Verificar calce (choque/holgura firmada) | ✅ holgura firmada con clases y informe (E6; falta el corte vivo) |
+| Ajuste de cono, toro, redondeos | ✅ (E7) |
+| Revolución / recubrimiento desde cortes | ✅ (E8) |
+| Asistente de reconstrucción | ✅ prismáticas y de revolución simples (E9) |
+| Superficies libres ajustadas a la malla | ✅ por relleno de OpenCASCADE (E10) |
 
 ## Problema anotado: las mallas que vienen del CAD se ven y se trabajan mal (2026-10-10) ✅
 
@@ -191,7 +194,7 @@ escaneo ✅, E1.4 sketch anclado al corte ✅. **E1 cerrada (2026-10-10).**
 - Pendiente: desmolde con «hasta el escaneo»; caras no planas en «Cara al escaneo»; elegir
   los triángulos del escaneo en estas operaciones (fijo en 20 000).
 
-### E4 — Formas que siguen la piel
+### E4 — Formas que siguen la piel ✅ (E4.1 2026-10-11, E4.2 y E4.3 2026-10-15)
 
 Partes: E4.1 carcasa y parche bajo un sketch, E4.2 región pintada con pincel, E4.3 molde.
 
@@ -226,7 +229,7 @@ Partes: E4.1 carcasa y parche bajo un sketch, E4.2 región pintada con pincel, E
     arriba) y e2e «escaneo: carcasa y parche bajo un sketch». Banco: `ESPESOR=2` en
     `scan_body`.
   - Pendiente: la caja − cuerpo del conejo a −0,5 mm cortado a media altura sigue fallando
-    (no eran las astillas); paredes del parche perpendiculares a la piel (llega con E4.2).
+    (no eran las astillas). Las paredes del parche perpendiculares a la piel llegaron con E4.2.
 - E4.2 región pintada ✅ (2026-10-15, sin probar en la app real): `ScanBody.paint = ScanPaint { radius, dabs }`;
   cada toque (`ScanDab`) guarda su `ScanSeed` (triángulo + baricéntricas, como las referencias de E1.3) y la app
   rellena `point` y `normal` en `fit_scan_references` (`ScanMesh::fit_dab`), así sigue al escaneo si se alinea o
@@ -234,7 +237,7 @@ Partes: E4.1 carcasa y parche bajo un sketch, E4.2 región pintada con pincel, E
   (borde perpendicular a la piel), y de los pedazos solo los que cada toque ve desde afuera (`scan_paint`; la cola
   de `scan_patch` pasó a `keep_scan_pieces`). `paint` manda sobre `region`. UI: «Pincel» + radio en la pestaña
   del escaneo (arrastrar con el botón izquierdo; toques cada medio radio, máx. 80; comando `cad_scan_dabs`).
-  Prueba: `scan_paint_patch_follows_the_brush` (esfera: volumen de la tapa de radio 8). Falta: e2e, campo por
+  Prueba: `scan_paint_patch_follows_the_brush` (esfera: volumen de la tapa de radio 8). e2e «escaneo: pincel pinta un parche sobre la piel». Falta: campo por
   vértice con borde suave (hoy son cilindros), borrar/editar los toques después, geodésica en vez de cilindro.
 - E4.3 molde ✅ (2026-10-15, sin probar en la app real): `cad_scan::add_mold` (comando `cad_scan_mold`) agrega al
   diseño, como operaciones normales y editables: dos cajas alrededor del escaneo partidas en un plano (eje y
@@ -242,7 +245,8 @@ Partes: E4.1 carcasa y parche bajo un sketch, E4.2 región pintada con pincel, E
   cuatro esquinas, a mitad de pared (así la tapa solo calza de una forma; perno en la de abajo que entra 1 mm en su
   pared, hueco con 0,2 mm de juego en la de arriba, cada una con su alcance) y un bebedero cilíndrico al centro de
   la de arriba. UI: «Crear molde» en la pestaña del escaneo. Prueba: `scan_mold_makes_two_halves_with_keys_and_sprue`
-  (esfera: volumen de las dos mitades, cada una de su lado del plano, pernos que salen). Falta: partir por la línea
+  (esfera: volumen de las dos mitades, cada una de su lado del plano, pernos que salen) y e2e «escaneo: molde de
+  dos mitades con llaves y bebedero». Falta: partir por la línea
   de mayor contorno (hoy solo plano), respiraderos, bebedero que llegue a la cavidad si el centro no la toca,
   escalones de la cavidad por encima del plano (rebajes) y la colocación de las llaves en el contorno.
 

@@ -40,9 +40,11 @@ que hacen). Cada cambio de texto actualiza el catálogo `en.*.ts`.
 4. [x] Remallar (`RemeshStep`, `SimplifyPanel`, `SmoothPanel`, `IsotropicPanel`,
    `VoxelPanel`, `QuadsPanel`).
 5. [x] Reparar, Escanear, Fabricar, Materiales, Vista.
-6. [~] Esqueleto, Animar, Pose hechos; faltan Luces e Historial (párrafos con piezas sueltas).
+6. [~] Esqueleto, Animar, Pose hechos; faltan Luces (`LightsPanel.tsx`) e Historial (`HistoryPanel.tsx`): siguen con su párrafo `leading-relaxed` y sin `Hint` (revisado 2026-10-15).
 7. [ ] Revisión: ningún párrafo `leading-relaxed` suelto en los paneles
-   laterales; `tsc` y pruebas de i18n.
+   laterales; `tsc` y pruebas de i18n. Hoy quedan `leading-relaxed` en `UvStep`, `RemeshStep`,
+   `SkeletonStep`, `AnimateStep`, `RigPanel` (3), `IkPanel`, `ObjectTab` (2), `LibraryPanel`,
+   `MaterialPanel`, `LightsPanel` e `HistoryPanel` (algunos son avisos de «sin modelo» y pueden quedarse).
 
 ## C. Los objetos siguen existiendo después de la retopología (en este orden)
 
@@ -59,4 +61,4 @@ no despliega y la malla original no aparece tachada.
 4. [x] Materiales: con objetos de quads elegidos muestra sus materiales (editar
    color, textura…); asignar/quitar material no aplica a la piel.
 5. [ ] (falta probar en la app real, sin e2e hasta que se pida) Probar con el cráneo y con un modelo de una sola pieza (no cambia nada).
-6. [ ] Commit.
+6. [x] Commit (`b394b72`, 2026-10-12).

@@ -1,5 +1,9 @@
 # Informe de sesión — E4.1 (2026-10-11)
 
+Informe histórico de esa sesión. Al 2026-10-15 siguen abiertos solo el caso del conejo a −0,5 mm (E2) y las
+carcasas de piezas grandes; el estado actual de E4–E10 está en `PLAN_ESCANEO.md`. Las 8 fallas e2e de abajo
+no se volvieron a medir aquí.
+
 Pedido: seguir con E4 de `libs/cad/PLAN_ESCANEO.md` («formas que siguen la piel») y al terminar
 correr la suite e2e completa.
 
@@ -95,6 +99,5 @@ Escenario saltado: «remallar: isótropo traslada textura y pesos» no tiene
   sólido válido» (no eran las astillas).
 - Las 6 fallas e2e de arriba (anteriores a E4.1).
 - «escaneo: sigue de referencia» inestable.
-- E4.2: región pintada con pincel (paredes del parche perpendiculares a la piel).
-- E4.3: molde.
+- ~~E4.2: región pintada con pincel~~ y ~~E4.3: molde~~: hechos el 2026-10-15 (ver `PLAN_ESCANEO.md`).
 - Carcasas en piezas grandes (≥ 1 m) son lentas o piden espesores grandes.

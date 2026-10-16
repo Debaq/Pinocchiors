@@ -11,7 +11,7 @@ Leyenda: ✅ hecho · 🟡 a medias · ❌ falta · (F*n*) fase de este plan que
 
 ## Cobertura de la lista
 
-### Operaciones a partir de croquis
+### Operaciones a partir de sketch
 | Función | Estado |
 |---|---|
 | Extrusión / corte por extrusión | ✅ (`Extrude`, `op: Cut`) |
@@ -21,7 +21,7 @@ Leyenda: ✅ hecho · 🟡 a medias · ❌ falta · (F*n*) fase de este plan que
 | Nervio | ✅ (`Rib`) |
 | Agujero | ✅ |
 | Rosca | ✅ (cosmética, modelada y coordinada con `ThreadLink`) |
-| Envolver croquis sobre cara (grabado y relieve) | ✅ (`Wrap` sobre un `SurfaceSketch`, 2026-10-11) |
+| Envolver sketch sobre cara (grabado y relieve) | ✅ (`Wrap` sobre un `SurfaceSketch`, 2026-10-11) |
 
 ### Opciones de extrusión
 | Función | Estado |
@@ -85,9 +85,12 @@ Leyenda: ✅ hecho · 🟡 a medias · ❌ falta · (F*n*) fase de este plan que
 | Función | Estado |
 |---|---|
 | Lineal, circular, a lo largo de curva, relleno de región | ✅ (además por tabla) |
+| Circular en anillos (corona de agujeros) | ✅ (`Circular.rings`, 2026-10-15) |
+| En espiral, sobre superficie curva y cadena (eslabones a distancia fija) | ✅ (`PatternKind::Spiral`, `Surface`, `Chain`; 2026-10-15, F10 del ROADMAP) |
+| Variable (cada copia cambia de tamaño) y patrón de patrón | ✅ (`Pattern.vary` con `PatternVary`; un patrón puede repetir a otro, 2026-10-15) |
 | Lineal en dos direcciones | ✅ (`Linear.second`, 2026-10-11) |
-| Guiado por puntos de croquis | ✅ (`PatternKind::Points`, 2026-10-11) |
-| Omitir instancias | 🟡 escritas en el diálogo (`Pattern.skip`); falta prender y apagar con clic en el visor (F2) |
+| Guiado por puntos de sketch | ✅ (`PatternKind::Points`, 2026-10-11) |
+| Omitir instancias | 🟡 escritas en el diálogo (`Pattern.skip`, `SkipCopies`); falta prender y apagar con clic en el visor (F2) |
 | Simetría de operaciones | ✅ |
 | Simetría de cuerpos | ✅ unido o como pieza aparte (`Mirror.op`, 2026-10-11) |
 
@@ -131,7 +134,7 @@ Unión, resta, intersección, dividir, separar no conectados, eliminar: ✅ toda
 ### Gestión de operaciones
 | Función | Estado |
 |---|---|
-| Editar, editar croquis, suprimir, reordenar, eliminar, renombrar | ✅ |
+| Editar, editar sketch, suprimir, reordenar, eliminar, renombrar | ✅ |
 | Copiar y pegar | ✅ Ctrl+C / Ctrl+V en el árbol y «Duplicar» (2026-10-11) |
 | Retroceder (rollback), vista previa en vivo | ✅ |
 | Manipuladores gráficos | ✅ flechas en extrusión, agujero, chapa, mover cara, engrosar, vaciado, redondeo, chaflán, patrón lineal (las dos direcciones) y desplazar; arcos en revolución, patrón circular, girar cara y girar cuerpo (2026-10-11) |
@@ -328,9 +331,14 @@ antes (no la que se dibuja mientras tanto) y el arco sigue el ángulo más cerca
 - Escaneo → CAD: pasó a [PLAN_ESCANEO.md](PLAN_ESCANEO.md) (2026-10-10).
 - Visor: canvas único (que el visor principal dibuje las capas del CAD y CadView use ese
   canvas). La cámara común ya está (`lib/cameraRig.ts`).
-- Chapa: más allá de pestañas, alivios y esquinas cerradas (dobladillos, pestañas en arista
-  curva, desdoblar/doblar).
+- Chapa: el dobladillo (pestaña a 180°) y el desarrollo como pieza (`FlatSolid`) se hicieron el
+  2026-10-15 (F9 del ROADMAP). Falta: pestañas en arista curva (cono o cilindro; el desarrollo
+  tendría que entender conos), volver a doblar el desarrollo y dobladillo cerrado sin radio.
 - Suite e2e completa, push y release CAD Windows/macOS cuando el usuario lo pida.
+- Revisado el 2026-10-15 contra el código: todo lo marcado ✅ sigue en `feature.rs`/`eval.rs` y los
+  e2e «operaciones:» viven en `apps/web/e2e/cad/operaciones.mjs` (se lanzan con `cad.mjs`). Lo
+  único que sigue abierto del plan: omitir copias con clic (F2), tangente a una cara vecina (F5),
+  mover/desfasar caras curvas y reemplazar cara por una superficie (F6), y la chapa de arriba.
 
 ## Por probar (lo hecho en la nube sin compilar Rust)
 

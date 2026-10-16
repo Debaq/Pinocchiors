@@ -76,7 +76,8 @@ Ejemplo de uso:
 ```
 cargo run --release -p orizon3d-core --example turntable_synth -- \
   [--stl x.stl --size 60] [--width 960] [--steps 90] [--elev 0,30,60] \
-  [--axis-error mm] [--jitter grados] [--frames dir] [--out nube.ply]
+  [--lasers base] [--axis-error mm] [--elev-error grados] [--jitter grados] \
+  [--frames dir] [--out nube.ply]
 ```
 
 Resultados con 960×540, 3 alturas y calibración exacta:
@@ -130,11 +131,15 @@ Todo en Rust: tablero de ajedrez impreso apoyado en el plato.
 
 ## Fase 3 — hardware
 
+Estado (2026-10-15): el módulo `turntable` no está conectado a la app de escritorio todavía; vive solo en `orizon3d-core` (ejemplo `turntable_synth` y `tests/turntable.rs`).
+
 - ✅ `scanear.rs`: `ScanEarRig` implementa `Rig` con el protocolo de arriba.
   - Da cada movimiento por terminado cuando `GET_STATUS` informa quieto en el
     ángulo pedido, y después espera a que se asiente la vibración.
   - Se probó contra un Arduino simulado en `tests/turntable.rs`.
-- Pendiente: el firmware real, y agregarle los comandos de láser y luz.
+- ✅ `ScanEarRig::set_laser`/`set_light` ya mandan los comandos propuestos `PY:LASER:<n>:<0|1>` y `PY:LIGHT:<0-255>`.
+- Pendiente: el firmware real que los entienda (el del repo scanEar no está).
+- Pendiente (no hay ninguna implementación de `FrameSource` fuera del banco sintético; `camera.rs`/`capture.rs` son del Revopoint):
 - `FrameSource` V4L2 sobre la webcam:
   - foco, exposición, ganancia y balance de blancos en manual;
   - descartar los cuadros viejos del búfer después de cada movimiento.

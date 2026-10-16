@@ -8,7 +8,7 @@ Path tracing dentro del visor (three-gpu-pathtracer) queda **descartado**.
 ## Dónde vive en la interfaz
 
 - Botón **Render** en la pestaña **Exportar** (`ExportStep`), junto al de exportar el modelo.
-  Abre un diálogo propio (`ConfirmDialog`-style, sin diálogos nativos) con las opciones.
+  Abre el espacio Render (`RenderStep`, panel flotante sin velo, sin diálogos nativos) con las opciones; el formato de imagen elegido en Exportar (PNG/JPG/WebP) también abre Render.
 - Sin cámaras (fase 1), el render sale **de lo que se ve en pantalla en ese momento**: misma
   posición, giro y zoom de la vista. Si la relación de aspecto elegida no es la de la ventana,
   se recorta alrededor del centro; el visor muestra un **marco de render** translúcido con el
@@ -17,13 +17,13 @@ Path tracing dentro del visor (three-gpu-pathtracer) queda **descartado**.
 
 ## Fase 1 — Imagen con el motor del visor
 
-**Estado (2026-10-12): núcleo hecho, sin commitear.** Hecho: botón Render en Exportar (también
-Ctrl+Shift+R), `RenderDialog` (panel flotante sin velo), marco de render en el visor,
+**Estado (2026-10-12): núcleo hecho y commiteado.** Hecho: botón Render en Exportar (también
+Ctrl+Shift+R, área «file», `openRender` en `App.tsx`), panel Render (`RenderStep.tsx`; la fase 1 lo tuvo como `RenderDialog`, ya no existe), marco de render en el visor,
 `Viewer3D.renderStill` + `lib/renderStill.ts` (mosaicos de 2048, supersampling 1/4/16 + MSAA 4x,
 fondo transparente/color/visor, PNG/JPG/WebP, qué se oculta), halo del glow incluido, guardado por
 el comando `write_render_image` (cuerpo crudo, sin JSON), opciones y carpeta recordadas, i18n.
 Verificado en Chromium headless (tamaño, color exacto, alfa, mosaicos sin costuras, cancelar).
-Verificado a ojo en Chromium headless (2026-10-12): sombras suaves (penumbra con 4 cuadros), GTAO (contacto esfera/losa) y suelo con sombra (a la altura de la base del modelo) funcionan y se activan/desactivan por separado. Falta: el atajo en `shortcutDefs` ya está pero no se ha probado en Tauri real,
+Verificado a ojo en Chromium headless (2026-10-12): sombras suaves (penumbra con 4 cuadros), GTAO (contacto esfera/losa) y suelo con sombra (a la altura de la base del modelo) funcionan y se activan/desactivan por separado. Falta: el atajo (definido en `App.tsx`) no se ha probado en Tauri real,
 y probar el flujo completo (guardar archivo) en la app de escritorio.
 
 Alcance: captura de calidad, no luz global. Es lo que ya dibuja Three, mejor configurado.
@@ -63,7 +63,7 @@ Outliner, todo son **opciones del panel Render** (espacio Render, Alt+7).
 
 ## Fase 3 — GeppettoRay, motor de render propio en Rust
 
-Motor llamado **GeppettoRay** (el carpintero que da vida a Pinocchio). Crate nuevo `libs/geppettoray/` (pide permiso antes de crear la carpeta). CPU primero, con rayon;
+Motor llamado **GeppettoRay** (el carpintero que da vida a Pinocchio). Crate `libs/geppettoray/` (ya creado). CPU primero, con rayon;
 el GPU (wgpu compute) queda como fase aparte si hace falta velocidad.
 
 Entrada: el `Scene` de converter (mallas, materiales PBR, texturas, esqueleto y animación) más
@@ -80,7 +80,7 @@ cámara, luces y mundo de la fase 2. Los materiales ya son los de glTF, así que
 | 3g | **Progreso en la app**: pasadas progresivas con vista previa que se afina, mosaicos, **Cancelar**, tiempo estimado (como ya hacen retopología y remallar, en segundo plano). |
 | 3h | **Animación**: un fotograma por pose evaluada en CPU (esqueleto + pesos), secuencia PNG y, si ffmpeg está, video; reanudar un render interrumpido. |
 
-**Estado (2026-10-12): 3a hecha, sin commitear.** `libs/geppettoray/`: BVH propia (SAH por cubetas), `RayScene::from_scene` (vía `world_primitives`), cámara pinhole, path tracer difuso + emisión con ruleta rusa, entorno uniforme y sol con muestreo directo, PNG sRGB. Tests: horno blanco, caja cerrada (serie geométrica), BVH vs fuerza bruta, sol sobre plano. Siguiente: 3b.
+**Estado (2026-10-12): 3a hecha.** `libs/geppettoray/`: BVH propia (SAH por cubetas), `RayScene::from_scene` (vía `world_primitives`), cámara pinhole, path tracer difuso + emisión con ruleta rusa, entorno uniforme y sol con muestreo directo, PNG sRGB. Tests: horno blanco, caja cerrada (serie geométrica), BVH vs fuerza bruta, sol sobre plano. Siguiente: 3b.
 
 **3b hecha (2026-10-12):** BSDF glTF (difuso Ashikhmin–Shirley + GGX Smith correlacionado + Schlick, barniz como 2.º lóbulo GGX, muestreo VNDF y mezcla de lóbulos), texturas PNG/JPEG/WebP con filtrado bilineal y repetición (base y emisión en sRGB→lineal), metal/rugosidad desde textura, mapa de normales (tangentes por triángulo desde las UV, no MikkTSpace), color de vértice, opacidad Mask y Blend estocástica (también en rayos de sombra), unlit. Decisiones: el mapa de oclusión se **ignora** a propósito (el path tracing calcula la oclusión real; aplicarlo la duplicaría); sin mipmaps (el antialiasing por muestreo lo compensa); solo set UV 0 y escala UV. Tests: reciprocidad, energía ≤ 1, pdf, textura, máscara/mezcla, espejo metálico, mapa de normales plano, horno blanco con material completo.
 
@@ -93,29 +93,29 @@ cámara, luces y mundo de la fase 2. Los materiales ya son los de glTF, así que
 **3f hecha (2026-10-12):** `render_aov` (mismo color que `render` + albedo, normal, posición, profundidad y varianza del promedio por píxel; capas con hasta 8 muestras, cámara sin lente) y `denoise` (à-trous espacial estilo SVGF: filtra la iluminación = color/albedo y la vuelve a multiplicar por el albedo, así las texturas no se desdibujan; pesos por normal, plano tangente, albedo y luminancia guiada por la varianza prefiltrada 5×5; recorte de luciérnagas contra la media de los 8 vecinos; 4 pasadas por defecto). Open Image Denoise queda descartado por ahora (dependencia C++). Medido: a 4 muestras el error cuadrático baja ~55 % en una escena de esfera con sol y ~83 % en un plano con textura de rayas y penumbra, sin perder contraste de la textura y sin correr los bordes de geometría. Límites: es solo espacial (sin acumulación temporal para animación), los reflejos nítidos y el vidrio no se separan del fondo (el AOV usa el primer cruce), y la profundidad de campo no se refleja en las capas (el desenfoque queda como ruido). Tests: reducción del error contra referencia de 512 muestras, el color de `render_aov` = el de `render`, imagen limpia intacta, bordes de geometría, texturas, luciérnagas. Los tests de `geppettoray` corren con `opt-level = 2` en dev.
 
 **3g hecha (2026-10-12), sin probar en Tauri real:** `render_progressive` (pasadas que se acumulan, mosaicos en paralelo, cancelación entre mosaicos, tiempo estimado, denoise final opcional, fondo transparente con alfa y color de fondo visible aparte del entorno que ilumina). En la app: `apps/desktop/src/ray_render.rs` (hilo aparte; comandos `ray_render_start/status/image/cancel`; PNG RGBA por pasada) y `lib/rayRender.ts` (sigue el avance cada 150 ms, baja la imagen solo si cambió, cancela con el `AbortSignal` del render del visor). Panel Render: selector **Motor** (Rápido (visor) / GeppettoRay), calidad en muestras (32/128/512/2048), "Quitar ruido", barra con pasada, muestras y tiempo que falta; la imagen se ve encima del visor mientras se afina; cámaras predefinidas, hoja de vistas, formatos y degradado siguen funcionando igual. Con GeppettoRay se desactivan sombras suaves, suelo con sombra y oclusión ambiental (la luz ya las produce).
-**3h hecha (2026-10-12), sin commitear ni probar en Tauri real:** `converter-scene/src/pose.rs` (muestreo de canales + `world_primitives_at` con skinning CPU), `geppettoray::{AnimatedScene, render_animation}` (`src/animation.rs`, tests en `tests/animacion.rs`), `apps/desktop/src/ray_render.rs` (`ray_render_animation_start`, PNG por cuadro, reanudar, degradado, ffmpeg), UI en `RenderStep.tsx`/`App.tsx` (`handleRenderAnimation`) y `lib/rayRender.ts` (`renderRayAnimation`). Pendiente: denoise temporal, cámara animada, probar con un rig real en la app.
+**3h hecha (2026-10-12), sin probar en Tauri real:** `converter-scene/src/pose.rs` (muestreo de canales + `world_primitives_at` con skinning CPU), `geppettoray::{AnimatedScene, render_animation}` (`src/animation.rs`, tests en `tests/animacion.rs`), `apps/desktop/src/ray_render.rs` (`ray_render_animation_start`, PNG por cuadro, reanudar, degradado, ffmpeg), UI en `RenderStep.tsx`/`App.tsx` (`handleRenderAnimation`) y `lib/rayRender.ts` (`renderRayAnimation`). Pendiente: denoise temporal, cámara animada, probar con un rig real en la app.
 
-**Faltas menores hechas (2026-10-12), sin commitear:** sol con disco y luces puntual/foco con esfera (sombras suaves); `ShadowCatcher` (suelo con sombra invisible, opacidad por luz que falta) y `suelo con sombra` activo con GeppettoRay; HDRI elegible desde el panel Render (.hdr, intensidad, giro) vía `RayRequest.hdri`; `ToneMap::Aces` como three.js (`RayRequest.tone_map`, la app lo envía siempre); emisión texturizada como luz de área (`RayScene::emission_at`, `Texture::mean_luminance`); vidrio esmerilado (VNDF + peso G1) y pila de medios para volúmenes anidados (`MediaStack`). Tests en `tests/menores.rs` (11) y `ray_render.rs` (3 nuevos) y `e2e/rayRender.test.mjs`. Quedan sin hacer: cáusticas, tamaño de sol/foco editable en la UI, exposición del tono, CLI `apps/geppettoray` (pide permiso para crear la carpeta).
+**Faltas menores hechas (2026-10-12):** sol con disco y luces puntual/foco con esfera (sombras suaves); `ShadowCatcher` (suelo con sombra invisible, opacidad por luz que falta) y `suelo con sombra` activo con GeppettoRay; HDRI elegible desde el panel Render (.hdr, intensidad, giro) vía `RayRequest.hdri`; `ToneMap::Aces` como three.js (`RayRequest.tone_map`, la app lo envía siempre); emisión texturizada como luz de área (`RayScene::emission_at`, `Texture::mean_luminance`); vidrio esmerilado (VNDF + peso G1) y pila de medios para volúmenes anidados (`MediaStack`). Tests en `tests/menores.rs` (11) y `ray_render.rs` (3 nuevos) y `e2e/rayRender.test.mjs`. Quedan sin hacer (revisado 2026-10-15): cáusticas, tamaño de sol/foco editable en la UI (hoy es la constante `SUN_ANGULAR_RADIUS` en `lib/rayRender.ts`), exposición del tono (ACES con `exposure: 1.0` fijo), CLI `apps/geppettoray` (pide permiso para crear la carpeta).
 
 Aproximaciones y límites de la conexión: las luces del visor pasan como sol principal + relleno (+ luz de cámara) y un cielo uniforme que resume ambiente y entorno (el visor usa una imagen de estudio para reflejos: no coinciden exacto); sin el tono ACES del visor (sale lineal→sRGB); la escena es la de `AppState.scene` (sin pose de esqueleto: eso es 3h). Tests: render progresivo (6), comandos de Rust (4: corre y entrega PNG con alfa, cancelar, escena vacía, validación) y `e2e/rayRender.test.mjs` (8: luces, campo de visión, petición, avance, cancelar, error).
 
-## Fase 4 — Estudio fotográfico (pedido 2026-10-13)
+## Fase 4 — Estudio fotográfico (pedido 2026-10-12; 4a hecha, 4b y 4c pendientes)
 
 Motivo: el suelo solo recibía sombra (no se veía), las 4 luces solo movían la principal y el relleno, y las cámaras eran solo direcciones sin lente. Va en GeppettoRay, en el motor rápido y en el visor (con interruptor).
 
 | Paso | Qué |
 |---|---|
-| 4a | **Fondo de estudio** (ciclorama): piso que sube en curva hasta un muro, sin costuras, bajo el punto más bajo del modelo y detrás de él según la cámara; color y brillo del piso. HECHO (2026-10-13). |
-| 4b | **Luces de estudio** reales: softbox de área, aro, contraluz, 3 puntos (GeppettoRay: emisores invisibles a la cámara; visor: aproximación con luces del rig). |
-| 4c | **Presets de fotografía**: cámara (dirección, focal, apertura, profundidad de campo) + luces + fondo en uno (producto, retrato, macro, catálogo 3/4…). |
+| 4a | **Fondo de estudio** (ciclorama): piso que sube en curva hasta un muro, sin costuras, bajo el punto más bajo del modelo y detrás de él según la cámara; color y brillo del piso. HECHO (2026-10-12). |
+| 4b | PENDIENTE (hoy `lib/renderLights.ts` solo tiene presets de sol/relleno: visor, estudio, suave, contraluz, dramática). **Luces de estudio** reales: softbox de área, aro, contraluz, 3 puntos (GeppettoRay: emisores invisibles a la cámara; visor: aproximación con luces del rig). |
+| 4c | PENDIENTE. **Presets de fotografía**: cámara (dirección, focal, apertura, profundidad de campo) + luces + fondo en uno (producto, retrato, macro, catálogo 3/4…). |
 
-**4a hecha (2026-10-13), sin commitear:** `geppettoray::Studio` (`studio.rs`: perfil piso→curva (16 pasos)→muro, medidas relativas a la diagonal del modelo: 7× al frente, 2,5× al muro, 9× de semiancho, radio 0,9×, alto 7×; una cara, así que desde abajo no tapa) + `RayMaterial::casts_shadow` (el estudio recibe sin proyectar: la luz llega al modelo aunque venga de detrás del muro) + `AnimatedScene::with_studio` y `AnimationSettings.studio` (todos los cuadros). App: `RayRequest.studio {color, gloss}` (mide la escena en reposo; desactiva el suelo con sombra); TS: `lib/studioSet.ts` (misma geometría en three para el motor rápido), `Viewer3D.setStudio` (visor en vivo mientras se está en Render; el muro mira según la cámara actual y se rehace al cambiar de cámara) y tarjeta "Estudio" (fondo de estudio, color, brillo del piso). Con estudio el fondo es el ciclorama (sin transparencia ni degradado) y las sombras del motor rápido se activan solas. Tests: `tests/estudio.rs` (4), `ray_render.rs` (1), `e2e/rayRender.test.mjs` (1). Verificado a ojo con Fox.glb (mate y brillante).
+**4a hecha (2026-10-12), commiteada (`eafaafd`):** `geppettoray::Studio` (`studio.rs`: perfil piso→curva (16 pasos)→muro, medidas relativas a la diagonal del modelo: 7× al frente, 2,5× al muro, 9× de semiancho, radio 0,9×, alto 7×; una cara, así que desde abajo no tapa) + `RayMaterial::casts_shadow` (el estudio recibe sin proyectar: la luz llega al modelo aunque venga de detrás del muro) + `AnimatedScene::with_studio` y `AnimationSettings.studio` (todos los cuadros). App: `RayRequest.studio {color, gloss}` (mide la escena en reposo; desactiva el suelo con sombra); TS: `lib/studioSet.ts` (misma geometría en three para el motor rápido), `Viewer3D.setStudio` (visor en vivo mientras se está en Render; el muro mira según la cámara actual y se rehace al cambiar de cámara) y tarjeta "Estudio" (fondo de estudio, color, brillo del piso). Con estudio el fondo es el ciclorama (sin transparencia ni degradado) y las sombras del motor rápido se activan solas. Tests: `tests/estudio.rs` (4), `ray_render.rs` (1), `e2e/rayRender.test.mjs` (1). Verificado a ojo con Fox.glb (mate y brillante).
 
 Decisiones abiertas (para cuando lleguemos):
 - ~~BVH propia o el crate `bvh`/`embree`~~ → propia (decidido en 3a); antes: `bvh`/`embree` (Embree es rapidísimo pero trae dependencia C++; la
   compilación a wasm y el empaquetado pesan).
 - Cuánto del Principled BSDF de Blender copiar; arrancar con el modelo de glTF y sumar.
-- Si el motor corre dentro de la app o también como `apps/geppettoray` (CLI como `apps/converter`).
+- ~~Si el motor corre dentro de la app~~ → corre dentro de la app (`ray_render.rs`); el CLI `apps/geppettoray` (como `apps/converter`) sigue sin existir.
 
 Verificación (obligatoria desde 3a):
 - **Prueba del horno blanco**: esfera blanca difusa dentro de luz uniforme sale del mismo
