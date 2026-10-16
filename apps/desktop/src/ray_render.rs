@@ -263,8 +263,10 @@ fn camera_from(req: &RayRequest) -> gr::Camera {
     )
 }
 
-fn run(scene: converter_scene::Scene, req: RayRequest, cancel: Arc<AtomicBool>, status: Arc<Mutex<Status>>) {
+fn run(mut scene: converter_scene::Scene, req: RayRequest, cancel: Arc<AtomicBool>, status: Arc<Mutex<Status>>) {
     let set = |f: &mut dyn FnMut(&mut Status)| f(&mut status.lock().unwrap());
+    // Las piezas de Diseñar llegan con las aristas vivas suavizadas: se vuelven a marcar
+    crate::crease::crease_shade(&mut scene, crate::crease::CREASE_DEG);
     let animated = gr::AnimatedScene::new(&scene);
     // La escena sola: de ella salen el tamaño del fondo de estudio y del suelo con sombra
     let probe = animated.at(None, 0.0);
@@ -409,13 +411,14 @@ fn make_video(anim: &AnimationRequest) -> Result<Option<String>, String> {
 }
 
 fn run_animation(
-    scene: converter_scene::Scene,
+    mut scene: converter_scene::Scene,
     req: RayRequest,
     anim: AnimationRequest,
     cancel: Arc<AtomicBool>,
     status: Arc<Mutex<Status>>,
 ) {
     let set = |f: &mut dyn FnMut(&mut Status)| f(&mut status.lock().unwrap());
+    crate::crease::crease_shade(&mut scene, crate::crease::CREASE_DEG);
     let fail = |msg: String| {
         set(&mut |s| {
             s.phase = Phase::Error;

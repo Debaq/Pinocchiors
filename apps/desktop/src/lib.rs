@@ -15,6 +15,7 @@ pub mod print_all;
 pub mod print_prep;
 pub mod print_skin;
 pub mod project;
+pub mod crease;
 pub mod ray_render;
 pub mod remesh;
 pub mod scan_cloud;
