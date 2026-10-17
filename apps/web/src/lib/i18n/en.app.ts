@@ -297,6 +297,8 @@ export const en_app: Catalog = {
   "Exportando {name}...": "Exporting {name}...",
   "Exportadas {n} variantes ({size})": "Exported {n} variants ({size})",
   "Exportando a {file}...": "Exporting to {file}...",
+  "Horneando animaciones...": "Baking animations...",
+  "Calculando límites desde las animaciones...": "Computing limits from the animations...",
   "Diseño exportado: {file} ({size})": "Design exported: {file} ({size})",
   "{message}: {name} ({size})": "{message}: {name} ({size})",
   "Buscando planos de apoyo...": "Looking for support planes...",

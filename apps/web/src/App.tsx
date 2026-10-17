@@ -172,7 +172,6 @@ import {
 } from "./lib/animation";
 import {
   applyRotationLocks,
-  bakeClip,
   constrainer,
   bodyAxes,
   controlWorld,
@@ -233,6 +232,7 @@ import {
   type RigConstraint,
 } from "./lib/constraints";
 import { RigEditor, type RigEditorTab } from "./components/layout/RigEditor";
+import { bakeClipsAsync, observedLimitsAsync } from "./lib/animWorkerClient";
 import { JointPanel, type ChainView, type LimitsAuto, type RelationEdge, type RelationNode, type TrajectorySample } from "./components/panels/JointPanel";
 import {
   anatomicalLimits,
@@ -245,7 +245,6 @@ import {
   limitExcess,
   meshLimits,
   mirrorLimits,
-  observedLimits,
   rangePath,
   scaleLimits,
   type DiskPoint,
@@ -4725,7 +4724,10 @@ export const App: Component = () => {
   onCleanup(() => stopProbe(false));
 
   /** Límites automáticos para la selección (o todo el esqueleto) */
-  const handleAutoLimits = (mode: LimitsAuto) => {
+  /** Hay un horneado/cálculo de animación en el worker: no se lanza otro igual */
+  let animHeavyBusy = false;
+  const handleAutoLimits = async (mode: LimitsAuto) => {
+    if (animHeavyBusy) return;
     const ctx = rigCtx();
     const joints = (jointSelection().length > 0 ? jointSelection() : ctx.bones.map((_, j) => j)).filter((j) => ctx.children[j].length > 0);
     const anatomical = anatomicalLimits(ctx);
@@ -4744,7 +4746,23 @@ export const App: Component = () => {
       }
     }
     if (mode === "observed") {
-      const found = observedLimits(clips(), ctx, joints, new Map(joints.map((j) => [j, kindOf(j)])));
+      // Instantánea al empezar: durante la espera el usuario puede seguir editando
+      const bonesAtStart = rigBones();
+      animHeavyBusy = true;
+      let found: Awaited<ReturnType<typeof observedLimitsAsync>>;
+      try {
+        found = await busy(t("Calculando límites desde las animaciones..."), () =>
+          observedLimitsAsync(clips(), bonesAtStart, rigSettings(), joints, new Map(joints.map((j) => [j, kindOf(j)])))
+        );
+      } catch (e) {
+        setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
+        return;
+      } finally {
+        animHeavyBusy = false;
+      }
+      // Si el esqueleto cambió mientras tanto, el resultado ya no corresponde
+      if (rigBones() !== bonesAtStart) return;
+      next = rigSettings();
       found.forEach((l, j) => (set(j, l), count++));
       if (found.size === 0) return setStatusMessage(t("No hay animaciones con keys de donde sacar los límites"));
     }
@@ -5627,6 +5645,17 @@ export const App: Component = () => {
       const mix = mixer().enabled && mixer().layers.length > 0 ? bakeMixer(mixer(), clips(), rigCtx(), "Mezcla", activeClip()?.fps ?? 24) : undefined;
       const exported = bvh ? (mix ? [mix] : clips().filter((c) => c.id === activeClipId())) : mix ? [...clips(), mix] : clips();
       const withAnimations = bvh || skeletonOnly || includeRig;
+      // La pila de evaluación horneada a giros por cuadro (en el worker, sobre una instantánea del rig)
+      let bakedForExport: AnimationClip[] | null = null;
+      if (withAnimations) {
+        if (animHeavyBusy) return;
+        animHeavyBusy = true;
+        try {
+          bakedForExport = await busy(t("Horneando animaciones..."), () => bakeClipsAsync(exported, rigBones(), rigSettings()));
+        } finally {
+          animHeavyBusy = false;
+        }
+      }
       const result = await busy(t("Exportando a {file}...", { file: name ?? "" }), () => invoke<ExportResult>("export_model", {
         config: {
           format: opts.format,
@@ -5644,7 +5673,7 @@ export const App: Component = () => {
           optimize_geometry: opts.cleanGeometry,
           strip_unused: opts.cleanGeometry,
           // La pila de evaluación horneada a giros por cuadro: lo único que entienden glTF, USD y BVH
-          animations: withAnimations ? clipsForExport(exported.map((c) => (c.baked ? c : bakeClip(c, rigCtx()))), boneIndex()) : null,
+          animations: bakedForExport ? clipsForExport(bakedForExport, boneIndex()) : null,
           non_deforming: rigBones().flatMap((b, i) => (boneProps(rigSettings(), b.name).deform ? [] : [i])),
           skeleton_only: skeletonOnly,
           bone_shapes: exportBoneShapes(),
@@ -5859,7 +5888,17 @@ export const App: Component = () => {
     const source = id === "__mix__" ? bakeMixer(mixer(), clips(), rigCtx(), t("Mezcla"), activeClip()?.fps ?? 24) : clips().find((c) => c.id === id);
     if (!source) return;
     // La misma pila de evaluación horneada que se exporta
-    const baked = source.baked ? source : bakeClip(source, rigCtx());
+    let baked: AnimationClip;
+    if (animHeavyBusy) return;
+    animHeavyBusy = true;
+    try {
+      [baked] = await busy(t("Horneando animaciones..."), () => bakeClipsAsync([source], rigBones(), rigSettings()));
+    } catch (e) {
+      setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
+      return;
+    } finally {
+      animHeavyBusy = false;
+    }
     const [clip] = clipsForExport([baked], boneIndex());
     const keyed = clip.tracks.flatMap((tr) => [...tr.rotation, ...tr.translation].map((k) => k.frame));
     const first = Math.round(clip.start ?? Math.min(...keyed));
