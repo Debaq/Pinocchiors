@@ -216,3 +216,38 @@ fn perf_visibility_is_visible_par() {
     assert!(visible < n);
     report("visibility_is_visible_par", rayon::current_num_threads(), idx.len(), ms);
 }
+
+#[test]
+#[ignore = "perf"]
+fn perf_heat_direct_vs_cg_accuracy() {
+    // Compara el solver directo con CG (el método original) sobre la malla grande: tarda lo de CG
+    use crate::heat_diffusion::Solver;
+    let (pos, idx) = icosphere(subdivisions());
+    let mesh = Mesh::from_triangles(&pos, &idx);
+    let bones = bone_counts().0;
+    let skel = synthetic_skeleton(bones);
+    let hd = HeatDiffusion::new(&mesh);
+    let t = Instant::now();
+    let direct = hd.compute_weights_with(&skel, Solver::Direct).expect("direct");
+    let ms_direct = t.elapsed().as_secs_f64() * 1e3;
+    let t = Instant::now();
+    let cg = hd.compute_weights_with(&skel, Solver::Cg).expect("cg");
+    let ms_cg = t.elapsed().as_secs_f64() * 1e3;
+    let mut worst: Real = 0.0;
+    let mut sum_sq: Real = 0.0;
+    let mut count = 0usize;
+    for (d, c) in direct.iter().zip(&cg) {
+        for (a, b) in d.iter().zip(c) {
+            worst = worst.max((a - b).abs());
+            sum_sq += (a - b) * (a - b);
+            count += 1;
+        }
+    }
+    println!(
+        "PERF crate=attachment bench=heat_direct_vs_cg threads={} tris={} ms_direct={ms_direct:.0} ms_cg={ms_cg:.0} max_diff={worst:.3e} rms_diff={:.3e}",
+        rayon::current_num_threads(),
+        idx.len(),
+        (sum_sq / count as Real).sqrt()
+    );
+    assert!(worst < 1e-5, "direct y CG difieren en {worst}");
+}

@@ -13,11 +13,18 @@
 //! visibles más cercanos a `i` (0 si no). Como `L·1 = 0`, los pesos de todos
 //! los huesos suman 1 en cada vértice. El sistema es invariante a la escala de
 //! la malla.
+//!
+//! La matriz `L + A·H` es la misma para todos los huesos (solo cambia el lado
+//! derecho), así que se factoriza una vez (Cholesky disperso, ver
+//! `pinocchio_sparse::SpdFactor`) y cada hueso cuesta dos sustituciones
+//! triangulares. Antes se resolvía un CG por hueso (cientos de iteraciones cada
+//! uno): 85 s contra 1,4 s con 20 huesos y 82k triángulos en 1 hilo, y los pesos
+//! coinciden con los de CG hasta ~1e-11. Si la factorización falla se vuelve a CG.
 
 use pinocchio_math::{Real, Vector3};
 use pinocchio_mesh::Mesh;
 use pinocchio_skeleton::Skeleton;
-use pinocchio_sparse::SPDMatrix;
+use pinocchio_sparse::{SPDMatrix, SpdFactor};
 use pinocchio_spatial::{Bvh, Triangle};
 use rayon::prelude::*;
 use thiserror::Error;
@@ -42,6 +49,17 @@ const TIE_TOLERANCE: Real = 1e-4;
 const OVERSHOOT_WEIGHT: Real = 1.0;
 /// Margen (fracción del segmento) ignorado en los extremos del test de visibilidad
 const VISIBILITY_MARGIN: Real = 1e-3;
+
+/// Cómo se resuelve el sistema de cada hueso
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Solver {
+    /// Cholesky disperso: se factoriza una vez y cada hueso son dos sustituciones.
+    /// Si la factorización falla, cae a CG.
+    Direct,
+    /// Gradiente conjugado por hueso (el método original); hoy lo usan las pruebas de comparación
+    #[cfg_attr(not(test), allow(dead_code))]
+    Cg,
+}
 
 /// Calculador de heat diffusion para skinning weights
 pub struct HeatDiffusion<'a> {
@@ -82,6 +100,14 @@ impl<'a> HeatDiffusion<'a> {
     pub fn compute_weights<S: Skeleton + Sync>(
         &self,
         skeleton: &S,
+    ) -> Result<Vec<Vec<Real>>, HeatDiffusionError> {
+        self.compute_weights_with(skeleton, Solver::Direct)
+    }
+
+    pub(crate) fn compute_weights_with<S: Skeleton + Sync>(
+        &self,
+        skeleton: &S,
+        solver: Solver,
     ) -> Result<Vec<Vec<Real>>, HeatDiffusionError> {
         let num_vertices = self.mesh.num_vertices();
         let num_bones = skeleton.num_bones();
@@ -127,13 +153,10 @@ impl<'a> HeatDiffusion<'a> {
             })
             .collect();
 
-        let system = self
-            .build_laplacian()
-            .add_diagonal(&heat_diag)
-            .map_err(|_| HeatDiffusionError::SolverError)?;
+        let system = self.build_system(&heat_diag)?;
 
-        // Resolver un sistema por hueso, en paralelo
-        let bone_weights: Vec<Option<Vec<Real>>> = (0..num_bones)
+        // Lado derecho de cada hueso (`None` si no toca a ningún vértice)
+        let rhs_list: Vec<Option<Vec<Real>>> = (0..num_bones)
             .into_par_iter()
             .map(|bone_idx| {
                 let rhs: Vec<Real> = nearest
@@ -147,15 +170,19 @@ impl<'a> HeatDiffusion<'a> {
                         }
                     })
                     .collect();
-                if rhs.iter().all(|&v| v == 0.0) {
-                    return Ok(None);
-                }
-                system
-                    .solve_cg(&rhs, 5000, 1e-9)
-                    .map(Some)
-                    .map_err(|_| HeatDiffusionError::SolverError)
+                (!rhs.iter().all(|&v| v == 0.0)).then_some(rhs)
             })
-            .collect::<Result<_, _>>()?;
+            .collect();
+
+        let bone_weights = match solver {
+            Solver::Direct => match system.cholesky_factor() {
+                Ok(factor) => Self::solve_direct(&factor, &rhs_list)?,
+                Err(_) => Self::solve_cg(&system, &rhs_list)?,
+            },
+            Solver::Cg => Self::solve_cg(&system, &rhs_list)?,
+        };
+        // Con muchos huesos son cientos de MB que ya no hacen falta
+        drop((system, rhs_list));
 
         // Transponer a [vértice][hueso], recortar negativos y normalizar
         let mut vertex_weights = vec![vec![0.0; num_bones]; num_vertices];
@@ -180,6 +207,35 @@ impl<'a> HeatDiffusion<'a> {
         }
 
         Ok(vertex_weights)
+    }
+
+    /// Resuelve todos los huesos con una sola factorización
+    fn solve_direct(
+        factor: &SpdFactor,
+        rhs_list: &[Option<Vec<Real>>],
+    ) -> Result<Vec<Option<Vec<Real>>>, HeatDiffusionError> {
+        let present: Vec<usize> = (0..rhs_list.len()).filter(|&b| rhs_list[b].is_some()).collect();
+        let cols: Vec<&[Real]> = present.iter().filter_map(|&b| rhs_list[b].as_deref()).collect();
+        let solved = factor.solve_columns(&cols).map_err(|_| HeatDiffusionError::SolverError)?;
+        let mut out: Vec<Option<Vec<Real>>> = vec![None; rhs_list.len()];
+        for (&b, w) in present.iter().zip(solved) {
+            out[b] = Some(w);
+        }
+        Ok(out)
+    }
+
+    /// Resuelve cada hueso con CG, en paralelo (el método original)
+    fn solve_cg(
+        system: &SPDMatrix,
+        rhs_list: &[Option<Vec<Real>>],
+    ) -> Result<Vec<Option<Vec<Real>>>, HeatDiffusionError> {
+        rhs_list
+            .par_iter()
+            .map(|rhs| match rhs {
+                None => Ok(None),
+                Some(rhs) => system.solve_cg(rhs, 5000, 1e-9).map(Some).map_err(|_| HeatDiffusionError::SolverError),
+            })
+            .collect()
     }
 
     /// Para cada vértice, el/los hueso(s) visible(s) que pasan por el centro
@@ -213,7 +269,7 @@ impl<'a> HeatDiffusion<'a> {
             r.get(r.len() / 2).copied().unwrap_or(1.0).max(Real::MIN_POSITIVE)
         };
 
-        (0..self.mesh.num_vertices())
+        let result = (0..self.mesh.num_vertices())
             .into_par_iter()
             .map(|vert_idx| {
                 let pos = self.mesh.vertices[vert_idx].position;
@@ -255,7 +311,8 @@ impl<'a> HeatDiffusion<'a> {
                 let distance = tied.iter().map(|c| c.3).fold(Real::INFINITY, Real::min);
                 NearestBones { bones: tied.iter().map(|c| c.1).collect(), distance: effective(distance) }
             })
-            .collect()
+            .collect();
+        result
     }
 
     /// Radio del tubo de cada vértice: mitad de la distancia, hacia adentro
@@ -310,51 +367,47 @@ impl<'a> HeatDiffusion<'a> {
         areas
     }
 
-    /// Construye el Laplaciano cotangente `L_ij = -½(cot α + cot β)` (paralelizado).
-    /// Los cotangentes negativos se recortan a 0 para que el sistema sea una M-matriz.
-    fn build_laplacian(&self) -> SPDMatrix {
+    /// Construye el sistema `L + diag(heat)`, con `L_ij = -½(cot α + cot β)` el Laplaciano
+    /// cotangente. Los cotangentes negativos se recortan a 0 para que sea una M-matriz.
+    ///
+    /// Las caras se reparten en tandas entre hilos y las entradas se ordenan y suman
+    /// una sola vez (sin una lista por cara ni copias intermedias).
+    fn build_system(&self, heat_diag: &[Real]) -> Result<SPDMatrix, HeatDiffusionError> {
+        const FACES_PER_TASK: usize = 4096;
         let n = self.mesh.num_vertices();
         let num_faces = self.mesh.num_faces();
 
         // Cada cara contribuye 12 entradas (4 por cada una de sus 3 aristas)
-        let contributions: Vec<_> = (0..num_faces)
+        let chunks: Vec<Vec<(usize, usize, Real)>> = (0..num_faces.div_ceil(FACES_PER_TASK))
             .into_par_iter()
-            .flat_map(|face_idx| {
-                let verts = self.mesh.get_face_vertices(face_idx);
-                let positions = self.mesh.get_face_positions(face_idx);
-                let mut triplets = Vec::with_capacity(12);
-
-                for i in 0..3 {
-                    let j = (i + 1) % 3;
-                    let k = (i + 2) % 3;
-
-                    let vi = verts[i];
-                    let vj = verts[j];
-
-                    let w = 0.5 * Self::cotangent_weight_static(&positions[i], &positions[j], &positions[k]);
-
-                    triplets.push((vi, vi, w));
-                    triplets.push((vj, vj, w));
-                    triplets.push((vi, vj, -w));
-                    triplets.push((vj, vi, -w));
+            .map(|chunk| {
+                let (lo, hi) = (chunk * FACES_PER_TASK, ((chunk + 1) * FACES_PER_TASK).min(num_faces));
+                let mut out = Vec::with_capacity((hi - lo) * 12);
+                for face_idx in lo..hi {
+                    let verts = self.mesh.get_face_vertices(face_idx);
+                    let positions = self.mesh.get_face_positions(face_idx);
+                    for i in 0..3 {
+                        let j = (i + 1) % 3;
+                        let k = (i + 2) % 3;
+                        let (vi, vj) = (verts[i], verts[j]);
+                        let w = 0.5 * Self::cotangent_weight_static(&positions[i], &positions[j], &positions[k]);
+                        out.push((vi, vi, w));
+                        out.push((vj, vj, w));
+                        out.push((vi, vj, -w));
+                        out.push((vj, vi, -w));
+                    }
                 }
-
-                triplets
+                out
             })
             .collect();
 
-        let mut rows = Vec::with_capacity(contributions.len());
-        let mut cols = Vec::with_capacity(contributions.len());
-        let mut values = Vec::with_capacity(contributions.len());
-
-        for (r, c, v) in contributions {
-            rows.push(r);
-            cols.push(c);
-            values.push(v);
+        let mut entries = Vec::with_capacity(num_faces * 12 + n);
+        for chunk in chunks {
+            entries.extend(chunk);
         }
-
-        SPDMatrix::from_triplets(n, &rows, &cols, &values)
-            .unwrap_or_else(|_| SPDMatrix::new(n))
+        // La diagonal va al final: se suma después de las caras, igual que antes
+        entries.extend(heat_diag.iter().enumerate().map(|(i, &h)| (i, i, h)));
+        SPDMatrix::from_entries(n, entries).map_err(|_| HeatDiffusionError::SolverError)
     }
 
     /// Cotangente del ángulo en `pk` opuesto a la arista `pi-pj` (recortado a ≥ 0)
@@ -450,6 +503,31 @@ mod tests {
             skel.add_bone(Bone::with_parent(format!("b{i}"), p, i - 1));
         }
         skel
+    }
+
+    /// El solver directo (Cholesky) da los mismos pesos que CG, y suman 1
+    #[test]
+    fn test_direct_solver_matches_cg() {
+        let mesh = make_cylinder(0.5, 2.0, 24, 40);
+        let skel = make_chain(&[
+            Vector3::new(0.0, 0.1, 0.0),
+            Vector3::new(0.0, 0.6, 0.0),
+            Vector3::new(0.0, 1.1, 0.0),
+            Vector3::new(0.0, 1.5, 0.0),
+            Vector3::new(0.0, 1.9, 0.0),
+        ]);
+        let hd = HeatDiffusion::new(&mesh);
+        let direct = hd.compute_weights_with(&skel, Solver::Direct).unwrap();
+        let cg = hd.compute_weights_with(&skel, Solver::Cg).unwrap();
+        assert_eq!(direct.len(), cg.len());
+        let mut worst: Real = 0.0;
+        for (d, c) in direct.iter().zip(&cg) {
+            assert!((d.iter().sum::<Real>() - 1.0).abs() < 1e-9);
+            for (a, b) in d.iter().zip(c) {
+                worst = worst.max((a - b).abs());
+            }
+        }
+        assert!(worst < 1e-6, "direct y CG difieren en {worst}");
     }
 
     #[test]

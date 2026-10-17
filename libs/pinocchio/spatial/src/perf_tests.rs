@@ -139,7 +139,7 @@ fn perf_bvh_build() {
     let (pos, idx) = icosphere(subdivisions());
     let (ms, bvh) = bench(|| Bvh::build(triangles(&pos, &idx)));
     assert_eq!(bvh.num_triangles(), idx.len());
-    report("bvh_build", 1, idx.len(), ms);
+    report("bvh_build", rayon::current_num_threads(), idx.len(), ms);
 }
 
 #[test]

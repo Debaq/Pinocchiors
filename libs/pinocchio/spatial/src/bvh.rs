@@ -4,6 +4,7 @@
 //! distancia punto-malla de O(n) a O(log n).
 
 use pinocchio_math::{Real, Rect, Vector3};
+use rayon::prelude::*;
 
 /// Nodo del BVH
 #[derive(Debug, Clone)]
@@ -81,8 +82,10 @@ impl Bvh {
             return Self { root: None, triangles };
         }
 
-        let indices: Vec<usize> = (0..triangles.len()).collect();
-        let root = Self::build_recursive(&triangles, indices);
+        // Las cajas se calculan una vez (antes se recalculaban en cada nivel del árbol)
+        let tri_bounds: Vec<Rect> = triangles.par_iter().map(Triangle::bounds).collect();
+        let mut indices: Vec<usize> = (0..triangles.len()).collect();
+        let root = Self::build_recursive(&triangles, &tri_bounds, &mut indices);
 
         Self {
             root: Some(root),
@@ -90,18 +93,23 @@ impl Bvh {
         }
     }
 
-    fn build_recursive(triangles: &[Triangle], indices: Vec<usize>) -> BvhNode {
+    /// Por debajo de este tamaño un subárbol se construye en el hilo que lo recibe
+    const PAR_BUILD_MIN: usize = 2048;
+
+    /// Construye el subárbol de `indices` (se reordena in situ). El resultado no depende
+    /// del número de hilos: mismo eje, mismo orden estable y mismo corte por la mitad.
+    fn build_recursive(triangles: &[Triangle], tri_bounds: &[Rect], indices: &mut [usize]) -> BvhNode {
         if indices.len() == 1 {
             let idx = indices[0];
             return BvhNode::Leaf {
-                bounds: triangles[idx].bounds(),
+                bounds: tri_bounds[idx],
                 triangle_idx: idx,
             };
         }
 
         // Calcular bounds de todos los triángulos
         let bounds = indices.iter()
-            .map(|&i| triangles[i].bounds())
+            .map(|&i| tri_bounds[i])
             .fold(Rect::empty(), |acc, b| acc.union(&b));
 
         // Elegir eje de división basado en la extensión máxima
@@ -114,9 +122,8 @@ impl Bvh {
             2 // Z
         };
 
-        // Ordenar por centroide en el eje elegido
-        let mut sorted_indices = indices;
-        sorted_indices.sort_by(|&a, &b| {
+        // Ordenar (de forma estable) por centroide en el eje elegido
+        let compare = |&a: &usize, &b: &usize| {
             let ca = &triangles[a].centroid;
             let cb = &triangles[b].centroid;
             let va = match axis {
@@ -130,14 +137,29 @@ impl Bvh {
                 _ => cb.z(),
             };
             va.partial_cmp(&vb).unwrap_or(std::cmp::Ordering::Equal)
-        });
+        };
+        let parallel = indices.len() >= Self::PAR_BUILD_MIN;
+        if parallel {
+            indices.par_sort_by(compare);
+        } else {
+            indices.sort_by(compare);
+        }
 
         // Dividir en dos mitades
-        let mid = sorted_indices.len() / 2;
-        let (left_indices, right_indices) = sorted_indices.split_at(mid);
+        let mid = indices.len() / 2;
+        let (left_indices, right_indices) = indices.split_at_mut(mid);
 
-        let left = Self::build_recursive(triangles, left_indices.to_vec());
-        let right = Self::build_recursive(triangles, right_indices.to_vec());
+        let (left, right) = if parallel {
+            rayon::join(
+                || Self::build_recursive(triangles, tri_bounds, left_indices),
+                || Self::build_recursive(triangles, tri_bounds, right_indices),
+            )
+        } else {
+            (
+                Self::build_recursive(triangles, tri_bounds, left_indices),
+                Self::build_recursive(triangles, tri_bounds, right_indices),
+            )
+        };
 
         BvhNode::Internal {
             bounds,
@@ -483,6 +505,68 @@ fn ray_hits_bounds(bounds: &Rect, origin: &Vector3, inv_dir: &Vector3, t_min: Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// El algoritmo de construcción original (ordenar por completo en cada nivel, en un hilo)
+    fn build_reference(triangles: &[Triangle], mut indices: Vec<usize>) -> BvhNode {
+        if indices.len() == 1 {
+            let idx = indices[0];
+            return BvhNode::Leaf { bounds: triangles[idx].bounds(), triangle_idx: idx };
+        }
+        let bounds = indices.iter().map(|&i| triangles[i].bounds()).fold(Rect::empty(), |acc, b| acc.union(&b));
+        let size = bounds.size();
+        let axis = if size.x() >= size.y() && size.x() >= size.z() { 0 } else if size.y() >= size.z() { 1 } else { 2 };
+        indices.sort_by(|&a, &b| {
+            let (ca, cb) = (&triangles[a].centroid, &triangles[b].centroid);
+            let pick = |c: &Vector3| match axis { 0 => c.x(), 1 => c.y(), _ => c.z() };
+            pick(ca).partial_cmp(&pick(cb)).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let mid = indices.len() / 2;
+        let (l, r) = indices.split_at(mid);
+        BvhNode::Internal {
+            bounds,
+            left: Box::new(build_reference(triangles, l.to_vec())),
+            right: Box::new(build_reference(triangles, r.to_vec())),
+        }
+    }
+
+    fn same_tree(a: &BvhNode, b: &BvhNode) -> bool {
+        match (a, b) {
+            (BvhNode::Leaf { bounds: ba, triangle_idx: ia }, BvhNode::Leaf { bounds: bb, triangle_idx: ib }) => ia == ib && ba == bb,
+            (BvhNode::Internal { bounds: ba, left: la, right: ra }, BvhNode::Internal { bounds: bb, left: lb, right: rb }) => {
+                ba == bb && same_tree(la, lb) && same_tree(ra, rb)
+            }
+            _ => false,
+        }
+    }
+
+    /// Rejilla regular de triángulos: muchos centroides empatan en cada eje
+    fn grid_triangles(n: usize) -> Vec<Triangle> {
+        let mut out = Vec::new();
+        for i in 0..n {
+            for j in 0..n {
+                let (x, z) = (i as Real, j as Real);
+                let (a, b, c, d) = (
+                    Vector3::new(x, 0.0, z),
+                    Vector3::new(x + 1.0, 0.0, z),
+                    Vector3::new(x, 0.0, z + 1.0),
+                    Vector3::new(x + 1.0, 0.0, z + 1.0),
+                );
+                out.push(Triangle::new(a, b, c));
+                out.push(Triangle::new(b, d, c));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn parallel_build_gives_the_same_tree_as_the_original_algorithm() {
+        // 2 · 70² = 9800 triángulos: supera PAR_BUILD_MIN y hay empates en todos los ejes
+        let triangles = grid_triangles(70);
+        let reference = build_reference(&triangles, (0..triangles.len()).collect());
+        let bvh = Bvh::build(triangles);
+        assert!(same_tree(bvh.root.as_ref().unwrap(), &reference), "el árbol cambió");
+    }
+
 
     #[test]
     fn ray_with_negative_zero_sees_boxes_touching_its_origin() {
