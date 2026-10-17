@@ -28,7 +28,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      - run: cargo test --workspace --locked
+      - run: cargo test --workspace --locked --no-fail-fast
 
   clippy:
     name: Clippy (avisos de estilo)
