@@ -54,6 +54,7 @@ CadShape* cad_split_keep(const CadShape* s, const double* o, const double* n) { 
 CadShape* cad_from_mesh(const double* v, int32_t nv, const int32_t* t, int32_t nt, double tol) { (void)v; (void)nv; (void)t; (void)nt; (void)tol; FAIL_PTR; }
 int32_t cad_count_faces(const CadShape* s) { (void)s; FAIL_INT; }
 int32_t cad_count_edges(const CadShape* s) { (void)s; FAIL_INT; }
+int32_t cad_face_classes(const CadShape* s, CadFaceClass* o, int32_t n) { (void)s; (void)o; (void)n; FAIL_INT; }
 int32_t cad_face_info(const CadShape* s, int32_t i, CadFaceInfo* o) { (void)s; (void)i; (void)o; FAIL_INT; }
 int32_t cad_edge_info(const CadShape* s, int32_t i, CadEdgeInfo* o) { (void)s; (void)i; (void)o; FAIL_INT; }
 int32_t cad_edge_faces(const CadShape* s, int32_t e, int32_t* o) { (void)s; (void)e; (void)o; FAIL_INT; }
