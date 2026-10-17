@@ -60,6 +60,8 @@ fn bench<T>(name: &str, tris: usize, mut f: impl FnMut() -> T) -> T {
             times.push(t.elapsed().as_secs_f64() * 1e3);
         }
         times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        // La primera corrida (fría) puede diferir de las siguientes por la memoria que ya tiene el proceso
+        eprintln!("  ({name}: primera corrida {warm:.0} ms, siguientes {times:.0?} ms)");
         times[1]
     };
     println!("PERF crate={CRATE} bench={name} threads={} tris={tris} ms={ms:.2}", rayon::current_num_threads());
@@ -162,6 +164,21 @@ fn perf_isotropic() {
     let n = out.indices.len() / 3;
     assert!(n > target / 3 && n < target * 3, "pedidos ~{target}, salieron {n}");
     assert!(is_closed(&out.indices));
+    println!("CHECK isotropic hash={:016x} vertices={} triangulos={}", checksum(&out.positions, &out.indices), out.positions.len(), n);
+}
+
+/// Suma de comprobación (FNV-1a) de una malla de salida: sirve para comprobar que un cambio de
+/// rendimiento no altera el resultado
+fn checksum(positions: &[[f32; 3]], indices: &[u32]) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    let mut mix = |v: u64| hash = (hash ^ v).wrapping_mul(0x100000001b3);
+    for p in positions.iter().flatten() {
+        mix(p.to_bits() as u64);
+    }
+    for &i in indices {
+        mix(i as u64);
+    }
+    hash
 }
 
 #[test]
@@ -173,6 +190,7 @@ fn perf_voxel() {
     let out = bench("voxel_smooth2", t.len() / 3, || voxel(&p, &t, &opts).unwrap());
     assert!(!out.indices.is_empty());
     assert!(is_closed(&out.indices), "los vóxeles deben dar una malla cerrada");
+    println!("CHECK voxel_smooth2 hash={:016x} vertices={} triangulos={}", checksum(&out.positions, &out.indices), out.positions.len(), out.indices.len() / 3);
 }
 
 #[test]
@@ -192,6 +210,7 @@ fn perf_voxel_isotropic() {
     let out = bench("voxel_plus_isotropic", t.len() / 3, || voxel(&p, &t, &opts).unwrap());
     assert!(!out.indices.is_empty());
     assert!(is_closed(&out.indices));
+    println!("CHECK voxel_plus_isotropic hash={:016x} vertices={} triangulos={}", checksum(&out.positions, &out.indices), out.positions.len(), out.indices.len() / 3);
 }
 
 #[test]
