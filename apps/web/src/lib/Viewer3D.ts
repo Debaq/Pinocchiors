@@ -22,6 +22,7 @@ import { installDqSkinning, setDqSkinning } from "./dqSkinning";
 import { installAutoSmooth, setAutoSmooth } from "./autoSmooth";
 import { LightRig, configureRenderer, type LightSettings } from "./lightRig";
 import { buildGridLines } from "./gridLines";
+import { disposeBvh, ensureBvh, markBvhStale, pickMesh } from "./meshBvh";
 import { skinAttributes, type AnimationLodData } from "./lod";
 import { isMotionFrame, MOTION_REST_MS, qualityScale } from "./adaptiveQuality";
 import { t as tr } from "./i18n.ts";
@@ -766,6 +767,8 @@ export class Viewer3D {
 
     // Raycaster
     this.raycaster = new THREE.Raycaster();
+    // Solo lo leen las mallas con BVH (meshBvh.ts): devuelven el impacto más cercano sin juntar todos
+    this.raycaster.firstHitOnly = true;
     this.mouse = new THREE.Vector2();
 
     // Event listeners
@@ -1566,7 +1569,7 @@ export class Viewer3D {
     const target = this.paintableMesh();
     if (!target) return null;
     this.raycaster.setFromCamera(this.getMousePosition(event), this.camera);
-    return this.raycaster.intersectObject(target)[0] ?? null;
+    return pickMesh(this.raycaster, target);
   }
 
   private brushRadius(): number {
@@ -2645,6 +2648,7 @@ export class Viewer3D {
       mesh.geometry.getAttribute("position").needsUpdate = true;
       mesh.geometry.getAttribute("normal").needsUpdate = true;
       mesh.geometry.computeBoundingSphere();
+      markBvhStale(mesh); // los vértices cambiaron: el BVH se ajusta (refit) en el próximo picking
     }
   }
 
@@ -2674,6 +2678,7 @@ export class Viewer3D {
     this.weightsData = null;
     if (this.weightsMesh) {
       this.meshGroup.remove(this.weightsMesh);
+      disposeBvh(this.weightsMesh);
       this.weightsMesh.geometry.dispose();
       (this.weightsMesh.material as THREE.Material).dispose();
       this.weightsMesh = null;
@@ -3144,6 +3149,7 @@ export class Viewer3D {
       (o): o is THREE.Mesh =>
         o instanceof THREE.Mesh && o.visible && o !== this.currentWireframe && o !== this.rig?.wireframe
     );
+    for (const m of targets) if (m === this.currentMesh || m === this.weightsMesh) ensureBvh(m);
     // Se mide sobre la malla completa, no sobre el LOD de la animación
     const hit = this.withFullMesh(() => this.raycaster.intersectObjects(targets, false)[0]);
     if (!hit) return;
@@ -3892,6 +3898,7 @@ export class Viewer3D {
     // Remove existing weights mesh
     if (this.weightsMesh) {
       this.meshGroup.remove(this.weightsMesh);
+      disposeBvh(this.weightsMesh);
       this.weightsMesh.geometry.dispose();
       (this.weightsMesh.material as THREE.Material).dispose();
       this.weightsMesh = null;
@@ -5312,6 +5319,7 @@ export class Viewer3D {
     }
     if (this.currentMesh) {
       this.meshGroup.remove(this.currentMesh);
+      disposeBvh(this.currentMesh);
       this.currentMesh.geometry.dispose();
       this.disposeMaterial(this.currentMesh.material);
       this.currentMesh = null;
@@ -5334,6 +5342,7 @@ export class Viewer3D {
 
     if (this.weightsMesh) {
       this.meshGroup.remove(this.weightsMesh);
+      disposeBvh(this.weightsMesh);
       this.weightsMesh.geometry.dispose();
       (this.weightsMesh.material as THREE.Material).dispose();
       this.weightsMesh = null;
@@ -5512,7 +5521,7 @@ export class Viewer3D {
     const mesh = this.currentMesh;
     if (!mesh?.visible) return null;
     this.raycaster.setFromCamera(this.getMousePosition(e), this.camera);
-    const hit = this.raycaster.intersectObject(mesh)[0];
+    const hit = pickMesh(this.raycaster, mesh);
     return hit?.faceIndex != null ? this.dataFace(hit.faceIndex) : null;
   }
 
@@ -5615,7 +5624,7 @@ export class Viewer3D {
     const mesh = this.currentMesh;
     if (!mesh?.visible || !this.meshData?.groupNodes) return;
     this.raycaster.setFromCamera(this.getMousePosition(e), this.camera);
-    const hit = this.raycaster.intersectObject(mesh)[0];
+    const hit = pickMesh(this.raycaster, mesh);
     const node = hit?.faceIndex != null ? this.nodeOfFace(hit.faceIndex) : null;
     this.setHoveredNodes(node === null ? [] : [node]);
   }
@@ -5640,7 +5649,7 @@ export class Viewer3D {
       const mesh = this.currentMesh;
       if (!mesh?.visible || !this.meshData?.groupNodes) return;
       this.raycaster.setFromCamera(this.getMousePosition(e), this.camera);
-      const hit = this.raycaster.intersectObject(mesh)[0];
+      const hit = pickMesh(this.raycaster, mesh);
       const node = hit?.faceIndex != null ? this.nodeOfFace(hit.faceIndex) : null;
       this.callbacks.onNodesPicked?.(node === null ? [] : [node], node === null ? "set" : e.shiftKey ? "toggle" : e.ctrlKey || e.metaKey ? "remove" : "set");
       return;
@@ -5685,6 +5694,7 @@ export class Viewer3D {
     this.mouse = this.getMousePosition(event);
     this.raycaster.setFromCamera(this.mouse, this.camera);
     const solids = [...this.scene.children].filter((o) => o.visible && (o as THREE.Mesh).isMesh);
+    for (const m of [this.currentMesh, this.weightsMesh]) if (m?.visible) ensureBvh(m);
     if (!this.raycaster.intersectObjects(solids, true)[0]) {
       this.homeView();
       return;
@@ -5694,7 +5704,7 @@ export class Viewer3D {
     this.mouse = this.getMousePosition(event);
     this.raycaster.setFromCamera(this.mouse, this.camera);
     if (this.boneSpheres.some((s) => s.visible) && this.raycaster.intersectObjects(this.boneSpheres.filter((s) => s.visible))[0]) return;
-    const hit = this.raycaster.intersectObject(mesh)[0];
+    const hit = pickMesh(this.raycaster, mesh);
     if (hit?.faceIndex === undefined || hit.faceIndex === null) return;
     const node = this.nodeOfFace(hit.faceIndex);
     if (node !== null) this.callbacks.onNodePicked(node);
@@ -5769,6 +5779,7 @@ export class Viewer3D {
       }
     }
     this.weightsMesh?.geometry.setIndex(new THREE.BufferAttribute(this.visibleIndex(), 1));
+    disposeBvh(this.weightsMesh); // el índice cambió: se reconstruye al próximo picking
   }
 
   setHighlightedNodes(nodes: number[]): void {
