@@ -31,6 +31,8 @@ export interface RayExtras {
   /** Muestras por píxel */
   samples: number;
   denoise: boolean;
+  /** Exposición antes de la curva de tono (1 = sin cambio) */
+  exposure?: number;
   /** Imagen HDR de entorno (ruta a un .hdr); sin ella, el cielo uniforme del visor */
   hdri?: { path: string; intensity: number; rotationDeg: number };
 }
@@ -190,6 +192,7 @@ function buildRequest(view: RayView, opts: RenderStillOptions, extras: RayExtras
     sunAngularRadius: SUN_ANGULAR_RADIUS,
     // Misma curva de tono que el visor, para que el motor y el visor den el mismo tono
     toneMap: true,
+    exposure: extras.exposure ?? 1,
     shadowFloor: opts.groundShadow && !studio ? SHADOW_FLOOR_STRENGTH : null,
     studio: studio ? { color: hexToLinear(studio.color), gloss: studio.gloss } : null,
     hdri: extras.hdri ?? null,

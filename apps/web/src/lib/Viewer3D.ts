@@ -22,6 +22,7 @@ import { installDqSkinning, setDqSkinning } from "./dqSkinning";
 import { installAutoSmooth, setAutoSmooth } from "./autoSmooth";
 import { LightRig, configureRenderer, type LightSettings } from "./lightRig";
 import { buildGridLines } from "./gridLines";
+import { QuadViews } from "./quadViews";
 import { disposeBvh, ensureBvh, markBvhStale, pickMesh } from "./meshBvh";
 import { skinAttributes, type AnimationLodData } from "./lod";
 import { isMotionFrame, MOTION_REST_MS, qualityScale } from "./adaptiveQuality";
@@ -548,6 +549,8 @@ export class Viewer3D {
   /** Suelta de una vez los listeners globales en `dispose` */
   private readonly listeners = new AbortController();
   private resizeObserver: ResizeObserver | null = null;
+  /** Cuatro vistas: las otras tres (ortográficas); null con la vista única */
+  private quad: QuadViews | null = null;
   /** El último clic derecho canceló una operación modal */
   private suppressContextMenu = false;
   /** Dónde se apretó el derecho (sin moverse al soltar: menú) */
@@ -619,6 +622,17 @@ export class Viewer3D {
   private cloudPointSize = 2;
   private cloudTool: CloudSelectTool | null = null;
   private cloudBrushPx = 30;
+  private cloudVisibleOnly = true;
+  /** Recorte por caja o plano: el objeto con el gizmo y qué lado se toma */
+  private cloudClip: { shape: "box" | "plane"; object: THREE.Group; controls: TransformControls; invert: boolean } | null = null;
+  /** Alineación a mano: parejas de puntos (mm de la nube) marcadas en la toma activa y en las demás */
+  private cloudPairs: { on: boolean; from: [number, number, number][]; to: [number, number, number][]; markers: THREE.Points[] } = {
+    on: false,
+    from: [],
+    to: [],
+    markers: [],
+  };
+  private cloudPairListener: ((from: number, to: number) => void) | null = null;
   /** Selección en curso: modo, trazo en px del lienzo y proyección de la nube */
   private cloudDrag: {
     mode: "set" | "add" | "remove";
@@ -913,6 +927,57 @@ export class Viewer3D {
     }, { signal });
   }
 
+  /** Ajuste al mover con el gizmo: a las celdas de la grilla o al vértice más cercano */
+  private gizmoSnap: "off" | "grid" | "vertex" = "off";
+  private gridStepScene = 0;
+
+  setGizmoSnap(mode: "off" | "grid" | "vertex"): void {
+    this.gizmoSnap = mode;
+    this.applyTranslationSnap();
+  }
+
+  private applyTranslationSnap(): void {
+    const snap = this.gizmoSnap === "grid" && this.gridStepScene > 0 ? this.gridStepScene : null;
+    if (this.transformControls && this.transformControls.translationSnap !== snap) this.transformControls.setTranslationSnap(snap);
+  }
+
+  /**
+   * Con el ajuste a vértices, lo que se arrastra (articulación, esqueleto, control) salta al vértice
+   * de la malla más cercano si está a menos del 3 % del tamaño del modelo; el modelo entero se
+   * ajusta a los vértices de los otros objetos. Busca por distancia en 3D (sin proyectar).
+   */
+  private snapToVertex(object: THREE.Object3D): void {
+    if (this.gizmoSnap !== "vertex") return;
+    const wholeObject = object === this.objectPivot;
+    const sources = wholeObject ? (this.ghostGroup.children as THREE.Mesh[]) : this.currentMesh ? [this.currentMesh] : [];
+    if (sources.length === 0) return;
+    const world = object.getWorldPosition(new THREE.Vector3());
+    const mesh0 = this.currentMesh ?? sources[0];
+    const diag = new THREE.Box3().setFromObject(mesh0).getSize(new THREE.Vector3()).length();
+    const limit2 = (0.03 * diag) ** 2;
+    let best: THREE.Vector3 | null = null;
+    let bestD = limit2;
+    const p = new THREE.Vector3();
+    for (const mesh of sources) {
+      const attr = mesh.geometry?.getAttribute?.("position");
+      if (!attr) continue;
+      mesh.updateWorldMatrix(true, false);
+      const stride = Math.max(1, Math.ceil(attr.count / 300_000));
+      for (let i = 0; i < attr.count; i += stride) {
+        p.fromBufferAttribute(attr, i).applyMatrix4(mesh.matrixWorld);
+        const d = p.distanceToSquared(world);
+        if (d < bestD) {
+          bestD = d;
+          best = (best ?? new THREE.Vector3()).copy(p);
+        }
+      }
+    }
+    if (!best) return;
+    // De mundo a lo local del padre del objeto
+    object.parent?.updateWorldMatrix(true, false);
+    object.position.copy(object.parent ? object.parent.worldToLocal(best) : best);
+  }
+
   /** Con Ctrl el gizmo gira de a 5° (Ctrl+Shift, 15°) */
   private updateGizmoSnap(): void {
     const controls = this.transformControls;
@@ -985,6 +1050,10 @@ export class Viewer3D {
     if (e.button !== 0 || e.altKey) return;
     if (this.keysDown.has("l")) {
       this.onLightDown(e);
+      return;
+    }
+    if (this.cloudPairs.on && this.cloud && this.cloudFocus) {
+      this.onCloudPairDown(e);
       return;
     }
     if (this.cloudTool && this.cloud && this.cloudFocus) {
@@ -1782,11 +1851,43 @@ export class Viewer3D {
     // Ventana minimizada o panel plegado: 0/0 dejaría la cámara con NaN
     if (!width || !height) return;
 
-    this.camera.aspect = width / height;
+    // Con cuatro vistas, la principal ocupa un cuadrante
+    const k = this.quad ? 0.5 : 1;
+    const w = Math.max(1, Math.floor(width * k));
+    const h = Math.max(1, Math.floor(height * k));
+    this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
-    this.renderer.setSize(width, height);
-    this.glowHalo?.setSize(width, height);
+    this.renderer.setSize(w, h);
+    this.glowHalo?.setSize(w, h);
     this.updateRenderFrame();
+  }
+
+  /** Cuatro vistas (principal, superior, frontal y derecha) o la vista única */
+  setQuadView(on: boolean): void {
+    if (on === (this.quad !== null)) return;
+    if (on) {
+      const host = this.canvas.parentElement;
+      if (!host) return;
+      this.quad = new QuadViews(
+        host,
+        this.renderer,
+        this.scene,
+        () => {
+          const box = this.cloudBox() ?? (this.currentMesh ? new THREE.Box3().setFromObject(this.currentMesh) : this.skeletonBox());
+          return box && !box.isEmpty() ? box.getBoundingSphere(new THREE.Sphere()) : null;
+        },
+        (dir) => this.lookFrom([dir.x, dir.y, dir.z]),
+        () => this.requestRender(),
+      );
+    } else {
+      this.quad?.dispose();
+      this.quad = null;
+    }
+    this.onResize();
+  }
+
+  get quadView(): boolean {
+    return this.quad !== null;
   }
 
   /** Pide un cuadro; varias peticiones antes del próximo se juntan en uno */
@@ -1833,7 +1934,7 @@ export class Viewer3D {
     const now = performance.now();
     const moving = isMotionFrame(now, this.lastMotionAt);
     // Con halo de brillo o cuatro vistas hay otros búferes con su propio tamaño: no se tocan
-    const blocked = this.glowMaterials !== null;
+    const blocked = this.glowMaterials !== null || this.quad !== null;
     this.applyQualityScale(qualityScale(this.adaptiveQuality, moving, blocked));
     if (this.motionTimer !== null) clearTimeout(this.motionTimer);
     this.motionTimer = null;
@@ -1862,6 +1963,7 @@ export class Viewer3D {
     // Si la cámara sigue amortiguando, su evento "change" pide el siguiente
     this.controls.update();
     this.trackMotion();
+    this.quad?.render();
     this.renderer.render(this.scene, this.camera);
     this.renderGlow();
     this.cameraRig.renderCube(this.renderer);
@@ -1990,6 +2092,64 @@ export class Viewer3D {
     this.previewOverlay = new THREE.Mesh(geometry, material);
     this.previewOverlay.renderOrder = 2;
     this.meshGroup.add(this.previewOverlay);
+  }
+
+  /** La malla con que se compara la actual (retopología), al lado: sólida y con su alambre */
+  private compareGroup: THREE.Group | null = null;
+
+  /**
+   * Pone `data` junto a la malla actual, a su derecha, para compararlas a simple vista. El alambre
+   * es el de los quads si los trae. `null` la quita.
+   */
+  setCompareMesh(data: MeshData | null): void {
+    if (this.compareGroup) {
+      this.scene.remove(this.compareGroup);
+      this.compareGroup.traverse((o) => {
+        if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments) {
+          o.geometry.dispose();
+          (o.material as THREE.Material).dispose();
+        }
+      });
+      this.compareGroup = null;
+    }
+    const base = this.currentMesh;
+    if (!data || !base) return;
+    const baseBox = new THREE.Box3().setFromObject(base);
+    const box = new THREE.Box3().setFromArray(data.positions);
+    const gap = 0.15 * Math.max(baseBox.getSize(new THREE.Vector3()).x, box.getSize(new THREE.Vector3()).x);
+    // A la derecha de la actual, alineada por el piso y el centro de profundidad
+    const shift = new THREE.Vector3(
+      baseBox.max.x + gap - box.min.x,
+      baseBox.min.y - box.min.y,
+      (baseBox.min.z + baseBox.max.z) / 2 - (box.min.z + box.max.z) / 2,
+    );
+    const group = new THREE.Group();
+    group.position.copy(shift);
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.BufferAttribute(data.positions, 3));
+    geometry.setAttribute("normal", new THREE.BufferAttribute(data.normals, 3));
+    geometry.setIndex(new THREE.BufferAttribute(data.indices, 1));
+    const solid = new THREE.Mesh(
+      geometry,
+      new THREE.MeshStandardMaterial({ color: themeHex("comment"), roughness: 0.8, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 }),
+    );
+    group.add(solid);
+    const wireColor = themeHex("accent");
+    if (data.quadIndices && data.quadIndices.length > 0) {
+      const lines = new THREE.LineSegments(this.createQuadWireframeGeometry(data.positions, data.quadIndices), new THREE.LineBasicMaterial({ color: wireColor }));
+      lines.renderOrder = 1;
+      group.add(lines);
+    } else {
+      const wire = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color: wireColor, wireframe: true, transparent: true, opacity: 0.5 }));
+      wire.renderOrder = 1;
+      group.add(wire);
+    }
+    this.compareGroup = group;
+    this.scene.add(group);
+    // La cámara abarca las dos
+    const both = baseBox.clone().union(box.clone().translate(shift));
+    this.cameraRig.frame(both.getBoundingSphere(new THREE.Sphere()));
+    this.placeLights();
   }
 
   /** Cuántos objetos en gris hay (para las pruebas) */
@@ -2881,6 +3041,7 @@ export class Viewer3D {
     controls.setSize(0.5);
     this.recolorGizmo(controls);
     this.scene.add(controls.getHelper());
+    this.applyTranslationSnap();
     // Resalta ejes al pasar el mouse sin pasar por métodos del visor
     controls.addEventListener("change", () => this.requestRender());
     // Solo arrastrar el gizmo es movimiento (el resaltado al pasar el mouse no)
@@ -2911,6 +3072,7 @@ export class Viewer3D {
 
     controls.addEventListener("objectChange", () => {
       const object = controls.object;
+      if (object && controls.getMode() === "translate") this.snapToVertex(object);
       if (object === this.objectPivot) {
         this.previewObjectGizmo();
         return;
@@ -3306,6 +3468,9 @@ export class Viewer3D {
       extent = Math.max(size.x, size.y, size.z) || extent;
     }
     const { step, major } = buildGridLines(this.grid, extent, toUnit);
+    // Celda en unidades de la escena, para el ajuste a la grilla del gizmo
+    this.gridStepScene = step / toUnit;
+    this.applyTranslationSnap();
 
     const format = (v: number) => `${Number(v.toPrecision(6)).toLocaleString()} ${unitLabel}`;
     this.callbacks.onGridChanged?.(tr("Grilla: {step} · líneas mayores {major}", { step: format(step), major: format(major) }));
@@ -3364,6 +3529,7 @@ export class Viewer3D {
 
   dispose(): void {
     this.restoreQuality();
+    this.quad?.dispose();
     this.listeners.abort();
     this.resizeObserver?.disconnect();
     this.glowHalo?.dispose();
@@ -3384,6 +3550,8 @@ export class Viewer3D {
     }
     this.clearMesh();
     this.clearSkeleton();
+    this.setCloudClip(null);
+    this.setCloudPairMode(false);
     this.clearCloud();
     this.cloudOverlay?.remove();
     this.selectionBox?.remove();
@@ -3461,6 +3629,8 @@ export class Viewer3D {
     this.applyCloudFocus();
     this.rebuildGrid();
     if (fit && this.cloud) this.fitCamera();
+    if (this.cloudClip) this.selectCloudClip();
+    this.drawCloudPairMarkers();
     this.notifyCloudSelection();
   }
 
@@ -3523,6 +3693,207 @@ export class Viewer3D {
     }
     this.recolorCloud();
     this.notifyCloudSelection();
+  }
+
+  // ── Recorte por caja o plano ──
+
+  /**
+   * Caja (se mueve y se escala) o plano (se mueve y se gira) con gizmo sobre la
+   * nube; lo que cae dentro de la caja, o del lado al que apunta el plano, queda
+   * seleccionado para borrarlo o conservarlo con el historial de siempre. `null`
+   * lo quita
+   */
+  setCloudClip(shape: "box" | "plane" | null): void {
+    if (this.cloudClip) {
+      const { object, controls } = this.cloudClip;
+      controls.detach();
+      this.scene.remove(controls.getHelper());
+      controls.dispose();
+      this.cloudGroup.remove(object);
+      object.traverse((o) => {
+        const m = o as THREE.Mesh;
+        m.geometry?.dispose();
+        (m.material as THREE.Material | undefined)?.dispose();
+      });
+      this.cloudClip = null;
+    }
+    const cloud = this.cloud;
+    if (!shape || !cloud) {
+      this.requestRender();
+      return;
+    }
+    const bb = cloud.points.geometry.boundingBox ?? new THREE.Box3();
+    const size = bb.getSize(new THREE.Vector3());
+    const center = bb.getCenter(new THREE.Vector3());
+    const group = new THREE.Group();
+    const tint = 0x5fa8d3;
+    if (shape === "box") {
+      // De -1 a 1: la escala del grupo es la mitad de cada medida
+      const geometry = new THREE.BoxGeometry(2, 2, 2);
+      group.add(new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color: tint, transparent: true, opacity: 0.1, depthWrite: false })));
+      group.add(new THREE.LineSegments(new THREE.EdgesGeometry(geometry), new THREE.LineBasicMaterial({ color: tint })));
+      group.position.copy(center);
+      group.scale.copy(size).multiplyScalar(0.5).max(new THREE.Vector3(1, 1, 1));
+    } else {
+      const side = Math.max(size.x, size.y, size.z, 1) * 1.3;
+      const plane = new THREE.Mesh(
+        new THREE.PlaneGeometry(side, side),
+        new THREE.MeshBasicMaterial({ color: tint, transparent: true, opacity: 0.18, side: THREE.DoubleSide, depthWrite: false }),
+      );
+      // Flecha hacia el lado que se selecciona (+Z local)
+      const arrow = new THREE.LineSegments(
+        new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, side * 0.2)]),
+        new THREE.LineBasicMaterial({ color: 0xff5555 }),
+      );
+      group.add(plane, arrow);
+      group.position.copy(center);
+    }
+    this.cloudGroup.add(group);
+    const controls = new TransformControls(this.camera, this.canvas);
+    controls.setSize(0.7);
+    controls.attach(group);
+    controls.setMode("translate");
+    this.scene.add(controls.getHelper());
+    controls.addEventListener("change", () => this.requestRender());
+    controls.addEventListener("dragging-changed", (event) => {
+      this.controls.enabled = !event.value;
+    });
+    controls.addEventListener("objectChange", () => this.selectCloudClip());
+    this.cloudClip = { shape, object: group, controls, invert: false };
+    this.selectCloudClip();
+    this.requestRender();
+  }
+
+  /** Qué hace el gizmo del recorte: mover, escalar (caja) o girar (plano) */
+  setCloudClipMode(mode: "translate" | "scale" | "rotate"): void {
+    const clip = this.cloudClip;
+    if (!clip) return;
+    clip.controls.setMode(mode === "scale" && clip.shape === "plane" ? "translate" : mode === "rotate" && clip.shape === "box" ? "translate" : mode);
+    this.requestRender();
+  }
+
+  /** Cambia de lado: lo de afuera de la caja, o el otro lado del plano */
+  flipCloudClip(): void {
+    if (!this.cloudClip) return;
+    this.cloudClip.invert = !this.cloudClip.invert;
+    this.selectCloudClip();
+  }
+
+  /** Marca como seleccionados los puntos del lado que toma el recorte */
+  private selectCloudClip(): void {
+    const clip = this.cloudClip;
+    const cloud = this.cloud;
+    if (!clip || !cloud) return;
+    clip.object.updateMatrix();
+    const inv = clip.object.matrix.clone().invert().elements;
+    const pos = cloud.points.geometry.getAttribute("position").array as Float32Array;
+    const box = clip.shape === "box";
+    for (let i = 0; i < cloud.count; i++) {
+      const x = pos[i * 3];
+      const y = pos[i * 3 + 1];
+      const z = pos[i * 3 + 2];
+      const lx = inv[0] * x + inv[4] * y + inv[8] * z + inv[12];
+      const ly = inv[1] * x + inv[5] * y + inv[9] * z + inv[13];
+      const lz = inv[2] * x + inv[6] * y + inv[10] * z + inv[14];
+      const inside = box ? Math.abs(lx) <= 1 && Math.abs(ly) <= 1 && Math.abs(lz) <= 1 : lz > 0;
+      cloud.selected[i] = inside !== clip.invert ? 1 : 0;
+    }
+    this.recolorCloud();
+    this.notifyCloudSelection();
+    this.requestRender();
+  }
+
+  // ── Alineación a mano: parejas de puntos ──
+
+  /** Con `true`, cada clic marca un punto: uno de la toma activa y luego su pareja en las demás tomas a la vista */
+  setCloudPairMode(on: boolean): void {
+    this.cloudPairs.on = on;
+    if (on) this.canvas.style.cursor = "crosshair";
+    else if (this.cloudTool === null) this.canvas.style.cursor = "default";
+    if (!on) this.clearCloudPairs();
+  }
+
+  setCloudPairListener(listener: ((from: number, to: number) => void) | null): void {
+    this.cloudPairListener = listener;
+  }
+
+  getCloudPairs(): { from: [number, number, number][]; to: [number, number, number][] } {
+    return { from: [...this.cloudPairs.from], to: [...this.cloudPairs.to] };
+  }
+
+  clearCloudPairs(): void {
+    this.cloudPairs.from = [];
+    this.cloudPairs.to = [];
+    this.drawCloudPairMarkers();
+    this.cloudPairListener?.(0, 0);
+  }
+
+  /** Quita el último punto marcado */
+  undoCloudPair(): void {
+    const pairs = this.cloudPairs;
+    if (pairs.to.length < pairs.from.length) pairs.from.pop();
+    else pairs.to.pop();
+    this.drawCloudPairMarkers();
+    this.cloudPairListener?.(pairs.from.length, pairs.to.length);
+  }
+
+  private onCloudPairDown(e: PointerEvent): void {
+    const pairs = this.cloudPairs;
+    const expectFrom = pairs.from.length === pairs.to.length;
+    const source = expectFrom ? this.cloud?.points.geometry : this.cloudGhost?.geometry;
+    const array = source?.getAttribute("position")?.array as Float32Array | undefined;
+    if (!array) return;
+    const hit = this.pickCloudPoint(this.canvasPoint(e), array);
+    if (!hit) return;
+    (expectFrom ? pairs.from : pairs.to).push(hit);
+    this.drawCloudPairMarkers();
+    this.cloudPairListener?.(pairs.from.length, pairs.to.length);
+  }
+
+  /** El punto de `positions` (mm) que se ve más cerca de la cámara dentro de 14 px del cursor */
+  private pickCloudPoint(at: [number, number], positions: Float32Array): [number, number, number] | null {
+    const rect = this.canvas.getBoundingClientRect();
+    this.camera.updateMatrixWorld();
+    this.cloudGroup.updateMatrixWorld();
+    const m = new THREE.Matrix4()
+      .multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse)
+      .multiply(this.cloudGroup.matrixWorld).elements;
+    const hw = rect.width / 2;
+    const hh = rect.height / 2;
+    let best = -1;
+    let bestDepth = Infinity;
+    for (let i = 0; i < positions.length / 3; i++) {
+      const x = positions[i * 3];
+      const y = positions[i * 3 + 1];
+      const z = positions[i * 3 + 2];
+      const w = m[3] * x + m[7] * y + m[11] * z + m[15];
+      if (w <= 1e-6 || w >= bestDepth) continue;
+      const px = ((m[0] * x + m[4] * y + m[8] * z + m[12]) / w + 1) * hw;
+      const py = (1 - (m[1] * x + m[5] * y + m[9] * z + m[13]) / w) * hh;
+      if ((px - at[0]) ** 2 + (py - at[1]) ** 2 > 14 * 14) continue;
+      best = i;
+      bestDepth = w;
+    }
+    return best < 0 ? null : [positions[best * 3], positions[best * 3 + 1], positions[best * 3 + 2]];
+  }
+
+  private drawCloudPairMarkers(): void {
+    for (const m of this.cloudPairs.markers) {
+      this.cloudGroup.remove(m);
+      m.geometry.dispose();
+      (m.material as THREE.Material).dispose();
+    }
+    this.cloudPairs.markers = [];
+    for (const [list, color] of [[this.cloudPairs.from, 0xffb020], [this.cloudPairs.to, 0x40e070]] as const) {
+      if (list.length === 0) continue;
+      const geometry = new THREE.BufferGeometry().setAttribute("position", new THREE.Float32BufferAttribute(list.flat(), 3));
+      const material = new THREE.PointsMaterial({ color, size: 11, sizeAttenuation: false, depthTest: false });
+      const points = new THREE.Points(geometry, material);
+      points.renderOrder = 10;
+      this.cloudGroup.add(points);
+      this.cloudPairs.markers.push(points);
+    }
+    this.requestRender();
   }
 
   /** mm de la nube → unidades de la escena */
@@ -3602,6 +3973,7 @@ export class Viewer3D {
     const out = new Float32Array(cloud.count * 2);
     const hw = rect.width / 2;
     const hh = rect.height / 2;
+    const depth = new Float32Array(cloud.count);
     for (let i = 0; i < cloud.count; i++) {
       const x = pos[i * 3];
       const y = pos[i * 3 + 1];
@@ -3610,12 +3982,53 @@ export class Viewer3D {
       if (w <= 1e-6) {
         out[i * 2] = NaN;
         out[i * 2 + 1] = NaN;
+        depth[i] = Infinity;
         continue;
       }
       out[i * 2] = ((m[0] * x + m[4] * y + m[8] * z + m[12]) / w + 1) * hw;
       out[i * 2 + 1] = (1 - (m[1] * x + m[5] * y + m[9] * z + m[13]) / w) * hh;
+      depth[i] = w;
     }
+    if (this.cloudVisibleOnly) this.hideOccludedCloud(out, depth, rect.width, rect.height);
     return out;
+  }
+
+  /** Solo lo visible: un mapa de profundidad grueso (celdas de 4 px) deja fuera los puntos de atrás */
+  private hideOccludedCloud(screen: Float32Array, depth: Float32Array, width: number, height: number): void {
+    const cell = 4;
+    const cols = Math.max(1, Math.ceil(width / cell));
+    const rows = Math.max(1, Math.ceil(height / cell));
+    const nearest = new Float32Array(cols * rows).fill(Infinity);
+    const index = (i: number): number => {
+      const cx = Math.floor(screen[i * 2] / cell);
+      const cy = Math.floor(screen[i * 2 + 1] / cell);
+      return cx < 0 || cy < 0 || cx >= cols || cy >= rows ? -1 : cy * cols + cx;
+    };
+    let near = Infinity;
+    let far = 0;
+    for (let i = 0; i < depth.length; i++) {
+      if (!Number.isFinite(depth[i])) continue;
+      near = Math.min(near, depth[i]);
+      far = Math.max(far, depth[i]);
+    }
+    for (let i = 0; i < depth.length; i++) {
+      const c = Number.isFinite(depth[i]) ? index(i) : -1;
+      if (c >= 0 && depth[i] < nearest[c]) nearest[c] = depth[i];
+    }
+    // Margen: lo que sigue a la vista en la superficie (grosor del escaneo), no lo de atrás
+    const slack = Math.max((far - near) * 0.03, 1e-6);
+    for (let i = 0; i < depth.length; i++) {
+      const c = Number.isFinite(depth[i]) ? index(i) : -1;
+      if (c >= 0 && depth[i] > nearest[c] + slack) {
+        screen[i * 2] = NaN;
+        screen[i * 2 + 1] = NaN;
+      }
+    }
+  }
+
+  /** Con `true` (de fábrica) la selección ignora lo que otra parte de la nube tapa */
+  setCloudVisibleOnly(on: boolean): void {
+    this.cloudVisibleOnly = on;
   }
 
   private canvasPoint(e: PointerEvent): [number, number] {

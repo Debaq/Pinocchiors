@@ -1,11 +1,12 @@
 import { t, tn, tx, locale } from "./lib/i18n";
-import { animationLod, defaultExportFormat, meshBuild, previewFirst, showFps } from "./lib/settings";
+import { animationLod, defaultExportFormat, forgetRecent, meshBuild, peekBeforeImport, previewFirst, recentFiles, rememberRecent, showFps } from "./lib/settings";
 import { followUiScale } from "./lib/uiScale";
 import { tBackend } from "./lib/i18nBackend";
 import { Component, batch, createEffect, createMemo, createSignal, on, onMount, onCleanup, Show, untrack, type JSX } from "solid-js";
 import { invoke as tauriInvoke, Channel, type InvokeArgs, type InvokeOptions } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { Header, StatusBar, Viewport, ViewportHeader, Toolbar, ProgressOverlay, Timeline, type TimelineRow } from "./components/layout";
 import type { OnionSettings, TimelineMode, TimelineTool } from "./components/layout/Timeline";
@@ -96,9 +97,9 @@ import { bindingOf, createShortcutManager, formatBinding, type ShortcutDef } fro
 import { decodeMesh, decodeWeights } from "./lib/buffers";
 import { LOD_FROM_FACES, fetchAnimationLod } from "./lib/lod";
 import { createPersisted, startDrag } from "./lib/ui-state";
-import { PlaybackBar, type PlaybackSegment } from "./components/layout/PlaybackBar";
 import { createChunked } from "./lib/chunked";
 import { packHistory } from "./lib/historyPack";
+import { PlaybackBar, type PlaybackSegment } from "./components/layout/PlaybackBar";
 import { TextureEditor, TEXTURE_SLOTS, type TextureExportKind, type TextureSelection, type TextureSlot } from "./components/layout/TextureEditor";
 import { applyTheme, followSystemTheme, type ThemeSetting } from "./lib/theme";
 import type { MenuEntry } from "./components/ui/ContextMenu";
@@ -133,6 +134,21 @@ import { RenderEditor } from "./components/layout/RenderEditor";
 interface ProjectSaved {
   written: boolean;
   bytes: number;
+}
+
+/** Lo que `peek_model` lee de un archivo sin importarlo */
+interface ModelPeek {
+  name: string;
+  format: string;
+  bytes: number;
+  vertices: number | null;
+  faces: number | null;
+  meshes: number | null;
+  materials: number | null;
+  textures: number | null;
+  animations: number | null;
+  rigged: boolean | null;
+  note: string | null;
 }
 
 interface ProjectOpened {
@@ -1116,6 +1132,8 @@ export const App: Component = () => {
   const [quadMeshLoaded, setQuadMeshLoaded] = createSignal(false);
   const [quadMeshInfo, setQuadMeshInfo] = createSignal({ vertices: 0, quads: 0 });
   const [showQuadMesh, setShowQuadMesh] = createSignal(false);
+  // Retopología: la original y la de quads, una al lado de la otra
+  const [compareRetopo, setCompareRetopo] = createSignal(false);
   // Remallar: el modo elegido (la retopología es uno de ellos)
   const [remeshMode, setRemeshMode] = createSignal<RemeshMode>("retopology");
   const [simplifyConfig, setSimplifyConfig] = createSignal<SimplifyConfig>(DEFAULT_SIMPLIFY);
@@ -1223,6 +1241,7 @@ export const App: Component = () => {
   const usesQuad = () => activeQuad() && quadMeshLoaded();
   /** El visor muestra los quads: a pedido, o en las etapas que los usan */
   const displayQuad = () =>
+    !compareRetopo() &&
     (showQuadMesh() || (usesQuad() && ["uv", "skeleton", "animate"].includes(pipeline.activeStep()))) && !!quadMeshData();
 
   /** Los pesos ya no corresponden a la malla activa */
@@ -1624,6 +1643,12 @@ export const App: Component = () => {
 
   // Context panel visibility
   const [showContextPanel, setShowContextPanel] = createSignal(true);
+  // Cuatro vistas (principal, superior, frontal y derecha); se recuerda entre sesiones
+  const [quadView, setQuadView] = createPersisted("view.quad", false);
+  createEffect(() => viewer()?.setQuadView(quadView() && !showCad()));
+  // Ajuste al mover con el gizmo: ninguno, a la grilla o a los vértices
+  const [gizmoSnap, setGizmoSnap] = createPersisted<"off" | "grid" | "vertex">("view.gizmoSnap", "off");
+  createEffect(() => viewer()?.setGizmoSnap(gizmoSnap()));
 
   // Grid visibility
   const [showGrid, setShowGrid] = createSignal(true);
@@ -2431,6 +2456,7 @@ export const App: Component = () => {
       area: "rig", get description() { return t("Radio del pincel / centrar"); },
     },
     { key: "f", shift: true, action: () => viewerRef?.startModal("strength"), area: "rig", get description() { return t("Intensidad del pincel"); } },
+    { key: "q", ctrl: true, alt: true, action: () => !showCad() && setQuadView(!quadView()), area: "view", get description() { return t("Cuatro vistas"); } },
     { key: "n", action: () => setShowContextPanel(!showContextPanel()), area: "view", get description() { return t("Mostrar/ocultar panel"); } },
     {
       key: "z",
@@ -2566,14 +2592,15 @@ export const App: Component = () => {
    * Importa un modelo. Con `projects` el mismo diálogo abre también proyectos
    * .pinocchio (pantalla de inicio); `then` es la sección a la que se pasa
    */
-  const handleLoad = async (opts: { projects?: boolean; then?: PipelineStepId } = {}) => {
+  const handleLoad = async (opts: { projects?: boolean; then?: PipelineStepId; files?: string[] } = {}) => {
     if (blockedByTask()) return;
     try {
       const formats = supportedFormats();
       if (!formats) return;
 
       const extensions = formats.import.flatMap((f) => f.extensions);
-      const selected = await open({
+      // Con `files` (arrastrados o de la lista de recientes) no se abre el diálogo
+      const selected = opts.files ?? await open({
         title: opts.projects ? t("Abrir un proyecto o importar un modelo 3D") : t("Importar modelo 3D (con sus texturas, si vienen aparte)"),
         multiple: true,
         filters: [
@@ -2605,6 +2632,7 @@ export const App: Component = () => {
       const filePath = models[0];
       const textures = files.filter((f) => f !== filePath && TEXTURE_FILE_EXTENSIONS.includes(extensionOf(f)));
       const name = filePath.split(/[\\/]/).pop() ?? filePath;
+      if (peekBeforeImport() && !(await confirmImport(filePath))) return;
       setStatusMessage(t("Importando {name}...", { name }));
 
       // El modelo importado es un objeto nuevo de la escena (los demás quedan)
@@ -2622,6 +2650,7 @@ export const App: Component = () => {
       await showNewModel(info, t("Importar {name}", { name }));
       // El nombre cambia solo si la importación salió bien
       setFileName(name);
+      rememberRecent(filePath);
       const attached = info.textures ?? [];
       const skipped = info.textures_skipped ?? [];
       if (attached.length > 0 || skipped.length > 0) {
@@ -2640,6 +2669,29 @@ export const App: Component = () => {
     } finally {
       setSwitching(false);
     }
+  };
+
+  /** Muestra lo que se sabe del archivo sin importarlo y pregunta si seguir (sin datos, sigue) */
+  const confirmImport = async (path: string) => {
+    const info = await invoke<ModelPeek>("peek_model", { path }).catch(() => undefined);
+    if (!info) return true;
+    const lines = [
+      `${info.name} · ${formatBytes(info.bytes)}`,
+      info.note ? tBackend(info.note) : info.format.toUpperCase(),
+      info.vertices != null ? t("{n} vértices", { n: info.vertices.toLocaleString() }) : "",
+      info.faces != null ? t("{n} caras", { n: info.faces.toLocaleString() }) : "",
+      info.meshes != null ? t("{n} mallas", { n: info.meshes.toLocaleString() }) : "",
+      info.materials != null ? t("{n} materiales", { n: info.materials.toLocaleString() }) : "",
+      info.textures != null ? t("{n} texturas", { n: info.textures.toLocaleString() }) : "",
+      info.animations ? t("{n} animaciones", { n: info.animations.toLocaleString() }) : "",
+      info.rigged ? t("Trae esqueleto") : "",
+    ].filter(Boolean);
+    const heavy = (info.faces ?? 0) > 1_000_000 || info.bytes > 300 * 1024 * 1024;
+    return confirmAction({
+      title: t("Importar {name}", { name: info.name }),
+      message: lines.join("\n") + (heavy ? `\n\n${t("Es un modelo pesado: la importación puede tardar.")}` : ""),
+      confirmLabel: t("Importar"),
+    });
   };
 
   /** Modelo del escáner (Orizon3D), de la nube editada o del escáner: reemplaza al abierto */
@@ -5201,6 +5253,12 @@ export const App: Component = () => {
       onSavePose={(selectionOnly) => void handleSavePose(selectionOnly)}
       onDeletePose={(id) => changePoseLibrary(t("Borrar pose"), poseLibrary().filter((p) => p.id !== id))}
       onRenamePose={(id, name) => changePoseLibrary(t("Renombrar pose"), poseLibrary().map((p) => (p.id === id ? { ...p, name } : p)))}
+      onPoseMeta={(id, meta) =>
+        changePoseLibrary(
+          t("Categoría y etiquetas de la pose"),
+          poseLibrary().map((p) => (p.id === id ? { ...p, category: meta.category, tags: meta.tags.length > 0 ? meta.tags : undefined } : p)),
+        )
+      }
       onApplyPose={handleApplyLibraryPose}
     />
   );
@@ -5679,6 +5737,9 @@ export const App: Component = () => {
           bone_shapes: exportBoneShapes(),
           node_extras: (includeRig || skeletonOnly) && (opts.format === "glb" || opts.format === "gltf") ? rigExtras() : null,
           fps: activeClip()?.fps ?? null,
+          scale_factor: (opts.format === "usdz" || opts.format === "usda") && (opts.usdScale ?? 1) !== 1 ? opts.usdScale : null,
+          split_orm_channels: opts.usdSplitOrm === true,
+          arkit_compatible: opts.usdArkit === true,
         },
       }));
 
@@ -5797,7 +5858,7 @@ export const App: Component = () => {
     };
     try {
       const hdri = s.rayHdri ? { path: s.rayHdri, intensity: s.rayHdriIntensity, rotationDeg: s.rayHdriRotation } : undefined;
-      return await renderRay(invoke as never, view, opts, { samples: s.raySamples, denoise: s.rayDenoise, hdri }, show, signal, onPreview);
+      return await renderRay(invoke as never, view, opts, { samples: s.raySamples, denoise: s.rayDenoise, exposure: s.rayExposure, hdri }, show, signal, onPreview);
     } finally {
       setRenderDetail(undefined);
     }
@@ -5949,7 +6010,7 @@ export const App: Component = () => {
           shadows: s.shadows || s.studio,
           ambientOcclusion: s.ambientOcclusion,
         },
-        { samples: s.raySamples, denoise: s.rayDenoise, hdri },
+        { samples: s.raySamples, denoise: s.rayDenoise, exposure: s.rayExposure, hdri },
         {
           clips: [clip],
           clip: 0,
@@ -8289,6 +8350,7 @@ export const App: Component = () => {
         invoke<ProjectSaved>("save_project", { path, ui: projectUi(), onlyIfChanged: false })
       );
       setProjectPath(path);
+      rememberRecent(path!);
       scheduleUnsavedCheck(0);
       setStatusMessage(t("Proyecto guardado: {name} ({mb} MB)", { name: baseName(path!), mb: (saved.bytes / 1e6).toFixed(1) }));
       // Lo guardado ya está a salvo: la recuperación vieja no debe ofrecerse al abrir la app
@@ -8322,6 +8384,7 @@ export const App: Component = () => {
       await adoptCurrentModel();
       // La recuperación no es el archivo del usuario: el próximo Guardar pregunta dónde
       setProjectPath(recovered ? undefined : path);
+      if (!recovered) rememberRecent(path);
       setRecovery(undefined);
       setStatusMessage(recovered ? t("Sesión recuperada") : t("Proyecto abierto: {name}", { name: baseName(path) }));
     } catch (e) {
@@ -8543,9 +8606,50 @@ export const App: Component = () => {
     }
   };
 
+  /** Los últimos archivos abiertos, en el menú Archivo; los que ya no existen se descartan al fallar */
+  const recentMenuItems = (): MenuEntry[] => {
+    const recent = recentFiles();
+    if (recent.length === 0) return [];
+    return [
+      { separator: true },
+      { header: t("Recientes") },
+      ...recent.slice(0, 5).map((path): MenuEntry => ({ label: baseName(path), onSelect: () => void openRecent(path) })),
+      { separator: true },
+    ];
+  };
+  const openRecent = async (path: string) => {
+    if (/\.pinocchio$/i.test(path)) await handleOpenProject(path);
+    else await handleLoad({ files: [path] });
+    // Si el archivo se movió o se borró, sale de la lista
+    const missing = await invoke<ModelPeek>("peek_model", { path }).then(() => false, () => true);
+    if (missing) forgetRecent(path);
+  };
+
+  // Arrastrar archivos sobre la ventana: un proyecto lo abre; un modelo (con sus texturas) lo importa
+  const [dropping, setDropping] = createSignal(false);
+  let unlistenDrop: (() => void) | undefined;
+  onCleanup(() => unlistenDrop?.());
+  onMount(async () => {
+    try {
+      unlistenDrop = await getCurrentWebview().onDragDropEvent((event) => {
+        const e = event.payload;
+        if (e.type === "enter" || e.type === "over") setDropping(!blockedByTask() && !settingsOpen());
+        else if (e.type === "leave") setDropping(false);
+        else if (e.type === "drop") {
+          const wasDropping = dropping();
+          setDropping(false);
+          if (wasDropping && e.paths.length > 0) void handleLoad({ projects: true, files: e.paths });
+        }
+      });
+    } catch {
+      // Sin backend (vista previa en el navegador) no hay arrastre de archivos del sistema
+    }
+  });
+
   const fileMenuItems = (): MenuEntry[] => [
     { label: t("Nuevo proyecto"), shortcut: "Ctrl+N", onSelect: () => handleNewProject() },
     { label: t("Abrir proyecto…"), shortcut: "Ctrl+O", onSelect: () => handleOpenProject() },
+    ...recentMenuItems(),
     { label: t("Guardar"), shortcut: "Ctrl+S", disabled: !hasProjectWork(), onSelect: () => handleSaveProject() },
     { label: t("Guardar como…"), shortcut: "Ctrl+Shift+S", disabled: !hasProjectWork(), onSelect: () => handleSaveProject(true) },
     { separator: true },
@@ -8557,6 +8661,62 @@ export const App: Component = () => {
     { separator: true },
     { label: t("Configuración…"), onSelect: () => setSettingsOpen(true) },
   ];
+
+  // Editar, Vista y Malla: las mismas acciones de los atajos y paneles, a la mano en la barra
+  const canUndoNow = () => (inDesign() ? (cadUi.session() ? cadUi.sketchHistory().undo > 0 : cad.canUndo()) : history.canUndo());
+  const canRedoNow = () => (inDesign() ? (cadUi.session() ? cadUi.sketchHistory().redo > 0 : cad.canRedo()) : history.canRedo());
+  const editMenuItems = (): MenuEntry[] => [
+    { label: t("Deshacer"), shortcut: "Ctrl+Z", disabled: !canUndoNow(), onSelect: undo },
+    { label: t("Rehacer"), shortcut: "Ctrl+Shift+Z", disabled: !canRedoNow(), onSelect: redo },
+    { separator: true },
+    { label: t("Seleccionar todo"), shortcut: "A", disabled: !cloudEditing() && !rigging(), onSelect: () => (cloudEditing() ? scanCloud.select("all") : handleSelectCommand("all")) },
+    { label: t("No seleccionar nada"), shortcut: "Alt+A", disabled: !cloudEditing() && !rigging(), onSelect: () => (cloudEditing() ? scanCloud.select("none") : handleSelectCommand("none")) },
+    { label: t("Invertir la selección de la nube"), shortcut: "Ctrl+I", disabled: !cloudEditing(), onSelect: () => scanCloud.select("invert") },
+    { separator: true },
+    { label: t("Copiar pose"), shortcut: "Ctrl+C", disabled: !animating(), onSelect: handleCopyPose },
+    { label: t("Pegar pose"), shortcut: "Ctrl+V", disabled: !animating(), onSelect: () => handlePastePose(false) },
+    { label: t("Pegar pose espejada"), shortcut: "Ctrl+Shift+V", disabled: !animating(), onSelect: () => handlePastePose(true) },
+    { separator: true },
+    { label: t("Borrar la selección"), shortcut: "Supr", disabled: !cloudEditing() && !animating(), onSelect: () => (cloudEditing() ? scanCloud.deleteSelection() : handleDeleteKeys()) },
+  ];
+  const viewMenuItems = (): MenuEntry[] => {
+    const v3d = !showCad();
+    const view = (name: string) => () => viewerRef?.setView(name);
+    return [
+      { label: t("Ver todo"), shortcut: "Inicio", disabled: !v3d, onSelect: () => viewerRef?.resetView() },
+      { label: t("Centrar en la selección"), shortcut: ".", disabled: !v3d, onSelect: () => viewerRef?.focusSelection() },
+      { separator: true },
+      { header: t("Vistas") },
+      { label: t("Frontal"), shortcut: "1", disabled: !v3d, onSelect: view("front") },
+      { label: t("Trasera"), shortcut: "Ctrl+1", disabled: !v3d, onSelect: view("back") },
+      { label: t("Derecha"), shortcut: "3", disabled: !v3d, onSelect: view("right") },
+      { label: t("Izquierda"), shortcut: "Ctrl+3", disabled: !v3d, onSelect: view("left") },
+      { label: t("Superior"), shortcut: "7", disabled: !v3d, onSelect: view("top") },
+      { label: t("Inferior"), shortcut: "Ctrl+7", disabled: !v3d, onSelect: view("bottom") },
+      { label: t("Cuatro vistas"), shortcut: "Ctrl+Alt+Q", checked: quadView(), disabled: !v3d, onSelect: () => setQuadView(!quadView()) },
+      { separator: true },
+      { label: t("Alambre"), shortcut: "Shift+Z", checked: viewSettings().showWireframe, disabled: !v3d, onSelect: () => setViewSettings((prev) => ({ ...prev, showWireframe: !prev.showWireframe })) },
+      { label: t("Rayos X"), shortcut: "Alt+Z", checked: !!viewSettings().xray, disabled: !v3d, onSelect: () => setViewSettings((prev) => ({ ...prev, xray: !prev.xray })) },
+      { separator: true },
+      { header: t("Ajuste al mover") },
+      { label: t("Sin ajuste"), checked: gizmoSnap() === "off", disabled: !v3d, onSelect: () => setGizmoSnap("off") },
+      { label: t("A la grilla"), checked: gizmoSnap() === "grid", disabled: !v3d, onSelect: () => setGizmoSnap("grid") },
+      { label: t("A los vértices"), checked: gizmoSnap() === "vertex", disabled: !v3d, onSelect: () => setGizmoSnap("vertex") },
+      { separator: true },
+      { label: t("Mostrar el panel derecho"), shortcut: "N", checked: showContextPanel(), onSelect: () => setShowContextPanel(!showContextPanel()) },
+    ];
+  };
+  const meshMenuItems = (): MenuEntry[] => {
+    const step = (id: PipelineStepId) => () => pipeline.setActiveStep(id);
+    const off = !meshLoaded() || inDesign();
+    return [
+      { label: t("Estructura"), disabled: off, onSelect: step("structure") },
+      { label: t("Reparar"), disabled: off, onSelect: step("repair") },
+      { label: t("Remallar"), disabled: off, onSelect: step("remesh") },
+      { label: t("UV / Piel"), disabled: off, onSelect: step("uv") },
+      { label: t("Materiales"), disabled: off, onSelect: step("materials") },
+    ];
+  };
 
   // Guardado automático: al archivo del proyecto, o al de recuperación si aún
   // no tiene. Apagado, igual se deja una copia de recuperación cada 5 minutos
@@ -8736,6 +8896,11 @@ export const App: Component = () => {
           fileName={projectPath() ? baseName(projectPath()!) : fileName()}
           unsaved={unsaved()}
           fileMenu={fileMenuItems}
+          menus={[
+            { label: t("Editar"), items: editMenuItems },
+            { label: t("Vista"), items: viewMenuItems },
+            { label: t("Malla"), items: meshMenuItems },
+          ]}
           onOpenSettings={() => setSettingsOpen(true)}
           workspace={pipeline.workspace()?.id}
           onWorkspace={pipeline.openWorkspace}
@@ -8970,6 +9135,7 @@ export const App: Component = () => {
               onPaintSettingsChanged={(change) => setPaintConfig((prev) => ({ ...prev, ...change }))}
               onWeightsPainted={handleWeightsPainted}
               paintSettings={paintSettings()}
+              compareMesh={compareRetopo() && pipeline.activeStep() === "remesh" ? quadMeshData() : undefined}
               meshData={plateViewIndex() !== null && plateViewData() ? plateViewData() : piecesViewOn() && piecesViewData() ? piecesViewData() : skinPreviewOn() && skinPreviewData() ? skinPreviewData() : showsPreview() ? remeshPreviewData() : displayQuad() ? quadMeshData() : meshData()}
               sceneMaterials={viewerMaterials()}
               lights={lights()}
@@ -9034,6 +9200,12 @@ export const App: Component = () => {
               />
             </Show>
 
+            <Show when={dropping()}>
+              <div class="absolute inset-2 z-40 flex items-center justify-center rounded-xl border-2 border-dashed border-accent bg-accent/10 pointer-events-none">
+                <span class="px-4 py-2 rounded-lg bg-bg-darker/90 text-sm text-text">{t("Suelta el proyecto o el modelo 3D para abrirlo")}</span>
+              </div>
+            </Show>
+
             {/* Welcome Screen overlay */}
             <Show when={!hasWork() && pipeline.activeStep() !== "scan" && pipeline.workspace()?.id !== "rig" && !showCad()}>
               <WelcomeScreen
@@ -9045,6 +9217,8 @@ export const App: Component = () => {
                 formats={supportedFormats()?.import.flatMap((f) => f.extensions)}
                 recovery={recovery()}
                 onRecover={() => handleOpenProject(recovery()!.path, true)}
+                recent={recentFiles().slice(0, 4).map((path) => ({ path, name: baseName(path) }))}
+                onOpenRecent={(path) => void openRecent(path)}
               />
             </Show>
 
@@ -9256,6 +9430,8 @@ export const App: Component = () => {
               hasResult: quadMeshLoaded(),
               showQuadMesh: showQuadMesh(),
               onShowQuadMeshChange: setShowQuadMesh,
+              compare: compareRetopo() && !!quadMeshData(),
+              onCompareChange: setCompareRetopo,
               useForNextSteps: activeQuad(),
               onUseForNextStepsChange: handleActiveMesh,
               quality: quadQuality(),

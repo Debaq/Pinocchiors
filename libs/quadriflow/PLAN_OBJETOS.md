@@ -40,8 +40,8 @@ que hacen). Cada cambio de texto actualiza el catálogo `en.*.ts`.
 4. [x] Remallar (`RemeshStep`, `SimplifyPanel`, `SmoothPanel`, `IsotropicPanel`,
    `VoxelPanel`, `QuadsPanel`).
 5. [x] Reparar, Escanear, Fabricar, Materiales, Vista.
-6. [~] Esqueleto, Animar, Pose hechos; faltan Luces (`LightsPanel.tsx`) e Historial (`HistoryPanel.tsx`): siguen con su párrafo `leading-relaxed` y sin `Hint` (revisado 2026-10-15).
-7. [ ] Revisión: ningún párrafo `leading-relaxed` suelto en los paneles
+6. [x] Esqueleto, Animar, Pose, Luces e Historial hechos (2026-10-16).
+7. [x] Revisión (2026-10-16; quedan avisos de estado, «sin modelo» y los de diálogos, Escáner y Diseñar): ningún párrafo `leading-relaxed` suelto en los paneles
    laterales; `tsc` y pruebas de i18n. Hoy quedan `leading-relaxed` en `UvStep`, `RemeshStep`,
    `SkeletonStep`, `AnimateStep`, `RigPanel` (3), `IkPanel`, `ObjectTab` (2), `LibraryPanel`,
    `MaterialPanel`, `LightsPanel` e `HistoryPanel` (algunos son avisos de «sin modelo» y pueden quedarse).

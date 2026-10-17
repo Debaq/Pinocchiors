@@ -613,6 +613,7 @@ export const en_ui_steps: Catalog = {
   "Fusionar": "Merge",
   "Comparar": "Compare",
   "Quitar ruido": "Remove noise",
+  "Exposición": "Exposure",
   "Quitar fragmentos": "Remove fragments",
   "Quitar la mesa": "Remove the table",
   "Borrar selección": "Delete selection",

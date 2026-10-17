@@ -36,6 +36,7 @@ export const Select = (props: SelectProps) => {
       optionDisabled="disabled"
       value={selected()}
       onChange={(option) => option && option.value !== props.value && props.onChange?.(option.value)}
+      class="min-w-0"
       placeholder={props.placeholder ?? t("Seleccionar...")}
       disabled={props.disabled}
       itemComponent={(itemProps) => (
@@ -80,7 +81,7 @@ export const Select = (props: SelectProps) => {
           props.class
         )}
       >
-        <KobalteSelect.Value<SelectOption>>
+        <KobalteSelect.Value<SelectOption> class="truncate min-w-0">
           {(state) => state.selectedOption().label}
         </KobalteSelect.Value>
         <KobalteSelect.Icon>

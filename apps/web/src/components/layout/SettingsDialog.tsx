@@ -9,7 +9,11 @@ import {
   meshBuild,
   adaptiveQuality,
   animationLod,
+  clearRecent,
+  peekBeforeImport,
   previewFirst,
+  recentFiles,
+  setPeekBeforeImportModel,
   resetLayout,
   setAdaptiveQuality,
   setAnimationLodEnabled,
@@ -74,6 +78,7 @@ const EXPORT_FORMAT_OPTIONS = [
   { value: "glb", label: "GLB" },
   { value: "gltf", label: "glTF" },
   { value: "usdz", label: "USDZ" },
+  { value: "usda", label: "USDA" },
   { value: "obj", label: "OBJ" },
   { value: "3mf", label: "3MF" },
   { value: "stl", label: "STL" },
@@ -465,7 +470,7 @@ export const SettingsDialog: Component<SettingsDialogProps> = (props) => {
                   checked={previewFirst()}
                   onChange={setPreviewFirstModel}
                 />
-                <Hint>{t("En modelos de cientos de miles de caras, el visor muestra una versión liviana al instante y la cambia por el detalle completo cuando llega.")}</Hint>
+                <Hint>{t("En modelos de más de 100 000 caras, el visor muestra una versión liviana al instante y la cambia por el detalle completo cuando llega.")}</Hint>
                 <Checkbox
                   label={t("LOD al animar")}
                   checked={animationLod()}
@@ -479,6 +484,21 @@ export const SettingsDialog: Component<SettingsDialogProps> = (props) => {
                   onChange={(mode) => setMeshBuild(mode as MeshBuildMode)}
                 />
                 <Hint>{t("La malla de edición es la que usan reparar, esqueleto, remallar y demás herramientas; verla en el visor no la necesita. En modelos grandes tarda segundos y ocupa mucha memoria.")}</Hint>
+              </Section>
+              <Section title={t("Importar")}>
+                <Checkbox
+                  label={t("Mostrar la información del archivo antes de importar")}
+                  checked={peekBeforeImport()}
+                  onChange={setPeekBeforeImportModel}
+                />
+                <Hint>{t("Antes de importar un modelo se muestra su peso y, si el formato lo permite, cuántas caras y materiales trae.")}</Hint>
+                <button
+                  class="text-xs text-text-muted hover:text-text underline disabled:opacity-40 disabled:no-underline"
+                  disabled={recentFiles().length === 0}
+                  onClick={clearRecent}
+                >
+                  {t("Borrar la lista de archivos recientes")}
+                </button>
               </Section>
               <Section title={t("Exportar")}>
                 <Select

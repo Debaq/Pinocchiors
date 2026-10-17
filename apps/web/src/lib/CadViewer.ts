@@ -2028,6 +2028,24 @@ export class CadViewer {
     this.requestRender();
   }
 
+  /**
+   * Encuadra solo si lo visible quedó perdido: muy chico o muy grande para la
+   * distancia de la cámara, o lejos del centro de giro (un sólido en mm sobre
+   * la vista de un humanoide de 1,8 m). Si se ve bien, no mueve la cámara.
+   */
+  frameIfLost() {
+    const box = new THREE.Box3();
+    for (const o of [this.body, this.scan]) if (o?.visible) box.expandByObject(o);
+    if (box.isEmpty()) return;
+    const sphere = box.getBoundingSphere(new THREE.Sphere());
+    const dist = this.camera.position.distanceTo(this.controls.target);
+    const lost =
+      sphere.radius < dist * 0.03 ||
+      sphere.radius > dist * 3 ||
+      sphere.center.distanceTo(this.controls.target) > dist + sphere.radius;
+    if (lost) this.frameAll();
+  }
+
   /** Encuadra todo lo visible */
   frameAll() {
     const box = new THREE.Box3();

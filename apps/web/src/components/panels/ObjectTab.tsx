@@ -1,6 +1,6 @@
 import { Component, For, Show } from "solid-js";
 import * as THREE from "three";
-import { NumberInput } from "../ui";
+import { Hint, NumberInput } from "../ui";
 import { PlacementPanel, type PlacementPanelProps } from "./PlacementPanel";
 import { NodeMaterials, type MaterialActions, type NodePrimitive } from "./MaterialPanel";
 import { fmtNumber, t } from "../../lib/i18n";
@@ -88,9 +88,9 @@ export const ObjectTab: Component<ObjectTabProps> = (props) => (
                 {row("Posición", node().translation, 0.01, "", (tr) => props.onNodeTransform?.({ ...current(), translation: tr as NodeTransform["translation"] }))}
                 {row("Giro (XYZ)", euler(), 1, "°", setRotation)}
                 {row("Escala", node().scale, 0.01, "", (s) => props.onNodeTransform?.({ ...current(), scale: s as NodeTransform["scale"] }))}
-                <p class="text-[11px] text-text-dim leading-relaxed">
-                  {t("Transformación local del archivo (respecto de su padre). Cambiarla rehace la malla: el rig y la retopología se descartan. Para mover el modelo entero usa las herramientas de abajo.")}
-                </p>
+                <div class="flex justify-end">
+                  <Hint text={t("Transformación local del archivo (respecto de su padre). Cambiarla rehace la malla: el rig y la retopología se descartan. Para mover el modelo entero usa las herramientas de abajo.")} />
+                </div>
                 <div class="flex gap-3">
                   <button class="text-accent hover:underline" onClick={() => props.onToggleNode?.()}>
                     {node().hidden ? t("Mostrar") : t("Ocultar")}
@@ -107,9 +107,9 @@ export const ObjectTab: Component<ObjectTabProps> = (props) => (
           <NodeMaterials {...props.nodeMaterials!} />
         </Show>
         <Show when={props.node === undefined}>
-          <p class="text-[11px] text-text-dim leading-relaxed">
-            {t("Doble clic sobre una parte del modelo para elegirla y cambiar su material.")}
-          </p>
+          <div class="flex justify-end">
+            <Hint text={t("Doble clic sobre una parte del modelo para elegirla y cambiar su material.")} />
+          </div>
         </Show>
         <Show when={props.placement}>{(placement) => <PlacementPanel {...placement()} />}</Show>
       </div>

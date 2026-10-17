@@ -30,6 +30,9 @@ export interface WelcomeScreenProps {
   /** Última sesión guardada por el guardado automático */
   recovery?: { saved_at: number; source_name: string | null };
   onRecover?: () => void;
+  /** Archivos abiertos hace poco */
+  recent?: { path: string; name: string }[];
+  onOpenRecent?: (path: string) => void;
 }
 
 interface Choice {
@@ -155,6 +158,24 @@ export const WelcomeScreen: Component<WelcomeScreenProps> = (props) => {
               )}
             </For>
           </div>
+
+          <Show when={(props.recent?.length ?? 0) > 0}>
+            <div class="space-y-1">
+              <span class="text-[11px] font-medium uppercase tracking-wide text-text-dim">{t("Recientes")}</span>
+              <For each={props.recent}>
+                {(r) => (
+                  <button
+                    class="flex w-full items-center gap-2 px-2 py-1 rounded-md text-xs text-text-muted hover:text-text hover:bg-bg-lighter text-left"
+                    title={r.path}
+                    onClick={() => props.onOpenRecent?.(r.path)}
+                  >
+                    <Icons.Cube size={13} class="shrink-0" />
+                    <span class="truncate">{r.name}</span>
+                  </button>
+                )}
+              </For>
+            </div>
+          </Show>
 
           <Show when={props.recovery}>
             {(r) => (

@@ -440,6 +440,40 @@ fn rotation_candidates(source: &PointCloud, target: &PointCloud, spacing: f32, d
     starts
 }
 
+/// Alineación a mano: lleva cada `src[i]` sobre su pareja `dst[i]` (puntos que se
+/// marcaron en las dos nubes). Pide al menos 3 parejas que no estén en línea
+/// recta, porque con menos la orientación queda indefinida. Devuelve la
+/// transformación y el error cuadrático medio de las parejas (mm).
+pub fn align_by_points(src: &[[f32; 3]], dst: &[[f32; 3]]) -> Result<(Transform, f32), String> {
+    if src.len() != dst.len() {
+        return Err("Cada punto marcado necesita su pareja".into());
+    }
+    if src.len() < 3 {
+        return Err("Marca al menos 3 parejas de puntos".into());
+    }
+    // Sin área entre los puntos (en línea) no hay giro único
+    let c = centroid(src);
+    let mut area2 = 0.0f64;
+    for i in 0..src.len() {
+        for j in i + 1..src.len() {
+            let a = [src[i][0] - c[0], src[i][1] - c[1], src[i][2] - c[2]];
+            let b = [src[j][0] - c[0], src[j][1] - c[1], src[j][2] - c[2]];
+            let x = cross(a, b);
+            area2 = area2.max((x[0] * x[0] + x[1] * x[1] + x[2] * x[2]) as f64);
+        }
+    }
+    let scale = diagonal(src).max(1e-6) as f64;
+    if area2.sqrt() < 1e-3 * scale * scale {
+        return Err("Los puntos marcados están casi en línea recta: marca alguno fuera de ella".into());
+    }
+    let t = best_fit_transform(src, dst);
+    let sq: f32 = src.iter().zip(dst).map(|(a, b)| {
+        let m = t.apply(*a);
+        (0..3).map(|d| (m[d] - b[d]).powi(2)).sum::<f32>()
+    }).sum();
+    Ok((t, (sq / src.len() as f32).sqrt()))
+}
+
 /// La nube llevada con `t` (posición y dirección de vista)
 pub fn transform_cloud(cloud: &PointCloud, t: &Transform) -> PointCloud {
     let points = cloud
@@ -529,6 +563,26 @@ pub fn heat_colors(dist: &[Option<f32>], scale: f32) -> Vec<[u8; 3]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn alineacion_por_parejas_recupera_el_movimiento() {
+        let src = [[0.0, 0.0, 0.0], [40.0, 0.0, 0.0], [0.0, 25.0, 0.0], [0.0, 0.0, 15.0], [30.0, 20.0, 10.0]];
+        let truth = Transform { r: axis_angle([0.0, 0.0, 1.0], 0.7), t: [12.0, -5.0, 3.0] };
+        let dst: Vec<[f32; 3]> = src.iter().map(|p| truth.apply(*p)).collect();
+        let (t, rmse) = align_by_points(&src, &dst).unwrap();
+        assert!(rmse < 1e-3, "rmse {rmse}");
+        for p in &src {
+            let (a, b) = (t.apply(*p), truth.apply(*p));
+            assert!((0..3).all(|d| (a[d] - b[d]).abs() < 1e-3));
+        }
+    }
+
+    #[test]
+    fn alineacion_por_parejas_rechaza_pocas_o_en_linea() {
+        let line = [[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [20.0, 0.0, 0.0]];
+        assert!(align_by_points(&line, &line).is_err());
+        assert!(align_by_points(&line[..2], &line[..2]).is_err());
+    }
 
     /// Caja hueca de 80×50×30 mm muestreada cada 2 mm, sin la tapa de abajo:
     /// asimétrica en los tres ejes para que la orientación quede definida

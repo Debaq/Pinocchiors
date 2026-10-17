@@ -20,8 +20,8 @@ export const en_settings: Catalog = {
     "While you animate, drag or orbit the view, the viewer lowers the resolution a little to stay smooth and restores it when still. Captures and renders always use full quality.",
   "Modelos pesados": "Heavy models",
   "Mostrar primero una vista previa": "Show a preview first",
-  "En modelos de cientos de miles de caras, el visor muestra una versión liviana al instante y la cambia por el detalle completo cuando llega.":
-    "With models of hundreds of thousands of faces, the viewer shows a light version right away and swaps in the full detail when it arrives.",
+  "En modelos de más de 100 000 caras, el visor muestra una versión liviana al instante y la cambia por el detalle completo cuando llega.":
+    "With models of more than 100,000 faces, the viewer shows a light version right away and swaps in the full detail when it arrives.",
   "LOD al animar": "Animation LOD",
   "En modelos de más de 100 000 caras con esqueleto, el visor dibuja una versión simplificada mientras animas y vuelve al detalle completo al parar. Exportar, guardar y renderizar siempre usan la malla completa.":
     "With models of more than 100,000 faces and a skeleton, the viewer draws a simplified version while you animate and returns to full detail when you stop. Exporting, saving and rendering always use the full mesh.",

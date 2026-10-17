@@ -26,6 +26,10 @@ export interface StoredPose {
   /** Miniatura (data URL JPEG) */
   thumbnail?: string;
   bones: PoseByName;
+  /** Grupo de la biblioteca ("Caminar", "Combate"…); sin él, queda en «Sin categoría» */
+  category?: string;
+  /** Etiquetas libres para buscar */
+  tags?: string[];
 }
 
 /** Articulaciones que se pueden posar: la raíz y las que tienen algo que girar */
@@ -230,5 +234,11 @@ export function readPoseClipboard(): PoseByName | null {
 /** Biblioteca guardada en el proyecto: solo las poses bien formadas */
 export function loadPoseLibrary(raw: unknown): StoredPose[] {
   if (!Array.isArray(raw)) return [];
-  return raw.filter((p) => p && typeof p.id === "string" && typeof p.name === "string" && p.bones && typeof p.bones === "object");
+  return raw
+    .filter((p) => p && typeof p.id === "string" && typeof p.name === "string" && p.bones && typeof p.bones === "object")
+    .map((p) => ({
+      ...p,
+      category: typeof p.category === "string" && p.category.trim() ? p.category.trim() : undefined,
+      tags: Array.isArray(p.tags) ? p.tags.filter((t: unknown) => typeof t === "string" && t.trim()) : undefined,
+    }));
 }

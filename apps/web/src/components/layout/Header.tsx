@@ -16,6 +16,8 @@ export interface HeaderProps {
   unsaved?: boolean;
   /** Ítems del menú Archivo (se arman al abrirlo) */
   fileMenu?: () => MenuEntry[];
+  /** Más menús junto a Archivo (Editar, Vista, Malla…); sus ítems se arman al abrirlos */
+  menus?: { label: string; items: () => MenuEntry[] }[];
   onOpenSettings?: () => void;
   /** Espacio de trabajo activo (`undefined` mientras se exporta) */
   workspace?: WorkspaceId;
@@ -30,7 +32,7 @@ export interface HeaderProps {
 
 export const Header: Component<HeaderProps> = (props) => {
   const [isMaximized, setIsMaximized] = createSignal(false);
-  const [fileMenu, setFileMenu] = createSignal<{ x: number; y: number; items: MenuEntry[] } | null>(null);
+  const [fileMenu, setFileMenu] = createSignal<{ x: number; y: number; items: MenuEntry[]; index: number } | null>(null);
   let menuClosedAt = 0;
 
   let unlisten: (() => void) | undefined;
@@ -79,25 +81,33 @@ export const Header: Component<HeaderProps> = (props) => {
           {props.title ?? "Pinocchio"}
         </h1>
 
-        <Show when={props.fileMenu}>
-          <button
-            class={clsx(
-              "h-7 px-2.5 rounded-md text-xs text-text-muted",
-              "hover:text-text hover:bg-surface/40",
-              fileMenu() && "text-text bg-surface/40"
-            )}
-            onClick={(e) => {
-              // El clic que acaba de cerrar el menú (clic fuera) no lo vuelve a abrir
-              if (performance.now() - menuClosedAt < 300) return;
-              const rect = e.currentTarget.getBoundingClientRect();
-              setFileMenu({ x: rect.left, y: rect.bottom + 4, items: props.fileMenu!() });
-            }}
-          >
-            {t("Archivo")}
-          </button>
-        </Show>
-        <Show when={fileMenu()}>
-          {(m) => <ContextMenu x={m().x} y={m().y} items={m().items} onClose={() => { menuClosedAt = performance.now(); setFileMenu(null); }} />}
+        <For each={[...(props.fileMenu ? [{ label: t("Archivo"), items: props.fileMenu }] : []), ...(props.menus ?? [])]}>
+          {(menu, index) => (
+            <button
+              class={clsx(
+                "h-7 px-2.5 rounded-md text-xs text-text-muted",
+                "hover:text-text hover:bg-surface/40",
+                fileMenu()?.index === index() && "text-text bg-surface/40"
+              )}
+              onClick={(e) => {
+                // El clic que acaba de cerrar el menú (clic fuera) no lo vuelve a abrir
+                if (performance.now() - menuClosedAt < 300) return;
+                const rect = e.currentTarget.getBoundingClientRect();
+                setFileMenu({ x: rect.left, y: rect.bottom + 4, items: menu.items(), index: index() });
+              }}
+              onMouseEnter={(e) => {
+                // Con un menú abierto, pasar a otro de la barra lo abre (como en un menú de escritorio)
+                if (!fileMenu() || fileMenu()!.index === index()) return;
+                const rect = e.currentTarget.getBoundingClientRect();
+                setFileMenu({ x: rect.left, y: rect.bottom + 4, items: menu.items(), index: index() });
+              }}
+            >
+              {menu.label}
+            </button>
+          )}
+        </For>
+        <Show when={fileMenu()} keyed>
+          {(m) => <ContextMenu x={m.x} y={m.y} items={m.items} onClose={() => { menuClosedAt = performance.now(); setFileMenu(null); }} />}
         </Show>
       </div>
 

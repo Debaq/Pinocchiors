@@ -21,7 +21,7 @@ export const Checkbox = (props: CheckboxProps) => {
       onChange={props.onChange}
       disabled={props.disabled}
       class={clsx(
-        "relative inline-flex items-center gap-2 cursor-pointer",
+        "relative flex items-center gap-2 cursor-pointer min-w-0",
         "data-[disabled]:opacity-50 data-[disabled]:pointer-events-none",
         props.class
       )}
@@ -29,7 +29,7 @@ export const Checkbox = (props: CheckboxProps) => {
       <KobalteCheckbox.Input class="peer sr-only" />
       <KobalteCheckbox.Control
         class={clsx(
-          "w-4 h-4 rounded",
+          "w-4 h-4 shrink-0 rounded",
           "border border-border bg-bg-lighter",
           "flex items-center justify-center",
           "transition-all duration-100",
@@ -54,7 +54,7 @@ export const Checkbox = (props: CheckboxProps) => {
   );
 
   return props.hint ? (
-    <Tooltip content={props.hint} placement="left" class="relative inline-flex">
+    <Tooltip content={props.hint} placement="left" class="relative flex">
       {box}
     </Tooltip>
   ) : (

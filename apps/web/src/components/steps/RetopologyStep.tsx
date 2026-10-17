@@ -12,6 +12,8 @@ export interface RetopologyStepProps {
   hasResult?: boolean;
   showQuadMesh?: boolean;
   onShowQuadMeshChange?: (show: boolean) => void;
+  compare?: boolean;
+  onCompareChange?: (compare: boolean) => void;
   quality?: QuadQuality;
   objects?: RetopologyObject[];
   /** Triángulos / 2: un quad son dos triángulos, más quads que eso no aportan nada */
@@ -33,6 +35,8 @@ export const RetopologyStep: Component<RetopologyStepProps> = (props) => {
         hasResult={props.hasResult}
         showQuadMesh={props.showQuadMesh}
         onShowQuadMeshChange={props.onShowQuadMeshChange}
+        compare={props.compare}
+        onCompareChange={props.onCompareChange}
         quality={props.quality}
         objects={props.objects}
         maxQuads={props.maxQuads}

@@ -8,6 +8,7 @@ pub mod hdri;
 pub mod imported_rig;
 pub mod lod;
 pub mod mesh_slot;
+pub mod peek;
 #[cfg(target_os = "linux")]
 pub mod linux_desktop;
 pub mod commands;
@@ -64,6 +65,7 @@ pub fn run() {
             // Import/Export multi-formato
             commands::get_supported_formats,
             commands::import_model,
+            peek::peek_model,
             commands::export_model,
             commands::write_render_image,
             ray_render::ray_render_start,
@@ -221,6 +223,7 @@ pub fn run() {
             scan_cloud::scan_cloud_add,
             scan_cloud::scan_cloud_take_set,
             scan_cloud::scan_cloud_take_align,
+            scan_cloud::scan_cloud_align_points,
             scan_cloud::scan_cloud_fuse,
             scan_cloud::scan_cloud_reference,
             scan_cloud::scan_cloud_align_reference,

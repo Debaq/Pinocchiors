@@ -68,6 +68,9 @@ export interface RetopologyPanelProps {
   hasResult?: boolean;
   showQuadMesh?: boolean;
   onShowQuadMeshChange?: (show: boolean) => void;
+  /** La original y la de quads, una al lado de la otra */
+  compare?: boolean;
+  onCompareChange?: (compare: boolean) => void;
   quality?: QuadQuality;
   objects?: RetopologyObject[];
   /** Triángulos / 2 (un quad son dos): más quads que eso no aportan nada */
@@ -269,6 +272,12 @@ export const RetopologyPanel: Component<RetopologyPanelProps> = (props) => {
               label={t("Mostrar malla de quads")}
               checked={props.showQuadMesh}
               onChange={(checked) => props.onShowQuadMeshChange?.(checked)}
+            />
+            <Checkbox
+              label={t("Comparar con la original, lado a lado")}
+              hint={t("Muestra la malla original a la izquierda y la de quads, con sus aristas, a la derecha.")}
+              checked={props.compare}
+              onChange={(checked) => props.onCompareChange?.(checked)}
             />
           </div>
         </Show>

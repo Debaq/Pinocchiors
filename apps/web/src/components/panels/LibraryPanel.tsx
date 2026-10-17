@@ -1,8 +1,9 @@
 import { Component, For, Show, createSignal } from "solid-js";
 import { clsx } from "clsx";
-import { Button, Panel } from "../ui";
+import { Button, Hint, Panel } from "../ui";
 import * as Icons from "../icons";
 import type { StoredPose } from "../../lib/poseTools";
+import { parseTags, poseMatches } from "../../lib/poseLibrary";
 import type { FactoryPose, PresetAnimation, PresetAnimationId } from "../../lib/presetAnimations";
 import { LiveSlider, type PoseSource } from "./PosePanel";
 import { t } from "../../lib/i18n";
@@ -19,6 +20,8 @@ export interface LibraryPanelProps {
   onSavePose: (selectionOnly: boolean) => void;
   onDeletePose: (id: string) => void;
   onRenamePose: (id: string, name: string) => void;
+  /** Categoría y etiquetas de una pose (vacías las quitan) */
+  onPoseMeta: (id: string, meta: { category?: string; tags: string[] }) => void;
   onApplyPose: (source: PoseSource, factor: number, commit: boolean) => void;
 }
 
@@ -31,6 +34,16 @@ export const LibraryPanel: Component<LibraryPanelProps> = (props) => {
   const [chosen, setChosen] = createSignal<PoseSource | null>(null);
   const [blend, setBlend] = createSignal(100);
   const [renaming, setRenaming] = createSignal<string | null>(null);
+  const [query, setQuery] = createSignal("");
+  const [category, setCategory] = createSignal<string | null>(null);
+  const categories = () => [...new Set(props.library.map((p) => p.category ?? "").filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  // Si la categoría elegida ya no existe (se borró la última pose), se vuelve a ver todo
+  const activeCategory = () => (category() === null || category() === "" || categories().includes(category()!) ? category() : null);
+  const shown = () => props.library.filter((p) => poseMatches(p, query(), activeCategory()));
+  const chosenPose = () => {
+    const c = chosen();
+    return c?.kind === "stored" ? props.library.find((p) => p.id === c.id) : undefined;
+  };
   const isChosen = (s: PoseSource) => chosen()?.kind === s.kind && chosen()?.id === s.id;
 
   return (
@@ -51,9 +64,9 @@ export const LibraryPanel: Component<LibraryPanelProps> = (props) => {
               </For>
             </div>
           </Show>
-          <p class="text-xs text-text-dim leading-relaxed">
-            {t("Cada una se agrega como animación nueva, con keys que puedes ajustar en la línea de tiempo.")}
-          </p>
+          <div class="flex justify-end">
+            <Hint text={t("Cada una se agrega como animación nueva, con keys que puedes ajustar en la línea de tiempo.")} />
+          </div>
         </div>
       </Panel>
 
@@ -96,8 +109,32 @@ export const LibraryPanel: Component<LibraryPanelProps> = (props) => {
         }
       >
         <div class="space-y-2">
+          <Show when={props.library.length > 1}>
+            <div class="flex flex-wrap items-center gap-1.5">
+              <input
+                type="search"
+                value={query()}
+                placeholder={t("Buscar pose…")}
+                aria-label={t("Buscar pose")}
+                class="flex-1 min-w-[6rem] px-2 py-1 rounded bg-surface/40 border border-border text-xs text-text outline-none focus:border-accent"
+                onInput={(e) => setQuery(e.currentTarget.value)}
+              />
+              <Show when={categories().length > 0}>
+                <select
+                  aria-label={t("Categoría")}
+                  class="px-1.5 py-1 rounded bg-surface/40 border border-border text-xs text-text outline-none focus:border-accent"
+                  value={activeCategory() === null ? "__all" : activeCategory() === "" ? "__none" : activeCategory()!}
+                  onChange={(e) => setCategory(e.currentTarget.value === "__all" ? null : e.currentTarget.value === "__none" ? "" : e.currentTarget.value)}
+                >
+                  <option value="__all">{t("Todas")}</option>
+                  <option value="__none">{t("Sin categoría")}</option>
+                  <For each={categories()}>{(c) => <option value={c}>{c}</option>}</For>
+                </select>
+              </Show>
+            </div>
+          </Show>
           <div class="grid grid-cols-3 gap-1.5">
-            <For each={props.library}>
+            <For each={shown()}>
               {(pose) => (
                 <div
                   class={clsx(
@@ -151,6 +188,44 @@ export const LibraryPanel: Component<LibraryPanelProps> = (props) => {
           </div>
           <Show when={props.library.length === 0}>
             <p class="text-xs text-text-dim">{t("Guarda poses con + para reusarlas en otros cuadros.")}</p>
+          </Show>
+          <Show when={props.library.length > 0 && shown().length === 0}>
+            <p class="text-xs text-text-dim">{t("Ninguna pose coincide con la búsqueda.")}</p>
+          </Show>
+          <Show when={chosenPose()} keyed>
+            {(pose) => (
+              <div class="space-y-1.5 pt-1 border-t border-border">
+                <label class="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+                  <span class="text-text-muted">{t("Categoría")}</span>
+                  <input
+                    list="pose-categories"
+                    value={pose.category ?? ""}
+                    class="flex-1 min-w-[6rem] px-2 py-1 rounded bg-surface/40 border border-border text-xs text-text outline-none focus:border-accent"
+                    onKeyDown={(e) => {
+                      e.stopPropagation();
+                      if (e.key === "Enter") e.currentTarget.blur();
+                    }}
+                    onChange={(e) => props.onPoseMeta(pose.id, { category: e.currentTarget.value.trim() || undefined, tags: pose.tags ?? [] })}
+                  />
+                  <datalist id="pose-categories">
+                    <For each={categories()}>{(c) => <option value={c} />}</For>
+                  </datalist>
+                </label>
+                <label class="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+                  <span class="text-text-muted">{t("Etiquetas")}</span>
+                  <input
+                    value={(pose.tags ?? []).join(", ")}
+                    placeholder={t("separadas por comas")}
+                    class="flex-1 min-w-[6rem] px-2 py-1 rounded bg-surface/40 border border-border text-xs text-text outline-none focus:border-accent"
+                    onKeyDown={(e) => {
+                      e.stopPropagation();
+                      if (e.key === "Enter") e.currentTarget.blur();
+                    }}
+                    onChange={(e) => props.onPoseMeta(pose.id, { category: pose.category, tags: parseTags(e.currentTarget.value) })}
+                  />
+                </label>
+              </div>
+            )}
           </Show>
         </div>
       </Panel>
