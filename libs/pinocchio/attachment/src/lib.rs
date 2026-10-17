@@ -12,6 +12,7 @@ pub mod heat_diffusion;
 pub mod attachment;
 pub mod symmetry;
 pub mod detached;
+#[cfg(test)] mod perf_tests;
 
 pub use visibility::VisibilityTester;
 pub use heat_diffusion::{HeatDiffusion, HeatDiffusionError};

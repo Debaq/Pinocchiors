@@ -7,6 +7,7 @@
 
 mod spd_matrix;
 mod lsq_solver;
+#[cfg(test)] mod perf_tests;
 
 pub use spd_matrix::SPDMatrix;
 pub use lsq_solver::LSQSolver;

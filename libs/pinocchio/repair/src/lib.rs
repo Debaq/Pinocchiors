@@ -46,6 +46,8 @@ pub use config::{AnalysisConfig, HoleFillConfig, MeshDiagnostics, RepairConfig, 
 pub use error::{RepairError, RepairResult};
 pub use trimesh::TriMesh;
 
+#[cfg(test)] mod perf_tests;
+
 use pinocchio_mesh::Mesh;
 use repair::{cleanup, holes, intersect, manifold, orient};
 
