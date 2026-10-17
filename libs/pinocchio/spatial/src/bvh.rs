@@ -68,10 +68,110 @@ pub struct ClosestHit {
     pub triangle: usize,
 }
 
+/// Profundidad máxima de la pila de recorrido (el árbol está balanceado: ~log₂ de los triángulos)
+const STACK_DEPTH: usize = 96;
+
+/// Nodo del árbol aplanado (ver [`FlatBvh`])
+#[derive(Debug, Clone, Copy)]
+struct FlatNode {
+    min: [Real; 3],
+    max: [Real; 3],
+    /// Hoja: índice del triángulo. Interno: índice del hijo derecho (el izquierdo es el siguiente)
+    link: u32,
+    /// Hoja: posición en el recorrido izquierda-derecha del árbol; desempata los cortes a igual distancia
+    rank: u32,
+    leaf: bool,
+}
+
+/// El mismo árbol en un arreglo, en preorden (el hijo izquierdo sigue a su padre): los rayos lo
+/// recorren con una pila en vez de recursión y sin saltar entre nodos sueltos en memoria.
+#[derive(Debug, Default)]
+struct FlatBvh {
+    nodes: Vec<FlatNode>,
+}
+
+impl FlatBvh {
+    fn from_tree(root: &BvhNode) -> Self {
+        fn push(node: &BvhNode, out: &mut Vec<FlatNode>, rank: &mut u32) -> usize {
+            let index = out.len();
+            let bounds = Bvh::get_bounds(node);
+            let mut flat = FlatNode {
+                min: [bounds.min.x(), bounds.min.y(), bounds.min.z()],
+                max: [bounds.max.x(), bounds.max.y(), bounds.max.z()],
+                link: 0,
+                rank: 0,
+                leaf: false,
+            };
+            match node {
+                BvhNode::Leaf { triangle_idx, .. } => {
+                    flat.link = *triangle_idx as u32;
+                    flat.rank = *rank;
+                    flat.leaf = true;
+                    *rank += 1;
+                    out.push(flat);
+                }
+                BvhNode::Internal { left, right, .. } => {
+                    out.push(flat);
+                    push(left, out, rank);
+                    out[index].link = push(right, out, rank) as u32;
+                }
+            }
+            index
+        }
+        let mut nodes = Vec::new();
+        push(root, &mut nodes, &mut 0);
+        Self { nodes }
+    }
+}
+
+/// Rayo preparado para probar muchas cajas: la inversa de la dirección y qué ejes son paralelos
+struct RayBoxes {
+    inv: [Real; 3],
+    parallel: [bool; 3],
+    o: [Real; 3],
+}
+
+impl RayBoxes {
+    fn new(origin: &Vector3, inv_dir: &Vector3) -> Self {
+        let inv = [inv_dir.x(), inv_dir.y(), inv_dir.z()];
+        Self { inv, parallel: inv.map(Real::is_infinite), o: [origin.x(), origin.y(), origin.z()] }
+    }
+
+    /// Lo mismo que [`ray_hits_bounds`], devolviendo además la distancia de entrada a la caja
+    /// (`Some` si el rayo la toca en `[t_min, t_max]`)
+    #[inline]
+    fn entry(&self, node: &FlatNode, t_min: Real, t_max: Real) -> Option<Real> {
+        let (mut lo, mut hi) = (t_min, t_max);
+        for axis in 0..3 {
+            let (o, min, max) = (self.o[axis], node.min[axis], node.max[axis]);
+            // Rayo paralelo a este eje: toca la caja solo si el origen está dentro de su franja
+            if self.parallel[axis] {
+                if o < min || o > max {
+                    return None;
+                }
+                continue;
+            }
+            let inv = self.inv[axis];
+            let mut t0 = (min - o) * inv;
+            let mut t1 = (max - o) * inv;
+            if t0 > t1 {
+                std::mem::swap(&mut t0, &mut t1);
+            }
+            lo = lo.max(t0);
+            hi = hi.min(t1);
+            if lo > hi {
+                return None;
+            }
+        }
+        Some(lo)
+    }
+}
+
 /// BVH para consultas rápidas de distancia
 #[derive(Debug)]
 pub struct Bvh {
     root: Option<BvhNode>,
+    flat: FlatBvh,
     triangles: Vec<Triangle>,
 }
 
@@ -79,7 +179,7 @@ impl Bvh {
     /// Construye un BVH desde una lista de triángulos
     pub fn build(triangles: Vec<Triangle>) -> Self {
         if triangles.is_empty() {
-            return Self { root: None, triangles };
+            return Self { root: None, flat: FlatBvh::default(), triangles };
         }
 
         // Las cajas se calculan una vez (antes se recalculaban en cada nivel del árbol)
@@ -88,6 +188,7 @@ impl Bvh {
         let root = Self::build_recursive(&triangles, &tri_bounds, &mut indices);
 
         Self {
+            flat: FlatBvh::from_tree(&root),
             root: Some(root),
             triangles,
         }
@@ -282,17 +383,46 @@ impl Bvh {
     /// segmento, en `[0, 0.5)`) de cada extremo, para que un vértice de la
     /// malla no quede bloqueado por sus propios triángulos adyacentes.
     pub fn segment_intersects(&self, a: &Vector3, b: &Vector3, margin: Real) -> bool {
-        let Some(root) = self.root.as_ref() else {
+        if self.flat.nodes.is_empty() {
             return false;
-        };
+        }
         let dir = *b - *a;
         if dir.length_squared() == 0.0 {
             return false;
         }
         let inv_dir = Vector3::new(1.0 / dir.x(), 1.0 / dir.y(), 1.0 / dir.z());
-        self.any_hit_recursive(root, a, &dir, &inv_dir, margin, 1.0 - margin)
+        self.any_hit(a, &dir, &inv_dir, margin, 1.0 - margin)
     }
 
+    /// ¿Algún triángulo corta el rayo con `t` en `(t_min, t_max)`? Con salida en el primero que
+    /// encuentra: el resultado no depende del orden de recorrido
+    fn any_hit(&self, origin: &Vector3, dir: &Vector3, inv_dir: &Vector3, t_min: Real, t_max: Real) -> bool {
+        let ray = RayBoxes::new(origin, inv_dir);
+        let nodes = &self.flat.nodes;
+        let mut stack = [0u32; STACK_DEPTH];
+        let mut top = 1;
+        while top > 0 {
+            top -= 1;
+            let index = stack[top] as usize;
+            let node = &nodes[index];
+            if ray.entry(node, t_min, t_max).is_none() {
+                continue;
+            }
+            if node.leaf {
+                if ray_triangle_t(origin, dir, &self.triangles[node.link as usize]).is_some_and(|t| t > t_min && t < t_max) {
+                    return true;
+                }
+            } else {
+                // El hijo izquierdo (el siguiente en el arreglo) sale primero
+                stack[top] = node.link;
+                stack[top + 1] = index as u32 + 1;
+                top += 2;
+            }
+        }
+        false
+    }
+
+    #[cfg(test)]
     fn any_hit_recursive(
         &self,
         node: &BvhNode,
@@ -327,6 +457,72 @@ impl Bvh {
     /// su `t` y el índice del triángulo. Con `dir` unitario, `t` es la
     /// distancia.
     pub fn ray_hit(&self, origin: &Vector3, dir: &Vector3, t_min: Real, t_max: Real) -> Option<(Real, usize)> {
+        let nodes = &self.flat.nodes;
+        if nodes.is_empty() {
+            return None;
+        }
+        let ray = RayBoxes::new(origin, &Vector3::new(1.0 / dir.x(), 1.0 / dir.y(), 1.0 / dir.z()));
+        // Mejor corte hasta ahora: (t, posición de la hoja en el recorrido izquierda-derecha, triángulo)
+        let mut best: Option<(Real, u32, usize)> = None;
+        let mut limit = t_max;
+        // Pila de (nodo, distancia de entrada a su caja)
+        let mut stack = [(0u32, 0.0 as Real); STACK_DEPTH];
+        let Some(entry) = ray.entry(&nodes[0], t_min, limit) else {
+            return None;
+        };
+        stack[0] = (0, entry);
+        let mut top = 1;
+        while top > 0 {
+            top -= 1;
+            let (index, entry) = stack[top];
+            if entry > limit {
+                continue;
+            }
+            let node = &nodes[index as usize];
+            if node.leaf {
+                let tri = node.link as usize;
+                if let Some(t) = ray_triangle_t(origin, dir, &self.triangles[tri])
+                    && t > t_min
+                    // A igual distancia gana la hoja que el recorrido izquierda-derecha habría visto primero
+                    && (t < limit || best.is_some_and(|(bt, rank, _)| t == bt && node.rank < rank))
+                {
+                    best = Some((t, node.rank, tri));
+                    limit = t;
+                }
+                continue;
+            }
+            // Primero el hijo más cercano; a igual distancia, el izquierdo
+            let (left, right) = (index as usize + 1, node.link as usize);
+            let hit_left = ray.entry(&nodes[left], t_min, limit);
+            let hit_right = ray.entry(&nodes[right], t_min, limit);
+            match (hit_left, hit_right) {
+                (Some(l), Some(r)) if l <= r => {
+                    stack[top] = (right as u32, r);
+                    stack[top + 1] = (left as u32, l);
+                    top += 2;
+                }
+                (Some(l), Some(r)) => {
+                    stack[top] = (left as u32, l);
+                    stack[top + 1] = (right as u32, r);
+                    top += 2;
+                }
+                (Some(l), None) => {
+                    stack[top] = (left as u32, l);
+                    top += 1;
+                }
+                (None, Some(r)) => {
+                    stack[top] = (right as u32, r);
+                    top += 1;
+                }
+                (None, None) => {}
+            }
+        }
+        best.map(|(t, _, tri)| (t, tri))
+    }
+
+    /// El recorrido recursivo original (izquierda y luego derecha), como referencia en las pruebas
+    #[cfg(test)]
+    fn ray_hit_reference(&self, origin: &Vector3, dir: &Vector3, t_min: Real, t_max: Real) -> Option<(Real, usize)> {
         let root = self.root.as_ref()?;
         let inv_dir = Vector3::new(1.0 / dir.x(), 1.0 / dir.y(), 1.0 / dir.z());
         let mut best = (t_max, usize::MAX);
@@ -334,6 +530,7 @@ impl Bvh {
         (best.0 < t_max).then_some(best)
     }
 
+    #[cfg(test)]
     fn first_hit_recursive(
         &self,
         node: &BvhNode,
@@ -469,7 +666,8 @@ fn ray_triangle_t(origin: &Vector3, dir: &Vector3, tri: &Triangle) -> Option<Rea
     Some(inv * e2.dot(&q))
 }
 
-/// Test rayo-AABB por slabs restringido a `[t_min, t_max]`
+/// Test rayo-AABB por slabs restringido a `[t_min, t_max]` (lo usan los recorridos de referencia de las pruebas)
+#[cfg(test)]
 fn ray_hits_bounds(bounds: &Rect, origin: &Vector3, inv_dir: &Vector3, t_min: Real, t_max: Real) -> bool {
     let mut lo = t_min;
     let mut hi = t_max;
@@ -556,6 +754,101 @@ mod tests {
             }
         }
         out
+    }
+
+    /// Generador congruencial (los tests no usan dependencias)
+    struct Lcg(u64);
+    impl Lcg {
+        fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            self.0 >> 33
+        }
+    }
+
+    /// Esfera de triángulos con un poco de relieve (sin empates)
+    fn bumpy_sphere(rings: usize, segments: usize) -> Vec<Triangle> {
+        let point = |i: usize, j: usize| {
+            let (theta, phi) = (std::f64::consts::PI * i as f64 / rings as f64, std::f64::consts::TAU * (j % segments) as f64 / segments as f64);
+            let r = 1.0 + 0.08 * (theta * 5.0).sin() * (phi * 3.0).cos();
+            Vector3::new(r * theta.sin() * phi.cos(), r * theta.cos(), r * theta.sin() * phi.sin())
+        };
+        let mut out = Vec::new();
+        for i in 0..rings {
+            for j in 0..segments {
+                let (a, b, c, d) = (point(i, j), point(i, j + 1), point(i + 1, j), point(i + 1, j + 1));
+                out.push(Triangle::new(a, c, b));
+                out.push(Triangle::new(b, c, d));
+            }
+        }
+        out
+    }
+
+    fn random_unit(rng: &mut Lcg) -> Vector3 {
+        loop {
+            let v = Vector3::new(
+                (rng.next() % 2001) as f64 / 1000.0 - 1.0,
+                (rng.next() % 2001) as f64 / 1000.0 - 1.0,
+                (rng.next() % 2001) as f64 / 1000.0 - 1.0,
+            );
+            if v.length() > 0.1 && v.length() <= 1.0 {
+                return v * (1.0 / v.length());
+            }
+        }
+    }
+
+    /// El recorrido aplanado, de más cercano a más lejano, da el mismo triángulo y la misma
+    /// distancia que el recorrido recursivo original, también en los empates
+    #[test]
+    fn flat_ray_hit_matches_the_recursive_traversal() {
+        let mut rng = Lcg(77);
+        let meshes = [("rejilla", grid_triangles(40)), ("esfera", bumpy_sphere(30, 48))];
+        for (name, triangles) in meshes {
+            let bvh = Bvh::build(triangles);
+            let mut hits = 0;
+            for n in 0..6000 {
+                // Orígenes sobre las posiciones enteras de la rejilla (cortes exactos por vértices y
+                // aristas compartidas) y también al azar; direcciones sobre los ejes y al azar
+                let origin = if name == "esfera" {
+                    // Alrededor de la esfera, mirando hacia ella con algo de desvío
+                    random_unit(&mut rng) * (0.4 + (rng.next() % 300) as f64 / 100.0)
+                } else if n % 3 == 0 {
+                    Vector3::new((rng.next() % 41) as f64, 1.0 + (rng.next() % 3) as f64, (rng.next() % 41) as f64)
+                } else {
+                    Vector3::new((rng.next() % 4001) as f64 / 100.0 - 20.0, (rng.next() % 600) as f64 / 100.0 - 3.0, (rng.next() % 4001) as f64 / 100.0 - 20.0)
+                };
+                let dir = match n % 4 {
+                    0 if name == "rejilla" => Vector3::new(0.0, -1.0, 0.0),
+                    1 if name == "rejilla" => Vector3::new(0.0, 1.0, 0.0),
+                    _ => random_unit(&mut rng),
+                };
+                let (t_min, t_max) = [(0.0, 100.0), (0.5, 3.0), (1e-9, 1e9)][n % 3];
+                let (new, old) = (bvh.ray_hit(&origin, &dir, t_min, t_max), bvh.ray_hit_reference(&origin, &dir, t_min, t_max));
+                assert_eq!(new, old, "{name}: origen {origin:?}, dir {dir:?}, [{t_min}, {t_max}]");
+                hits += new.is_some() as usize;
+            }
+            assert!(hits > 300, "{name}: la prueba casi no tiene cortes ({hits})");
+        }
+    }
+
+    #[test]
+    fn flat_segment_test_matches_the_recursive_traversal() {
+        let mut rng = Lcg(5);
+        let bvh = Bvh::build(bumpy_sphere(30, 48));
+        let (mut blocked, mut free) = (0, 0);
+        for n in 0..4000 {
+            let a = random_unit(&mut rng) * ((rng.next() % 100) as f64 / 90.0);
+            let b = random_unit(&mut rng) * (0.5 + (rng.next() % 200) as f64 / 100.0);
+            let margin = [1e-3, 0.0, 0.05][n % 3];
+            let dir = b - a;
+            let reference = {
+                let inv = Vector3::new(1.0 / dir.x(), 1.0 / dir.y(), 1.0 / dir.z());
+                dir.length_squared() != 0.0 && bvh.any_hit_recursive(bvh.root.as_ref().unwrap(), &a, &dir, &inv, margin, 1.0 - margin)
+            };
+            let got = bvh.segment_intersects(&a, &b, margin);
+            assert_eq!(got, reference, "segmento {a:?} -> {b:?}, margen {margin}");
+            if got { blocked += 1 } else { free += 1 }
+        }
+        assert!(blocked > 200 && free > 200, "{blocked} bloqueados, {free} libres");
     }
 
     #[test]
