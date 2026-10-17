@@ -1,5 +1,6 @@
 import { batch, createSignal } from "solid-js";
 import { t } from "./i18n.ts";
+import { unpackHistory } from "./historyPack.ts";
 
 /**
  * Historial en árbol: deshacer y hacer otra cosa abre una rama nueva en vez
@@ -46,6 +47,8 @@ export interface SavedHistory {
   version: 1;
   nodes: HistoryNode[];
   current: number;
+  /** Listas compartidas entre pasos al guardar (ver `packHistory` en historyPack.ts) */
+  pool?: unknown[];
 }
 
 export interface HistoryStore {
@@ -198,8 +201,9 @@ export function createHistoryStore(handlers: StepHandlers): HistoryStore {
         setCurrent(0);
       }),
     save: () => ({ version: 1, nodes: nodes(), current: current() }),
-    load: (saved, volatile = []) =>
+    load: (packed, volatile = []) =>
       batch(() => {
+        const saved = packed && unpackHistory(packed);
         const valid =
           saved?.version === 1 &&
           Array.isArray(saved.nodes) &&

@@ -98,6 +98,7 @@ import { LOD_FROM_FACES, fetchAnimationLod } from "./lib/lod";
 import { createPersisted, startDrag } from "./lib/ui-state";
 import { PlaybackBar, type PlaybackSegment } from "./components/layout/PlaybackBar";
 import { createChunked } from "./lib/chunked";
+import { packHistory } from "./lib/historyPack";
 import { TextureEditor, TEXTURE_SLOTS, type TextureExportKind, type TextureSelection, type TextureSlot } from "./components/layout/TextureEditor";
 import { applyTheme, followSystemTheme, type ThemeSetting } from "./lib/theme";
 import type { MenuEntry } from "./components/ui/ContextMenu";
@@ -8078,7 +8079,7 @@ export const App: Component = () => {
       rig: rigSettings(),
       poseLibrary: poseLibrary(),
       mixer: mixer(),
-      history: withHistory ? history.save() : undefined,
+      history: withHistory ? packHistory(history.save()) : undefined,
       // Los objetos van solo al proyecto (no a las copias de deshacer ni al casillero de cada uno)
       objects: withHistory ? objects() : undefined,
       activeObject: withHistory ? activeObjectId() : undefined,
