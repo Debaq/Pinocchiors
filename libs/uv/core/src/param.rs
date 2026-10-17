@@ -2,7 +2,7 @@
 
 use crate::geometry::PolyMesh;
 use pinocchio_math::Vector3;
-use pinocchio_sparse::SPDMatrix;
+use pinocchio_sparse::{SPDMatrix, SpdFactor};
 use std::collections::HashMap;
 
 /// UV de una carta y su calidad.
@@ -102,6 +102,26 @@ fn planar(chart: &Chart) -> Vec<[f64; 2]> {
     chart.positions.iter().map(|p| [p.dot(&x), p.dot(&y)]).collect()
 }
 
+/// Residuo relativo máximo con el que se acepta una solución directa (si no, se usa CG)
+const DIRECT_RESIDUAL: f64 = 1e-6;
+
+/// Resuelve `A·x = b` para cada lado derecho. Primero con la factorización de Cholesky
+/// (exacta, y se reutiliza entre llamadas) y, si la matriz no se dejó factorizar o la solución
+/// no es fiable (la regularización de LSCM es de 1e-10: casi singular), con CG.
+fn solve_all(matrix: &SPDMatrix, factor: Option<&SpdFactor>, rhs: &[&[f64]], max_iterations: usize, tolerance: f64) -> Option<Vec<Vec<f64>>> {
+    if let Some(solutions) = factor.and_then(|f| f.solve_columns(rhs).ok()) {
+        let reliable = solutions.iter().zip(rhs).all(|(x, b)| {
+            let norm = b.iter().map(|v| v * v).sum::<f64>().sqrt().max(1e-300);
+            let residual = matrix.mul_vec(x).iter().zip(*b).map(|(ax, b)| (ax - b) * (ax - b)).sum::<f64>().sqrt();
+            x.iter().all(|v| v.is_finite()) && residual <= DIRECT_RESIDUAL * norm
+        });
+        if reliable {
+            return Some(solutions);
+        }
+    }
+    rhs.iter().map(|b| matrix.solve_cg(b, max_iterations, tolerance).ok()).collect()
+}
+
 /// LSCM con dos vértices fijos.
 fn lscm(chart: &Chart) -> Option<Vec<[f64; 2]>> {
     let n = chart.positions.len();
@@ -176,7 +196,8 @@ fn lscm(chart: &Chart) -> Option<Vec<[f64; 2]>> {
         vals.push(scale * 1e-10);
     }
     let matrix = SPDMatrix::from_triplets(size, &rows, &cols, &vals).ok()?;
-    let solution = matrix.solve_cg(&rhs, 20 * size + 200, 1e-10).ok()?;
+    let factor = matrix.cholesky_factor().ok();
+    let solution = solve_all(&matrix, factor.as_ref(), &[&rhs], 20 * size + 200, 1e-10)?.pop()?;
 
     let uv = (0..n)
         .map(|i| match pinned.get(&i) {
@@ -239,6 +260,8 @@ fn arap(chart: &Chart, uv: &mut [[f64; 2]], iterations: usize) {
         vals.push(1e-12);
     }
     let Ok(matrix) = SPDMatrix::from_triplets(size, &rows, &cols, &vals) else { return };
+    // La misma matriz en todas las iteraciones: se factoriza una vez
+    let factor = matrix.cholesky_factor().ok();
 
     for _ in 0..iterations {
         // Paso local: rotación más cercana al jacobiano de cada triángulo
@@ -287,8 +310,8 @@ fn arap(chart: &Chart, uv: &mut [[f64; 2]], iterations: usize) {
                 }
             }
         }
-        let solve = |b: &[f64]| matrix.solve_cg(b, 20 * size + 200, 1e-9).ok();
-        let (Some(us), Some(vs)) = (solve(&rhs[0]), solve(&rhs[1])) else { return };
+            let Some(mut solved) = solve_all(&matrix, factor.as_ref(), &[&rhs[0], &rhs[1]], 20 * size + 200, 1e-9) else { return };
+        let (Some(vs), Some(us)) = (solved.pop(), solved.pop()) else { return };
         if us.iter().chain(&vs).any(|x| !x.is_finite()) {
             return;
         }

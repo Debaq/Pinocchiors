@@ -40,6 +40,11 @@ fn bench<R>(name: &str, tris: usize, mut f: impl FnMut() -> R) -> R {
 
 /// Esfera-cubo ondulada de radio ~1: `n × n` quads por cara (6·n² quads).
 fn cube_sphere(n: usize) -> (Vec<[f64; 3]>, Vec<[usize; 4]>) {
+    cube_sphere_amp(n, 0.03)
+}
+
+/// Igual, con la amplitud del relieve (0,03 es suave; 0,25 obliga a partir cartas).
+fn cube_sphere_amp(n: usize, amp: f64) -> (Vec<[f64; 3]>, Vec<[usize; 4]>) {
     let mut points = Vec::new();
     let mut faces = Vec::new();
     for axis in 0..3 {
@@ -54,7 +59,7 @@ fn cube_sphere(n: usize) -> (Vec<[f64; 3]>, Vec<[usize; 4]>) {
                     p[(axis + 2) % 3] = v;
                     let len = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
                     let d = p.map(|c| c / len);
-                    let r = 1.0 + 0.03 * (d[0] * 9.0).sin() * (d[1] * 7.0).cos() * (d[2] * 11.0).sin();
+                    let r = 1.0 + amp * (d[0] * 9.0).sin() * (d[1] * 7.0).cos() * (d[2] * 11.0).sin();
                     points.push(d.map(|c| c * r));
                 }
             }
@@ -107,6 +112,54 @@ fn unwrap_and_pack() {
     assert_eq!(out.corners.len(), faces.len());
     assert!(out.num_charts > 0);
     assert!(out.corners.iter().flatten().flatten().all(|c| (-1e-3..=1.001).contains(c)), "UV fuera de [0,1]");
+}
+
+/// Desplegado de mallas de varios tamaños y relieves (cartas chicas y grandes).
+#[test]
+#[ignore = "perf"]
+fn unwrap_sizes() {
+    let list: &[(usize, f64)] = if small() { &[(8, 0.25)] } else { &[(15, 0.03), (30, 0.03), (30, 0.25), (60, 0.03), (60, 0.25)] };
+    for &(n, amp) in list {
+        let (points, faces) = cube_sphere_amp(n, amp);
+        let options = UnwrapOptions { texture_size: 1024, ..Default::default() };
+        let name = format!("unwrap_n{n}_amp{amp}");
+        let out = bench(&name, faces.len() * 2, || unwrap(&points, &faces, &options));
+        assert!(out.num_charts > 0);
+    }
+}
+
+/// Calidad del desplegado (no mide tiempo): cartas, estiramiento, inversiones y cobertura, con
+/// relieve suave y fuerte y los dos diseños. Sirve para comparar el resultado al cambiar el solver.
+#[test]
+#[ignore = "perf"]
+fn unwrap_quality() {
+    use uv_core::Layout;
+    let n = if small() { 8 } else { 30 };
+    for (label, amp) in [("suave", 0.03), ("fuerte", 0.25)] {
+        let (points, faces) = cube_sphere_amp(n, amp);
+        for layout in [Layout::Compact, Layout::Paintable] {
+            let options = UnwrapOptions { texture_size: 1024, layout, ..Default::default() };
+            let t = Instant::now();
+            let out = unwrap(&points, &faces, &options);
+            // Suma de comprobación de todas las UV y de la carta de cada cara (FNV-1a): detecta cualquier cambio
+            let mut hash: u64 = 0xcbf29ce484222325;
+            let mut mix = |v: u64| hash = (hash ^ v).wrapping_mul(0x100000001b3);
+            for c in out.corners.iter().flatten().flatten() {
+                mix(c.to_bits() as u64);
+            }
+            for &c in &out.chart_of_face {
+                mix(c as u64);
+            }
+            println!(
+                "QUALITY relieve={label} layout={layout:?} hash={hash:016x} cartas={} estiramiento={:.6} invertidos={} cobertura={:.6} ms={:.0}",
+                out.num_charts,
+                out.stretch,
+                out.flipped,
+                out.coverage,
+                t.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+    }
 }
 
 /// Construcción de la superficie de consulta (BVH de triángulos del original denso).

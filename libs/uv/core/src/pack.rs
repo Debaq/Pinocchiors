@@ -102,12 +102,23 @@ struct Mask {
     h: usize,
     words: usize,
     bits: Vec<u64>,
+    /// Filas con celdas, de la más llena a la más vacía (ver [`Mask::index_rows`])
+    heavy_first: Vec<u32>,
+    /// La fila más llena, en corridas `(inicio, largo)`: con ella `Atlas::find` descarta
+    /// de una vez casi todas las posiciones x
+    pivot: Option<Pivot>,
+}
+
+#[derive(Debug, Clone)]
+struct Pivot {
+    row: usize,
+    runs: Vec<(usize, usize)>,
 }
 
 impl Mask {
     fn new(w: usize, h: usize) -> Self {
         let words = w.div_ceil(64).max(1);
-        Self { w, h, words, bits: vec![0; words * h] }
+        Self { w, h, words, bits: vec![0; words * h], heavy_first: Vec::new(), pivot: None }
     }
 
     fn set(&mut self, x: usize, y: usize) {
@@ -118,26 +129,59 @@ impl Mask {
         self.bits[y * self.words + x / 64] & (1 << (x % 64)) != 0
     }
 
+    /// Ordena las filas con celdas de la más llena a la más vacía: `Atlas::fits` las prueba
+    /// en ese orden y los candidatos que no caben fallan antes (el resultado es el mismo)
+    fn index_rows(&mut self) {
+        let weight = |y: usize| self.row(y).iter().map(|w| w.count_ones()).sum::<u32>();
+        let mut rows: Vec<(u32, u32)> = (0..self.h).map(|y| (weight(y), y as u32)).filter(|&(w, _)| w > 0).collect();
+        rows.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+        self.heavy_first = rows.into_iter().map(|(_, y)| y).collect();
+        self.pivot = self.heavy_first.first().map(|&y| {
+            let row = y as usize;
+            let mut runs: Vec<(usize, usize)> = Vec::new();
+            for x in (0..self.w).filter(|&x| self.get(x, row)) {
+                match runs.last_mut() {
+                    Some((start, len)) if *start + *len == x => *len += 1,
+                    _ => runs.push((x, 1)),
+                }
+            }
+            Pivot { row, runs }
+        });
+    }
+
     fn row(&self, y: usize) -> &[u64] {
         &self.bits[y * self.words..(y + 1) * self.words]
     }
 
     /// La máscara engordada `p` celdas hacia cada lado (cuadrado de lado
     /// 2p + 1); su celda (p, p) corresponde a la (0, 0) de la original.
+    ///
+    /// Se engorda por filas con palabras de 64 celdas (un desplazamiento por cada duplicación
+    /// del ancho) y luego en vertical combinando filas, sin tocar celda por celda.
     fn dilate(&self, p: usize) -> Mask {
+        let len = 2 * p + 1;
         let mut wide = Mask::new(self.w + 2 * p, self.h);
         for y in 0..self.h {
-            for x in (0..self.w).filter(|&x| self.get(x, y)) {
-                for dx in 0..=2 * p {
-                    wide.set(x + dx, y);
-                }
+            let row = &mut wide.bits[y * wide.words..(y + 1) * wide.words];
+            row[..self.words].copy_from_slice(self.row(y));
+            // row[x] = OR de self[x - 2p ..= x]
+            let mut size = 1;
+            while size * 2 <= len {
+                or_shift_up(row, size);
+                size *= 2;
+            }
+            if size < len {
+                or_shift_up(row, len - size);
             }
         }
         let mut out = Mask::new(self.w + 2 * p, self.h + 2 * p);
-        for y in 0..wide.h {
-            for x in (0..wide.w).filter(|&x| wide.get(x, y)) {
-                for dy in 0..=2 * p {
-                    out.set(x, y + dy);
+        for y in 0..out.h {
+            let dst = y * out.words;
+            for k in 0..len {
+                if let Some(src) = y.checked_sub(k).filter(|&r| r < wide.h) {
+                    for j in 0..out.words {
+                        out.bits[dst + j] |= wide.bits[src * wide.words + j];
+                    }
                 }
             }
         }
@@ -179,6 +223,7 @@ fn rasterize(triangles: &[[[f64; 2]; 3]], w: usize, h: usize) -> Mask {
             }
         }
     }
+    mask.index_rows();
     mask
 }
 
@@ -214,6 +259,57 @@ impl Oriented {
     }
 }
 
+/// `acc[x] |= acc[x + s]`, en el sitio. Las palabras se recorren de menor a mayor y cada una
+/// solo lee las de índice igual o mayor, que todavía no se modificaron.
+fn or_shift_down(acc: &mut [u64], s: usize) {
+    let (words, bits) = (s / 64, s % 64);
+    for i in 0..acc.len() {
+        let lo = acc.get(i + words).copied().unwrap_or(0);
+        acc[i] |= if bits == 0 {
+            lo
+        } else {
+            (lo >> bits) | (acc.get(i + words + 1).copied().unwrap_or(0) << (64 - bits))
+        };
+    }
+}
+
+/// `acc[x] |= acc[x - s]`, en el sitio. Las palabras se recorren de mayor a menor y cada una
+/// solo lee las de índice igual o menor, que todavía no se modificaron.
+fn or_shift_up(acc: &mut [u64], s: usize) {
+    let (words, bits) = (s / 64, s % 64);
+    for i in (0..acc.len()).rev() {
+        let at = |j: usize| i.checked_sub(j).map_or(0, |k| acc[k]);
+        let v = if bits == 0 { at(words) } else { (at(words) << bits) | (at(words + 1) >> (64 - bits)) };
+        acc[i] |= v;
+    }
+}
+
+/// `dst[x] |= src[x + s]`
+fn or_shifted_into(dst: &mut [u64], src: &[u64], s: usize) {
+    let (words, bits) = (s / 64, s % 64);
+    for (i, d) in dst.iter_mut().enumerate() {
+        let lo = src.get(i + words).copied().unwrap_or(0);
+        *d |= if bits == 0 {
+            lo
+        } else {
+            (lo >> bits) | (src.get(i + words + 1).copied().unwrap_or(0) << (64 - bits))
+        };
+    }
+}
+
+/// Deja en `acc` `OR de occ[x .. x + len]` para cada `x`: ¿hay algún bit ocupado en la ventana que
+/// empieza en x? (se duplica el largo de la ventana en cada paso: log₂(len) desplazamientos)
+fn window_or(acc: &mut [u64], len: usize) {
+    let mut size = 1;
+    while size * 2 <= len {
+        or_shift_down(acc, size);
+        size *= 2;
+    }
+    if size < len {
+        or_shift_down(acc, len - size);
+    }
+}
+
 /// Grilla de ocupación cuadrada.
 struct Atlas {
     size: usize,
@@ -230,7 +326,8 @@ impl Atlas {
 
     /// ¿Cabe `mask` con su esquina en (x, y) sin tocar celdas ocupadas?
     fn fits(&self, mask: &Mask, x: usize, y: usize) -> bool {
-        (0..mask.h).all(|r| {
+        mask.heavy_first.iter().all(|&r| {
+            let r = r as usize;
             let row = &self.bits[(y + r) * self.words..(y + r + 1) * self.words];
             mask.row(r).iter().enumerate().all(|(j, &bits)| {
                 if bits == 0 {
@@ -241,6 +338,47 @@ impl Atlas {
                 occupied & bits == 0
             })
         })
+    }
+
+    /// Primer `x` en `[margin, x_max]` donde `mask` cabe con su esquina en `(x, y)`.
+    ///
+    /// Igual que probar `fits` en cada x, pero primero se calculan de una vez, con operaciones de
+    /// palabras de 64 bits, las posiciones donde la fila más llena de la carta choca con el
+    /// atlas, y solo se prueban con `fits` completo las que quedan libres.
+    fn first_fit_x(&self, mask: &Mask, y: usize, margin: usize, x_max: usize) -> Option<usize> {
+        let Some(pivot) = &mask.pivot else {
+            return (margin..=x_max).find(|&x| self.fits(mask, x, y));
+        };
+        let at = (y + pivot.row) * self.words;
+        let occupied = &self.bits[at..at + self.words];
+        let mut blocked = vec![0u64; self.words];
+        let mut window = occupied.to_vec();
+        for (n, &(start, len)) in pivot.runs.iter().enumerate() {
+            if n > 0 {
+                window.copy_from_slice(occupied);
+            }
+            window_or(&mut window, len);
+            or_shifted_into(&mut blocked, &window, start);
+        }
+        let mut x = margin;
+        while x <= x_max {
+            let word = x / 64;
+            // Bit j de `free`: la posición x + j no choca con la fila pivote
+            let free = !blocked[word] >> (x % 64);
+            if free == 0 {
+                x = (word + 1) * 64;
+                continue;
+            }
+            x += free.trailing_zeros() as usize;
+            if x > x_max {
+                return None;
+            }
+            if self.fits(mask, x, y) {
+                return Some(x);
+            }
+            x += 1;
+        }
+        None
     }
 
     /// Marca `halo` con su celda (pad, pad) en (x, y).
@@ -293,7 +431,7 @@ impl Atlas {
         (margin..=y_max)
             .into_par_iter()
             .filter(|&y| need.iter().enumerate().all(|(r, &n)| free[y + r] >= n))
-            .find_map_first(|y| (margin..=x_max).find(|&x| self.fits(mask, x, y)).map(|x| (y, x)))
+            .find_map_first(|y| self.first_fit_x(mask, y, margin, x_max).map(|x| (y, x)))
     }
 }
 
@@ -336,21 +474,20 @@ fn place_all(
     capacity: usize,
 ) -> Option<(usize, Vec<Placement>)> {
     let margin = pad.div_ceil(2);
-    // Orientación o: ángulo base o / 4, giro o % 4
-    let oriented: Vec<Vec<Oriented>> = charts
-        .par_iter()
-        .zip(bases)
-        .map(|(chart, base)| {
-            let scaled = base.map(|row| row.map(|v| v * k));
-            (0..4 * angles)
-                .map(|o| {
-                    let angle = std::f64::consts::FRAC_PI_2 * (o / 4) as f64 / angles as f64;
-                    Oriented::new(chart, mul(quarter_turn(o), mul(rotation(angle), scaled)), pad)
-                })
-                .collect()
+    // Orientación o: ángulo base o / 4, giro o % 4. Se reparte por carta y por giro (con pocas
+    // cartas grandes, repartir solo por carta deja hilos ociosos)
+    let orientations = 4 * angles;
+    let flat: Vec<Oriented> = (0..charts.len() * orientations)
+        .into_par_iter()
+        .map(|n| {
+            let (chart, o) = (n / orientations, n % orientations);
+            let scaled = bases[chart].map(|row| row.map(|v| v * k));
+            let angle = std::f64::consts::FRAC_PI_2 * (o / 4) as f64 / angles as f64;
+            Oriented::new(&charts[chart], mul(quarter_turn(o), mul(rotation(angle), scaled)), pad)
         })
         .collect();
-    let orientations = 4 * angles;
+    let mut flat = flat.into_iter();
+    let oriented: Vec<Vec<Oriented>> = (0..charts.len()).map(|_| flat.by_ref().take(orientations).collect()).collect();
 
     // De mayor a menor
     let cells = |i: usize| oriented[i][0].mask.bits.iter().map(|w| w.count_ones() as usize).sum::<usize>();
@@ -696,4 +833,124 @@ pub(crate) fn pack_paintable(
     }
     // No debería pasar: como último recurso, compacto
     pack(charts, texture_size as u32, padding)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Generador congruencial (los tests no usan dependencias)
+    struct Lcg(u64);
+    impl Lcg {
+        fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            self.0 >> 33
+        }
+    }
+
+    fn random_mask(rng: &mut Lcg, w: usize, h: usize, density: u64) -> Mask {
+        let mut mask = Mask::new(w, h);
+        for y in 0..h {
+            // Corridas (como las cartas reales) en vez de ruido puro
+            let mut x = (rng.next() % 8) as usize;
+            while x < w {
+                let len = 1 + (rng.next() % 12) as usize;
+                if rng.next() % 100 < density {
+                    for i in x..(x + len).min(w) {
+                        mask.set(i, y);
+                    }
+                }
+                x += len + (rng.next() % 6) as usize;
+            }
+        }
+        mask.index_rows();
+        mask
+    }
+
+    #[test]
+    fn window_or_marks_every_window_that_touches_an_occupied_bit() {
+        let mut rng = Lcg(7);
+        for _ in 0..200 {
+            let n = 1 + (rng.next() % 5) as usize;
+            let occ: Vec<u64> = (0..n).map(|_| if rng.next() % 3 == 0 { rng.next() << 20 } else { 0 }).collect();
+            let len = 1 + (rng.next() % 130) as usize;
+            let mut got = occ.clone();
+            window_or(&mut got, len);
+            let bit = |v: &[u64], x: usize| v.get(x / 64).is_some_and(|w| w >> (x % 64) & 1 == 1);
+            for x in 0..64 * n {
+                let expected = (x..x + len).any(|i| bit(&occ, i));
+                assert_eq!(bit(&got, x), expected, "x={x} len={len}");
+            }
+        }
+    }
+
+    #[test]
+    fn first_fit_x_matches_trying_every_position() {
+        let mut rng = Lcg(42);
+        for case in 0..300 {
+            let size = 64 + (rng.next() % 200) as usize;
+            let mut atlas = Atlas::new(size);
+            let fill = 5 + rng.next() % 60;
+            for y in 0..size {
+                for x in 0..size {
+                    if rng.next() % 100 < fill / 4 || (x / 9 + y / 7) % 5 == 0 && rng.next() % 100 < fill {
+                        atlas.bits[y * atlas.words + x / 64] |= 1 << (x % 64);
+                    }
+                }
+            }
+            let (w, h) = (1 + (rng.next() % 40) as usize, 1 + (rng.next() % 40) as usize);
+            let density = 30 + rng.next() % 70;
+            let mask = random_mask(&mut rng, w, h, density);
+            let margin = (rng.next() % 3) as usize;
+            let (x_max, y_max) = (size - w, size - h);
+            for y in margin..=y_max {
+                let brute = (margin..=x_max).find(|&x| atlas.fits(&mask, x, y));
+                assert_eq!(atlas.first_fit_x(&mask, y, margin, x_max), brute, "caso {case}, y={y}");
+            }
+        }
+    }
+
+    /// La dilatación original, celda por celda
+    fn dilate_reference(m: &Mask, p: usize) -> Mask {
+        let mut wide = Mask::new(m.w + 2 * p, m.h);
+        for y in 0..m.h {
+            for x in (0..m.w).filter(|&x| m.get(x, y)) {
+                for dx in 0..=2 * p {
+                    wide.set(x + dx, y);
+                }
+            }
+        }
+        let mut out = Mask::new(m.w + 2 * p, m.h + 2 * p);
+        for y in 0..wide.h {
+            for x in (0..wide.w).filter(|&x| wide.get(x, y)) {
+                for dy in 0..=2 * p {
+                    out.set(x, y + dy);
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn dilate_matches_the_cell_by_cell_version() {
+        let mut rng = Lcg(99);
+        for case in 0..300 {
+            let (w, h) = (1 + (rng.next() % 200) as usize, 1 + (rng.next() % 60) as usize);
+            let density = 10 + rng.next() % 90;
+            let mask = random_mask(&mut rng, w, h, density);
+            for p in [0, 1, 2, 3, 5, 9, 33, 70] {
+                let (fast, slow) = (mask.dilate(p), dilate_reference(&mask, p));
+                assert_eq!((fast.w, fast.h), (slow.w, slow.h));
+                assert_eq!(fast.bits, slow.bits, "caso {case}, p={p}, {w}x{h}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_empty_mask_fits_at_the_margin() {
+        let atlas = Atlas::new(64);
+        let mut mask = Mask::new(4, 4);
+        mask.index_rows();
+        assert_eq!(atlas.first_fit_x(&mask, 3, 2, 50), Some(2));
+    }
 }
