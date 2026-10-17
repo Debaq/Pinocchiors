@@ -357,6 +357,31 @@ export function keyFrames(track: BoneTrack | undefined): number[] {
   return [...new Set(trackKeys(track).map((k) => k.frame))].sort((a, b) => a - b);
 }
 
+/** Cuadros con keys de una pista (ordenados) y cómo se interpola cada uno (rotación antes que desplazamiento) */
+export interface TrackKeyInfo {
+  frames: number[];
+  interpolation: Map<number, KeyInterpolation>;
+}
+
+export function trackKeyInfo(track: BoneTrack): TrackKeyInfo {
+  const interpolation = new Map<number, KeyInterpolation>();
+  for (const k of [...track.rotation, ...track.translation]) if (!interpolation.has(k.frame)) interpolation.set(k.frame, k.interpolation);
+  return { frames: keyFrames(track), interpolation };
+}
+
+/** Ids de las keys de todas las pistas agrupados por cuadro, en una sola pasada (el resumen de la línea de tiempo) */
+export function keysByFrame(clip: AnimationClip): Map<number, string[]> {
+  const out = new Map<number, string[]>();
+  for (const t of clip.tracks) {
+    for (const f of keyFrames(t)) {
+      const ids = out.get(f);
+      if (ids) ids.push(keyId(t.bone, f));
+      else out.set(f, [keyId(t.bone, f)]);
+    }
+  }
+  return out;
+}
+
 /** Keys seleccionadas de todos los huesos en esos cuadros (el resumen de la línea de tiempo) */
 export function keysAtFrames(clip: AnimationClip, frames: Set<number>): string[] {
   return clip.tracks.flatMap((t) => keyFrames(t).filter((f) => frames.has(f)).map((f) => keyId(t.bone, f)));

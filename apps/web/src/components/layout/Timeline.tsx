@@ -4,9 +4,10 @@ import { IconButton, NumberInput, Select, Tooltip } from "../ui";
 import * as Icons from "../icons";
 import { createPersisted, startDrag } from "../../lib/ui-state";
 import {
-  keyFrames,
   keyId,
-  keysAtFrames,
+  keysByFrame,
+  trackKeyInfo,
+  type TrackKeyInfo,
   type AnimationClip,
   type BoneTrack,
   type KeyInterpolation,
@@ -185,6 +186,24 @@ export const Timeline: Component<TimelineProps> = (props) => {
   const [renaming, setRenaming] = createSignal<number | null>(null);
 
   let lanesRef: HTMLDivElement | undefined;
+  // Hoja de claves: solo se dibujan las keys de las filas visibles (con 100+ huesos son decenas de miles de nodos)
+  const [scrollBox, setScrollBox] = createSignal({ top: 0, height: 400 });
+  const OVERSCAN = 6;
+  const firstRow = createMemo(() => Math.max(0, Math.floor(scrollBox().top / ROW) - 1 - OVERSCAN));
+  const lastRow = createMemo(() => Math.ceil((scrollBox().top + scrollBox().height) / ROW) + OVERSCAN);
+  const rowVisible = (i: number) => i >= firstRow() && i <= lastRow();
+  let bodyObserver: ResizeObserver | undefined;
+  const bodyRef = (el: HTMLDivElement) => {
+    const update = () => setScrollBox({ top: el.scrollTop, height: el.clientHeight });
+    el.addEventListener("scroll", update, { passive: true });
+    bodyObserver = new ResizeObserver(update);
+    bodyObserver.observe(el);
+    onCleanup(() => {
+      el.removeEventListener("scroll", update);
+      bodyObserver?.disconnect();
+    });
+    update();
+  };
   onMount(() => {
     const observer = new ResizeObserver(() => setWidth(lanesRef?.clientWidth ?? 600));
     if (lanesRef) observer.observe(lanesRef);
@@ -229,15 +248,24 @@ export const Timeline: Component<TimelineProps> = (props) => {
     return list.length > 0 && list.every((t) => t.muted);
   };
 
-  const summaryFrames = createMemo(() => [...new Set(props.clip.tracks.flatMap(keyFrames))].sort((a, b) => a - b));
+  // Una sola pasada por las pistas: cuadros con keys, su interpolación y los ids por cuadro
+  const trackInfo = createMemo(() => new Map<BoneTrack, TrackKeyInfo>(props.clip.tracks.map((t) => [t, trackKeyInfo(t)])));
+  const summary = createMemo(() => keysByFrame(props.clip));
+  const summaryFrames = createMemo(() => [...summary().keys()].sort((a, b) => a - b));
   /** Cuadros con keys de los miembros de un grupo, y sus ids */
   const groupKeys = (members: string[], frame: number) =>
     members.flatMap((m) => {
       const t = tracks().get(`b|${m}`);
-      return t && keyFrames(t).includes(frame) ? [keyId(m, frame)] : [];
+      return t && trackInfo().get(t)?.interpolation.has(frame) ? [keyId(m, frame)] : [];
     });
-  const groupFrames = (members: string[]) =>
-    [...new Set(members.flatMap((m) => keyFrames(tracks().get(`b|${m}`))))].sort((a, b) => a - b);
+  const groupFrames = (members: string[]) => {
+    const frames = new Set<number>();
+    for (const m of members) {
+      const t = tracks().get(`b|${m}`);
+      if (t) for (const f of trackInfo().get(t)?.frames ?? []) frames.add(f);
+    }
+    return [...frames].sort((a, b) => a - b);
+  };
 
   const scrub = (e: PointerEvent) => {
     e.preventDefault();
@@ -547,7 +575,7 @@ export const Timeline: Component<TimelineProps> = (props) => {
         />
       </Show>
       <Show when={props.mode === "keys"}>
-        <div class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
+        <div ref={bodyRef} class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
           <div class="flex">
             <div class="shrink-0 border-r border-border" style={{ width: `${NAMES}px` }}>
               <div class="px-2 flex items-center text-xs font-semibold text-text border-b border-border/40" style={{ height: `${ROW}px` }}>
@@ -605,21 +633,22 @@ export const Timeline: Component<TimelineProps> = (props) => {
             </div>
             <div class="relative flex-1 min-w-0 overflow-hidden select-none">
               <Lane onClick={() => props.onSelection(new Set())}>
-                <For each={summaryFrames()}>{(f) => <Diamond frame={f} ids={keysAtFrames(props.clip, new Set([f]))} step={false} />}</For>
+                <For each={summaryFrames()}>{(f) => <Diamond frame={f} ids={summary().get(f) ?? []} step={false} />}</For>
               </Lane>
               <For each={props.rows}>
-                {(row) => {
+                {(row, index) => {
+                  const visible = () => rowVisible(index());
                   if (row.group) {
                     const g = row.group;
                     return (
                       <Lane tint={g.color} muted={rowMuted(row)} onClick={() => props.onSelection(new Set())}>
-                        <For each={groupFrames(g.members)}>{(f) => <Diamond frame={f} ids={groupKeys(g.members, f)} step={false} tint={g.color} />}</For>
+                        <For each={visible() ? groupFrames(g.members) : []}>{(f) => <Diamond frame={f} ids={groupKeys(g.members, f)} step={false} tint={g.color} />}</For>
                       </Lane>
                     );
                   }
                   const track = () => trackOf(row);
-                  const interpolationAt = (f: number) =>
-                    ([...(track()?.rotation ?? []), ...(track()?.translation ?? [])] as { frame: number; interpolation: KeyInterpolation }[]).find((k) => k.frame === f)?.interpolation;
+                  const info = () => (track() ? trackInfo().get(track()!) : undefined);
+                  const interpolationAt = (f: number) => info()?.interpolation.get(f);
                   return (
                     <Lane
                       active={isActive(row)}
@@ -629,7 +658,7 @@ export const Timeline: Component<TimelineProps> = (props) => {
                         selectRow(row);
                       }}
                     >
-                      <For each={row.control || row.ik ? [] : (props.violations?.get(row.bone) ?? [])}>
+                      <For each={!visible() || row.control || row.ik ? [] : (props.violations?.get(row.bone) ?? [])}>
                         {(f) => (
                           <div
                             class="absolute bottom-0 h-1 bg-red/80 pointer-events-none"
@@ -638,7 +667,7 @@ export const Timeline: Component<TimelineProps> = (props) => {
                           />
                         )}
                       </For>
-                      <For each={keyFrames(track())}>
+                      <For each={visible() ? (info()?.frames ?? []) : []}>
                         {(f) => <Diamond frame={f} ids={[keyId(row.bone, f)]} step={interpolationAt(f) === "step"} bezier={interpolationAt(f) === "bezier"} />}
                       </For>
                     </Lane>
