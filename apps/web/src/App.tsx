@@ -96,6 +96,7 @@ import { bindingOf, createShortcutManager, formatBinding, type ShortcutDef } fro
 import { decodeMesh, decodeWeights } from "./lib/buffers";
 import { createPersisted, startDrag } from "./lib/ui-state";
 import { PlaybackBar, type PlaybackSegment } from "./components/layout/PlaybackBar";
+import { createChunked } from "./lib/chunked";
 import { TextureEditor, TEXTURE_SLOTS, type TextureExportKind, type TextureSelection, type TextureSlot } from "./components/layout/TextureEditor";
 import { applyTheme, followSystemTheme, type ThemeSetting } from "./lib/theme";
 import type { MenuEntry } from "./components/ui/ContextMenu";
@@ -4493,20 +4494,26 @@ export const App: Component = () => {
   });
 
   /** La animación de la articulación activa, cuadro a cuadro (antes de los límites) */
-  const trajectory = createMemo<TrajectorySample[]>(() => {
-    const clip = activeClip();
-    const j = activeJoint();
-    if (!clip || j < 0 || !animating() || !rigBones()[j]) return [];
-    const ctx = unlimitedCtx();
-    const limits = limitsOf(j);
-    const out: TrajectorySample[] = [];
-    const end = Math.min(Math.round(clip.end), Math.round(clip.start) + 600);
-    for (let f = Math.round(clip.start); f <= end; f++) {
+  const trajectory = createChunked<
+    { clip: AnimationClip; j: number; ctx: ReturnType<typeof unlimitedCtx>; limits: ReturnType<typeof limitsOf> },
+    TrajectorySample[],
+    TrajectorySample[]
+  >({
+    source: () => {
+      const clip = activeClip();
+      const j = activeJoint();
+      if (!clip || j < 0 || !animating() || !rigBones()[j]) return undefined;
+      return { clip, j, ctx: unlimitedCtx(), limits: limitsOf(j) };
+    },
+    frames: ({ clip }) => [Math.round(clip.start), Math.min(Math.round(clip.end), Math.round(clip.start) + 600)],
+    start: () => [],
+    step: ({ clip, j, ctx, limits }, out, f) => {
       const q = evaluatePose(clip, f, ctx).rotations.get(j) ?? ([0, 0, 0, 1] as Quat);
       const parts = jointParts(j, q);
       out.push({ frame: f, ...parts, excess: limits ? limitExcess(q, ctx.frames[j], limits) : 0 });
-    }
-    return out;
+    },
+    finish: (out) => out,
+    empty: new Map(),
   });
 
   const activeKeyFrames = createMemo(() => {
@@ -4516,18 +4523,23 @@ export const App: Component = () => {
   });
 
   /** Cuadros fuera del límite de cada hueso (marcas rojas en la línea de tiempo) */
-  const violations = createMemo(() => {
-    const clip = activeClip();
-    const out = new Map<string, number[]>();
-    if (!clip || !animating()) return out;
-    const ctx = unlimitedCtx();
-    const limited = rigBones().flatMap((b, j) => {
-      const l = boneProps(rigSettings(), b.name).limits;
-      return l ? [{ j, l, name: b.name }] : [];
-    });
-    if (limited.length === 0) return out;
-    const end = Math.min(Math.round(clip.end), Math.round(clip.start) + 600);
-    for (let f = Math.round(clip.start); f <= end; f++) {
+  const violations = createChunked<
+    { clip: AnimationClip; ctx: ReturnType<typeof unlimitedCtx>; limited: { j: number; l: JointLimits; name: string }[] },
+    Map<string, number[]>,
+    Map<string, number[]>
+  >({
+    source: () => {
+      const clip = activeClip();
+      if (!clip || !animating()) return undefined;
+      const limited = rigBones().flatMap((b, j) => {
+        const l = boneProps(rigSettings(), b.name).limits;
+        return l ? [{ j, l, name: b.name }] : [];
+      });
+      return limited.length === 0 ? undefined : { clip, ctx: unlimitedCtx(), limited };
+    },
+    frames: ({ clip }) => [Math.round(clip.start), Math.min(Math.round(clip.end), Math.round(clip.start) + 600)],
+    start: () => new Map(),
+    step: ({ clip, ctx, limited }, out, f) => {
       const pose = evaluatePose(clip, f, ctx);
       for (const { j, l, name } of limited) {
         const q = pose.rotations.get(j);
@@ -4536,8 +4548,10 @@ export const App: Component = () => {
           out.get(name)!.push(f);
         }
       }
-    }
-    return out;
+    },
+    finish: (out) => out,
+    empty: [],
+    delay: 0,
   });
 
   /** Articulación activa en la barra de estado: nombre, giro, bloqueos y límite */
