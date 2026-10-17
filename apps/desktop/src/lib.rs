@@ -6,6 +6,7 @@ pub mod cad;
 pub mod bvh;
 pub mod hdri;
 pub mod imported_rig;
+pub mod lod;
 pub mod mesh_slot;
 #[cfg(target_os = "linux")]
 pub mod linux_desktop;
@@ -135,6 +136,7 @@ pub fn run() {
             // Autorig
             commands::run_autorig,
             commands::get_weights_data,
+            lod::animation_lod,
             commands::set_vertex_weights,
             commands::get_weight_mirror,
             // Retopología

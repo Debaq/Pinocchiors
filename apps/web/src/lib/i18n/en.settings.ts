@@ -15,10 +15,16 @@ export const en_settings: Catalog = {
     "Two fingers (or the wheel) rotate the view and with Shift pan it; Ctrl or pinch zooms. Without this, the wheel zooms.",
   "Pantalla": "Display",
   "Mostrar los FPS en la cabecera": "Show FPS in the header",
+  "Calidad adaptativa al mover": "Adaptive quality while moving",
+  "Mientras animas, arrastras o giras la vista, el visor baja un poco la resolución para ir más fluido y la restaura al quedar quieto. Las capturas y los renders siempre salen a calidad completa.":
+    "While you animate, drag or orbit the view, the viewer lowers the resolution a little to stay smooth and restores it when still. Captures and renders always use full quality.",
   "Modelos pesados": "Heavy models",
   "Mostrar primero una vista previa": "Show a preview first",
   "En modelos de cientos de miles de caras, el visor muestra una versión liviana al instante y la cambia por el detalle completo cuando llega.":
     "With models of hundreds of thousands of faces, the viewer shows a light version right away and swaps in the full detail when it arrives.",
+  "LOD al animar": "Animation LOD",
+  "En modelos de más de 100 000 caras con esqueleto, el visor dibuja una versión simplificada mientras animas y vuelve al detalle completo al parar. Exportar, guardar y renderizar siempre usan la malla completa.":
+    "With models of more than 100,000 faces and a skeleton, the viewer draws a simplified version while you animate and returns to full detail when you stop. Exporting, saving and rendering always use the full mesh.",
   "Armar la malla de edición": "Build the editing mesh",
   "La malla de edición es la que usan reparar, esqueleto, remallar y demás herramientas; verla en el visor no la necesita. En modelos grandes tarda segundos y ocupa mucha memoria.":
     "The editing mesh is what repair, skeleton, remesh and the other tools use; viewing the model doesn't need it. On large models it takes seconds and a lot of memory.",

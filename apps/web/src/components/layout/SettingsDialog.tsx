@@ -7,8 +7,12 @@ import {
   UI_SCALES,
   defaultExportFormat,
   meshBuild,
+  adaptiveQuality,
+  animationLod,
   previewFirst,
   resetLayout,
+  setAdaptiveQuality,
+  setAnimationLodEnabled,
   setDefaultExportFormat,
   setMeshBuild,
   setPreviewFirstModel,
@@ -341,6 +345,8 @@ export const SettingsDialog: Component<SettingsDialogProps> = (props) => {
 
               <Section title={t("Pantalla")}>
                 <Checkbox label={t("Mostrar los FPS en la cabecera")} checked={showFps()} onChange={setShowFps} />
+                <Checkbox label={t("Calidad adaptativa al mover")} checked={adaptiveQuality()} onChange={setAdaptiveQuality} />
+                <Hint>{t("Mientras animas, arrastras o giras la vista, el visor baja un poco la resolución para ir más fluido y la restaura al quedar quieto. Las capturas y los renders siempre salen a calidad completa.")}</Hint>
               </Section>
 
               <Section title={t("Grilla y unidades")}>
@@ -460,6 +466,12 @@ export const SettingsDialog: Component<SettingsDialogProps> = (props) => {
                   onChange={setPreviewFirstModel}
                 />
                 <Hint>{t("En modelos de cientos de miles de caras, el visor muestra una versión liviana al instante y la cambia por el detalle completo cuando llega.")}</Hint>
+                <Checkbox
+                  label={t("LOD al animar")}
+                  checked={animationLod()}
+                  onChange={setAnimationLodEnabled}
+                />
+                <Hint>{t("En modelos de más de 100 000 caras con esqueleto, el visor dibuja una versión simplificada mientras animas y vuelve al detalle completo al parar. Exportar, guardar y renderizar siempre usan la malla completa.")}</Hint>
                 <Select
                   label={t("Armar la malla de edición")}
                   options={MESH_BUILD_OPTIONS()}

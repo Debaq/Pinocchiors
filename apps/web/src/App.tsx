@@ -1,5 +1,5 @@
 import { t, tn, tx, locale } from "./lib/i18n";
-import { defaultExportFormat, meshBuild, previewFirst, showFps } from "./lib/settings";
+import { animationLod, defaultExportFormat, meshBuild, previewFirst, showFps } from "./lib/settings";
 import { followUiScale } from "./lib/uiScale";
 import { tBackend } from "./lib/i18nBackend";
 import { Component, batch, createEffect, createMemo, createSignal, on, onMount, onCleanup, Show, untrack, type JSX } from "solid-js";
@@ -94,6 +94,7 @@ import { TOOLSETS, toolContext, type ToolId } from "./lib/tools";
 import { createHistoryStore, type SavedHistory } from "./lib/history";
 import { bindingOf, createShortcutManager, formatBinding, type ShortcutDef } from "./lib/shortcuts";
 import { decodeMesh, decodeWeights } from "./lib/buffers";
+import { LOD_FROM_FACES, fetchAnimationLod } from "./lib/lod";
 import { createPersisted, startDrag } from "./lib/ui-state";
 import { PlaybackBar, type PlaybackSegment } from "./components/layout/PlaybackBar";
 import { createChunked } from "./lib/chunked";
@@ -2977,6 +2978,66 @@ export const App: Component = () => {
     });
   });
 
+  // LOD al animar: con una malla muy pesada se pide al backend una versión
+  // decimada con pesos (en segundo plano); el visor sigue con la completa hasta
+  // que llega y la usa solo mientras dura la animación. Ver lib/lod.ts.
+  // Una sola petición en vuelo; si algo cambia mientras tanto se repite al terminar.
+  // Una versión que ya dio "sin LOD" no se vuelve a pedir hasta que cambie.
+  let lodInFlight = false;
+  let lodDirty = false;
+  let lodNullFor = -1;
+  const requestAnimationLod = async (v: NonNullable<ReturnType<typeof viewer>>): Promise<void> => {
+    if (lodInFlight) {
+      lodDirty = true;
+      return;
+    }
+    const version = v.getLodVersion();
+    if (v.hasAnimationLod() || lodNullFor === version) return;
+    lodInFlight = true;
+    try {
+      const data = await fetchAnimationLod();
+      if (!v.setAnimationLod(data, version)) {
+        // Cambió la malla o los pesos mientras se calculaba: se pide de nuevo; si no, no hay LOD para esta versión
+        if (v.getLodVersion() !== version) lodDirty = true;
+        else lodNullFor = version;
+      }
+    } catch (e) {
+      lodNullFor = version;
+      console.warn("LOD al animar:", e);
+    } finally {
+      lodInFlight = false;
+    }
+    if (lodDirty) {
+      lodDirty = false;
+      void requestAnimationLod(v);
+    }
+  };
+  // Booleano estable: previewTime() cambia en cada cuadro y no debe re-disparar el efecto
+  const inAnimationMode = createMemo(() => animating() || previewing());
+  createEffect(() => {
+    const v = viewer();
+    if (!v) return;
+    const active = inAnimationMode();
+    weightsData();
+    skeletonData();
+    const heavy = meshInfo().faces >= LOD_FROM_FACES;
+    const enabled = animationLod();
+    untrack(() => {
+      if (!enabled) {
+        if (v.hasAnimationLod()) v.setAnimationLod(null);
+      } else if (active && heavy) {
+        void requestAnimationLod(v);
+      }
+    });
+  });
+  // El LOD se dibuja solo mientras se reproduce; en pausa o editando, la malla completa
+  createEffect(() => {
+    const v = viewer();
+    if (!v) return;
+    const reproducing = playing() || previewPlaying();
+    v.setLodActive(reproducing);
+  });
+
   // Pose del cuadro actual
   createEffect(() => {
     const v = viewer();
@@ -4513,7 +4574,8 @@ export const App: Component = () => {
       out.push({ frame: f, ...parts, excess: limits ? limitExcess(q, ctx.frames[j], limits) : 0 });
     },
     finish: (out) => out,
-    empty: new Map(),
+    empty: [],
+    delay: 0,
   });
 
   const activeKeyFrames = createMemo(() => {
@@ -4550,8 +4612,7 @@ export const App: Component = () => {
       }
     },
     finish: (out) => out,
-    empty: [],
-    delay: 0,
+    empty: new Map(),
   });
 
   /** Articulación activa en la barra de estado: nombre, giro, bloqueos y límite */

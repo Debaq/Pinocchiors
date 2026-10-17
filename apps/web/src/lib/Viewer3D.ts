@@ -22,6 +22,8 @@ import { installDqSkinning, setDqSkinning } from "./dqSkinning";
 import { installAutoSmooth, setAutoSmooth } from "./autoSmooth";
 import { LightRig, configureRenderer, type LightSettings } from "./lightRig";
 import { buildGridLines } from "./gridLines";
+import { skinAttributes, type AnimationLodData } from "./lod";
+import { isMotionFrame, MOTION_REST_MS, qualityScale } from "./adaptiveQuality";
 import { t as tr } from "./i18n.ts";
 
 installDqSkinning();
@@ -294,6 +296,9 @@ function boneColor(bone: number): THREE.Color {
 
 /** Zona sin influencia en la vista de todos los huesos */
 const NO_INFLUENCE = new THREE.Color(0x44475a);
+
+/** Espera al parar la reproducción antes de volver a la malla completa (evita parpadeos) */
+const LOD_STOP_DELAY_MS = 300;
 
 /**
  * Color del vértice `v`: con un hueso elegido, el mapa de calor de su peso;
@@ -725,6 +730,7 @@ export class Viewer3D {
       antialias: true,
     });
     configureRenderer(this.renderer);
+    this.fullRatio = this.renderer.getPixelRatio();
     this.renderer.setSize(canvas.clientWidth, canvas.clientHeight);
 
     // Controls
@@ -734,7 +740,10 @@ export class Viewer3D {
     this.controls.target.set(0, 0.5, 0);
     this.controls.update();
     // También durante la amortiguación, tras soltar el botón
-    this.controls.addEventListener("change", () => this.requestRender());
+    this.controls.addEventListener("change", () => {
+      this.markMotion();
+      this.requestRender();
+    });
     this.cameraRig = new CameraRig(this.camera, this.controls, this.canvas, () => this.requestRender());
 
     // Groups
@@ -1357,6 +1366,7 @@ export class Viewer3D {
   private modalMove(x: number, y: number): void {
     const m = this.modal;
     if (!m) return;
+    this.markMotion();
     const rect = this.canvas.getBoundingClientRect();
     const dx = x - m.mouse.x;
     const dy = y - m.mouse.y;
@@ -1537,6 +1547,7 @@ export class Viewer3D {
     const weights = this.weightsData;
     if (!weights) return;
     const width = weights.maxInfluences * 2;
+    this.invalidateLod();
     vertices.forEach((v, i) => {
       weights.weights.set(rows.subarray(i * width, (i + 1) * width), v * width);
       this.recolorVertex(v);
@@ -1728,6 +1739,7 @@ export class Viewer3D {
       this.stroke.set(v, weights.weights.slice(base, base + k * 2));
     }
     if (paintRow(weights.weights, base, k, bone, this.strokeMode, amount, smoothTarget, this.fallbackBone(bone))) {
+      this.invalidateLod();
       this.recolorVertex(v);
     }
   }
@@ -1783,16 +1795,70 @@ export class Viewer3D {
     }
   }
 
+  // Calidad adaptativa: cuadros seguidos (animación, arrastre, órbita, scrub) = movimiento,
+  // y mientras dura se baja el pixel ratio; en reposo vuelve al completo. Son propiedades
+  // flecha (no métodos) para que el envoltorio de arriba no pida un cuadro en cada llamada
+  private fullRatio = 1;
+  private adaptiveQuality = true;
+  private lastMotionAt: number | null = null;
+  private motionTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Aplica la escala al pixel ratio solo si cambió (cambiarlo reasigna el búfer) */
+  private applyQualityScale = (scale: number): void => {
+    const ratio = this.fullRatio * scale;
+    if (Math.abs(this.renderer.getPixelRatio() - ratio) > 1e-6) this.renderer.setPixelRatio(ratio);
+  };
+
+  /** Vuelve al pixel ratio completo y borra el estado de movimiento */
+  private restoreQuality = (): void => {
+    if (this.motionTimer !== null) clearTimeout(this.motionTimer);
+    this.motionTimer = null;
+    this.lastMotionAt = null;
+    this.applyQualityScale(1);
+  };
+
+  /**
+   * Marca movimiento real (cámara, reproducción, scrub, arrastre). Solo anota el instante:
+   * cuadros pedidos por el mouse sobre la UI o por un clic no cuentan como movimiento
+   */
+  private markMotion = (): void => {
+    this.lastMotionAt = performance.now();
+  };
+
+  /** Se llama en cada cuadro: decide la escala y arma la vuelta a calidad completa */
+  private trackMotion = (): void => {
+    const now = performance.now();
+    const moving = isMotionFrame(now, this.lastMotionAt);
+    // Con halo de brillo o cuatro vistas hay otros búferes con su propio tamaño: no se tocan
+    const blocked = this.glowMaterials !== null;
+    this.applyQualityScale(qualityScale(this.adaptiveQuality, moving, blocked));
+    if (this.motionTimer !== null) clearTimeout(this.motionTimer);
+    this.motionTimer = null;
+    if (this.renderer.getPixelRatio() === this.fullRatio) return;
+    this.motionTimer = setTimeout(() => {
+      this.restoreQuality();
+      this.requestRender();
+    }, MOTION_REST_MS);
+  };
+
+  /** Ajuste "Calidad adaptativa al mover": al apagarlo se restaura la calidad completa */
+  setAdaptiveQuality(on: boolean): void {
+    this.adaptiveQuality = on;
+    if (!on) this.restoreQuality();
+  }
+
   private animate = (): void => {
     this.animationId = null;
     if (this.stillBusy) return;
     if (this.cameraRig.moving) {
+      this.markMotion();
       this.cameraRig.step();
       // Sin arrastre residual de la amortiguación durante el giro
       this.controls.enableDamping = !this.cameraRig.moving;
     }
     // Si la cámara sigue amortiguando, su evento "change" pide el siguiente
     this.controls.update();
+    this.trackMotion();
     this.renderer.render(this.scene, this.camera);
     this.renderGlow();
     this.cameraRig.renderCube(this.renderer);
@@ -1812,6 +1878,7 @@ export class Viewer3D {
     this.resetObjectPreview();
     this.clearMeasure();
     this.meshData = data;
+    this.invalidateLod();
     this.paintNeighbors = null;
     this.estimatedInfluence = null;
     this.clearMesh();
@@ -2005,12 +2072,14 @@ export class Viewer3D {
     this.glowMaterials = this.glowStrength > 0 ? glow : null;
   }
 
-  private renderGlow(): void {
+  // Propiedad flecha, no método: el constructor envuelve los métodos del prototipo para que pidan un
+  // cuadro, y `animate` llama a esto en cada cuadro (sería un bucle de render permanente)
+  private renderGlow = (): void => {
     const mesh = this.rig?.mesh ?? this.currentMesh;
     if (!this.glowMaterials || !mesh?.visible) return;
     this.glowHalo ??= new GlowHalo(this.renderer, this.canvas.clientWidth, this.canvas.clientHeight);
     this.glowHalo.render(this.scene, this.camera, mesh, this.glowMaterials, this.glowStrength);
-  }
+  };
 
   private refreshMeshMaterial(): void {
     const mesh = this.currentMesh;
@@ -2019,6 +2088,7 @@ export class Viewer3D {
     mesh.material = this.buildMaterial(mesh.geometry);
     this.updateGlow(mesh.material);
     if (this.rig?.mesh) this.rig.mesh.material = mesh.material;
+    this.syncLodGroups();
     this.applyXray();
   }
 
@@ -2228,6 +2298,7 @@ export class Viewer3D {
       this.skeletonData !== null &&
       this.boneSpheres.length === data.bones.length &&
       data.bones.every((b, i) => b.parent === this.skeletonData!.bones[i].parent);
+    if (!sameStructure) this.invalidateLod();
     this.skeletonData = data;
     // Misma estructura (mover un hueso, centrar, espejo): actualizar en el
     // lugar, así el gizmo sigue enganchado a su esfera durante el arrastre
@@ -2583,6 +2654,7 @@ export class Viewer3D {
     this.resetPose();
     this.disposeRig();
     this.clearSkeleton();
+    this.invalidateLod();
     this.boneSpheres = [];
     this.skeletonData = null;
     this.estimatedInfluence = null;
@@ -2598,6 +2670,7 @@ export class Viewer3D {
     if (!this.weightsData) return;
     this.resetPose();
     this.disposeRig();
+    this.invalidateLod();
     this.weightsData = null;
     if (this.weightsMesh) {
       this.meshGroup.remove(this.weightsMesh);
@@ -2611,6 +2684,7 @@ export class Viewer3D {
 
   loadWeights(data: WeightsData): void {
     this.resetPose();
+    this.invalidateLod();
     this.weightsData = data;
     this.applySettings();
     this.buildRig();
@@ -2804,6 +2878,8 @@ export class Viewer3D {
     this.scene.add(controls.getHelper());
     // Resalta ejes al pasar el mouse sin pasar por métodos del visor
     controls.addEventListener("change", () => this.requestRender());
+    // Solo arrastrar el gizmo es movimiento (el resaltado al pasar el mouse no)
+    controls.addEventListener("objectChange", () => this.markMotion());
 
     controls.addEventListener("dragging-changed", (event) => {
       this.controls.enabled = !event.value;
@@ -3068,7 +3144,8 @@ export class Viewer3D {
       (o): o is THREE.Mesh =>
         o instanceof THREE.Mesh && o.visible && o !== this.currentWireframe && o !== this.rig?.wireframe
     );
-    const hit = this.raycaster.intersectObjects(targets, false)[0];
+    // Se mide sobre la malla completa, no sobre el LOD de la animación
+    const hit = this.withFullMesh(() => this.raycaster.intersectObjects(targets, false)[0]);
     if (!hit) return;
     let point = hit.point.clone();
     if ((e.ctrlKey || e.metaKey) && hit.face) {
@@ -3280,6 +3357,7 @@ export class Viewer3D {
   }
 
   dispose(): void {
+    this.restoreQuality();
     this.listeners.abort();
     this.resizeObserver?.disconnect();
     this.glowHalo?.dispose();
@@ -3917,6 +3995,7 @@ export class Viewer3D {
       wireframe: skinned?.wireframe ?? null,
     };
     this.syncRigVisibility();
+    this.applyLod();
     if (this.lastPose) this.setPose(this.lastPose);
     else this.updatePosedSpheres();
   }
@@ -3930,38 +4009,7 @@ export class Viewer3D {
     const numBones = threeSkeleton.bones.length;
     const numVertices = data.positions.length / 3;
     // Hasta 4 influencias por vértice (como el GLB exportado), renormalizadas
-    const k = weights.maxInfluences;
-    const skinIndex = new Uint16Array(numVertices * 4);
-    const skinWeight = new Float32Array(numVertices * 4);
-    // Los huesos que no deforman pasan su peso al primer ancestro que sí
-    const deform = this.rigDisplay?.deform;
-    const parents = this.skeletonData?.bones.map((b) => b.parent) ?? [];
-    const target = Array.from({ length: numBones }, (_, b) => {
-      let t: number | null = b;
-      while (t !== null && deform && deform[t] === false) t = parents[t] ?? null;
-      return t ?? b;
-    });
-    const pairs: [number, number][] = [];
-    for (let v = 0; v < numVertices; v++) {
-      pairs.length = 0;
-      for (let i = 0; i < k; i++) {
-        const w = weights.weights[(v * k + i) * 2 + 1];
-        if (w <= 0) continue;
-        const bone = target[weights.weights[(v * k + i) * 2]] ?? 0;
-        const same = pairs.find((p) => p[0] === bone);
-        if (same) same[1] += w;
-        else pairs.push([bone, w]);
-      }
-      pairs.sort((a, b) => b[1] - a[1]);
-      const top = pairs.slice(0, 4);
-      const sum = top.reduce((acc, [, w]) => acc + w, 0);
-      top.forEach(([bone, w], slot) => {
-        skinIndex[v * 4 + slot] = Math.min(bone, numBones - 1);
-        skinWeight[v * 4 + slot] = w / sum;
-      });
-      // Sin pesos: sigue a la raíz
-      if (top.length === 0) skinWeight[v * 4] = 1;
-    }
+    const { skinIndex, skinWeight } = skinAttributes(weights, numVertices, numBones, this.skinTargets(numBones));
 
     // Comparte los atributos de la malla de reposo; solo el skin es nuevo
     const geometry = new THREE.BufferGeometry();
@@ -3989,9 +4037,192 @@ export class Viewer3D {
     return result;
   }
 
+  /** Hueso que recibe el peso de cada uno: los que no deforman pasan el suyo al primer ancestro que sí */
+  private skinTargets(numBones: number): number[] {
+    const deform = this.rigDisplay?.deform;
+    const parents = this.skeletonData?.bones.map((b) => b.parent) ?? [];
+    return Array.from({ length: numBones }, (_, b) => {
+      let t: number | null = b;
+      while (t !== null && deform && deform[t] === false) t = parents[t] ?? null;
+      return t ?? b;
+    });
+  }
+
+  // ─── LOD al animar ───────────────────────────────────────────────────────
+  // Con una malla pesada, mientras se anima se dibuja una versión decimada con
+  // los mismos pesos (ver `lib/lod.ts`). Es solo visual: el rig sigue siendo el
+  // de la malla completa y las capturas/renders vuelven a ella.
+
+  /** Cambia con cada malla, pesos o estructura de esqueleto nuevos: un LOD pedido antes ya no sirve */
+  private lodVersion = 0;
+  private lodData: AnimationLodData | null = null;
+  /** Geometría del LOD con el skin del rig actual (se rehace con el rig) */
+  private lodGeometry: THREE.BufferGeometry | null = null;
+  /** Geometría completa con skin del rig, mientras el LOD la reemplaza */
+  private fullSkinGeometry: THREE.BufferGeometry | null = null;
+  /** La animación se está reproduciendo: conviene dibujar el LOD */
+  private lodWanted = false;
+  private lodStopTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Capturas/renders en curso que necesitan la malla completa */
+  private lodHold = 0;
+
+  /** Versión actual de malla+pesos+esqueleto; se pasa a `setAnimationLod` al volver del backend */
+  getLodVersion(): number {
+    return this.lodVersion;
+  }
+
+  /** Hay un LOD listo para esta malla y pesos */
+  hasAnimationLod(): boolean {
+    return this.lodData !== null;
+  }
+
+  /** Se usa el LOD ahora mismo (se dibuja la versión decimada) */
+  isLodActive(): boolean {
+    return this.fullSkinGeometry !== null;
+  }
+
+  /**
+   * Guarda el LOD calculado para la versión `version` (si ya cambió algo, se
+   * descarta) o lo quita con `null`. Hasta que llega, el visor muestra la malla
+   * completa; al llegar, se cambia de geometría sin vaciar nada.
+   */
+  setAnimationLod(data: AnimationLodData | null, version = this.lodVersion): boolean {
+    if (version !== this.lodVersion) return false;
+    if (data && (!this.meshData || data.sourceVertices !== this.meshData.positions.length / 3)) return false;
+    this.releaseLod();
+    this.lodData = data;
+    this.applyLod();
+    this.requestRender();
+    return data !== null;
+  }
+
+  /** Malla, pesos o esqueleto distintos: el LOD guardado ya no corresponde */
+  private invalidateLod(): void {
+    this.lodVersion++;
+    this.releaseLod();
+    this.lodData = null;
+  }
+
+  /** Vuelve a la geometría completa y libera la del LOD */
+  private releaseLod(): void {
+    this.useFullGeometry();
+    this.lodGeometry?.dispose();
+    this.lodGeometry = null;
+  }
+
+  private useFullGeometry(): void {
+    const rig = this.rig;
+    const full = this.fullSkinGeometry;
+    if (!full) return;
+    this.fullSkinGeometry = null;
+    if (rig?.mesh) rig.mesh.geometry = full;
+    if (rig?.wireframe) rig.wireframe.geometry = full;
+  }
+
+  /** Los grupos del LOD siguen el material de los de la malla completa (nodos ocultos, texturas) */
+  private syncLodGroups(): void {
+    const lod = this.lodData;
+    const geometry = this.lodGeometry;
+    const rest = this.currentMesh?.geometry;
+    if (!geometry || !rest) return;
+    geometry.clearGroups();
+    // Sin grupos en la malla completa (una sola pasada de material), el LOD se dibuja entero
+    if (!lod?.mesh.groups || rest.groups.length !== lod.mesh.groups.length / 3) return;
+    rest.groups.forEach((g, i) => geometry.addGroup(lod.mesh.groups![i * 3], lod.mesh.groups![i * 3 + 1], g.materialIndex));
+  }
+
+  /** Dibuja el LOD en vez de la malla completa, si hay rig con malla y LOD válido */
+  private applyLod(): void {
+    const rig = this.rig;
+    const lod = this.lodData;
+    if (!rig?.mesh || !rig.wireframe || !lod || this.fullSkinGeometry) return;
+    // Solo mientras se reproduce y sin capturas/renders en curso
+    if (!this.lodWanted || this.lodHold > 0) return;
+    const full = rig.mesh.geometry;
+    const rest = this.currentMesh?.geometry;
+    // Mismos grupos (materiales) que la malla completa; si esta no tiene grupos, el LOD tampoco
+    if (!rest || lod.weights.numBones !== rig.bones.length) return;
+    if (rest.groups.length > 0 && rest.groups.length !== (lod.mesh.groups?.length ?? 0) / 3) return;
+    if (!this.lodGeometry) {
+      const { mesh, weights } = lod;
+      const numVertices = mesh.positions.length / 3;
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.BufferAttribute(mesh.positions, 3));
+      geometry.setAttribute("normal", new THREE.BufferAttribute(mesh.normals, 3));
+      if (mesh.uvs) geometry.setAttribute("uv", new THREE.BufferAttribute(mesh.uvs, 2));
+      setCreases(geometry, mesh);
+      geometry.setIndex(new THREE.BufferAttribute(mesh.indices, 1));
+      // Los materiales de cada grupo salen de la malla completa (ocultar nodos incluido)
+      if (rest.groups.length > 0) rest.groups.forEach((g, i) => geometry.addGroup(mesh.groups![i * 3], mesh.groups![i * 3 + 1], g.materialIndex));
+      const skin = skinAttributes(weights, numVertices, rig.bones.length, this.skinTargets(rig.bones.length));
+      geometry.setAttribute("skinIndex", new THREE.Uint16BufferAttribute(skin.skinIndex, 4));
+      geometry.setAttribute("skinWeight", new THREE.Float32BufferAttribute(skin.skinWeight, 4));
+      this.lodGeometry = geometry;
+    }
+    this.fullSkinGeometry = full;
+    rig.mesh.geometry = this.lodGeometry;
+    rig.wireframe.geometry = this.lodGeometry;
+  }
+
+  /** Pone la malla completa en lugar del LOD; devuelve cómo volver a él (nada, si no estaba activo) */
+  private holdFullMesh(): () => void {
+    this.lodHold++;
+    this.useFullGeometry();
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      if (--this.lodHold === 0) this.applyLod();
+    };
+  }
+
+  /**
+   * Usar el LOD ahora (reproduciendo) o la malla completa (en pausa, editando
+   * la pose). Al parar espera un poco para no parpadear entre una y otra.
+   */
+  setLodActive(active: boolean): void {
+    if (this.lodStopTimer !== null) {
+      clearTimeout(this.lodStopTimer);
+      this.lodStopTimer = null;
+    }
+    if (active) {
+      this.lodWanted = true;
+      this.applyLod();
+      this.requestRender();
+    } else if (this.lodWanted) {
+      this.lodStopTimer = setTimeout(() => {
+        this.lodStopTimer = null;
+        this.lodWanted = false;
+        this.useFullGeometry();
+        this.requestRender();
+      }, LOD_STOP_DELAY_MS);
+    }
+  }
+
+  /**
+   * Corre `fn` con la malla completa (capturas y renders) y vuelve al LOD
+   * después. Si `fn` es asíncrona, devuelve una promesa.
+   */
+  private withFullMesh<T>(fn: () => T): T {
+    const back = this.holdFullMesh();
+    try {
+      const result = fn();
+      if (result instanceof Promise) return result.finally(back) as T;
+      back();
+      return result;
+    } catch (e) {
+      back();
+      throw e;
+    }
+  }
+
   private disposeRig(): void {
     const rig = this.rig;
     if (!rig) return;
+    // Antes de soltar los atributos de skin: el rig vuelve a su geometría
+    this.useFullGeometry();
+    this.lodGeometry?.dispose();
+    this.lodGeometry = null;
     this.clearOnionSkin();
     this.rig = null;
 
@@ -4139,6 +4370,7 @@ export class Viewer3D {
   setPose(pose: Pose): void {
     const rig = this.rig;
     this.lastPose = pose;
+    this.markMotion();
     // Durante un giro o desplazamiento manda el mouse
     if (!rig || this.modal || this.poseDragStart || this.controlDragStart) return;
     rig.bones.forEach((bone, b) => {
@@ -4382,7 +4614,8 @@ export class Viewer3D {
       if (mesh && rig.mesh) {
         const s = new THREE.Skeleton(bones);
         const skinned = new THREE.SkinnedMesh(
-          rig.mesh.geometry,
+          // Siempre la completa: el LOD se libera con el rig o al invalidarse
+          this.fullSkinGeometry ?? rig.mesh.geometry,
           new THREE.MeshBasicMaterial({ color: ghost.color, transparent: true, opacity: ghost.opacity * 0.5, depthWrite: false })
         );
         skinned.frustumCulled = false;
@@ -4498,6 +4731,7 @@ export class Viewer3D {
   setJointsPose(pose: Pose): void {
     const rig = this.rig;
     if (!rig) return;
+    this.markMotion();
     rig.bones.forEach((bone, b) => {
       bone.quaternion.identity();
       bone.position.copy(rig.rest[b]);
@@ -4814,7 +5048,7 @@ export class Viewer3D {
 
   /** Tamaño de la vista en píxeles reales (lo que sale con el tamaño "Pantalla" del render) */
   getViewSize(): { width: number; height: number } {
-    const ratio = this.renderer.getPixelRatio();
+    const ratio = this.fullRatio;
     return { width: Math.round(this.canvas.clientWidth * ratio), height: Math.round(this.canvas.clientHeight * ratio) };
   }
 
@@ -4833,7 +5067,7 @@ export class Viewer3D {
     const w = this.canvas.clientWidth;
     const h = this.canvas.clientHeight;
     const rect = renderFrameRect(w, h, aspect);
-    const ratio = this.renderer.getPixelRatio();
+    const ratio = this.fullRatio;
     // Sin `host`, respecto al padre del lienzo (como el marco). Con `host`, corrige lo que haya entre
     // ambos (la cabecera del visor): si no, la imagen queda corrida hacia arriba
     let ox = this.canvas.offsetLeft;
@@ -4921,6 +5155,7 @@ export class Viewer3D {
    */
   async renderStill(opts: RenderStillOptions, onProgress?: (fraction: number) => void, signal?: AbortSignal): Promise<StillImage> {
     if (this.stillBusy) throw new Error(tr("Ya hay un render en curso"));
+    this.restoreQuality();
     const hidden: THREE.Object3D[] = [];
     if (opts.hideGrid) hidden.push(this.grid);
     if (opts.hideSkeleton) hidden.push(this.skeletonGroup, this.controlsGroup);
@@ -4964,7 +5199,10 @@ export class Viewer3D {
       ground = makeShadowGround(groundBox);
       this.scene.add(ground);
     }
+    // Los renders siempre salen con la malla completa, no con el LOD de la animación
+    let backToLod = () => {};
     try {
+      backToLod = this.holdFullMesh();
       return await renderStillImage(
         {
           renderer: this.renderer,
@@ -5002,6 +5240,7 @@ export class Viewer3D {
       }
       hidden.forEach((o, i) => (o.visible = visible[i]));
       this.stillBusy = false;
+      backToLod();
       this.onResize();
     }
   }
@@ -5012,10 +5251,11 @@ export class Viewer3D {
    * cuadrado del centro, en JPEG
    */
   snapshot(size = 128): string {
+    this.restoreQuality();
     const gizmo = this.transformControls?.getHelper();
     const gizmoVisible = gizmo?.visible ?? false;
     if (gizmo) gizmo.visible = false;
-    this.renderer.render(this.scene, this.camera);
+    this.withFullMesh(() => this.renderer.render(this.scene, this.camera));
     if (gizmo) gizmo.visible = gizmoVisible;
     const source = this.renderer.domElement;
     // Cuadrado alrededor de lo que se ve del modelo (articulaciones y malla), con margen

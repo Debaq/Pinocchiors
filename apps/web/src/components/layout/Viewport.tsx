@@ -18,6 +18,7 @@ import {
 import type { FloorCandidate } from "../../lib/placement";
 import { ContextMenu, type MenuEntry } from "../ui/ContextMenu";
 import { fmtNumber, t } from "../../lib/i18n";
+import { adaptiveQuality } from "../../lib/settings";
 
 export interface ViewportProps {
   // Callbacks
@@ -181,6 +182,8 @@ export const Viewport: Component<ViewportProps> = (props) => {
   onCleanup(() => {
     viewer?.dispose();
   });
+
+  createEffect(() => viewer?.setAdaptiveQuality(adaptiveQuality()));
 
   // React to mesh data changes
   createEffect(() => {

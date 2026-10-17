@@ -223,7 +223,7 @@ impl WeightsData {
     /// Binario little-endian: cabecera `u32 × 4` (vértices, huesos,
     /// influencias, bytes de nombres), nombres en UTF-8 separados por `\n` y
     /// rellenos a múltiplo de 4, y los pares `f32`.
-    fn to_bytes(&self) -> Vec<u8> {
+    pub(crate) fn to_bytes(&self) -> Vec<u8> {
         let mut names = self.bone_names.join("\n").into_bytes();
         let names_len = names.len();
         names.resize(names_len.div_ceil(4) * 4, 0);
@@ -2674,7 +2674,7 @@ pub async fn get_weights_data(app: AppHandle) -> Result<Response, String> {
 
 /// Pesos en el orden de vértices del visor (con el rig sobre la malla de
 /// quads, los vértices duplicados en costuras UV repiten la fila de su vértice)
-fn get_weights_data_impl(state: &AppState) -> Result<WeightsData, String> {
+pub(crate) fn get_weights_data_impl(state: &AppState) -> Result<WeightsData, String> {
     let view_map = rig_view_map(state)?;
     let result_lock = state.result.lock().unwrap();
     let result = result_lock.as_ref().ok_or("No hay resultado de autorig")?;

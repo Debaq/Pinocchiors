@@ -21,6 +21,11 @@ export const setUiScale = setScale;
 export const showFps = fps;
 export const setShowFps = setFps;
 
+/** Bajar la resolución del visor mientras hay movimiento (animar, arrastrar, orbitar) y restaurarla al parar */
+const [adaptiveQualityRaw, setAdaptiveQualityRaw] = createPersisted<boolean>("settings.adaptiveQuality", true);
+export const adaptiveQuality = adaptiveQualityRaw;
+export const setAdaptiveQuality = setAdaptiveQualityRaw;
+
 /** Formato con que arranca el panel Exportar en un proyecto nuevo */
 export const defaultExportFormat = format;
 export const setDefaultExportFormat = setFormat;
@@ -36,6 +41,15 @@ export const setMeshBuild = setMeshBuildRaw;
 const [previewFirstRaw, setPreviewFirst] = createPersisted<boolean>("settings.previewFirst", true);
 export const previewFirst = previewFirstRaw;
 export const setPreviewFirstModel = setPreviewFirst;
+
+/**
+ * LOD al animar: con un modelo muy pesado (más de 100 000 caras) y esqueleto, el
+ * visor dibuja una versión decimada (~50 000 caras) con los mismos pesos mientras
+ * se anima. Solo es visual: exportar, guardar y renderizar usan la malla completa.
+ */
+const [animationLodRaw, setAnimationLodRaw] = createPersisted<boolean>("settings.animationLod", true);
+export const animationLod = animationLodRaw;
+export const setAnimationLodEnabled = setAnimationLodRaw;
 
 /** Impresoras propias (Fabricar): nombre, cama y boquilla; se recuerdan entre sesiones */
 export interface SavedPrinter {
