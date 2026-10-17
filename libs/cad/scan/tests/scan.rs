@@ -249,6 +249,9 @@ fn big_planes_come_out_whole() {
 /// triángulo) y lo encuentran si la malla se rehízo (punto más cercano).
 #[test]
 fn references_follow_the_scan() {
+    if !occt::available() {
+        return;
+    }
     let scan = scan_of(&part(), 0.01);
     let opts = PickOptions::default();
     let top = face_where(&scan, |c, n| n[2] > 0.99 && c[2] > 19.0 && c[0] < 50.0);

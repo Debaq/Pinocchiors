@@ -66,6 +66,9 @@ jobs:
       - run: npm ci
       - run: npx tsc --noEmit
       - name: Pruebas de lógica (node)
+        # Las pruebas esperan los textos en español; el idioma sale de navigator.language (LANG)
+        env:
+          LANG: es_ES.UTF-8
         run: |
           for f in e2e/*.test.mjs; do
             node --experimental-strip-types "$f" || exit 1
