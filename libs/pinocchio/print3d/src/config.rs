@@ -9,12 +9,9 @@ pub struct SubdivideConfig {
     /// Volumen de construcción de la impresora (mm) [x, y, z]
     pub build_volume: [Real; 3],
 
-    /// Dimensión máxima permitida por pieza (mm)
-    /// Si es None, usa build_volume
+    /// Dimensión máxima permitida por pieza (mm), en cada eje, además del
+    /// volumen de construcción. Si es None, solo manda `build_volume`
     pub max_dimension: Option<Real>,
-
-    /// Solapamiento entre piezas para joints (mm)
-    pub overlap: Real,
 
     /// Estrategia de subdivisión
     pub strategy: SubdivideStrategy,
@@ -45,7 +42,6 @@ impl Default for SubdivideConfig {
         Self {
             build_volume: [220.0, 220.0, 250.0], // Ender 3 típico
             max_dimension: None,
-            overlap: 0.0,
             strategy: SubdivideStrategy::Grid,
             margin: 5.0,
             manual: Vec::new(),
@@ -198,6 +194,6 @@ pub enum LabelingScheme {
     /// Alfanumérico: 1A, 1B, 2A, 2B...
     Alphanumeric,
 
-    /// Por coordenadas: X0Y0Z0, X1Y0Z0...
+    /// Por coordenadas en la grilla de cortes: X0Y0Z0, X1Y0Z0...
     Coordinate,
 }
