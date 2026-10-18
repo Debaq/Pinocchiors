@@ -72,8 +72,8 @@ Decisiones (2026-10-05):
 - [x] **F6 — Espacio de trabajo "Diseñar"** en la web: árbol de operaciones, panel de parámetros,
       primitivas, sketch básico (línea, rectángulo, círculo, arco) sobre plano o cara, extruir,
       elegir caras/aristas en el visor, redondeo. Textos sin mencionar Blender.
-- [~] **F7 — Distribución**: `scripts/build-occt.sh` + workflow manual `release-cad.yml` (no
-      toca `release.yml`). Linux probado en local; Windows y macOS escritos pero sin correr.
+- [~] **F7 — Distribución**: `scripts/build-occt.sh` + `release.yml` (único, siempre con CAD).
+      Linux probado; Windows y macOS pendientes (ver PENDIENTES §9).
 - [x] **F8 — Sketch completo** (cerrada el 2026-10-15): portar herramientas de cad-blender.
       Revisado contra `cad-blender` (sus 20 capacidades de sketch, A1–A20): todas están. La
       última, el **ajuste de ángulo** al dibujar una línea, se agregó como «Ángulos fijos» en

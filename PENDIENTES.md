@@ -233,8 +233,12 @@ sombra, HDRI elegible, ACES, luz de área texturizada) y 4a (fondo de estudio).
 Fases F0–F6 y F8–F10 cerradas (F9 se cerró el 2026-10-15); E0–E10 del escaneo
 con sección ✅.
 
-- 🟨 **F7 distribución:** `release-cad.yml` en Windows y macOS escrito, nunca
-  corrió; pueden faltar librerías. Linux probado en local.
+- 🟨 **F7 distribución:** un solo `release.yml` (2026-10-17) sale siempre con CAD
+  (OCCT estático) y corre todos los tests con OCCT real. Linux funcionaba en la
+  variante anterior; Windows tenía el C++ sin compilar con MSVC (arreglado con
+  `extern "C++"`, sin verificar) y macOS fallaba
+  `cremallera_helicoidal_con_piñon_de_las_dos_manos` (choque 0,74 mm³ que en
+  Linux no aparece).
 - ⬜ **Ensambles y chapa (queda de F9, ya cerrada):** relación tangente; arrastre
   libre de instancias con rótula, plana o paralela; sub-ensambles; instancias de
   STEP importados; pestaña en arista curva (el desarrollo no entiende conos);
