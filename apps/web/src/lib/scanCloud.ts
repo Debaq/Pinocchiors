@@ -1,4 +1,5 @@
 import { createSignal } from "solid-js";
+import { createPersisted } from "./ui-state";
 import { invoke } from "@tauri-apps/api/core";
 import type { CloudSelectTool, PointCloudData, Viewer3D } from "./Viewer3D";
 import { t, fmtNumber } from "./i18n.ts";
@@ -115,6 +116,13 @@ export function createScanCloud(viewer: () => Viewer3D | undefined, onMessage: (
   const [shown, setShown] = createSignal(true);
   /** Última comparación con la referencia, mientras el mapa está a la vista */
   const [comparison, setComparison] = createSignal<CompareResult>();
+  /** La selección ignora lo que otra parte de la nube tapa */
+  const [visibleOnly, setVisibleOnlyState] = createPersisted("scan.select.visibleOnly", true);
+  /** Recorte por caja o plano a la vista */
+  const [clip, setClipState] = createSignal<"box" | "plane" | null>(null);
+  /** Alineación a mano: puntos marcados en la toma activa y en las demás */
+  const [pairMode, setPairModeState] = createSignal(false);
+  const [pairs, setPairs] = createSignal<{ from: number; to: number }>({ from: 0, to: 0 });
 
   /** Corre una tarea con aviso de ocupado y el error a la vista */
   const run = async <T>(what: string, task: () => Promise<T>): Promise<T | undefined> => {
@@ -132,6 +140,7 @@ export function createScanCloud(viewer: () => Viewer3D | undefined, onMessage: (
   /** Trae la nube al visor */
   const refresh = async (fit = false) => {
     const data = parseCloud(await invoke<ArrayBuffer>("scan_cloud_data"));
+    viewer()?.setCloudVisibleOnly(visibleOnly());
     viewer()?.setPointCloud(data.count > 0 ? data : null, fit);
   };
 
@@ -282,9 +291,62 @@ export function createScanCloud(viewer: () => Viewer3D | undefined, onMessage: (
   const setBrushSize = (px: number) => viewer()?.setCloudBrushSize(px);
 
   const setTool = (next: CloudSelectTool) => {
+    // Con un gizmo o los puntos de alineación a la vista, el clic no selecciona
+    setClipState(null);
+    viewer()?.setCloudClip(null);
+    setPairModeState(false);
+    viewer()?.setCloudPairMode(false);
     setToolSignal(next);
     viewer()?.setCloudTool(next);
   };
+
+  const setVisibleOnly = (on: boolean) => {
+    setVisibleOnlyState(on);
+    viewer()?.setCloudVisibleOnly(on);
+  };
+
+  /** Recorte por caja o plano: se arrastra el gizmo y lo marcado se borra o se conserva */
+  const setClip = (shape: "box" | "plane" | null) => {
+    const v = viewer();
+    if (!v) return;
+    setPairModeState(false);
+    v.setCloudPairMode(false);
+    // Con el gizmo a la vista, el rectángulo y el lazo no deben tomar los clics
+    v.setCloudTool(shape ? null : tool());
+    v.setCloudClip(shape);
+    setClipState(shape);
+  };
+  const setClipMode = (mode: "translate" | "scale" | "rotate") => viewer()?.setCloudClipMode(mode);
+  const flipClip = () => viewer()?.flipCloudClip();
+
+  /** Activa o apaga el marcado de parejas de puntos para alinear a mano */
+  const setPairMode = (on: boolean) => {
+    const v = viewer();
+    if (!v) return;
+    if (on) {
+      setClip(null);
+      v.setCloudTool(null);
+    } else {
+      v.setCloudTool(tool());
+    }
+    v.setCloudPairMode(on);
+    v.setCloudPairListener(on ? (from, to) => setPairs({ from, to }) : null);
+    setPairs({ from: 0, to: 0 });
+    setPairModeState(on);
+  };
+  const undoPair = () => viewer()?.undoCloudPair();
+  const clearPairs = () => viewer()?.clearCloudPairs();
+
+  /** Lleva la toma activa sobre las demás con las parejas de puntos marcadas */
+  const alignByPoints = () =>
+    run("Alinear por puntos", async () => {
+      const marked = viewer()?.getCloudPairs();
+      if (!marked) return;
+      const result = await invoke<AlignResult>("scan_cloud_align_points", { from: marked.from, to: marked.to });
+      viewer()?.clearCloudPairs();
+      await adopt(result.info);
+      onMessage(t("{source} alineada por puntos (error {err} mm)", { source: result.info.source, err: result.rmse.toFixed(2) }));
+    });
 
   /** Engancha el visor (al crearse) y recupera la nube si ya había una */
   const attach = async (v: Viewer3D) => {
@@ -303,6 +365,18 @@ export function createScanCloud(viewer: () => Viewer3D | undefined, onMessage: (
     selected,
     tool,
     setTool,
+    visibleOnly,
+    setVisibleOnly,
+    clip,
+    setClip,
+    setClipMode,
+    flipClip,
+    pairMode,
+    setPairMode,
+    pairs,
+    undoPair,
+    clearPairs,
+    alignByPoints,
     setPointSize,
     setBrushSize,
     shown,

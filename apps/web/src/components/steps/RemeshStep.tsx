@@ -210,9 +210,10 @@ export const RemeshStep: Component<RemeshStepProps> = (props) => {
         </For>
       </div>
       <div class="border-t border-border pt-3 space-y-3">
-        <p class="text-xs text-text-muted leading-relaxed">
-          {t(current().what)} <span class="text-text-dim">{t(current().use)}</span>
-        </p>
+        <div class="flex items-start justify-between gap-2">
+          <span class="text-xs text-text-muted">{t(current().what)}</span>
+          <Hint text={t(current().use)} />
+        </div>
         <Show when={!current().ready}>
           <div data-remesh-pending>
             <Hint label={t("Cómo funciona")} text={t("Este modo todavía no está: llega en las próximas etapas. Mientras, la retopología y la reparación siguen disponibles.")} />

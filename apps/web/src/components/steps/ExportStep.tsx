@@ -3,7 +3,7 @@ import { Button, Checkbox, Hint, Select, Slider, Tooltip } from "../ui";
 import * as Icons from "../icons";
 import { t } from "../../lib/i18n";
 
-export type ExportFormat = "png" | "jpeg" | "webp" | "step" | "glb" | "gltf" | "obj" | "stl" | "3mf" | "ply" | "usdz" | "bvh" | "json";
+export type ExportFormat = "png" | "jpeg" | "webp" | "step" | "glb" | "gltf" | "obj" | "stl" | "3mf" | "ply" | "usdz" | "usda" | "bvh" | "json";
 
 /** Formatos que llevan el esqueleto sin modelo */
 export const SKELETON_FORMATS: ExportFormat[] = ["glb", "gltf", "bvh"];
@@ -27,11 +27,17 @@ export interface ExportOptions {
   textureQuality: number;
   /** Soldar vértices duplicados y quitar materiales sin uso */
   cleanGeometry: boolean;
+  /** USD (USDZ y USDA): escala del conjunto (1 = sin cambio) */
+  usdScale?: number;
+  /** USD: separar la textura ORM en oclusión, rugosidad y metal */
+  usdSplitOrm?: boolean;
+  /** USD: restricciones de AR Quick Look (texturas ≤ 2048, un solo set de UV) */
+  usdArkit?: boolean;
   /** Diseño: agrandar por eje lo que el material se encoge al enfriar (solo mallas) */
   compensate?: boolean;
 }
 
-type WebSettings = Omit<ExportOptions, "format" | "preset" | "compensate">;
+type WebSettings = Omit<ExportOptions, "format" | "preset" | "compensate" | "usdScale" | "usdSplitOrm" | "usdArkit">;
 
 const PRESETS: Record<Exclude<WebPreset, "custom">, WebSettings> = {
   none: {
@@ -76,6 +82,7 @@ const FORMATS: FormatEntry[] = [
   { id: "glb", name: "GLB", hint: "Web, juegos y AR. Un solo archivo con texturas, rig y animaciones." },
   { id: "gltf", name: "glTF", hint: "Como GLB, pero en JSON + .bin separados: fácil de inspeccionar." },
   { id: "usdz", name: "USDZ", hint: "AR en iPhone/iPad (Quick Look). Conserva el rig." },
+  { id: "usda", name: "USDA", hint: "USD en texto, legible y editable; las texturas quedan al lado. Conserva el rig." },
   { id: "obj", name: "OBJ", hint: "Geometría con materiales y texturas (.mtl). Sin rig." },
   { id: "3mf", name: "3MF", hint: "Impresión 3D moderna: milímetros, malla cerrada y colores." },
   { id: "stl", name: "STL", hint: "Impresión 3D clásica. Solo geometría, en milímetros." },
@@ -166,7 +173,7 @@ export const ExportStep: Component<ExportStepProps> = (props) => {
   // Del modelo de la app (no del diseño)
   const model = () => !props.design;
   const current = () => FORMATS.find((f) => f.id === opts().format) ?? FORMATS[0];
-  const keepsRig = () => ["glb", "gltf", "usdz"].includes(opts().format);
+  const keepsRig = () => ["glb", "gltf", "usdz", "usda"].includes(opts().format);
 
   return (
     <div class="space-y-5">
@@ -257,7 +264,7 @@ export const ExportStep: Component<ExportStepProps> = (props) => {
               onChange={props.onIncludeRigChange}
             />
             <Show when={!props.autorigComplete || !keepsRig()}>
-              <Hint text={!props.autorigComplete ? t("Ejecuta el autorig para exportar el rig.") : t("Solo GLB, glTF y USDZ llevan el rig.")} />
+              <Hint text={!props.autorigComplete ? t("Ejecuta el autorig para exportar el rig.") : t("Solo GLB, glTF, USDZ y USDA llevan el rig.")} />
             </Show>
           </div>
           <div class="flex items-center justify-between gap-2">
@@ -279,6 +286,37 @@ export const ExportStep: Component<ExportStepProps> = (props) => {
             />
             <Hint text={t("Reacomoda las islas lo más juntas posible y vuelve a hornear las texturas (lo pintado incluido): se pinta sobre el mapa legible y se exporta el que aprovecha la textura.")} />
           </div>
+        </div>
+      </Show>
+
+      {/* USD */}
+      <Show when={model() && !props.skeletonOnly && (opts().format === "usdz" || opts().format === "usda")}>
+        <div class="space-y-3 p-3 rounded-md bg-surface/30 border border-border">
+          <span class="text-xs font-medium text-text-muted">{t("Opciones de USD")}</span>
+          <Slider
+            label={t("Escala")}
+            min={0.01}
+            max={100}
+            step={0.01}
+            value={opts().usdScale ?? 1}
+            onChange={(v) => set({ usdScale: v })}
+            showValue
+            formatValue={(v) => `×${v}`}
+          />
+          <div class="flex items-center justify-between gap-2">
+            <Checkbox label={t("Separar oclusión, rugosidad y metal")} checked={opts().usdSplitOrm === true} onChange={(v) => set({ usdSplitOrm: v })} />
+            <Hint text={t("Divide la textura combinada ORM en tres imágenes, una por canal, como piden algunos visores de USD.")} />
+          </div>
+          <div class="flex items-center justify-between gap-2">
+            <Checkbox label={t("Compatible con AR Quick Look")} checked={opts().usdArkit === true} onChange={(v) => set({ usdArkit: v })} />
+            <Hint text={t("Para iPhone y iPad: texturas de hasta 2048 px y un solo mapa UV.")} />
+          </div>
+          <Select
+            label={t("Tamaño máximo de texturas")}
+            options={TEXTURE_SIZES}
+            value={String(opts().maxTextureSize)}
+            onChange={(v) => tweak({ maxTextureSize: Number(v) })}
+          />
         </div>
       </Show>
 

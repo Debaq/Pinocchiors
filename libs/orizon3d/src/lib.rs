@@ -14,11 +14,13 @@ pub mod edit;
 pub mod capture;
 pub mod mesh;
 pub mod pointcloud;
+pub mod poisson;
 pub mod recording;
 pub mod register;
 pub mod scan;
 pub mod turntable;
 mod scanner;
+#[cfg(test)] mod perf_tests;
 
 pub use camera::{CameraDescription, StreamInfo};
 pub use capture::DepthControls;

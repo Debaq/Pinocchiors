@@ -102,14 +102,16 @@ struct Rules {
 
 impl Rules {
     fn of(p: &[[f64; 3]], triangles: &[[u32; 3]], options: &SmoothOptions) -> Self {
-        // Caras de cada arista
-        let mut edges: HashMap<(u32, u32), Vec<u32>> = HashMap::with_capacity(triangles.len() * 3 / 2);
-        for (f, t) in triangles.iter().enumerate() {
-            for k in 0..3 {
-                let (a, b) = (t[k], t[(k + 1) % 3]);
-                edges.entry((a.min(b), a.max(b))).or_default().push(f as u32);
-            }
-        }
+        // Caras de cada arista: los lados de todas las caras ordenados por arista. Así las listas de
+        // vecinos salen siempre en el mismo orden (con un `HashMap` el orden cambiaba en cada
+        // ejecución y con él el orden de suma de los promedios: el resultado variaba en los
+        // últimos bits de una ejecución a otra)
+        let mut sides: Vec<(u32, u32, u32)> = triangles
+            .iter()
+            .enumerate()
+            .flat_map(|(f, t)| (0..3).map(move |k| (t[k].min(t[(k + 1) % 3]), t[k].max(t[(k + 1) % 3]), f as u32)))
+            .collect();
+        sides.par_sort_unstable();
         let cos_sharp = options.sharp_angle.map(|a| f64::from(a).to_radians().cos());
         let normals: Vec<[f64; 3]> = triangles.iter().map(|t| normalize(face_normal(p, t))).collect();
 
@@ -117,12 +119,18 @@ impl Rules {
         let mut all: Vec<Vec<u32>> = vec![Vec::new(); n];
         let mut border: Vec<Vec<u32>> = vec![Vec::new(); n];
         let mut crease: Vec<Vec<u32>> = vec![Vec::new(); n];
-        for (&(a, b), faces) in &edges {
+        let mut from = 0;
+        while from < sides.len() {
+            let (a, b, _) = sides[from];
+            let to = from + sides[from..].iter().take_while(|s| (s.0, s.1) == (a, b)).count();
+            // Las caras de la arista son `sides[from..to]`, en orden de cara
+            let faces = &sides[from..to];
+            from = to;
             all[a as usize].push(b);
             all[b as usize].push(a);
             let target = match faces.len() {
                 1 => Some(&mut border),
-                2 => cos_sharp.filter(|&c| dot(normals[faces[0] as usize], normals[faces[1] as usize]) < c).map(|_| &mut crease),
+                2 => cos_sharp.filter(|&c| dot(normals[faces[0].2 as usize], normals[faces[1].2 as usize]) < c).map(|_| &mut crease),
                 // Arista de más de dos caras: se respeta como una viva
                 _ => Some(&mut crease),
             };

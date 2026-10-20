@@ -626,6 +626,22 @@ pub async fn scan_cloud_take_align(app: AppHandle, align: String) -> Result<Alig
     .await
 }
 
+/// Alinea la toma activa a mano: parejas de puntos marcadas en la toma activa (`from`)
+/// y en las demás a la vista (`to`), en mm. Se deshace en la toma
+#[tauri::command]
+pub async fn scan_cloud_align_points(app: AppHandle, from: Vec<[f32; 3]>, to: Vec<[f32; 3]>) -> Result<AlignResult, String> {
+    with_editor(app, move |editor| {
+        let s = editor.as_mut().ok_or("No hay una nube en edición")?;
+        s.others_visible().ok_or("No hay otras tomas a la vista sobre las que alinear")?;
+        let (t, rmse) = register::align_by_points(&from, &to)?;
+        let moved = register::transform_cloud(&s.cur().cloud, &t);
+        let added = moved.points.len();
+        s.commit(moved, "Alinear por puntos");
+        Ok(AlignResult { added, overlap: None, rmse, note: None, info: s.info() })
+    })
+    .await
+}
+
 /// Cómo quedó una fusión
 #[derive(Debug, Clone, Serialize)]
 pub struct FuseResult {
@@ -702,7 +718,12 @@ pub async fn scan_cloud_create_model(
     };
     in_background(app, move |state| {
         report(&on_progress, "meshing", 10, "Reconstruyendo la malla...");
-        let mesh = mesh::reconstruct(&cloud, settings.voxel_mm.max(1.0), settings.fill, settings.smooth);
+        let voxel = settings.voxel_mm.max(1.0);
+        let mesh = if settings.poisson {
+            orizon3d_core::poisson::reconstruct_poisson(&cloud, voxel, settings.fill, settings.smooth)
+        } else {
+            mesh::reconstruct(&cloud, voxel, settings.fill, settings.smooth)
+        };
         let mesh = finish_mesh(mesh, &settings, &on_progress)?;
         load_scan(&mesh, &on_progress, state)
     })

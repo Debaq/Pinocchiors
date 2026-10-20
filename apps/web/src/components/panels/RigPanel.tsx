@@ -1,6 +1,6 @@
 import { Component, For, Show, createMemo, createSignal } from "solid-js";
 import { clsx } from "clsx";
-import { Button, Checkbox, NumberInput, Panel, Select } from "../ui";
+import { Button, Checkbox, Hint, NumberInput, Panel, Select } from "../ui";
 import * as Icons from "../icons";
 import {
   BONE_SHAPES,
@@ -279,9 +279,9 @@ export const RigPanel: Component<RigPanelProps> = (props) => {
                 onChange={(v) => props.onChange(v ? t("Cuaterniones duales") : t("Piel lineal"), { ...props.settings, dualQuaternion: v || undefined })}
               />
               <Show when={props.settings.dualQuaternion}>
-                <p class="text-[11px] text-text-dim leading-relaxed">
-                  {t("Solo en el visor: glTF no guarda este tipo de piel, así que lo exportado se ve con piel lineal en otras herramientas.")}
-                </p>
+                <div class="flex justify-end">
+                  <Hint text={t("Solo en el visor: glTF no guarda este tipo de piel, así que lo exportado se ve con piel lineal en otras herramientas.")} />
+                </div>
               </Show>
 
               <div class="space-y-1">
@@ -441,9 +441,9 @@ export const RigPanel: Component<RigPanelProps> = (props) => {
         }
       >
         <div class="space-y-2">
-          <p class="text-xs text-text-dim leading-relaxed">
-            {t("Objetos que no deforman la malla, con keys propias. Mueven las cadenas de IK y sirven de objetivo a las restricciones.")}
-          </p>
+          <div class="flex justify-end">
+            <Hint text={t("Objetos que no deforman la malla, con keys propias. Mueven las cadenas de IK y sirven de objetivo a las restricciones.")} />
+          </div>
           <div class="rounded border border-border divide-y divide-border/60">
             <For each={props.settings.controls} fallback={<p class="px-2 py-2 text-xs text-text-dim">{t("Sin controles.")}</p>}>
               {(c) => (
@@ -519,9 +519,9 @@ export const RigPanel: Component<RigPanelProps> = (props) => {
       {/* Reposo */}
       <Panel title={t("Pose de reposo")} icon={<Icons.Person size={14} />} defaultOpen={false}>
         <div class="space-y-2">
-          <p class="text-xs text-text-dim leading-relaxed">
-            {t("El reposo es la pose sin giros, aparte del cuadro 0. Aplicar la pose como reposo mueve las articulaciones adonde las deja la pose y vuelve a ligar la piel con los mismos pesos.")}
-          </p>
+          <div class="flex justify-end">
+            <Hint text={t("El reposo es la pose sin giros, aparte del cuadro 0. Aplicar la pose como reposo mueve las articulaciones adonde las deja la pose y vuelve a ligar la piel con los mismos pesos.")} />
+          </div>
           <div class="grid grid-cols-2 gap-1">
             <Button size="sm" onClick={props.onClearPose} disabled={!props.posing}>
               {t("Volver a reposo")}

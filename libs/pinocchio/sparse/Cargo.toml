@@ -8,6 +8,8 @@ description = "Sparse matrix operations and Cholesky decomposition for Pinocchio
 [dependencies]
 pinocchio-math = { workspace = true }
 sprs = { workspace = true }
+faer = { workspace = true }
+rayon = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

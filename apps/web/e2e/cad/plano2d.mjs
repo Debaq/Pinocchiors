@@ -75,7 +75,9 @@ export const escenarios = {
     rmSync(pdf, { force: true });
     await b.eval(`window.__nextPath = ${JSON.stringify(pdf)}`);
     await b.clickText("Exportar PDF");
-    await sleep(3000);
+    // Con la máquina cargada el PDF tarda más de 3 s
+    for (let t = 0; t < 40 && !existsSync(pdf); t++) await sleep(500);
+    await sleep(500);
     if (!existsSync(pdf) || !readFileSync(pdf).subarray(0, 5).toString() === "%PDF-") throw new Error("no se exportó el PDF");
     const { execSync } = await import("node:child_process");
     try {
@@ -636,7 +638,8 @@ export const escenarios = {
     rmSync(pdf, { force: true });
     await b.eval(`window.__nextPath = ${JSON.stringify(pdf)}`);
     await b.clickText("Exportar PDF");
-    await sleep(3000);
+    for (let t = 0; t < 40 && !existsSync(pdf); t++) await sleep(500);
+    await sleep(500);
     if (!existsSync(pdf)) throw new Error("no se exportó el PDF");
     const { execSync } = await import("node:child_process");
     try {

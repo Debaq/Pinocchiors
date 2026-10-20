@@ -1,5 +1,5 @@
 import { Component } from "solid-js";
-import { Panel, Slider, Checkbox, Button } from "../ui";
+import { Panel, Slider, Checkbox, Button, Hint } from "../ui";
 import * as Icons from "../icons";
 import { defaultLights, type LightSettings } from "../../lib/Viewer3D";
 import { t } from "../../lib/i18n";
@@ -15,9 +15,9 @@ export const LightsPanel: Component<LightsPanelProps> = (props) => {
   return (
     <Panel id="lights" title={t("Luces")} icon={<Icons.Lightning size={14} />} defaultOpen>
       <div class="space-y-4 pt-1">
-        <p class="text-xs text-text-muted leading-relaxed">
-          {t("Mantén")} <span class="text-text">L</span> {t("y arrastra con clic izquierdo en el visor: gira la luz principal alrededor del modelo.")}
-        </p>
+        <div class="flex justify-end">
+          <Hint text={t("Mantén L y arrastra con clic izquierdo en el visor: gira la luz principal alrededor del modelo.")} />
+        </div>
         <Slider
           label={t("Dirección")}
           value={Math.round(props.lights.azimuth)}

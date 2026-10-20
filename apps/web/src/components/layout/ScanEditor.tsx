@@ -72,6 +72,8 @@ export interface ScanMeshSettings {
   flat_patch: boolean;
   /** Quitar las piezas sueltas chicas antes de tapar */
   remove_pieces: boolean;
+  /** Reconstrucción de Poisson (superficie cerrada y lisa) en vez del campo por mínimos cuadrados */
+  poisson: boolean;
 }
 
 /** Parámetros de las herramientas de limpieza de la nube */
@@ -130,6 +132,7 @@ const DEFAULT_MESH: ScanMeshSettings = {
   max_hole_mm: 0,
   flat_patch: false,
   remove_pieces: true,
+  poisson: false,
 };
 
 const DEFAULT_COMPARE: CompareSettings = { tolerance_mm: 0.5, scale_mm: 3, reach_mm: 10 };
@@ -1043,7 +1046,7 @@ export const ScanEditor: Component<ScanEditorProps> = (props) => {
                   ? t("Clic a clic marca los vértices de la cuerda; se cierra con clic en el primer punto, doble clic o Enter. Retroceso quita el último punto y Esc cancela.")
                   : t("Arrastra con el botón izquierdo sobre el visor.")) +
                 " " +
-                t("Shift suma, Ctrl resta. La vista se gira con el botón central o Alt + izquierdo. La selección atraviesa la nube: gira la vista para no tomar la cara de atrás.")
+                t("Shift suma, Ctrl resta. La vista se gira con el botón central o Alt + izquierdo. Con «Solo lo visible» la selección no toma lo que otra parte de la nube tapa; sin ella atraviesa la nube.")
               }
             />
           }
@@ -1063,6 +1066,13 @@ export const ScanEditor: Component<ScanEditorProps> = (props) => {
               <ToolButton label={t("Invertir la selección (Ctrl+I)")} icon={<Icons.ArrowsLeftRight size={14} />} onClick={() => cloud().select("invert")} />
             </ToolGroup>
           </div>
+          <Checkbox
+            small
+            label={t("Solo lo visible")}
+            checked={cloud().visibleOnly()}
+            onChange={(v) => cloud().setVisibleOnly(v)}
+            hint={t("La selección ignora los puntos que otra parte de la nube tapa desde esta vista (la cara de atrás)")}
+          />
           <Show when={cloud().tool() === "brush"}>
             <Slider
               inline
@@ -1105,6 +1115,97 @@ export const ScanEditor: Component<ScanEditorProps> = (props) => {
             </Button>
           </div>
         </Panel>
+
+        <Panel
+          id="scan.cloud.clip"
+          dense
+          title={t("Recortar por caja o plano")}
+          icon={<Icons.Scissors size={14} />}
+          defaultOpen={false}
+          headerActions={
+            <Help text={t("Pone una caja o un plano sobre la nube. Arrastra su gizmo para moverlo (la caja también se escala; el plano se gira): lo de adentro de la caja, o el lado al que apunta la flecha roja del plano, queda seleccionado. Después bórralo o conserva solo eso.")} />
+          }
+        >
+          <div class="flex items-center gap-1.5">
+            <ToolGroup>
+              <ToolButton label={t("Caja")} active={cloud().clip() === "box"} icon={<Icons.Cube size={15} />} onClick={() => cloud().setClip(cloud().clip() === "box" ? null : "box")} />
+              <ToolButton label={t("Plano")} active={cloud().clip() === "plane"} icon={<Icons.Square size={15} />} onClick={() => cloud().setClip(cloud().clip() === "plane" ? null : "plane")} />
+            </ToolGroup>
+            <Show when={cloud().clip()}>
+              <ToolGroup>
+                <ToolButton label={t("Mover")} icon={<Icons.ArrowsOutCardinal size={14} />} onClick={() => cloud().setClipMode("translate")} />
+                <Show when={cloud().clip() === "box"}>
+                  <ToolButton label={t("Escalar")} icon={<Icons.ArrowsOutCardinal size={14} />} onClick={() => cloud().setClipMode("scale")} />
+                </Show>
+                <Show when={cloud().clip() === "plane"}>
+                  <ToolButton label={t("Girar")} icon={<Icons.ArrowsClockwise size={14} />} onClick={() => cloud().setClipMode("rotate")} />
+                </Show>
+                <ToolButton label={cloud().clip() === "box" ? t("Tomar lo de afuera") : t("Cambiar de lado")} icon={<Icons.ArrowsLeftRight size={14} />} onClick={() => cloud().flipClip()} />
+              </ToolGroup>
+            </Show>
+          </div>
+          <Show when={cloud().clip()}>
+            <div class="flex items-center gap-1.5">
+              <span class="text-xs text-text-muted">
+                <span class="font-mono text-text">{cloud().selected().toLocaleString()}</span> {t("marcados")}
+              </span>
+              <div class="flex-1" />
+              <Button size="sm" variant="danger" class={MINI} disabled={cloud().selected() === 0 || busy()} icon={<Icons.Trash size={12} />} onClick={() => cloud().deleteSelection()}>
+                {t("Borrar")}
+              </Button>
+              <Button size="sm" class={MINI} disabled={cloud().selected() === 0 || busy()} icon={<Icons.Scissors size={12} />} onClick={() => cloud().keepSelection()}>
+                {t("Conservar")}
+              </Button>
+            </div>
+          </Show>
+        </Panel>
+
+        <Show when={info()!.takes.length > 1}>
+          <Panel
+            id="scan.cloud.pairs"
+            dense
+            title={t("Alinear por puntos")}
+            icon={<Icons.CornersIn size={15} />}
+            defaultOpen={false}
+            headerActions={
+              <Help text={t("Para cuando la alineación automática no acierta. Marca un punto de la toma activa (naranja) y luego el punto de otra toma a la vista donde debería caer (verde); repite al menos 3 veces, sin que queden en línea. La toma activa se mueve para que cada naranja caiga sobre su verde (se deshace).")} />
+            }
+          >
+            <div class="flex items-center gap-1.5">
+              <Button size="sm" class={MINI} variant={cloud().pairMode() ? "primary" : "default"} onClick={() => cloud().setPairMode(!cloud().pairMode())}>
+                {cloud().pairMode() ? t("Terminar de marcar") : t("Marcar puntos")}
+              </Button>
+              <Show when={cloud().pairMode()}>
+                <span class="text-xs text-text-muted">
+                  {cloud().pairs().from === cloud().pairs().to ? t("Ahora: punto de la toma activa") : t("Ahora: su pareja en otra toma")}
+                </span>
+              </Show>
+            </div>
+            <Show when={cloud().pairMode()}>
+              <div class="flex items-center gap-1.5">
+                <span class="text-xs text-text-muted">
+                  <span class="font-mono text-text">{Math.min(cloud().pairs().from, cloud().pairs().to)}</span> {t("parejas")}
+                </span>
+                <div class="flex-1" />
+                <Button size="sm" class={MINI} disabled={cloud().pairs().from === 0} onClick={() => cloud().undoPair()}>
+                  {t("Quitar el último")}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="primary"
+                  class={MINI}
+                  disabled={busy() || cloud().pairs().from !== cloud().pairs().to || cloud().pairs().from < 3}
+                  onClick={async () => {
+                    await cloud().alignByPoints();
+                    cloud().setPairMode(false);
+                  }}
+                >
+                  {t("Alinear")}
+                </Button>
+              </div>
+            </Show>
+          </Panel>
+        </Show>
 
         <Panel id="scan.cloud.noise" dense title={t("Limpieza")} icon={<Icons.MagicWand size={14} />} defaultOpen>
           <Tool
@@ -1436,6 +1537,12 @@ export const ScanEditor: Component<ScanEditorProps> = (props) => {
             {(current) => t("Desde la nube en edición ({n} puntos, {s}).", { n: current().points.toLocaleString(locale()), s: current().source })}
           </Show>
         </Hint>
+        <Show when={info()}>
+          <div class="flex items-center justify-between gap-2">
+            <Checkbox small label={t("Poisson")} checked={mesh().poisson} onChange={(v) => updateMesh({ poisson: v })} />
+            <Help text={t("Reconstrucción de Poisson: una superficie lisa y cerrada que sigue las normales de los puntos, y tapa los huecos sola. Pide una nube bien orientada y sin ruido; si hay zonas sin datos, puede inventar volumen ahí. Solo desde la nube en edición.")} />
+          </div>
+        </Show>
         <div class="space-y-1">
           <Slider
             inline

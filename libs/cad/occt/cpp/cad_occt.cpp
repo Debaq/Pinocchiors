@@ -897,6 +897,8 @@ CadShape* cad_loft_pipe(const CadShape* const* wires, int32_t n, const CadShape*
     });
 }
 
+// Enlace C++ dentro del bloque extern "C" (MSVC no acepta funciones con enlace C que devuelvan plantillas)
+extern "C++" {
 namespace hermite {
 
 // Las aristas de un alambre en el orden y el sentido en que se recorre, como curvas
@@ -934,6 +936,7 @@ static std::vector<Side> rotated(const std::vector<Side>& b, size_t shift, bool 
 }
 
 }  // namespace hermite
+}  // extern "C++"
 
 // Transición con tangencia en las puntas: la superficie se arma a mano (no hay en OCCT un loft
 // con condiciones de borde). Cada lado es un parche B-spline: a lo largo de la arista, la arista
@@ -1300,6 +1303,7 @@ CadShape* cad_intersect_curves(const CadShape* a, const CadShape* b) {
 // la cuña entre el centro y los puntos de contacto menos el tubo: se resta en
 // el convexo y se suma en el cóncavo.
 // ---------------------------------------------------------------------------
+extern "C++" {
 namespace blend {
 
 // Caras desfasadas `off` (hacia afuera con `off` > 0), extendidas para que el cruce no se corte antes
@@ -1396,6 +1400,7 @@ static TopoDS_Wire trim(const TopoDS_Wire& w, const BRepAdaptor_CompCurve& cc, d
 }
 
 }  // namespace blend
+}  // extern "C++"
 
 CadShape* cad_face_blend(const CadShape* s, const int32_t* fa, int32_t na, const int32_t* fb, int32_t nb, double r, int32_t side) {
     return guard("redondeo de cara", (CadShape*)nullptr, [&] {
@@ -1767,6 +1772,7 @@ CadShape* cad_split_faces(const CadShape* s, const int32_t* faces, int32_t n, co
     });
 }
 
+extern "C++" {
 namespace silhouette {
 
 // Las curvas de la cara donde la normal es perpendicular a `d`, en (u, v): marching squares sobre
@@ -1882,6 +1888,7 @@ static std::vector<std::vector<gp_Pnt2d>> curves(const TopoDS_Face& f, const gp_
 }
 
 }  // namespace silhouette
+}  // extern "C++"
 
 // Línea de partición por silueta: parte las caras donde, vistas desde `dir`, la normal pasa a
 // ser perpendicular a la mirada (el contorno aparente; en un molde, donde se separan las dos

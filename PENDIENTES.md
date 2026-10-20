@@ -33,14 +33,11 @@ Verificado por lectura y búsqueda en el código; no se ejecutaron pruebas.
 
 ## 1. Errores comprobados
 
-- 🟨 Impresión 3D, campos sin usar (`libs/pinocchio/print3d`):
-  - `SubdivideConfig::max_dimension` y `overlap` se declaran (`config.rs:14,17`)
-    y nadie los lee.
-  - `LabeledPiece.cut_faces` siempre `vec![]` (`slicer.rs`).
-  - `LabelingScheme::Coordinate` genera `P{n}` (`slicer.rs:664`) y
-    `From<SubdivideStrategy>` nunca lo elige.
-  - `AssemblyInfo.total_volume` es 0 y `assembly_order` va por ID
-    (`labeling.rs:73-81`, con TODO).
+- ✅ Impresión 3D, campos sin usar (2026-10-16): `max_dimension` ahora limita el
+  volumen útil por eje; `overlap` y `cut_faces` se quitaron (nadie los llenaba);
+  `LabelingScheme::Coordinate` genera `X{i}Y{j}Z{k}` por la grilla de cortes
+  (sin `From<SubdivideStrategy>`, no hacía falta); `AssemblyInfo` ordena el
+  ensamble de abajo hacia arriba y suma `total_volume`.
 - ✅ Resuelto desde el último compilado: «Optimal (menos cortes)» (`cuts.rs`
   `optimal_planes`), cortes manuales, piezas en el visor, candado de proporción,
   puzzles y terraza (print3d Fases 9, 10 y 12).
@@ -87,27 +84,50 @@ Hecho: Outliner, Orizon3D en panel lateral con edición de nube, varios
 escaneos y comparación con referencia, atajos reasignables por área
 (`shortcuts.ts`), E2E propios.
 
-- ⬜ Nube: selección solo de lo visible (sin oclusión), recortar por caja o
-  plano con gizmo, alineación manual por puntos, malla por Poisson.
-- ⬜ Arrastrar y soltar para importar, archivos recientes, vista previa de la
-  información antes de importar.
-- ⬜ Exportar USDA en texto (existe `Format::Usda`; `ExportStep.tsx` solo ofrece
-  USDZ). 🟨 Opciones USD en la interfaz: el backend tiene `scale_factor` y
-  `split_orm_channels`, la UI no las expone; revisar «eje arriba».
-- ⬜ Impresión 3D en la interfaz: ver sección 6 y `PLAN_PRINT3D.md`.
-- ⬜ Cuatro vistas; menús Editar/Vista/Malla (`Header.tsx` solo tiene el de
-  archivo). 🟨 Ajuste a grilla/vértices: el visor 3D solo tiene snap de giro del
-  gizmo (el del sketch CAD sí existe).
-- ⬜ Tags y categorías en la biblioteca de poses (`StoredPose`).
-- ⬜ Overlay lado a lado original/retopología.
-- ⬜ Rendimiento: decimar la vista previa de mallas > 100k, workers, LOD.
+- 🧪 Nube (2026-10-16, solo compilado y con pruebas unitarias; sin ver en el
+  visor): selección solo de lo visible (casilla «Solo lo visible»), recortar por
+  caja o plano con gizmo, alineación manual por puntos (`align_by_points`) y malla
+  por Poisson (`poisson.rs`; probado con esfera sintética, no con escaneos reales).
+- 🧪 Arrastrar y soltar para importar (proyectos y modelos, también sobre la
+  ventana con trabajo abierto), archivos recientes (menú Archivo e inicio) e
+  información previa a importar (`peek_model`, opcional en Configuración ▸
+  Archivos): escritos, sin probar con la app Tauri real.
+- 🧪 USDA en texto exportable (texturas al lado) y opciones de USD en Exportar
+  (escala, separar ORM, AR Quick Look). «Eje arriba» se revisó: sale de
+  `scene.y_up`, sin cambios.
+- ⬜ Impresión 3D en la interfaz: la contracción por eje ya está (Impresora y material); el resto, en la sección 6 y `PLAN_PRINT3D.md`.
+- 🧪 Cuatro vistas (Vista ▸ Cuatro vistas, Ctrl+Alt+Q: principal + superior, frontal
+  y derecha ortográficas; rueda acerca, arrastrar desplaza, doble clic lleva la
+  principal a esa dirección), menús Editar/Vista/Malla en la cabecera y ajuste al
+  mover con el gizmo a la grilla o a los vértices (Vista ▸ Ajuste al mover).
+  Cuatro vistas probado en Chromium con un prisma; el resto, solo con tipos.
+  ⬜ Las vistas ortográficas no son editables (solo mirar) y no hay vistas
+  nombradas propias; el ajuste a vértices pega las articulaciones a la malla y el
+  modelo entero a los otros objetos.
+- ✅ Tags y categorías en la biblioteca de poses (`StoredPose.category/tags`, búsqueda y filtro).
+- 🧪 Comparar original y retopología lado a lado (casilla en Retopología): sin ver en el visor real.
+- 🟨 Rendimiento: la vista previa liviana ahora sale desde 100 000 caras (antes 400 000); faltan decodificar en workers y LOD.
 - 🟨 Pruebas: hay E2E con `node --test` y un arnés CDP en `apps/web/e2e`, no
-  Playwright ni E2E de la app Tauri completa; el CI no los corre.
-- ⬜ CI sin clippy (`ci.yml` solo corre `cargo test`, `tsc` y `build`); ~30
-  avisos de estilo pendientes (hace falta red hacia crates.io).
+  Playwright ni E2E de la app Tauri completa; el CI corre ya las pruebas de
+  lógica `e2e/*.test.mjs`, no el arnés CDP.
+- 🟨 CI con clippy informativo (job nuevo en `ci.yml`, sin `-D warnings`):
+  0 errores y ~120 avisos de estilo en 12 crates (`cargo clippy --workspace --offline`
+  del 2026-10-16); falta limpiarlos para poder exigirlos.
 - PLAN_OBJETOS sección C: probar el cráneo y un modelo de una sola pieza en la
-  app real; 🟨 en curso: Luces e Historial en Hint y revisar párrafos
-  `leading-relaxed` sueltos.
+  app real. ✅ Luces e Historial ya usan Hint y los párrafos `leading-relaxed`
+  de los paneles laterales pasaron a Hint (quedan avisos de estado y los de
+  diálogos, Escáner y Diseñar, fuera del plan).
+- ✅ **Paneles angostos pisaban rótulos con sus campos** (visto el 2026-10-16;
+  arreglado el mismo día en los componentes, sin verlo aún en la app real a
+  1280 px): `NumberInput` y `Num` con rótulo largo ahora envuelven (`flex-wrap`,
+  campo `min-w` propio), `Checkbox` es de bloque (dos casillas seguidas ya no
+  quedan en una línea) y `Select` no desborda las celdas de grilla.
+- ✅ Cámara de Diseñar: un sólido de otra escala que la vista heredada del visor
+  principal ahora se encuadra solo (`frameIfLost`); falta ver el caso real
+  engranes mm + humanoide.
+- ✅ Render: exposición editable en el motor GeppettoRay (control «Exposición»,
+  ×0,25–×4); el material por defecto ya era gris 0,8, así que «muy claro» se
+  corrige con la exposición.
 
 ## 5. Librerías
 
@@ -213,8 +233,12 @@ sombra, HDRI elegible, ACES, luz de área texturizada) y 4a (fondo de estudio).
 Fases F0–F6 y F8–F10 cerradas (F9 se cerró el 2026-10-15); E0–E10 del escaneo
 con sección ✅.
 
-- 🟨 **F7 distribución:** `release-cad.yml` en Windows y macOS escrito, nunca
-  corrió; pueden faltar librerías. Linux probado en local.
+- 🟨 **F7 distribución:** un solo `release.yml` (2026-10-17) sale siempre con CAD
+  (OCCT estático) y corre todos los tests con OCCT real. Linux funcionaba en la
+  variante anterior; Windows tenía el C++ sin compilar con MSVC (arreglado con
+  `extern "C++"`, sin verificar) y macOS fallaba
+  `cremallera_helicoidal_con_piñon_de_las_dos_manos` (choque 0,74 mm³ que en
+  Linux no aparece).
 - ⬜ **Ensambles y chapa (queda de F9, ya cerrada):** relación tangente; arrastre
   libre de instancias con rótula, plana o paralela; sub-ensambles; instancias de
   STEP importados; pestaña en arista curva (el desarrollo no entiende conos);

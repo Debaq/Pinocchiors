@@ -1,21 +1,24 @@
-# Releases.
+# Release completa: app de escritorio CON el núcleo CAD, CLI y WASM.
 #
 # El prefijo `pre.` del tag es solo parte del nombre: la release se publica
 # como release normal y queda marcada como la más reciente.
 #
-# Se lanza SOLO al hacer push de un tag con el formato:
-#   pre.<YYYY>.<MM>.<DD>.<sha7>     p.ej. pre.2026.09.26.285f33f
-# La fecha es la del commit en UTC. Para crear el tag correcto:
-#   ./scripts/release.sh [commit]
+# Se lanza a mano (Actions → Release → Run workflow, o
+#   gh workflow run Release --ref <rama> -f plataformas=linux)
+# y publica el commit de la rama elegida; el tag lo crea la propia release.
+# También al subir un tag con el formato pre.<YYYY>.<MM>.<DD>.<sha7> (fecha del
+# commit en UTC), que es lo que hace ./scripts/release.sh [commit].
 #
-# O a mano (Actions → Release → Run workflow, o
-# `gh workflow run Release -f plataformas=linux`): publica el commit de la rama
-# elegida con el mismo formato de tag, que crea la propia release. Con
-# `plataformas=linux` solo compila CLI y app de Linux (más WASM).
+# plataformas: linux (por defecto) o todas (Windows y macOS además).
+#
+# OpenCASCADE se compila mínimo y estático con scripts/build-occt.sh (solo
+# modelado y STEP, sin visualización ni X11) y queda en caché por versión,
+# sistema y hash del script: la primera vez tarda ~30 min por plataforma,
+# después sale de caché. CAD_REQUIRE_OCCT=1 hace que la app no salga sin CAD.
 #
 # Artefactos:
-#   - CLI `converter`       Linux x86_64, Windows x86_64, macOS arm64 + x86_64
 #   - App de escritorio     binario Linux + .AppImage, .msi/-setup.exe, .dmg (arm64)
+#   - CLI `converter`       Linux x86_64, Windows x86_64, macOS arm64 + x86_64
 #   - Paquete WASM          converter-wasm (wasm-bindgen --target web)
 
 name: Release
@@ -37,6 +40,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  OCCT_VERSION: "7.9.3"
 
 jobs:
   # ───────────────────────────────────────────────────────────────────────────
@@ -48,7 +52,7 @@ jobs:
       cli: ${{ steps.matrix.outputs.cli }}
       desktop: ${{ steps.matrix.outputs.desktop }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - id: tag
         env:
@@ -85,66 +89,53 @@ jobs:
           echo "desktop=${desktop}]" >> "$GITHUB_OUTPUT"
 
   # ───────────────────────────────────────────────────────────────────────────
+  # Todo el workspace con OCCT real (los tests del CAD no se saltan). Mismo
+  # sistema que el desktop de Linux, así este job deja OCCT en caché para él.
   test:
-    name: Tests
-    runs-on: ubuntu-latest
+    name: Tests (con CAD)
+    runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - name: Dependencias del sistema (tests de la app Tauri)
+      - name: Dependencias del sistema
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev ninja-build
 
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-
-      - run: cargo test --workspace --locked
-
-  # ───────────────────────────────────────────────────────────────────────────
-  cli:
-    name: CLI (${{ matrix.target }})
-    needs: [version, test]
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJSON(needs.version.outputs.cli) }}
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # restore/save por separado: si después falla el job, OCCT ya quedó guardado.
+      - name: OCCT en caché
+        id: occt-cache
+        uses: actions/cache/restore@v4
         with:
-          targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: cli-${{ matrix.target }}
+          path: occt-static
+          key: occt-${{ env.OCCT_VERSION }}-ubuntu-22.04-${{ hashFiles('scripts/build-occt.sh') }}
 
-      - run: cargo build --release --locked -p converter-cli --target ${{ matrix.target }}
-
-      - name: Empaquetar
+      - name: Compilar OCCT estático
+        if: steps.occt-cache.outputs.cache-hit != 'true'
         env:
-          TAG: ${{ needs.version.outputs.tag }}
-        run: |
-          name="converter-${TAG}-${{ matrix.target }}"
-          mkdir -p "dist/${name}"
-          bin_dir="target/${{ matrix.target }}/release"
-          if [[ "${{ matrix.target }}" == *windows* ]]; then
-            cp "${bin_dir}/converter.exe" "dist/${name}/"
-            (cd dist && 7z a -tzip "${name}.zip" "${name}" > /dev/null)
-          else
-            cp "${bin_dir}/converter" "dist/${name}/"
-            tar -C dist -czf "dist/${name}.tar.gz" "${name}"
-          fi
-          rm -rf "dist/${name}"
+          CMAKE_GENERATOR: Ninja
+        run: OCCT_WORK_DIR="$RUNNER_TEMP/occt" scripts/build-occt.sh "$PWD/occt-static" "$OCCT_VERSION"
 
-      - uses: actions/upload-artifact@v4
+      - name: Guardar OCCT en caché
+        if: steps.occt-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
         with:
-          name: cli-${{ matrix.target }}
-          path: dist/*
-          if-no-files-found: error
+          path: occt-static
+          key: ${{ steps.occt-cache.outputs.cache-primary-key }}
+
+      - name: Rutas de OCCT
+        run: |
+          echo "OCCT_STATIC=1" >> "$GITHUB_ENV"
+          echo "CAD_REQUIRE_OCCT=1" >> "$GITHUB_ENV"
+          echo "OCCT_INCLUDE_DIR=$PWD/occt-static/include/opencascade" >> "$GITHUB_ENV"
+          echo "OCCT_LIB_DIR=$PWD/occt-static/lib" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: test-cad
+
+      - run: cargo test --workspace --locked --no-fail-fast
 
   # ───────────────────────────────────────────────────────────────────────────
   desktop:
@@ -159,7 +150,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Dependencias del sistema (Linux)
         if: matrix.platform == 'linux'
@@ -167,14 +158,55 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
-            librsvg2-dev patchelf file
+            librsvg2-dev patchelf file ninja-build
+
+      - name: Entorno de MSVC (Windows)
+        if: matrix.platform == 'windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      # En bash el link.exe de Git (coreutils) tapa al linker de MSVC.
+      - name: Quitar link.exe de Git (Windows)
+        if: matrix.platform == 'windows'
+        run: rm -f /usr/bin/link.exe
+
+      - name: OCCT en caché
+        id: occt-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: occt-static
+          key: occt-${{ env.OCCT_VERSION }}-${{ matrix.os }}-${{ hashFiles('scripts/build-occt.sh') }}
+
+      - name: Compilar OCCT estático
+        if: steps.occt-cache.outputs.cache-hit != 'true'
+        env:
+          CMAKE_GENERATOR: Ninja
+        run: |
+          if [[ "${{ matrix.platform }}" == macos ]]; then brew install ninja; fi
+          OCCT_WORK_DIR="$RUNNER_TEMP/occt" scripts/build-occt.sh "$PWD/occt-static" "$OCCT_VERSION"
+
+      - name: Guardar OCCT en caché
+        if: steps.occt-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: occt-static
+          key: ${{ steps.occt-cache.outputs.cache-primary-key }}
+
+      - name: Rutas de OCCT
+        run: |
+          # En Windows, ruta nativa (C:/...) y no la de MSYS (/c/...)
+          root=$PWD
+          if [[ "${{ matrix.platform }}" == windows ]]; then root=$(cygpath -m "$PWD"); fi
+          echo "OCCT_STATIC=1" >> "$GITHUB_ENV"
+          echo "CAD_REQUIRE_OCCT=1" >> "$GITHUB_ENV"
+          echo "OCCT_INCLUDE_DIR=$root/occt-static/include/opencascade" >> "$GITHUB_ENV"
+          echo "OCCT_LIB_DIR=$root/occt-static/lib" >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          key: desktop-${{ matrix.platform }}
+          key: desktop-cad-${{ matrix.platform }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -212,15 +244,7 @@ jobs:
           done
           # Binario Linux suelto (requiere webkit2gtk-4.1 instalado en el sistema)
           if [[ "${{ matrix.platform }}" == linux ]]; then
-            bin=""
-            for candidate in target/release/pinocchio-app target/release/Pinocchio; do
-              if [[ -f "$candidate" ]]; then bin="$candidate"; break; fi
-            done
-            if [[ -z "$bin" ]]; then
-              echo "::error::No se encontró el binario de la app en target/release"
-              exit 1
-            fi
-            cp "$bin" "dist/Pinocchio-${TAG}-linux-x86_64"
+            cp target/release/pinocchio-app "dist/Pinocchio-${TAG}-linux-x86_64"
             chmod +x "dist/Pinocchio-${TAG}-linux-x86_64"
           fi
           ls -la dist
@@ -232,12 +256,57 @@ jobs:
           if-no-files-found: error
 
   # ───────────────────────────────────────────────────────────────────────────
+  cli:
+    name: CLI (${{ matrix.target }})
+    needs: [version, test]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.version.outputs.cli) }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: cli-${{ matrix.target }}
+
+      - run: cargo build --release --locked -p converter-cli --target ${{ matrix.target }}
+
+      - name: Empaquetar
+        env:
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          name="converter-${TAG}-${{ matrix.target }}"
+          mkdir -p "dist/${name}"
+          bin_dir="target/${{ matrix.target }}/release"
+          if [[ "${{ matrix.target }}" == *windows* ]]; then
+            cp "${bin_dir}/converter.exe" "dist/${name}/"
+            (cd dist && 7z a -tzip "${name}.zip" "${name}" > /dev/null)
+          else
+            cp "${bin_dir}/converter" "dist/${name}/"
+            tar -C dist -czf "dist/${name}.tar.gz" "${name}"
+          fi
+          rm -rf "dist/${name}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  # ───────────────────────────────────────────────────────────────────────────
   wasm:
     name: WASM
     needs: [version, test]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
@@ -275,11 +344,11 @@ jobs:
 
   # ───────────────────────────────────────────────────────────────────────────
   release:
-    name: Publicar pre-release
-    needs: [version, cli, desktop, wasm]
+    name: Publicar release
+    needs: [version, desktop, cli, wasm]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 

@@ -835,7 +835,10 @@ export const CadView: Component<CadViewProps> = (props) => {
     // En el ensamble el visor muestra las instancias (efecto de abajo)
     if (ui.assemblyMode()) return;
     viewer?.setBody(m);
-    if (m && !hadBody && !ui.session()) viewer?.frameAll();
+    if (m && !ui.session()) {
+      if (!hadBody) viewer?.frameAll();
+      else viewer?.frameIfLost();
+    }
     hadBody = !!m;
   });
   // Ensamble: cada instancia en su lugar, con el color de su pieza

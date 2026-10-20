@@ -37,6 +37,29 @@ export function sphereStl(R, cz, name) {
   return path;
 }
 
+/** Tubo de pared gruesa (radio exterior 9 mm, interior 7 mm, de z = 0 a 60) como STL: el escaneo
+ * de reserva cuando no está `SPECULUM`. Su pared exterior es un cilindro de Ø18 mm */
+export function tubeStl(path, rOut = 9, rIn = 7, h = 60, segs = 144) {
+  const ring = (r, z, j) => [r * Math.cos((2 * Math.PI * j) / segs), r * Math.sin((2 * Math.PI * j) / segs), z];
+  let stl = "solid tubo\n";
+  const facet = (a, c, d) => (stl += `facet normal 0 0 0\nouter loop\nvertex ${a.join(" ")}\nvertex ${c.join(" ")}\nvertex ${d.join(" ")}\nendloop\nendfacet\n`);
+  for (let j = 0; j < segs; j++) {
+    const k = j + 1;
+    // Pared exterior (normal hacia fuera) e interior (hacia dentro)
+    facet(ring(rOut, 0, j), ring(rOut, 0, k), ring(rOut, h, k));
+    facet(ring(rOut, 0, j), ring(rOut, h, k), ring(rOut, h, j));
+    facet(ring(rIn, 0, j), ring(rIn, h, k), ring(rIn, 0, k));
+    facet(ring(rIn, 0, j), ring(rIn, h, j), ring(rIn, h, k));
+    // Tapas de abajo y de arriba
+    facet(ring(rOut, 0, k), ring(rOut, 0, j), ring(rIn, 0, j));
+    facet(ring(rOut, 0, k), ring(rIn, 0, j), ring(rIn, 0, k));
+    facet(ring(rOut, h, j), ring(rOut, h, k), ring(rIn, h, k));
+    facet(ring(rOut, h, j), ring(rIn, h, k), ring(rIn, h, j));
+  }
+  writeFileSync(path, stl + "endsolid tubo\n");
+  return path;
+}
+
 /** STL de texto con dos cubos de 20 mm, el segundo corrido 10 mm en cada eje */
 export function twoCubesStl() {
   const quads = [
@@ -93,7 +116,9 @@ export async function sketchOn(b) {
   for (const [u, v] of tries) {
     const [x, y] = await b.eval(`window.__cadViewer.screenOf([${u * s}, ${v * s}, 0])`);
     const hit = await b.eval(`(() => { const h = window.__cadViewer.pick(${x}, ${y}, { faces: true, planes: true }); return h && (h.kind === "plane" ? h.plane : h.kind); })()`);
-    if (hit === "xy") return void (await b.click(x, y, { wait: 1500 }));
+    // Que no lo tape un panel (el del sketch recién terminado cubre parte del visor)
+    const libre = await b.eval(`document.elementFromPoint(${x}, ${y})?.tagName === "CANVAS"`);
+    if (hit === "xy" && libre) return void (await b.click(x, y, { wait: 1500 }));
   }
   throw new Error("no encontré un punto libre de la planta");
 }
@@ -134,7 +159,10 @@ export async function clickRow(b, name) {
 export const sketchText = (b, re) => b.eval(`(document.body.innerText.match(${re}) ?? [""])[0]`);
 export const setInput = (b, labelStart, value) =>
   b.eval(`(() => {
-    const i = [...document.querySelectorAll("label")].find((l) => l.textContent.startsWith(${JSON.stringify(labelStart)}))?.querySelector("input");
+    // El primero que empieza así y tiene campo («Ángulos fijos» es otra cosa y no lo tiene)
+    const x = ${JSON.stringify(labelStart)};
+    const c = [...document.querySelectorAll("label")].filter((l) => l.textContent.startsWith(x) && l.querySelector("input"));
+    const i = c[0]?.querySelector("input");
     if (!i) return false;
     i.value = ${JSON.stringify(String(value))};
     i.dispatchEvent(new Event("change", { bubbles: true }));

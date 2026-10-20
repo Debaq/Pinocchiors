@@ -454,10 +454,11 @@ pub fn subdivide(mesh: &Mesh, config: &SubdivideConfig) -> Result<Vec<LabeledPie
 
     // Verificar si ya cabe
     let margin2 = config.margin * 2.0;
+    let cap = config.max_dimension.filter(|d| d.is_finite() && *d > 0.0).unwrap_or(Real::INFINITY);
     let effective_volume = [
-        config.build_volume[0] - margin2,
-        config.build_volume[1] - margin2,
-        config.build_volume[2] - margin2,
+        config.build_volume[0].min(cap) - margin2,
+        config.build_volume[1].min(cap) - margin2,
+        config.build_volume[2].min(cap) - margin2,
     ];
     if config.margin < 0.0 || effective_volume.iter().any(|&v| !(v.is_finite() && v > 0.0)) {
         return Err(Print3dError::InvalidConfig(format!(
@@ -481,7 +482,6 @@ pub fn subdivide(mesh: &Mesh, config: &SubdivideConfig) -> Result<Vec<LabeledPie
             label: "1".to_string(),
             original_position: [bbox.center().x(), bbox.center().y(), bbox.center().z()],
             neighbors: vec![],
-            cut_faces: vec![],
         }]);
     }
 
@@ -514,7 +514,6 @@ pub fn subdivide(mesh: &Mesh, config: &SubdivideConfig) -> Result<Vec<LabeledPie
             label: "1".to_string(),
             original_position: [bbox.center().x(), bbox.center().y(), bbox.center().z()],
             neighbors: vec![],
-            cut_faces: vec![],
         }]);
     }
 
@@ -537,7 +536,6 @@ pub fn subdivide(mesh: &Mesh, config: &SubdivideConfig) -> Result<Vec<LabeledPie
                     piece_bbox.center().z(),
                 ],
                 neighbors: vec![],
-                cut_faces: vec![],
             }
         })
         .collect();
@@ -652,6 +650,7 @@ fn calculate_z_planes(bbox: &BoundingBox, max_height: Real) -> Vec<Plane> {
 
 /// Genera labels para las piezas según el esquema
 pub fn generate_labels(pieces: &mut [LabeledPiece], scheme: LabelingScheme) {
+    let cells = if scheme == LabelingScheme::Coordinate { grid_cells(pieces) } else { Vec::new() };
     for (i, piece) in pieces.iter_mut().enumerate() {
         piece.id = i;
         piece.label = match scheme {
@@ -661,11 +660,47 @@ pub fn generate_labels(pieces: &mut [LabeledPiece], scheme: LabelingScheme) {
                 let letter = (b'A' + (i % 26) as u8) as char;
                 format!("{}{}", num, letter)
             }
-            LabelingScheme::Coordinate => {
-                format!("P{}", i + 1)
-            }
+            LabelingScheme::Coordinate => coordinate_label(&cells[i]),
         };
     }
+    if scheme == LabelingScheme::Coordinate {
+        // Dos piezas en la misma celda (cortes inclinados): una letra las distingue
+        let mut seen: HashMap<String, usize> = HashMap::new();
+        for piece in pieces.iter_mut() {
+            let n = seen.entry(piece.label.clone()).or_insert(0);
+            if *n > 0 {
+                piece.label = format!("{}{}", piece.label, (b'a' + ((*n - 1) % 26) as u8) as char);
+            }
+            *n += 1;
+        }
+    }
+}
+
+/// Índice de grilla de cada pieza: por eje, las posiciones que difieren en
+/// más que la tolerancia son celdas distintas, ordenadas de menor a mayor
+fn grid_cells(pieces: &[LabeledPiece]) -> Vec<[usize; 3]> {
+    let mut cells = vec![[0usize; 3]; pieces.len()];
+    for axis in 0..3 {
+        let mut values: Vec<Real> = pieces.iter().map(|p| p.original_position[axis]).collect();
+        values.sort_by(|a, b| a.total_cmp(b));
+        let span = values.last().copied().unwrap_or(0.0) - values.first().copied().unwrap_or(0.0);
+        let tol = (span * 0.01).max(1e-3);
+        let mut centers: Vec<Real> = Vec::new();
+        for v in values {
+            if centers.last().is_none_or(|&c| v - c > tol) {
+                centers.push(v);
+            }
+        }
+        for (cell, piece) in cells.iter_mut().zip(pieces) {
+            let v = piece.original_position[axis];
+            cell[axis] = centers.iter().rposition(|&c| c <= v + tol).unwrap_or(0);
+        }
+    }
+    cells
+}
+
+fn coordinate_label(cell: &[usize; 3]) -> String {
+    format!("X{}Y{}Z{}", cell[0], cell[1], cell[2])
 }
 
 #[cfg(test)]
@@ -873,7 +908,6 @@ mod tests {
                 label: String::new(),
                 original_position: [0.0, 0.0, 0.0],
                 neighbors: vec![],
-                cut_faces: vec![],
             },
             LabeledPiece {
                 mesh: Mesh::new(),
@@ -881,7 +915,6 @@ mod tests {
                 label: String::new(),
                 original_position: [0.0, 0.0, 0.0],
                 neighbors: vec![],
-                cut_faces: vec![],
             },
         ];
 
@@ -900,7 +933,6 @@ mod tests {
                 label: String::new(),
                 original_position: [0.0, 0.0, 0.0],
                 neighbors: vec![],
-                cut_faces: vec![],
             })
             .collect();
 
@@ -954,5 +986,23 @@ mod tests {
             ..Default::default()
         };
         assert!(matches!(subdivide(&cube, &config), Err(Print3dError::InvalidConfig(_))));
+    }
+
+    #[test]
+    fn etiquetas_por_coordenadas_de_la_grilla() {
+        let pieza = |x: Real, z: Real| LabeledPiece { original_position: [x, 0.0, z], ..Default::default() };
+        let mut piezas = vec![pieza(0.0, 0.0), pieza(100.0, 0.0), pieza(0.0, 50.0), pieza(100.0, 50.0)];
+        generate_labels(&mut piezas, LabelingScheme::Coordinate);
+        let etiquetas: Vec<&str> = piezas.iter().map(|p| p.label.as_str()).collect();
+        assert_eq!(etiquetas, ["X0Y0Z0", "X1Y0Z0", "X0Y0Z1", "X1Y0Z1"]);
+    }
+
+    #[test]
+    fn dimension_maxima_reduce_el_volumen_util() {
+        let cubo = create_unit_cube();
+        let sin_tope = SubdivideConfig { build_volume: [100.0; 3], margin: 0.0, ..Default::default() };
+        assert_eq!(subdivide(&cubo, &sin_tope).unwrap().len(), 1);
+        let con_tope = SubdivideConfig { max_dimension: Some(0.5), ..sin_tope };
+        assert!(subdivide(&cubo, &con_tope).unwrap().len() > 1);
     }
 }

@@ -55,6 +55,8 @@ nalgebra = "0.33"
 
 # Matrices sparse
 sprs = "0.11"
+# Cholesky disperso (ordenamiento AMD, supernodal, paralelo) para sistemas con muchos lados derechos
+faer = { version = "0.24", default-features = false, features = ["std", "rayon", "sparse-linalg"] }
 
 # Grafos
 petgraph = "0.7"

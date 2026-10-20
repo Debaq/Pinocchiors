@@ -81,7 +81,6 @@ export const en_panels1: Catalog = {
   // HistoryPanel
   "Clic en un paso para volver a él. Si deshaces y haces otra cosa se abre una rama y lo anterior queda acá. Los hitos":
     "Click a step to go back to it. If you undo and do something else, a branch opens and the earlier work stays here. Milestones",
-  "todavía no se pueden deshacer.": "can't be undone yet.",
   "Hay un hito en el medio: no se puede volver hasta acá": "There is a milestone in between: you can't go back to this point",
   "{n} bifurcación": "{n} branch",
   "{n} bifurcaciones": "{n} branches",
@@ -365,8 +364,8 @@ export const en_panels1: Catalog = {
 
   // LightsPanel
   "Luces": "Lights",
-  "Mantén": "Hold",
-  "y arrastra con clic izquierdo en el visor: gira la luz principal alrededor del modelo.": "and drag with the left button in the viewport: it orbits the main light around the model.",
+  "Mantén L y arrastra con clic izquierdo en el visor: gira la luz principal alrededor del modelo.": "Hold L and drag with the left button in the viewport: it orbits the main light around the model.",
+  "Clic en un paso para volver a él. Si deshaces y haces otra cosa se abre una rama y lo anterior queda acá. Los hitos con candado todavía no se pueden deshacer.": "Click a step to go back to it. If you undo and do something else, a branch opens and the earlier work stays here. Milestones with a lock can't be undone yet.",
   "Dirección": "Direction",
   "Altura": "Height",
   "Intensidad": "Intensity",

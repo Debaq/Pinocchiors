@@ -2,14 +2,16 @@
 //   node apps/web/e2e/cad/escaneo.mjs [filtro…] [-j N]     (solo este grupo)
 //   node apps/web/e2e/cad.mjs --grupo escaneo              (lo mismo)
 
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { sleep } from "../cdp.mjs";
-import { call, SPECULUM, near, sphereStl, twoCubesStl, importModel, begin, evaluate, sketchOn, body, accept, tab } from "./_comun.mjs";
+import { call, SPECULUM, tubeStl, near, sphereStl, twoCubesStl, importModel, begin, evaluate, sketchOn, body, accept, tab } from "./_comun.mjs";
 import { siEsPrincipal } from "./_ejecutor.mjs";
 
 export const escenarios = {
   async "escaneo: cilindro elegido con un clic y comparar el diseño con colores de desviación"(b) {
-    await b.eval(`window.__nextPath = [${JSON.stringify(SPECULUM)}]`);
+    // El escaneo del espéculo si está en el disco; si no, un tubo de Ø18 mm (misma pared cilíndrica en el punto del clic)
+    const scan = existsSync(SPECULUM) ? SPECULUM : tubeStl(`${process.env.E2E_OUT ?? "/tmp/pinocchio-e2e"}/escaneo-tubo.stl`);
+    await b.eval(`window.__nextPath = [${JSON.stringify(scan)}]`);
     await b.clickContains("Abrir / importar");
     await sleep(4000);
     await begin(b);

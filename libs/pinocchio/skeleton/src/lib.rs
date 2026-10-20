@@ -13,6 +13,7 @@ pub mod presets;
 pub mod json_loader;
 pub mod symmetry;
 pub mod body;
+#[cfg(test)] mod perf_tests;
 
 #[cfg(feature = "converter")]
 pub mod gltf_loader;

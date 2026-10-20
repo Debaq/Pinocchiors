@@ -25,9 +25,9 @@ export const NumberInput = (props: NumberInputProps) => {
   };
 
   return (
-    <label class={clsx("flex items-center gap-2", props.class)}>
+    <label class={clsx("flex flex-wrap items-center gap-x-2 gap-y-1", props.class)}>
       <Show when={props.label}>
-        <span class="text-xs text-text-muted w-4 text-center shrink-0">{props.label}</span>
+        <span class={clsx("text-xs text-text-muted", (props.label?.length ?? 0) <= 2 ? "w-4 text-center shrink-0" : "leading-tight")}>{props.label}</span>
       </Show>
       <input
         type="number"
@@ -38,7 +38,7 @@ export const NumberInput = (props: NumberInputProps) => {
         step={step()}
         disabled={props.disabled}
         class={clsx(
-          "w-full min-w-0 px-2 py-1 rounded",
+          "flex-1 min-w-[4.5rem] px-2 py-1 rounded",
           "bg-surface/40 border border-border",
           "text-xs text-text font-mono",
           "outline-none focus:border-accent",

@@ -1,7 +1,8 @@
 //! Matriz simétrica positiva definida (SPD)
 
 use pinocchio_math::Real;
-use sprs::{CsMat, CsMatI, TriMat};
+use rayon::prelude::*;
+use sprs::{CsMat, CsMatI};
 use thiserror::Error;
 
 /// Error en operaciones de matriz SPD
@@ -51,15 +52,44 @@ impl SPDMatrix {
                 found: cols.len(),
             });
         }
+        let entries = rows.iter().zip(cols).zip(values).map(|((&r, &c), &v)| (r, c, v)).collect();
+        Self::from_entries(size, entries)
+    }
 
-        let mut triplet = TriMat::new((size, size));
-        for ((&r, &c), &v) in rows.iter().zip(cols.iter()).zip(values.iter()) {
-            triplet.add_triplet(r, c, v);
+    /// Crea la matriz desde entradas `(fila, columna, valor)`; las repetidas se suman.
+    ///
+    /// Ordena en paralelo (por columna y fila, de forma estable: las repetidas se
+    /// suman siempre en el mismo orden, con cualquier número de hilos).
+    pub fn from_entries(size: usize, mut entries: Vec<(usize, usize, Real)>) -> Result<Self, SPDMatrixError> {
+        if size >= u32::MAX as usize {
+            return Err(SPDMatrixError::DimensionMismatch { expected: u32::MAX as usize, found: size });
         }
+        if let Some(&(r, c, _)) = entries.iter().find(|e| e.0 >= size || e.1 >= size) {
+            return Err(SPDMatrixError::DimensionMismatch { expected: size, found: r.max(c) });
+        }
+        entries.par_sort_by_key(|e| ((e.1 as u64) << 32) | e.0 as u64);
 
-        let matrix: CsMatI<Real, usize> = triplet.to_csc();
+        let mut indptr = vec![0usize; size + 1];
+        let mut indices = Vec::with_capacity(entries.len());
+        let mut data: Vec<Real> = Vec::with_capacity(entries.len());
+        let mut last = None;
+        for (r, c, v) in entries {
+            if last == Some((r, c)) {
+                if let Some(d) = data.last_mut() {
+                    *d += v;
+                }
+                continue;
+            }
+            last = Some((r, c));
+            indices.push(r);
+            data.push(v);
+            indptr[c + 1] += 1;
+        }
+        for i in 0..size {
+            indptr[i + 1] += indptr[i];
+        }
         Ok(Self {
-            matrix,
+            matrix: CsMatI::new_csc((size, size), indptr, indices, data),
             size,
             cholesky: None,
         })
@@ -260,16 +290,31 @@ impl SPDMatrix {
                 found: d.len(),
             });
         }
-        let mut triplet = TriMat::with_capacity((self.size, self.size), self.nnz() + self.size);
-        for (&val, (r, c)) in self.matrix.iter() {
-            triplet.add_triplet(r, c, val);
-        }
-        for (i, &di) in d.iter().enumerate() {
-            triplet.add_triplet(i, i, di);
+        // Las columnas ya están ordenadas: se suma a la entrada diagonal o se inserta, sin reordenar
+        let n = self.size;
+        let indptr = self.matrix.indptr();
+        let ptr = indptr.raw_storage();
+        let (idx, dat) = (self.matrix.indices(), self.matrix.data());
+        let mut new_ptr = Vec::with_capacity(n + 1);
+        let mut new_idx = Vec::with_capacity(idx.len() + n);
+        let mut new_dat: Vec<Real> = Vec::with_capacity(idx.len() + n);
+        new_ptr.push(0);
+        for c in 0..n {
+            let (lo, hi) = (ptr[c], ptr[c + 1]);
+            let split = lo + idx[lo..hi].partition_point(|&r| r < c);
+            new_idx.extend_from_slice(&idx[lo..split]);
+            new_dat.extend_from_slice(&dat[lo..split]);
+            let on_diagonal = split < hi && idx[split] == c;
+            new_idx.push(c);
+            new_dat.push(d[c] + if on_diagonal { dat[split] } else { 0.0 });
+            let rest = if on_diagonal { split + 1 } else { split };
+            new_idx.extend_from_slice(&idx[rest..hi]);
+            new_dat.extend_from_slice(&dat[rest..hi]);
+            new_ptr.push(new_idx.len());
         }
         Ok(Self {
-            matrix: triplet.to_csc(),
-            size: self.size,
+            matrix: CsMatI::new_csc((n, n), new_ptr, new_idx, new_dat),
+            size: n,
             cholesky: None,
         })
     }
@@ -340,6 +385,11 @@ impl SPDMatrix {
         }
 
         Ok(x)
+    }
+
+    /// Factoriza la matriz (Cholesky disperso) para resolver muchos lados derechos
+    pub fn cholesky_factor(&self) -> Result<crate::factor::SpdFactor, SPDMatrixError> {
+        crate::factor::SpdFactor::new(&self.matrix)
     }
 
     /// Acceso a la matriz interna
@@ -430,5 +480,41 @@ mod tests {
         assert!(residual < 1e-8, "residuo = {residual}");
         // La solución es positiva y decrece al alejarse del nodo con calor
         assert!(x[0] > x[25] && x[25] > 0.0);
+    }
+
+    #[test]
+    fn from_entries_sums_duplicates_and_sorts() {
+        // Fuera de orden y con una entrada repetida: (1,0) = 2 + 3
+        let m = SPDMatrix::from_entries(3, vec![(2, 2, 1.0), (1, 0, 2.0), (0, 0, 4.0), (1, 0, 3.0), (0, 1, 5.0)]).unwrap();
+        assert_eq!(m.nnz(), 4);
+        assert_eq!(m.get(1, 0), 5.0);
+        assert_eq!(m.get(0, 1), 5.0);
+        assert_eq!(m.get(0, 0), 4.0);
+        assert_eq!(m.get(2, 2), 1.0);
+        let csc = m.as_csc();
+        assert!(csc.indices().windows(2).all(|w| w[0] != w[1]));
+    }
+
+    #[test]
+    fn from_triplets_rejects_an_index_out_of_range() {
+        assert!(matches!(
+            SPDMatrix::from_triplets(2, &[0, 2], &[0, 0], &[1.0, 1.0]),
+            Err(SPDMatrixError::DimensionMismatch { expected: 2, .. })
+        ));
+        assert!(SPDMatrix::from_triplets(2, &[0], &[0, 1], &[1.0]).is_err());
+    }
+
+    #[test]
+    fn add_diagonal_adds_to_existing_entries_and_inserts_missing_ones() {
+        // La fila/columna 1 no tiene entrada diagonal; las 0 y 2 sí
+        let m = SPDMatrix::from_entries(3, vec![(0, 0, 1.0), (1, 0, -1.0), (0, 1, -1.0), (2, 2, 2.0), (2, 1, 0.5), (1, 2, 0.5)]).unwrap();
+        let out = m.add_diagonal(&[10.0, 20.0, 30.0]).unwrap();
+        assert_eq!(out.get(0, 0), 11.0);
+        assert_eq!(out.get(1, 1), 20.0);
+        assert_eq!(out.get(2, 2), 32.0);
+        assert_eq!(out.get(1, 0), -1.0);
+        assert_eq!(out.get(1, 2), 0.5);
+        assert_eq!(out.nnz(), 7);
+        assert!(m.add_diagonal(&[1.0]).is_err());
     }
 }

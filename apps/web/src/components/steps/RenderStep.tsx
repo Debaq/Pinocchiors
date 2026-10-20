@@ -41,6 +41,8 @@ export interface RenderSettings {
   raySamples: number;
   /** GeppettoRay: quita el ruido que queda al final */
   rayDenoise: boolean;
+  /** GeppettoRay: exposición antes de la curva de tono (1 = sin cambio) */
+  rayExposure: number;
   /** GeppettoRay: entorno HDR: "builtin:id" (los incluidos), la ruta de un .hdr, o vacío = cielo uniforme del visor */
   rayHdri: string;
   rayHdriIntensity: number;
@@ -98,6 +100,7 @@ export const defaultRenderSettings: RenderSettings = {
   engine: "viewer",
   raySamples: 128,
   rayDenoise: true,
+  rayExposure: 1,
   rayHdri: "builtin:studio",
   rayHdriIntensity: 1,
   rayHdriRotation: 0,
@@ -350,6 +353,17 @@ export const RenderOptions: Component<RenderOptionsProps> = (props) => {
           <Tooltip content={t("Quita el ruido al terminar, sin borrar el detalle de las texturas ni los bordes.")} placement="left">
             <Checkbox label={t("Quitar ruido")} checked={s().rayDenoise} disabled={busy()} onChange={(v) => set({ rayDenoise: v })} />
           </Tooltip>
+          <Slider
+            label={t("Exposición")}
+            min={0.25}
+            max={4}
+            step={0.05}
+            value={s().rayExposure}
+            disabled={busy()}
+            onChange={(v) => set({ rayExposure: v })}
+            formatValue={(v) => `×${v.toFixed(2)}`}
+            showValue
+          />
           <Hint text={t("Simula la luz de verdad (rebotes, vidrio, reflejos): tarda más, pero la imagen se ve mientras se afina. Las sombras suaves y la oclusión ambiental del visor no se usan: la luz ya las produce.")} />
         </Show>
         <Select label={t("Formato")} options={formatOptions} value={s().format} disabled={busy()} onChange={(v) => set({ format: v as StillFormat })} />

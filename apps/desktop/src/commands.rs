@@ -223,7 +223,7 @@ impl WeightsData {
     /// Binario little-endian: cabecera `u32 × 4` (vértices, huesos,
     /// influencias, bytes de nombres), nombres en UTF-8 separados por `\n` y
     /// rellenos a múltiplo de 4, y los pares `f32`.
-    fn to_bytes(&self) -> Vec<u8> {
+    pub(crate) fn to_bytes(&self) -> Vec<u8> {
         let mut names = self.bone_names.join("\n").into_bytes();
         let names_len = names.len();
         names.resize(names_len.div_ceil(4) * 4, 0);
@@ -270,8 +270,10 @@ pub struct ExportConfig {
     pub draco_level: Option<u8>,
     /// Bits de cuantización de las posiciones (precisión de la geometría)
     pub draco_position_bits: Option<u8>,
-    // USDZ
+    // USDZ y USDA
     pub arkit_compatible: Option<bool>,
+    /// Separar la textura ORM en oclusión, rugosidad y metal
+    pub split_orm_channels: Option<bool>,
     pub fps: Option<f64>,
     /// Animaciones de la línea de tiempo (solo con el rig)
     pub animations: Option<Vec<animation::AnimationClip>>,
@@ -531,6 +533,12 @@ pub fn get_supported_formats() -> SupportedFormats {
                 name: "USDZ".to_string(),
                 extensions: vec!["usdz".to_string()],
                 description: "Universal Scene Description (Apple AR)".to_string(),
+            },
+            FormatInfo {
+                id: "usda".to_string(),
+                name: "USDA".to_string(),
+                extensions: vec!["usda".to_string()],
+                description: "Universal Scene Description en texto (con texturas al lado)".to_string(),
             },
             FormatInfo {
                 id: "bvh".to_string(),
@@ -852,7 +860,7 @@ pub(crate) fn scene_mesh_data(scene: &Scene) -> MeshData {
 }
 
 /// Desde cuántas caras se muestra primero una vista previa liviana
-pub(crate) const PREVIEW_FROM_FACES: usize = 400_000;
+pub(crate) const PREVIEW_FROM_FACES: usize = 100_000;
 /// Celdas por lado de la grilla de la vista previa
 const PREVIEW_GRID: f32 = 320.0;
 
@@ -1143,18 +1151,25 @@ pub(crate) fn export_model_impl(config: ExportConfig, state: &AppState) -> Resul
             files_created.push(config.path.clone());
         }
         "usdz" => {
-            let usda_opts = UsdaExportOptions {
-                scale_factor: config.scale_factor,
-                max_texture_size: config.max_texture_size,
-                split_orm_channels: false,
-                arkit_compatible: config.arkit_compatible.unwrap_or(false),
-                fps: config.fps.unwrap_or(24.0),
-                export_animations: config.export_animations.unwrap_or(true),
-                keyframe_tolerance: 1e-4,
-            };
-            write_usdz(scene, &usda_opts, path)
+            write_usdz(scene, &usd_options(&config), path)
                 .map_err(|e| format!("Error exportando USDZ: {:?}", e))?;
             files_created.push(config.path.clone());
+        }
+        "usda" => {
+            let out = converter_usda::write_usda(scene, &usd_options(&config))
+                .map_err(|e| format!("Error exportando USDA: {e:?}"))?;
+            std::fs::write(path, out.usda.as_bytes()).map_err(|e| format!("Error exportando USDA: {e}"))?;
+            files_created.push(config.path.clone());
+            // Las texturas van al lado, en las rutas relativas que el USDA nombra
+            let dir = path.parent().unwrap_or_else(|| Path::new("."));
+            for tex in &out.textures {
+                let target = dir.join(&tex.asset_path);
+                if let Some(parent) = target.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| format!("Error exportando USDA: {e}"))?;
+                }
+                std::fs::write(&target, &tex.data).map_err(|e| format!("Error exportando USDA: {e}"))?;
+                files_created.push(target.to_string_lossy().to_string());
+            }
         }
         _ => return Err(format!("Formato de exportación no soportado: {}", config.format)),
     }
@@ -1167,6 +1182,19 @@ pub(crate) fn export_model_impl(config: ExportConfig, state: &AppState) -> Resul
         files_created,
         total_bytes,
     })
+}
+
+/// Opciones de USD (USDZ y USDA) según la configuración de la exportación
+fn usd_options(config: &ExportConfig) -> UsdaExportOptions {
+    UsdaExportOptions {
+        scale_factor: config.scale_factor,
+        max_texture_size: config.max_texture_size,
+        split_orm_channels: config.split_orm_channels.unwrap_or(false),
+        arkit_compatible: config.arkit_compatible.unwrap_or(false),
+        fps: config.fps.unwrap_or(24.0),
+        export_animations: config.export_animations.unwrap_or(true),
+        keyframe_tolerance: 1e-4,
+    }
 }
 
 /// Margen entre islas del mapa compactado al exportar (px)
@@ -2674,7 +2702,7 @@ pub async fn get_weights_data(app: AppHandle) -> Result<Response, String> {
 
 /// Pesos en el orden de vértices del visor (con el rig sobre la malla de
 /// quads, los vértices duplicados en costuras UV repiten la fila de su vértice)
-fn get_weights_data_impl(state: &AppState) -> Result<WeightsData, String> {
+pub(crate) fn get_weights_data_impl(state: &AppState) -> Result<WeightsData, String> {
     let view_map = rig_view_map(state)?;
     let result_lock = state.result.lock().unwrap();
     let result = result_lock.as_ref().ok_or("No hay resultado de autorig")?;
@@ -4120,7 +4148,6 @@ pub(crate) fn subdivide_mesh_impl(config: SubdivideConfigInput, state: &AppState
     let subdivide_config = SubdivideConfig {
         build_volume: config.build_volume.map(|v| v / k),
         max_dimension: None,
-        overlap: 0.0,
         strategy,
         margin: config.margin.unwrap_or(2.0) / k,
         manual: config.planes.iter().map(|p| pinocchio_print3d::CutPlane { axis: p.axis, position: p.position / k, tilt_deg: p.tilt_deg }).collect(),

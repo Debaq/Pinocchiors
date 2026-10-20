@@ -23,9 +23,6 @@ pub struct LabeledPiece {
 
     /// IDs de piezas vecinas (comparten cara de corte)
     pub neighbors: Vec<usize>,
-
-    /// Índices de caras que son resultado del corte
-    pub cut_faces: Vec<usize>,
 }
 
 impl Default for LabeledPiece {
@@ -36,7 +33,6 @@ impl Default for LabeledPiece {
             label: String::new(),
             original_position: [0.0, 0.0, 0.0],
             neighbors: Vec::new(),
-            cut_faces: Vec::new(),
         }
     }
 }
@@ -69,16 +65,22 @@ impl AssemblyInfo {
             adjacency.insert(piece.id, piece.neighbors.clone());
         }
 
-        // Orden de ensamblaje: por ahora simplemente por ID
-        // TODO: Implementar orden topológico óptimo
-        let assembly_order: Vec<usize> = pieces.iter().map(|p| p.id).collect();
+        // Orden de ensamblaje: de abajo hacia arriba (cada pieza se apoya en la
+        // anterior); a igual altura, por Y y luego por X
+        let mut order: Vec<&LabeledPiece> = pieces.iter().collect();
+        order.sort_by(|a, b| {
+            let (p, q) = (a.original_position, b.original_position);
+            p[2].total_cmp(&q[2]).then(p[1].total_cmp(&q[1])).then(p[0].total_cmp(&q[0])).then(a.id.cmp(&b.id))
+        });
+        let assembly_order: Vec<usize> = order.iter().map(|p| p.id).collect();
+        let total_volume = pieces.iter().map(|p| crate::analysis::compute_volume(&p.mesh).abs()).sum();
 
         Self {
             piece_count: pieces.len(),
             adjacency,
             assembly_order,
             original_dimensions,
-            total_volume: 0.0, // TODO: Calcular
+            total_volume,
         }
     }
 

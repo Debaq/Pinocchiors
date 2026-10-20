@@ -276,6 +276,9 @@ pub struct MeshSettingsDto {
     /// Quita las piezas sueltas chicas antes de tapar
     #[serde(default)]
     pub remove_pieces: bool,
+    /// Reconstrucción de Poisson (superficie cerrada y lisa, con normales) en vez del campo MLS
+    #[serde(default)]
+    pub poisson: bool,
 }
 
 /// Tapa los agujeros de la malla del escaneo según `settings` (triangulación
@@ -577,7 +580,7 @@ mod tests {
     }
 
     fn hole_settings(flat: bool) -> MeshSettingsDto {
-        MeshSettingsDto { voxel_mm: 2.0, fill: 1, smooth: 2, close_holes: true, max_hole_mm: 0.0, flat_patch: flat, remove_pieces: true }
+        MeshSettingsDto { voxel_mm: 2.0, fill: 1, smooth: 2, close_holes: true, max_hole_mm: 0.0, flat_patch: flat, remove_pieces: true, poisson: false }
     }
 
     /// Aristas de borde (usadas por una sola cara)

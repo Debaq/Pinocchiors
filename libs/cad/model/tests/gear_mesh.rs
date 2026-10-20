@@ -69,6 +69,9 @@ fn exterior_con_exterior_calza_en_cualquier_direccion() {
 
 #[test]
 fn copia_modulo_y_angulo() {
+    if !occt::available() {
+        return;
+    }
     let mut b = gear(GearKind::External, 30);
     b.spec.module = 5.0;
     b.spec.pressure_angle = 25.0;
@@ -319,6 +322,9 @@ fn sin_fin_y_rueda_calzan() {
 
 #[test]
 fn rueda_sin_helice_no_sirve_de_fuente_del_sin_fin() {
+    if !occt::available() {
+        return;
+    }
     let mut doc = Document::new();
     let ia = doc.add(prim(gear(GearKind::External, 20), BodyOp::New));
     let mut b = worm(1, false);
@@ -404,6 +410,9 @@ fn piñon_se_engrana_con_una_cremallera_que_va_primero() {
 
 #[test]
 fn par_con_modulo_transversal_se_ubica_por_el_primitivo_transversal() {
+    if !occt::available() {
+        return;
+    }
     // El primero da mt = 2 con β = 15°; el segundo copia el módulo normal y lo pasa a transversal con su hélice
     let mut a = gear(GearKind::External, 20);
     a.spec.helix_angle = 15.0;

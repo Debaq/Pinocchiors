@@ -21,6 +21,7 @@ mod edge;
 mod mesh;
 pub mod io;
 mod decimation;
+#[cfg(test)] mod perf_tests;
 pub mod morph_target;
 pub mod placement;
 

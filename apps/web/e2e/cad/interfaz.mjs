@@ -961,6 +961,9 @@ export const escenarios = {
     // Elegir solo la región del primer círculo y extruir
     if (await b.eval(`!!window.__cadUi.session()`)) throw new Error(`el sketch siguió abierto: ${await uiState(b)}`);
     // Un punto del círculo que no tape el panel del sketch recién terminado
+    // (soltar la operación elegida cierra el panel)
+    await b.eval(`window.__cadStore.select(undefined)`);
+    await sleep(400);
     let region;
     for (const [x, y] of [[-15, -15], [-13, -16], [-12, -17], [-17, -17], [-13, -13]]) {
       const p = await at([x, y, 0]);

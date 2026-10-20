@@ -14,6 +14,34 @@ use pinocchio_spatial::{Bvh, Triangle};
 use rayon::prelude::*;
 use std::collections::{HashMap, VecDeque};
 use std::f64::consts::PI;
+use std::hash::{BuildHasherDefault, Hasher};
+
+/// Hasher rápido para claves enteras: el de la biblioteca estándar es criptográfico y aquí los
+/// mapas son enormes (millones de aristas y puntos de la grilla) y solo se consultan por clave.
+#[derive(Default)]
+struct FxHasher(u64);
+
+impl Hasher for FxHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.write_u64(u64::from(b));
+        }
+    }
+
+    fn write_u32(&mut self, i: u32) {
+        self.write_u64(u64::from(i));
+    }
+
+    fn write_u64(&mut self, i: u64) {
+        self.0 = (self.0.rotate_left(5) ^ i).wrapping_mul(0x517c_c1b7_2722_0a95);
+    }
+}
+
+type FastMap<K, V> = HashMap<K, V, BuildHasherDefault<FxHasher>>;
 
 /// Lados de la grilla (en vóxeles) permitidos para el eje más largo.
 pub(crate) const MIN_CELLS: f64 = 48.0;
@@ -230,7 +258,7 @@ pub(crate) fn rebuild_with_limit(surface: &Surface, voxel: f64, max_cells: f64, 
         let tiny = 1e-3 * h;
         if flags[i as usize] & INSIDE != 0 { d.min(-tiny) } else { d.max(tiny) }
     };
-    let crossing: HashMap<u32, f64> = crossing.par_iter().map(|&i| (i, signed(i))).collect();
+    let crossing: FastMap<u32, f64> = crossing.par_iter().map(|&i| (i, signed(i))).collect();
 
     let mut out = marching_tetrahedra(&grid, &flags, &crossing, &signed);
     collapse_short_edges(&mut out, SHORT_EDGE * h);
@@ -341,6 +369,8 @@ fn classify(surface: &Surface, grid: &Grid, tree: &WindingTree, band: f64) -> Ve
         }
     }
 
+    let [nx, ny, nz] = grid.dims;
+    let nxy = nx * ny;
     let mut queue = VecDeque::new();
     for seed in 0..flags.len() as u32 {
         if flags[seed as usize] & KNOWN != 0 {
@@ -350,11 +380,32 @@ fn classify(surface: &Surface, grid: &Grid, tree: &WindingTree, band: f64) -> Ve
         flags[seed as usize] |= KNOWN | bit;
         queue.push_back(seed);
         while let Some(i) = queue.pop_front() {
-            for j in grid.face_neighbors(i) {
-                if flags[j as usize] & KNOWN == 0 {
-                    flags[j as usize] |= KNOWN | bit;
-                    queue.push_back(j);
+            // Las coordenadas se calculan una vez por punto (no una vez por vecino)
+            let i = i as usize;
+            let (x, y, z) = (i % nx, (i / nx) % ny, i / nxy);
+            let mut visit = |j: usize| {
+                if flags[j] & KNOWN == 0 {
+                    flags[j] |= KNOWN | bit;
+                    queue.push_back(j as u32);
                 }
+            };
+            if x > 0 {
+                visit(i - 1);
+            }
+            if x + 1 < nx {
+                visit(i + 1);
+            }
+            if y > 0 {
+                visit(i - nx);
+            }
+            if y + 1 < ny {
+                visit(i + nx);
+            }
+            if z > 0 {
+                visit(i - nxy);
+            }
+            if z + 1 < nz {
+                visit(i + nxy);
             }
         }
     }
@@ -375,7 +426,7 @@ const KUHN: [[usize; 4]; 6] = [
 /// `signed` da la distancia con signo de un punto que no esté en `crossing`
 /// (no debería pasar, pero una esquina sin distancia no puede tumbar la
 /// reconstrucción)
-fn marching_tetrahedra(grid: &Grid, flags: &[u8], crossing: &HashMap<u32, f64>, signed: &(dyn Fn(u32) -> f64 + Sync)) -> Surface {
+fn marching_tetrahedra(grid: &Grid, flags: &[u8], crossing: &FastMap<u32, f64>, signed: &(dyn Fn(u32) -> f64 + Sync)) -> Surface {
     // Cubos con alguna esquina de cruce
     let [nx, ny, nz] = grid.dims;
     let mut cells: Vec<u32> = crossing
@@ -392,7 +443,7 @@ fn marching_tetrahedra(grid: &Grid, flags: &[u8], crossing: &HashMap<u32, f64>, 
     cells.dedup();
 
     let mut surface = Surface::new(Vec::new(), Vec::new());
-    let mut edge_vertex: HashMap<(u32, u32), u32> = HashMap::new();
+    let mut edge_vertex: FastMap<(u32, u32), u32> = FastMap::default();
     let inside = |i: u32| flags[i as usize] & INSIDE != 0;
     for cell in cells {
         let [x, y, z] = grid.coords(cell);
@@ -630,15 +681,20 @@ impl WindingTree {
     /// Número de vueltas en `p`: ≈1 adentro, ≈0 afuera.
     fn winding(&self, p: V3) -> f64 {
         let mut total = 0.0;
-        let mut stack = vec![0];
-        while let Some(i) = stack.pop() {
-            let node = &self.nodes[i];
+        // Pila fija: el árbol se parte por la mitad, su profundidad es ~log₂ de los triángulos
+        let mut stack = [0usize; 128];
+        let mut top = 1;
+        while top > 0 {
+            top -= 1;
+            let node = &self.nodes[stack[top]];
             let r = node.center - p;
             let dist = r.norm();
             if dist > BETA * node.radius {
                 total += node.dipole.dot(&r) / (dist * dist * dist);
-            } else if let Some(children) = node.children {
-                stack.extend(children);
+            } else if let Some([left, right]) = node.children {
+                stack[top] = left;
+                stack[top + 1] = right;
+                top += 2;
             } else {
                 total += self.triangles[node.start..node.end]
                     .iter()

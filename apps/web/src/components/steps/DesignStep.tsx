@@ -216,16 +216,16 @@ const RelationAdder: Component<{ mates: Mate[]; onAdd: (r: Relation) => void }> 
 };
 
 const Num: Component<{ value: number; onCommit: (v: number) => void; label?: string; suffix?: string; step?: number; min?: number }> = (props) => (
-  <label class="flex items-center gap-2 text-xs">
+  <label class="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
     <Show when={props.label}>
-      <span class={clsx("text-text-muted shrink-0", (props.label?.length ?? 0) <= 2 ? "w-3" : "w-24")}>{props.label}</span>
+      <span class={clsx("text-text-muted", (props.label?.length ?? 0) <= 2 ? "w-3 shrink-0" : "min-w-[4rem] leading-tight")}>{props.label}</span>
     </Show>
     <input
       type="number"
       value={Number.isFinite(props.value) ? +props.value.toFixed(6) : 0}
       step={props.step ?? 1}
       min={props.min}
-      class="w-full min-w-0 px-2 py-1 rounded bg-surface/40 border border-border text-xs text-text font-mono outline-none focus:border-accent [appearance:textfield]"
+      class="flex-1 min-w-[4.5rem] px-2 py-1 rounded bg-surface/40 border border-border text-xs text-text font-mono outline-none focus:border-accent [appearance:textfield]"
       onChange={(e) => {
         const v = parseFloat(e.currentTarget.value);
         if (!Number.isNaN(v) && v !== props.value) props.onCommit(v);

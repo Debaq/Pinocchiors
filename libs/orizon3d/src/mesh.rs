@@ -144,7 +144,7 @@ fn corner_pos(origin: [f32; 3], voxel: f32, i: usize, j: usize, k: usize, c: usi
 /// F=0 es una sola pared bien orientada. En un escaneo de 360° cada punto trae
 /// su propia dirección de vista; sin ella se asume la cámara en el origen, lo
 /// que en la cara de atrás del objeto invertiría el campo.
-fn orient_normals(pos: &[[f32; 3]], views: &[[f32; 3]], nrm: &mut [[f32; 3]]) {
+pub(crate) fn orient_normals(pos: &[[f32; 3]], views: &[[f32; 3]], nrm: &mut [[f32; 3]]) {
     for ((p, v), n) in pos.iter().zip(views).zip(nrm.iter_mut()) {
         let toward_cam = if v[0] != 0.0 || v[1] != 0.0 || v[2] != 0.0 { *v } else { [-p[0], -p[1], -p[2]] };
         if n[0] * toward_cam[0] + n[1] * toward_cam[1] + n[2] * toward_cam[2] < 0.0 {
@@ -471,7 +471,7 @@ pub fn reconstruct(cloud: &PointCloud, voxel: f32, fill: u32, smooth: u32) -> Me
 }
 
 /// Suavizado laplaciano: mueve cada vértice hacia la media de sus vecinos.
-fn laplacian_smooth(mesh: &mut Mesh, iters: u32) {
+pub(crate) fn laplacian_smooth(mesh: &mut Mesh, iters: u32) {
     if iters == 0 || mesh.vertices.is_empty() {
         return;
     }
@@ -512,7 +512,7 @@ fn laplacian_smooth(mesh: &mut Mesh, iters: u32) {
 
 /// Emite un quad (como 2 triángulos) a partir de las 4 celdas [bl,br,tl,tr],
 /// con el bucle bl→br→tr→tl. `flip` invierte el sentido para orientar la normal.
-fn push_quad(tris: &mut Vec<[u32; 3]>, q: [u32; 4], flip: bool) {
+pub(crate) fn push_quad(tris: &mut Vec<[u32; 3]>, q: [u32; 4], flip: bool) {
     let loop_ = [q[0], q[1], q[3], q[2]];
     if flip {
         tris.push([loop_[0], loop_[1], loop_[2]]);

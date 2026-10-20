@@ -8,6 +8,7 @@
 mod octree;
 mod distance_field;
 mod bvh;
+#[cfg(test)] mod perf_tests;
 
 pub use octree::Octree;
 pub use distance_field::DistanceField;

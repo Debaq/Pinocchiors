@@ -53,6 +53,9 @@ fn z_turn(sol: &cad_model::AssemblySolution, id: u32) -> f64 {
 
 #[test]
 fn engranes_sugeridos_con_su_razon_real() {
+    if !occt::available() {
+        return;
+    }
     let (ev, mut asm) = train(gear(GearKind::External, 18), 0.0);
     let sol = solve(&asm);
     let rel = suggest_gear_relations(&ev, &asm, &sol);
@@ -77,6 +80,9 @@ fn engranes_sugeridos_con_su_razon_real() {
 
 #[test]
 fn relacion_sin_unir_la_resuelve_el_solver() {
+    if !occt::available() {
+        return;
+    }
     let (ev, mut asm) = train(gear(GearKind::External, 18), 0.0);
     let sol = solve(&asm);
     asm.relations = suggest_gear_relations(&ev, &asm, &sol);
@@ -123,6 +129,9 @@ fn los_dientes_giran_sin_chocar() {
 
 #[test]
 fn corona_gira_con_el_piñon() {
+    if !occt::available() {
+        return;
+    }
     let mut doc = Document::new();
     doc.add(prim(PrimitiveShape::Box { dx: 10.0, dy: 10.0, dz: 2.0, centered: false, centered_z: false }));
     let ia = doc.add(prim(PrimitiveShape::Gear(gear(GearKind::External, 12))));
@@ -150,6 +159,9 @@ fn corona_gira_con_el_piñon() {
 
 #[test]
 fn piñon_y_cremallera() {
+    if !occt::available() {
+        return;
+    }
     let mut doc = Document::new();
     doc.add(prim(PrimitiveShape::Box { dx: 10.0, dy: 10.0, dz: 2.0, centered: false, centered_z: false }));
     let ia = doc.add(prim(PrimitiveShape::Gear(gear(GearKind::External, 12))));
@@ -222,6 +234,9 @@ fn json_de_las_relaciones() {
 
 #[test]
 fn sin_fin_y_rueda_en_el_ensamble() {
+    if !occt::available() {
+        return;
+    }
     for left in [false, true] {
         let mut doc = Document::new();
         doc.add(prim(PrimitiveShape::Box { dx: 10.0, dy: 10.0, dz: 2.0, centered: false, centered_z: false }));
@@ -273,6 +288,9 @@ fn sin_fin_y_rueda_en_el_ensamble() {
 
 #[test]
 fn sale_del_punto_muerto_de_180_grados() {
+    if !occt::available() {
+        return;
+    }
     // Dientes iguales: razón -1; los dos a 90° dejan la relación desfasada justo 180°
     let (ev, mut asm) = train(gear(GearKind::External, 12), 0.0);
     let sol = solve(&asm);
@@ -318,6 +336,9 @@ fn chain(parts: Vec<(GearPart, f64)>, extra_hinge_first: bool) -> (Evaluation, A
 
 #[test]
 fn tren_de_tres_engranes_con_loco() {
+    if !occt::available() {
+        return;
+    }
     let (ev, mut asm) = chain(vec![(gear(GearKind::External, 12), 0.0), (gear(GearKind::External, 18), 0.0), (gear(GearKind::External, 24), 90.0)], false);
     let sol = solve(&asm);
     asm.relations = suggest_gear_relations(&ev, &asm, &sol);
@@ -337,6 +358,9 @@ fn tren_de_tres_engranes_con_loco() {
 
 #[test]
 fn la_deteccion_elige_la_bisagra_del_eje_del_engrane() {
+    if !occt::available() {
+        return;
+    }
     let (ev, mut asm) = chain(vec![(gear(GearKind::External, 12), 0.0), (gear(GearKind::External, 18), 0.0)], true);
     let sol = solve(&asm);
     let rel = suggest_gear_relations(&ev, &asm, &sol);
@@ -348,6 +372,9 @@ fn la_deteccion_elige_la_bisagra_del_eje_del_engrane() {
 
 #[test]
 fn tren_con_corona_de_cuatro_engranes() {
+    if !occt::available() {
+        return;
+    }
     // Sol 12 → satélite 12 → corona 36 (carro fijo): la corona gira 12/36 del sol y en el mismo sentido
     let (ev, mut asm) = chain(vec![(gear(GearKind::External, 12), 0.0), (gear(GearKind::External, 12), 0.0), (gear(GearKind::Internal, 36), 0.0)], false);
     let sol = solve(&asm);
@@ -362,6 +389,9 @@ fn tren_con_corona_de_cuatro_engranes() {
 
 #[test]
 fn planetario_con_brazo_que_gira() {
+    if !occt::available() {
+        return;
+    }
     // Sol 12 → satélite 12 (montado en el brazo) → corona 36. Willis: ω_c − c = −(z_s/z_c)·(ω_s − c)
     let mut doc = Document::new();
     doc.add(prim(PrimitiveShape::Box { dx: 10.0, dy: 10.0, dz: 2.0, centered: false, centered_z: false }));
@@ -417,6 +447,9 @@ fn planetario_con_brazo_que_gira() {
 
 #[test]
 fn avisa_de_ejes_no_paralelos_y_de_helicoidales_cruzados() {
+    if !occt::available() {
+        return;
+    }
     use cad_model::assembly::gear_axis_warnings;
     let (ev, mut asm) = chain(vec![(gear(GearKind::External, 12), 0.0), (gear(GearKind::External, 18), 0.0)], false);
     let sol = solve(&asm);
@@ -440,6 +473,9 @@ fn avisa_de_ejes_no_paralelos_y_de_helicoidales_cruzados() {
 
 #[test]
 fn cremallera_primero_y_piñon_despues_en_el_ensamble() {
+    if !occt::available() {
+        return;
+    }
     let mut doc = Document::new();
     doc.add(prim(PrimitiveShape::Box { dx: 10.0, dy: 10.0, dz: 2.0, centered: false, centered_z: false }));
     let rack = GearPart { spec: GearSpec { kind: GearKind::Rack, teeth: 8, module: 2.0, ..Default::default() }, width: 10.0, outer: 6.0, ..Default::default() };
@@ -492,6 +528,9 @@ fn cremallera_primero_y_piñon_despues_en_el_ensamble() {
 
 #[test]
 fn rueda_primero_y_sin_fin_despues_en_el_ensamble() {
+    if !occt::available() {
+        return;
+    }
     for left in [false, true] {
         // La rueda como la deja el sin fin, pero va primero
         let mut forward = Document::new();
@@ -551,6 +590,9 @@ fn rueda_primero_y_sin_fin_despues_en_el_ensamble() {
 
 #[test]
 fn un_angulo_impuesto_de_180_grados_converge() {
+    if !occt::available() {
+        return;
+    }
     let (_, mut asm) = train(gear(GearKind::External, 18), 0.0);
     asm.mates[0].angle = Some(180.0);
     let sol = solve(&asm);
@@ -616,6 +658,9 @@ fn planetary(n: u32, hub_angle_check: bool) -> (Evaluation, Assembly) {
 
 #[test]
 fn planetario_completo_con_la_corona_fija() {
+    if !occt::available() {
+        return;
+    }
     // Las partes: 0 sol, 1..3 satélites, 4 corona, 5 portasatélites
     let (ev, mut asm) = planetary(3, true);
     assert_eq!(ev.parts.len(), 6);

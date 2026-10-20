@@ -2,6 +2,7 @@ import { Component, For, Show, createEffect, createMemo } from "solid-js";
 import { clsx } from "clsx";
 import type { HistoryNode } from "../../lib/history";
 import * as Icons from "../icons";
+import { Hint } from "../ui";
 import { t, tn } from "../../lib/i18n";
 
 export interface HistoryPanelProps {
@@ -62,11 +63,12 @@ export const HistoryPanel: Component<HistoryPanelProps> = (props) => {
 
   return (
     <div class="space-y-2">
-      <p class="text-xs text-text-muted leading-relaxed">
-        {t("Clic en un paso para volver a él. Si deshaces y haces otra cosa se abre una rama y lo anterior queda acá. Los hitos")}{" "}
-        (<Icons.Lock size={10} class="inline -mt-0.5" />) {t("todavía no se pueden deshacer.")}
-        <Show when={branches() > 0}> {tn(branches(), "{n} bifurcación", "{n} bifurcaciones")}.</Show>
-      </p>
+      <div class="flex justify-end">
+        <Hint
+          label={branches() > 0 ? tn(branches(), "{n} bifurcación", "{n} bifurcaciones") : undefined}
+          text={t("Clic en un paso para volver a él. Si deshaces y haces otra cosa se abre una rama y lo anterior queda acá. Los hitos con candado todavía no se pueden deshacer.")}
+        />
+      </div>
       <div ref={listRef} class="rounded-md border border-border py-1 max-h-[60vh] overflow-y-auto">
         <For each={rows()}>
           {(row) => {

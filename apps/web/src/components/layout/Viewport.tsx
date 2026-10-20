@@ -18,8 +18,11 @@ import {
 import type { FloorCandidate } from "../../lib/placement";
 import { ContextMenu, type MenuEntry } from "../ui/ContextMenu";
 import { fmtNumber, t } from "../../lib/i18n";
+import { adaptiveQuality } from "../../lib/settings";
 
 export interface ViewportProps {
+  /** Malla que se muestra al lado de la actual para compararlas (retopología) */
+  compareMesh?: MeshData;
   // Callbacks
   onViewerReady?: (viewer: Viewer3D) => void;
   onFpsUpdate?: (fps: number) => void;
@@ -182,11 +185,20 @@ export const Viewport: Component<ViewportProps> = (props) => {
     viewer?.dispose();
   });
 
+  createEffect(() => viewer?.setAdaptiveQuality(adaptiveQuality()));
+
   // React to mesh data changes
   createEffect(() => {
     if (viewer && props.meshData) {
       viewer.loadMesh(props.meshData);
     }
+  });
+
+  // Comparar con otra malla, al lado (la de arriba ya cargó: depende de las dos)
+  createEffect(() => {
+    const compare = props.compareMesh;
+    props.meshData;
+    viewer?.setCompareMesh(compare ?? null);
   });
 
   // React to skeleton data changes

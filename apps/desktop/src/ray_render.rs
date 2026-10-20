@@ -120,6 +120,9 @@ pub struct RayRequest {
     /// Curva de tono ACES como la del visor (sin ella la salida es lineal → sRGB)
     #[serde(default)]
     pub tone_map: bool,
+    /// Exposición antes de la curva de tono (1 = sin cambio)
+    #[serde(default = "one")]
+    pub exposure: f32,
     /// Suelo invisible que recibe la sombra, con esta opacidad máxima (None = sin suelo)
     #[serde(default)]
     pub shadow_floor: Option<f32>,
@@ -172,7 +175,7 @@ fn studio_from(req: &RayRequest, scene: &gr::RayScene) -> Option<gr::Studio> {
 }
 
 fn tone_of(req: &RayRequest) -> gr::ToneMap {
-    if req.tone_map { gr::ToneMap::Aces { exposure: 1.0 } } else { gr::ToneMap::Linear }
+    if req.tone_map { gr::ToneMap::Aces { exposure: req.exposure.clamp(0.1, 8.0) } } else { gr::ToneMap::Linear }
 }
 
 /// Degradado vertical bajo la imagen, en sRGB de 8 bits (como el que pinta la interfaz)
@@ -263,8 +266,10 @@ fn camera_from(req: &RayRequest) -> gr::Camera {
     )
 }
 
-fn run(scene: converter_scene::Scene, req: RayRequest, cancel: Arc<AtomicBool>, status: Arc<Mutex<Status>>) {
+fn run(mut scene: converter_scene::Scene, req: RayRequest, cancel: Arc<AtomicBool>, status: Arc<Mutex<Status>>) {
     let set = |f: &mut dyn FnMut(&mut Status)| f(&mut status.lock().unwrap());
+    // Las piezas de Diseñar llegan con las aristas vivas suavizadas: se vuelven a marcar
+    crate::crease::crease_shade(&mut scene, crate::crease::CREASE_DEG);
     let animated = gr::AnimatedScene::new(&scene);
     // La escena sola: de ella salen el tamaño del fondo de estudio y del suelo con sombra
     let probe = animated.at(None, 0.0);
@@ -409,13 +414,14 @@ fn make_video(anim: &AnimationRequest) -> Result<Option<String>, String> {
 }
 
 fn run_animation(
-    scene: converter_scene::Scene,
+    mut scene: converter_scene::Scene,
     req: RayRequest,
     anim: AnimationRequest,
     cancel: Arc<AtomicBool>,
     status: Arc<Mutex<Status>>,
 ) {
     let set = |f: &mut dyn FnMut(&mut Status)| f(&mut status.lock().unwrap());
+    crate::crease::crease_shade(&mut scene, crate::crease::CREASE_DEG);
     let fail = |msg: String| {
         set(&mut |s| {
             s.phase = Phase::Error;
@@ -699,6 +705,7 @@ mod tests {
             ambient: [0.3; 3],
             sun_angular_radius: 0.0,
             tone_map: false,
+            exposure: 1.0,
             shadow_floor: None,
             studio: None,
             hdri: None,
