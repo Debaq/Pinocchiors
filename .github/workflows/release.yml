@@ -9,7 +9,7 @@
 # También al subir un tag con el formato pre.<YYYY>.<MM>.<DD>.<sha7> (fecha del
 # commit en UTC), que es lo que hace ./scripts/release.sh [commit].
 #
-# plataformas: linux (por defecto) o todas (Windows y macOS además).
+# plataformas: linux (por defecto), linux-windows o todas (Windows y macOS además).
 #
 # OpenCASCADE se compila mínimo y estático con scripts/build-occt.sh (solo
 # modelado y STEP, sin visualización ni X11) y queda en caché por versión,
@@ -32,7 +32,7 @@ on:
       plataformas:
         description: "Plataformas a compilar"
         type: choice
-        options: [linux, todas]
+        options: [linux, linux-windows, todas]
         default: linux
 
 permissions:
@@ -74,15 +74,18 @@ jobs:
 
       - id: matrix
         env:
-          SOLO_LINUX: ${{ github.event_name == 'workflow_dispatch' && inputs.plataformas == 'linux' }}
+          # Con tag no hay inputs: compila todas
+          PLATAFORMAS: ${{ github.event_name == 'workflow_dispatch' && inputs.plataformas || 'todas' }}
         run: |
           cli='[{"os":"ubuntu-latest","target":"x86_64-unknown-linux-gnu"}'
           desktop='[{"os":"ubuntu-22.04","platform":"linux"}'
-          if [[ "$SOLO_LINUX" != true ]]; then
+          if [[ "$PLATAFORMAS" != linux ]]; then
             cli+=',{"os":"windows-latest","target":"x86_64-pc-windows-msvc"}'
+            desktop+=',{"os":"windows-latest","platform":"windows"}'
+          fi
+          if [[ "$PLATAFORMAS" == todas ]]; then
             cli+=',{"os":"macos-latest","target":"aarch64-apple-darwin"}'
             cli+=',{"os":"macos-latest","target":"x86_64-apple-darwin"}'
-            desktop+=',{"os":"windows-latest","platform":"windows"}'
             desktop+=',{"os":"macos-latest","platform":"macos"}'
           fi
           echo "cli=${cli}]" >> "$GITHUB_OUTPUT"
