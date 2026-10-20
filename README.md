@@ -448,7 +448,7 @@ cargo test -p converter-gltf-io
 
 Incluye tests end-to-end del autorig sobre humanoides sintéticos (`libs/pinocchio/core/tests/autorig_e2e.rs`): posiciones de articulaciones, pesos por región del cuerpo, pose T, malla decimada y malla sin soldar.
 
-Pruebas del frontend (`apps/web`): `npm run e2e:unit` (`node --test`) y `npm run e2e:cad` (arnés CDP contra `cad_http`, con `vite`). El CI (`.github/workflows/ci.yml`) solo se lanza a mano.
+Pruebas del frontend (`apps/web`): `npm run e2e:unit` (`node --test`) y `npm run e2e:cad` (arnés CDP contra `cad_http`, con `vite`). El único workflow es `.github/workflows/release.yml` (tests + binarios con CAD) y solo se lanza a mano o con un tag `pre.*`.
 
 Los tests de la app de escritorio necesitan las dependencias de sistema de Tauri:
 
