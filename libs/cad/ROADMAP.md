@@ -766,3 +766,6 @@ cargo test -p cad-model
   dobladillo y desarrollo como pieza (`tests/sheet.rs::hem_is_a_flange_folded_back_over_the_sheet`, e2e
   «ensamble: animar una unión en GLB y vista explosionada»). Lo que no entró de F9 está en su ítem de
   Fases (tangente, sub-ensambles, STEP importados, etc.).
+- **2026-10-22 Pestañas F0 y F1** ([PLAN_PESTANAS.md](PLAN_PESTANAS.md)): proyectos de formato 1
+  congelados en `apps/desktop/tests/fixtures/` (`legacy_projects_open`) y modelo `cad_model::tabs`
+  (`Tabs::from_legacy`: el diseño de antes es la pestaña 0, tal cual). La app todavía no lo usa (F2).

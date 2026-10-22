@@ -632,6 +632,26 @@ fn write_project(path: &Path, manifest: &Manifest, state_bytes: &[u8], ui: &str)
     std::fs::rename(&tmp, path).map_err(|e| format!("No se pudo guardar {}: {e}", path.display()))
 }
 
+/// Lee un proyecto: el manifiesto (ya revisado), el estado en MessagePack y la interfaz
+fn read_project(path: &Path) -> Result<(Manifest, Vec<u8>, String), String> {
+    let file = std::fs::File::open(path).map_err(|e| format!("No se pudo abrir {}: {e}", path.display()))?;
+    let mut zip = zip::ZipArchive::new(file).map_err(|_| "No es un proyecto de Pinocchio válido".to_string())?;
+    let manifest: Manifest =
+        serde_json::from_slice(&read_entry(&mut zip, "manifest.json")?).map_err(|e| format!("Manifiesto inválido: {e}"))?;
+    if manifest.format != FORMAT {
+        return Err("No es un proyecto de Pinocchio".into());
+    }
+    if manifest.version > FORMAT_VERSION {
+        return Err(format!(
+            "El proyecto es de una versión más nueva de la app (formato {}); actualiza Pinocchio para abrirlo",
+            manifest.version
+        ));
+    }
+    let state_bytes = read_entry(&mut zip, "state.msgpack")?;
+    let ui = String::from_utf8(read_entry(&mut zip, "ui.json")?).map_err(|e| e.to_string())?;
+    Ok((manifest, state_bytes, ui))
+}
+
 fn read_entry(zip: &mut zip::ZipArchive<std::fs::File>, name: &str) -> Result<Vec<u8>, String> {
     let mut entry = zip.by_name(name).map_err(|_| format!("El proyecto no tiene {name}"))?;
     let mut bytes = Vec::with_capacity(entry.size() as usize);
@@ -724,21 +744,7 @@ pub struct ProjectOpened {
 #[tauri::command]
 pub async fn open_project(app: AppHandle, path: String) -> Result<ProjectOpened, String> {
     in_background(app, move |state| {
-        let file = std::fs::File::open(&path).map_err(|e| format!("No se pudo abrir {path}: {e}"))?;
-        let mut zip = zip::ZipArchive::new(file).map_err(|_| "No es un proyecto de Pinocchio válido".to_string())?;
-        let manifest: Manifest =
-            serde_json::from_slice(&read_entry(&mut zip, "manifest.json")?).map_err(|e| format!("Manifiesto inválido: {e}"))?;
-        if manifest.format != FORMAT {
-            return Err("No es un proyecto de Pinocchio".into());
-        }
-        if manifest.version > FORMAT_VERSION {
-            return Err(format!(
-                "El proyecto es de una versión más nueva de la app (formato {}); actualiza Pinocchio para abrirlo",
-                manifest.version
-            ));
-        }
-        let state_bytes = read_entry(&mut zip, "state.msgpack")?;
-        let ui = String::from_utf8(read_entry(&mut zip, "ui.json")?).map_err(|e| e.to_string())?;
+        let (manifest, state_bytes, ui) = read_project(Path::new(&path))?;
         let project: ProjectState =
             rmp_serde::from_slice(&state_bytes).map_err(|e| format!("Estado del proyecto ilegible: {e}"))?;
         restore(state, project)?;
@@ -1436,5 +1442,152 @@ mod tests {
         assert!((r - expected).norm() < 1e-12);
         assert_eq!(loaded.quad_mesh.lock().unwrap().as_ref().unwrap().faces[0].v, [0, 1, 2, 3]);
         assert!(loaded.use_retopology.load(Ordering::SeqCst));
+    }
+
+    // ─── Proyectos de formato 1 congelados (PLAN_PESTANAS F0) ──────────────
+
+    fn fixture(name: &str) -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name)
+    }
+
+    fn primitive(shape: cad_model::PrimitiveShape, origin: [f64; 3], op: cad_model::BodyOp) -> cad_model::FeatureKind {
+        cad_model::FeatureKind::Primitive(cad_model::Primitive { shape, origin, z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op, link: None })
+    }
+
+    /// Diseño de las muestras: caja (pieza A) y cilindro aparte (pieza B), con
+    /// parámetro, configuración, carpeta, versión con nombre y un plano 2D
+    fn legacy_design() -> cad_model::Document {
+        use cad_model::{BodyOp, Configuration, Document, Folder, Material, NamedVersion, Parameter, PartId, PartProps, PrimitiveShape};
+        let mut doc = Document::new();
+        doc.parameters.push(Parameter { name: "largo".into(), expr: "40".into() });
+        let a = doc.add(primitive(PrimitiveShape::Box { dx: 40.0, dy: 20.0, dz: 10.0, centered: false, centered_z: false }, [0.0; 3], BodyOp::Join));
+        doc.bindings.insert(format!("{}.kind.shape.dx", a.0), "largo".into());
+        let b = doc.add(primitive(PrimitiveShape::Cylinder { radius: 5.0, height: 30.0 }, [100.0, 0.0, 0.0], BodyOp::New));
+        doc.folders.push(Folder { name: "Base".into(), first: a, last: b, collapsed: false });
+        doc.parts = vec![
+            PartProps { part: PartId { feature: a, index: 0 }, name: Some("Caja".into()), color: Some("#336699".into()), hidden: false, material: Some(Material { name: "PLA".into(), density: 1.24 }) },
+            PartProps { part: PartId { feature: b, index: 0 }, name: Some("Eje".into()), color: Some("#cc3300".into()), hidden: false, material: None },
+        ];
+        doc.configurations.push(Configuration { name: "Corta".into(), values: [("largo".to_string(), "25".to_string())].into(), suppressed: vec![] });
+        doc.versions.push(NamedVersion { name: "v1".into(), created: "2026-10-22T12:00:00Z".into(), note: Some("primera".into()), document: doc.clone() });
+        doc.drawing = Some(serde_json::json!({
+            "sheets": [{
+                "id": 1, "name": "Plano 1", "sheet": "A4", "projection": "first", "scale": null,
+                "hiddenLines": true, "smooth": false, "overall": true, "hiddenViews": ["back", "bottom", "right"],
+                "sixViews": true, "section": null, "title": "Diseño", "author": "", "details": [], "sketch": null,
+                "dims": [{ "view": "front", "kind": "length", "refs": [[0, 0], [40, 0]] }]
+            }],
+            "next_id": 2
+        }));
+        doc
+    }
+
+    /// Ensamble de las muestras: dos cajas y dos ejes, bisagras acopladas como engranes y una deslizante
+    fn legacy_assembly(doc: &cad_model::Document) -> cad_model::Assembly {
+        use cad_model::{Assembly, Connector, Instance, Mate, MateKind, PartId, Relation};
+        let [a, b] = [0, 1].map(|i| PartId { feature: doc.features[i].id, index: 0 });
+        let inst = |id, part, name: &str, position, fixed| Instance { id, part, name: name.into(), position, rotation: [0.0; 3], fixed };
+        let con = |instance, origin| Connector { instance, origin, z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0] };
+        let mate = |id, name: &str, kind, a, b| Mate { id, name: name.into(), kind, a, b, flip: false, angle: None, distance: None };
+        Assembly {
+            instances: vec![
+                inst(1, a, "Caja 1", [0.0; 3], true),
+                inst(2, b, "Eje 1", [10.0, 10.0, 10.0], false),
+                inst(3, b, "Eje 2", [30.0, 10.0, 10.0], false),
+                inst(4, a, "Caja 2", [0.0, 50.0, 0.0], false),
+            ],
+            mates: vec![
+                mate(1, "Bisagra 1", MateKind::Revolute, con(1, [10.0, 10.0, 10.0]), con(2, [0.0; 3])),
+                mate(2, "Bisagra 2", MateKind::Revolute, con(1, [30.0, 10.0, 10.0]), con(3, [0.0; 3])),
+                mate(3, "Deslizante", MateKind::Slider, con(1, [0.0, 20.0, 0.0]), con(4, [0.0; 3])),
+            ],
+            relations: vec![Relation::Gear { a: 1, b: 2, ratio: -2.0, phase: 0.0, carrier: None, carrier_ratio: 0.0 }],
+            next_id: 5,
+        }
+    }
+
+    fn write_fixture(state: &AppState, name: &str, ui: serde_json::Value) {
+        let bytes = rmp_serde::to_vec_named(&capture(state)).unwrap();
+        let manifest = Manifest { format: FORMAT.into(), version: 1, app_version: env!("CARGO_PKG_VERSION").into(), saved_at: 0, source_name: None };
+        std::fs::create_dir_all(fixture("")).unwrap();
+        write_project(&fixture(name), &manifest, &bytes, &ui.to_string()).unwrap();
+    }
+
+    /// Genera las muestras de formato 1. Se corrió una vez (2026-10-22, master
+    /// 7a81f83) y los archivos quedan congelados: NO volver a correrlo después
+    /// de cambiar el formato. `cargo test -p pinocchio-app generate_v1_fixtures -- --ignored`
+    #[test]
+    #[ignore]
+    fn generate_v1_fixtures() {
+        assert!(cad_model::occt::available(), "hace falta OpenCASCADE");
+        assert_eq!(FORMAT_VERSION, 1, "las muestras son del formato 1");
+        // Diseño con piezas
+        let state = AppState::new();
+        *state.cad_document.lock().unwrap() = Some(legacy_design());
+        write_fixture(&state, "v1-diseno-piezas.pinocchio", serde_json::json!({ "version": 1, "objects": [], "activeObject": null }));
+        // Más el ensamble dentro del diseño
+        let mut doc = legacy_design();
+        doc.assembly = Some(legacy_assembly(&doc));
+        *state.cad_document.lock().unwrap() = Some(doc);
+        write_fixture(&state, "v1-ensamble.pinocchio", serde_json::json!({ "version": 1, "objects": [], "activeObject": null }));
+        // Objetos: la caja con malla (activa), el eje sin malla y un cubo importado
+        let state = AppState::new();
+        let doc = legacy_design();
+        let [a, b] = [0, 1].map(|i| cad_model::PartId { feature: doc.features[i].id, index: 0 });
+        *state.cad_document.lock().unwrap() = Some(doc);
+        let channel = tauri::ipc::Channel::new(|_| Ok(()));
+        let made = crate::cad::part_to_model_impl(&state, a, None, &channel).unwrap();
+        adopt_impl(&state, 1);
+        activate_impl(&state, 3).unwrap();
+        *state.scene.lock().unwrap() = Some(cube_scene(10.0, [0.0; 3], 0.001));
+        *state.mesh.lock().unwrap() = Some(cube());
+        activate_impl(&state, 1).unwrap();
+        let part = |p: cad_model::PartId| serde_json::json!({ "feature": p.feature, "index": p.index });
+        write_fixture(&state, "v1-objetos.pinocchio", serde_json::json!({
+            "version": 1,
+            "objects": [
+                { "id": 1, "name": "Caja", "source": { "kind": "cad", "part": part(a), "hash": made.hash } },
+                { "id": 2, "name": "Eje", "source": { "kind": "cad", "part": part(b) } },
+                { "id": 3, "name": "cubo", "source": { "kind": "import" }, "ui": "{\"version\":1}", "rev": 1 }
+            ],
+            "activeObject": 1
+        }));
+    }
+
+    /// Abre una muestra de formato 1 en un estado nuevo
+    fn open_fixture(name: &str) -> (AppState, serde_json::Value) {
+        let (manifest, bytes, ui) = read_project(&fixture(name)).unwrap();
+        assert_eq!(manifest.version, 1);
+        let state = AppState::new();
+        restore(&state, rmp_serde::from_slice(&bytes).unwrap()).unwrap();
+        (state, serde_json::from_str(&ui).unwrap())
+    }
+
+    /// Los proyectos de formato 1 se siguen abriendo sin perder nada
+    #[test]
+    fn legacy_projects_open() {
+        let (state, _) = open_fixture("v1-diseno-piezas.pinocchio");
+        let doc = state.cad_document.lock().unwrap().clone().unwrap();
+        assert_eq!(doc, legacy_design());
+        if cad_model::occt::available() {
+            let eval = doc.evaluate();
+            let volumes: Vec<f64> = eval.parts.iter().map(|p| p.shape.mass().unwrap().volume).collect();
+            assert_eq!(volumes.len(), 2, "dos piezas");
+            assert!((volumes[0] - 8000.0).abs() < 1e-6 && (volumes[1] - std::f64::consts::PI * 750.0).abs() < 1e-3, "{volumes:?}");
+        }
+
+        let (state, _) = open_fixture("v1-ensamble.pinocchio");
+        let doc = state.cad_document.lock().unwrap().clone().unwrap();
+        let asm = doc.assembly.clone().unwrap();
+        assert_eq!(asm, legacy_assembly(&doc));
+        let solved = cad_model::assembly::solve(&asm);
+        assert!(solved.converged && solved.residual < 1e-6, "{solved:?}");
+
+        let (state, ui) = open_fixture("v1-objetos.pinocchio");
+        assert_eq!(state.objects.lock().unwrap().active, Some(1));
+        assert!(state.mesh.lock().unwrap().is_some(), "la caja tiene su malla");
+        assert_eq!(ui["objects"][0]["source"]["part"]["feature"], state.cad_document.lock().unwrap().as_ref().unwrap().features[0].id.0);
+        activate_impl(&state, 3).unwrap();
+        assert_eq!(state.mesh.lock().unwrap().as_ref().unwrap().num_vertices(), 8, "el cubo importado");
     }
 }

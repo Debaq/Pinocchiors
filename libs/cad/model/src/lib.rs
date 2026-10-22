@@ -26,6 +26,7 @@ pub mod sketch;
 pub mod sketch_assist;
 pub mod sketch3d;
 pub mod standard;
+pub mod tabs;
 pub mod threads;
 
 pub use cad_occt::{self as occt, Shape};
@@ -39,6 +40,7 @@ pub use regions::{Loop, LoopPiece, Region, find_regions};
 pub use gear_part::{GearAxis, GearLink, GearPart};
 pub use gears::{GearKind, GearSpec};
 pub use threads::ThreadAxis;
+pub use tabs::{Tab, TabId, TabKind, Tabs};
 pub use sketch_assist::Suggestion;
 pub use sketch3d::{Constraint3d, Entity3d, Geometry3d, Point3d, Report3d, Sketch3d, WorldAxis};
 pub use sketch::{AngleEnd, DimOpts, Geometry, Sketch, SketchConstraint, SketchEntity, SketchError, SketchPoint, SketchStatus, SketchText, SketchUse, TextStyle, SolveReport, UseSource};

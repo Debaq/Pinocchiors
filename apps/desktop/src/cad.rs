@@ -2052,7 +2052,7 @@ pub async fn cad_part_to_model(
     in_background(app, move |state| part_to_model_impl(state, part, known, &on_progress)).await
 }
 
-fn part_to_model_impl(
+pub(crate) fn part_to_model_impl(
     state: &AppState,
     part: cad_model::PartId,
     known: Option<String>,
