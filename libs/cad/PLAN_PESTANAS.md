@@ -145,7 +145,7 @@ pestaña, piezas derivadas de otra pestaña y planos que apunten a una pestaña 
 - Ojo: entre F2 y F3 la app ya guarda en formato 2; una compilación anterior a F2 no abre esos
   proyectos (avisa). La interfaz de hoy sigue funcionando igual (una sola pestaña).
 
-### F3 — Interfaz: barra de pestañas ❌
+### F3 — Interfaz: barra de pestañas 🟡 2026-10-22 (falta probarla en la app)
 
 - Componente `DesignTabs` debajo del visor de Diseñar; estado `tabs()` en `createCadStore` con
   `reload` al cambiar de pestaña.
@@ -160,6 +160,21 @@ pestaña, piezas derivadas de otra pestaña y planos que apunten a una pestaña 
   (colores solo en `app.css`). Sin mencionar Blender.
 - Pruebas: node para la lógica pura del store; e2e del pedido («pestañas: crear, renombrar,
   duplicar, borrar, deshacer») solo cuando el usuario lo pida.
+- Hecho: `components/layout/DesignTabs.tsx` (barra de 28 px bajo el visor de Diseñar, montada en
+  App junto a `CadView`; clic, doble clic para renombrar, arrastre con el puntero, menú
+  Renombrar/Duplicar/Borrar… con `confirmAction`, «+» = Nuevo diseño). `changeDesignTabs` termina
+  el sketch abierto, suelta selecciones y el modo ensamble antes de cambiar de pestaña. Store:
+  `tabs()`, `changeTabs(cmd, args)`, `loadActive`; `reload` y `newDesign` releen las pestañas;
+  `apply` las relee si el primer cambio creó «Diseño 1». Lógica pura en `lib/designTabs.ts`
+  (`neighborTab`, `dropIndex`, `swapTabHistory`), node `e2e/designTabs.test.mjs`. Atajos
+  Ctrl+AvPág / Ctrl+RePág (área Diseñar, reasignables). Nombres por defecto del backend
+  («Diseño 1», «… (copia)») se muestran con `tBackend` (en inglés «Part design 1»); los
+  errores de pestañas están en `en.layout2.ts`.
+- Cambios respecto de lo planeado: agregar, borrar, renombrar y mover pestañas **no** se deshacen
+  (borrar pide confirmación y lo dice); «Nuevo ensamble» espera a F5; las piezas agrupadas por
+  pestaña en el Outliner pasan a F4 (allí los objetos ya saben de qué pestaña son). Copiar y
+  pegar operaciones entre pestañas debería andar ya (el portapapeles es del store, no de la
+  pestaña): sin probar.
 
 ### F4 — Objetos de la escena por pestaña ❌
 

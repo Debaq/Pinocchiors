@@ -14,6 +14,7 @@ import type { Snap } from "./sketchSnap";
 import type { Contour } from "./sketchText";
 import type { PlanetaryPlan } from "./planetary";
 import { breaks, ellipseArcPolyline, makeBSpline, sample, type BSpline } from "./sketchCurves.ts";
+import { swapTabHistory, type TabHistory } from "./designTabs.ts";
 
 export type P2 = [number, number];
 export type P3 = [number, number, number];
@@ -1636,6 +1637,19 @@ export interface CadStatus {
   available: boolean;
   occt_version: string;
   has_document: boolean;
+}
+
+/** Pestaña del proyecto: un diseño o un ensamble (ver libs/cad/PLAN_PESTANAS.md) */
+export interface CadTab {
+  id: number;
+  name: string;
+  kind: "design" | "assembly";
+}
+
+/** Las pestañas en el orden de la barra y la activa (`null`: no hay ninguna) */
+export interface CadTabs {
+  tabs: CadTab[];
+  active: number | null;
 }
 
 export interface SolvedSketch {
@@ -4078,6 +4092,9 @@ export function createCadStore() {
   const undoStack: CadDocument[] = [];
   const redoStack: CadDocument[] = [];
   const [historyVersion, setHistoryVersion] = createSignal(0);
+  const [tabs, setTabs] = createSignal<CadTabs>({ tabs: [], active: null });
+  // Deshacer y rehacer de las pestañas que no están activas
+  const tabHistory = new Map<number, TabHistory<CadDocument>>();
   let meshVersion = -1;
   // Envíos encadenados: el último gana y los intermedios no pisan el resultado
   let sendSeq = 0;
@@ -4092,6 +4109,8 @@ export function createCadStore() {
 
   const apply = async (r: CadResult) => {
     setResult(r);
+    // El primer cambio sin pestañas crea «Diseño 1» en el backend
+    if (tabs().tabs.length === 0 && committed()) setTabs(await invoke<CadTabs>("cad_tabs"));
     await refreshMesh(r.version);
   };
 
@@ -4177,6 +4196,27 @@ export function createCadStore() {
     }
     setDoc(next);
     return send(next);
+  };
+
+  /** Trae el documento de la pestaña activa y su recálculo (sin tocar el deshacer) */
+  const loadActive = async () => {
+    const d = await invoke<CadDocument | null>("cad_get_document");
+    setViewing(undefined);
+    setComparison(null);
+    setDraft(undefined);
+    setDoc(d);
+    setSelected(undefined);
+    if (!d) {
+      setResult(null);
+      setMesh(null);
+      meshVersion = -1;
+      return;
+    }
+    try {
+      await apply(await invoke<CadResult>("cad_evaluate"));
+    } catch (e) {
+      setError(String(e));
+    }
   };
 
   const openDraft = (d: Draft) => {
@@ -4307,30 +4347,36 @@ export function createCadStore() {
 
     /** Trae el documento del backend (al abrir un proyecto o empezar uno nuevo) */
     async reload() {
-      const d = await invoke<CadDocument | null>("cad_get_document");
-      setViewing(undefined);
-      setComparison(null);
+      tabHistory.clear();
+      setTabs(await invoke<CadTabs>("cad_tabs"));
       undoStack.length = 0;
       redoStack.length = 0;
       setHistoryVersion((v) => v + 1);
-      setDraft(undefined);
-      setDoc(d);
-      setSelected(undefined);
-      if (!d) {
-        setResult(null);
-        setMesh(null);
-        meshVersion = -1;
-        return;
-      }
-      try {
-        await apply(await invoke<CadResult>("cad_evaluate"));
-      } catch (e) {
-        setError(String(e));
-      }
+      await loadActive();
+    },
+
+    tabs,
+    /**
+     * Cambia las pestañas con un comando `cad_tab_*` (acepta antes el diálogo
+     * abierto). Si cambia la activa, guarda su deshacer, trae el de la nueva y
+     * relee su documento y su recálculo.
+     */
+    async changeTabs(cmd: "cad_tab_add" | "cad_tab_rename" | "cad_tab_duplicate" | "cad_tab_delete" | "cad_tab_move" | "cad_tab_activate", args: Record<string, unknown>) {
+      if (draft()) await acceptDraft();
+      await lastSend;
+      const before = tabs().active;
+      const next = await invoke<CadTabs>(cmd, args);
+      swapTabHistory(tabHistory, undoStack, redoStack, before, next);
+      setTabs(next);
+      if (next.active === before) return;
+      setHistoryVersion((v) => v + 1);
+      await loadActive();
     },
 
     async newDesign() {
       const r = await invoke<CadResult>("cad_new");
+      tabHistory.clear();
+      setTabs(await invoke<CadTabs>("cad_tabs"));
       setDraft(undefined);
       undoStack.length = 0;
       redoStack.length = 0;
@@ -4346,6 +4392,7 @@ export function createCadStore() {
     },
 
     commit,
+
 
     /**
      * Agrega una operación al final (o donde está la barra de retroceso) y abre

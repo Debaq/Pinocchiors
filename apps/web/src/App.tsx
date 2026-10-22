@@ -329,6 +329,8 @@ import { DEFAULT_VOXEL, isHeavyGrid, voxelParams, voxelSize, type VoxelConfig, t
 import type { PreviewView } from "./components/layout/ViewportHeader";
 import { ScanEditor, type ScanEditorTab, type ScanMeshSettings } from "./components/layout/ScanEditor";
 import { CadView } from "./components/layout/CadView";
+import { DesignTabs, changeDesignTabs } from "./components/layout/DesignTabs";
+import { neighborTab } from "./lib/designTabs";
 import { DesignStep, FeatureTree } from "./components/steps/DesignStep";
 import { createCadStore, partColor, partHidden, PLANE_LABELS, type Fabrication, type PartId } from "./lib/cad";
 import { createCadUi } from "./lib/cadUi";
@@ -2500,6 +2502,18 @@ export const App: Component = () => {
     { key: "c", ctrl: true, action: () => animating() && handleCopyPose(), area: "rig", get description() { return t("Copiar pose"); } },
     { key: "v", ctrl: true, action: () => animating() && handlePastePose(false), area: "rig", get description() { return t("Pegar pose"); } },
     { key: "v", ctrl: true, shift: true, action: () => animating() && handlePastePose(true), area: "rig", get description() { return t("Pegar pose espejada"); } },
+    // Pestañas de Diseñar
+    ...([["PageDown", 1, "Diseñar: pestaña siguiente"], ["PageUp", -1, "Diseñar: pestaña anterior"]] as const).map(([key, step, label]): ShortcutDef => ({
+      key,
+      ctrl: true,
+      area: "design",
+      when: () => showCad(),
+      action: () => {
+        const id = neighborTab(cad.tabs().tabs, cad.tabs().active, step);
+        if (id !== undefined) void changeDesignTabs(cad, cadUi, "cad_tab_activate", { id });
+      },
+      get description() { return t(label); },
+    })),
     // Operaciones de Diseñar: casi todas sin tecla de fábrica (se asignan en Configuración)
     ...designOperations(designActions, cadUi).map((op): ShortcutDef => {
       const first = DESIGN_DEFAULT_KEYS[op.label];
@@ -9190,14 +9204,21 @@ export const App: Component = () => {
               }
             />
 
-            {/* Espacio Diseñar: su propio visor encima del principal */}
+            {/* Espacio Diseñar: su propio visor encima del principal y, abajo, las pestañas */}
             <Show when={showCad()}>
-              <CadView store={cad} ui={cadUi} toolsMount={cadToolsMount()} scanMesh={scanMesh()} showGrid={showGrid()} actions={designActions}
-                lights={lights()}
-                trackpad={trackpadNavigation()}
-                initialPose={meshLoaded() ? viewer()?.getCameraPose() : undefined}
-                onLeave={(pose) => viewer()?.setCameraPose(pose)}
-              />
+              <div class="absolute inset-0 z-[5] flex flex-col">
+                <div class="relative min-h-0 flex-1">
+                  <CadView store={cad} ui={cadUi} toolsMount={cadToolsMount()} scanMesh={scanMesh()} showGrid={showGrid()} actions={designActions}
+                    lights={lights()}
+                    trackpad={trackpadNavigation()}
+                    initialPose={meshLoaded() ? viewer()?.getCameraPose() : undefined}
+                    onLeave={(pose) => viewer()?.setCameraPose(pose)}
+                  />
+                </div>
+                <div class="h-7 shrink-0 border-t border-border">
+                  <DesignTabs store={cad} ui={cadUi} confirm={confirmAction} />
+                </div>
+              </div>
             </Show>
 
             <Show when={dropping()}>
