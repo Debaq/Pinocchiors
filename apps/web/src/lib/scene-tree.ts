@@ -59,6 +59,8 @@ export type ObjectRow = CadOutlineItem & {
   modifications?: SceneNode[];
   /** Nombre de la malla del activo ("Malla generada" en las piezas del diseño) */
   meshLabel?: string;
+  /** Pestaña del diseño de la pieza: con piezas de varias pestañas, se agrupan por pestaña */
+  tab?: { id: number; name: string };
 };
 
 export interface SceneTreeState {
@@ -137,6 +139,29 @@ const leaf = (item: CadOutlineItem): SceneNode => ({ expanded: false, ...item, c
 
 function group(id: string, label: string, children: SceneNode[]): SceneNode {
   return { id, type: "group", label, visible: true, expanded: true, selected: false, readonly: true, children };
+}
+
+/**
+ * Con piezas de más de una pestaña, las de cada pestaña van en un subgrupo
+ * (`group-tab-<id>`, donde aparece su primera pieza); los modelos importados
+ * quedan sueltos. Con una sola pestaña, la lista tal cual.
+ */
+export function groupByTab(rows: Pick<ObjectRow, "tab">[], nodes: SceneNode[]): SceneNode[] {
+  const ids = new Set(rows.flatMap((r) => (r.tab ? [r.tab.id] : [])));
+  if (ids.size < 2) return nodes;
+  const out: SceneNode[] = [];
+  const groups = new Map<number, SceneNode>();
+  rows.forEach((row, i) => {
+    if (!row.tab) return void out.push(nodes[i]);
+    let g = groups.get(row.tab.id);
+    if (!g) {
+      g = group(`group-tab-${row.tab.id}`, row.tab.name, []);
+      groups.set(row.tab.id, g);
+      out.push(g);
+    }
+    g.children.push(nodes[i]);
+  });
+  return out;
 }
 
 /**
@@ -252,15 +277,15 @@ export function buildSceneTree(state: SceneTreeState): SceneNode {
     });
   }
   // ── Objetos ──
-  const objects: SceneNode[] = state.objects?.length
-    ? state.objects.map(({ active, modifications = [], meshLabel, ...row }) => {
-        // Del activo: su malla, lo hecho sobre ella y lo que salió después (quads, esqueleto, pesos)
-        const [first, ...rest] = model;
-        const mesh = first?.id === "mesh" ? [{ ...first, label: meshLabel ?? first.label }] : [];
-        const children = active ? [...mesh, ...modifications, ...(mesh.length ? rest : model)] : modifications;
-        return { ...leaf(row), expanded: active, children };
-      })
-    : model;
+  const rows = state.objects ?? [];
+  const objectNodes = rows.map(({ active, modifications = [], meshLabel, tab: _, ...row }): SceneNode => {
+    // Del activo: su malla, lo hecho sobre ella y lo que salió después (quads, esqueleto, pesos)
+    const [first, ...rest] = model;
+    const mesh = first?.id === "mesh" ? [{ ...first, label: meshLabel ?? first.label }] : [];
+    const children = active ? [...mesh, ...modifications, ...(mesh.length ? rest : model)] : modifications;
+    return { ...leaf(row), expanded: active, children };
+  });
+  const objects: SceneNode[] = rows.length ? groupByTab(rows, objectNodes) : model;
 
   root.children.push(group("group-planes", t("Planos"), planes));
   if (state.cad) root.children.push({ ...group("group-features", t("Operaciones"), []), content: state.cad.featureTree, count: state.cad.featureCount });

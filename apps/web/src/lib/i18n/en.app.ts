@@ -839,4 +839,7 @@ export const en_app: Catalog = {
   "Categoría y etiquetas de la pose": "Pose category and tags",
   "Comparar con la original, lado a lado": "Compare with the original, side by side",
   "Muestra la malla original a la izquierda y la de quads, con sus aristas, a la derecha.": "Shows the original mesh on the left and the quad mesh, with its edges, on the right.",
+  // Piezas de otras pestañas del diseño en el Outliner
+  "Pieza de «{tab}»: clic para ir a esa pestaña": "Part from «{tab}»: click to go to that tab",
+  "Pieza de «{tab}»": "Part from «{tab}»",
 };

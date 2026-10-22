@@ -9,8 +9,11 @@ import type { HistoryNode, SavedHistory } from "./history";
 
 export type ObjectSource =
   | { kind: "import" }
-  /** Pieza del diseño; `hash` = huella de la malla generada (sin generar todavía si falta) */
-  | { kind: "cad"; part: PartId; hash?: string };
+  /**
+   * Pieza del diseño; `studio` = su pestaña (los proyectos de antes no la
+   * guardaban: es la 0); `hash` = huella de la malla generada (sin generar todavía si falta)
+   */
+  | { kind: "cad"; studio?: number; part: PartId; hash?: string };
 
 export interface SceneObject {
   id: number;
@@ -25,8 +28,16 @@ export interface SceneObject {
 
 export const partKey = (p: PartId) => `${p.feature}:${p.index}`;
 
-export const isCadObject = (o: SceneObject | undefined): o is SceneObject & { source: { kind: "cad"; part: PartId; hash?: string } } =>
-  o?.source.kind === "cad";
+export type CadObject = SceneObject & { source: Extract<ObjectSource, { kind: "cad" }> };
+
+export const isCadObject = (o: SceneObject | undefined): o is CadObject => o?.source.kind === "cad";
+
+/** Pestaña del diseño de la pieza */
+export const studioOf = (o: CadObject) => o.source.studio ?? 0;
+
+/** El objeto es el de la pieza `part` de la pestaña `studio` */
+export const isPartObject = (o: SceneObject, studio: number, part: PartId) =>
+  isCadObject(o) && studioOf(o) === studio && partKey(o.source.part) === partKey(part);
 
 /** Ya tiene malla (o la tuvo): no se puede descartar sin perder trabajo */
 export const materialized = (o: SceneObject, active: number | undefined) =>
@@ -35,24 +46,24 @@ export const materialized = (o: SceneObject, active: number | undefined) =>
 export const nextObjectId = (list: SceneObject[]) => list.reduce((m, o) => Math.max(m, o.id), 0) + 1;
 
 /**
- * Agrega un objeto por cada pieza del diseño que todavía no tiene y renombra
- * los de las piezas que cambiaron de nombre. Los de piezas que ya no están se
- * quedan (si tenían malla, es trabajo hecho; si no, el Outliner los esconde).
+ * Agrega un objeto por cada pieza de la pestaña `studio` que todavía no tiene
+ * y renombra los de las piezas que cambiaron de nombre. Los de piezas que ya
+ * no están se quedan (si tenían malla, es trabajo hecho; si no, el Outliner
+ * los esconde). Los de otras pestañas no se tocan.
  */
-export function syncCadObjects(list: SceneObject[], parts: { id: PartId; name: string }[]): SceneObject[] {
+export function syncCadObjects(list: SceneObject[], parts: { id: PartId; name: string }[], studio: number): SceneObject[] {
   let changed = false;
   let next = nextObjectId(list);
   const out = list.map((o) => {
-    if (o.source.kind !== "cad") return o;
-    const key = partKey(o.source.part);
-    const p = parts.find((x) => partKey(x.id) === key);
+    if (!isCadObject(o) || studioOf(o) !== studio) return o;
+    const p = parts.find((x) => isPartObject(o, studio, x.id));
     if (!p || p.name === o.name) return o;
     changed = true;
     return { ...o, name: p.name };
   });
   for (const p of parts) {
-    if (out.some((o) => o.source.kind === "cad" && partKey(o.source.part) === partKey(p.id))) continue;
-    out.push({ id: next++, name: p.name, source: { kind: "cad", part: p.id } });
+    if (out.some((o) => isPartObject(o, studio, p.id))) continue;
+    out.push({ id: next++, name: p.name, source: { kind: "cad", studio, part: p.id } });
     changed = true;
   }
   return changed ? out : list;

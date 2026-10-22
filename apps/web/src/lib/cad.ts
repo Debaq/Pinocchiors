@@ -4093,6 +4093,8 @@ export function createCadStore() {
   const redoStack: CadDocument[] = [];
   const [historyVersion, setHistoryVersion] = createSignal(0);
   const [tabs, setTabs] = createSignal<CadTabs>({ tabs: [], active: null });
+  // Pestaña de la que es `result` (al cambiar de pestaña, `tabs` cambia antes que el recálculo)
+  const [resultTab, setResultTab] = createSignal(0);
   // Deshacer y rehacer de las pestañas que no están activas
   const tabHistory = new Map<number, TabHistory<CadDocument>>();
   let meshVersion = -1;
@@ -4108,9 +4110,12 @@ export function createCadStore() {
   };
 
   const apply = async (r: CadResult) => {
-    setResult(r);
     // El primer cambio sin pestañas crea «Diseño 1» en el backend
     if (tabs().tabs.length === 0 && committed()) setTabs(await invoke<CadTabs>("cad_tabs"));
+    batch(() => {
+      setResult(r);
+      setResultTab(tabs().active ?? 0);
+    });
     await refreshMesh(r.version);
   };
 
@@ -4356,6 +4361,8 @@ export function createCadStore() {
     },
 
     tabs,
+    /** Pestaña de la que es el recálculo de `result` (las piezas que se ven) */
+    resultTab,
     /**
      * Cambia las pestañas con un comando `cad_tab_*` (acepta antes el diálogo
      * abierto). Si cambia la activa, guarda su deshacer, trae el de la nueva y

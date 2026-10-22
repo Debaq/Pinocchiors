@@ -176,7 +176,7 @@ pestaña, piezas derivadas de otra pestaña y planos que apunten a una pestaña 
   pegar operaciones entre pestañas debería andar ya (el portapapeles es del store, no de la
   pestaña): sin probar.
 
-### F4 — Objetos de la escena por pestaña ❌
+### F4 — Objetos de la escena por pestaña 🟡 2026-10-22 (falta probarla en la app)
 
 - `ObjectSource` cad: `{ kind: "cad"; studio?: number; part; hash? }`; `partKey` →
   `studio:feature:index` con `studio ?? 0` (las claves viejas `feature:index` se leen como
@@ -187,6 +187,18 @@ pestaña, piezas derivadas de otra pestaña y planos que apunten a una pestaña 
   diseño» funcionan igual con piezas de cualquier pestaña.
 - Pruebas: fixture `v1-objetos` abre con sus mallas y su paso rehecho; pieza de la pestaña 2 se
   vuelve objeto y se exporta con `export_objects`.
+- Hecho: `ObjectSource.studio?` (falta = 0), `studioOf`, `isPartObject(o, studio, part)`;
+  `partKey` sigue siendo la identidad de la pieza dentro de un diseño. `syncCadObjects(list,
+  parts, studio)` solo toca los objetos de esa pestaña (alcanza con sincronizar la que se ve:
+  toda pestaña nueva se activa al crearla). Store: `resultTab()` = de qué pestaña es `result`
+  (cambia junto con él; `tabs()` cambia antes, al pedir el cambio). App: `partView(o)` busca la
+  pieza solo si el objeto es de la pestaña que se ve; `otherTab(o)`; las filas de piezas de
+  otra pestaña se ven tal cual (en Diseñar, clic = ir a esa pestaña; no se borran desde ahí);
+  `cad_part_to_model` con `studio`. Outliner: con piezas de 2+ pestañas, subgrupos
+  `group-tab-<id>` (`groupByTab` en scene-tree; los importados quedan sueltos). Pestaña borrada:
+  sus objetos con malla quedan como «Ya no está en el diseño»; sin malla, no salen. Pruebas:
+  node `e2e/objectsTabs.test.mjs`; el `hash` del fixture se mantiene (F2). Falta: el paso de
+  Preparar rehecho sobre una pieza de otra pestaña, en la app.
 
 ### F5 — Ensamble como pestaña propia ❌
 

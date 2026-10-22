@@ -90,7 +90,7 @@ const WORKSPACE_KEYS: Record<WorkspaceId, string> = { prepare: "1", rig: "2", pr
 import { VIEW_AXES, fromView, toView, viewSize, type Axis } from "./lib/axes";
 import { buildSceneTree, type QuadObjectRow, type CadOutline, type CadOutlineItem, type ObjectRow, type SceneNode } from "./lib/scene-tree";
 import { addDrawing, drawingSheets, drawingTree, parseElementNode, removeDrawing, removeElement, toggleElement, updateDrawing } from "./lib/drawingDoc";
-import { isCadObject, isGeometryStep, materialized, nextObjectId, partKey, savedTrail, syncCadObjects, type SceneObject } from "./lib/objects";
+import { isCadObject, isGeometryStep, isPartObject, materialized, nextObjectId, partKey, savedTrail, studioOf, syncCadObjects, type CadObject, type SceneObject } from "./lib/objects";
 import { TOOLSETS, toolContext, type ToolId } from "./lib/tools";
 import { createHistoryStore, type SavedHistory } from "./lib/history";
 import { bindingOf, createShortcutManager, formatBinding, type ShortcutDef } from "./lib/shortcuts";
@@ -1825,9 +1825,16 @@ export const App: Component = () => {
   };
   /** Objetos de las piezas que salieron de una tachada */
   const piecesObjects = (part: PartId) => {
-    const keys = new Set(piecesOf(part).map(partKey));
-    return objects().filter((o) => isCadObject(o) && keys.has(partKey(o.source.part)));
+    const pieces = piecesOf(part);
+    return objects().filter((o) => pieces.some((p) => isPartObject(o, cad.resultTab(), p)));
   };
+  /** La pieza del objeto en el recálculo que se ve (no está si es de otra pestaña o ya no existe) */
+  const partView = (o: SceneObject | undefined) =>
+    isCadObject(o) && studioOf(o) === cad.resultTab() ? cad.result()?.parts.find((p) => partKey(p.id) === partKey(o.source.part)) : undefined;
+  /** La pestaña de la pieza, si es otra que la que se ve y todavía existe */
+  const otherTab = (o: CadObject) => (studioOf(o) === cad.resultTab() ? undefined : cad.tabs().tabs.find((x) => x.id === studioOf(o)));
+  /** Tachada: partida o unida en su pestaña (solo se sabe en la que se ve) */
+  const replacedObject = (o: SceneObject | undefined) => isCadObject(o) && studioOf(o) === cad.resultTab() && !partView(o) ? replacedEntry(o.source.part) : undefined;
 
   /** Filas de los objetos para el Outliner (las piezas que ya no están y nunca tuvieron malla no salen; las reemplazadas, tachadas) */
   /** Piezas con algo suyo elegido en el visor (una cara o una arista): su fila se marca en el Outliner */
@@ -1861,16 +1868,38 @@ export const App: Component = () => {
         hint: isCadObject(o) ? t("Se rehace sola si la pieza cambia en el diseño") : undefined,
       }));
       if (isCadObject(o)) {
-        const i = parts.findIndex((p) => partKey(p.id) === partKey(o.source.part));
+        const tab = cad.tabs().tabs.find((x) => x.id === studioOf(o));
+        // De otra pestaña que sigue: se ve tal cual (su pieza no está en el recálculo de esta)
+        const other = otherTab(o);
+        if (other) {
+          return [{
+            id: `obj-${o.id}`,
+            type: "part",
+            label: o.name,
+            tab: { id: other.id, name: tBackend(other.name) },
+            active: isActive,
+            modifications,
+            meshLabel: t("Malla generada"),
+            selected: isActive || extraObjects().includes(o.id),
+            visible: inDesign() ? true : isActive ? viewSettings().showMesh : !hiddenGhosts().includes(o.id),
+            readonly: inDesign() || (!isActive && !o.ui),
+            // Se borra desde su pestaña (ahí se sabe si borrar la pieza del diseño)
+            deletable: false,
+            muted: inDesign(),
+            hint: inDesign() ? t("Pieza de «{tab}»: clic para ir a esa pestaña", { tab: tBackend(other.name) }) : t("Pieza de «{tab}»", { tab: tBackend(other.name) }),
+          }];
+        }
+        const i = parts.findIndex((p) => isPartObject(o, cad.resultTab(), p.id));
         const view = parts[i];
         // Partida por un corte o unida con otras: tachada; un clic elige lo que salió de ella
-        const replaced = !view ? replacedEntry(o.source.part) : undefined;
+        const replaced = replacedObject(o);
         if (replaced && !isActive) {
           const into = piecesObjects(o.source.part).map((x) => x.name);
           return [{
             id: `obj-${o.id}`,
             type: "part",
             label: o.name,
+            tab: tab && { id: tab.id, name: tBackend(tab.name) },
             active: false,
             modifications,
             selected: false,
@@ -1893,6 +1922,7 @@ export const App: Component = () => {
           id: `obj-${o.id}`,
           type: "part",
           label: o.name,
+          tab: tab && { id: tab.id, name: tBackend(tab.name) },
           active: isActive,
           modifications,
           meshLabel: t("Malla generada"),
@@ -2049,12 +2079,12 @@ export const App: Component = () => {
   const ensureCadMesh = async () => {
     const object = activeObject();
     if (!isCadObject(object)) return;
-    const parts = cad.result()?.parts ?? [];
-    if (!parts.some((p) => partKey(p.id) === partKey(object.source.part))) return;
+    // De la pestaña que se ve: solo si la pieza sigue; de otra, si la pestaña sigue (el backend la recalcula aparte)
+    if (studioOf(object) === cad.resultTab() ? !partView(object) : !otherTab(object)) return;
     let r: { changed: boolean; hash: string; info: MeshInfo | null };
     try {
       r = await busy(t("Preparando la malla de {name}...", { name: object.name }), () =>
-        invoke("cad_part_to_model", { part: object.source.part, known: object.source.hash ?? null, onProgress: progressChannel() })
+        invoke("cad_part_to_model", { part: object.source.part, studio: studioOf(object), known: object.source.hash ?? null, onProgress: progressChannel() })
       );
     } catch (e) {
       return setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
@@ -2235,7 +2265,7 @@ export const App: Component = () => {
   createEffect(() => {
     const r = cad.result();
     if (!r || cad.draft()) return;
-    setObjects((list) => syncCadObjects(list, r.parts.map((p) => ({ id: p.id, name: p.name }))));
+    setObjects((list) => syncCadObjects(list, r.parts.map((p) => ({ id: p.id, name: p.name })), cad.resultTab()));
   });
 
   // Salir de Diseñar a un espacio que trabaja sobre la malla: la pieza elegida
@@ -2248,7 +2278,7 @@ export const App: Component = () => {
         if (active) return void activateObject(active.id, true);
         const parts = cad.result()?.parts ?? [];
         const wanted = parts.find((p) => partKey(p.id) === cadUi.openPart()) ?? parts[0];
-        const target = wanted && objects().find((o) => isCadObject(o) && partKey(o.source.part) === partKey(wanted.id));
+        const target = wanted && objects().find((o) => isPartObject(o, cad.resultTab(), wanted.id));
         if (target) void activateObject(target.id, true);
       });
     })
@@ -7907,7 +7937,7 @@ export const App: Component = () => {
     }
     const object = objectOfNode(nodeId);
     if (object) {
-      const view = isCadObject(object) ? cad.result()?.parts.find((p) => partKey(p.id) === partKey(object.source.part)) : undefined;
+      const view = partView(object);
       // En Diseñar el ojo es el de la pieza en el diseño; fuera, el del objeto en el visor
       if (view && inDesign()) void cad.setPartProps(view.id, { hidden: !partHidden(cad.doc(), view) });
       else if (object.id === activeObjectId()) setViewSettings((prev) => ({ ...prev, showMesh: !prev.showMesh }));
@@ -7998,7 +8028,7 @@ export const App: Component = () => {
     const object = objectOfNode(nodeId);
     if (object) {
       void (async () => {
-        const view = isCadObject(object) ? cad.result()?.parts.find((p) => partKey(p.id) === partKey(object.source.part)) : undefined;
+        const view = partView(object);
         if (view) {
           await cad.addFeature({ type: "delete_parts", parts: [view.id] });
           await cad.acceptDraft();
@@ -8859,7 +8889,7 @@ export const App: Component = () => {
       return;
     }
     // Tachada: se eligen las piezas que salieron de ella
-    if (isCadObject(object) && !cad.result()?.parts.some((p) => partKey(p.id) === partKey(object.source.part)) && replacedEntry(object.source.part)) {
+    if (isCadObject(object) && replacedObject(object)) {
       const pieces = piecesObjects(object.source.part);
       if (!pieces.length) return;
       setExtraObjects(pieces.slice(1).map((x) => x.id));
@@ -8869,6 +8899,12 @@ export const App: Component = () => {
     if (object) {
       setExtraObjects([]);
       if (isCadObject(object) && inDesign()) {
+        // Pieza de otra pestaña: se va a esa pestaña
+        const other = otherTab(object);
+        if (other) {
+          void changeDesignTabs(cad, cadUi, "cad_tab_activate", { id: other.id });
+          return;
+        }
         cadUi.setOpenPart(partKey(object.source.part));
         pipeline.setActiveStep("design_part");
       }

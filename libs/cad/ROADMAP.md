@@ -774,3 +774,6 @@ cargo test -p cad-model
   pestaña y `cad_part_to_model` con `studio`. La interfaz todavía muestra una sola (F3).
 - **2026-10-22 Pestañas F3** ([PLAN_PESTANAS.md](PLAN_PESTANAS.md)): barra de pestañas bajo el visor
   de Diseñar (`DesignTabs`), deshacer por pestaña, Ctrl+AvPág/RePág. Sin probar todavía en la app.
+- **2026-10-22 Pestañas F4** ([PLAN_PESTANAS.md](PLAN_PESTANAS.md)): los objetos de la escena saben
+  de qué pestaña es su pieza (`studio`), el Outliner los agrupa por pestaña y la malla se genera
+  desde la pestaña que sea. Sin probar todavía en la app.
