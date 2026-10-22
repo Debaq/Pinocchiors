@@ -32,7 +32,8 @@ use tauri::AppHandle;
 use uv_core::{Skin, SkinInfo};
 
 const FORMAT: &str = "pinocchio-project";
-const FORMAT_VERSION: u32 = 1;
+/// 2: el diseño va en pestañas (`cad_tabs`); el 1 tenía un solo diseño (`cad`)
+const FORMAT_VERSION: u32 = 2;
 
 #[derive(Serialize, Deserialize)]
 struct Manifest {
@@ -71,8 +72,11 @@ struct ProjectState {
     scene_before_print_scale: Option<Scene>,
     /// Pieles imprimibles: caras elegidas e imágenes importadas
     print_skin: Option<PrintSkinDto>,
-    /// Diseño CAD (recetas: el sólido se recalcula al abrir)
+    /// Diseño CAD de los proyectos de formato 1 (solo se lee: pasa a ser la pestaña 0)
+    #[serde(skip_serializing_if = "Option::is_none")]
     cad: Option<cad_model::Document>,
+    /// Pestañas del diseño (recetas: los sólidos se recalculan al abrir)
+    cad_tabs: Option<cad_model::Tabs>,
     /// Los objetos de la escena que no están activos (el activo es el resto
     /// de los campos); `None` = el activo todavía no tiene número
     active_object: Option<u64>,
@@ -476,7 +480,7 @@ impl From<SkinDto> for Skin<4> {
 fn capture(state: &AppState) -> ProjectState {
     let objects = state.objects.lock().unwrap();
     ProjectState {
-        cad: state.cad_document.lock().unwrap().clone(),
+        cad_tabs: Some(state.cad_tabs.lock().unwrap().clone()),
         active_object: objects.active,
         objects: objects.stored.clone(),
         ..capture_model(state)
@@ -536,13 +540,14 @@ fn capture_model(state: &AppState) -> ProjectState {
 /// Reemplaza todo el estado por el del proyecto. Se convierte primero y se
 /// asigna al final: si algo falla, el estado actual queda intacto.
 fn restore(state: &AppState, mut p: ProjectState) -> Result<(), String> {
-    let cad = p.cad.take();
+    let tabs = match p.cad_tabs.take() {
+        Some(tabs) => tabs,
+        None => cad_model::Tabs::from_legacy(p.cad.take()),
+    };
     let objects = ObjectSlots { active: p.active_object, stored: std::mem::take(&mut p.objects) };
     restore_model(state, p)?;
     *state.objects.lock().unwrap() = objects;
-    *state.cad_document.lock().unwrap() = cad;
-    *state.cad_preview.lock().unwrap() = None;
-    *state.cad_cache.lock().unwrap() = None;
+    state.set_cad_tabs(tabs);
     state.cad_ops.lock().unwrap().clear();
     *state.cad_scan.lock().unwrap() = None;
     Ok(())
@@ -1185,7 +1190,7 @@ mod tests {
     #[test]
     fn print_skin_survives_save_and_follows_the_object() {
         let state = AppState::new();
-        *state.cad_document.lock().unwrap() = Some(cad_model::Document::new());
+        state.set_cad_tabs(cad_model::Tabs::from_legacy(Some(cad_model::Document::new())));
         *state.mesh.lock().unwrap() = Some(cube());
         crate::print_skin::edit_zone(&state, &[2, 3], crate::print_skin::ZoneMode::Set).unwrap();
         state.print_skin_images.lock().unwrap().push(crate::print_skin::SkinImage {
@@ -1221,7 +1226,7 @@ mod tests {
     #[test]
     fn objects_swap_and_survive_save() {
         let state = AppState::new();
-        *state.cad_document.lock().unwrap() = Some(cad_model::Document::new());
+        state.set_cad_tabs(cad_model::Tabs::from_legacy(Some(cad_model::Document::new())));
         *state.mesh.lock().unwrap() = Some(cube());
         *state.skeleton.lock().unwrap() = Some(SkeletonType::Human);
         adopt_impl(&state, 1);
@@ -1229,7 +1234,7 @@ mod tests {
         activate_impl(&state, 2).unwrap();
         assert!(state.mesh.lock().unwrap().is_none());
         assert!(state.skeleton.lock().unwrap().is_none());
-        assert!(state.cad_document.lock().unwrap().is_some(), "el diseño queda");
+        assert!(state.cad_doc().is_some(), "el diseño queda");
         // Vuelta al primero: su malla y su esqueleto
         activate_impl(&state, 1).unwrap();
         assert_eq!(state.mesh.lock().unwrap().as_ref().unwrap().num_vertices(), 8);
@@ -1241,7 +1246,7 @@ mod tests {
         assert_eq!(other.objects.lock().unwrap().active, Some(1));
         activate_impl(&other, 2).unwrap();
         assert!(other.mesh.lock().unwrap().is_none());
-        assert!(other.cad_document.lock().unwrap().is_some());
+        assert!(other.cad_doc().is_some());
         remove_impl(&other, 2);
         assert_eq!(other.objects.lock().unwrap().active, None);
         activate_impl(&other, 1).unwrap();
@@ -1386,7 +1391,7 @@ mod tests {
             thin: None, direction: None, start: 0.0,
         }));
         doc.add(cad_model::FeatureKind::Import { format: cad_model::ImportFormat::Step, data: vec![0, 1, 2, 255], op: cad_model::BodyOp::Cut });
-        *state.cad_document.lock().unwrap() = Some(doc.clone());
+        state.set_cad_tabs(cad_model::Tabs::from_legacy(Some(doc.clone())));
 
         let bytes = rmp_serde::to_vec_named(&capture(&state)).unwrap();
         let dir = std::env::temp_dir().join(format!("pinocchio-test-{}", std::process::id()));
@@ -1403,7 +1408,7 @@ mod tests {
         let loaded = AppState::new();
         restore(&loaded, project).unwrap();
 
-        assert_eq!(loaded.cad_document.lock().unwrap().as_ref(), Some(&doc));
+        assert_eq!(loaded.cad_doc().as_ref(), Some(&doc));
         let m = loaded.mesh.lock().unwrap().clone().unwrap();
         assert_eq!(m.vertices.len(), mesh.vertices.len());
         assert_eq!(m.edges.len(), mesh.edges.len());
@@ -1523,20 +1528,20 @@ mod tests {
         assert_eq!(FORMAT_VERSION, 1, "las muestras son del formato 1");
         // Diseño con piezas
         let state = AppState::new();
-        *state.cad_document.lock().unwrap() = Some(legacy_design());
+        state.set_cad_tabs(cad_model::Tabs::from_legacy(Some(legacy_design())));
         write_fixture(&state, "v1-diseno-piezas.pinocchio", serde_json::json!({ "version": 1, "objects": [], "activeObject": null }));
         // Más el ensamble dentro del diseño
         let mut doc = legacy_design();
         doc.assembly = Some(legacy_assembly(&doc));
-        *state.cad_document.lock().unwrap() = Some(doc);
+        state.set_cad_tabs(cad_model::Tabs::from_legacy(Some(doc)));
         write_fixture(&state, "v1-ensamble.pinocchio", serde_json::json!({ "version": 1, "objects": [], "activeObject": null }));
         // Objetos: la caja con malla (activa), el eje sin malla y un cubo importado
         let state = AppState::new();
         let doc = legacy_design();
         let [a, b] = [0, 1].map(|i| cad_model::PartId { feature: doc.features[i].id, index: 0 });
-        *state.cad_document.lock().unwrap() = Some(doc);
+        state.set_cad_tabs(cad_model::Tabs::from_legacy(Some(doc)));
         let channel = tauri::ipc::Channel::new(|_| Ok(()));
-        let made = crate::cad::part_to_model_impl(&state, a, None, &channel).unwrap();
+        let made = crate::cad::part_to_model_impl(&state, a, 0, None, &channel).unwrap();
         adopt_impl(&state, 1);
         activate_impl(&state, 3).unwrap();
         *state.scene.lock().unwrap() = Some(cube_scene(10.0, [0.0; 3], 0.001));
@@ -1567,8 +1572,10 @@ mod tests {
     #[test]
     fn legacy_projects_open() {
         let (state, _) = open_fixture("v1-diseno-piezas.pinocchio");
-        let doc = state.cad_document.lock().unwrap().clone().unwrap();
+        let doc = state.cad_doc().unwrap();
         assert_eq!(doc, legacy_design());
+        // El diseño de antes es la pestaña 0
+        assert_eq!(*state.cad_tabs.lock().unwrap(), cad_model::Tabs::from_legacy(Some(legacy_design())));
         if cad_model::occt::available() {
             let eval = doc.evaluate();
             let volumes: Vec<f64> = eval.parts.iter().map(|p| p.shape.mass().unwrap().volume).collect();
@@ -1577,7 +1584,7 @@ mod tests {
         }
 
         let (state, _) = open_fixture("v1-ensamble.pinocchio");
-        let doc = state.cad_document.lock().unwrap().clone().unwrap();
+        let doc = state.cad_doc().unwrap();
         let asm = doc.assembly.clone().unwrap();
         assert_eq!(asm, legacy_assembly(&doc));
         let solved = cad_model::assembly::solve(&asm);
@@ -1586,8 +1593,59 @@ mod tests {
         let (state, ui) = open_fixture("v1-objetos.pinocchio");
         assert_eq!(state.objects.lock().unwrap().active, Some(1));
         assert!(state.mesh.lock().unwrap().is_some(), "la caja tiene su malla");
-        assert_eq!(ui["objects"][0]["source"]["part"]["feature"], state.cad_document.lock().unwrap().as_ref().unwrap().features[0].id.0);
+        assert_eq!(ui["objects"][0]["source"]["part"]["feature"], state.cad_doc().as_ref().unwrap().features[0].id.0);
+        // La pieza sigue siendo la misma (misma huella: no se regenera la malla)
+        if cad_model::occt::available() {
+            let part = cad_model::PartId { feature: state.cad_doc().unwrap().features[0].id, index: 0 };
+            let hash = ui["objects"][0]["source"]["hash"].as_str().unwrap().to_string();
+            let channel = tauri::ipc::Channel::new(|_| Ok(()));
+            assert!(!crate::cad::part_to_model_impl(&state, part, 0, Some(hash), &channel).unwrap().changed);
+        }
         activate_impl(&state, 3).unwrap();
         assert_eq!(state.mesh.lock().unwrap().as_ref().unwrap().num_vertices(), 8, "el cubo importado");
+    }
+
+    /// Guardar en formato 2 y volver a abrir: todas las pestañas iguales, sin el campo viejo
+    #[test]
+    fn tabs_survive_save_in_format_2() {
+        let (state, _) = open_fixture("v1-ensamble.pinocchio");
+        {
+            let mut tabs = state.cad_tabs.lock().unwrap();
+            let mut tapa = legacy_design();
+            tapa.parameters[0].expr = "15".into();
+            tabs.add(cad_model::TabKind::Design { document: Box::new(tapa) }, Some("Tapa".into()));
+            tabs.add_assembly(None);
+            tabs.activate(1).unwrap();
+        }
+        let saved = state.cad_tabs.lock().unwrap().clone();
+        assert_eq!(saved.tabs.len(), 3);
+        let bytes = rmp_serde::to_vec_named(&capture(&state)).unwrap();
+        let raw: serde_json::Value = rmp_serde::from_slice(&bytes).unwrap();
+        assert!(raw.get("cad").is_none(), "el formato 2 no escribe el diseño suelto");
+        let dir = std::env::temp_dir().join(format!("pinocchio-tabs-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("p.pinocchio");
+        let manifest = Manifest { format: FORMAT.into(), version: FORMAT_VERSION, app_version: "t".into(), saved_at: 0, source_name: None };
+        write_project(&path, &manifest, &bytes, "{}").unwrap();
+        let (manifest, bytes, _) = read_project(&path).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(manifest.version, 2);
+        let other = AppState::new();
+        restore(&other, rmp_serde::from_slice(&bytes).unwrap()).unwrap();
+        assert_eq!(*other.cad_tabs.lock().unwrap(), saved);
+        assert_eq!(other.cad_doc().unwrap().parameters[0].expr, "15", "la activa es «Tapa»");
+    }
+
+    /// Una app con formato 1 no abre (a medias) un proyecto de formato 2
+    #[test]
+    fn newer_format_is_refused() {
+        let dir = std::env::temp_dir().join(format!("pinocchio-new-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("p.pinocchio");
+        let manifest = Manifest { format: FORMAT.into(), version: FORMAT_VERSION + 1, app_version: "t".into(), saved_at: 0, source_name: None };
+        write_project(&path, &manifest, &[], "{}").unwrap();
+        let err = read_project(&path).err().unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(err.contains("versión más nueva"), "{err}");
     }
 }

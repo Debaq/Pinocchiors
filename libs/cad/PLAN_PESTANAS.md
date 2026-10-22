@@ -110,7 +110,7 @@ pestaña, piezas derivadas de otra pestaña y planos que apunten a una pestaña 
   Assembly}`), 7 pruebas en `tests/tabs.rs`. Nombres repetidos sin distinguir mayúsculas
   (también «Ñ»/«ñ»).
 
-### F2 — Backend: estado, guardado y comandos ❌
+### F2 — Backend: estado, guardado y comandos ✅ 2026-10-22
 
 - `AppState.cad_document` → `cad_tabs: Mutex<Tabs>`. Para no tocar los ~40 usos de una vez, un
   ayudante `with_active_design(state, |doc| …)` / `active_design(state)`; los comandos de hoy
@@ -128,6 +128,22 @@ pestaña, piezas derivadas de otra pestaña y planos que apunten a una pestaña 
 - Pruebas: fixtures F0 abren y quedan iguales (mismas piezas, volúmenes, ensamble resuelto en la
   pestaña nueva); guardar → abrir con formato 2 conserva todo; proyecto con 3 pestañas ida y
   vuelta.
+- Hecho: `AppState.cad_tabs` con `cad_doc()` (copia de la activa), `with_cad_doc(f)` (cambia la
+  activa; sin pestañas crea «Diseño 1»; error si la activa es un ensamble) y `set_cad_tabs`.
+  `cad_cache` sigue siendo el recálculo de lo que se ve; `cad_tab_caches` guarda el de las demás
+  y `change_tabs` los intercambia (las ~30 lecturas de `cad_cache` no cambiaron). `cad_ops`
+  (`EvalCache` por huella) se comparte entre pestañas. Comandos `cad_tabs`, `cad_tab_add
+  { kind: "design" | "assembly", name? }`, `cad_tab_rename`, `cad_tab_duplicate`,
+  `cad_tab_delete`, `cad_tab_move { id, to }`, `cad_tab_activate`: devuelven `TabsView
+  { tabs: [{ id, name, kind }], active }`; la interfaz relee documento y recálculo después.
+  `cad_status.has_document` = hay pestañas (aunque la activa sea un ensamble). `cad_new` = una
+  sola pestaña vacía; `cad_close` = sin pestañas. `cad_part_to_model { part, studio? }`: otra
+  pestaña se recalcula aparte sin tocar el visor. Pruebas: `legacy_projects_open` (pestaña 0 y
+  misma huella de malla: no se regenera), `tabs_survive_save_in_format_2` (sin campo `cad`),
+  `newer_format_is_refused`, `switching_tabs_keeps_each_evaluation`,
+  `part_of_another_tab_becomes_a_model`. Suite del backend: 160 ok.
+- Ojo: entre F2 y F3 la app ya guarda en formato 2; una compilación anterior a F2 no abre esos
+  proyectos (avisa). La interfaz de hoy sigue funcionando igual (una sola pestaña).
 
 ### F3 — Interfaz: barra de pestañas ❌
 

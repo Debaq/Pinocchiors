@@ -172,13 +172,16 @@ pub struct AppState {
     pub undo_snapshots: Mutex<crate::project::UndoSnapshots>,
 
     // ── CAD ──
-    /// Diseño paramétrico abierto (se guarda en el proyecto)
-    pub cad_document: Mutex<Option<cad_model::Document>>,
+    /// Pestañas del diseño (se guardan en el proyecto); los comandos del CAD
+    /// trabajan sobre la activa (ver `cad_doc`, `with_cad_doc`)
+    pub cad_tabs: Mutex<cad_model::Tabs>,
     /// Borrador de una operación abierta en su diálogo: el visor muestra este
     /// documento hasta que se acepta o se cancela (no se guarda)
     pub cad_preview: Mutex<Option<cad_model::Document>>,
-    /// Último recálculo del diseño
+    /// Último recálculo de la pestaña activa
     pub cad_cache: Mutex<Option<crate::cad::CadCache>>,
+    /// Último recálculo de las otras pestañas (vuelve a `cad_cache` al activarlas)
+    pub cad_tab_caches: Mutex<std::collections::HashMap<cad_model::TabId, crate::cad::CadCache>>,
     /// Estado después de cada operación ya calculada (recálculo incremental)
     pub cad_ops: Mutex<cad_model::EvalCache>,
     /// Modelo preparado para escaneo → CAD
@@ -227,9 +230,10 @@ impl AppState {
             scene_before_print_scale: Mutex::new(None),
             scene_edits: Mutex::new(Vec::new()),
             undo_snapshots: Mutex::new(Default::default()),
-            cad_document: Mutex::new(None),
+            cad_tabs: Mutex::new(cad_model::Tabs::default()),
             cad_preview: Mutex::new(None),
             cad_cache: Mutex::new(None),
+            cad_tab_caches: Mutex::new(Default::default()),
             cad_ops: Mutex::new(cad_model::EvalCache::default()),
             cad_scan: Mutex::new(None),
             cad_scan_object: Mutex::new(None),
@@ -254,12 +258,32 @@ impl AppState {
         self.use_retopology.store(true, Ordering::SeqCst);
         self.reset_derived();
         *self.undo_snapshots.lock().unwrap() = Default::default();
-        *self.cad_document.lock().unwrap() = None;
-        *self.cad_preview.lock().unwrap() = None;
-        *self.cad_cache.lock().unwrap() = None;
+        self.set_cad_tabs(cad_model::Tabs::default());
         self.cad_ops.lock().unwrap().clear();
         *self.cad_scan.lock().unwrap() = None;
         *self.objects.lock().unwrap() = Default::default();
+    }
+
+    /// Reemplaza todas las pestañas del diseño (y suelta borrador y recálculos)
+    pub fn set_cad_tabs(&self, tabs: cad_model::Tabs) {
+        *self.cad_tabs.lock().unwrap() = tabs;
+        *self.cad_preview.lock().unwrap() = None;
+        *self.cad_cache.lock().unwrap() = None;
+        self.cad_tab_caches.lock().unwrap().clear();
+    }
+
+    /// El documento de la pestaña activa (`None`: no hay diseño o la activa es un ensamble)
+    pub fn cad_doc(&self) -> Option<cad_model::Document> {
+        self.cad_tabs.lock().unwrap().active_design().cloned()
+    }
+
+    /// Cambia el documento de la pestaña activa; sin pestañas, crea la primera
+    pub fn with_cad_doc<R>(&self, f: impl FnOnce(&mut cad_model::Document) -> R) -> Result<R, String> {
+        let mut tabs = self.cad_tabs.lock().unwrap();
+        if tabs.is_empty() {
+            tabs.add_design(None);
+        }
+        tabs.active_design_mut().map(f).ok_or_else(|| "La pestaña activa no es un diseño".to_string())
     }
 
     /// Objeto nuevo: sin modelo, esqueleto ni nada derivado (el diseño, los

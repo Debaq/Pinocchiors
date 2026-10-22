@@ -15,7 +15,7 @@ use std::hash::{Hash, Hasher};
 
 use cad_model::{
     AxisDef, BodyOp, Document, EdgeRef, FaceRef, FeatureKind, FeatureState, FeatureStatus, ImportFormat, Plane, PlaneDef,
-    PlaneSpec, PointSpec, Region, Sketch, SolveReport,
+    PlaneSpec, PointSpec, Region, Sketch, SolveReport, TabId, Tabs,
 };
 use cad_model::geom::P3;
 use cad_scan::{CylinderPick, DetectOptions, Detection, OutlineOptions, PickOptions, PlanePick, ScanMesh, Section};
@@ -275,7 +275,7 @@ fn evaluate(state: &AppState) -> Result<CadResult, String> {
     let preview = state.cad_preview.lock().unwrap().clone();
     let doc = match preview {
         Some(d) => d,
-        None => state.cad_document.lock().unwrap().clone().ok_or("No hay un diseño abierto")?,
+        None => state.cad_doc().ok_or("No hay un diseño abierto")?,
     };
     evaluate_doc(state, &doc)
 }
@@ -425,7 +425,7 @@ fn scan_body_mesh(scan: &ScanCache, offset: f64, thickness: f64, faces: usize) -
 
 /// Recalcula el documento guardado, sin el borrador (exportar, pasar a modelo).
 fn evaluate_committed(state: &AppState) -> Result<CadResult, String> {
-    let doc = state.cad_document.lock().unwrap().clone().ok_or("No hay un diseño abierto")?;
+    let doc = state.cad_doc().ok_or("No hay un diseño abierto")?;
     evaluate_doc(state, &doc)
 }
 
@@ -520,7 +520,7 @@ fn status_impl(state: &AppState) -> CadStatus {
     CadStatus {
         available: cad_model::occt::available(),
         occt_version: cad_model::occt::occt_version(),
-        has_document: state.cad_document.lock().unwrap().is_some(),
+        has_document: !state.cad_tabs.lock().unwrap().is_empty(),
     }
 }
 
@@ -537,21 +537,18 @@ pub async fn cad_new(app: AppHandle) -> Result<CadResult, String> {
 }
 
 fn new_impl(state: &AppState) -> Result<CadResult, String> {
-    *state.cad_document.lock().unwrap() = Some(Document::new());
-    *state.cad_preview.lock().unwrap() = None;
+    state.set_cad_tabs(cad_model::Tabs::from_legacy(Some(Document::new())));
     evaluate(state)
 }
 
 #[tauri::command]
 pub fn cad_close(state: tauri::State<'_, AppState>) {
-    *state.cad_document.lock().unwrap() = None;
-    *state.cad_preview.lock().unwrap() = None;
-    *state.cad_cache.lock().unwrap() = None;
+    state.set_cad_tabs(cad_model::Tabs::default());
 }
 
 #[tauri::command]
 pub fn cad_get_document(state: tauri::State<'_, AppState>) -> Option<Document> {
-    state.cad_document.lock().unwrap().clone()
+    state.cad_doc()
 }
 
 /// Reemplaza el documento y recalcula.
@@ -562,7 +559,7 @@ pub async fn cad_set_document(app: AppHandle, document: Document) -> Result<CadR
 }
 
 fn set_document_impl(state: &AppState, document: Document) -> Result<CadResult, String> {
-    *state.cad_document.lock().unwrap() = Some(document);
+    state.with_cad_doc(|d| *d = document)?;
     *state.cad_preview.lock().unwrap() = None;
     evaluate(state)
 }
@@ -578,6 +575,115 @@ pub async fn cad_preview(app: AppHandle, document: Option<Document>) -> Result<C
 fn preview_impl(state: &AppState, document: Option<Document>) -> Result<CadResult, String> {
     *state.cad_preview.lock().unwrap() = document;
     evaluate(state)
+}
+
+// ─── Pestañas ───────────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct TabView {
+    pub id: TabId,
+    pub name: String,
+    /// "design" o "assembly"
+    pub kind: &'static str,
+}
+
+/// Las pestañas en el orden de la barra y la activa (`None`: no hay ninguna)
+#[derive(Serialize)]
+pub struct TabsView {
+    pub tabs: Vec<TabView>,
+    pub active: Option<TabId>,
+}
+
+#[derive(Deserialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum NewTab {
+    Design,
+    Assembly,
+}
+
+fn tabs_view(tabs: &Tabs) -> TabsView {
+    TabsView {
+        tabs: tabs
+            .tabs
+            .iter()
+            .map(|t| TabView { id: t.id, name: t.name.clone(), kind: if t.kind.is_design() { "design" } else { "assembly" } })
+            .collect(),
+        active: tabs.active_tab().map(|t| t.id),
+    }
+}
+
+/// Cambia las pestañas con `f`. Si cambió la activa, el recálculo de la que
+/// se deja se guarda aparte y vuelve el de la nueva (si lo había); el borrador
+/// se descarta. Los recálculos de pestañas borradas se sueltan.
+fn change_tabs(state: &AppState, f: impl FnOnce(&mut Tabs) -> Result<(), String>) -> Result<TabsView, String> {
+    let (before, after, alive, view) = {
+        let mut tabs = state.cad_tabs.lock().unwrap();
+        let before = tabs.active_tab().map(|t| t.id);
+        f(&mut tabs)?;
+        let alive: Vec<TabId> = tabs.tabs.iter().map(|t| t.id).collect();
+        (before, tabs.active_tab().map(|t| t.id), alive, tabs_view(&tabs))
+    };
+    let mut caches = state.cad_tab_caches.lock().unwrap();
+    caches.retain(|id, _| alive.contains(id));
+    if before != after {
+        *state.cad_preview.lock().unwrap() = None;
+        let mut cache = state.cad_cache.lock().unwrap();
+        let left = cache.take();
+        if let (Some(b), Some(c)) = (before, left)
+            && alive.contains(&b)
+        {
+            caches.insert(b, c);
+        }
+        *cache = after.and_then(|a| caches.remove(&a));
+    }
+    Ok(view)
+}
+
+#[tauri::command]
+pub fn cad_tabs(state: tauri::State<'_, AppState>) -> TabsView {
+    tabs_view(&state.cad_tabs.lock().unwrap())
+}
+
+/// Pestaña nueva al final; queda activa.
+#[tauri::command]
+pub fn cad_tab_add(state: tauri::State<'_, AppState>, kind: NewTab, name: Option<String>) -> Result<TabsView, String> {
+    tab_add_impl(&state, kind, name)
+}
+
+fn tab_add_impl(state: &AppState, kind: NewTab, name: Option<String>) -> Result<TabsView, String> {
+    change_tabs(state, |t| {
+        match kind {
+            NewTab::Design => t.add_design(name),
+            NewTab::Assembly => t.add_assembly(name),
+        };
+        Ok(())
+    })
+}
+
+#[tauri::command]
+pub fn cad_tab_rename(state: tauri::State<'_, AppState>, id: TabId, name: String) -> Result<TabsView, String> {
+    change_tabs(&state, |t| t.rename(id, &name))
+}
+
+/// Copia al lado de la original; queda activa.
+#[tauri::command]
+pub fn cad_tab_duplicate(state: tauri::State<'_, AppState>, id: TabId) -> Result<TabsView, String> {
+    change_tabs(&state, |t| t.duplicate(id).map(|_| ()))
+}
+
+#[tauri::command]
+pub fn cad_tab_delete(state: tauri::State<'_, AppState>, id: TabId) -> Result<TabsView, String> {
+    change_tabs(&state, |t| t.remove(id).map(|_| ()))
+}
+
+#[tauri::command]
+pub fn cad_tab_move(state: tauri::State<'_, AppState>, id: TabId, to: usize) -> Result<TabsView, String> {
+    change_tabs(&state, |t| t.move_to(id, to))
+}
+
+#[tauri::command]
+pub fn cad_tab_activate(state: tauri::State<'_, AppState>, id: TabId) -> Result<TabsView, String> {
+    change_tabs(&state, |t| t.activate(id))
 }
 
 /// Estado del recálculo actual (sin cambiar nada).
@@ -724,7 +830,7 @@ fn deviation_impl(state: &AppState, tolerance: f64) -> Result<Vec<u8>, String> {
 
 /// Instancias del ensamble en su lugar, con el ensamble y su solución.
 fn assembly_shapes(state: &AppState) -> Result<(cad_model::Assembly, Vec<(u32, cad_model::Shape)>), String> {
-    let doc = state.cad_document.lock().unwrap().clone().ok_or("No hay un diseño abierto")?;
+    let doc = state.cad_doc().ok_or("No hay un diseño abierto")?;
     let asm = doc.assembly.clone().ok_or("El diseño no tiene ensamble")?;
     evaluate_committed(state)?;
     let cache = state.cad_cache.lock().unwrap();
@@ -806,7 +912,7 @@ pub async fn cad_assembly_connector(app: AppHandle, face: usize) -> Result<cad_m
 fn assembly_connector_impl(state: &AppState, face: usize) -> Result<cad_model::Connector, String> {
     let ranges = assembly_faces_impl(state)?;
     let [id, start, _] = *ranges.iter().find(|r| (r[1] as usize..r[2] as usize).contains(&face)).ok_or("Esa cara no es de ninguna instancia")?;
-    let doc = state.cad_document.lock().unwrap().clone().ok_or("No hay un diseño abierto")?;
+    let doc = state.cad_doc().ok_or("No hay un diseño abierto")?;
     let asm = doc.assembly.ok_or("El diseño no tiene ensamble")?;
     let inst = asm.instances.iter().find(|i| i.id == id).ok_or("La instancia ya no existe")?;
     let cache = state.cad_cache.lock().unwrap();
@@ -855,7 +961,7 @@ fn assembly_clearance_impl(state: &AppState, min_gap: Option<f64>) -> Result<Vec
     let gap = match min_gap {
         Some(g) => g,
         None => {
-            let doc = state.cad_document.lock().unwrap();
+            let doc = state.cad_doc();
             let fab = doc.as_ref().and_then(|d| d.fabrication.as_ref()).ok_or("Elige una impresora en Fabricar o en Diseñar para saber qué holgura pedir")?;
             fab.tolerances().fit_clearance(fab.fit)
         }
@@ -873,7 +979,7 @@ pub async fn cad_assembly_suggest(app: AppHandle) -> Result<Vec<cad_model::Relat
 }
 
 fn assembly_suggest_impl(state: &AppState) -> Result<Vec<cad_model::Relation>, String> {
-    let doc = state.cad_document.lock().unwrap().clone().ok_or("No hay un diseño abierto")?;
+    let doc = state.cad_doc().ok_or("No hay un diseño abierto")?;
     let asm = doc.assembly.ok_or("El diseño no tiene ensamble")?;
     evaluate_committed(state)?;
     let cache = state.cad_cache.lock().unwrap();
@@ -889,7 +995,7 @@ pub async fn cad_assembly_gear_warnings(app: AppHandle) -> Result<Vec<String>, S
 }
 
 fn assembly_gear_warnings_impl(state: &AppState) -> Result<Vec<String>, String> {
-    let doc = state.cad_document.lock().unwrap().clone().ok_or("No hay un diseño abierto")?;
+    let doc = state.cad_doc().ok_or("No hay un diseño abierto")?;
     let asm = doc.assembly.ok_or("El diseño no tiene ensamble")?;
     evaluate_committed(state)?;
     let cache = state.cad_cache.lock().unwrap();
@@ -1228,7 +1334,7 @@ pub async fn cad_flat_pattern(app: AppHandle, part: Option<cad_model::PartId>) -
 
 fn flat_pattern_impl(state: &AppState, part: Option<cad_model::PartId>) -> Result<cad_model::sheet::FlatPattern, String> {
     evaluate_committed(state)?;
-    let doc = state.cad_document.lock().unwrap().clone().unwrap_or_default();
+    let doc = state.cad_doc().unwrap_or_default();
     let cache = state.cad_cache.lock().unwrap();
     let eval = &cache.as_ref().ok_or("No hay sólido")?.eval;
     let sheet = doc.features.iter().rev().find_map(|f| match &f.kind {
@@ -1696,9 +1802,28 @@ fn body_scene(state: &AppState, name: &str) -> Result<Scene, String> {
 /// Escena para exportar: una malla por pieza con su nombre (o solo `only`).
 fn parts_scene(state: &AppState, name: &str, only: Option<cad_model::PartId>) -> Result<Scene, String> {
     evaluate_committed(state)?;
-    let doc = state.cad_document.lock().unwrap().clone().unwrap_or_default();
+    let doc = state.cad_doc().unwrap_or_default();
     let cache = state.cad_cache.lock().unwrap();
-    let eval = &cache.as_ref().ok_or("El diseño todavía no tiene un sólido")?.eval;
+    parts_scene_of(&doc, &cache.as_ref().ok_or("El diseño todavía no tiene un sólido")?.eval, name, only)
+}
+
+/// Como `parts_scene`, de la pestaña `tab` (la activa usa su recálculo; las
+/// demás se recalculan aparte, sin tocar lo que muestra el visor)
+fn tab_parts_scene(state: &AppState, tab: Option<TabId>, name: &str, only: Option<cad_model::PartId>) -> Result<Scene, String> {
+    let other = {
+        let tabs = state.cad_tabs.lock().unwrap();
+        match tab.filter(|t| *t != tabs.active) {
+            Some(t) => Some(tabs.design(t).cloned().ok_or("Esa pestaña ya no está o no es un diseño")?),
+            None => None,
+        }
+    };
+    let Some(doc) = other else { return parts_scene(state, name, only) };
+    let doc = fit_scan_references(state, &doc).unwrap_or(doc);
+    let eval = doc.evaluate_with(&mut state.cad_ops.lock().unwrap());
+    parts_scene_of(&doc, &eval, name, only)
+}
+
+fn parts_scene_of(doc: &Document, eval: &cad_model::Evaluation, name: &str, only: Option<cad_model::PartId>) -> Result<Scene, String> {
     if eval.parts.is_empty() {
         return Err("El diseño todavía no tiene un sólido".into());
     }
@@ -1709,7 +1834,7 @@ fn parts_scene(state: &AppState, name: &str, only: Option<cad_model::PartId>) ->
         .enumerate()
         .filter(|(_, p)| only.is_none_or(|o| o == p.id))
         // Una pieza sola conserva el nombre del diseño
-        .map(|(i, p)| (&p.shape, if several || only.is_some() { part_name(&doc, p.id, i + 1) } else { name.to_string() }))
+        .map(|(i, p)| (&p.shape, if several || only.is_some() { part_name(doc, p.id, i + 1) } else { name.to_string() }))
         .collect();
     if items.is_empty() {
         return Err("Esa pieza ya no existe".into());
@@ -1782,7 +1907,7 @@ pub async fn cad_export(
 /// interiores, tuercas, arandelas, ejes y chaveteros) y la matriz que agranda lo que el material
 /// se encoge. El diseño abierto no cambia.
 fn compensated_eval(state: &AppState) -> Result<(Document, cad_model::Evaluation, Option<[[f64; 4]; 3]>), String> {
-    let mut doc = state.cad_document.lock().unwrap().clone().ok_or("No hay un diseño abierto")?;
+    let mut doc = state.cad_doc().ok_or("No hay un diseño abierto")?;
     let fab = doc.fabrication.as_mut().ok_or("Elige una impresora y un material para compensar")?;
     fab.compensate_all = true;
     let scale = fab.tolerances().shrink_scale();
@@ -1806,7 +1931,7 @@ fn export_impl(state: &AppState, path: &str, format: &str, part: Option<cad_mode
         Some((d, e, _)) => (d, e),
         None => {
             evaluate_committed(state)?;
-            doc_owned = state.cad_document.lock().unwrap().clone().unwrap_or_default();
+            doc_owned = state.cad_doc().unwrap_or_default();
             guard = state.cad_cache.lock().unwrap();
             (&doc_owned, &guard.as_ref().ok_or("El diseño todavía no tiene un sólido")?.eval)
         }
@@ -1906,7 +2031,7 @@ pub async fn cad_export_assembly_animation(
 
 #[allow(clippy::too_many_arguments)]
 fn export_assembly_animation_impl(state: &AppState, path: &str, mate: u32, var: cad_model::assembly::SweepVar, from: f64, to: f64, frames: usize, fps: f64) -> Result<u64, String> {
-    let doc = state.cad_document.lock().unwrap().clone().ok_or("No hay un diseño abierto")?;
+    let doc = state.cad_doc().ok_or("No hay un diseño abierto")?;
     let asm = doc.assembly.clone().ok_or("El diseño no tiene ensamble")?;
     evaluate_committed(state)?;
     let cache = state.cad_cache.lock().unwrap();
@@ -1965,13 +2090,12 @@ pub async fn cad_import_step(app: AppHandle, path: String, op: Option<BodyOp>) -
         // Validar antes de meterlo al documento
         cad_model::Shape::from_step(&data).map_err(|e| e.to_string())?;
         *state.cad_preview.lock().unwrap() = None;
-        let mut lock = state.cad_document.lock().unwrap();
-        let doc = lock.get_or_insert_with(Document::new);
-        let id = doc.add(FeatureKind::Import { format: ImportFormat::Step, data, op: op.unwrap_or_default() });
-        if let Some(name) = std::path::Path::new(&path).file_stem() {
-            doc.get_mut(id).unwrap().name = name.to_string_lossy().into_owned();
-        }
-        drop(lock);
+        state.with_cad_doc(|doc| {
+            let id = doc.add(FeatureKind::Import { format: ImportFormat::Step, data, op: op.unwrap_or_default() });
+            if let Some(name) = std::path::Path::new(&path).file_stem() {
+                doc.get_mut(id).unwrap().name = name.to_string_lossy().into_owned();
+            }
+        })?;
         evaluate(state)
     })
     .await
@@ -2038,27 +2162,30 @@ pub struct PartModel {
 }
 
 /// La malla de una pieza del diseño pasa a ser el modelo del objeto activo.
-/// `known` es la huella de la última vez: si la pieza no cambió no hace nada.
+/// `studio` es la pestaña de la pieza (falta = la 0, la de los proyectos de
+/// antes). `known` es la huella de la última vez: si la pieza no cambió no hace nada.
 /// El esqueleto del objeto se conserva (como al importar un modelo sin rig);
 /// lo demás derivado de la malla se descarta y lo rehace la interfaz.
 #[tauri::command]
 pub async fn cad_part_to_model(
     app: AppHandle,
     part: cad_model::PartId,
+    studio: Option<TabId>,
     known: Option<String>,
     on_progress: Channel<Progress>,
 ) -> Result<PartModel, String> {
     require_occt()?;
-    in_background(app, move |state| part_to_model_impl(state, part, known, &on_progress)).await
+    in_background(app, move |state| part_to_model_impl(state, part, studio.unwrap_or(0), known, &on_progress)).await
 }
 
 pub(crate) fn part_to_model_impl(
     state: &AppState,
     part: cad_model::PartId,
+    studio: TabId,
     known: Option<String>,
     progress: &Channel<Progress>,
 ) -> Result<PartModel, String> {
-    let mut scene = parts_scene(state, "Pieza", Some(part))?;
+    let mut scene = tab_parts_scene(state, Some(studio), "Pieza", Some(part))?;
     weld_scene(&mut scene);
     let hash = format!("{:016x}", scene_hash(&scene));
     if known.as_deref() == Some(hash.as_str()) && state.mesh.is_loaded() {
@@ -2289,11 +2416,7 @@ pub async fn cad_scan_mold(app: AppHandle, options: cad_scan::MoldOptions) -> Re
 fn scan_mold_impl(state: &AppState, o: cad_scan::MoldOptions) -> Result<CadResult, String> {
     let (lo, hi) = with_scan(state, |scan| Ok((scan.mesh.bbox_min, scan.mesh.bbox_max)))?;
     *state.cad_preview.lock().unwrap() = None;
-    {
-        let mut lock = state.cad_document.lock().unwrap();
-        let doc = lock.get_or_insert_with(Document::new);
-        cad_scan::add_mold(doc, lo, hi, &o)?;
-    }
+    state.with_cad_doc(|doc| cad_scan::add_mold(doc, lo, hi, &o))??;
     evaluate(state)
 }
 
@@ -2308,9 +2431,7 @@ pub async fn cad_scan_turned(app: AppHandle, origin: P3, direction: P3, op: Opti
 fn scan_turned_impl(state: &AppState, origin: P3, direction: P3, op: BodyOp) -> Result<CadResult, String> {
     *state.cad_preview.lock().unwrap() = None;
     with_scan(state, |scan| {
-        let mut lock = state.cad_document.lock().unwrap();
-        let doc = lock.get_or_insert_with(Document::new);
-        cad_scan::add_turned(doc, &scan.mesh, origin, direction, &ScanPickOptions::default().outline(&scan.mesh), op).map(|_| ())
+        state.with_cad_doc(|doc| cad_scan::add_turned(doc, &scan.mesh, origin, direction, &ScanPickOptions::default().outline(&scan.mesh), op).map(|_| ()))?
     })?;
     evaluate(state)
 }
@@ -2325,9 +2446,7 @@ pub async fn cad_scan_skin(app: AppHandle, direction: P3, count: usize, ruled: O
 fn scan_skin_impl(state: &AppState, direction: P3, count: usize, ruled: bool, op: BodyOp) -> Result<CadResult, String> {
     *state.cad_preview.lock().unwrap() = None;
     with_scan(state, |scan| {
-        let mut lock = state.cad_document.lock().unwrap();
-        let doc = lock.get_or_insert_with(Document::new);
-        cad_scan::add_skin(doc, &scan.mesh, direction, count, &ScanPickOptions::default().outline(&scan.mesh), ruled, op).map(|_| ())
+        state.with_cad_doc(|doc| cad_scan::add_skin(doc, &scan.mesh, direction, count, &ScanPickOptions::default().outline(&scan.mesh), ruled, op).map(|_| ()))?
     })?;
     evaluate(state)
 }
@@ -2352,9 +2471,7 @@ pub async fn cad_scan_apply(app: AppHandle, steps: Vec<u32>, options: Option<Sca
 fn scan_apply_impl(state: &AppState, steps: Vec<u32>, options: ScanPickOptions) -> Result<CadResult, String> {
     *state.cad_preview.lock().unwrap() = None;
     with_scan(state, |scan| {
-        let mut lock = state.cad_document.lock().unwrap();
-        let doc = lock.get_or_insert_with(Document::new);
-        cad_scan::apply_proposal(doc, &scan.mesh, &options.pick(), &options.outline(&scan.mesh), &steps).map(|_| ())
+        state.with_cad_doc(|doc| cad_scan::apply_proposal(doc, &scan.mesh, &options.pick(), &options.outline(&scan.mesh), &steps).map(|_| ()))?
     })?;
     evaluate(state)
 }
@@ -2469,25 +2586,24 @@ fn scan_add_impl(state: &AppState, feature: ScanFeature, options: ScanPickOption
             })
         })?;
         *state.cad_preview.lock().unwrap() = None;
-        let mut lock = state.cad_document.lock().unwrap();
-        let doc = lock.get_or_insert_with(Document::new);
-        let mut last_sketch = None;
-        for (mut kind, name) in kinds {
-            if let FeatureKind::Extrude(e) = &mut kind
-                && let Some(s) = last_sketch
-            {
-                e.sketch = s;
+        state.with_cad_doc(|doc| {
+            let mut last_sketch = None;
+            for (mut kind, name) in kinds {
+                if let FeatureKind::Extrude(e) = &mut kind
+                    && let Some(s) = last_sketch
+                {
+                    e.sketch = s;
+                }
+                let is_sketch = matches!(kind, FeatureKind::Sketch { .. });
+                let id = doc.add(kind);
+                if let Some(n) = name {
+                    doc.get_mut(id).unwrap().name = n;
+                }
+                if is_sketch {
+                    last_sketch = Some(id);
+                }
             }
-            let is_sketch = matches!(kind, FeatureKind::Sketch { .. });
-            let id = doc.add(kind);
-            if let Some(n) = name {
-                doc.get_mut(id).unwrap().name = n;
-            }
-            if is_sketch {
-                last_sketch = Some(id);
-            }
-        }
-        drop(lock);
+        })?;
         evaluate(state)
     }
 }
@@ -2546,12 +2662,32 @@ pub mod bridge {
             "cad_status" => ok(status_impl(state)),
             "cad_new" => ok(new_impl(state)?),
             "cad_close" => {
-                *state.cad_document.lock().unwrap() = None;
-                *state.cad_preview.lock().unwrap() = None;
-                *state.cad_cache.lock().unwrap() = None;
+                state.set_cad_tabs(cad_model::Tabs::default());
                 ok(())
             }
-            "cad_get_document" => ok(state.cad_document.lock().unwrap().clone()),
+            "cad_get_document" => ok(state.cad_doc()),
+            "cad_tabs" => ok(tabs_view(&state.cad_tabs.lock().unwrap())),
+            "cad_tab_add" => ok(tab_add_impl(state, arg(args, "kind")?, arg(args, "name")?)?),
+            "cad_tab_rename" => {
+                let (id, name): (TabId, String) = (arg(args, "id")?, arg(args, "name")?);
+                ok(change_tabs(state, |t| t.rename(id, &name))?)
+            }
+            "cad_tab_duplicate" => {
+                let id: TabId = arg(args, "id")?;
+                ok(change_tabs(state, |t| t.duplicate(id).map(|_| ()))?)
+            }
+            "cad_tab_delete" => {
+                let id: TabId = arg(args, "id")?;
+                ok(change_tabs(state, |t| t.remove(id).map(|_| ()))?)
+            }
+            "cad_tab_move" => {
+                let (id, to): (TabId, usize) = (arg(args, "id")?, arg(args, "to")?);
+                ok(change_tabs(state, |t| t.move_to(id, to))?)
+            }
+            "cad_tab_activate" => {
+                let id: TabId = arg(args, "id")?;
+                ok(change_tabs(state, |t| t.activate(id))?)
+            }
             "cad_set_document" => ok(set_document_impl(state, arg(args, "document")?)?),
             "cad_preview" => ok(preview_impl(state, arg(args, "document")?)?),
             "cad_evaluate" => ok(evaluate(state)?),
@@ -2679,7 +2815,8 @@ pub mod bridge {
             }
             "cad_part_to_model" => {
                 let channel = Channel::new(|_| Ok(()));
-                ok(part_to_model_impl(state, arg(args, "part")?, arg(args, "known")?, &channel)?)
+                let studio: Option<TabId> = arg(args, "studio")?;
+                ok(part_to_model_impl(state, arg(args, "part")?, studio.unwrap_or(0), arg(args, "known")?, &channel)?)
             }
             "object_activate" => ok(crate::project::activate_impl(state, arg(args, "id")?)?),
             "object_remove" => ok(crate::project::remove_impl(state, arg(args, "id")?)),
@@ -2748,7 +2885,7 @@ mod tests {
             return;
         }
         let state = AppState::new();
-        *state.cad_document.lock().unwrap() = Some(box_doc());
+        state.set_cad_tabs(cad_model::Tabs::from_legacy(Some(box_doc())));
         let r = evaluate(&state).unwrap();
         let body = r.body.unwrap();
         assert!((body.volume - 6000.0).abs() < 1e-6);
@@ -2785,13 +2922,13 @@ mod tests {
         now.versions.push(cad_model::NamedVersion { name: "v1".into(), created: "2026-10-08T10:00:00Z".into(), note: None, document: old.clone() });
         let h = doc_hash(&now);
         let state = AppState::new();
-        *state.cad_document.lock().unwrap() = Some(now);
+        state.set_cad_tabs(cad_model::Tabs::from_legacy(Some(now)));
         let out = compare_impl(&state, &old).unwrap();
         let f = |i: usize| f64::from_le_bytes(out[i..i + 8].try_into().unwrap());
         assert!((f(0) - 2000.0).abs() < 1e-6, "agregado {}", f(0));
         assert!(f(8).abs() < 1e-6, "quitado {}", f(8));
         // Las versiones no cambian el diseño
-        let mut doc = state.cad_document.lock().unwrap().clone().unwrap();
+        let mut doc = state.cad_doc().unwrap();
         doc.versions.clear();
         assert_eq!(doc_hash(&doc), h);
     }
@@ -2811,7 +2948,7 @@ mod tests {
             doc.add(FeatureKind::Primitive(cad_model::Primitive { shape, origin, z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op, link: None }));
         }
         let state = AppState::new();
-        *state.cad_document.lock().unwrap() = Some(doc);
+        state.set_cad_tabs(cad_model::Tabs::from_legacy(Some(doc)));
         evaluate(&state).unwrap();
         let edges = {
             let cache = state.cad_cache.lock().unwrap();
@@ -2851,7 +2988,7 @@ mod tests {
             compensate_all: false,
         });
         let state = AppState::new();
-        *state.cad_document.lock().unwrap() = Some(doc);
+        state.set_cad_tabs(cad_model::Tabs::from_legacy(Some(doc)));
         evaluate(&state).unwrap();
         let dir = std::env::temp_dir().join("pinocchio_cad_comp");
         std::fs::create_dir_all(&dir).unwrap();
@@ -2871,7 +3008,7 @@ mod tests {
         let comp = volume(true, "step");
         assert!((comp - ring(m.washer_d1 + 0.2) * s * s * s).abs() < 1e-5 * comp, "{comp} vs {}", ring(m.washer_d1 + 0.2) * s * s * s);
         // Sin impresora no hay con qué compensar
-        state.cad_document.lock().unwrap().as_mut().unwrap().fabrication = None;
+        state.cad_tabs.lock().unwrap().active_design_mut().unwrap().fabrication = None;
         assert!(export_impl(&state, dir.join("x.step").to_str().unwrap(), "step", None, false, true).is_err());
     }
 
@@ -2892,7 +3029,7 @@ mod tests {
             return;
         }
         let state = AppState::new();
-        *state.cad_document.lock().unwrap() = Some(box_doc());
+        state.set_cad_tabs(cad_model::Tabs::from_legacy(Some(box_doc())));
         let base = evaluate(&state).unwrap();
         // Borrador con la caja más alta
         let mut draft = box_doc();
@@ -2901,7 +3038,7 @@ mod tests {
         }
         let r = preview_impl(&state, Some(draft)).unwrap();
         assert!((r.body.unwrap().volume - 12000.0).abs() < 1e-6);
-        assert_eq!(state.cad_document.lock().unwrap().as_ref(), Some(&box_doc()));
+        assert_eq!(state.cad_doc().as_ref(), Some(&box_doc()));
         // Exportar usa el documento, no el borrador
         let scene = body_scene(&state, "Diseño").unwrap();
         let max_y = scene.world_primitives()[0].positions.iter().map(|p| p[1]).fold(f32::MIN, f32::max);
@@ -2922,7 +3059,7 @@ mod tests {
             return;
         }
         let state = AppState::new();
-        *state.cad_document.lock().unwrap() = Some(box_doc());
+        state.set_cad_tabs(cad_model::Tabs::from_legacy(Some(box_doc())));
         evaluate(&state).unwrap();
         let (face, edge) = (face_ref_impl(&state, 2).unwrap(), edge_ref_impl(&state, 5).unwrap());
         let far = FaceRef { point: [500.0, 500.0, 500.0], normal: [0.3, 0.3, 0.9], ..Default::default() };
@@ -2939,7 +3076,7 @@ mod tests {
         let state = AppState::new();
         let doc = box_doc();
         let id = doc.features[0].id;
-        *state.cad_document.lock().unwrap() = Some(doc);
+        state.set_cad_tabs(cad_model::Tabs::from_legacy(Some(doc)));
         let tool = tool_mesh_impl(&state, id).unwrap();
         let triangles = u32::from_le_bytes(tool[4..8].try_into().unwrap());
         assert_eq!(triangles, 12, "la caja como herramienta");
@@ -2953,7 +3090,7 @@ mod tests {
             return;
         }
         let state = AppState::new();
-        *state.cad_document.lock().unwrap() = Some(box_doc());
+        state.set_cad_tabs(cad_model::Tabs::from_legacy(Some(box_doc())));
         let mut scene = body_scene(&state, "Diseño").unwrap();
         weld_scene(&mut scene);
         let prims = scene.world_primitives();
@@ -2970,14 +3107,14 @@ mod tests {
             return;
         }
         let state = AppState::new();
-        *state.cad_document.lock().unwrap() = Some(box_doc());
+        state.set_cad_tabs(cad_model::Tabs::from_legacy(Some(box_doc())));
         let channel = Channel::new(|_| Ok(()));
-        let part = cad_model::PartId { feature: state.cad_document.lock().unwrap().as_ref().unwrap().features[0].id, index: 0 };
-        let first = part_to_model_impl(&state, part, None, &channel).unwrap();
+        let part = cad_model::PartId { feature: state.cad_doc().as_ref().unwrap().features[0].id, index: 0 };
+        let first = part_to_model_impl(&state, part, 0, None, &channel).unwrap();
         assert!(first.changed);
-        let again = part_to_model_impl(&state, part, Some(first.hash.clone()), &channel).unwrap();
+        let again = part_to_model_impl(&state, part, 0, Some(first.hash.clone()), &channel).unwrap();
         assert!(!again.changed, "misma pieza: no recarga");
-        state.cad_document.lock().unwrap().as_mut().unwrap().features[0].kind = FeatureKind::Primitive(cad_model::Primitive {
+        state.cad_tabs.lock().unwrap().active_design_mut().unwrap().features[0].kind = FeatureKind::Primitive(cad_model::Primitive {
             shape: cad_model::PrimitiveShape::Box { dx: 40.0, dy: 20.0, dz: 30.0, centered: false, centered_z: false },
             origin: [0.0; 3],
             z: [0.0, 0.0, 1.0],
@@ -2985,8 +3122,82 @@ mod tests {
             op: BodyOp::Join,
             link: None,
         });
-        let changed = part_to_model_impl(&state, part, Some(first.hash), &channel).unwrap();
+        let changed = part_to_model_impl(&state, part, 0, Some(first.hash), &channel).unwrap();
         assert!(changed.changed, "la pieza cambió: malla nueva");
+    }
+
+    fn box_tab(dx: f64) -> cad_model::TabKind {
+        let mut doc = box_doc();
+        if let FeatureKind::Primitive(p) = &mut doc.features[0].kind {
+            p.shape = cad_model::PrimitiveShape::Box { dx, dy: 20.0, dz: 30.0, centered: false, centered_z: false };
+        }
+        cad_model::TabKind::Design { document: Box::new(doc) }
+    }
+
+    /// Cambiar de pestaña muestra su diseño y guarda el recálculo de la otra
+    #[test]
+    fn switching_tabs_keeps_each_evaluation() {
+        if !cad_model::occt::available() {
+            return;
+        }
+        let state = AppState::new();
+        state.set_cad_tabs(Tabs::from_legacy(Some(box_doc())));
+        let first = evaluate(&state).unwrap();
+        assert!((first.body.as_ref().unwrap().volume - 6000.0).abs() < 1e-6);
+        let view = change_tabs(&state, |t| {
+            t.add(box_tab(40.0), Some("Larga".into()));
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!((view.tabs.len(), view.active, view.tabs[1].name.as_str(), view.tabs[1].kind), (2, Some(1), "Larga", "design"));
+        let second = evaluate(&state).unwrap();
+        assert!((second.body.unwrap().volume - 24000.0).abs() < 1e-6);
+        // Vuelta a la primera: su recálculo de antes (misma versión, sin recalcular)
+        change_tabs(&state, |t| t.activate(0)).unwrap();
+        assert_eq!(state.cad_cache.lock().unwrap().as_ref().unwrap().doc_hash, doc_hash(&box_doc()));
+        assert_eq!(evaluate(&state).unwrap().version, first.version);
+        // set_document cambia solo la activa
+        let mut doc = box_doc();
+        doc.parameters.push(cad_model::Parameter { name: "x".into(), expr: "1".into() });
+        set_document_impl(&state, doc.clone()).unwrap();
+        assert_eq!(state.cad_tabs.lock().unwrap().design(0), Some(&doc));
+        assert_ne!(state.cad_tabs.lock().unwrap().design(1), Some(&doc));
+        // Borrar la otra suelta su recálculo
+        change_tabs(&state, |t| t.remove(1).map(|_| ())).unwrap();
+        assert!(state.cad_tab_caches.lock().unwrap().is_empty());
+        // Un ensamble activo no es un diseño
+        change_tabs(&state, |t| {
+            t.add_assembly(None);
+            Ok(())
+        })
+        .unwrap();
+        assert!(state.cad_doc().is_none());
+        assert!(set_document_impl(&state, box_doc()).is_err());
+        assert!(status_impl(&state).has_document);
+    }
+
+    /// La malla de una pieza de otra pestaña sale sin cambiar lo que muestra el visor
+    #[test]
+    fn part_of_another_tab_becomes_a_model() {
+        if !cad_model::occt::available() {
+            return;
+        }
+        let state = AppState::new();
+        let mut tabs = Tabs::from_legacy(Some(box_doc()));
+        let other = tabs.add(box_tab(40.0), None);
+        tabs.activate(0).unwrap();
+        state.set_cad_tabs(tabs);
+        let shown = evaluate(&state).unwrap().version;
+        let part = cad_model::PartId { feature: state.cad_doc().unwrap().features[0].id, index: 0 };
+        let channel = Channel::new(|_| Ok(()));
+        let made = part_to_model_impl(&state, part, other, None, &channel).unwrap();
+        let info = made.info.unwrap();
+        // Caja de 40×20×30 (la de la pestaña activa es de 10×20×30): el lado más largo es el doble del más corto
+        let size: Vec<f32> = (0..3).map(|i| info.bounding_box.max[i] - info.bounding_box.min[i]).collect();
+        let (lo, hi) = size.iter().fold((f32::INFINITY, 0.0f32), |(lo, hi), &x| (lo.min(x), hi.max(x)));
+        assert!((hi / lo - 2.0).abs() < 1e-3, "{size:?}");
+        assert_eq!(evaluate(&state).unwrap().version, shown, "el visor no se tocó");
+        assert!(part_to_model_impl(&state, part, 7, None, &channel).is_err());
     }
 
     #[test]
@@ -2995,7 +3206,7 @@ mod tests {
             return;
         }
         let state = AppState::new();
-        *state.cad_document.lock().unwrap() = Some(box_doc());
+        state.set_cad_tabs(cad_model::Tabs::from_legacy(Some(box_doc())));
         let scene = body_scene(&state, "Diseño").unwrap();
         assert!((scene.meters_per_unit - 0.001).abs() < 1e-12);
         let prims = scene.world_primitives();
@@ -3013,7 +3224,7 @@ mod tests {
         }
         // El sólido como "escaneo": su cara superior se elige y mide 30 de profundidad
         let state = AppState::new();
-        *state.cad_document.lock().unwrap() = Some(box_doc());
+        state.set_cad_tabs(cad_model::Tabs::from_legacy(Some(box_doc())));
         let scene = body_scene(&state, "Escaneo").unwrap();
         *state.scene.lock().unwrap() = Some(scene);
         let top = with_scan(&state, |scan| {

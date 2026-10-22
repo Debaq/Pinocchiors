@@ -769,3 +769,6 @@ cargo test -p cad-model
 - **2026-10-22 Pestañas F0 y F1** ([PLAN_PESTANAS.md](PLAN_PESTANAS.md)): proyectos de formato 1
   congelados en `apps/desktop/tests/fixtures/` (`legacy_projects_open`) y modelo `cad_model::tabs`
   (`Tabs::from_legacy`: el diseño de antes es la pestaña 0, tal cual). La app todavía no lo usa (F2).
+- **2026-10-22 Pestañas F2** ([PLAN_PESTANAS.md](PLAN_PESTANAS.md)): el backend guarda las pestañas
+  (`AppState.cad_tabs`, proyecto formato 2, lee el 1), comandos `cad_tab_*`, recálculo guardado por
+  pestaña y `cad_part_to_model` con `studio`. La interfaz todavía muestra una sola (F3).
