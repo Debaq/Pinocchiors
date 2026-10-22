@@ -276,6 +276,8 @@ export const en_layout2: Catalog = {
   "Terminar bloque": "Finish block",
   "Descartar bloque": "Discard block",
   "Esta cota sobre-define el sketch": "This dimension over-defines the sketch",
+  "Construcción activada: lo que dibujes saldrá como línea de construcción": "Construction on: what you draw will be a construction line",
+  "Desactivar": "Turn off",
   "Dejarla de referencia": "Make it a reference",
   "Quitarla": "Remove it",
   "{label}: elegir lo que restringe": "{label}: pick what it constrains",

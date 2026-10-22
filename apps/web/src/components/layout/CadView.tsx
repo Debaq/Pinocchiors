@@ -4773,6 +4773,17 @@ export const CadView: Component<CadViewProps> = (props) => {
         )}
       </Show>
 
+      {/* Modo construcción encendido: lo que se dibuja sale de construcción, y es fácil olvidarlo */}
+      <Show when={ui.session() && ui.constructionMode()}>
+        <div data-construction-mode class="absolute bottom-3 left-1/2 -translate-x-1/2 flex items-center gap-2 rounded-md border border-warning/70 bg-bg-lighter/95 px-3 py-1.5 text-xs text-text shadow">
+          <SketchIcons.Construction size={14} class="text-warning" />
+          {tr("Construcción activada: lo que dibujes saldrá como línea de construcción")}
+          <Button size="sm" variant="ghost" onClick={() => ui.toggleConstruction()}>
+            {tr("Desactivar")}
+          </Button>
+        </div>
+      </Show>
+
       {/* Herramienta activa (y la restricción que espera), abajo a la izquierda */}
       <Show when={ui.session()}>
         <div data-active-tool class="pointer-events-none absolute bottom-3 left-3 rounded bg-bg-lighter/90 border border-border px-2 py-0.5 text-[11px] text-text-muted shadow">

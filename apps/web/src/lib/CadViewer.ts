@@ -1299,6 +1299,7 @@ export class CadViewer {
       }
     }
 
+    const halos = hex("viewport");
     const lines = (pts: (P2 | undefined)[], color: number, dashed = false, width = 1) => {
       if (pts.some((p) => !p)) return;
       if (width > 1) {
@@ -1319,6 +1320,13 @@ export class CadViewer {
         this.sketchGroup.add(l);
         return;
       }
+      // Contorno del color del visor: separa la línea del cuerpo gris que pueda haber detrás
+      const halo = new Line2(
+        new LineGeometry().setPositions((pts as P2[]).flatMap((p) => w(p).toArray())),
+        new LineMaterial({ color: halos, linewidth: 3, resolution: this.renderer.getSize(new THREE.Vector2()), depthTest: false, transparent: true, opacity: 0.85 }),
+      );
+      halo.renderOrder = 6;
+      this.sketchGroup.add(halo);
       const g = new THREE.BufferGeometry().setFromPoints((pts as P2[]).map(w));
       const m = dashed
         ? new THREE.LineDashedMaterial({ color, dashSize: 2 / this.mmPerUnit, gapSize: 1.5 / this.mmPerUnit, depthTest: false })
@@ -1329,7 +1337,7 @@ export class CadViewer {
       this.sketchGroup.add(l);
     };
     const normal = hex("fg");
-    const construction = hex("comment");
+    const construction = hex("sketch-construction");
     const sel = hex("orange");
     const freeE = new Set(overlay.freeEntities ?? []);
     const conflictE = new Set([...(overlay.conflictEntities ?? []), ...(overlay.warnEntities ?? [])]);
@@ -1540,7 +1548,7 @@ export class CadViewer {
         const pts = entityPolyline(e.geometry, point);
         if (!pts) continue;
         const g = new THREE.BufferGeometry().setFromPoints(pts.map(w));
-        const color = themeHex(vs.whole ? "cyan" : e.construction ? "comment" : "fg");
+        const color = themeHex(vs.whole ? "cyan" : e.construction ? "sketch-construction" : "fg");
         const l = e.construction
           ? new THREE.Line(g, new THREE.LineDashedMaterial({ color, dashSize: 2 / this.mmPerUnit, gapSize: 1.5 / this.mmPerUnit }))
           : new THREE.Line(g, new THREE.LineBasicMaterial({ color }));
@@ -2193,7 +2201,7 @@ export class CadViewer {
     };
     for (const e of sk.entities) {
       const g = e.geometry;
-      const color = selected.has(e.id) ? themeHex("orange") : conflict.has(e.id) ? themeHex("error") : e.construction ? themeHex("comment") : themeHex("fg");
+      const color = selected.has(e.id) ? themeHex("orange") : conflict.has(e.id) ? themeHex("error") : e.construction ? themeHex("sketch-construction") : themeHex("fg");
       const p = (id: number) => at.get(id);
       if (g.type === "line" && p(g.start) && p(g.end)) line([p(g.start)!, p(g.end)!], color, !!e.construction);
       else if (g.type === "arc" && p(g.start) && p(g.mid) && p(g.end)) line(arc3Polyline(p(g.start)!, p(g.mid)!, p(g.end)!), color, !!e.construction);

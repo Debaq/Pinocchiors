@@ -36,6 +36,8 @@
   --color-info: #8be9fd;
   /* Sketch: entidad a la que le falta definir (azul, como en Onshape) */
   --color-sketch-free: #82aaff;
+  /* Sketch: línea de construcción (discontinua), más clara que el comentario para leerse */
+  --color-sketch-construction: #9aa8d6;
   /* CAD: lo que elegiría un clic, bajo el mouse (preselección) */
   --color-preselect: #ffc53d;
 
@@ -116,6 +118,7 @@
   --color-error: #c92a2a;
   --color-info: #0a6f8c;
   --color-sketch-free: #2457c5;
+  --color-sketch-construction: #4a5160;
   --color-preselect: #e09600;
 
   --color-text: #1f2030;
@@ -174,6 +177,8 @@
   --color-error: #bb3333;
   --color-info: #0e6a84;
   --color-sketch-free: #2858b8;
+  /* Sketch: línea de construcción (discontinua), más clara que el comentario para leerse */
+  --color-sketch-construction: #4a5160;
   --color-preselect: #c98700;
 
   --color-text: #2a2e37;
@@ -223,6 +228,8 @@
   --color-error: #ae3a2e;
   --color-info: #2a7272;
   --color-sketch-free: #2f5db0;
+  /* Sketch: línea de construcción (discontinua), más clara que el comentario para leerse */
+  --color-sketch-construction: #5c5140;
   --color-preselect: #b97f00;
 
   --color-text: #3b342a;
@@ -270,6 +277,8 @@
   --color-error: #e0707a;
   --color-info: #67bfca;
   --color-sketch-free: #7ea6f5;
+  /* Sketch: línea de construcción (discontinua), más clara que el comentario para leerse */
+  --color-sketch-construction: #9aa1ac;
   --color-preselect: #e8c46a;
 
   --color-text: #d5d8dc;
@@ -317,6 +326,8 @@
   --color-error: #bf616a;
   --color-info: #88c0d0;
   --color-sketch-free: #8aa8e6;
+  /* Sketch: línea de construcción (discontinua), más clara que el comentario para leerse */
+  --color-sketch-construction: #9aabc9;
   --color-preselect: #ebcb8b;
 
   --color-text: #d8dee9;
@@ -364,6 +375,8 @@
   --color-error: #ea6962;
   --color-info: #7daea3;
   --color-sketch-free: #85a5dc;
+  /* Sketch: línea de construcción (discontinua), más clara que el comentario para leerse */
+  --color-sketch-construction: #b0a592;
   --color-preselect: #e2b45c;
 
   --color-text: #e2d6c0;
