@@ -270,6 +270,7 @@ pub fn run() {
             cad::cad_measure,
             cad::cad_parts_at,
             cad::cad_drawing,
+            cad::cad_drawing_info,
             cad::cad_assembly_mesh,
             cad::cad_assembly_faces,
             cad::cad_assembly_connector,

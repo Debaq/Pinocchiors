@@ -245,8 +245,8 @@ pestaña, piezas derivadas de otra pestaña y planos que apunten a una pestaña 
   «ensamble: animar una unión…» arma el ensamble dentro del diseño: sigue andando así.
 - Falta de F5: `Instance.configuration` (cada instancia con su configuración), la instancia de
   una pieza o pestaña borrada marcada en rojo (hoy simplemente no se dibuja), el planetario
-  «Armar» desde el diseño crea el ensamble dentro del diseño (no en una pestaña), y los planos
-  2D en una pestaña de ensamble no se guardan (F7).
+  «Armar» desde el diseño crea el ensamble dentro del diseño (no en una pestaña). (Los planos 2D
+  de una pestaña de ensamble ya se guardan: F7.)
 
 ### F6 — Pieza derivada (traer una pieza de otra pestaña) 🟡 2026-10-23 (falta probarla en la app)
 
@@ -277,7 +277,7 @@ pestaña, piezas derivadas de otra pestaña y planos que apunten a una pestaña 
   `derived_part_follows_its_tab` en el backend.
 - Sin `placement`: para ubicarla, Mover/Girar cuerpo después (como cualquier pieza).
 
-### F7 — Planos 2D de cualquier pestaña ❌
+### F7 — Planos 2D de cualquier pestaña 🟡 2026-10-23 (falta probarla en la app)
 
 - Cada hoja (`DrawingSheet`) recuerda de qué pestaña son sus vistas (`source: TabId`, falta = la
   pestaña que la contiene); un plano puede ser de un ensamble (vistas con todas las instancias y
@@ -285,6 +285,24 @@ pestaña, piezas derivadas de otra pestaña y planos que apunten a una pestaña 
 - Las hojas viejas siguen en su pestaña de diseño, sin cambios.
 - Pruebas: fixture `v1-diseno-piezas` con su plano idéntico (mismo SVG); plano del ensamble con
   globos y tabla de materiales.
+- Hecho (con un cambio): cada pestaña tiene **sus** planos, sobre lo que ella muestra; no hay
+  `source` (una hoja de un diseño mostrando otra pestaña rompía cotas ligadas, engranes y
+  materiales, que salen del recálculo de la pestaña). Para el plano de otra pieza: abrir su
+  pestaña. `TabKind::Assembly { assembly, drawing }` (`drawing` con `serde(default)`: los
+  proyectos de F5 abren igual); `assembly_document` lo pone en el documento virtual y
+  `cad_set_document` en un ensamble guarda ensamble **y** planos (`Tabs::set_assembly_drawing`).
+  Backend: `drawing_shapes` = en un ensamble, las instancias en su lugar (compuesto) y cada una
+  rayada con el material de su pieza (`hatch_part` = índice de la pieza en `parts`); en un
+  diseño, lo de siempre. Comando nuevo `cad_drawing_info` (caja de lo dibujado y centro de cada
+  instancia). Interfaz (`lib/drawingBom.ts`): lista de materiales como tabla sobre el cajetín
+  (`bomRows`/`bomTable`, como la del panel) y globos numerados (`placeBalloons`: cada uno hacia
+  su pieza, en una elipse alrededor de la vista, sin pisarse) en la isométrica o la vista que se
+  elija (`DrawingSheet.bom`, `.balloons`; en SVG, PDF y DXF). Botón «Plano 2D del ensamble» en
+  el panel del ensamble; cambiar de pestaña cierra el plano. En un ensamble no se ofrecen
+  tablas de engranes (sus círculos saldrían donde está la pieza en su diseño). Las hojas de los
+  diseños no cambian (mismo camino de código). Pruebas: `assembly_tab_keeps_its_drawing`
+  (caja y centros en su lugar, vista de punta a punta, rayado por pieza, el plano vuelve con la
+  pestaña), ida y vuelta con plano en `tests/tabs.rs`, `e2e/drawingBom.test.mjs` (3).
 
 ### F8 — Después (sin definir con el usuario)
 

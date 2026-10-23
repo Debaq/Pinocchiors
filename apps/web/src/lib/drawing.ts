@@ -235,6 +235,17 @@ export interface CutMarks {
   /** Círculos primitivos de engranes (trazo y punto) y sus tablas de datos */
   gears?: { view: string; center: P2; radius: number; circles?: { label: string; radius: number }[] }[];
   tables?: { title: string; rows: [string, string][] }[];
+  /** Globos de un ensamble: el número de la lista de materiales en `at`, con su línea hasta `to` (coordenadas de la vista) */
+  balloons?: { view: string; label: string; to: P2; at: P2 }[];
+}
+
+/** Radio de los globos (mm de hoja) */
+export const BALLOON_R = 3.5;
+
+/** Donde la línea de un globo toca su círculo (mm de hoja): del centro hacia el punto */
+function balloonEdge(at: P2, to: P2): P2 {
+  const d = Math.hypot(to[0] - at[0], to[1] - at[1]) || 1;
+  return [at[0] + ((to[0] - at[0]) / d) * BALLOON_R, at[1] + ((to[1] - at[1]) / d) * BALLOON_R];
 }
 
 /**
@@ -1205,6 +1216,18 @@ export function sheetSvg(
       );
     }
   }
+  for (const b of opts.marks?.balloons ?? []) {
+    const v = at(b.view);
+    if (!v) continue;
+    const S = (p: P2): P2 => [v.x + p[0] * v.scale, v.y - p[1] * v.scale];
+    const [c, to] = [S(b.at), S(b.to)];
+    const e = balloonEdge(c, to);
+    out.push(
+      `<g data-balloon="${esc(b.label)}" stroke="#000" stroke-width="0.25"><line x1="${n(e[0])}" y1="${n(e[1])}" x2="${n(to[0])}" y2="${n(to[1])}"/>` +
+        `<circle cx="${n(to[0])}" cy="${n(to[1])}" r="0.5" fill="#000"/><circle cx="${n(c[0])}" cy="${n(c[1])}" r="${n(BALLOON_R)}" fill="#fff"/>` +
+        `<text x="${n(c[0])}" y="${n(c[1] + 1.25)}" font-size="3.5" fill="#000" stroke="none" text-anchor="middle">${esc(b.label)}</text></g>`,
+    );
+  }
   for (const b of gearTableBoxes(opts.marks?.tables ?? [], sheet.width, sheet.height, MARGIN, TITLE_H)) {
     const g = GEAR_TABLE;
     out.push(`<g data-gear-table="${esc(b.table.title)}" fill="none" stroke="#000" stroke-width="0.35">`);
@@ -1558,6 +1581,26 @@ export function sheetDxf(
         if (!v) continue;
         const pts = c.points.map((p) => S(v, p));
         for (let i = 0; i < pts.length; i++) line("CORTES", pts[i], pts[(i + 1) % pts.length]);
+      }
+      // Globos del ensamble: círculo con su número y la línea hasta la pieza
+      for (const b of opts.marks?.balloons ?? []) {
+        const v = view(b.view);
+        if (!v) continue;
+        const [c, to] = [S(v, b.at), S(v, b.to)];
+        line("COTAS", balloonEdge(c, to), to);
+        pair(0, "CIRCLE");
+        pair(8, "COTAS");
+        pair(10, c[0]);
+        pair(20, c[1]);
+        pair(30, 0);
+        pair(40, BALLOON_R);
+        pair(0, "TEXT");
+        pair(8, "COTAS");
+        pair(10, c[0] - b.label.length * 1.2);
+        pair(20, c[1] - 1.25);
+        pair(30, 0);
+        pair(40, 3.5);
+        pair(1, b.label);
       }
       // Círculo primitivo de los engranes (con su cruz)
       for (const c of opts.marks?.gears ?? []) {

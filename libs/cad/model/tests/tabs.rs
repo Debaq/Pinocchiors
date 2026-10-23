@@ -42,6 +42,12 @@ fn roundtrip_json_and_messagepack() {
     let mut tabs = Tabs::from_legacy(Some(legacy_doc()));
     tabs.add(TabKind::Design { document: Box::new(box_doc(40.0)) }, Some("Tapa".into()));
     tabs.add_assembly(None);
+    // Un ensamble con su plano
+    let with_sheet = tabs.add_assembly(None);
+    let sheets = serde_json::json!({ "sheets": [{ "id": 1, "name": "Plano 1", "bom": true, "scale": 0.5 }], "next_id": 2 });
+    tabs.set_assembly_drawing(with_sheet, Some(sheets.clone())).unwrap();
+    assert!(tabs.set_assembly_drawing(0, None).is_err(), "un diseño guarda su plano en su documento");
+    assert_eq!(tabs.assembly_document(with_sheet, &[]).unwrap().drawing, Some(sheets));
     let json: Tabs = serde_json::from_str(&serde_json::to_string(&tabs).unwrap()).unwrap();
     assert_eq!(json, tabs);
     let msgpack: Tabs = rmp_serde::from_slice(&rmp_serde::to_vec_named(&tabs).unwrap()).unwrap();
@@ -144,7 +150,7 @@ fn legacy_assembly_moves_to_its_own_tab() {
     let ids: Vec<_> = tabs.tabs.iter().map(|t| (t.id, t.name.as_str(), t.kind.is_design())).collect();
     assert_eq!(ids, [(0, "Diseño 1", true), (2, "Ensamble 1", false), (other, "Diseño 2", true)], "justo después de su diseño");
     assert!(tabs.design(0).unwrap().assembly.is_none(), "el diseño queda sin ensamble");
-    let TabKind::Assembly { assembly } = &tabs.get(2).unwrap().kind else { panic!() };
+    let TabKind::Assembly { assembly, .. } = &tabs.get(2).unwrap().kind else { panic!() };
     assert_eq!(assembly.instances[0].studio, 0);
     assert_eq!(assembly.instances[0].position, [1.0, 2.0, 3.0]);
     assert_eq!(tabs.users(0), [2]);
@@ -164,14 +170,14 @@ fn flat_assembly_roundtrip() {
     let part = |studio, f| (studio, PartId { feature: FeatureId(f), index: 1 });
     let inst = |id, (studio, part)| Instance { id, studio, part, name: format!("I{id}"), position: [0.0; 3], rotation: [0.0; 3], fixed: id == 1 };
     let assembly = Assembly { instances: vec![inst(1, part(0, 3)), inst(2, part(b, 3))], next_id: 3, ..Default::default() };
-    let TabKind::Assembly { assembly: stored } = &mut tabs.get_mut(asm).unwrap().kind else { panic!() };
+    let TabKind::Assembly { assembly: stored, .. } = &mut tabs.get_mut(asm).unwrap().kind else { panic!() };
     *stored = assembly.clone();
     let flat = tabs.flat_assembly(asm).unwrap();
     assert_eq!(flat.instances[0].part.feature, FeatureId(3));
     assert_eq!(flat.instances[1].part.feature, tab_feature(b, FeatureId(3)));
     assert_ne!(flat.instances[0].part, flat.instances[1].part, "misma operación en dos pestañas: piezas distintas");
     tabs.set_flat_assembly(asm, flat).unwrap();
-    let TabKind::Assembly { assembly: back } = &tabs.get(asm).unwrap().kind else { panic!() };
+    let TabKind::Assembly { assembly: back, .. } = &tabs.get(asm).unwrap().kind else { panic!() };
     assert_eq!(*back, assembly);
     assert!(tabs.flat_assembly(0).is_none());
     assert!(tabs.set_flat_assembly(0, Assembly::default()).is_err());

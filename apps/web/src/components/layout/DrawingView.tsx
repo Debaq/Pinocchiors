@@ -4,11 +4,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import { partMaterial, type CadStore, type GearPart } from "../../lib/cad";
 import { gearMarks, gearTable } from "../../lib/gearSheet";
+import { bomRows, bomTable, placeBalloons } from "../../lib/drawingBom";
 import type { CadUi, DrawingTool } from "../../lib/cadUi";
 import * as D from "../icons/design";
 import * as SketchIcons from "../icons/sketch";
 import { SideButton, SideSep } from "../design/DesignToolbar";
 import {
+  BALLOON_R,
   SCALES,
   SHEETS,
   asArc,
@@ -168,7 +170,25 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
   // Lo que se pide al backend (nombre y desde dónde se mira), como texto: el
   // efecto corre solo si cambia. La que se está girando va con su giro del momento
   // Caja de la pieza (para que los prismas de corte la atraviesen entera)
+  // En un ensamble, la caja de las instancias en su lugar y el centro de cada una (para los globos)
+  const inAssembly = () => store.activeTab()?.kind === "assembly";
+  const [info, setInfo] = createSignal<{ min: P3; max: P3; items: { instance: number; center: P3 }[] }>();
+  let infoSeq = 0;
+  createEffect(
+    on([() => store.result()?.version, inAssembly], ([, asm]) => {
+      const n = ++infoSeq;
+      if (!asm) return setInfo(undefined);
+      invoke<{ min: P3; max: P3; items: { instance: number; center: P3 }[] }>("cad_drawing_info").then(
+        (i) => n === infoSeq && setInfo(i),
+        () => n === infoSeq && setInfo(undefined),
+      );
+    }),
+  );
   const box = createMemo((): Box3 | undefined => {
+    if (inAssembly()) {
+      const i = info();
+      return i ? { min: i.min, max: i.max } : undefined;
+    }
     const b = store.result()?.body;
     return b ? { min: b.bbox_min as P3, max: b.bbox_max as P3 } : undefined;
   });
@@ -220,8 +240,8 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
       setBusy(true);
       try {
         // El corte va por el medio del sólido, paralelo al frente: se queda la mitad de atrás
-        const body = store.result()?.body;
-        const at = sectionY() ?? (body ? (body.bbox_min[1] + body.bbox_max[1]) / 2 : 0);
+        const bx = box();
+        const at = sectionY() ?? (bx ? (bx.min[1] + bx.max[1]) / 2 : 0);
         const specs = asked.map(({ name, eye, xdir, cut, shaded }) =>
           name === "front" && sectionOn() ? { eye, xdir, cut, shaded, section: { origin: [0, at, 0], normal: [0, 1, 0] } } : { eye, xdir, cut, shaded },
         );
@@ -335,7 +355,25 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
     const infos = gearInfos() ?? [];
     const gears = gearMarks(picked, views, infos);
     const tables = picked.flatMap((g, i) => (infos[i] ? [gearTable(g, infos[i]!, store.doc()?.features.find((f) => f.id === g.feature)?.name ?? `#${g.feature}`)] : []));
-    return { lines, centers, breaks, gears, tables };
+    // Ensamble: la lista de materiales y sus globos sobre una vista
+    const bom = inAssembly() ? bomRows(store.doc()?.assembly?.instances ?? [], store.result()?.parts ?? []) : [];
+    if (bom.length && s.bom !== false) tables.unshift(bomTable(bom, t("Lista de materiales")));
+    const balloons = (() => {
+      if (!bom.length || s.balloons === null) return [];
+      const name = s.balloons ?? (r.placed.some((p) => p.name === "iso" && !p.detail) ? "iso" : r.placed.find((p) => !p.detail)?.name);
+      const v = name ? r.placed.find((p) => p.name === name && !p.detail) : undefined;
+      const dir = name ? viewDirOf(s, name) : undefined;
+      if (!v || !dir) return [];
+      const up = viewUp(dir);
+      const dot = (a: P3, b: P3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+      const items = info()?.items ?? [];
+      const anchors = bom.flatMap((row) => {
+        const it = items.find((x) => x.instance === row.instances[0]);
+        return it ? [{ label: String(row.item), to: [dot(it.center, dir.xdir), dot(it.center, up)] as P2 }] : [];
+      });
+      return placeBalloons(anchors, bounds(v.lines), 10 / v.scale, (2 * BALLOON_R + 1.5) / v.scale).map((b) => ({ view: v.name, ...b }));
+    })();
+    return { lines, centers, breaks, gears, tables, balloons };
   });
   // Lo dibujado a mano sobre la hoja (un sketch en mm de hoja), con lo ligado
   // a las vistas donde están hoy sus líneas
@@ -966,7 +1004,8 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
               if (x.kind === "radius") return `R${dimText(x.value)}`;
               return `${x.prefix ?? ""}${dimText(x.value)}`;
             }}
-            gearList={(store.result()?.gears ?? []).map((g) => ({ id: g.feature, name: store.doc()?.features.find((f) => f.id === g.feature)?.name ?? `#${g.feature}` }))}
+            gearList={(inAssembly() ? [] : (store.result()?.gears ?? [])).map((g) => ({ id: g.feature, name: store.doc()?.features.find((f) => f.id === g.feature)?.name ?? `#${g.feature}` }))}
+            assembly={inAssembly()}
             update={upd}
             close={() => ui.setDrawingSel(undefined)}
             editDrawing={() => void startDrawing()}
@@ -1028,6 +1067,8 @@ const ElementWindow: Component<{
   dimValue: (index: number) => string | undefined;
   /** Engranes del diseño, para ponerles círculo primitivo y tabla */
   gearList: { id: number; name: string }[];
+  /** Plano de un ensamble: lista de materiales y globos */
+  assembly: boolean;
   update: (change: (s: DrawingSheet) => void) => void;
   close: () => void;
   editDrawing: () => void;
@@ -1188,6 +1229,26 @@ const ElementWindow: Component<{
                     </button>
                   </p>
                 </Show>
+              </div>
+            </Show>
+            <Show when={props.assembly}>
+              <div class="space-y-1" aria-label={t("Lista de materiales")}>
+                {check(t("Lista de materiales"), props.sheet.bom !== false, (on) => props.update((s) => (s.bom = on)))}
+                {row(
+                  t("Globos"),
+                  <div class="w-28">
+                    <Select
+                      options={[
+                        { value: "auto", label: t("Automático") },
+                        { value: "none", label: t("Sin globos") },
+                        ...VIEW_NAMES.filter((v) => !props.sheet.hiddenViews.includes(v)).map((v) => ({ value: v, label: VIEW_LABELS[v] })),
+                        ...(props.sheet.customViews ?? []).filter((c) => !c.hidden).map((c) => ({ value: customViewName(c.id), label: c.name })),
+                      ]}
+                      value={props.sheet.balloons === null ? "none" : (props.sheet.balloons ?? "auto")}
+                      onChange={(v) => props.update((s) => (s.balloons = v === "auto" ? undefined : v === "none" ? null : v))}
+                    />
+                  </div>,
+                )}
               </div>
             </Show>
             {check(t("Rayado según el material"), props.sheet.hatchByMaterial !== false, (on) => props.update((s) => (s.hatchByMaterial = on)))}

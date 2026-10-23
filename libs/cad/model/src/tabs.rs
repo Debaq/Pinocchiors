@@ -79,7 +79,12 @@ pub struct Tab {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TabKind {
     Design { document: Box<Document> },
-    Assembly { assembly: Assembly },
+    Assembly {
+        assembly: Assembly,
+        /// Planos 2D del ensamble (los maneja la interfaz, como `Document::drawing`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        drawing: Option<serde_json::Value>,
+    },
 }
 
 impl TabKind {
@@ -176,7 +181,7 @@ impl Tabs {
     }
 
     pub fn add_assembly(&mut self, name: Option<String>) -> TabId {
-        self.add(TabKind::Assembly { assembly: Assembly::default() }, name)
+        self.add(TabKind::Assembly { assembly: Assembly::default(), drawing: None }, name)
     }
 
     pub fn rename(&mut self, id: TabId, name: &str) -> Result<(), String> {
@@ -236,7 +241,7 @@ impl Tabs {
         self.tabs
             .iter()
             .filter(|t| match &t.kind {
-                TabKind::Assembly { assembly } => assembly.instances.iter().any(|i| i.studio == id),
+                TabKind::Assembly { assembly, .. } => assembly.instances.iter().any(|i| i.studio == id),
                 TabKind::Design { document } => t.id != id && document.features.iter().any(|f| matches!(&f.kind, FeatureKind::Derived(d) if d.studio == id)),
             })
             .map(|t| t.id)
@@ -350,7 +355,7 @@ impl Tabs {
             }
             let name = self.fresh_name(ASSEMBLY_NAME);
             let id = self.fresh_id();
-            self.tabs.insert(i + 1, Tab { id, name, kind: TabKind::Assembly { assembly } });
+            self.tabs.insert(i + 1, Tab { id, name, kind: TabKind::Assembly { assembly, drawing: None } });
             moved += 1;
             i += 2;
         }
@@ -360,7 +365,7 @@ impl Tabs {
     /// El ensamble de la pestaña `id` como si fuera de un solo diseño: sus
     /// piezas con los números de [`tab_feature`].
     pub fn flat_assembly(&self, id: TabId) -> Option<Assembly> {
-        let TabKind::Assembly { assembly } = &self.get(id)?.kind else { return None };
+        let TabKind::Assembly { assembly, .. } = &self.get(id)?.kind else { return None };
         let mut flat = assembly.clone();
         for inst in &mut flat.instances {
             inst.part = tab_part(inst.studio, inst.part);
@@ -377,20 +382,30 @@ impl Tabs {
             inst.part.feature = feature;
         }
         match &mut self.get_mut(id).ok_or("Esa pestaña ya no está")?.kind {
-            TabKind::Assembly { assembly } => *assembly = flat,
+            TabKind::Assembly { assembly, .. } => *assembly = flat,
+            TabKind::Design { .. } => return Err("Esa pestaña no es un ensamble".into()),
+        }
+        Ok(())
+    }
+
+    /// Guarda los planos 2D de la pestaña de ensamble `id`.
+    pub fn set_assembly_drawing(&mut self, id: TabId, sheets: Option<serde_json::Value>) -> Result<(), String> {
+        match &mut self.get_mut(id).ok_or("Esa pestaña ya no está")?.kind {
+            TabKind::Assembly { drawing, .. } => *drawing = sheets,
             TabKind::Design { .. } => return Err("Esa pestaña no es un ensamble".into()),
         }
         Ok(())
     }
 
     /// La pestaña de ensamble `id` vista como un diseño sin operaciones: su
-    /// ensamble con [`flat_assembly`](Self::flat_assembly) y las piezas de todos
+    /// ensamble con [`flat_assembly`](Self::flat_assembly), sus planos y las piezas de todos
     /// los diseños con [`flat_part_props`](Self::flat_part_props). Así la
     /// interfaz y los comandos del ensamble la tratan como el ensamble de un diseño.
     pub fn assembly_document(&self, id: TabId, names: &[(PartId, String)]) -> Option<Document> {
         let assembly = self.flat_assembly(id)?;
+        let TabKind::Assembly { drawing, .. } = &self.get(id)?.kind else { return None };
         let (parts, fabrication) = self.flat_part_props(names);
-        Some(Document { assembly: Some(assembly), parts, fabrication, ..Document::default() })
+        Some(Document { assembly: Some(assembly), parts, fabrication, drawing: drawing.clone(), ..Document::default() })
     }
 
     /// Lo que un ensamble necesita de los diseños, con los números de

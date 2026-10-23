@@ -650,10 +650,11 @@ pub async fn cad_set_document(app: AppHandle, document: Document) -> Result<CadR
 
 fn set_document_impl(state: &AppState, document: Document) -> Result<CadResult, String> {
     if state.cad_in_assembly() {
-        // De un ensamble solo se guarda su ensamble (lo demás sale de los diseños)
+        // De un ensamble solo se guardan su ensamble y sus planos (lo demás sale de los diseños)
         let mut tabs = state.cad_tabs.lock().unwrap();
         let active = tabs.active;
         tabs.set_flat_assembly(active, document.assembly.unwrap_or_default())?;
+        tabs.set_assembly_drawing(active, document.drawing)?;
     } else {
         state.with_cad_doc(|d| *d = document)?;
     }
@@ -1690,13 +1691,86 @@ pub async fn cad_drawing(app: AppHandle, views: Vec<DrawingViewSpec>) -> Result<
     in_background(app, move |state| drawing_impl(state, &views)).await
 }
 
-fn drawing_impl(state: &AppState, views: &[DrawingViewSpec]) -> Result<Vec<DrawingViewResult>, String> {
-    require_occt()?;
+/// Lo que muestra un plano: el sólido entero y cada pieza con el índice de la suya en `parts`
+/// del recálculo (para rayarla según su material). En un ensamble, las instancias en su lugar.
+fn drawing_shapes(state: &AppState) -> Result<(cad_model::Shape, Vec<(u32, cad_model::Shape)>), String> {
+    if state.cad_in_assembly() {
+        let (asm, shapes) = assembly_shapes(state)?;
+        let cache = state.cad_cache.lock().unwrap();
+        let parts = &cache.as_ref().ok_or("El ensamble todavía no tiene piezas")?.eval.parts;
+        let pieces: Vec<(u32, cad_model::Shape)> = shapes
+            .into_iter()
+            .filter_map(|(id, s)| {
+                let inst = asm.instances.iter().find(|i| i.id == id)?;
+                parts.iter().position(|p| p.id == inst.part).map(|k| (k as u32, s))
+            })
+            .collect();
+        let list: Vec<cad_model::Shape> = pieces.iter().map(|(_, s)| s.clone()).collect();
+        let body = match list.len() {
+            0 => return Err("El ensamble todavía no tiene piezas".into()),
+            1 => list[0].clone(),
+            _ => cad_model::Shape::compound(&list).map_err(|e| e.to_string())?,
+        };
+        return Ok((body, pieces));
+    }
     evaluate_committed(state)?;
     let cache = state.cad_cache.lock().unwrap();
-    let body = cache.as_ref().and_then(|c| c.eval.body.as_ref()).ok_or("El diseño todavía no tiene un sólido")?;
+    let ev = &cache.as_ref().ok_or("El diseño todavía no tiene un sólido")?.eval;
+    let body = ev.body.clone().ok_or("El diseño todavía no tiene un sólido")?;
+    let pieces = ev.parts.iter().enumerate().filter(|(_, p)| !p.is_surface()).map(|(i, p)| (i as u32, p.shape.clone())).collect();
+    Ok((body, pieces))
+}
+
+/// Lo que necesita un plano antes de pedir las vistas: la caja de lo que muestra y, en un
+/// ensamble, el centro de cada instancia en su lugar (para los globos).
+#[derive(Serialize)]
+pub struct DrawingInfo {
+    pub min: [f64; 3],
+    pub max: [f64; 3],
+    pub items: Vec<DrawingItem>,
+}
+
+#[derive(Serialize)]
+pub struct DrawingItem {
+    pub instance: u32,
+    pub center: [f64; 3],
+}
+
+#[tauri::command]
+pub async fn cad_drawing_info(app: AppHandle) -> Result<DrawingInfo, String> {
+    in_background(app, drawing_info_impl).await
+}
+
+fn drawing_info_impl(state: &AppState) -> Result<DrawingInfo, String> {
+    require_occt()?;
+    if !state.cad_in_assembly() {
+        let (body, _) = drawing_shapes(state)?;
+        let (min, max) = body.bounds().map_err(|e| e.to_string())?;
+        return Ok(DrawingInfo { min, max, items: Vec::new() });
+    }
+    let (_, shapes) = assembly_shapes(state)?;
+    let (mut min, mut max) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+    let mut items = Vec::new();
+    for (instance, s) in shapes {
+        let (lo, hi) = s.bounds().map_err(|e| e.to_string())?;
+        for k in 0..3 {
+            min[k] = min[k].min(lo[k]);
+            max[k] = max[k].max(hi[k]);
+        }
+        let center = s.mass().map_or([0, 1, 2].map(|k| (lo[k] + hi[k]) / 2.0), |m| m.center);
+        items.push(DrawingItem { instance, center });
+    }
+    if items.is_empty() {
+        return Err("El ensamble todavía no tiene piezas".into());
+    }
+    Ok(DrawingInfo { min, max, items })
+}
+
+fn drawing_impl(state: &AppState, views: &[DrawingViewSpec]) -> Result<Vec<DrawingViewResult>, String> {
+    require_occt()?;
     // Con varias piezas, el rayado sale pieza por pieza (cada una con el suyo, según su material)
-    let all_parts: Vec<&cad_model::Part> = cache.as_ref().map(|c| c.eval.parts.iter().collect()).unwrap_or_default();
+    let (body, pieces) = drawing_shapes(state)?;
+    let body = &body;
     let m = body.mass().map_err(|e| e.to_string())?;
     let size = (0..3).map(|k| m.bbox_max[k] - m.bbox_min[k]).fold(0.0, f64::max).max(1.0);
     views
@@ -1736,15 +1810,12 @@ fn drawing_impl(state: &AppState, views: &[DrawingViewSpec]) -> Result<Vec<Drawi
             };
             // Varias piezas: el mismo corte en cada una, para saber de cuál es cada triángulo
             let mut hatch_part = Vec::new();
-            if cut.is_some() && all_parts.len() > 1 {
+            if cut.is_some() && pieces.len() > 1 {
                 let mut per = Vec::new();
-                for (i, part) in all_parts.iter().enumerate() {
-                    if part.is_surface() {
-                        continue;
-                    }
-                    let Ok(Some(c)) = cut_shape(&part.shape, v) else { continue };
+                for (i, shape) in &pieces {
+                    let Ok(Some(c)) = cut_shape(shape, v) else { continue };
                     let (h, _) = section_hatch(&c, &planes, v, size);
-                    hatch_part.extend(std::iter::repeat(i as u32).take(h.len()));
+                    hatch_part.extend(std::iter::repeat_n(*i, h.len()));
                     per.extend(h);
                 }
                 if per.is_empty() {
@@ -2849,6 +2920,7 @@ pub mod bridge {
             "cad_assembly_clearance" => ok(assembly_clearance_impl(state, arg::<Option<f64>>(args, "min_gap")?)?),
             "cad_assembly_suggest" => ok(assembly_suggest_impl(state)?),
             "cad_assembly_gear_warnings" => ok(assembly_gear_warnings_impl(state)?),
+            "cad_drawing_info" => ok(drawing_info_impl(state)?),
             "cad_drawing" => ok(drawing_impl(state, &arg::<Vec<DrawingViewSpec>>(args, "views")?)?),
             "cad_write_pdf" => {
                 let (path, svg): (String, String) = (arg(args, "path")?, arg(args, "svg")?);
@@ -3366,7 +3438,7 @@ mod tests {
         assert_eq!(saved.assembly.unwrap().solution.poses.len(), 2);
         {
             let tabs = state.cad_tabs.lock().unwrap();
-            let cad_model::TabKind::Assembly { assembly } = &tabs.get(asm).unwrap().kind else { panic!() };
+            let cad_model::TabKind::Assembly { assembly, .. } = &tabs.get(asm).unwrap().kind else { panic!() };
             let feature = tabs.design(long).unwrap().features[0].id;
             assert_eq!((assembly.instances[1].studio, assembly.instances[1].part.feature), (long, feature), "su pestaña y su operación de siempre");
             assert_eq!(tabs.users(long), [asm]);
@@ -3388,6 +3460,46 @@ mod tests {
         set_document_impl(&state, d).unwrap();
         change_tabs(&state, |t| t.activate(asm)).unwrap();
         assert_eq!(evaluate(&state).unwrap().parts[1].volume.round(), 30000.0);
+    }
+
+    /// El plano de una pestaña de ensamble dibuja las instancias en su lugar y se guarda en ella
+    #[test]
+    fn assembly_tab_keeps_its_drawing() {
+        if !cad_model::occt::available() {
+            return;
+        }
+        let state = AppState::new();
+        let mut tabs = Tabs::from_legacy(Some(box_doc()));
+        tabs.add(box_tab(40.0), Some("Larga".into()));
+        let asm = tabs.add_assembly(None);
+        state.set_cad_tabs(tabs);
+        let r = evaluate(&state).unwrap();
+        let inst = |id, part, x: f64| cad_model::Instance { id, studio: 0, part, name: format!("I{id}"), position: [x, 0.0, 0.0], rotation: [0.0; 3], fixed: true };
+        let mut doc = state.cad_doc().unwrap();
+        doc.assembly = Some(cad_model::Assembly { instances: vec![inst(1, r.parts[0].id, 0.0), inst(2, r.parts[1].id, 50.0)], next_id: 3, ..Default::default() });
+        let sheets = serde_json::json!({ "sheets": [{ "id": 1, "name": "Plano 1", "bom": true }], "next_id": 2 });
+        doc.drawing = Some(sheets.clone());
+        set_document_impl(&state, doc).unwrap();
+        // Caja y centros de las instancias en su lugar
+        let info = drawing_info_impl(&state).unwrap();
+        assert!((info.min[0] - 0.0).abs() < 1e-6 && (info.max[0] - 90.0).abs() < 1e-6, "{:?} {:?}", info.min, info.max);
+        let mut centers: Vec<(u32, f64)> = info.items.iter().map(|i| (i.instance, i.center[0])).collect();
+        centers.sort_by_key(|c| c.0);
+        assert_eq!(centers, [(1, 5.0), (2, 70.0)]);
+        // La vista de frente va de una punta del ensamble a la otra; el corte se raya por pieza
+        let front = DrawingViewSpec { eye: [0.0, -1.0, 0.0], xdir: [1.0, 0.0, 0.0], section: Some(DrawingSection { origin: [0.0, 10.0, 0.0], normal: [0.0, 1.0, 0.0] }), cut: vec![], shaded: false };
+        let v = drawing_impl(&state, &[front]).unwrap().remove(0);
+        let xs = v.lines.iter().flat_map(|l| l.points.iter().map(|p| p[0]));
+        let (lo, hi) = xs.fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), x| (a.min(x), b.max(x)));
+        assert!(lo.abs() < 1e-3 && (hi - 90.0).abs() < 1e-3, "{lo} {hi}");
+        let mut which = v.hatch_part.clone();
+        which.dedup();
+        assert_eq!(which, [0, 1], "cada instancia con la pieza de la que viene");
+        // El plano queda en la pestaña y vuelve al volver a ella
+        change_tabs(&state, |t| t.activate(0)).unwrap();
+        assert!(state.cad_doc().unwrap().drawing.is_none());
+        change_tabs(&state, |t| t.activate(asm)).unwrap();
+        assert_eq!(state.cad_doc().unwrap().drawing, Some(sheets));
     }
 
     /// La malla de una pieza de otra pestaña sale sin cambiar lo que muestra el visor

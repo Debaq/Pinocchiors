@@ -6752,6 +6752,12 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
       </Section>
       <Show when={(asm()?.instances.length ?? 0) > 0}>
         <BomSection store={store} />
+        {/* En su propia pestaña, el plano del ensamble: las instancias en su lugar, la lista y los globos */}
+        <Show when={store.activeTab()?.kind === "assembly"}>
+          <Button size="sm" fullWidth onClick={() => props.ui.setDrawingOpen(true)}>
+            {tl("Plano 2D del ensamble (lista de materiales y globos)")}
+          </Button>
+        </Show>
       </Show>
       <Section title={tl("Choques")}>
         <Button size="sm" fullWidth disabled={(asm()?.instances.length ?? 0) < 2} onClick={() => void store.assemblyInterference().then(setHits)}>

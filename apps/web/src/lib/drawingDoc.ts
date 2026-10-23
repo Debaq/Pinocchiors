@@ -64,6 +64,10 @@ export interface DrawingSheet {
   /** Lo dibujado encima de una vista (se mueve y se escala con ella) */
   owners?: SheetOwner[];
   sketchHidden?: boolean;
+  /** Plano de un ensamble: la lista de materiales (sin `false`, se pone) */
+  bom?: boolean;
+  /** Vista con los globos de la lista (sin ella, la isométrica o la primera; `null`, sin globos) */
+  balloons?: string | null;
   /** Engranes (ids de sus operaciones) con círculo primitivo y tabla de datos */
   gears?: number[];
 }

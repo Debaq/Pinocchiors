@@ -373,4 +373,8 @@ export const en_layout2: Catalog = {
   "Esa pestaña todavía no tiene piezas": "That tab has no parts yet",
   "El original ya no tiene {n} de las piezas elegidas": "The original no longer has {n} of the chosen parts",
   "Quitarlas": "Remove them",
+  // Plano del ensamble (F7)
+  "Globos": "Balloons",
+  "Sin globos": "No balloons",
+  "Plano 2D del ensamble (lista de materiales y globos)": "Assembly 2D drawing (bill of materials and balloons)",
 };

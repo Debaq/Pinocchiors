@@ -785,3 +785,7 @@ cargo test -p cad-model
   (`FeatureKind::Derived`): trae piezas de otra pestaña de diseño, en una configuración, como piezas
   aparte o unidas/restadas/intersecadas, y se rehace cuando cambia el original. Ciclos con error
   claro. Sin probar todavía en la app.
+- **2026-10-23 Pestañas F7** ([PLAN_PESTANAS.md](PLAN_PESTANAS.md)): planos 2D en las pestañas
+  de ensamble (se guardan con la pestaña): las instancias en su lugar, rayadas según su pieza, con
+  la lista de materiales como tabla y globos numerados (SVG, PDF y DXF). Sin probar todavía en la
+  app.
