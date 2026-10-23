@@ -12,6 +12,18 @@ export function neighborTab(tabs: { id: number }[], active: number | null, step:
 /** Igual que `tab_feature` del backend: la operación `f` de la pestaña `tab` con un número único entre pestañas */
 export const tabFeature = (tab: number, f: number) => tab * 2 ** 20 + f;
 
+/** Al revés de `tabFeature`: la pestaña y la operación */
+export const splitTabFeature = (f: number): [number, number] => [Math.floor(f / 2 ** 20), f % 2 ** 20];
+
+/** Desde acá, las «pestañas» de `tabFeature` son variantes de un ensamble (un diseño en otra configuración) */
+export const VARIANT_BASE = 2 ** 11;
+
+/** Pestaña de diseño de la pieza de una instancia (la de su número o, en una variante, la que trae) */
+export function instanceStudio(inst: { studio?: number; part: { feature: number } }): number {
+  const [tab] = splitTabFeature(inst.part.feature);
+  return tab < VARIANT_BASE ? tab : (inst.studio ?? 0);
+}
+
 /** Posición final de una pestaña que estaba en `from` y se suelta en el hueco `slot` (0 = antes de la primera) */
 export const dropIndex = (from: number, slot: number) => (slot > from ? slot - 1 : slot);
 

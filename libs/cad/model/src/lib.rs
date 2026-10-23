@@ -40,7 +40,7 @@ pub use regions::{Loop, LoopPiece, Region, find_regions};
 pub use gear_part::{GearAxis, GearLink, GearPart};
 pub use gears::{GearKind, GearSpec};
 pub use threads::ThreadAxis;
-pub use tabs::{Tab, TabId, TabKind, Tabs, merge_evaluations, split_tab_feature, tab_feature};
+pub use tabs::{Tab, TabId, TabKind, Tabs, VARIANT_BASE, merge_evaluations, split_tab_feature, tab_feature};
 pub use sketch_assist::Suggestion;
 pub use sketch3d::{Constraint3d, Entity3d, Geometry3d, Point3d, Report3d, Sketch3d, WorldAxis};
 pub use sketch::{AngleEnd, DimOpts, Geometry, Sketch, SketchConstraint, SketchEntity, SketchError, SketchPoint, SketchStatus, SketchText, SketchUse, TextStyle, SolveReport, UseSource};

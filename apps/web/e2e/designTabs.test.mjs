@@ -2,7 +2,7 @@
 //   node --test apps/web/e2e/designTabs.test.mjs
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { dropIndex, neighborTab, swapTabHistory, tabFeature } from "../src/lib/designTabs.ts";
+import { dropIndex, neighborTab, swapTabHistory, tabFeature, splitTabFeature, instanceStudio, VARIANT_BASE } from "../src/lib/designTabs.ts";
 
 const tabs = (...ids) => ids.map((id) => ({ id }));
 
@@ -49,4 +49,12 @@ test("cada pestaña conserva su deshacer", () => {
   // Borrar la activa: la que queda empieza sin deshacer (no hay a quién devolverle las pilas)
   swapTabHistory(saved, undo, redo, 0, { tabs: tabs(2), active: 2 });
   assert.deepEqual([undo, redo, saved.size], [[], [], 0]);
+});
+
+test("la pestaña de la pieza de una instancia, también en una variante", () => {
+  assert.deepEqual(splitTabFeature(tabFeature(3, 12)), [3, 12]);
+  assert.equal(instanceStudio({ part: { feature: tabFeature(2, 5) } }), 2);
+  // Variante (otra configuración): la pestaña es la que trae la instancia
+  assert.equal(instanceStudio({ studio: 4, part: { feature: tabFeature(VARIANT_BASE + 1, 5) } }), 4);
+  assert.equal(instanceStudio({ part: { feature: 7 } }), 0);
 });

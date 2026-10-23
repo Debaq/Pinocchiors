@@ -9,7 +9,7 @@ fn occt() -> bool {
 }
 
 fn inst(id: u32, position: P3, fixed: bool) -> Instance {
-    Instance { id, studio: 0, part: PartId { feature: FeatureId(0), index: 0 }, name: format!("I{id}"), position, rotation: [0.3, -0.2, 0.5], fixed }
+    Instance { id, studio: 0, configuration: None, part: PartId { feature: FeatureId(0), index: 0 }, name: format!("I{id}"), position, rotation: [0.3, -0.2, 0.5], fixed }
 }
 
 /// Arriba de A (cubo de 10 desde el origen) y abajo de B, enfrentados.

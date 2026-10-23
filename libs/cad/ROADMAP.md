@@ -789,3 +789,6 @@ cargo test -p cad-model
   de ensamble (se guardan con la pestaña): las instancias en su lugar, rayadas según su pieza, con
   la lista de materiales como tabla y globos numerados (SVG, PDF y DXF). Sin probar todavía en la
   app.
+- **2026-10-23 Pestañas F5 (cierre)**: cada instancia de un ensamble en la configuración de su
+  diseño que se elija (variantes), instancias sin pieza en rojo en el panel y «Armar en una
+  pestaña de ensamble nueva» después de crear un planetario. Sin probar todavía en la app.

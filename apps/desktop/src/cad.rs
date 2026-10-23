@@ -442,20 +442,25 @@ fn evaluate_committed(state: &AppState) -> Result<CadResult, String> {
     evaluate_doc(state, &doc)
 }
 
-/// Las pestañas de diseño (con las referencias del escaneo al día), para un ensamble
+/// Las pestañas de diseño y las variantes del ensamble activo (un diseño en
+/// otra configuración, con su número de `VARIANT_BASE` en adelante), con las
+/// referencias del escaneo al día, para un ensamble
 fn design_tabs(state: &AppState) -> Vec<(TabId, Document)> {
-    let designs: Vec<(TabId, Document)> = state
-        .cad_tabs
-        .lock()
-        .unwrap()
-        .tabs
-        .iter()
-        .filter_map(|t| match &t.kind {
-            cad_model::TabKind::Design { document } => Some((t.id, (**document).clone())),
-            cad_model::TabKind::Assembly { .. } => None,
-        })
-        .collect();
-    designs.into_iter().map(|(id, d)| (id, prepared(state, Some(id), &d).unwrap_or(d))).collect()
+    let (designs, variants) = {
+        let tabs = state.cad_tabs.lock().unwrap();
+        let designs: Vec<(TabId, Document)> = tabs
+            .tabs
+            .iter()
+            .filter_map(|t| match &t.kind {
+                cad_model::TabKind::Design { document } => Some((t.id, (**document).clone())),
+                cad_model::TabKind::Assembly { .. } => None,
+            })
+            .collect();
+        (designs, tabs.variant_documents(tabs.active))
+    };
+    let mut out: Vec<(TabId, Document)> = designs.into_iter().map(|(id, d)| (id, prepared(state, Some(id), &d).unwrap_or(d))).collect();
+    out.extend(variants.into_iter().map(|(vtab, studio, d)| (vtab, prepared(state, Some(studio), &d).unwrap_or(d))));
+    out
 }
 
 /// Huella de todos los diseños (lo que cambia el recálculo de un ensamble)
@@ -536,7 +541,7 @@ fn evaluate_doc(state: &AppState, doc: &Document) -> Result<CadResult, String> {
     let doc = match &designs {
         Some(designs) => {
             let tabs = state.cad_tabs.lock().unwrap();
-            let mut parts = tabs.flat_part_props(&assembly_part_names(designs, eval)).0;
+            let mut parts = tabs.flat_part_props(tabs.active, &assembly_part_names(designs, eval)).0;
             // El mismo nombre en dos pestañas: se aclara de cuál es
             let names: Vec<Option<String>> = parts.iter().map(|p| p.name.clone()).collect();
             for p in &mut parts {
@@ -3431,7 +3436,7 @@ mod tests {
         assert_eq!(volumes, [6000.0, 24000.0]);
         assert_ne!(r.parts[0].id, r.parts[1].id, "la misma operación de dos pestañas: piezas distintas");
         // Insertar las dos como lo hace la interfaz (con los ids que vio) y guardar
-        let inst = |id, part, x: f64| cad_model::Instance { id, studio: 0, part, name: format!("I{id}"), position: [x, 0.0, 0.0], rotation: [0.0; 3], fixed: id == 1 };
+        let inst = |id, part, x: f64| cad_model::Instance { id, studio: 0, configuration: None, part, name: format!("I{id}"), position: [x, 0.0, 0.0], rotation: [0.0; 3], fixed: id == 1 };
         let mut doc = state.cad_doc().unwrap();
         doc.assembly = Some(cad_model::Assembly { instances: vec![inst(1, r.parts[0].id, 0.0), inst(2, r.parts[1].id, 50.0)], next_id: 3, ..Default::default() });
         let saved = set_document_impl(&state, doc).unwrap();
@@ -3462,6 +3467,38 @@ mod tests {
         assert_eq!(evaluate(&state).unwrap().parts[1].volume.round(), 30000.0);
     }
 
+    /// Una instancia en otra configuración de su diseño trae esa variante de la pieza
+    #[test]
+    fn instance_uses_its_configuration() {
+        if !cad_model::occt::available() {
+            return;
+        }
+        let state = AppState::new();
+        let mut design = box_doc();
+        design.parameters.push(cad_model::Parameter { name: "largo".into(), expr: "10".into() });
+        design.bindings.insert(format!("{}.kind.shape.dx", design.features[0].id.0), "largo".into());
+        design.configurations.push(cad_model::Configuration { name: "Larga".into(), values: [("largo".to_string(), "50".to_string())].into(), suppressed: vec![] });
+        let mut tabs = Tabs::from_legacy(Some(design));
+        tabs.add_assembly(None);
+        state.set_cad_tabs(tabs);
+        let r = evaluate(&state).unwrap();
+        let part = r.parts[0].id;
+        let inst = |id, cfg: Option<&str>, x: f64| cad_model::Instance { id, studio: 0, configuration: cfg.map(Into::into), part, name: format!("I{id}"), position: [x, 0.0, 0.0], rotation: [0.0; 3], fixed: true };
+        let mut doc = state.cad_doc().unwrap();
+        doc.assembly = Some(cad_model::Assembly { instances: vec![inst(1, None, 0.0), inst(2, Some("Larga"), 50.0)], next_id: 3, ..Default::default() });
+        set_document_impl(&state, doc).unwrap();
+        let r = evaluate(&state).unwrap();
+        let named: Vec<(String, f64)> = r.parts.iter().map(|p| (p.name.clone(), p.volume.round())).collect();
+        assert_eq!(named, [("Pieza 1".to_string(), 6000.0), ("Pieza 1 (Larga)".to_string(), 30000.0)]);
+        let (_, shapes) = assembly_shapes(&state).unwrap();
+        let mut v: Vec<(u32, f64)> = shapes.iter().map(|(id, s)| (*id, s.mass().unwrap().volume.round())).collect();
+        v.sort_by_key(|x| x.0);
+        assert_eq!(v, [(1, 6000.0), (2, 30000.0)]);
+        // La del diseño sigue en la de base
+        change_tabs(&state, |t| t.activate(0)).unwrap();
+        assert_eq!(evaluate(&state).unwrap().parts[0].volume.round(), 6000.0);
+    }
+
     /// El plano de una pestaña de ensamble dibuja las instancias en su lugar y se guarda en ella
     #[test]
     fn assembly_tab_keeps_its_drawing() {
@@ -3474,7 +3511,7 @@ mod tests {
         let asm = tabs.add_assembly(None);
         state.set_cad_tabs(tabs);
         let r = evaluate(&state).unwrap();
-        let inst = |id, part, x: f64| cad_model::Instance { id, studio: 0, part, name: format!("I{id}"), position: [x, 0.0, 0.0], rotation: [0.0; 3], fixed: true };
+        let inst = |id, part, x: f64| cad_model::Instance { id, studio: 0, configuration: None, part, name: format!("I{id}"), position: [x, 0.0, 0.0], rotation: [0.0; 3], fixed: true };
         let mut doc = state.cad_doc().unwrap();
         doc.assembly = Some(cad_model::Assembly { instances: vec![inst(1, r.parts[0].id, 0.0), inst(2, r.parts[1].id, 50.0)], next_id: 3, ..Default::default() });
         let sheets = serde_json::json!({ "sheets": [{ "id": 1, "name": "Plano 1", "bom": true }], "next_id": 2 });

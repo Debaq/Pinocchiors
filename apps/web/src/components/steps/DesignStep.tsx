@@ -1,5 +1,5 @@
 import { matchesOutliner, outlinerQuery } from "../../lib/outlinerFilter";
-import { Component, For, Index, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup, untrack, type JSX } from "solid-js";
+import { Component, For, Index, Match, Show, Switch, createEffect, createMemo, createResource, createSignal, on, onCleanup, untrack, type JSX } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import { clsx } from "clsx";
@@ -140,6 +140,8 @@ import { Button, Checkbox, IconButton, NumberInput, Select, Slider, Tooltip } fr
 import * as Icons from "../icons";
 import { t as tl, locale, tn } from "../../lib/i18n";
 import { tBackend } from "../../lib/i18nBackend";
+import { changeDesignTabs } from "../layout/DesignTabs";
+import { instanceStudio } from "../../lib/designTabs";
 import { jointKey, jointsOf } from "../../lib/assemblyDrag";
 import { planetFeatures, planetaryAssembly, ringFeature, type PlanetaryPlan } from "../../lib/planetary";
 
@@ -5599,8 +5601,28 @@ const GearLinkBox: Component<{
  * Planetario de una vez con este engrane de sol: satélites enlazados a él, portasatélites con sus pasadores y
  * corona concentrica. El backend revisa los dientes y la condición de montaje.
  */
-const PlanetaryBox: Component<{ store: CadStore; feature: number; shape: Extract<PrimitiveShape, { type: "gear" }> }> = (props) => {
+/**
+ * Arma en el ensamble abierto el planetario creado con «Armar un planetario»: corona fija, sol y
+ * portasatélites girando, satélites en sus pasadores y los acoplamientos. Devuelve el motivo si no se pudo.
+ */
+async function assemblePlanetary(store: CadStore): Promise<string | undefined> {
+  const made = planetaryAssembly(await store.assemblyFeatures(), store.result()?.gears ?? [], store.result()?.parts ?? [], store.doc()?.assembly ?? undefined);
+  if (typeof made === "string") return made;
+  await store.editAssembly((a) => {
+    a.instances = made.instances;
+    a.mates = made.mates;
+    a.next_id = made.next_id;
+  });
+  const found = await store.assemblySuggest();
+  await store.editAssembly((a) => {
+    a.relations = [...(a.relations ?? []), ...found];
+  });
+}
+
+const PlanetaryBox: Component<{ store: CadStore; ui: CadUi; feature: number; shape: Extract<PrimitiveShape, { type: "gear" }> }> = (props) => {
   const [open, setOpen] = createSignal(false);
+  // Ya creado: se puede armar en una pestaña de ensamble nueva
+  const [made, setMade] = createSignal(false);
   const [planets, setPlanets] = createSignal(3);
   const [teeth, setTeeth] = createSignal(12);
   const [plan, setPlan] = createSignal<PlanetaryPlan>();
@@ -5639,8 +5661,21 @@ const PlanetaryBox: Component<{ store: CadStore; feature: number; shape: Extract
         d.next_id = id + 1;
       });
       setOpen(false);
+      setMade(true);
     } catch (e) {
       setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  /** Pestaña de ensamble nueva con el planetario armado (las piezas quedan en este diseño) */
+  const assemble = async () => {
+    setBusy(true);
+    try {
+      await changeDesignTabs(props.store, props.ui, "cad_tab_add", { kind: "assembly", name: null });
+      if (props.store.activeTab()?.kind !== "assembly") return;
+      const note = await assemblePlanetary(props.store);
+      if (note) props.ui.setMessage(tBackend(note));
     } finally {
       setBusy(false);
     }
@@ -5648,6 +5683,11 @@ const PlanetaryBox: Component<{ store: CadStore; feature: number; shape: Extract
   return (
     <div class="space-y-1 border-t border-border pt-1.5" data-planetary>
       <Checkbox small label={tl("Armar un planetario con este sol")} checked={open()} onChange={setOpen} />
+      <Show when={made() && !open()}>
+        <Button size="sm" fullWidth disabled={busy()} onClick={() => void assemble()} data-planetary-assemble>
+          {tl("Armar en una pestaña de ensamble nueva")}
+        </Button>
+      </Show>
       <Show when={open()}>
         <Row label={tl("Satélites")}>
           <NumberInput value={planets()} onChange={(v) => v >= 2 && setPlanets(Math.round(v))} />
@@ -5852,7 +5892,7 @@ const GearFields: Component<{
         <GearLinkBox store={props.store} ui={props.ui} feature={props.feature} shape={props.shape} field={props.field} update={props.update} />
       </Show>
       <Show when={kind() === "external" && !props.shape.link}>
-        <PlanetaryBox store={props.store} feature={props.feature} shape={props.shape} />
+        <PlanetaryBox store={props.store} ui={props.ui} feature={props.feature} shape={props.shape} />
       </Show>
       <Row label={tl("Tipo")}>
         <Select
@@ -6441,6 +6481,21 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
   const partKey = (p: PartView) => `${p.id.feature}:${p.id.index}`;
   const instName = (id: number) => asm()?.instances.find((i) => i.id === id)?.name ?? `#${id}`;
   const [note, setNote] = createSignal<string>();
+  // En una pestaña de ensamble, las configuraciones del diseño de cada instancia
+  const [configs] = createResource(
+    () => (store.activeTab()?.kind === "assembly" ? JSON.stringify([...new Set((asm()?.instances ?? []).map(instanceStudio))].sort((a, b) => a - b)) : ""),
+    async (key) => {
+      const out: Record<number, string[]> = {};
+      for (const id of JSON.parse(key) as number[]) {
+        const d = await invoke<CadDocument | null>("cad_tab_document", { id }).catch(() => null);
+        out[id] = (d?.configurations ?? []).map((c) => c.name);
+      }
+      return out;
+    },
+  );
+  /** Otra configuración: el ensamble trae esa variante de la pieza (y la instancia, su número nuevo) */
+  const setConfiguration = (id: number, name: string) =>
+    void Promise.resolve(store.editAssembly((a) => (a.instances.find((i) => i.id === id)!.configuration = name || undefined))).then(() => store.loadActive());
   // Animación: la unión que se recorre, de dónde a dónde y cuántos cuadros
   const movable = () => (asm()?.mates ?? []).filter((m) => m.kind === "revolute" || m.kind === "slider" || m.kind === "cylindrical" || m.kind === "pin_slot");
   const [animMate, setAnimMate] = createSignal<number>();
@@ -6537,61 +6592,77 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
           </Button>
         </div>
         <For each={asm()?.instances ?? []} fallback={<p class="text-[11px] text-text-dim">{tl("Insertar piezas del diseño para ensamblarlas")}</p>}>
-          {(inst) => (
-            <div class="space-y-1 rounded border border-border p-1.5" data-instance={inst.id}>
-              <div class="flex items-center gap-1.5 text-xs">
-                <span class="flex-1 truncate text-text">{inst.name}</span>
-                <Checkbox
-                  small
-                  label={tl("Fija")}
-                  checked={inst.fixed}
-                  onChange={(c) => void store.editAssembly((a) => (a.instances.find((i) => i.id === inst.id)!.fixed = c))}
-                />
-                <IconButton aria-label={tl("Quitar {name}", { name: inst.name })} size="sm" variant="ghost" onClick={() => removeInstance(inst.id)}>
-                  <Icons.Trash size={11} />
-                </IconButton>
-              </div>
-              <Show when={asm() && jointsOf(asm()!, inst.id).length > 1}>
-                {(_) => {
-                  const joints = () => jointsOf(asm()!, inst.id);
-                  const label = (j: ReturnType<typeof jointsOf>[number]) => `${j.mate.name || `#${j.mate.id}`} · ${j.mode === "turn" ? tl("gira") : tl("desliza")}`;
-                  return (
-                    <Row label={tl("Al arrastrar mueve por")}>
-                      <Select
-                        options={joints().map((j) => ({ value: jointKey(j), label: label(j) }))}
-                        value={props.ui.dragJoints()[inst.id] ?? jointKey(joints()[0])}
-                        onChange={(v) => props.ui.setDragJoints({ ...props.ui.dragJoints(), [inst.id]: v })}
+          {(inst) => {
+            // Su pieza ya no está (se borró en su diseño, o se borró la pestaña): no se dibuja
+            const orphan = () => !!store.result() && !parts().some((p) => samePart(p.id, inst.part));
+            return (
+              <div class={clsx("space-y-1 rounded border p-1.5", orphan() ? "border-error/70 bg-error/5" : "border-border")} data-instance={inst.id} data-orphan={orphan() || undefined}>
+                <div class="flex items-center gap-1.5 text-xs">
+                  <span class={clsx("flex-1 truncate", orphan() ? "text-error" : "text-text")}>{inst.name}</span>
+                  <Checkbox
+                    small
+                    label={tl("Fija")}
+                    checked={inst.fixed}
+                    onChange={(c) => void store.editAssembly((a) => (a.instances.find((i) => i.id === inst.id)!.fixed = c))}
+                  />
+                  <IconButton aria-label={tl("Quitar {name}", { name: inst.name })} size="sm" variant="ghost" onClick={() => removeInstance(inst.id)}>
+                    <Icons.Trash size={11} />
+                  </IconButton>
+                </div>
+                <Show when={(configs()?.[instanceStudio(inst)]?.length ?? 0) > 0 || inst.configuration}>
+                  <Row label={tl("Configuración")}>
+                    <Select
+                      options={[{ value: "", label: tl("La de base") }, ...(configs()?.[instanceStudio(inst)] ?? []).map((c) => ({ value: c, label: c }))]}
+                      value={inst.configuration ?? ""}
+                      onChange={(v) => setConfiguration(inst.id, v)}
+                    />
+                  </Row>
+                </Show>
+                <Show when={orphan()}>
+                  <p class="text-[11px] text-error">{tl("Su pieza ya no está (se borró en su diseño o se borró su pestaña): no se dibuja ni se mueve.")}</p>
+                </Show>
+                <Show when={asm() && jointsOf(asm()!, inst.id).length > 1}>
+                  {(_) => {
+                    const joints = () => jointsOf(asm()!, inst.id);
+                    const label = (j: ReturnType<typeof jointsOf>[number]) => `${j.mate.name || `#${j.mate.id}`} · ${j.mode === "turn" ? tl("gira") : tl("desliza")}`;
+                    return (
+                      <Row label={tl("Al arrastrar mueve por")}>
+                        <Select
+                          options={joints().map((j) => ({ value: jointKey(j), label: label(j) }))}
+                          value={props.ui.dragJoints()[inst.id] ?? jointKey(joints()[0])}
+                          onChange={(v) => props.ui.setDragJoints({ ...props.ui.dragJoints(), [inst.id]: v })}
+                        />
+                      </Row>
+                    );
+                  }}
+                </Show>
+                <span class="text-[10px] text-text-dim">{tl("Posición (mm)")}</span>
+                <div class="grid grid-cols-3 gap-1">
+                  <For each={["X", "Y", "Z"]}>
+                    {(axis, k) => (
+                      <Num
+                        label={axis}
+                        value={inst.position[k()]}
+                        onCommit={(v) => void store.editAssembly((a) => (a.instances.find((i) => i.id === inst.id)!.position[k()] = v))}
                       />
-                    </Row>
-                  );
-                }}
-              </Show>
-              <span class="text-[10px] text-text-dim">{tl("Posición (mm)")}</span>
-              <div class="grid grid-cols-3 gap-1">
-                <For each={["X", "Y", "Z"]}>
-                  {(axis, k) => (
-                    <Num
-                      label={axis}
-                      value={inst.position[k()]}
-                      onCommit={(v) => void store.editAssembly((a) => (a.instances.find((i) => i.id === inst.id)!.position[k()] = v))}
-                    />
-                  )}
-                </For>
+                    )}
+                  </For>
+                </div>
+                <span class="text-[10px] text-text-dim">{tl("Giro (°)")}</span>
+                <div class="grid grid-cols-3 gap-1">
+                  <For each={["X", "Y", "Z"]}>
+                    {(axis, k) => (
+                      <Num
+                        label={axis}
+                        value={Math.round(deg(inst.rotation[k()]) * 1000) / 1000}
+                        onCommit={(v) => void store.editAssembly((a) => (a.instances.find((i) => i.id === inst.id)!.rotation[k()] = (v * Math.PI) / 180))}
+                      />
+                    )}
+                  </For>
+                </div>
               </div>
-              <span class="text-[10px] text-text-dim">{tl("Giro (°)")}</span>
-              <div class="grid grid-cols-3 gap-1">
-                <For each={["X", "Y", "Z"]}>
-                  {(axis, k) => (
-                    <Num
-                      label={axis}
-                      value={Math.round(deg(inst.rotation[k()]) * 1000) / 1000}
-                      onCommit={(v) => void store.editAssembly((a) => (a.instances.find((i) => i.id === inst.id)!.rotation[k()] = (v * Math.PI) / 180))}
-                    />
-                  )}
-                </For>
-              </div>
-            </div>
-          )}
+            );
+          }}
         </For>
       </Section>
       <Section title={tl("Animación")}>
@@ -6674,20 +6745,7 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
           <Tooltip content={tl("Con un sol, satélites, corona y portasatélites creados con «Armar un planetario»: pone la corona fija, el sol y el portasatélites girando en ella, y cada satélite girando en el portasatélites, con sus acoplamientos")}>
             <Button
               size="sm"
-              onClick={async () => {
-                const made = planetaryAssembly(await store.assemblyFeatures(), store.result()?.gears ?? [], store.result()?.parts ?? [], asm() ?? undefined);
-                if (typeof made === "string") return setNote(made);
-                setNote(undefined);
-                void store.editAssembly((a) => {
-                  a.instances = made.instances;
-                  a.mates = made.mates;
-                  a.next_id = made.next_id;
-                }).then(() => store.assemblySuggest()).then((found) =>
-                  store.editAssembly((a) => {
-                    a.relations = [...(a.relations ?? []), ...found];
-                  }),
-                );
-              }}
+              onClick={async () => setNote(await assemblePlanetary(store))}
             >
               {tl("Armar el planetario en el ensamble")}
             </Button>

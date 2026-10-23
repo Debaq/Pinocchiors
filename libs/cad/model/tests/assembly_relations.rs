@@ -33,7 +33,7 @@ fn train(second: GearPart, angle: f64) -> (Evaluation, Assembly) {
     let ev = doc.evaluate();
     assert!(ev.errors().is_empty(), "{:?}", ev.errors());
     assert_eq!(ev.parts.len(), 3);
-    let inst = |id: u32, k: usize, fixed: bool| Instance { id, studio: 0, part: ev.parts[k].id, name: format!("P{id}"), position: [0.0; 3], rotation: [0.0; 3], fixed };
+    let inst = |id: u32, k: usize, fixed: bool| Instance { id, studio: 0, configuration: None, part: ev.parts[k].id, name: format!("P{id}"), position: [0.0; 3], rotation: [0.0; 3], fixed };
     let (ga, gb) = (&ev.gears[0], &ev.gears[1]);
     let asm = Assembly {
         instances: vec![inst(1, 0, true), inst(2, 1, false), inst(3, 2, false)],
@@ -140,7 +140,7 @@ fn corona_gira_con_el_piñon() {
     doc.add(prim(PrimitiveShape::Gear(ring)));
     let ev = doc.evaluate();
     assert!(ev.errors().is_empty(), "{:?}", ev.errors());
-    let inst = |id: u32, k: usize, fixed: bool| Instance { id, studio: 0, part: ev.parts[k].id, name: String::new(), position: [0.0; 3], rotation: [0.0; 3], fixed };
+    let inst = |id: u32, k: usize, fixed: bool| Instance { id, studio: 0, configuration: None, part: ev.parts[k].id, name: String::new(), position: [0.0; 3], rotation: [0.0; 3], fixed };
     let (ga, gb) = (&ev.gears[0], &ev.gears[1]);
     let mut asm = Assembly {
         instances: vec![inst(1, 0, true), inst(2, 1, false), inst(3, 2, false)],
@@ -170,7 +170,7 @@ fn piñon_y_cremallera() {
     doc.add(prim(PrimitiveShape::Gear(rack)));
     let ev = doc.evaluate();
     assert!(ev.errors().is_empty(), "{:?}", ev.errors());
-    let inst = |id: u32, k: usize, fixed: bool| Instance { id, studio: 0, part: ev.parts[k].id, name: String::new(), position: [0.0; 3], rotation: [0.0; 3], fixed };
+    let inst = |id: u32, k: usize, fixed: bool| Instance { id, studio: 0, configuration: None, part: ev.parts[k].id, name: String::new(), position: [0.0; 3], rotation: [0.0; 3], fixed };
     let (ga, gr) = (&ev.gears[0], &ev.gears[1]);
     // La cremallera desliza a lo largo de su X; su conector lleva Z = ese eje
     let slide_z = gr.x;
@@ -206,7 +206,7 @@ fn piñon_y_cremallera() {
 #[test]
 fn tornillo_acopla_giro_y_avance() {
     let mk = |angle: Option<f64>, distance: Option<f64>| {
-        let a = Instance { id: 1, studio: 0, part: PartId { feature: FeatureId(0), index: 0 }, name: String::new(), position: [0.0; 3], rotation: [0.0; 3], fixed: true };
+        let a = Instance { id: 1, studio: 0, configuration: None, part: PartId { feature: FeatureId(0), index: 0 }, name: String::new(), position: [0.0; 3], rotation: [0.0; 3], fixed: true };
         let b = Instance { id: 2, ..a.clone() };
         let b = Instance { fixed: false, ..b };
         let c = |i| conn(i, [0.0; 3], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
@@ -248,7 +248,7 @@ fn sin_fin_y_rueda_en_el_ensamble() {
         doc.add(prim(PrimitiveShape::Gear(wheel)));
         let ev = doc.evaluate();
         assert!(ev.errors().is_empty(), "{:?}", ev.errors());
-        let inst = |id: u32, k: usize, fixed: bool| Instance { id, studio: 0, part: ev.parts[k].id, name: String::new(), position: [0.0; 3], rotation: [0.0; 3], fixed };
+        let inst = |id: u32, k: usize, fixed: bool| Instance { id, studio: 0, configuration: None, part: ev.parts[k].id, name: String::new(), position: [0.0; 3], rotation: [0.0; 3], fixed };
         let (ga, gb) = (&ev.gears[0], &ev.gears[1]);
         let mut asm = Assembly {
             instances: vec![inst(1, 0, true), inst(2, 1, false), inst(3, 2, false)],
@@ -319,11 +319,11 @@ fn chain(parts: Vec<(GearPart, f64)>, extra_hinge_first: bool) -> (Evaluation, A
     let ev = doc.evaluate();
     assert!(ev.errors().is_empty(), "{:?}", ev.errors());
     let n = ev.gears.len();
-    let mut instances = vec![Instance { id: 1, studio: 0, part: ev.parts[0].id, name: "C".into(), position: [0.0; 3], rotation: [0.0; 3], fixed: true }];
+    let mut instances = vec![Instance { id: 1, studio: 0, configuration: None, part: ev.parts[0].id, name: "C".into(), position: [0.0; 3], rotation: [0.0; 3], fixed: true }];
     let mut mates = Vec::new();
     for (k, g) in ev.gears.iter().enumerate() {
         let id = k as u32 + 2;
-        instances.push(Instance { id, studio: 0, part: ev.parts[k + 1].id, name: format!("G{id}"), position: [0.0; 3], rotation: [0.0; 3], fixed: false });
+        instances.push(Instance { id, studio: 0, configuration: None, part: ev.parts[k + 1].id, name: format!("G{id}"), position: [0.0; 3], rotation: [0.0; 3], fixed: false });
         if extra_hinge_first && k == 1 {
             // Una bisagra de eje perpendicular (otra pieza) antes de la buena: no debe confundir la detección
             mates.push(hinge(100, MateKind::Revolute, conn(1, g.origin, g.x, g.z), conn(id, g.origin, g.x, g.z)));
@@ -404,7 +404,7 @@ fn planetario_con_brazo_que_gira() {
     doc.add(prim(PrimitiveShape::Gear(ring)));
     let ev = doc.evaluate();
     assert!(ev.errors().is_empty(), "{:?}", ev.errors());
-    let inst = |id: u32, k: usize, fixed: bool| Instance { id, studio: 0, part: ev.parts[k].id, name: format!("P{id}"), position: [0.0; 3], rotation: [0.0; 3], fixed };
+    let inst = |id: u32, k: usize, fixed: bool| Instance { id, studio: 0, configuration: None, part: ev.parts[k].id, name: format!("P{id}"), position: [0.0; 3], rotation: [0.0; 3], fixed };
     let (gs, gp, gr) = (&ev.gears[0], &ev.gears[1], &ev.gears[2]);
     let mut asm = Assembly {
         instances: vec![inst(1, 0, true), inst(2, 1, false), inst(3, 0, false), inst(4, 2, false), inst(5, 3, false)],
@@ -485,7 +485,7 @@ fn cremallera_primero_y_piñon_despues_en_el_ensamble() {
     doc.add(prim(PrimitiveShape::Gear(pinion)));
     let ev = doc.evaluate();
     assert!(ev.errors().is_empty(), "{:?}", ev.errors());
-    let inst = |id: u32, k: usize, fixed: bool| Instance { id, studio: 0, part: ev.parts[k].id, name: String::new(), position: [0.0; 3], rotation: [0.0; 3], fixed };
+    let inst = |id: u32, k: usize, fixed: bool| Instance { id, studio: 0, configuration: None, part: ev.parts[k].id, name: String::new(), position: [0.0; 3], rotation: [0.0; 3], fixed };
     let (gr, gp) = (&ev.gears[0], &ev.gears[1]);
     let mut asm = Assembly {
         instances: vec![inst(1, 0, true), inst(2, 1, false), inst(3, 2, false)],
@@ -550,7 +550,7 @@ fn rueda_primero_y_sin_fin_despues_en_el_ensamble() {
         doc.add(prim(PrimitiveShape::Gear(w)));
         let ev = doc.evaluate();
         assert!(ev.errors().is_empty(), "{:?}", ev.errors());
-        let inst = |id: u32, k: usize, fixed: bool| Instance { id, studio: 0, part: ev.parts[k].id, name: String::new(), position: [0.0; 3], rotation: [0.0; 3], fixed };
+        let inst = |id: u32, k: usize, fixed: bool| Instance { id, studio: 0, configuration: None, part: ev.parts[k].id, name: String::new(), position: [0.0; 3], rotation: [0.0; 3], fixed };
         let (ga, gb) = (&ev.gears[0], &ev.gears[1]);
         let mut asm = Assembly {
             instances: vec![inst(1, 0, true), inst(2, 1, false), inst(3, 2, false)],
@@ -638,9 +638,9 @@ fn planetary(n: u32, hub_angle_check: bool) -> (Evaluation, Assembly) {
     let part = |k: usize| ev.parts[k].id;
     let ring_part = n as usize + 2; // la corona es la parte siguiente a sol y satélites
     let mut instances = vec![
-        Instance { id: 1, studio: 0, part: part(ring_part - 1), name: "Corona".into(), position: [0.0; 3], rotation: [0.0; 3], fixed: true },
-        Instance { id: 2, studio: 0, part: part(0), name: "Sol".into(), position: [0.0; 3], rotation: [0.0; 3], fixed: false },
-        Instance { id: 3, studio: 0, part: part(ring_part), name: "Portasatélites".into(), position: [0.0; 3], rotation: [0.0; 3], fixed: false },
+        Instance { id: 1, studio: 0, configuration: None, part: part(ring_part - 1), name: "Corona".into(), position: [0.0; 3], rotation: [0.0; 3], fixed: true },
+        Instance { id: 2, studio: 0, configuration: None, part: part(0), name: "Sol".into(), position: [0.0; 3], rotation: [0.0; 3], fixed: false },
+        Instance { id: 3, studio: 0, configuration: None, part: part(ring_part), name: "Portasatélites".into(), position: [0.0; 3], rotation: [0.0; 3], fixed: false },
     ];
     let sun_axis = &g[0];
     let mut mates = vec![
@@ -650,7 +650,7 @@ fn planetary(n: u32, hub_angle_check: bool) -> (Evaluation, Assembly) {
     for k in 0..n as usize {
         let pa = &g[1 + k];
         let id = 4 + k as u32;
-        instances.push(Instance { id, studio: 0, part: part(1 + k), name: format!("Satélite {}", k + 1), position: [0.0; 3], rotation: [0.0; 3], fixed: false });
+        instances.push(Instance { id, studio: 0, configuration: None, part: part(1 + k), name: format!("Satélite {}", k + 1), position: [0.0; 3], rotation: [0.0; 3], fixed: false });
         mates.push(hinge(3 + k as u32, MateKind::Revolute, conn(3, pa.origin, pa.z, pa.x), conn(id, pa.origin, pa.z, pa.x)));
     }
     (ev, Assembly { instances, mates, next_id: 100, ..Default::default() })

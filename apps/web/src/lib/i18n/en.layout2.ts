@@ -377,4 +377,8 @@ export const en_layout2: Catalog = {
   "Globos": "Balloons",
   "Sin globos": "No balloons",
   "Plano 2D del ensamble (lista de materiales y globos)": "Assembly 2D drawing (bill of materials and balloons)",
+  // Lo que faltaba de F5
+  "Armar en una pestaña de ensamble nueva": "Assemble in a new assembly tab",
+  "Su pieza ya no está (se borró en su diseño o se borró su pestaña): no se dibuja ni se mueve.":
+    "Its part no longer exists (deleted in its part design, or its tab was deleted): it is not drawn or moved.",
 };

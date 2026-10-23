@@ -90,6 +90,9 @@ pub struct Instance {
     /// los proyectos de antes: 0, sin uso)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub studio: crate::tabs::TabId,
+    /// Variante de su diseño, por nombre (ninguna = la de base). Solo en una pestaña de ensamble.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configuration: Option<String>,
     pub part: PartId,
     pub name: String,
     /// Traslación (mm) y giro como vector (eje × ángulo en radianes), aplicados a la pieza.

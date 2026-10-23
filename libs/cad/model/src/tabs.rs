@@ -34,6 +34,10 @@ pub fn split_tab_feature(f: FeatureId) -> (TabId, FeatureId) {
     (f.0 >> FEATURE_BITS, FeatureId(f.0 & ((1 << FEATURE_BITS) - 1)))
 }
 
+/// Desde acá, los números de pestaña de [`tab_feature`] son variantes de un
+/// ensamble (un diseño en una configuración que usa alguna instancia), no pestañas.
+pub const VARIANT_BASE: TabId = 1 << 11;
+
 fn tab_part(tab: TabId, p: PartId) -> PartId {
     PartId { feature: tab_feature(tab, p.feature), index: p.index }
 }
@@ -362,14 +366,48 @@ impl Tabs {
         moved
     }
 
+    /// Los diseños en otra configuración que usan las instancias del ensamble
+    /// `id` (pestaña y nombre), en orden: la k-ésima se numera `VARIANT_BASE + k`.
+    pub fn variants(&self, id: TabId) -> Vec<(TabId, String)> {
+        let Some(TabKind::Assembly { assembly, .. }) = self.get(id).map(|t| &t.kind) else { return Vec::new() };
+        let mut out: Vec<(TabId, String)> = Vec::new();
+        for inst in &assembly.instances {
+            if let Some(cfg) = &inst.configuration
+                && !out.iter().any(|(s, c)| *s == inst.studio && c == cfg)
+            {
+                out.push((inst.studio, cfg.clone()));
+            }
+        }
+        out
+    }
+
+    /// El documento de cada variante del ensamble `id` (su número, su pestaña
+    /// y el diseño con esa configuración activa; si ya no la tiene, la de base).
+    pub fn variant_documents(&self, id: TabId) -> Vec<(TabId, TabId, Document)> {
+        self.variants(id)
+            .into_iter()
+            .enumerate()
+            .filter_map(|(k, (studio, cfg))| {
+                let mut doc = self.design(studio)?.clone();
+                doc.active_configuration = doc.configurations.iter().position(|c| c.name == cfg);
+                Some((VARIANT_BASE + k as TabId, studio, doc))
+            })
+            .collect()
+    }
+
     /// El ensamble de la pestaña `id` como si fuera de un solo diseño: sus
-    /// piezas con los números de [`tab_feature`].
+    /// piezas con los números de [`tab_feature`] (las de una instancia en otra
+    /// configuración, con el de su variante). Cada instancia conserva su pestaña.
     pub fn flat_assembly(&self, id: TabId) -> Option<Assembly> {
         let TabKind::Assembly { assembly, .. } = &self.get(id)?.kind else { return None };
+        let variants = self.variants(id);
         let mut flat = assembly.clone();
         for inst in &mut flat.instances {
-            inst.part = tab_part(inst.studio, inst.part);
-            inst.studio = 0;
+            let tab = match &inst.configuration {
+                Some(cfg) => VARIANT_BASE + variants.iter().position(|(s, c)| *s == inst.studio && c == cfg).unwrap_or(0) as TabId,
+                None => inst.studio,
+            };
+            inst.part = tab_part(tab, inst.part);
         }
         Some(flat)
     }
@@ -377,8 +415,11 @@ impl Tabs {
     /// Guarda en la pestaña `id` un ensamble armado con [`flat_assembly`](Self::flat_assembly).
     pub fn set_flat_assembly(&mut self, id: TabId, mut flat: Assembly) -> Result<(), String> {
         for inst in &mut flat.instances {
-            let (studio, feature) = split_tab_feature(inst.part.feature);
-            inst.studio = studio;
+            let (tab, feature) = split_tab_feature(inst.part.feature);
+            // Una variante: la pestaña es la que la instancia ya traía
+            if tab < VARIANT_BASE {
+                inst.studio = tab;
+            }
             inst.part.feature = feature;
         }
         match &mut self.get_mut(id).ok_or("Esa pestaña ya no está")?.kind {
@@ -404,15 +445,16 @@ impl Tabs {
     pub fn assembly_document(&self, id: TabId, names: &[(PartId, String)]) -> Option<Document> {
         let assembly = self.flat_assembly(id)?;
         let TabKind::Assembly { drawing, .. } = &self.get(id)?.kind else { return None };
-        let (parts, fabrication) = self.flat_part_props(names);
+        let (parts, fabrication) = self.flat_part_props(id, names);
         Some(Document { assembly: Some(assembly), parts, fabrication, drawing: drawing.clone(), ..Document::default() })
     }
 
     /// Lo que un ensamble necesita de los diseños, con los números de
     /// [`tab_feature`]: nombre, color, visibilidad y material de cada pieza
-    /// (`names`: los nombres de las piezas sin nombre puesto, de su recálculo),
+    /// (`names`: los nombres de las piezas sin nombre puesto, de su recálculo;
+    /// las de una variante del ensamble `asm` llevan su configuración en el nombre),
     /// y la fabricación del primer diseño que la tenga (para las holguras).
-    pub fn flat_part_props(&self, names: &[(PartId, String)]) -> (Vec<PartProps>, Option<crate::document::Fabrication>) {
+    pub fn flat_part_props(&self, asm: TabId, names: &[(PartId, String)]) -> (Vec<PartProps>, Option<crate::document::Fabrication>) {
         let mut props = Vec::new();
         let mut fabrication = None;
         for tab in &self.tabs {
@@ -425,11 +467,29 @@ impl Tabs {
                 props.push(p);
             }
         }
+        // Las variantes del ensamble `asm`: como su diseño, con la configuración en el nombre
+        let variants = self.variants(asm);
+        let tagged = |tab: TabId, name: &str| match tab.checked_sub(VARIANT_BASE).and_then(|k| variants.get(k as usize)) {
+            Some((_, cfg)) => format!("{name} ({cfg})"),
+            None => name.to_string(),
+        };
+        for (k, (studio, _)) in variants.iter().enumerate() {
+            let Some(document) = self.design(*studio) else { continue };
+            let vtab = VARIANT_BASE + k as TabId;
+            for p in &document.parts {
+                let mut p = p.clone();
+                p.part = tab_part(vtab, p.part);
+                p.name = p.name.map(|n| tagged(vtab, &n));
+                p.material = p.material.or_else(|| document.material.clone());
+                props.push(p);
+            }
+        }
         for (id, name) in names {
+            let name = tagged(split_tab_feature(id.feature).0, name);
             match props.iter_mut().find(|p| p.part == *id) {
-                Some(p) if p.name.is_none() => p.name = Some(name.clone()),
+                Some(p) if p.name.is_none() => p.name = Some(name),
                 Some(_) => {}
-                None => props.push(PartProps { part: *id, name: Some(name.clone()), color: None, hidden: false, material: None }),
+                None => props.push(PartProps { part: *id, name: Some(name), color: None, hidden: false, material: None }),
             }
         }
         (props, fabrication)

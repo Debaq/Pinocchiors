@@ -1225,6 +1225,10 @@ export type Relation =
 /** Una pieza puesta en el ensamble: posición (mm) y giro como vector (eje × ángulo en rad) */
 export interface AsmInstance {
   id: number;
+  /** Pestaña de diseño de su pieza (en una pestaña de ensamble; ver `instanceStudio`) */
+  studio?: number;
+  /** Configuración de su diseño, por nombre (ninguna = la de base) */
+  configuration?: string | null;
   part: PartId;
   name: string;
   position: P3;
@@ -4383,6 +4387,8 @@ export function createCadStore() {
     },
     /** Pestaña de la que es el recálculo de `result` (las piezas que se ven) */
     resultTab,
+    /** Vuelve a traer el documento de la pestaña activa y su recálculo (sin tocar el deshacer) */
+    loadActive,
     /**
      * Cambia las pestañas con un comando `cad_tab_*` (acepta antes el diálogo
      * abierto). Si cambia la activa, guarda su deshacer, trae el de la nueva y

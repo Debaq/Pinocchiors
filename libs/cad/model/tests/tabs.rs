@@ -20,7 +20,7 @@ fn legacy_doc() -> Document {
     doc.parameters.push(Parameter { name: "largo".into(), expr: "10".into() });
     let part = PartId { feature: doc.features[0].id, index: 0 };
     doc.assembly = Some(Assembly {
-        instances: vec![Instance { id: 1, studio: 0, part, name: "Caja".into(), position: [1.0, 2.0, 3.0], rotation: [0.0, 0.1, 0.0], fixed: true }],
+        instances: vec![Instance { id: 1, studio: 0, configuration: None, part, name: "Caja".into(), position: [1.0, 2.0, 3.0], rotation: [0.0, 0.1, 0.0], fixed: true }],
         next_id: 2,
         ..Default::default()
     });
@@ -168,7 +168,7 @@ fn flat_assembly_roundtrip() {
     let b = tabs.add_design(None);
     let asm = tabs.add_assembly(None);
     let part = |studio, f| (studio, PartId { feature: FeatureId(f), index: 1 });
-    let inst = |id, (studio, part)| Instance { id, studio, part, name: format!("I{id}"), position: [0.0; 3], rotation: [0.0; 3], fixed: id == 1 };
+    let inst = |id, (studio, part)| Instance { id, studio, configuration: None, part, name: format!("I{id}"), position: [0.0; 3], rotation: [0.0; 3], fixed: id == 1 };
     let assembly = Assembly { instances: vec![inst(1, part(0, 3)), inst(2, part(b, 3))], next_id: 3, ..Default::default() };
     let TabKind::Assembly { assembly: stored, .. } = &mut tabs.get_mut(asm).unwrap().kind else { panic!() };
     *stored = assembly.clone();
@@ -192,7 +192,7 @@ fn flat_part_props_carry_names_and_materials() {
     let mut tabs = Tabs::from_legacy(Some(a));
     let b = tabs.add(TabKind::Design { document: Box::new(box_doc(20.0)) }, None);
     let pb = PartId { feature: tab_feature(b, FeatureId(0)), index: 0 };
-    let (props, fabrication) = tabs.flat_part_props(&[(pb, "Pieza 1".into())]);
+    let (props, fabrication) = tabs.flat_part_props(0, &[(pb, "Pieza 1".into())]);
     assert!(fabrication.is_none());
     assert_eq!(props.len(), 2);
     assert_eq!((props[0].name.as_deref(), props[0].material.as_ref().map(|m| m.name.as_str())), (Some("Caja"), Some("PLA")), "el material del diseño");
@@ -339,4 +339,46 @@ fn derived_uses_the_named_configuration() {
     d.configuration = Some("Otra".into());
     tabs.design_mut(b).unwrap().features[0].kind = FeatureKind::Derived(d);
     assert!(!eval_tab(&tabs, b).errors().is_empty());
+}
+
+#[test]
+fn instances_in_other_configurations_are_variants() {
+    let mut a = box_doc(10.0);
+    a.configurations.push(Configuration { name: "Larga".into(), values: Default::default(), suppressed: vec![] });
+    a.parts.push(PartProps { part: PartId { feature: a.features[0].id, index: 0 }, name: Some("Caja".into()), color: None, hidden: false, material: None });
+    let mut tabs = Tabs::from_legacy(Some(a));
+    let b = tabs.add_design(None);
+    let asm = tabs.add_assembly(None);
+    let part = PartId { feature: FeatureId(0), index: 0 };
+    let inst = |id, studio, cfg: Option<&str>| Instance { id, studio, configuration: cfg.map(Into::into), part, name: format!("I{id}"), position: [0.0; 3], rotation: [0.0; 3], fixed: false };
+    let assembly = Assembly { instances: vec![inst(1, 0, None), inst(2, 0, Some("Larga")), inst(3, b, Some("X")), inst(4, 0, Some("Larga"))], next_id: 5, ..Default::default() };
+    let TabKind::Assembly { assembly: stored, .. } = &mut tabs.get_mut(asm).unwrap().kind else { panic!() };
+    *stored = assembly.clone();
+    assert_eq!(tabs.variants(asm), [(0, "Larga".to_string()), (b, "X".to_string())]);
+    // Cada variante con su número; la misma variante, el mismo
+    let flat = tabs.flat_assembly(asm).unwrap();
+    let tab_of = |i: usize| split_tab_feature(flat.instances[i].part.feature).0;
+    assert_eq!([tab_of(0), tab_of(1), tab_of(2), tab_of(3)], [0, VARIANT_BASE, VARIANT_BASE + 1, VARIANT_BASE]);
+    assert_eq!(flat.instances[2].studio, b, "cada instancia conserva su pestaña");
+    // Ida y vuelta, también después de cambiarle la configuración a una
+    tabs.set_flat_assembly(asm, flat.clone()).unwrap();
+    let TabKind::Assembly { assembly: back, .. } = &tabs.get(asm).unwrap().kind else { panic!() };
+    assert_eq!(*back, assembly);
+    let mut changed = flat;
+    changed.instances[0].configuration = Some("Larga".into());
+    tabs.set_flat_assembly(asm, changed).unwrap();
+    assert_eq!(split_tab_feature(tabs.flat_assembly(asm).unwrap().instances[0].part.feature).0, VARIANT_BASE);
+    // Sus documentos: con la configuración activa (la que no existe, la de base)
+    let docs = tabs.variant_documents(asm);
+    assert_eq!(docs.iter().map(|(v, s, d)| (*v, *s, d.active_configuration)).collect::<Vec<_>>(), [(VARIANT_BASE, 0, Some(0)), (VARIANT_BASE + 1, b, None)]);
+    // Los nombres llevan la configuración
+    let unnamed = PartId { feature: tab_feature(VARIANT_BASE + 1, FeatureId(0)), index: 0 };
+    let (props, _) = tabs.flat_part_props(asm, &[(unnamed, "Pieza 1".into())]);
+    let name = |p: PartId| props.iter().find(|x| x.part == p).and_then(|x| x.name.clone());
+    assert_eq!(name(PartId { feature: tab_feature(VARIANT_BASE, FeatureId(0)), index: 0 }).as_deref(), Some("Caja (Larga)"));
+    assert_eq!(name(PartId { feature: FeatureId(0), index: 0 }).as_deref(), Some("Caja"));
+    assert_eq!(name(unnamed).as_deref(), Some("Pieza 1 (X)"));
+    // Sin configuraciones, se guarda como antes
+    let json = serde_json::to_string(&inst(1, 0, None)).unwrap();
+    assert!(!json.contains("configuration"), "{json}");
 }

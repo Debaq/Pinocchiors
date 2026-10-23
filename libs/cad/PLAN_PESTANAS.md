@@ -200,7 +200,7 @@ pestaña, piezas derivadas de otra pestaña y planos que apunten a una pestaña 
   node `e2e/objectsTabs.test.mjs`; el `hash` del fixture se mantiene (F2). Falta: el paso de
   Preparar rehecho sobre una pieza de otra pestaña, en la app.
 
-### F5 — Ensamble como pestaña propia 🟡 2026-10-23 (falta probarla en la app)
+### F5 — Ensamble como pestaña propia 🟡 2026-10-23 (completa; falta probarla en la app)
 
 - `Tabs::lift_assemblies()`: cada diseño con `assembly` con instancias → pestaña «Ensamble N»
   justo después, instancias con `studio` = ese diseño; se llama en `restore` (idempotente).
@@ -243,10 +243,20 @@ pestaña, piezas derivadas de otra pestaña y planos que apunten a una pestaña 
   instancias, bisagra, grados libres y choques» (`e2e/cad/piezas.mjs`) entra ahora por «+ → Nuevo
   ensamble», exporta desde la pestaña y vuelve a «Diseño 1» (sin correr: el usuario corre los e2e).
   «ensamble: animar una unión…» arma el ensamble dentro del diseño: sigue andando así.
-- Falta de F5: `Instance.configuration` (cada instancia con su configuración), la instancia de
-  una pieza o pestaña borrada marcada en rojo (hoy simplemente no se dibuja), el planetario
-  «Armar» desde el diseño crea el ensamble dentro del diseño (no en una pestaña). (Los planos 2D
-  de una pestaña de ensamble ya se guardan: F7.)
+- Lo que faltaba de F5, hecho 2026-10-23:
+  - `Instance.configuration` (por nombre; sin ella, la de base): las instancias en otra
+    configuración usan una **variante** = el diseño con esa configuración activa, recalculado
+    aparte y numerado desde `VARIANT_BASE` (2048) en `tab_feature` (`Tabs::variants`,
+    `variant_documents`). `flat_assembly` deja la pestaña real en `studio` y
+    `set_flat_assembly` la conserva cuando el número es de una variante; sus piezas se llaman
+    como en el diseño con la configuración entre paréntesis («Caja (M4)»). En el panel, cada
+    instancia con «Configuración» si su diseño tiene (al cambiarla se relee el documento).
+    Pruebas: `instances_in_other_configurations_are_variants`, `instance_uses_its_configuration`.
+  - La instancia cuya pieza ya no está (borrada en su diseño o con su pestaña) sale en rojo en el
+    panel con el motivo (en el visor no hay qué dibujar).
+  - «Armar un planetario» en un diseño: al crear las piezas aparece «Armar en una pestaña de
+    ensamble nueva» (crea la pestaña y arma ahí con lo mismo que el botón del panel del ensamble).
+  - Los planos 2D de una pestaña de ensamble se guardan (F7).
 
 ### F6 — Pieza derivada (traer una pieza de otra pestaña) 🟡 2026-10-23 (falta probarla en la app)
 

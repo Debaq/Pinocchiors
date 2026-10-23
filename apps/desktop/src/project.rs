@@ -1493,7 +1493,7 @@ mod tests {
     fn legacy_assembly(doc: &cad_model::Document) -> cad_model::Assembly {
         use cad_model::{Assembly, Connector, Instance, Mate, MateKind, PartId, Relation};
         let [a, b] = [0, 1].map(|i| PartId { feature: doc.features[i].id, index: 0 });
-        let inst = |id, part, name: &str, position, fixed| Instance { id, studio: 0, part, name: name.into(), position, rotation: [0.0; 3], fixed };
+        let inst = |id, part, name: &str, position, fixed| Instance { id, studio: 0, configuration: None, part, name: name.into(), position, rotation: [0.0; 3], fixed };
         let con = |instance, origin| Connector { instance, origin, z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0] };
         let mate = |id, name: &str, kind, a, b| Mate { id, name: name.into(), kind, a, b, flip: false, angle: None, distance: None };
         Assembly {
