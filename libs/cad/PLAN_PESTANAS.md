@@ -248,7 +248,7 @@ pestaña, piezas derivadas de otra pestaña y planos que apunten a una pestaña 
   «Armar» desde el diseño crea el ensamble dentro del diseño (no en una pestaña), y los planos
   2D en una pestaña de ensamble no se guardan (F7).
 
-### F6 — Pieza derivada (traer una pieza de otra pestaña) ❌
+### F6 — Pieza derivada (traer una pieza de otra pestaña) 🟡 2026-10-23 (falta probarla en la app)
 
 - Operación nueva `FeatureKind::Derived { studio, parts, configuration, placement }`: trae el
   sólido de piezas de otra pestaña como piezas de esta, y se rehace cuando el original cambia
@@ -257,6 +257,25 @@ pestaña, piezas derivadas de otra pestaña y planos que apunten a una pestaña 
   detectan y dan error claro antes de evaluar. Borrar una pestaña de la que otra deriva → aviso
   en el `ConfirmDialog` de F3.
 - Pruebas: derivar y restar (molde), cambiar el original y que la derivada siga, ciclo detectado.
+- Hecho: `Derived { studio, parts (vacío = todas), configuration (por nombre; ninguna = la de
+  base), op (por defecto pieza aparte) }` + `source: DerivedSource` que **no se guarda**: lo
+  llena `Tabs::fill_derived(tab, doc, eval)` antes de recalcular (como las referencias del
+  escaneo). La huella del original entra en la de la operación (`fingerprint`) y en
+  `Document::geometry_hash` (que reemplaza a `doc_hash` del backend), así un cambio allá rehace
+  la derivada y las cachés por pestaña se invalidan solas. Las caras siguen los orígenes del
+  original (`<operación>/<nombre>`). Ciclo: `derive_chain` recorre el grafo sin calcular y da
+  «las piezas derivadas forman un ciclo: «A» → «B» → «A»» en todas las pestañas del ciclo;
+  también traer de sí misma, de un ensamble o de una pestaña borrada dan error. Piezas que el
+  original ya no tiene: aviso con referencia perdida (`parts`). `Tabs::users` cuenta los diseños
+  que derivan (la confirmación de borrar ya los nombra). Backend: `prepared(state, tab, doc)`
+  junta escaneo + derivadas y se usa en todo recálculo (visor, ensamble, otra pestaña, exportar
+  compensado, comparar versiones, piezas antes de una operación, proyectar). Comando nuevo
+  `cad_tab_parts(id)` (piezas con su nombre). Interfaz: «Pieza derivada» en Sólidos (después de
+  STEP…) y su panel: pestaña de origen, configuración (si el original tiene), piezas a marcar y
+  con el sólido. Pruebas: 5 en `tests/tabs.rs` (guardado sin formas, molde que sigue al
+  original, ciclos/pestaña borrada/ensamble/pieza faltante, configuración) y
+  `derived_part_follows_its_tab` en el backend.
+- Sin `placement`: para ubicarla, Mover/Girar cuerpo después (como cualquier pieza).
 
 ### F7 — Planos 2D de cualquier pestaña ❌
 

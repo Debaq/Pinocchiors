@@ -875,6 +875,8 @@ export type FeatureKind =
   | { type: "transform"; parts: PartId[]; motion: Motion; copy: boolean }
   | { type: "split"; plane: PlaneSpec; flip: boolean }
   | { type: "import"; format: "step" | "brep"; data: number[]; op: BodyOp }
+  /** Piezas de otra pestaña de diseño (`parts` vacío = todas), en la configuración por nombre; se rehacen cuando cambia el original */
+  | { type: "derived"; studio: number; parts?: PartId[]; configuration?: string | null; op: BodyOp }
   /**
    * El escaneo elegido como sólido (rehecho por vóxeles con la holgura, a unos `faces` triángulos).
    * `thickness` ≠ 0: carcasa de ese espesor (negativo, hacia adentro); `region`: solo el parche
@@ -1899,6 +1901,7 @@ export const FEATURE_LABELS: Record<FeatureKind["type"], string> = {
   get mirror() { return tr("Simetría"); },
   get split() { return tx("cad", "Corte"); },
   get import() { return tr("Importado"); },
+  get derived() { return tr("Pieza derivada"); },
   get scan_body() { return tr("Cuerpo del escaneo"); },
   get scan_surface() { return tr("Superficie libre del escaneo"); },
   get boolean() { return tr("Booleana"); },

@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::assembly::Assembly;
 use crate::document::{Document, PartProps};
 use crate::eval::Evaluation;
-use crate::feature::{FeatureId, PartId};
+use crate::feature::{Derived, DerivedSource, FeatureId, FeatureKind, PartId};
 
 pub type TabId = u32;
 
@@ -231,13 +231,100 @@ impl Tabs {
         Ok(())
     }
 
-    /// Ensambles que usan piezas de la pestaña `id` (para avisar antes de borrarla).
+    /// Ensambles y diseños que usan piezas de la pestaña `id` (para avisar antes de borrarla).
     pub fn users(&self, id: TabId) -> Vec<TabId> {
         self.tabs
             .iter()
-            .filter(|t| matches!(&t.kind, TabKind::Assembly { assembly } if assembly.instances.iter().any(|i| i.studio == id)))
+            .filter(|t| match &t.kind {
+                TabKind::Assembly { assembly } => assembly.instances.iter().any(|i| i.studio == id),
+                TabKind::Design { document } => t.id != id && document.features.iter().any(|f| matches!(&f.kind, FeatureKind::Derived(d) if d.studio == id)),
+            })
             .map(|t| t.id)
             .collect()
+    }
+
+    /// Llena las piezas derivadas de `doc` (el de la pestaña `tab`): cada
+    /// pestaña de origen se calcula con `eval` (después de llenar las suyas).
+    /// Un ciclo (A trae de B, que trae de A) queda como error de la operación.
+    pub fn fill_derived(&self, tab: TabId, doc: &mut Document, eval: &mut dyn FnMut(&Document) -> Evaluation) {
+        self.fill_derived_in(&mut vec![tab], doc, eval);
+    }
+
+    /// Si `doc` trae piezas de otra pestaña
+    pub fn has_derived(doc: &Document) -> bool {
+        doc.features.iter().any(|f| matches!(f.kind, FeatureKind::Derived(_)))
+    }
+
+    fn fill_derived_in(&self, path: &mut Vec<TabId>, doc: &mut Document, eval: &mut dyn FnMut(&Document) -> Evaluation) {
+        for f in &mut doc.features {
+            if let FeatureKind::Derived(d) = &mut f.kind
+                && !f.suppressed
+            {
+                d.source = self.derived_source(path, d, eval);
+            }
+        }
+    }
+
+    /// Camino de derivadas desde `from` hasta una de `targets` (`from` primero,
+    /// la de `targets` al final), sin calcular nada.
+    fn derive_chain(&self, from: TabId, targets: &[TabId], seen: &mut Vec<TabId>) -> Option<Vec<TabId>> {
+        if targets.contains(&from) {
+            return Some(vec![from]);
+        }
+        if seen.contains(&from) {
+            return None;
+        }
+        seen.push(from);
+        let doc = self.design(from)?;
+        for f in doc.features.iter().filter(|f| !f.suppressed) {
+            if let FeatureKind::Derived(d) = &f.kind
+                && let Some(rest) = self.derive_chain(d.studio, targets, seen)
+            {
+                return Some([vec![from], rest].concat());
+            }
+        }
+        None
+    }
+
+    fn derived_source(&self, path: &mut Vec<TabId>, d: &Derived, eval: &mut dyn FnMut(&Document) -> Evaluation) -> DerivedSource {
+        let name = |id: TabId| self.get(id).map_or_else(|| "?".to_string(), |t| format!("«{}»", t.name));
+        // Ciclo: el origen trae (directa o indirectamente) de una pestaña del camino
+        if let Some(chain) = self.derive_chain(d.studio, path, &mut Vec::new()) {
+            let at = path.iter().position(|t| Some(t) == chain.last()).unwrap_or(0);
+            let chain: Vec<String> = path[at..].iter().chain(&chain).map(|&t| name(t)).collect();
+            return DerivedSource::failed(format!("las piezas derivadas forman un ciclo: {}", chain.join(" → ")));
+        }
+        let Some(tab) = self.get(d.studio) else {
+            return DerivedSource::failed("la pestaña de origen ya no está");
+        };
+        let TabKind::Design { document } = &tab.kind else {
+            return DerivedSource::failed("las piezas se traen de un diseño, no de un ensamble");
+        };
+        let mut src = (**document).clone();
+        src.active_configuration = match &d.configuration {
+            None => None,
+            Some(cfg) => match src.configurations.iter().position(|c| &c.name == cfg) {
+                Some(i) => Some(i),
+                None => return DerivedSource::failed(format!("{} no tiene la configuración «{cfg}»", name(d.studio))),
+            },
+        };
+        path.push(d.studio);
+        self.fill_derived_in(path, &mut src, eval);
+        path.pop();
+        let ev = eval(&src);
+        let mut parts = Vec::new();
+        let mut missing = Vec::new();
+        if d.parts.is_empty() {
+            parts.extend(ev.parts.iter().map(|p| (p.id, p.shape.clone(), p.tags.clone())));
+        } else {
+            for (k, id) in d.parts.iter().enumerate() {
+                match ev.parts.iter().find(|p| p.id == *id) {
+                    Some(p) => parts.push((p.id, p.shape.clone(), p.tags.clone())),
+                    None => missing.push(k),
+                }
+            }
+        }
+        DerivedSource { hash: src.geometry_hash(), parts, missing, error: None }
     }
 
     /// Los ensambles que estaban dentro de un diseño (proyectos de antes) pasan

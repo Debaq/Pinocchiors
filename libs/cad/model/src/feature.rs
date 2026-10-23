@@ -807,6 +807,67 @@ pub enum ImportFormat {
     Brep,
 }
 
+/// Piezas traídas de otra pestaña de diseño (como *Derived* de Onshape): se
+/// rehacen cuando cambia el original. Para molde y contramolde, una tapa que
+/// calza con su caja… Se mueven después con Mover/Girar cuerpo.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Derived {
+    /// Pestaña de donde vienen.
+    pub studio: crate::tabs::TabId,
+    /// Piezas que se traen (vacío = todas).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<PartId>,
+    /// Variante del original, por nombre (ninguna = la de base).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configuration: Option<String>,
+    /// Piezas aparte salvo que se elija unir, restar o intersectar.
+    #[serde(default = "derived_op")]
+    pub op: BodyOp,
+    /// Las piezas del original ya calculadas. No se guarda: la llena
+    /// `Tabs::fill_derived` antes de cada recálculo.
+    #[serde(skip)]
+    pub source: DerivedSource,
+}
+
+fn derived_op() -> BodyOp {
+    BodyOp::New
+}
+
+/// Lo que trae una pieza derivada, calculado en su pestaña de origen.
+#[derive(Clone)]
+pub struct DerivedSource {
+    /// Huella del original: entra en la del recálculo, así un cambio allá rehace la derivada.
+    pub hash: u64,
+    pub parts: Vec<(PartId, crate::Shape, Vec<Vec<FaceTag>>)>,
+    /// Posiciones en `Derived::parts` de las piezas que el original ya no tiene.
+    pub missing: Vec<usize>,
+    pub error: Option<String>,
+}
+
+impl DerivedSource {
+    pub fn failed(message: impl Into<String>) -> Self {
+        Self { hash: 0, parts: Vec::new(), missing: Vec::new(), error: Some(message.into()) }
+    }
+}
+
+impl Default for DerivedSource {
+    fn default() -> Self {
+        Self::failed("la pestaña de origen no se calculó")
+    }
+}
+
+impl PartialEq for DerivedSource {
+    fn eq(&self, other: &Self) -> bool {
+        (self.hash, &self.missing, &self.error) == (other.hash, &other.missing, &other.error)
+    }
+}
+
+impl std::fmt::Debug for DerivedSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DerivedSource").field("hash", &self.hash).field("parts", &self.parts.len()).field("missing", &self.missing).field("error", &self.error).finish()
+    }
+}
+
 /// Qué hace el redondeo de cara entre los dos grupos de caras.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -912,6 +973,8 @@ pub enum FeatureKind {
         #[serde(default)]
         op: BodyOp,
     },
+    /// Piezas de otra pestaña de diseño.
+    Derived(Derived),
     /// El escaneo como cuerpo, para encajes, cunas y negativos.
     ScanBody(ScanBody),
     /// Superficie libre ajustada a una zona del escaneo que no es plano, cilindro ni cono
@@ -1653,6 +1716,7 @@ impl FeatureKind {
             FeatureKind::Mirror { .. } => "Simetría",
             FeatureKind::Split { .. } => "Corte",
             FeatureKind::Import { .. } => "Importado",
+            FeatureKind::Derived(_) => "Pieza derivada",
             FeatureKind::ScanBody(b) if b.region.is_some() || b.paint.is_some() => "Parche del escaneo",
             FeatureKind::ScanBody(b) if b.thickness != 0.0 => "Carcasa del escaneo",
             FeatureKind::ScanBody(_) => "Cuerpo del escaneo",

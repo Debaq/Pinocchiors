@@ -715,6 +715,14 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     void store.addFeature({ type: "boolean", op: "subtract", targets: first ? [first] : [], tools: rest, keep_tools: false });
   };
 
+  /** Piezas de otra pestaña de diseño (la primera que haya); la pestaña y las piezas se cambian en el panel */
+  const addDerived = () => {
+    const { tabs, active } = store.tabs();
+    const other = tabs.find((x) => x.kind === "design" && x.id !== active);
+    if (!other) return say(tr("No hay otra pestaña de diseño de donde traer piezas"));
+    void store.addFeature({ type: "derived", studio: other.id, op: "new" });
+  };
+
   const addMirror = () => {
     const sel = selectedFeature();
     const features = sel && toolFeatures().includes(sel) ? [sel.id] : [];
@@ -846,6 +854,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     startFaceToScan,
     startScanShell,
     importStep,
+    addDerived,
     addSplitBy,
     trimWithPlane,
     trimWithSolid,

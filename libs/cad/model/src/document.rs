@@ -265,6 +265,22 @@ impl Document {
         Ok(())
     }
 
+    /// Huella de lo que cambia el recálculo. El material, las carpetas, los
+    /// nombres y colores de piezas, el ensamble, el plano y las versiones no
+    /// cuentan; lo traído de otras pestañas sí (ver `Derived::source`).
+    pub fn geometry_hash(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        let doc = Document { material: None, folders: Vec::new(), parts: Vec::new(), assembly: None, drawing: None, versions: Vec::new(), ..self.clone() };
+        serde_json::to_string(&doc).unwrap_or_default().hash(&mut h);
+        for f in &self.features {
+            if let crate::feature::FeatureKind::Derived(d) = &f.kind {
+                (f.id, d.source.hash, &d.source.error).hash(&mut h);
+            }
+        }
+        h.finish()
+    }
+
     /// Recalcula todo el árbol.
     pub fn evaluate(&self) -> Evaluation {
         crate::eval::evaluate(self)

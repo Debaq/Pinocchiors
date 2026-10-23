@@ -362,4 +362,15 @@ export const en_layout2: Catalog = {
   "Nuevo ensamble": "New assembly",
   "Se borra el ensamble con sus uniones y no se puede deshacer. Las piezas siguen en sus diseños.": "The assembly is deleted with its mates and this can't be undone. The parts stay in their part designs.",
   "Sus piezas quedarán faltando en: {list}.": "Its parts will be missing from: {list}.",
+  // Pieza derivada (F6)
+  "Piezas de otra pestaña de diseño que se rehacen cuando cambia el original (molde, tapa que calza con su caja)":
+    "Parts from another part design tab, rebuilt when the original changes (mold, a lid that fits its box)",
+  "No hay otra pestaña de diseño de donde traer piezas": "There is no other part design tab to bring parts from",
+  "De la pestaña": "From tab",
+  "Pestaña que ya no está": "Tab that no longer exists",
+  "La de base": "Base",
+  "Piezas (sin marcar ninguna, todas)": "Parts (none checked: all)",
+  "Esa pestaña todavía no tiene piezas": "That tab has no parts yet",
+  "El original ya no tiene {n} de las piezas elegidas": "The original no longer has {n} of the chosen parts",
+  "Quitarlas": "Remove them",
 };

@@ -27,6 +27,7 @@ export const en_lib1: Catalog = {
   "Simetría": "Mirror",
   "Corte": "Cut",
   "Importado": "Imported",
+  "Pieza derivada": "Derived part",
   "Cuerpo del escaneo": "Scan body",
   "Booleana": "Boolean",
   "Separar piezas": "Split parts",

@@ -72,6 +72,7 @@ import {
   type MateKind,
   type Relation,
   type PartId,
+  type CadDocument,
   type PlaneDef,
   type PointSpec,
   type RefPick,
@@ -3309,6 +3310,14 @@ export const FeatureEditor: Component<{
               </>
             )}
           </Match>
+          <Match when={f().kind.type === "derived" && (f().kind as Extract<FeatureKind, { type: "derived" }>)}>
+            {(k) => (
+              <>
+                <DerivedBox store={props.store} kind={k()} missing={lost("parts")} update={update} />
+                <Row label={tl("Con el sólido")}>{opSelect(k().op, (o) => update((x) => x.type === "derived" && (x.op = o)))}</Row>
+              </>
+            )}
+          </Match>
           <Match when={f().kind.type === "scan_body" && (f().kind as Extract<FeatureKind, { type: "scan_body" }>)}>
             {(k) => (
               <>
@@ -5083,6 +5092,92 @@ const SkipCopies: Component<{ value: number[]; onChange: (v: number[]) => void }
     <p class="text-[11px] text-text-dim">{tl("Números de las copias que no se hacen (1 es la primera; en dos direcciones se cuentan por filas).")}</p>
   </>
 );
+
+/** Lo que trae una pieza derivada: de qué pestaña, qué piezas (ninguna marcada = todas) y en qué configuración */
+const DerivedBox: Component<{
+  store: CadStore;
+  kind: Extract<FeatureKind, { type: "derived" }>;
+  /** Posiciones de `kind.parts` que el original ya no tiene */
+  missing: number[];
+  update: (mutate: (k: FeatureKind) => void) => void;
+}> = (props) => {
+  const sources = () => props.store.tabs().tabs.filter((x) => x.kind === "design" && x.id !== props.store.tabs().active);
+  const [labels, setLabels] = createSignal<{ id: PartId; name: string }[]>([]);
+  const [configs, setConfigs] = createSignal<string[]>([]);
+  let seq = 0;
+  createEffect(() => {
+    const id = props.kind.studio;
+    // Se releen al cambiar de pestaña de origen o las pestañas
+    props.store.tabs();
+    const n = ++seq;
+    invoke<{ id: PartId; name: string }[]>("cad_tab_parts", { id }).then(
+      (p) => n === seq && setLabels(p),
+      () => n === seq && setLabels([]),
+    );
+    invoke<CadDocument | null>("cad_tab_document", { id }).then(
+      (d) => n === seq && setConfigs((d?.configurations ?? []).map((c) => c.name)),
+      () => n === seq && setConfigs([]),
+    );
+  });
+  const chosen = () => props.kind.parts ?? [];
+  const has = (id: PartId) => chosen().some((x) => samePart(x, id));
+  const choose = (next: PartId[]) => props.update((x) => x.type === "derived" && (x.parts = next.length ? next : undefined));
+  const gone = () => chosen().filter((_, i) => props.missing.includes(i));
+  const tabOptions = () => [
+    ...sources().map((x) => ({ value: String(x.id), label: tBackend(x.name) })),
+    ...(sources().some((x) => x.id === props.kind.studio) ? [] : [{ value: String(props.kind.studio), label: tl("Pestaña que ya no está") }]),
+  ];
+  return (
+    <>
+      <Row label={tl("De la pestaña")}>
+        <Select
+          options={tabOptions()}
+          value={String(props.kind.studio)}
+          onChange={(v) =>
+            props.update((x) => {
+              if (x.type !== "derived" || x.studio === +v) return;
+              x.studio = +v;
+              x.parts = undefined;
+              x.configuration = undefined;
+            })
+          }
+        />
+      </Row>
+      <Show when={configs().length > 0 || props.kind.configuration}>
+        <Row label={tl("Configuración")}>
+          <Select
+            options={[{ value: "", label: tl("La de base") }, ...configs().map((c) => ({ value: c, label: c }))]}
+            value={props.kind.configuration ?? ""}
+            onChange={(v) => props.update((x) => x.type === "derived" && (x.configuration = v || undefined))}
+          />
+        </Row>
+      </Show>
+      <div class="space-y-1" data-derived-parts aria-label={tl("Piezas")}>
+        <span class="text-xs text-text-muted">{tl("Piezas (sin marcar ninguna, todas)")}</span>
+        <Show when={labels().length > 0} fallback={<p class="text-[11px] text-text-dim">{tl("Esa pestaña todavía no tiene piezas")}</p>}>
+          <For each={labels()}>
+            {(p) => (
+              <Checkbox
+                small
+                label={p.name}
+                checked={has(p.id)}
+                onChange={() => choose(has(p.id) ? chosen().filter((x) => !samePart(x, p.id)) : [...chosen(), p.id])}
+              />
+            )}
+          </For>
+        </Show>
+        <Show when={gone().length > 0}>
+          <div class="flex items-center justify-between text-[11px] text-error">
+            <span>{tl("El original ya no tiene {n} de las piezas elegidas", { n: gone().length })}</span>
+            <button class="underline hover:text-text" onClick={() => choose(chosen().filter((_, i) => !props.missing.includes(i)))}>
+              {tl("Quitarlas")}
+            </button>
+          </div>
+        </Show>
+      </div>
+    </>
+  );
+};
 
 const PartChecklist: Component<{
   store: CadStore;

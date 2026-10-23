@@ -130,6 +130,7 @@ export function designToolSets(a: DesignActions, ui: CadUi) {
     { label: "Engrane", icon: D.Gear, run: () => a.addGear(), tip: "Engrane de evolvente (recto, corona o cremallera) con módulo, dientes, agujero, cubo y chavetero" },
     "-",
     { label: "STEP...", icon: D.Import, run: () => void a.importStep(), tip: "Traer un sólido de un archivo STEP" },
+    { label: "Pieza derivada", icon: D.Import, run: a.addDerived, tip: "Piezas de otra pestaña de diseño que se rehacen cuando cambia el original (molde, tapa que calza con su caja)" },
   ];
   const modify: (Tool | "-")[] = [
     { label: "Vaciado", icon: D.Shell, run: () => void a.startFaces("shell"), needsBody: true, tip: "Ahueca el sólido; las caras elegidas quedan abiertas" },

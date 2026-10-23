@@ -253,12 +253,7 @@ fn part_name(doc: &Document, id: cad_model::PartId, n: usize) -> String {
 }
 
 fn doc_hash(doc: &Document) -> u64 {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    // El JSON es estable y cubre todo el documento; el material, las carpetas
-    // y los nombres y colores de piezas no cambian la geometría: no recalculan
-    let doc = Document { material: None, folders: Vec::new(), parts: Vec::new(), assembly: None, drawing: None, versions: Vec::new(), ..doc.clone() };
-    serde_json::to_string(&doc).unwrap_or_default().hash(&mut h);
-    h.finish()
+    doc.geometry_hash()
 }
 
 fn require_occt() -> Result<(), String> {
@@ -376,6 +371,24 @@ fn fit_scan_references(state: &AppState, doc: &Document) -> Option<Document> {
     done.ok().map(|_| out)
 }
 
+/// El documento de la pestaña `tab` (`None`: la activa) listo para recalcular,
+/// o `None` si va tal cual: las referencias del escaneo al día y las piezas
+/// traídas de otras pestañas (calculadas con la caché de operaciones).
+fn prepared(state: &AppState, tab: Option<TabId>, doc: &Document) -> Option<Document> {
+    let fitted = fit_scan_references(state, doc);
+    if !Tabs::has_derived(doc) {
+        return fitted;
+    }
+    let mut out = fitted.unwrap_or_else(|| doc.clone());
+    let tabs = state.cad_tabs.lock().unwrap();
+    let tab = tab.unwrap_or(tabs.active);
+    tabs.fill_derived(tab, &mut out, &mut |d| {
+        let fitted = fit_scan_references(state, d);
+        fitted.as_ref().unwrap_or(d).evaluate_with(&mut state.cad_ops.lock().unwrap())
+    });
+    Some(out)
+}
+
 fn uses_scan(kind: &FeatureKind) -> bool {
     matches!(
         kind,
@@ -442,7 +455,7 @@ fn design_tabs(state: &AppState) -> Vec<(TabId, Document)> {
             cad_model::TabKind::Assembly { .. } => None,
         })
         .collect();
-    designs.into_iter().map(|(id, d)| (id, fit_scan_references(state, &d).unwrap_or(d))).collect()
+    designs.into_iter().map(|(id, d)| (id, prepared(state, Some(id), &d).unwrap_or(d))).collect()
 }
 
 /// Huella de todos los diseños (lo que cambia el recálculo de un ensamble)
@@ -478,7 +491,7 @@ fn evaluate_doc(state: &AppState, doc: &Document) -> Result<CadResult, String> {
     // Pestaña de ensamble: el recálculo es el de todos los diseños juntos
     let designs = state.cad_in_assembly().then(|| design_tabs(state));
     let fitted;
-    let doc = match designs.is_none().then(|| fit_scan_references(state, doc)).flatten() {
+    let doc = match designs.is_none().then(|| prepared(state, None, doc)).flatten() {
         Some(d) => {
             fitted = d;
             &fitted
@@ -669,7 +682,7 @@ pub struct TabView {
     pub name: String,
     /// "design" o "assembly"
     pub kind: &'static str,
-    /// Ensambles que usan piezas de esta pestaña
+    /// Ensambles y diseños que usan piezas de esta pestaña
     pub used_by: Vec<TabId>,
 }
 
@@ -734,6 +747,21 @@ pub fn cad_tabs(state: tauri::State<'_, AppState>) -> TabsView {
 #[tauri::command]
 pub fn cad_tab_document(state: tauri::State<'_, AppState>, id: TabId) -> Option<Document> {
     state.cad_tabs.lock().unwrap().design(id).cloned()
+}
+
+/// Las piezas de una pestaña de diseño con el nombre que tienen en ella (para traerlas a otra)
+#[tauri::command]
+pub async fn cad_tab_parts(app: AppHandle, id: TabId) -> Result<Vec<PartLabel>, String> {
+    require_occt()?;
+    in_background(app, move |state| tab_parts_impl(state, id)).await
+}
+
+fn tab_parts_impl(state: &AppState, id: TabId) -> Result<Vec<PartLabel>, String> {
+    let doc = state.cad_tabs.lock().unwrap().design(id).cloned().ok_or("Esa pestaña ya no está o no es un diseño")?;
+    let doc = prepared(state, Some(id), &doc).unwrap_or(doc);
+    let eval = doc.evaluate_with(&mut state.cad_ops.lock().unwrap());
+    let numbers = part_numbers(&doc, &eval);
+    Ok(eval.parts.iter().map(|p| PartLabel { id: p.id, name: part_name(&doc, p.id, numbers.get(&p.id).copied().unwrap_or(0)) }).collect())
 }
 
 /// Pestaña nueva al final; queda activa.
@@ -1136,6 +1164,7 @@ pub async fn cad_compare(app: AppHandle, document: Document) -> Result<Response,
 fn compare_impl(state: &AppState, other: &Document) -> Result<Vec<u8>, String> {
     evaluate_committed(state)?;
     let now = state.cad_cache.lock().unwrap().as_ref().and_then(|c| c.eval.body.clone());
+    let other = prepared(state, None, other).unwrap_or_else(|| other.clone());
     let then = other.evaluate_with(&mut state.cad_ops.lock().unwrap()).body;
     let scale = 1.0 / mm_per_unit(state);
     let diff = |a: &Option<cad_model::Shape>, b: &Option<cad_model::Shape>| -> Result<Option<cad_model::Shape>, String> {
@@ -1367,6 +1396,7 @@ pub async fn cad_project_model(app: AppHandle, document: Document, index: usize,
 
 fn project_model_impl(state: &AppState, mut doc: Document, index: usize, plane: &cad_model::Plane, what: &str) -> Result<Vec<cad_model::project::Projected>, String> {
     doc.rollback = Some(doc.rollback.map_or(index, |r| r.min(index)));
+    let doc = prepared(state, None, &doc).unwrap_or(doc);
     let eval = doc.evaluate_with(&mut state.cad_ops.lock().unwrap());
     let body = eval.body.as_ref().ok_or("No hay sólido antes de este sketch")?;
     let curves = match what {
@@ -1566,6 +1596,7 @@ pub async fn cad_parts_at(app: AppHandle, document: Document, index: usize) -> R
 fn parts_at_impl(state: &AppState, mut doc: Document, index: usize) -> Result<Vec<PartView>, String> {
     require_occt()?;
     doc.rollback = Some(doc.rollback.map_or(index, |r| r.min(index)));
+    let doc = prepared(state, None, &doc).unwrap_or(doc);
     let eval = doc.evaluate_with(&mut state.cad_ops.lock().unwrap());
     let masses: Vec<_> = eval.parts.iter().map(|p| p.shape.mass().ok()).collect();
     Ok(part_views(&doc, &eval, &masses))
@@ -1910,7 +1941,7 @@ fn tab_parts_scene(state: &AppState, tab: Option<TabId>, name: &str, only: Optio
         }
     };
     let Some(doc) = other else { return parts_scene(state, name, only) };
-    let doc = fit_scan_references(state, &doc).unwrap_or(doc);
+    let doc = prepared(state, tab, &doc).unwrap_or(doc);
     let eval = doc.evaluate_with(&mut state.cad_ops.lock().unwrap());
     parts_scene_of(&doc, &eval, name, only)
 }
@@ -2003,7 +2034,7 @@ fn compensated_eval(state: &AppState) -> Result<(Document, cad_model::Evaluation
     let fab = doc.fabrication.as_mut().ok_or("Elige una impresora y un material para compensar")?;
     fab.compensate_all = true;
     let scale = fab.tolerances().shrink_scale();
-    let fitted = fit_scan_references(state, &doc);
+    let fitted = prepared(state, None, &doc);
     let ev = fitted.as_ref().unwrap_or(&doc).evaluate();
     if let Some((_, message)) = ev.errors().first() {
         return Err(format!("El diseño compensado no se pudo calcular: {message}"));
@@ -2763,6 +2794,7 @@ pub mod bridge {
                 let id: TabId = arg(args, "id")?;
                 ok(state.cad_tabs.lock().unwrap().design(id).cloned())
             }
+            "cad_tab_parts" => ok(tab_parts_impl(state, arg(args, "id")?)?),
             "cad_tab_add" => ok(tab_add_impl(state, arg(args, "kind")?, arg(args, "name")?)?),
             "cad_tab_rename" => {
                 let (id, name): (TabId, String) = (arg(args, "id")?, arg(args, "name")?);
@@ -3270,6 +3302,42 @@ mod tests {
         assert!(state.cad_doc().unwrap().features.is_empty());
         assert!(state.with_cad_doc(|_| ()).is_err());
         assert!(status_impl(&state).has_document);
+    }
+
+    /// Un molde que resta la pieza de otra pestaña sigue al original al volver a él
+    #[test]
+    fn derived_part_follows_its_tab() {
+        if !cad_model::occt::available() {
+            return;
+        }
+        let state = AppState::new();
+        state.set_cad_tabs(Tabs::from_legacy(Some(box_doc())));
+        change_tabs(&state, |t| {
+            t.add(box_tab(40.0), Some("Molde".into()));
+            Ok(())
+        })
+        .unwrap();
+        let derived = |studio| FeatureKind::Derived(cad_model::Derived { studio, parts: vec![], configuration: None, op: BodyOp::Cut, source: Default::default() });
+        state.with_cad_doc(|d| d.add(derived(0))).unwrap();
+        let r = evaluate(&state).unwrap();
+        assert!(r.status.iter().all(|s| matches!(s.state, cad_model::FeatureState::Ok)), "{:?}", r.status);
+        assert!((r.body.unwrap().volume - 18000.0).abs() < 1e-6);
+        assert_eq!(tabs_view(&state.cad_tabs.lock().unwrap()).tabs[0].used_by, [1]);
+        let parts = tab_parts_impl(&state, 0).unwrap();
+        assert_eq!((parts.len(), parts[0].name.as_str()), (1, "Pieza 1"));
+        // Cambia el original en su pestaña y se vuelve al molde
+        change_tabs(&state, |t| t.activate(0)).unwrap();
+        let mut longer = box_doc();
+        let FeatureKind::Primitive(p) = &mut longer.features[0].kind else { panic!() };
+        p.shape = cad_model::PrimitiveShape::Box { dx: 25.0, dy: 20.0, dz: 30.0, centered: false, centered_z: false };
+        set_document_impl(&state, longer).unwrap();
+        change_tabs(&state, |t| t.activate(1)).unwrap();
+        let r = evaluate(&state).unwrap();
+        assert!((r.body.unwrap().volume - 9000.0).abs() < 1e-6);
+        // Que el molde traiga de sí mismo: ciclo
+        state.with_cad_doc(|d| d.features[1].kind = derived(1)).unwrap();
+        let r = evaluate(&state).unwrap();
+        assert!(matches!(&r.status[1].state, cad_model::FeatureState::Error { message, .. } if message.contains("ciclo")), "{:?}", r.status[1]);
     }
 
     /// Una pestaña de ensamble ve las piezas de todos los diseños y guarda cada

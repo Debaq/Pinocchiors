@@ -207,3 +207,130 @@ fn merged_evaluation_keeps_parts_apart() {
     let v = merged.parts[1].shape.mass().unwrap().volume;
     assert!((v - 24000.0).abs() < 1e-6, "{v}");
 }
+
+fn derived(studio: TabId, op: BodyOp) -> FeatureKind {
+    FeatureKind::Derived(Derived { studio, parts: vec![], configuration: None, op, source: Default::default() })
+}
+
+/// Recalcula la pestaña `tab` con sus piezas derivadas llenas
+fn eval_tab(tabs: &Tabs, tab: TabId) -> Evaluation {
+    let mut doc = tabs.design(tab).unwrap().clone();
+    tabs.fill_derived(tab, &mut doc, &mut |d| d.evaluate());
+    doc.evaluate()
+}
+
+fn volume(ev: &Evaluation) -> f64 {
+    ev.parts.iter().map(|p| p.shape.mass().unwrap().volume).sum()
+}
+
+#[test]
+fn derived_is_saved_without_its_shapes() {
+    let mut doc = Document::new();
+    doc.add(derived(3, BodyOp::Cut));
+    let json = serde_json::to_string(&doc).unwrap();
+    assert!(!json.contains("source"), "{json}");
+    let back: Document = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, doc);
+    // Sin `op` guardado: pieza aparte
+    let FeatureKind::Derived(d) = serde_json::from_str::<FeatureKind>(r#"{"type":"derived","studio":1}"#).unwrap() else { panic!() };
+    assert_eq!((d.op, d.parts.len()), (BodyOp::New, 0));
+}
+
+#[test]
+fn derived_mold_follows_the_original() {
+    if !occt::available() {
+        return;
+    }
+    // Pestaña 0: una caja de 10×20×30. Pestaña 1: un bloque de 40×20×30 menos la caja (molde)
+    let mut tabs = Tabs::from_legacy(Some(box_doc(10.0)));
+    let mold = tabs.add(TabKind::Design { document: Box::new(box_doc(40.0)) }, Some("Molde".into()));
+    tabs.design_mut(mold).unwrap().add(derived(0, BodyOp::Cut));
+    let ev = eval_tab(&tabs, mold);
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    assert!((volume(&ev) - 30.0 * 20.0 * 30.0).abs() < 1e-6, "{}", volume(&ev));
+    assert_eq!(tabs.users(0), [mold]);
+    // Cambia el original: la derivada lo sigue (y la huella cambia)
+    let before = {
+        let mut d = tabs.design(mold).unwrap().clone();
+        tabs.fill_derived(mold, &mut d, &mut |d| d.evaluate());
+        d.geometry_hash()
+    };
+    *tabs.design_mut(0).unwrap() = box_doc(25.0);
+    let ev = eval_tab(&tabs, mold);
+    assert!((volume(&ev) - 15.0 * 20.0 * 30.0).abs() < 1e-6, "{}", volume(&ev));
+    let mut d = tabs.design(mold).unwrap().clone();
+    tabs.fill_derived(mold, &mut d, &mut |d| d.evaluate());
+    assert_ne!(d.geometry_hash(), before);
+    // Como pieza aparte: dos piezas
+    let mut copy = Document::new();
+    copy.add(derived(0, BodyOp::New));
+    let c = tabs.add(TabKind::Design { document: Box::new(copy) }, None);
+    let ev = eval_tab(&tabs, c);
+    assert_eq!(ev.parts.len(), 1);
+    assert!((volume(&ev) - 25.0 * 20.0 * 30.0).abs() < 1e-6);
+}
+
+#[test]
+fn derived_reports_cycles_and_missing_tabs() {
+    if !occt::available() {
+        return;
+    }
+    let mut tabs = Tabs::from_legacy(Some(box_doc(10.0)));
+    let b = tabs.add(TabKind::Design { document: Box::new(box_doc(40.0)) }, Some("B".into()));
+    tabs.design_mut(0).unwrap().add(derived(b, BodyOp::Join));
+    tabs.design_mut(b).unwrap().add(derived(0, BodyOp::Join));
+    let message = |ev: &Evaluation| ev.errors().first().map(|(_, m)| m.to_string()).unwrap_or_default();
+    let ev = eval_tab(&tabs, 0);
+    assert!(message(&ev).contains("ciclo"), "{}", message(&ev));
+    assert!(message(&ev).contains("«Diseño 1» → «B» → «Diseño 1»"), "{}", message(&ev));
+    // Ella misma
+    let mut own = tabs.clone();
+    own.design_mut(b).unwrap().features.pop();
+    own.design_mut(b).unwrap().add(derived(b, BodyOp::Join));
+    assert!(message(&eval_tab(&own, b)).contains("ciclo"));
+    assert_eq!(own.users(b), [0], "no se cuenta a sí misma");
+    // Pestaña borrada o un ensamble
+    let asm = tabs.add_assembly(None);
+    tabs.design_mut(b).unwrap().features.pop();
+    tabs.design_mut(b).unwrap().add(derived(asm, BodyOp::New));
+    assert!(message(&eval_tab(&tabs, b)).contains("ensamble"));
+    tabs.design_mut(b).unwrap().features.pop();
+    tabs.design_mut(b).unwrap().add(derived(77, BodyOp::New));
+    assert!(message(&eval_tab(&tabs, b)).contains("ya no está"));
+    // Pieza que el original ya no tiene: aviso, no error
+    tabs.design_mut(b).unwrap().features.pop();
+    let FeatureKind::Derived(mut d) = derived(0, BodyOp::New) else { panic!() };
+    let first = tabs.design(0).unwrap().features[0].id;
+    d.parts = vec![PartId { feature: first, index: 0 }, PartId { feature: first, index: 9 }];
+    tabs.design_mut(0).unwrap().features.pop();
+    tabs.design_mut(b).unwrap().add(FeatureKind::Derived(d));
+    let ev = eval_tab(&tabs, b);
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    assert_eq!(ev.parts.len(), 2, "el bloque y la caja traída");
+    let st = ev.status.last().unwrap();
+    assert!(matches!(&st.state, FeatureState::Warning { missing, .. } if missing.len() == 1 && missing[0].index == 1), "{:?}", st.state);
+}
+
+#[test]
+fn derived_uses_the_named_configuration() {
+    if !occt::available() {
+        return;
+    }
+    let mut a = box_doc(10.0);
+    a.parameters.push(Parameter { name: "largo".into(), expr: "10".into() });
+    let first = a.features[0].id.0;
+    a.bindings.insert(format!("{first}.kind.shape.dx"), "largo".into());
+    a.configurations.push(Configuration { name: "Larga".into(), values: [("largo".to_string(), "50".to_string())].into(), suppressed: vec![] });
+    let mut tabs = Tabs::from_legacy(Some(a));
+    let FeatureKind::Derived(mut d) = derived(0, BodyOp::New) else { panic!() };
+    d.configuration = Some("Larga".into());
+    let mut doc = Document::new();
+    doc.add(FeatureKind::Derived(d.clone()));
+    let b = tabs.add(TabKind::Design { document: Box::new(doc) }, None);
+    let ev = eval_tab(&tabs, b);
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    assert!((volume(&ev) - 50.0 * 20.0 * 30.0).abs() < 1e-6, "{}", volume(&ev));
+    d.configuration = Some("Otra".into());
+    tabs.design_mut(b).unwrap().features[0].kind = FeatureKind::Derived(d);
+    assert!(!eval_tab(&tabs, b).errors().is_empty());
+}

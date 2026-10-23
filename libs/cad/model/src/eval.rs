@@ -385,6 +385,10 @@ fn fingerprint(prev: u64, f: &Feature, rolled_back: bool) -> u64 {
     rolled_back.hash(&mut h);
     serde_json::to_string(&f.kind).unwrap_or_default().hash(&mut h);
     serde_json::to_string(&f.scope).unwrap_or_default().hash(&mut h);
+    // Lo traído de otra pestaña no se guarda: cuenta su huella
+    if let FeatureKind::Derived(d) = &f.kind {
+        (d.source.hash, &d.source.error).hash(&mut h);
+    }
     h.finish()
 }
 
@@ -2521,6 +2525,45 @@ impl Ctx<'_> {
                 let tool = Tagged { shape: tool, tags };
                 self.ev.tools.insert(f.id, (tool.clone(), *op));
                 self.apply(f.id, tool, *op)
+            }
+            FeatureKind::Derived(d) => {
+                let src = &d.source;
+                if let Some(e) = &src.error {
+                    return Err(e.clone());
+                }
+                for &k in &src.missing {
+                    self.miss("parts", k);
+                }
+                if !src.missing.is_empty() {
+                    self.warn(format!("el original ya no tiene {} de {} piezas", src.missing.len(), d.parts.len()));
+                }
+                if src.parts.is_empty() {
+                    return Err("el original no tiene piezas".into());
+                }
+                // Los orígenes de las caras siguen a los del original (con su operación en el nombre)
+                let tools: Vec<Tagged> = src
+                    .parts
+                    .iter()
+                    .map(|(_, shape, tags)| Tagged {
+                        shape: shape.clone(),
+                        tags: tags.iter().map(|ts| ts.iter().map(|t| tag(f.id, format!("{}/{}", t.feature.0, t.name))).collect()).collect(),
+                    })
+                    .collect();
+                if d.op == BodyOp::New {
+                    for t in tools {
+                        self.new_part(f.id, t);
+                    }
+                    self.sync();
+                    return Ok(());
+                }
+                let tool = if tools.len() == 1 {
+                    tools.into_iter().next().unwrap()
+                } else {
+                    let shapes: Vec<Shape> = tools.iter().map(|t| t.shape.clone()).collect();
+                    Tagged { shape: Shape::compound(&shapes).map_err(err)?, tags: tools.into_iter().flat_map(|t| t.tags).collect() }
+                };
+                self.ev.tools.insert(f.id, (tool.clone(), d.op));
+                self.apply(f.id, tool, d.op)
             }
             FeatureKind::ScanBody(b) => {
                 let tool = scan_solid(b.mesh.as_ref())?;

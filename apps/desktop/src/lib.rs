@@ -235,6 +235,7 @@ pub fn run() {
             cad::cad_get_document,
             cad::cad_tabs,
             cad::cad_tab_document,
+            cad::cad_tab_parts,
             cad::cad_tab_add,
             cad::cad_tab_rename,
             cad::cad_tab_duplicate,
