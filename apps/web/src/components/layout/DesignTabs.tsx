@@ -47,7 +47,7 @@ export const DesignTabs = (props: DesignTabsProps) => {
   const run = (cmd: TabCommand, args: Record<string, unknown>) => changeDesignTabs(props.store, props.ui, cmd, args);
 
   const [renaming, setRenaming] = createSignal<number>();
-  const [menu, setMenu] = createSignal<{ x: number; y: number; tab: CadTab }>();
+  const [menu, setMenu] = createSignal<{ x: number; y: number; items: MenuEntry[] }>();
 
   const rename = (tab: CadTab, name: string) => {
     setRenaming(undefined);
@@ -55,9 +55,14 @@ export const DesignTabs = (props: DesignTabsProps) => {
   };
 
   const remove = async (tab: CadTab) => {
+    const users = tab.used_by.map((id) => tabs().find((x) => x.id === id)).filter((x) => !!x).map((x) => `«${tBackend(x!.name)}»`);
+    const message =
+      tab.kind === "assembly"
+        ? t("Se borra el ensamble con sus uniones y no se puede deshacer. Las piezas siguen en sus diseños.")
+        : t("Se borra la pestaña con todas sus operaciones y no se puede deshacer. Las piezas que ya pasaron a la escena con su malla se quedan.");
     const ok = await props.confirm({
       title: t("Borrar «{name}»", { name: tBackend(tab.name) }),
-      message: t("Se borra la pestaña con todas sus operaciones y no se puede deshacer. Las piezas que ya pasaron a la escena con su malla se quedan."),
+      message: users.length ? `${message} ${t("Sus piezas quedarán faltando en: {list}.", { list: users.join(", ") })}` : message,
       confirmLabel: t("Borrar"),
       danger: true,
     });
@@ -140,7 +145,7 @@ export const DesignTabs = (props: DesignTabsProps) => {
             onDblClick={() => setRenaming(tab.id)}
             onContextMenu={(e) => {
               e.preventDefault();
-              setMenu({ x: e.clientX, y: e.clientY, tab });
+              setMenu({ x: e.clientX, y: e.clientY, items: menuItems(tab) });
             }}
           >
             {tab.kind === "assembly" ? <DesignIcons.Assembly size={13} /> : <Icons.Cube size={13} />}
@@ -164,14 +169,24 @@ export const DesignTabs = (props: DesignTabsProps) => {
       <button
         data-tab-add
         class="flex shrink-0 items-center px-2 text-text-muted hover:text-text"
-        title={t("Nuevo diseño")}
-        aria-label={t("Nuevo diseño")}
-        onClick={() => void run("cad_tab_add", { kind: "design", name: null })}
+        title={t("Nueva pestaña")}
+        aria-label={t("Nueva pestaña")}
+        onClick={(e) => {
+          const r = e.currentTarget.getBoundingClientRect();
+          setMenu({
+            x: r.left,
+            y: r.top - 64,
+            items: [
+              { label: t("Nuevo diseño"), onSelect: () => void run("cad_tab_add", { kind: "design", name: null }) },
+              { label: t("Nuevo ensamble"), onSelect: () => void run("cad_tab_add", { kind: "assembly", name: null }) },
+            ],
+          });
+        }}
       >
         <Icons.Plus size={14} />
       </button>
       <Show when={dropMark()}>{(x) => <div class="pointer-events-none absolute inset-y-0.5 w-0.5 bg-accent" style={{ left: `${x()}px` }} />}</Show>
-      <Show when={menu()}>{(m) => <ContextMenu x={m().x} y={m().y} items={menuItems(m().tab)} onClose={() => setMenu(undefined)} />}</Show>
+      <Show when={menu()}>{(m) => <ContextMenu x={m().x} y={m().y} items={m().items} onClose={() => setMenu(undefined)} />}</Show>
     </div>
   );
 };

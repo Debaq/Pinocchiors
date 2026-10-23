@@ -2,7 +2,7 @@
 //   node --test apps/web/e2e/designTabs.test.mjs
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { dropIndex, neighborTab, swapTabHistory } from "../src/lib/designTabs.ts";
+import { dropIndex, neighborTab, swapTabHistory, tabFeature } from "../src/lib/designTabs.ts";
 
 const tabs = (...ids) => ids.map((id) => ({ id }));
 
@@ -12,6 +12,12 @@ test("pestaña vecina en ronda", () => {
   assert.equal(neighborTab(tabs(0, 3, 5), 0, -1), 5);
   assert.equal(neighborTab(tabs(0), 0, 1), undefined, "una sola: nada");
   assert.equal(neighborTab(tabs(0, 3), null, 1), 0, "sin activa: la primera");
+});
+
+test("números de operación entre pestañas, como el backend (pestaña arriba de 20 bits)", () => {
+  assert.equal(tabFeature(0, 7), 7, "la pestaña 0 no cambia los números");
+  assert.equal(tabFeature(3, 12), 3 * 1048576 + 12);
+  assert.ok(tabFeature(4095, 2 ** 20 - 1) > 0, "sin pasar a negativo");
 });
 
 test("posición al soltar", () => {

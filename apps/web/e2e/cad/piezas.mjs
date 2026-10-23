@@ -197,8 +197,12 @@ export const escenarios = {
     await call("cad_set_document", { document: doc });
     await b.eval(`window.__cadStore.reload()`);
     await sleep(1500);
-    await b.clickText("Ensamble");
-    await sleep(800);
+    // El ensamble va en su pestaña: «+» → Nuevo ensamble
+    await b.eval(`document.querySelector("[data-tab-add]").click()`);
+    await sleep(300);
+    await b.clickText("Nuevo ensamble");
+    await sleep(1500);
+    if (!(await b.eval(`window.__cadUi.assemblyMode()`))) throw new Error("la pestaña de ensamble no está en modo ensamble");
     // Insertar las dos piezas (la primera queda fija)
     await b.clickText("Insertar");
     await sleep(1500);
@@ -239,11 +243,7 @@ export const escenarios = {
     await sleep(2000);
     sol = (await evaluate()).assembly.solution;
     if (sol.dof !== 0) throw new Error(`con ángulo: ${JSON.stringify(sol)}`);
-    // Volver al diseño
-    await b.clickText("Diseño");
-    await sleep(800);
-    if (await b.eval(`window.__cadUi.assemblyMode()`)) throw new Error("no volvió al diseño");
-    // Exportar el ensamble: cada instancia en su lugar, con su nombre
+    // Exportar el ensamble (desde su pestaña): cada instancia en su lugar, con su nombre
     const names = (await call("cad_get_document")).assembly.instances.map((i) => i.name);
     const out = process.env.E2E_OUT ?? "/tmp/pinocchio-e2e";
     await b.clickContains("Exportar");
@@ -265,6 +265,11 @@ export const escenarios = {
       if (!names.every((n) => text.includes(n))) throw new Error(`${fmt} sin los nombres ${names}`);
       if (fmt === "3mf" && (text.match(/<object /g) ?? []).length !== 2) throw new Error("3MF sin un objeto por instancia");
     }
+    // Volver al diseño (su pestaña): sin ensamble adentro
+    await b.eval(`document.querySelector('[data-tab="0"]').click()`);
+    await sleep(1500);
+    if (await b.eval(`window.__cadUi.assemblyMode()`)) throw new Error("no volvió al diseño");
+    if ((await call("cad_get_document")).assembly) throw new Error("el diseño quedó con ensamble adentro");
   },
 
   async "ensamble: animar una unión en GLB y vista explosionada"(b) {

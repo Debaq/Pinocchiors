@@ -6579,8 +6579,8 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
           <Tooltip content={tl("Con un sol, satélites, corona y portasatélites creados con «Armar un planetario»: pone la corona fija, el sol y el portasatélites girando en ella, y cada satélite girando en el portasatélites, con sus acoplamientos")}>
             <Button
               size="sm"
-              onClick={() => {
-                const made = planetaryAssembly(store.doc()?.features ?? [], store.result()?.gears ?? [], store.result()?.parts ?? [], asm() ?? undefined);
+              onClick={async () => {
+                const made = planetaryAssembly(await store.assemblyFeatures(), store.result()?.gears ?? [], store.result()?.parts ?? [], asm() ?? undefined);
                 if (typeof made === "string") return setNote(made);
                 setNote(undefined);
                 void store.editAssembly((a) => {

@@ -580,8 +580,10 @@ export const App: Component = () => {
   createEffect(() => {
     if (!inDesign() && cad.draft()) void cad.acceptDraft();
   });
-  /** El sólido del diseño, si hay */
-  const hasDesignBody = () => !!cad.committed() && !!cad.result()?.body;
+  /** La pestaña activa es un ensamble */
+  const inAssemblyTab = () => cad.activeTab()?.kind === "assembly";
+  /** El sólido del diseño, si hay (en un ensamble: sus instancias) */
+  const hasDesignBody = () => !!cad.committed() && (!!cad.result()?.body || (inAssemblyTab() && (cad.committed()?.assembly?.instances.length ?? 0) > 0));
   // Exportar desde Diseñar (o sin modelo) exporta el sólido del diseño
   const [exportDesign, setExportDesign] = createSignal(false);
   /** Pieza del diseño que se exporta ("operación:índice"); sin ella, todo */
@@ -599,7 +601,8 @@ export const App: Component = () => {
   const openExport = () => {
     const design = hasDesignBody() && (inDesign() || !hasWork());
     setExportDesign(design);
-    setExportPart(undefined);
+    // En un ensamble se exporta el ensamble
+    setExportPart(design && inAssemblyTab() ? "assembly" : undefined);
     if (design && !DESIGN_FORMATS.includes(exportOptions().format)) setExportOptions({ ...exportOptions(), format: "step" });
     pipeline.setActiveStep("export");
   };
@@ -2261,10 +2264,15 @@ export const App: Component = () => {
     })();
   });
 
-  // Cada pieza del diseño es un objeto (solo con el diseño guardado, no con la vista previa de un diálogo)
+  // Una pestaña de ensamble se ve y se edita como ensamble; una de diseño, como diseño
+  const activeTabKey = createMemo(() => `${cad.tabs().active}:${cad.activeTab()?.kind}`);
+  createEffect(on(activeTabKey, () => cadUi.setAssemblyMode(cad.activeTab()?.kind === "assembly")));
+
+  // Cada pieza del diseño es un objeto (solo con el diseño guardado, no con la vista previa de un
+  // diálogo; las piezas que ve un ensamble son de sus diseños y ya tienen el suyo)
   createEffect(() => {
     const r = cad.result();
-    if (!r || cad.draft()) return;
+    if (!r || cad.draft() || cad.tabs().tabs.find((x) => x.id === cad.resultTab())?.kind === "assembly") return;
     setObjects((list) => syncCadObjects(list, r.parts.map((p) => ({ id: p.id, name: p.name })), cad.resultTab()));
   });
 
@@ -2552,7 +2560,7 @@ export const App: Component = () => {
         key: first ?? "",
         shift: first !== undefined,
         area: "design",
-        action: () => showCad() && (!op.needsBody || hasDesignBody()) && op.run(),
+        action: () => showCad() && !inAssemblyTab() && (!op.needsBody || hasDesignBody()) && op.run(),
         get description() { return t(op.label); },
       };
     }),

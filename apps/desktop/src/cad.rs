@@ -429,16 +429,63 @@ fn evaluate_committed(state: &AppState) -> Result<CadResult, String> {
     evaluate_doc(state, &doc)
 }
 
+/// Las pestañas de diseño (con las referencias del escaneo al día), para un ensamble
+fn design_tabs(state: &AppState) -> Vec<(TabId, Document)> {
+    let designs: Vec<(TabId, Document)> = state
+        .cad_tabs
+        .lock()
+        .unwrap()
+        .tabs
+        .iter()
+        .filter_map(|t| match &t.kind {
+            cad_model::TabKind::Design { document } => Some((t.id, (**document).clone())),
+            cad_model::TabKind::Assembly { .. } => None,
+        })
+        .collect();
+    designs.into_iter().map(|(id, d)| (id, fit_scan_references(state, &d).unwrap_or(d))).collect()
+}
+
+/// Huella de todos los diseños (lo que cambia el recálculo de un ensamble)
+fn designs_hash(designs: &[(TabId, Document)]) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for (id, d) in designs {
+        (id, doc_hash(d)).hash(&mut h);
+    }
+    h.finish()
+}
+
+/// Nombre de cada pieza del recálculo juntado de un ensamble, como se llama
+/// en su pestaña (numeradas en su diseño, no entre todas)
+fn assembly_part_names(designs: &[(TabId, Document)], merged: &cad_model::Evaluation) -> Vec<(cad_model::PartId, String)> {
+    let mut out = Vec::new();
+    for (tab, doc) in designs {
+        let mut ids: Vec<cad_model::PartId> = merged
+            .parts
+            .iter()
+            .map(|p| p.id)
+            .filter(|id| cad_model::split_tab_feature(id.feature).0 == *tab)
+            .map(|id| cad_model::PartId { feature: cad_model::split_tab_feature(id.feature).1, index: id.index })
+            .collect();
+        ids.sort_by_key(|id| (doc.index_of(id.feature), id.index));
+        for (n, id) in ids.into_iter().enumerate() {
+            out.push((cad_model::PartId { feature: cad_model::tab_feature(*tab, id.feature), index: id.index }, part_name(doc, id, n + 1)));
+        }
+    }
+    out
+}
+
 fn evaluate_doc(state: &AppState, doc: &Document) -> Result<CadResult, String> {
+    // Pestaña de ensamble: el recálculo es el de todos los diseños juntos
+    let designs = state.cad_in_assembly().then(|| design_tabs(state));
     let fitted;
-    let doc = match fit_scan_references(state, doc) {
+    let doc = match designs.is_none().then(|| fit_scan_references(state, doc)).flatten() {
         Some(d) => {
             fitted = d;
             &fitted
         }
         None => doc,
     };
-    let hash = doc_hash(doc);
+    let hash = designs.as_deref().map_or_else(|| doc_hash(doc), designs_hash);
     let mut cache = state.cad_cache.lock().unwrap();
     match cache.take() {
         Some(c) if c.doc_hash == hash => *cache = Some(c),
@@ -448,7 +495,14 @@ fn evaluate_doc(state: &AppState, doc: &Document) -> Result<CadResult, String> {
         old => {
             let measures = old.as_ref().map(|c| c.measures.clone()).unwrap_or_default();
             let previous = old.map(|c| (c.doc_hash, c.eval));
-            let eval = doc.evaluate_with(&mut state.cad_ops.lock().unwrap());
+            let eval = match &designs {
+                Some(designs) => {
+                    let mut ops = state.cad_ops.lock().unwrap();
+                    let evals: Vec<(TabId, cad_model::Evaluation)> = designs.iter().map(|(id, d)| (*id, d.evaluate_with(&mut ops))).collect();
+                    cad_model::merge_evaluations(evals.iter().map(|(id, e)| (*id, e)))
+                }
+                None => doc.evaluate_with(&mut state.cad_ops.lock().unwrap()),
+            };
             *cache = Some(CadCache { doc_hash: hash, eval, previous, measures });
         }
     }
@@ -464,6 +518,29 @@ fn evaluate_doc(state: &AppState, doc: &Document) -> Result<CadResult, String> {
         }
     };
     let eval = &c.eval;
+    // Ensamble: las piezas con el nombre que tienen en su pestaña
+    let named;
+    let doc = match &designs {
+        Some(designs) => {
+            let tabs = state.cad_tabs.lock().unwrap();
+            let mut parts = tabs.flat_part_props(&assembly_part_names(designs, eval)).0;
+            // El mismo nombre en dos pestañas: se aclara de cuál es
+            let names: Vec<Option<String>> = parts.iter().map(|p| p.name.clone()).collect();
+            for p in &mut parts {
+                let Some(name) = &p.name else { continue };
+                if names.iter().filter(|n| n.as_ref() == Some(name)).count() > 1
+                    && let Some(tab) = tabs.get(cad_model::split_tab_feature(p.part.feature).0)
+                {
+                    p.name = Some(format!("{name} ({})", tab.name));
+                }
+            }
+            let mut d = doc.clone();
+            d.parts = parts;
+            named = d;
+            &named
+        }
+        None => doc,
+    };
     let mut sketches: Vec<SketchView> = eval
         .sketches
         .iter()
@@ -559,7 +636,14 @@ pub async fn cad_set_document(app: AppHandle, document: Document) -> Result<CadR
 }
 
 fn set_document_impl(state: &AppState, document: Document) -> Result<CadResult, String> {
-    state.with_cad_doc(|d| *d = document)?;
+    if state.cad_in_assembly() {
+        // De un ensamble solo se guarda su ensamble (lo demás sale de los diseños)
+        let mut tabs = state.cad_tabs.lock().unwrap();
+        let active = tabs.active;
+        tabs.set_flat_assembly(active, document.assembly.unwrap_or_default())?;
+    } else {
+        state.with_cad_doc(|d| *d = document)?;
+    }
     *state.cad_preview.lock().unwrap() = None;
     evaluate(state)
 }
@@ -585,6 +669,8 @@ pub struct TabView {
     pub name: String,
     /// "design" o "assembly"
     pub kind: &'static str,
+    /// Ensambles que usan piezas de esta pestaña
+    pub used_by: Vec<TabId>,
 }
 
 /// Las pestañas en el orden de la barra y la activa (`None`: no hay ninguna)
@@ -606,7 +692,7 @@ fn tabs_view(tabs: &Tabs) -> TabsView {
         tabs: tabs
             .tabs
             .iter()
-            .map(|t| TabView { id: t.id, name: t.name.clone(), kind: if t.kind.is_design() { "design" } else { "assembly" } })
+            .map(|t| TabView { id: t.id, name: t.name.clone(), kind: if t.kind.is_design() { "design" } else { "assembly" }, used_by: tabs.users(t.id) })
             .collect(),
         active: tabs.active_tab().map(|t| t.id),
     }
@@ -642,6 +728,12 @@ fn change_tabs(state: &AppState, f: impl FnOnce(&mut Tabs) -> Result<(), String>
 #[tauri::command]
 pub fn cad_tabs(state: tauri::State<'_, AppState>) -> TabsView {
     tabs_view(&state.cad_tabs.lock().unwrap())
+}
+
+/// El documento de una pestaña de diseño cualquiera (sin activarla)
+#[tauri::command]
+pub fn cad_tab_document(state: tauri::State<'_, AppState>, id: TabId) -> Option<Document> {
+    state.cad_tabs.lock().unwrap().design(id).cloned()
 }
 
 /// Pestaña nueva al final; queda activa.
@@ -2667,6 +2759,10 @@ pub mod bridge {
             }
             "cad_get_document" => ok(state.cad_doc()),
             "cad_tabs" => ok(tabs_view(&state.cad_tabs.lock().unwrap())),
+            "cad_tab_document" => {
+                let id: TabId = arg(args, "id")?;
+                ok(state.cad_tabs.lock().unwrap().design(id).cloned())
+            }
             "cad_tab_add" => ok(tab_add_impl(state, arg(args, "kind")?, arg(args, "name")?)?),
             "cad_tab_rename" => {
                 let (id, name): (TabId, String) = (arg(args, "id")?, arg(args, "name")?);
@@ -3165,15 +3261,65 @@ mod tests {
         // Borrar la otra suelta su recálculo
         change_tabs(&state, |t| t.remove(1).map(|_| ())).unwrap();
         assert!(state.cad_tab_caches.lock().unwrap().is_empty());
-        // Un ensamble activo no es un diseño
+        // Un ensamble activo se ve como un diseño sin operaciones (y no las recibe)
         change_tabs(&state, |t| {
             t.add_assembly(None);
             Ok(())
         })
         .unwrap();
-        assert!(state.cad_doc().is_none());
-        assert!(set_document_impl(&state, box_doc()).is_err());
+        assert!(state.cad_doc().unwrap().features.is_empty());
+        assert!(state.with_cad_doc(|_| ()).is_err());
         assert!(status_impl(&state).has_document);
+    }
+
+    /// Una pestaña de ensamble ve las piezas de todos los diseños y guarda cada
+    /// instancia con su pestaña
+    #[test]
+    fn assembly_tab_uses_parts_of_every_design() {
+        if !cad_model::occt::available() {
+            return;
+        }
+        let state = AppState::new();
+        let mut tabs = Tabs::from_legacy(Some(box_doc()));
+        let long = tabs.add(box_tab(40.0), Some("Larga".into()));
+        let asm = tabs.add_assembly(None);
+        state.set_cad_tabs(tabs);
+        // Lo que ve la interfaz: un diseño sin operaciones, sin sólido propio, con las piezas de los dos diseños
+        let r = evaluate(&state).unwrap();
+        assert!(r.body.is_none());
+        let volumes: Vec<f64> = r.parts.iter().map(|p| p.volume.round()).collect();
+        assert_eq!(volumes, [6000.0, 24000.0]);
+        assert_ne!(r.parts[0].id, r.parts[1].id, "la misma operación de dos pestañas: piezas distintas");
+        // Insertar las dos como lo hace la interfaz (con los ids que vio) y guardar
+        let inst = |id, part, x: f64| cad_model::Instance { id, studio: 0, part, name: format!("I{id}"), position: [x, 0.0, 0.0], rotation: [0.0; 3], fixed: id == 1 };
+        let mut doc = state.cad_doc().unwrap();
+        doc.assembly = Some(cad_model::Assembly { instances: vec![inst(1, r.parts[0].id, 0.0), inst(2, r.parts[1].id, 50.0)], next_id: 3, ..Default::default() });
+        let saved = set_document_impl(&state, doc).unwrap();
+        assert_eq!(saved.assembly.unwrap().solution.poses.len(), 2);
+        {
+            let tabs = state.cad_tabs.lock().unwrap();
+            let cad_model::TabKind::Assembly { assembly } = &tabs.get(asm).unwrap().kind else { panic!() };
+            let feature = tabs.design(long).unwrap().features[0].id;
+            assert_eq!((assembly.instances[1].studio, assembly.instances[1].part.feature), (long, feature), "su pestaña y su operación de siempre");
+            assert_eq!(tabs.users(long), [asm]);
+        }
+        // Las formas del ensamble: una caja de cada diseño, y su malla
+        let (_, shapes) = assembly_shapes(&state).unwrap();
+        let mut v: Vec<f64> = shapes.iter().map(|(_, s)| s.mass().unwrap().volume.round()).collect();
+        v.sort_by(f64::total_cmp);
+        assert_eq!(v, [6000.0, 24000.0]);
+        assert!(!assembly_mesh_impl(&state, 0.0).unwrap().is_empty());
+        // Un ensamble no recibe operaciones
+        assert!(state.with_cad_doc(|_| ()).is_err());
+        // Cambiar un diseño cambia el ensamble al volver
+        change_tabs(&state, |t| t.activate(long)).unwrap();
+        let mut d = state.cad_doc().unwrap();
+        if let FeatureKind::Primitive(p) = &mut d.features[0].kind {
+            p.shape = cad_model::PrimitiveShape::Box { dx: 50.0, dy: 20.0, dz: 30.0, centered: false, centered_z: false };
+        }
+        set_document_impl(&state, d).unwrap();
+        change_tabs(&state, |t| t.activate(asm)).unwrap();
+        assert_eq!(evaluate(&state).unwrap().parts[1].volume.round(), 30000.0);
     }
 
     /// La malla de una pieza de otra pestaña sale sin cambiar lo que muestra el visor

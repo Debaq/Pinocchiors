@@ -8,13 +8,53 @@
 use serde::{Deserialize, Serialize};
 
 use crate::assembly::Assembly;
-use crate::document::Document;
+use crate::document::{Document, PartProps};
+use crate::eval::Evaluation;
+use crate::feature::{FeatureId, PartId};
 
 pub type TabId = u32;
 
 /// Nombre base de las pestañas nuevas (se numeran: «Diseño 1», «Diseño 2»…).
 pub const DESIGN_NAME: &str = "Diseño";
 pub const ASSEMBLY_NAME: &str = "Ensamble";
+
+/// Bits de la operación en `tab_feature` (la pestaña va arriba).
+const FEATURE_BITS: u32 = 20;
+
+/// La operación `f` de la pestaña `tab` con un número único entre todas las
+/// pestañas: así un ensamble de piezas de varias pestañas se arma como si
+/// fueran de un solo diseño (ver [`Tabs::flat_assembly`]).
+pub fn tab_feature(tab: TabId, f: FeatureId) -> FeatureId {
+    debug_assert!(f.0 < 1 << FEATURE_BITS && tab < 1 << (32 - FEATURE_BITS));
+    FeatureId(tab << FEATURE_BITS | f.0)
+}
+
+/// Al revés de [`tab_feature`]: la pestaña y la operación.
+pub fn split_tab_feature(f: FeatureId) -> (TabId, FeatureId) {
+    (f.0 >> FEATURE_BITS, FeatureId(f.0 & ((1 << FEATURE_BITS) - 1)))
+}
+
+fn tab_part(tab: TabId, p: PartId) -> PartId {
+    PartId { feature: tab_feature(tab, p.feature), index: p.index }
+}
+
+/// Junta los recálculos de varias pestañas en uno: sus piezas y engranes con
+/// los números de [`tab_feature`] (lo que el ensamble lee de un recálculo).
+pub fn merge_evaluations<'a>(evals: impl IntoIterator<Item = (TabId, &'a Evaluation)>) -> Evaluation {
+    let mut out = Evaluation::default();
+    for (tab, ev) in evals {
+        out.parts.extend(ev.parts.iter().map(|p| crate::eval::Part { id: tab_part(tab, p.id), ..p.clone() }));
+        out.gears.extend(ev.gears.iter().map(|g| {
+            let mut g = g.clone();
+            g.feature = tab_feature(tab, g.feature);
+            if let Some(link) = &mut g.part.link {
+                link.feature = tab_feature(tab, link.feature);
+            }
+            g
+        }));
+    }
+    out
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Tabs {
@@ -189,5 +229,107 @@ impl Tabs {
         self.get(id).ok_or("Esa pestaña ya no está")?;
         self.active = id;
         Ok(())
+    }
+
+    /// Ensambles que usan piezas de la pestaña `id` (para avisar antes de borrarla).
+    pub fn users(&self, id: TabId) -> Vec<TabId> {
+        self.tabs
+            .iter()
+            .filter(|t| matches!(&t.kind, TabKind::Assembly { assembly } if assembly.instances.iter().any(|i| i.studio == id)))
+            .map(|t| t.id)
+            .collect()
+    }
+
+    /// Los ensambles que estaban dentro de un diseño (proyectos de antes) pasan
+    /// a su propia pestaña, justo después del diseño. Se puede llamar las veces
+    /// que sea: un diseño sin ensamble no cambia. Devuelve cuántos se mudaron.
+    pub fn lift_assemblies(&mut self) -> usize {
+        let mut moved = 0;
+        let mut i = 0;
+        while i < self.tabs.len() {
+            let tab = &mut self.tabs[i];
+            let TabKind::Design { document } = &mut tab.kind else {
+                i += 1;
+                continue;
+            };
+            let studio = tab.id;
+            let Some(mut assembly) = document.assembly.take().filter(|a| !a.instances.is_empty()) else {
+                document.assembly = None;
+                i += 1;
+                continue;
+            };
+            for inst in &mut assembly.instances {
+                inst.studio = studio;
+            }
+            let name = self.fresh_name(ASSEMBLY_NAME);
+            let id = self.fresh_id();
+            self.tabs.insert(i + 1, Tab { id, name, kind: TabKind::Assembly { assembly } });
+            moved += 1;
+            i += 2;
+        }
+        moved
+    }
+
+    /// El ensamble de la pestaña `id` como si fuera de un solo diseño: sus
+    /// piezas con los números de [`tab_feature`].
+    pub fn flat_assembly(&self, id: TabId) -> Option<Assembly> {
+        let TabKind::Assembly { assembly } = &self.get(id)?.kind else { return None };
+        let mut flat = assembly.clone();
+        for inst in &mut flat.instances {
+            inst.part = tab_part(inst.studio, inst.part);
+            inst.studio = 0;
+        }
+        Some(flat)
+    }
+
+    /// Guarda en la pestaña `id` un ensamble armado con [`flat_assembly`](Self::flat_assembly).
+    pub fn set_flat_assembly(&mut self, id: TabId, mut flat: Assembly) -> Result<(), String> {
+        for inst in &mut flat.instances {
+            let (studio, feature) = split_tab_feature(inst.part.feature);
+            inst.studio = studio;
+            inst.part.feature = feature;
+        }
+        match &mut self.get_mut(id).ok_or("Esa pestaña ya no está")?.kind {
+            TabKind::Assembly { assembly } => *assembly = flat,
+            TabKind::Design { .. } => return Err("Esa pestaña no es un ensamble".into()),
+        }
+        Ok(())
+    }
+
+    /// La pestaña de ensamble `id` vista como un diseño sin operaciones: su
+    /// ensamble con [`flat_assembly`](Self::flat_assembly) y las piezas de todos
+    /// los diseños con [`flat_part_props`](Self::flat_part_props). Así la
+    /// interfaz y los comandos del ensamble la tratan como el ensamble de un diseño.
+    pub fn assembly_document(&self, id: TabId, names: &[(PartId, String)]) -> Option<Document> {
+        let assembly = self.flat_assembly(id)?;
+        let (parts, fabrication) = self.flat_part_props(names);
+        Some(Document { assembly: Some(assembly), parts, fabrication, ..Document::default() })
+    }
+
+    /// Lo que un ensamble necesita de los diseños, con los números de
+    /// [`tab_feature`]: nombre, color, visibilidad y material de cada pieza
+    /// (`names`: los nombres de las piezas sin nombre puesto, de su recálculo),
+    /// y la fabricación del primer diseño que la tenga (para las holguras).
+    pub fn flat_part_props(&self, names: &[(PartId, String)]) -> (Vec<PartProps>, Option<crate::document::Fabrication>) {
+        let mut props = Vec::new();
+        let mut fabrication = None;
+        for tab in &self.tabs {
+            let TabKind::Design { document } = &tab.kind else { continue };
+            fabrication = fabrication.or_else(|| document.fabrication.clone());
+            for p in &document.parts {
+                let mut p = p.clone();
+                p.part = tab_part(tab.id, p.part);
+                p.material = p.material.or_else(|| document.material.clone());
+                props.push(p);
+            }
+        }
+        for (id, name) in names {
+            match props.iter_mut().find(|p| p.part == *id) {
+                Some(p) if p.name.is_none() => p.name = Some(name.clone()),
+                Some(_) => {}
+                None => props.push(PartProps { part: *id, name: Some(name.clone()), color: None, hidden: false, material: None }),
+            }
+        }
+        (props, fabrication)
     }
 }

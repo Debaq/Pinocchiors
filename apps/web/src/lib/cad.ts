@@ -14,7 +14,7 @@ import type { Snap } from "./sketchSnap";
 import type { Contour } from "./sketchText";
 import type { PlanetaryPlan } from "./planetary";
 import { breaks, ellipseArcPolyline, makeBSpline, sample, type BSpline } from "./sketchCurves.ts";
-import { swapTabHistory, type TabHistory } from "./designTabs.ts";
+import { swapTabHistory, tabFeature, type TabHistory } from "./designTabs.ts";
 
 export type P2 = [number, number];
 export type P3 = [number, number, number];
@@ -1644,6 +1644,8 @@ export interface CadTab {
   id: number;
   name: string;
   kind: "design" | "assembly";
+  /** Ensambles que usan piezas de esta pestaña */
+  used_by: number[];
 }
 
 /** Las pestañas en el orden de la barra y la activa (`null`: no hay ninguna) */
@@ -4361,6 +4363,21 @@ export function createCadStore() {
     },
 
     tabs,
+    /** La pestaña activa */
+    activeTab: () => tabs().tabs.find((t) => t.id === tabs().active),
+    /**
+     * Las operaciones que ve el ensamble: las del diseño o, en una pestaña de
+     * ensamble, las de todos los diseños con los números de `tabFeature`
+     */
+    async assemblyFeatures(): Promise<Feature[]> {
+      if (store.activeTab()?.kind !== "assembly") return doc()?.features ?? [];
+      const out: Feature[] = [];
+      for (const tab of tabs().tabs.filter((x) => x.kind === "design")) {
+        const d = await invoke<CadDocument | null>("cad_tab_document", { id: tab.id });
+        for (const f of d?.features ?? []) out.push({ ...f, id: tabFeature(tab.id, f.id) });
+      }
+      return out;
+    },
     /** Pestaña de la que es el recálculo de `result` (las piezas que se ven) */
     resultTab,
     /**

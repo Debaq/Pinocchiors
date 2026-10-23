@@ -777,3 +777,7 @@ cargo test -p cad-model
 - **2026-10-22 Pestañas F4** ([PLAN_PESTANAS.md](PLAN_PESTANAS.md)): los objetos de la escena saben
   de qué pestaña es su pieza (`studio`), el Outliner los agrupa por pestaña y la malla se genera
   desde la pestaña que sea. Sin probar todavía en la app.
+- **2026-10-23 Pestañas F5** ([PLAN_PESTANAS.md](PLAN_PESTANAS.md)): pestaña de ensamble con piezas de
+  todos los diseños (la interfaz la ve como un diseño virtual con piezas renumeradas por pestaña:
+  todo lo del ensamble sigue igual); los ensambles de antes se mudan a su pestaña al abrir.
+  Sin probar todavía en la app.

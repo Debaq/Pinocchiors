@@ -200,7 +200,7 @@ pestaña, piezas derivadas de otra pestaña y planos que apunten a una pestaña 
   node `e2e/objectsTabs.test.mjs`; el `hash` del fixture se mantiene (F2). Falta: el paso de
   Preparar rehecho sobre una pieza de otra pestaña, en la app.
 
-### F5 — Ensamble como pestaña propia ❌
+### F5 — Ensamble como pestaña propia 🟡 2026-10-23 (falta probarla en la app)
 
 - `Tabs::lift_assemblies()`: cada diseño con `assembly` con instancias → pestaña «Ensamble N»
   justo después, instancias con `studio` = ese diseño; se llama en `restore` (idempotente).
@@ -217,6 +217,36 @@ pestaña, piezas derivadas de otra pestaña y planos que apunten a una pestaña 
 - Pruebas: fixture `v1-ensamble` abre como pestaña «Ensamble 1» con la misma solución del solver
   (posiciones iguales a 1e-9); ensamble con piezas de dos pestañas; pieza borrada → instancia
   marcada.
+- Hecho (cómo): la pestaña de ensamble se le muestra a la interfaz como **un diseño virtual** sin
+  operaciones (`Tabs::assembly_document`): su ensamble con las piezas renumeradas
+  (`tab_feature(pestaña, operación)` = pestaña en los 12 bits de arriba, operación en los 20 de
+  abajo; la pestaña 0 no cambia los números) y las propiedades de las piezas de todos los diseños
+  (`flat_part_props`, con el material del diseño y la fabricación del primero que la tenga). El
+  recálculo de esa pestaña es `merge_evaluations` de todos los diseños (piezas y engranes
+  renumerados), con huella `designs_hash`; las piezas se nombran como en su pestaña
+  (`assembly_part_names`) y, si dos pestañas tienen el mismo nombre, se agrega «(pestaña)».
+  `set_document_impl` en un ensamble guarda solo su `assembly` (`set_flat_assembly` lo pasa a
+  `Instance.studio` + operación de siempre). Así **todo lo que ya hacía el ensamble** (solver,
+  uniones, relaciones, arrastre, explosión, choques, holguras, lista de materiales, exportar,
+  animar) funciona sin cambios. `Instance.studio` (`serde(default)`, no se escribe si es 0).
+  `Tabs::lift_assemblies` en `restore`. `Tabs::users` → `TabView.used_by` (aviso al borrar).
+  `cad_tab_document(id)` para leer otro diseño (Armar planetario en un ensamble usa
+  `store.assemblyFeatures()` con `tabFeature`). Interfaz: «+» abre Nuevo diseño / Nuevo
+  ensamble; el modo ensamble sigue al tipo de pestaña; en un ensamble no hay barra de
+  operaciones; el conmutador Diseño/Ensamble solo aparece en un diseño que ya tiene un ensamble
+  adentro (de antes o de un asistente); los objetos de la escena no se sincronizan con lo que ve
+  un ensamble. Pruebas: `tests/tabs.rs` (12), `assembly_tab_uses_parts_of_every_design`,
+  `legacy_projects_open` (el ensamble de formato 1 se muda y queda igual), node
+  `designTabs.test.mjs`.
+- También: «Exportar» en un ensamble exporta el ensamble (`hasDesignBody` cuenta sus instancias,
+  `exportPart = "assembly"`); los atajos de operaciones no corren en un ensamble. El e2e «ensamble:
+  instancias, bisagra, grados libres y choques» (`e2e/cad/piezas.mjs`) entra ahora por «+ → Nuevo
+  ensamble», exporta desde la pestaña y vuelve a «Diseño 1» (sin correr: el usuario corre los e2e).
+  «ensamble: animar una unión…» arma el ensamble dentro del diseño: sigue andando así.
+- Falta de F5: `Instance.configuration` (cada instancia con su configuración), la instancia de
+  una pieza o pestaña borrada marcada en rojo (hoy simplemente no se dibuja), el planetario
+  «Armar» desde el diseño crea el ensamble dentro del diseño (no en una pestaña), y los planos
+  2D en una pestaña de ensamble no se guardan (F7).
 
 ### F6 — Pieza derivada (traer una pieza de otra pestaña) ❌
 

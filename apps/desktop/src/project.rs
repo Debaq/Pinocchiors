@@ -540,10 +540,12 @@ fn capture_model(state: &AppState) -> ProjectState {
 /// Reemplaza todo el estado por el del proyecto. Se convierte primero y se
 /// asigna al final: si algo falla, el estado actual queda intacto.
 fn restore(state: &AppState, mut p: ProjectState) -> Result<(), String> {
-    let tabs = match p.cad_tabs.take() {
+    let mut tabs = match p.cad_tabs.take() {
         Some(tabs) => tabs,
         None => cad_model::Tabs::from_legacy(p.cad.take()),
     };
+    // Los ensambles que estaban dentro de un diseño pasan a su pestaña
+    tabs.lift_assemblies();
     let objects = ObjectSlots { active: p.active_object, stored: std::mem::take(&mut p.objects) };
     restore_model(state, p)?;
     *state.objects.lock().unwrap() = objects;
@@ -1491,7 +1493,7 @@ mod tests {
     fn legacy_assembly(doc: &cad_model::Document) -> cad_model::Assembly {
         use cad_model::{Assembly, Connector, Instance, Mate, MateKind, PartId, Relation};
         let [a, b] = [0, 1].map(|i| PartId { feature: doc.features[i].id, index: 0 });
-        let inst = |id, part, name: &str, position, fixed| Instance { id, part, name: name.into(), position, rotation: [0.0; 3], fixed };
+        let inst = |id, part, name: &str, position, fixed| Instance { id, studio: 0, part, name: name.into(), position, rotation: [0.0; 3], fixed };
         let con = |instance, origin| Connector { instance, origin, z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0] };
         let mate = |id, name: &str, kind, a, b| Mate { id, name: name.into(), kind, a, b, flip: false, angle: None, distance: None };
         Assembly {
@@ -1585,7 +1587,11 @@ mod tests {
 
         let (state, _) = open_fixture("v1-ensamble.pinocchio");
         let doc = state.cad_doc().unwrap();
-        let asm = doc.assembly.clone().unwrap();
+        assert!(doc.assembly.is_none(), "el ensamble se mudó a su pestaña");
+        let tabs = state.cad_tabs.lock().unwrap().clone();
+        assert_eq!(tabs.tabs.iter().map(|t| (t.id, t.name.as_str(), t.kind.is_design())).collect::<Vec<_>>(), [(0, "Diseño 1", true), (1, "Ensamble 1", false)]);
+        // Con las piezas de la pestaña 0, los números no cambian: el mismo ensamble
+        let asm = tabs.flat_assembly(1).unwrap();
         assert_eq!(asm, legacy_assembly(&doc));
         let solved = cad_model::assembly::solve(&asm);
         assert!(solved.converged && solved.residual < 1e-6, "{solved:?}");
@@ -1614,11 +1620,12 @@ mod tests {
             let mut tapa = legacy_design();
             tapa.parameters[0].expr = "15".into();
             tabs.add(cad_model::TabKind::Design { document: Box::new(tapa) }, Some("Tapa".into()));
+            let tapa = tabs.tabs.iter().find(|t| t.name == "Tapa").unwrap().id;
             tabs.add_assembly(None);
-            tabs.activate(1).unwrap();
+            tabs.activate(tapa).unwrap();
         }
         let saved = state.cad_tabs.lock().unwrap().clone();
-        assert_eq!(saved.tabs.len(), 3);
+        assert_eq!(saved.tabs.len(), 4, "diseño, su ensamble mudado, «Tapa» y un ensamble nuevo");
         let bytes = rmp_serde::to_vec_named(&capture(&state)).unwrap();
         let raw: serde_json::Value = rmp_serde::from_slice(&bytes).unwrap();
         assert!(raw.get("cad").is_none(), "el formato 2 no escribe el diseño suelto");

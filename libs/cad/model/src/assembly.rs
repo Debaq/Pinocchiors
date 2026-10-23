@@ -68,6 +68,10 @@ fn is_zero(x: &f64) -> bool {
     *x == 0.0
 }
 
+fn is_zero_u32(x: &u32) -> bool {
+    *x == 0
+}
+
 impl Relation {
     pub fn mates(&self) -> Vec<u32> {
         match self {
@@ -82,6 +86,10 @@ impl Relation {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Instance {
     pub id: u32,
+    /// Pestaña de diseño de la pieza (en un ensamble dentro del diseño, o de
+    /// los proyectos de antes: 0, sin uso)
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub studio: crate::tabs::TabId,
     pub part: PartId,
     pub name: String,
     /// Traslación (mm) y giro como vector (eje × ángulo en radianes), aplicados a la pieza.

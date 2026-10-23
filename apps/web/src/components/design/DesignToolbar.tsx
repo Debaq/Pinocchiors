@@ -322,9 +322,13 @@ export const DesignToolbar: Component<{ store: CadStore; ui: CadUi; actions: Des
 
   const { solids, modify, patterns, parts, sheet, surfaces, refs } = designToolSets(a, ui);
 
+  // En una pestaña de ensamble no hay operaciones: la barra no se muestra
   return (
+    <Show when={store.activeTab()?.kind !== "assembly"}>
     <div class="flex items-center gap-0.5 rounded-md border border-border bg-bg-lighter/95 px-1.5 py-1 pointer-events-auto shadow-sm">
-      {/* Diseño de las piezas o su ensamble */}
+      {/* Diseño de las piezas o su ensamble: solo con un ensamble dentro del diseño (de antes de
+          las pestañas, o armado por un asistente); los nuevos van en su pestaña */}
+      <Show when={store.activeTab()?.kind !== "assembly" && !!store.committed()?.assembly?.instances.length}>
       <div role="tablist" aria-label={t("Modo")} class="flex items-center gap-0.5 rounded bg-surface/40 p-0.5">
         <For each={[["design", "Diseño"], ["assembly", "Ensamble"]] as const}>
           {([id, label]) => (
@@ -348,6 +352,9 @@ export const DesignToolbar: Component<{ store: CadStore; ui: CadUi; actions: Des
       </div>
       <Show when={!ui.assemblyMode()}>
         <Sep />
+      </Show>
+      </Show>
+      <Show when={!ui.assemblyMode()}>
         <div class="flex items-center gap-0.5 flex-wrap">
           <ToolMenu label="Sólidos" tools={solids} hasBody={hasBody()} />
           <ToolMenu label="Modificar" tools={modify} hasBody={hasBody()} />
@@ -359,5 +366,6 @@ export const DesignToolbar: Component<{ store: CadStore; ui: CadUi; actions: Des
         </div>
       </Show>
     </div>
+    </Show>
   );
 };

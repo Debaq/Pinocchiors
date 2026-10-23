@@ -272,9 +272,20 @@ impl AppState {
         self.cad_tab_caches.lock().unwrap().clear();
     }
 
-    /// El documento de la pestaña activa (`None`: no hay diseño o la activa es un ensamble)
+    /// El documento de la pestaña activa (`None`: no hay pestañas). Un
+    /// ensamble se ve como un diseño sin operaciones con su ensamble (ver
+    /// `Tabs::assembly_document`)
     pub fn cad_doc(&self) -> Option<cad_model::Document> {
-        self.cad_tabs.lock().unwrap().active_design().cloned()
+        let tabs = self.cad_tabs.lock().unwrap();
+        match &tabs.active_tab()?.kind {
+            cad_model::TabKind::Design { document } => Some((**document).clone()),
+            cad_model::TabKind::Assembly { .. } => tabs.assembly_document(tabs.active, &[]),
+        }
+    }
+
+    /// La pestaña activa es un ensamble
+    pub fn cad_in_assembly(&self) -> bool {
+        self.cad_tabs.lock().unwrap().active_tab().is_some_and(|t| !t.kind.is_design())
     }
 
     /// Cambia el documento de la pestaña activa; sin pestañas, crea la primera

@@ -20,7 +20,7 @@ fn legacy_doc() -> Document {
     doc.parameters.push(Parameter { name: "largo".into(), expr: "10".into() });
     let part = PartId { feature: doc.features[0].id, index: 0 };
     doc.assembly = Some(Assembly {
-        instances: vec![Instance { id: 1, part, name: "Caja".into(), position: [1.0, 2.0, 3.0], rotation: [0.0, 0.1, 0.0], fixed: true }],
+        instances: vec![Instance { id: 1, studio: 0, part, name: "Caja".into(), position: [1.0, 2.0, 3.0], rotation: [0.0, 0.1, 0.0], fixed: true }],
         next_id: 2,
         ..Default::default()
     });
@@ -126,4 +126,84 @@ fn move_reorders() {
     tabs.move_to(b, 99).unwrap();
     assert_eq!(tabs.tabs.iter().map(|t| t.id).collect::<Vec<_>>(), [0, a, b]);
     assert_eq!(tabs.active, b, "mover no cambia la activa");
+}
+
+#[test]
+fn tab_feature_roundtrip() {
+    for (tab, f) in [(0, 0), (0, 7), (3, 12), (4095, (1 << 20) - 1)] {
+        assert_eq!(split_tab_feature(tab_feature(tab, FeatureId(f))), (tab, FeatureId(f)));
+    }
+    assert_eq!(tab_feature(0, FeatureId(5)), FeatureId(5), "la pestaña 0 no cambia los números");
+}
+
+#[test]
+fn legacy_assembly_moves_to_its_own_tab() {
+    let mut tabs = Tabs::from_legacy(Some(legacy_doc()));
+    let other = tabs.add_design(None);
+    assert_eq!(tabs.lift_assemblies(), 1);
+    let ids: Vec<_> = tabs.tabs.iter().map(|t| (t.id, t.name.as_str(), t.kind.is_design())).collect();
+    assert_eq!(ids, [(0, "Diseño 1", true), (2, "Ensamble 1", false), (other, "Diseño 2", true)], "justo después de su diseño");
+    assert!(tabs.design(0).unwrap().assembly.is_none(), "el diseño queda sin ensamble");
+    let TabKind::Assembly { assembly } = &tabs.get(2).unwrap().kind else { panic!() };
+    assert_eq!(assembly.instances[0].studio, 0);
+    assert_eq!(assembly.instances[0].position, [1.0, 2.0, 3.0]);
+    assert_eq!(tabs.users(0), [2]);
+    assert!(tabs.users(other).is_empty());
+    // Otra vez: nada (y un ensamble vacío dentro de un diseño no hace pestaña)
+    tabs.design_mut(other).unwrap().assembly = Some(Assembly::default());
+    assert_eq!(tabs.lift_assemblies(), 0);
+    assert!(tabs.design(other).unwrap().assembly.is_none());
+    assert_eq!(tabs.tabs.len(), 3);
+}
+
+#[test]
+fn flat_assembly_roundtrip() {
+    let mut tabs = Tabs::from_legacy(Some(box_doc(10.0)));
+    let b = tabs.add_design(None);
+    let asm = tabs.add_assembly(None);
+    let part = |studio, f| (studio, PartId { feature: FeatureId(f), index: 1 });
+    let inst = |id, (studio, part)| Instance { id, studio, part, name: format!("I{id}"), position: [0.0; 3], rotation: [0.0; 3], fixed: id == 1 };
+    let assembly = Assembly { instances: vec![inst(1, part(0, 3)), inst(2, part(b, 3))], next_id: 3, ..Default::default() };
+    let TabKind::Assembly { assembly: stored } = &mut tabs.get_mut(asm).unwrap().kind else { panic!() };
+    *stored = assembly.clone();
+    let flat = tabs.flat_assembly(asm).unwrap();
+    assert_eq!(flat.instances[0].part.feature, FeatureId(3));
+    assert_eq!(flat.instances[1].part.feature, tab_feature(b, FeatureId(3)));
+    assert_ne!(flat.instances[0].part, flat.instances[1].part, "misma operación en dos pestañas: piezas distintas");
+    tabs.set_flat_assembly(asm, flat).unwrap();
+    let TabKind::Assembly { assembly: back } = &tabs.get(asm).unwrap().kind else { panic!() };
+    assert_eq!(*back, assembly);
+    assert!(tabs.flat_assembly(0).is_none());
+    assert!(tabs.set_flat_assembly(0, Assembly::default()).is_err());
+}
+
+#[test]
+fn flat_part_props_carry_names_and_materials() {
+    let mut a = box_doc(10.0);
+    a.material = Some(Material { name: "PLA".into(), density: 1.24 });
+    let pa = PartId { feature: a.features[0].id, index: 0 };
+    a.parts.push(PartProps { part: pa, name: Some("Caja".into()), color: Some("#ff0000".into()), hidden: false, material: None });
+    let mut tabs = Tabs::from_legacy(Some(a));
+    let b = tabs.add(TabKind::Design { document: Box::new(box_doc(20.0)) }, None);
+    let pb = PartId { feature: tab_feature(b, FeatureId(0)), index: 0 };
+    let (props, fabrication) = tabs.flat_part_props(&[(pb, "Pieza 1".into())]);
+    assert!(fabrication.is_none());
+    assert_eq!(props.len(), 2);
+    assert_eq!((props[0].name.as_deref(), props[0].material.as_ref().map(|m| m.name.as_str())), (Some("Caja"), Some("PLA")), "el material del diseño");
+    assert_eq!((props[1].part, props[1].name.as_deref()), (pb, Some("Pieza 1")));
+}
+
+#[test]
+fn merged_evaluation_keeps_parts_apart() {
+    if !occt::available() {
+        return;
+    }
+    let (a, b) = (box_doc(10.0), box_doc(40.0));
+    let (ea, eb) = (a.evaluate(), b.evaluate());
+    let merged = merge_evaluations([(0, &ea), (3, &eb)]);
+    assert_eq!(merged.parts.len(), 2);
+    assert_eq!(merged.parts[0].id, ea.parts[0].id);
+    assert_eq!(merged.parts[1].id.feature, tab_feature(3, eb.parts[0].id.feature));
+    let v = merged.parts[1].shape.mass().unwrap().volume;
+    assert!((v - 24000.0).abs() < 1e-6, "{v}");
 }

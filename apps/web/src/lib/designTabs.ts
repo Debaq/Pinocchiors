@@ -9,6 +9,9 @@ export function neighborTab(tabs: { id: number }[], active: number | null, step:
   return tabs[(i + step + tabs.length) % tabs.length].id;
 }
 
+/** Igual que `tab_feature` del backend: la operación `f` de la pestaña `tab` con un número único entre pestañas */
+export const tabFeature = (tab: number, f: number) => tab * 2 ** 20 + f;
+
 /** Posición final de una pestaña que estaba en `from` y se suelta en el hueco `slot` (0 = antes de la primera) */
 export const dropIndex = (from: number, slot: number) => (slot > from ? slot - 1 : slot);
 

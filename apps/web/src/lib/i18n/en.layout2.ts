@@ -357,4 +357,9 @@ export const en_layout2: Catalog = {
   "No se puede borrar la única pestaña": "The only tab can't be deleted",
   "La pestaña activa no es un diseño": "The active tab is not a part design",
   "Esa pestaña ya no está o no es un diseño": "That tab no longer exists or is not a part design",
+  "Esa pestaña no es un ensamble": "That tab is not an assembly",
+  "Nueva pestaña": "New tab",
+  "Nuevo ensamble": "New assembly",
+  "Se borra el ensamble con sus uniones y no se puede deshacer. Las piezas siguen en sus diseños.": "The assembly is deleted with its mates and this can't be undone. The parts stay in their part designs.",
+  "Sus piezas quedarán faltando en: {list}.": "Its parts will be missing from: {list}.",
 };
