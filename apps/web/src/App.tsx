@@ -596,6 +596,10 @@ export const App: Component = () => {
     // Un archivo por variante (nombre-variante.ext)
     const c = cad.committed()?.configurations?.length ?? 0;
     if (c > 0) parts.push({ key: "configs", name: t("Todas las configuraciones ({n} archivos)", { n: c + 1 }) });
+    // Las pestañas: un archivo por pestaña, o las piezas de todos los diseños juntas
+    const tabs = cad.tabs().tabs;
+    if (tabs.length > 1) parts.push({ key: "tabs", name: t("Todas las pestañas ({n} archivos)", { n: tabs.length }) });
+    if (tabs.filter((x) => x.kind === "design").length > 1) parts.push({ key: "tabs-one", name: t("Todos los diseños en un archivo") });
     return parts;
   };
   const openExport = () => {
@@ -5688,6 +5692,16 @@ export const App: Component = () => {
       if (!selected) return;
       const path = /\.[^./]+$/.test(selected) ? selected : `${selected}.${extensions[0]}`;
       const file = path.split("/").pop();
+      if (part?.key === "tabs" || part?.key === "tabs-one") {
+        // Cada pestaña en su archivo (nombre-pestaña.ext) o todos los diseños en uno, sin cambiar la activa
+        const list = part.key === "tabs" ? cad.tabs().tabs.map((x) => ({ id: x.id as number | null, path: path.replace(/(\.[^./]+)$/, `-${tBackend(x.name).replace(/[^\p{L}\p{N}_-]+/gu, "_")}$1`) })) : [{ id: null, path }];
+        let total = 0;
+        for (const x of list) total += await busy(t("Exportando a {file}...", { file: x.path.split("/").pop() ?? "" }), () => cad.exportTabs(x.path, format, x.id));
+        setLastExport({ bytes: total, files: list.map((x) => x.path) });
+        setStatusMessage(list.length > 1 ? t("Exportadas {n} pestañas ({size})", { n: list.length, size: formatBytes(total) }) : t("Diseño exportado: {file} ({size})", { file: file ?? "", size: formatBytes(total) }));
+        pipeline.markCompleted("export");
+        return;
+      }
       if (part?.key === "configs") {
         // Cada variante (y la base) calculada y exportada; al final vuelve la que estaba
         const doc = cad.committed();

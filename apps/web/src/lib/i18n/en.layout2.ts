@@ -381,4 +381,23 @@ export const en_layout2: Catalog = {
   "Armar en una pestaña de ensamble nueva": "Assemble in a new assembly tab",
   "Su pieza ya no está (se borró en su diseño o se borró su pestaña): no se dibuja ni se mueve.":
     "Its part no longer exists (deleted in its part design, or its tab was deleted): it is not drawn or moved.",
+  // F8: exportar todas las pestañas
+  "Todas las pestañas ({n} archivos)": "All tabs ({n} files)",
+  "Todos los diseños en un archivo": "All part designs in one file",
+  "Exportadas {n} pestañas ({size})": "Exported {n} tabs ({size})",
+  // F8: copiar entre pestañas
+  "Un ensamble no lleva operaciones: pegarlas en una pestaña de diseño": "An assembly has no features: paste them into a part design tab",
+  "Una pestaña de diseño nueva con esta pieza, como pieza derivada: cambia cuando cambia acá":
+    "A new part design tab with this part, as a derived part: it changes when it changes here",
+  "Llevar {name} a una pestaña nueva": "Move {name} to a new tab",
+  // F8: variables del proyecto
+  "Variables del proyecto": "Project variables",
+  "Agregar variable": "Add variable",
+  "Quitar variable": "Remove variable",
+  "ya hay una variable «{name}»": "there is already a variable «{name}»",
+  "Como los parámetros, pero las ven todas las pestañas de diseño (un parámetro del diseño con el mismo nombre manda).":
+    "Like parameters, but every part design tab sees them (a part design parameter with the same name wins).",
+  "Este diseño tiene un parámetro «{name}»: manda el suyo": "This part design has a parameter «{name}»: its own wins",
+  // F8: subensambles
+  "Ensamble «{name}»": "Assembly «{name}»",
 };

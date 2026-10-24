@@ -372,20 +372,25 @@ fn fit_scan_references(state: &AppState, doc: &Document) -> Option<Document> {
 }
 
 /// El documento de la pestaña `tab` (`None`: la activa) listo para recalcular,
-/// o `None` si va tal cual: las referencias del escaneo al día y las piezas
-/// traídas de otras pestañas (calculadas con la caché de operaciones).
+/// o `None` si va tal cual: las referencias del escaneo al día, las variables
+/// del proyecto y las piezas traídas de otras pestañas (calculadas con la caché
+/// de operaciones).
 fn prepared(state: &AppState, tab: Option<TabId>, doc: &Document) -> Option<Document> {
     let fitted = fit_scan_references(state, doc);
-    if !Tabs::has_derived(doc) {
+    let tabs = state.cad_tabs.lock().unwrap();
+    let derived = Tabs::has_derived(doc);
+    if !derived && tabs.variables.is_empty() {
         return fitted;
     }
     let mut out = fitted.unwrap_or_else(|| doc.clone());
-    let tabs = state.cad_tabs.lock().unwrap();
-    let tab = tab.unwrap_or(tabs.active);
-    tabs.fill_derived(tab, &mut out, &mut |d| {
-        let fitted = fit_scan_references(state, d);
-        fitted.as_ref().unwrap_or(d).evaluate_with(&mut state.cad_ops.lock().unwrap())
-    });
+    tabs.add_variables(&mut out);
+    if derived {
+        let tab = tab.unwrap_or(tabs.active);
+        tabs.fill_derived(tab, &mut out, &mut |d| {
+            let fitted = fit_scan_references(state, d);
+            fitted.as_ref().unwrap_or(d).evaluate_with(&mut state.cad_ops.lock().unwrap())
+        });
+    }
     Some(out)
 }
 
@@ -442,10 +447,10 @@ fn evaluate_committed(state: &AppState) -> Result<CadResult, String> {
     evaluate_doc(state, &doc)
 }
 
-/// Las pestañas de diseño y las variantes del ensamble activo (un diseño en
+/// Las pestañas de diseño y las variantes del ensamble `asm` (un diseño en
 /// otra configuración, con su número de `VARIANT_BASE` en adelante), con las
 /// referencias del escaneo al día, para un ensamble
-fn design_tabs(state: &AppState) -> Vec<(TabId, Document)> {
+fn design_tabs(state: &AppState, asm: TabId) -> Vec<(TabId, Document)> {
     let (designs, variants) = {
         let tabs = state.cad_tabs.lock().unwrap();
         let designs: Vec<(TabId, Document)> = tabs
@@ -456,7 +461,7 @@ fn design_tabs(state: &AppState) -> Vec<(TabId, Document)> {
                 cad_model::TabKind::Assembly { .. } => None,
             })
             .collect();
-        (designs, tabs.variant_documents(tabs.active))
+        (designs, tabs.variant_documents(asm))
     };
     let mut out: Vec<(TabId, Document)> = designs.into_iter().map(|(id, d)| (id, prepared(state, Some(id), &d).unwrap_or(d))).collect();
     out.extend(variants.into_iter().map(|(vtab, studio, d)| (vtab, prepared(state, Some(studio), &d).unwrap_or(d))));
@@ -472,10 +477,59 @@ fn designs_hash(designs: &[(TabId, Document)]) -> u64 {
     h.finish()
 }
 
+/// Huella de los subensambles del ensamble `asm` (y los suyos): lo que cambia
+/// sus piezas rígidas. El ensamble mismo no entra: arrastrar no recalcula.
+fn subassemblies_hash(tabs: &Tabs, asm: TabId, h: &mut impl Hasher, depth: usize) {
+    if depth > MAX_NESTING {
+        return;
+    }
+    for sub in tabs.subassemblies(asm) {
+        (sub, serde_json::to_string(&tabs.flat_assembly(sub)).unwrap_or_default()).hash(h);
+        subassemblies_hash(tabs, sub, h, depth + 1);
+    }
+}
+
+/// Hasta cuántos ensambles uno dentro de otro
+const MAX_NESTING: usize = 8;
+
+/// El recálculo juntado del ensamble `asm`: sus diseños (y variantes) y una
+/// pieza rígida por cada subensamble
+fn merged_assembly(state: &AppState, asm: TabId, depth: usize) -> (Vec<(TabId, Document)>, cad_model::Evaluation) {
+    let designs = design_tabs(state, asm);
+    let mut merged = {
+        let mut ops = state.cad_ops.lock().unwrap();
+        let evals: Vec<(TabId, cad_model::Evaluation)> = designs.iter().map(|(id, d)| (*id, d.evaluate_with(&mut ops))).collect();
+        cad_model::merge_evaluations(evals.iter().map(|(id, e)| (*id, e)))
+    };
+    add_subassemblies(state, asm, &mut merged, depth);
+    (designs, merged)
+}
+
+/// Agrega al recálculo del ensamble `asm` una pieza rígida por cada subensamble suyo
+fn add_subassemblies(state: &AppState, asm: TabId, merged: &mut cad_model::Evaluation, depth: usize) {
+    if depth > MAX_NESTING {
+        return;
+    }
+    let subs = state.cad_tabs.lock().unwrap().subassemblies(asm);
+    for sub in subs {
+        let (_, sub_eval) = merged_assembly(state, sub, depth + 1);
+        if let Some(p) = state.cad_tabs.lock().unwrap().subassembly_part(sub, &sub_eval) {
+            merged.parts.push(p);
+        }
+    }
+}
+
 /// Nombre de cada pieza del recálculo juntado de un ensamble, como se llama
-/// en su pestaña (numeradas en su diseño, no entre todas)
-fn assembly_part_names(designs: &[(TabId, Document)], merged: &cad_model::Evaluation) -> Vec<(cad_model::PartId, String)> {
-    let mut out = Vec::new();
+/// en su pestaña (numeradas en su diseño, no entre todas); un subensamble, el de su pestaña
+fn assembly_part_names(tabs: &Tabs, designs: &[(TabId, Document)], merged: &cad_model::Evaluation) -> Vec<(cad_model::PartId, String)> {
+    let mut out: Vec<(cad_model::PartId, String)> = merged
+        .parts
+        .iter()
+        .filter_map(|p| {
+            let t = tabs.get(cad_model::split_tab_feature(p.id.feature).0)?;
+            (!t.kind.is_design()).then(|| (p.id, t.name.clone()))
+        })
+        .collect();
     for (tab, doc) in designs {
         let mut ids: Vec<cad_model::PartId> = merged
             .parts
@@ -494,7 +548,8 @@ fn assembly_part_names(designs: &[(TabId, Document)], merged: &cad_model::Evalua
 
 fn evaluate_doc(state: &AppState, doc: &Document) -> Result<CadResult, String> {
     // Pestaña de ensamble: el recálculo es el de todos los diseños juntos
-    let designs = state.cad_in_assembly().then(|| design_tabs(state));
+    let active = state.cad_tabs.lock().unwrap().active;
+    let designs = state.cad_in_assembly().then(|| design_tabs(state, active));
     let fitted;
     let doc = match designs.is_none().then(|| prepared(state, None, doc)).flatten() {
         Some(d) => {
@@ -503,7 +558,15 @@ fn evaluate_doc(state: &AppState, doc: &Document) -> Result<CadResult, String> {
         }
         None => doc,
     };
-    let hash = designs.as_deref().map_or_else(|| doc_hash(doc), designs_hash);
+    let hash = match &designs {
+        Some(d) => {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            designs_hash(d).hash(&mut h);
+            subassemblies_hash(&state.cad_tabs.lock().unwrap(), active, &mut h, 0);
+            h.finish()
+        }
+        None => doc_hash(doc),
+    };
     let mut cache = state.cad_cache.lock().unwrap();
     match cache.take() {
         Some(c) if c.doc_hash == hash => *cache = Some(c),
@@ -515,9 +578,13 @@ fn evaluate_doc(state: &AppState, doc: &Document) -> Result<CadResult, String> {
             let previous = old.map(|c| (c.doc_hash, c.eval));
             let eval = match &designs {
                 Some(designs) => {
-                    let mut ops = state.cad_ops.lock().unwrap();
-                    let evals: Vec<(TabId, cad_model::Evaluation)> = designs.iter().map(|(id, d)| (*id, d.evaluate_with(&mut ops))).collect();
-                    cad_model::merge_evaluations(evals.iter().map(|(id, e)| (*id, e)))
+                    let mut merged = {
+                        let mut ops = state.cad_ops.lock().unwrap();
+                        let evals: Vec<(TabId, cad_model::Evaluation)> = designs.iter().map(|(id, d)| (*id, d.evaluate_with(&mut ops))).collect();
+                        cad_model::merge_evaluations(evals.iter().map(|(id, e)| (*id, e)))
+                    };
+                    add_subassemblies(state, active, &mut merged, 0);
+                    merged
                 }
                 None => doc.evaluate_with(&mut state.cad_ops.lock().unwrap()),
             };
@@ -541,7 +608,7 @@ fn evaluate_doc(state: &AppState, doc: &Document) -> Result<CadResult, String> {
     let doc = match &designs {
         Some(designs) => {
             let tabs = state.cad_tabs.lock().unwrap();
-            let mut parts = tabs.flat_part_props(tabs.active, &assembly_part_names(designs, eval)).0;
+            let mut parts = tabs.flat_part_props(tabs.active, &assembly_part_names(&tabs, designs, eval)).0;
             // El mismo nombre en dos pestañas: se aclara de cuál es
             let names: Vec<Option<String>> = parts.iter().map(|p| p.name.clone()).collect();
             for p in &mut parts {
@@ -820,8 +887,45 @@ pub async fn cad_evaluate(app: AppHandle) -> Result<CadResult, String> {
 
 /// Calcula una fórmula con los parámetros dados (para validar mientras se escribe).
 #[tauri::command]
-pub fn cad_eval_expr(expr: String, parameters: Vec<cad_model::Parameter>) -> Result<f64, String> {
-    Document { parameters, ..Default::default() }.eval_expr(&expr)
+pub fn cad_eval_expr(state: tauri::State<'_, AppState>, expr: String, parameters: Vec<cad_model::Parameter>) -> Result<f64, String> {
+    eval_expr_impl(&state, &expr, parameters)
+}
+
+/// Con los parámetros del diseño y las variables del proyecto que no tapa
+fn eval_expr_impl(state: &AppState, expr: &str, parameters: Vec<cad_model::Parameter>) -> Result<f64, String> {
+    let mut doc = Document { parameters, ..Default::default() };
+    state.cad_tabs.lock().unwrap().add_variables(&mut doc);
+    doc.eval_expr(expr)
+}
+
+/// Las variables del proyecto (las ven todos los diseños) con su valor o su error.
+#[derive(Serialize)]
+pub struct VariablesView {
+    pub variables: Vec<cad_model::Parameter>,
+    pub values: Vec<cad_model::ResolvedValue>,
+}
+
+fn variables_view(state: &AppState) -> VariablesView {
+    let variables = state.cad_tabs.lock().unwrap().variables.clone();
+    let values = Document { parameters: variables.clone(), ..Default::default() }.parameter_values().1;
+    VariablesView { variables, values }
+}
+
+#[tauri::command]
+pub fn cad_variables(state: tauri::State<'_, AppState>) -> VariablesView {
+    variables_view(&state)
+}
+
+/// Cambia las variables del proyecto y recalcula lo que se ve.
+#[tauri::command]
+pub async fn cad_set_variables(app: AppHandle, variables: Vec<cad_model::Parameter>) -> Result<CadResult, String> {
+    require_occt()?;
+    in_background(app, move |state| set_variables_impl(state, variables)).await
+}
+
+fn set_variables_impl(state: &AppState, variables: Vec<cad_model::Parameter>) -> Result<CadResult, String> {
+    state.cad_tabs.lock().unwrap().variables = variables;
+    evaluate(state)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2088,6 +2192,67 @@ fn assembly_items_of(doc: &Document, asm: &cad_model::Assembly, shapes: Vec<(u32
     Ok(items)
 }
 
+/// Lo que se exporta de la pestaña `tab`: las piezas de un diseño o las instancias de un
+/// ensamble en su lugar, con su nombre y su color (sin tocar lo que muestra el visor).
+fn tab_export_items(state: &AppState, tab: TabId) -> Result<Vec<(cad_model::Shape, String, Option<[f64; 3]>)>, String> {
+    let design = state.cad_tabs.lock().unwrap().get(tab).ok_or("Esa pestaña ya no está")?.kind.is_design();
+    if !design {
+        let (designs, merged) = merged_assembly(state, tab, 0);
+        let tabs = state.cad_tabs.lock().unwrap();
+        let doc = tabs.assembly_document(tab, &assembly_part_names(&tabs, &designs, &merged)).ok_or("Esa pestaña ya no está")?;
+        let asm = doc.assembly.clone().unwrap_or_default();
+        let shapes = cad_model::assembly::instance_shapes(&merged, &asm, &cad_model::assembly::solve(&asm));
+        return assembly_items_of(&doc, &asm, shapes);
+    }
+    let doc = state.cad_tabs.lock().unwrap().design(tab).cloned().ok_or("Esa pestaña ya no está")?;
+    let doc = prepared(state, Some(tab), &doc).unwrap_or(doc);
+    let ev = doc.evaluate_with(&mut state.cad_ops.lock().unwrap());
+    let numbers = part_numbers(&doc, &ev);
+    Ok(ev
+        .parts
+        .iter()
+        .map(|x| {
+            let color = doc.parts.iter().find(|q| q.part == x.id).and_then(|q| q.color.as_deref()).and_then(hex_rgb);
+            (x.shape.clone(), part_name(&doc, x.id, numbers.get(&x.id).copied().unwrap_or(0)), color)
+        })
+        .collect())
+}
+
+/// Exporta una pestaña cualquiera (`tab`) o, sin ella, las piezas de todos los diseños en un
+/// solo archivo (cada una con el nombre de su pestaña delante). STEP o malla, como `cad_export`.
+#[tauri::command]
+pub async fn cad_export_tabs(app: AppHandle, path: String, format: String, tab: Option<TabId>) -> Result<u64, String> {
+    require_occt()?;
+    in_background(app, move |state| export_tabs_impl(state, &path, &format, tab)).await
+}
+
+fn export_tabs_impl(state: &AppState, path: &str, format: &str, tab: Option<TabId>) -> Result<u64, String> {
+    let items = match tab {
+        Some(t) => tab_export_items(state, t)?,
+        None => {
+            let designs: Vec<(TabId, String)> = state.cad_tabs.lock().unwrap().tabs.iter().filter(|t| t.kind.is_design()).map(|t| (t.id, t.name.clone())).collect();
+            let mut all = Vec::new();
+            for (id, name) in designs {
+                all.extend(tab_export_items(state, id)?.into_iter().map(|(s, n, c)| (s, format!("{name} · {n}"), c)));
+            }
+            all
+        }
+    };
+    if items.is_empty() {
+        return Err("No hay piezas que exportar".into());
+    }
+    let p = std::path::Path::new(path);
+    if matches!(format, "step" | "stp") {
+        let list: Vec<_> = items.iter().map(|(s, n, c)| (s, n.as_str(), *c)).collect();
+        let bytes = cad_model::Shape::parts_to_step(&list).map_err(|e| e.to_string())?;
+        std::fs::write(p, &bytes).map_err(|e| format!("No se pudo escribir {path}: {e}"))?;
+    } else {
+        let scene = shapes_scene(&items.iter().map(|(s, n, _)| (s, n.clone())).collect::<Vec<_>>())?;
+        export_scene(&scene, p, format)?;
+    }
+    Ok(std::fs::metadata(p).map(|m| m.len()).unwrap_or(0))
+}
+
 /// Exporta el sólido: STEP (exacto) o malla (STL, 3MF, OBJ, PLY, GLB).
 #[tauri::command]
 pub async fn cad_export(
@@ -2962,6 +3127,10 @@ pub mod bridge {
                 let (path, format): (String, String) = (arg(args, "path")?, arg(args, "format")?);
                 ok(export_impl(state, &path, &format, arg::<Option<cad_model::PartId>>(args, "part")?, arg::<Option<bool>>(args, "assembly")?.unwrap_or(false), arg::<Option<bool>>(args, "compensate")?.unwrap_or(false))?)
             }
+            "cad_export_tabs" => {
+                let (path, format): (String, String) = (arg(args, "path")?, arg(args, "format")?);
+                ok(export_tabs_impl(state, &path, &format, arg(args, "tab")?)?)
+            }
             "cad_export_assembly_animation" => ok(export_assembly_animation_impl(
                 state,
                 &arg::<String>(args, "path")?,
@@ -2972,7 +3141,9 @@ pub mod bridge {
                 arg::<Option<usize>>(args, "frames")?.unwrap_or(30),
                 arg::<Option<f64>>(args, "fps")?.unwrap_or(30.0),
             )?),
-            "cad_eval_expr" => ok(cad_eval_expr(arg(args, "expr")?, arg(args, "parameters")?)?),
+            "cad_eval_expr" => ok(eval_expr_impl(state, &arg::<String>(args, "expr")?, arg(args, "parameters")?)?),
+            "cad_variables" => ok(variables_view(state)),
+            "cad_set_variables" => ok(set_variables_impl(state, arg(args, "variables")?)?),
             "cad_scan_pick" => {
                 let kind: String = arg(args, "kind")?;
                 ok(scan_pick_impl(state, &kind, arg(args, "triangle")?, arg::<Option<ScanPickOptions>>(args, "options")?.unwrap_or_default())?)
@@ -3465,6 +3636,132 @@ mod tests {
         set_document_impl(&state, d).unwrap();
         change_tabs(&state, |t| t.activate(asm)).unwrap();
         assert_eq!(evaluate(&state).unwrap().parts[1].volume.round(), 30000.0);
+    }
+
+    /// Un ensamble dentro de otro: una pieza rígida con sus instancias en su lugar
+    #[test]
+    fn subassembly_is_a_rigid_part() {
+        if !cad_model::occt::available() {
+            return;
+        }
+        let state = AppState::new();
+        let mut tabs = Tabs::from_legacy(Some(box_doc()));
+        let sub = tabs.add_assembly(Some("Bisagra".into()));
+        let top = tabs.add_assembly(Some("Puerta".into()));
+        let box_part = cad_model::PartId { feature: tabs.design(0).unwrap().features[0].id, index: 0 };
+        let inst = |id, studio, part, x: f64| cad_model::Instance { id, studio, configuration: None, part, name: format!("I{id}"), position: [x, 0.0, 0.0], rotation: [0.0; 3], fixed: id == 1 };
+        let set = |tabs: &mut Tabs, id, list| {
+            let cad_model::TabKind::Assembly { assembly, .. } = &mut tabs.get_mut(id).unwrap().kind else { panic!() };
+            assembly.instances = list;
+            assembly.next_id = 9;
+        };
+        set(&mut tabs, sub, vec![inst(1, 0, box_part, 0.0), inst(2, 0, box_part, 20.0)]);
+        set(&mut tabs, top, vec![inst(1, sub, cad_model::SUBASSEMBLY_PART, 0.0), inst(2, sub, cad_model::SUBASSEMBLY_PART, 100.0), inst(3, 0, box_part, 300.0)]);
+        state.set_cad_tabs(tabs);
+        let r = evaluate(&state).unwrap();
+        let sub_view = r.parts.iter().find(|p| p.name == "Bisagra").expect("el subensamble es una pieza con su nombre");
+        assert_eq!(sub_view.volume.round(), 12000.0);
+        let (_, shapes) = assembly_shapes(&state).unwrap();
+        assert_eq!(shapes.iter().map(|(_, s)| s.mass().unwrap().volume).sum::<f64>().round(), 2.0 * 12000.0 + 6000.0);
+        let info = drawing_info_impl(&state).unwrap();
+        assert!((info.max[0] - 310.0).abs() < 1e-6 && (info.min[0]).abs() < 1e-6, "{:?}", info.max);
+        // Mover algo adentro del subensamble cambia al que lo lleva
+        let before = r.version;
+        {
+            let mut tabs = state.cad_tabs.lock().unwrap();
+            let cad_model::TabKind::Assembly { assembly, .. } = &mut tabs.get_mut(sub).unwrap().kind else { panic!() };
+            assembly.instances[1].position[0] = 40.0;
+        }
+        let r = evaluate(&state).unwrap();
+        assert_ne!(r.version, before);
+        assert!((drawing_info_impl(&state).unwrap().max[0] - 310.0).abs() < 1e-6);
+        assert!((drawing_info_impl(&state).unwrap().items.iter().find(|i| i.instance == 2).unwrap().center[0] - (100.0 + 25.0)).abs() < 1e-6, "centro del subensamble corrido");
+        // Ciclo: la bisagra lleva a la puerta; la puerta ya no puede llevarla (queda sin pieza)
+        {
+            let mut tabs = state.cad_tabs.lock().unwrap();
+            let cad_model::TabKind::Assembly { assembly, .. } = &mut tabs.get_mut(sub).unwrap().kind else { panic!() };
+            assembly.instances.push(inst(5, top, cad_model::SUBASSEMBLY_PART, 0.0));
+        }
+        let r = evaluate(&state).unwrap();
+        assert!(r.parts.iter().all(|p| p.name != "Bisagra"));
+        assert_eq!(assembly_shapes(&state).unwrap().1.len(), 1, "solo la caja suelta");
+    }
+
+    /// Las variables del proyecto las ven todos los diseños; un parámetro propio manda
+    #[test]
+    fn project_variables_reach_every_design() {
+        if !cad_model::occt::available() {
+            return;
+        }
+        let state = AppState::new();
+        let with_binding = |dx: Option<&str>| {
+            let mut d = box_doc();
+            let id = d.features[0].id.0;
+            d.bindings.insert(format!("{id}.kind.shape.dx"), "largo".into());
+            if let Some(v) = dx {
+                d.parameters.push(cad_model::Parameter { name: "largo".into(), expr: v.into() });
+            }
+            d
+        };
+        let mut tabs = Tabs::from_legacy(Some(with_binding(None)));
+        let own = tabs.add(cad_model::TabKind::Design { document: Box::new(with_binding(Some("5"))) }, Some("Propia".into()));
+        tabs.activate(0).unwrap();
+        state.set_cad_tabs(tabs);
+        // Sin la variable, la fórmula no tiene con qué
+        assert!(evaluate(&state).unwrap().bindings.iter().any(|b| b.error.is_some()));
+        let vars = vec![cad_model::Parameter { name: "base".into(), expr: "20".into() }, cad_model::Parameter { name: "largo".into(), expr: "base * 2".into() }];
+        let r = set_variables_impl(&state, vars).unwrap();
+        assert_eq!(r.body.unwrap().volume.round(), 40.0 * 600.0);
+        assert_eq!(variables_view(&state).values.iter().map(|v| v.value).collect::<Vec<_>>(), [Some(20.0), Some(40.0)]);
+        assert_eq!(eval_expr_impl(&state, "largo + 1", vec![]).unwrap(), 41.0);
+        assert_eq!(eval_expr_impl(&state, "largo + 1", vec![cad_model::Parameter { name: "largo".into(), expr: "1".into() }]).unwrap(), 2.0);
+        // La otra pestaña tiene su «largo»: manda el suyo
+        change_tabs(&state, |t| t.activate(own)).unwrap();
+        assert_eq!(evaluate(&state).unwrap().body.unwrap().volume.round(), 5.0 * 600.0);
+        // Cambiar la variable cambia el diseño que la usa, al volver a él
+        set_variables_impl(&state, vec![cad_model::Parameter { name: "largo".into(), expr: "30".into() }]).unwrap();
+        change_tabs(&state, |t| t.activate(0)).unwrap();
+        assert_eq!(evaluate(&state).unwrap().body.unwrap().volume.round(), 30.0 * 600.0);
+        // El documento guardado no las copia
+        assert!(state.cad_doc().unwrap().parameters.is_empty());
+    }
+
+    /// Exportar cualquier pestaña sin cambiar la activa, o todos los diseños en un archivo
+    #[test]
+    fn export_every_tab() {
+        if !cad_model::occt::available() {
+            return;
+        }
+        let state = AppState::new();
+        let mut tabs = Tabs::from_legacy(Some(box_doc()));
+        let long = tabs.add(box_tab(40.0), Some("Larga".into()));
+        let asm = tabs.add_assembly(None);
+        state.set_cad_tabs(tabs);
+        let r = evaluate(&state).unwrap();
+        let inst = |id, part, x: f64| cad_model::Instance { id, studio: 0, configuration: None, part, name: format!("I{id}"), position: [x, 0.0, 0.0], rotation: [0.0; 3], fixed: true };
+        let mut doc = state.cad_doc().unwrap();
+        doc.assembly = Some(cad_model::Assembly { instances: vec![inst(1, r.parts[0].id, 0.0), inst(2, r.parts[1].id, 50.0), inst(3, r.parts[1].id, 100.0)], next_id: 4, ..Default::default() });
+        set_document_impl(&state, doc).unwrap();
+        change_tabs(&state, |t| t.activate(0)).unwrap();
+        let shown = evaluate(&state).unwrap().version;
+        let volume = |items: &[(cad_model::Shape, String, Option<[f64; 3]>)]| items.iter().map(|(s, _, _)| s.mass().unwrap().volume).sum::<f64>().round();
+        // Un diseño: sus piezas; un ensamble: sus instancias en su lugar, con su nombre
+        assert_eq!(volume(&tab_export_items(&state, long).unwrap()), 24000.0);
+        let items = tab_export_items(&state, asm).unwrap();
+        assert_eq!(items.iter().map(|(_, n, _)| n.as_str()).collect::<Vec<_>>(), ["I1", "I2", "I3"]);
+        assert_eq!(volume(&items), 6000.0 + 2.0 * 24000.0);
+        assert!(tab_export_items(&state, 99).is_err());
+        // A archivo: cada pestaña y todos los diseños juntos (con el nombre de su pestaña)
+        let dir = std::env::temp_dir().join("pinocchio_cad_tabs");
+        std::fs::create_dir_all(&dir).unwrap();
+        for (tab, ext) in [(Some(asm), "step"), (Some(long), "stl"), (None, "step")] {
+            let path = dir.join(format!("t_{tab:?}.{ext}"));
+            assert!(export_tabs_impl(&state, path.to_str().unwrap(), ext, tab).unwrap() > 0);
+        }
+        let all = std::fs::read_to_string(dir.join("t_None.step")).unwrap();
+        assert!(all.contains("Larga") && all.contains("Pieza 1"), "nombres con su pestaña");
+        // Lo que muestra el visor no cambió
+        assert_eq!(evaluate(&state).unwrap().version, shown);
     }
 
     /// Una instancia en otra configuración de su diseño trae esa variante de la pieza

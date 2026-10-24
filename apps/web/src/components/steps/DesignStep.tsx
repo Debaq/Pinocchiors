@@ -141,7 +141,7 @@ import * as Icons from "../icons";
 import { t as tl, locale, tn } from "../../lib/i18n";
 import { tBackend } from "../../lib/i18nBackend";
 import { changeDesignTabs } from "../layout/DesignTabs";
-import { instanceStudio } from "../../lib/designTabs";
+import { instanceStudio, nestableAssemblies, splitTabFeature, tabFeature } from "../../lib/designTabs";
 import { jointKey, jointsOf } from "../../lib/assemblyDrag";
 import { planetFeatures, planetaryAssembly, ringFeature, type PlanetaryPlan } from "../../lib/planetary";
 
@@ -606,6 +606,7 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
               <Show when={ui.session()} fallback={
                 <Show when={!ui.assemblyMode()} fallback={<AssemblyPanel store={store} ui={ui} />}>
                   <ParametersSection store={store} />
+                  <VariablesSection store={store} />
                   <ConfigurationsSection store={store} />
                   <VersionsSection store={store} />
                 </Show>
@@ -1015,6 +1016,100 @@ const ParametersSection: Component<{ store: CadStore }> = (props) => {
  * reemplaza parámetros y suprime operaciones; la elegida es la que se ve y
  * se exporta.
  */
+/** Variables del proyecto: como los parámetros, pero las ven todas las pestañas de diseño */
+const VariablesSection: Component<{ store: CadStore }> = (props) => {
+  const store = props.store;
+  type Variable = { name: string; expr: string };
+  const [view, setView] = createSignal<{ variables: Variable[]; values: { key: string; value: number | null; error: string | null }[] }>({ variables: [], values: [] });
+  const [problem, setProblem] = createSignal<string>();
+  const reload = () => void store.variables().then(setView, () => undefined);
+  // Se releen al cambiar de pestaña (o al abrir otro proyecto)
+  createEffect(on(() => store.tabs(), reload));
+  const vars = () => view().variables;
+  const save = async (next: Variable[]) => {
+    setProblem(undefined);
+    try {
+      await store.setVariables(next);
+    } catch (e) {
+      setProblem(tBackend(String(e)));
+    }
+    reload();
+  };
+  const add = () => {
+    let n = vars().length + 1;
+    while (vars().some((v) => v.name === `v${n}`)) n++;
+    void save([...vars(), { name: `v${n}`, expr: "10" }]);
+  };
+  const edit = (i: number, change: Partial<Variable>) => void save(vars().map((v, j) => (j === i ? { ...v, ...change } : v)));
+  /** Este diseño tiene un parámetro con ese nombre: manda el suyo */
+  const shadowed = (name: string) => (store.doc()?.parameters ?? []).some((p) => p.name === name);
+  return (
+    <Section
+      title={tl("Variables del proyecto")}
+      right={
+        <IconButton aria-label={tl("Agregar variable")} size="sm" variant="ghost" onClick={add}>
+          <Icons.Plus size={12} />
+        </IconButton>
+      }
+    >
+      <Show
+        when={vars().length > 0}
+        fallback={<p class="text-[11px] text-text-dim leading-relaxed">{tl("Como los parámetros, pero las ven todas las pestañas de diseño (un parámetro del diseño con el mismo nombre manda).")}</p>}
+      >
+        <div class="space-y-1" data-variables>
+          <For each={vars()}>
+            {(v, i) => {
+              const res = () => view().values[i()];
+              return (
+                <div class="flex items-center gap-1.5" data-variable={v.name}>
+                  <input
+                    value={v.name}
+                    class="w-20 shrink-0 px-1.5 py-1 rounded bg-surface/40 border border-border text-xs text-text font-mono outline-none focus:border-accent"
+                    onChange={(e) => {
+                      const name = e.currentTarget.value.trim();
+                      if (name === v.name) return;
+                      if (!NAME_RE.test(name)) return setProblem(tl("«{name}» no sirve como nombre (letras, números y _)", { name }));
+                      if (vars().some((q, j) => j !== i() && q.name === name)) return setProblem(tl("ya hay una variable «{name}»", { name }));
+                      edit(i(), { name });
+                    }}
+                    onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+                  />
+                  <span class="text-text-dim text-xs">=</span>
+                  <input
+                    value={v.expr}
+                    class={clsx(
+                      "flex-1 min-w-0 px-1.5 py-1 rounded bg-surface/40 border text-xs text-text font-mono outline-none focus:border-accent",
+                      res()?.error ? "border-error" : "border-border",
+                    )}
+                    title={res()?.error ?? undefined}
+                    onChange={(e) => {
+                      const expr = e.currentTarget.value.trim();
+                      if (expr && expr !== v.expr) edit(i(), { expr });
+                    }}
+                    onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+                  />
+                  <span
+                    class={clsx("w-14 text-right text-xs font-mono truncate", res()?.error ? "text-error" : shadowed(v.name) ? "text-warning" : "text-text-muted")}
+                    title={res()?.error ?? (shadowed(v.name) ? tl("Este diseño tiene un parámetro «{name}»: manda el suyo", { name: v.name }) : undefined)}
+                  >
+                    {res()?.error ? "error" : res()?.value != null ? fmt(res()!.value!, 3).replace(/,?0+$/, "") : ""}
+                  </span>
+                  <IconButton aria-label={tl("Quitar variable")} size="sm" variant="ghost" onClick={() => void save(vars().filter((_, j) => j !== i()))}>
+                    <Icons.X size={10} />
+                  </IconButton>
+                </div>
+              );
+            }}
+          </For>
+        </div>
+      </Show>
+      <Show when={problem()}>
+        <p class="text-[11px] text-error">{problem()}</p>
+      </Show>
+    </Section>
+  );
+};
+
 /** Fecha corta: "8 oct 2026, 14:05" */
 const versionDate = (iso: string) => {
   const d = new Date(iso);
@@ -6515,8 +6610,39 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
     }
   };
 
+  // En una pestaña de ensamble, también los otros ensambles (rígidos, como una pieza) que no la llevan a ella
+  const isSub = (p: PartView) => store.tabs().tabs.some((t) => t.kind === "assembly" && t.id === splitTabFeature(p.id.feature)[0]);
+  const nestable = () => {
+    const { tabs, active } = store.tabs();
+    if (store.activeTab()?.kind !== "assembly" || active === null) return [];
+    return nestableAssemblies(tabs, active).flatMap((id) => tabs.filter((t) => t.id === id));
+  };
+  const choices = () => [
+    ...parts().filter((p) => !isSub(p)).map((p) => ({ value: partKey(p), label: p.name })),
+    ...nestable().map((t) => ({ value: `sub:${t.id}`, label: tl("Ensamble «{name}»", { name: tBackend(t.name) }) })),
+  ];
   const insert = () => {
-    const p = parts().find((x) => partKey(x) === (part() || (parts()[0] && partKey(parts()[0]))));
+    const key = part() || choices()[0]?.value;
+    if (key?.startsWith("sub:")) {
+      const tab = nestable().find((t) => t.id === Number(key.slice(4)));
+      if (!tab) return;
+      const name = tBackend(tab.name);
+      return void store.editAssembly((a) => {
+        const id = a.next_id || 1;
+        const copies = a.instances.filter((i) => i.studio === tab.id && splitTabFeature(i.part.feature)[0] === tab.id).length;
+        a.instances.push({
+          id,
+          studio: tab.id,
+          part: { feature: tabFeature(tab.id, 0), index: 0 },
+          name: copies ? `${name} (${copies + 1})` : name,
+          position: [a.instances.length * 60, 0, 0],
+          rotation: [0, 0, 0],
+          fixed: a.instances.length === 0,
+        });
+        a.next_id = id + 1;
+      });
+    }
+    const p = parts().find((x) => partKey(x) === key);
     if (!p) return props.ui.setMessage(tl("El diseño todavía no tiene piezas"));
     void store.editAssembly((a) => {
       const id = a.next_id || 1;
@@ -6582,12 +6708,12 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
         <div class="flex gap-1.5">
           <div class="flex-1">
             <Select
-              options={parts().map((p) => ({ value: partKey(p), label: p.name }))}
-              value={part() || (parts()[0] ? partKey(parts()[0]) : "")}
+              options={choices()}
+              value={part() || (choices()[0]?.value ?? "")}
               onChange={setPart}
             />
           </div>
-          <Button size="sm" onClick={insert} disabled={!parts().length}>
+          <Button size="sm" onClick={insert} disabled={!choices().length}>
             {tl("Insertar")}
           </Button>
         </div>
@@ -7160,6 +7286,15 @@ const PartsSection: Component<{ store: CadStore; ui: CadUi }> = (props) => {
   const open = props.ui.openPart;
   const setOpen = props.ui.setOpenPart;
   const opened = () => parts().find((p) => key(p) === open());
+  /** La pieza en una pestaña de diseño nueva (con su nombre), como pieza derivada: sigue a esta */
+  const toNewTab = async (p: PartView) => {
+    const studio = props.store.tabs().active;
+    if (studio === null) return;
+    await changeDesignTabs(props.store, props.ui, "cad_tab_add", { kind: "design", name: p.name });
+    if (props.store.activeTab()?.kind !== "design" || props.store.tabs().active === studio) return;
+    await props.store.addFeature({ type: "derived", studio, parts: [p.id], op: "new" });
+    await props.store.acceptDraft();
+  };
   createEffect(
     on(opened, (p, prev) => {
       if (p) props.ui.setHighlight({ faces: Array.from({ length: p.faces[1] - p.faces[0] }, (_, k) => p.faces[0] + k), edges: [] });
@@ -7216,6 +7351,13 @@ const PartsSection: Component<{ store: CadStore; ui: CadUi }> = (props) => {
                         : `${fmt(p.volume / 1000)} cm³`}
                   </span>
                   <span class="hidden group-hover:flex">
+                    <Show when={props.store.activeTab()?.kind === "design"}>
+                      <Tooltip content={tl("Una pestaña de diseño nueva con esta pieza, como pieza derivada: cambia cuando cambia acá")}>
+                        <IconButton aria-label={tl("Llevar {name} a una pestaña nueva", { name: p.name })} size="sm" variant="ghost" onClick={() => void toNewTab(p)}>
+                          <Icons.Copy size={11} />
+                        </IconButton>
+                      </Tooltip>
+                    </Show>
                     <IconButton
                       aria-label={tl("Borrar {name}", { name: p.name })}
                       size="sm"

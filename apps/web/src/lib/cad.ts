@@ -14,7 +14,7 @@ import type { Snap } from "./sketchSnap";
 import type { Contour } from "./sketchText";
 import type { PlanetaryPlan } from "./planetary";
 import { breaks, ellipseArcPolyline, makeBSpline, sample, type BSpline } from "./sketchCurves.ts";
-import { swapTabHistory, tabFeature, type TabHistory } from "./designTabs.ts";
+import { clipFormulas, pasteFormulas, swapTabHistory, tabFeature, type ClipFormulas, type TabHistory } from "./designTabs.ts";
 
 export type P2 = [number, number];
 export type P3 = [number, number, number];
@@ -4080,6 +4080,8 @@ export function createCadStore() {
   const [committed, setDoc] = createSignal<CadDocument | null>(null);
   // Operaciones copiadas del árbol (Ctrl+C), para pegarlas (Ctrl+V)
   const [featureClip, setFeatureClip] = createSignal<Feature[]>();
+  // Las fórmulas de lo copiado (viajan con las operaciones a otra pestaña)
+  let clipFormulasOf: ClipFormulas = { bindings: {}, parameters: [] };
   const [draft, setDraft] = createSignal<Draft>();
   // Herramienta de la operación en el diálogo (vista previa verde/roja)
   const [tool, setTool] = createSignal<{ mesh: CadMesh; op: BodyOp } | null>(null);
@@ -4456,17 +4458,27 @@ export function createCadStore() {
     /** Copia las operaciones (en el orden del árbol); cuántas */
     copyFeatures(ids: number[]): number {
       const list = (committed()?.features ?? []).filter((f) => ids.includes(f.id));
-      if (list.length) setFeatureClip(clone(list));
+      if (list.length) {
+        setFeatureClip(clone(list));
+        clipFormulasOf = clipFormulas(committed(), ids);
+      }
       return list.length;
     },
     /**
      * Pega operaciones (las copiadas, o `list`) al final o en la barra de
      * retroceso: ids nuevos, lo que se referían entre sí apunta a las copias y
      * lo de afuera queda igual (si ya no está, se ve como referencia perdida).
+     * Sus fórmulas van con ellas, y los parámetros que usan si en esta pestaña
+     * no están. En un ensamble no se pegan.
      */
     async pasteFeatures(list: Feature[] | undefined = featureClip()): Promise<number[]> {
       if (!list?.length) return [];
+      if (store.activeTab()?.kind === "assembly") {
+        setError(tr("Un ensamble no lleva operaciones: pegarlas en una pestaña de diseño"));
+        return [];
+      }
       if (draft()) await acceptDraft();
+      const formulas = list === featureClip() ? clipFormulasOf : clipFormulas(committed(), list.map((f) => f.id));
       const ids: number[] = [];
       await commit((d) => {
         let next = nextFeatureId(d);
@@ -4484,6 +4496,7 @@ export function createCadStore() {
         d.features.splice(at, 0, ...copies);
         d.next_id = next;
         if (d.rollback != null) d.rollback += copies.length;
+        pasteFormulas(d, formulas, map);
         ids.push(...copies.map((c) => c.id));
       });
       return ids;
@@ -4728,6 +4741,15 @@ export function createCadStore() {
       return undefined;
     },
 
+    /** Variables del proyecto (las ven todos los diseños; un parámetro propio con el mismo nombre manda) y su valor */
+    variables: () => invoke<{ variables: Parameter[]; values: ResolvedValue[] }>("cad_variables"),
+    /** Cambia las variables del proyecto y recalcula lo que se ve */
+    async setVariables(variables: Parameter[]) {
+      if (draft()) await acceptDraft();
+      await lastSend;
+      await apply(await invoke<CadResult>("cad_set_variables", { variables }));
+    },
+
     addParameter(name: string, expr: string) {
       return commit((d) => {
         d.parameters = [...(d.parameters ?? []), { name, expr }];
@@ -4798,6 +4820,8 @@ export function createCadStore() {
     /** Con `assembly`, las instancias del ensamble en su lugar */
     exportDesign: (path: string, format: string, part?: PartId, assembly = false, compensate = false) =>
       invoke<number>("cad_export", { path, format, part: part ?? null, assembly, compensate }),
+    /** Exporta la pestaña `tab` (sus piezas, o las instancias de un ensamble) o, con `null`, todos los diseños en un archivo */
+    exportTabs: (path: string, format: string, tab: number | null) => invoke<number>("cad_export_tabs", { path, format, tab }),
 
     // ─── Ensamble ─────────────────────────────────────────────────────
     /** La unión recorrida de `from` a `to` (° o mm) como GLB animado, una pose por cuadro */

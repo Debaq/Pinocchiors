@@ -42,6 +42,13 @@ fn roundtrip_json_and_messagepack() {
     let mut tabs = Tabs::from_legacy(Some(legacy_doc()));
     tabs.add(TabKind::Design { document: Box::new(box_doc(40.0)) }, Some("Tapa".into()));
     tabs.add_assembly(None);
+    // Variables del proyecto: las que el diseño no tiene se le agregan para recalcular
+    tabs.variables = vec![Parameter { name: "largo".into(), expr: "99".into() }, Parameter { name: "pared".into(), expr: "2".into() }];
+    let mut d = legacy_doc();
+    assert!(tabs.add_variables(&mut d));
+    assert_eq!(d.parameters.iter().map(|p| format!("{}={}", p.name, p.expr)).collect::<Vec<_>>(), ["largo=10", "pared=2"], "la propia manda");
+    assert!(!tabs.add_variables(&mut d));
+    assert!(!serde_json::to_string(&Tabs::from_legacy(None)).unwrap().contains("variables"), "sin variables, como antes");
     // Un ensamble con su plano
     let with_sheet = tabs.add_assembly(None);
     let sheets = serde_json::json!({ "sheets": [{ "id": 1, "name": "Plano 1", "bom": true, "scale": 0.5 }], "next_id": 2 });
@@ -381,4 +388,31 @@ fn instances_in_other_configurations_are_variants() {
     // Sin configuraciones, se guarda como antes
     let json = serde_json::to_string(&inst(1, 0, None)).unwrap();
     assert!(!json.contains("configuration"), "{json}");
+}
+
+#[test]
+fn subassemblies_skip_cycles() {
+    let mut tabs = Tabs::from_legacy(Some(box_doc(10.0)));
+    let a = tabs.add_assembly(Some("A".into()));
+    let b = tabs.add_assembly(Some("B".into()));
+    let c = tabs.add_assembly(Some("C".into()));
+    let inst = |id, studio| Instance { id, studio, configuration: None, part: SUBASSEMBLY_PART, name: format!("I{id}"), position: [0.0; 3], rotation: [0.0; 3], fixed: false };
+    let set = |tabs: &mut Tabs, id, list: Vec<Instance>| {
+        let TabKind::Assembly { assembly, .. } = &mut tabs.get_mut(id).unwrap().kind else { panic!() };
+        assembly.instances = list;
+    };
+    // B lleva a A; C lleva a B (y a sí mismo, que no cuenta)
+    set(&mut tabs, a, vec![Instance { part: PartId { feature: FeatureId(0), index: 0 }, ..inst(1, 0) }]);
+    set(&mut tabs, b, vec![inst(1, a), inst(2, a)]);
+    set(&mut tabs, c, vec![inst(1, b), inst(2, c)]);
+    assert!(tabs.contains_assembly(c, a), "indirecto");
+    assert!(!tabs.contains_assembly(a, c));
+    assert_eq!(tabs.subassemblies(b), [a]);
+    assert_eq!(tabs.subassemblies(c), [b]);
+    assert!(tabs.subassemblies(a).is_empty(), "un diseño no es subensamble");
+    // Ciclo: A lleva a C, que ya lleva a A
+    set(&mut tabs, a, vec![inst(1, c)]);
+    assert!(tabs.subassemblies(a).is_empty());
+    assert!(tabs.subassemblies(b).is_empty());
+    assert_eq!(tabs.users(a), [b]);
 }

@@ -314,12 +314,40 @@ pestaña, piezas derivadas de otra pestaña y planos que apunten a una pestaña 
   (caja y centros en su lugar, vista de punta a punta, rayado por pieza, el plano vuelve con la
   pestaña), ida y vuelta con plano en `tests/tabs.rs`, `e2e/drawingBom.test.mjs` (3).
 
-### F8 — Después (sin definir con el usuario)
+### F8 — Extras 🟡 2026-10-23 (falta probarla en la app)
 
 - Subensambles (un ensamble dentro de otro).
 - Parámetros del proyecto compartidos entre pestañas (variables de Onshape).
 - Copiar/pegar operaciones entre pestañas y «Pasar piezas a una pestaña nueva».
 - Exportar todas las pestañas a la vez (un STEP por pestaña o uno con todo).
+- Hecho, en ese orden al revés:
+  - **Exportar**: en el diálogo de exportar del diseño, «Todas las pestañas (N archivos)»
+    (`nombre-pestaña.ext`; un ensamble, con sus instancias en su lugar) y «Todos los diseños en
+    un archivo» (cada pieza «Pestaña · Pieza»). Comando `cad_export_tabs(path, format, tab?)`
+    (`tab_export_items`): no cambia la pestaña activa ni lo que se ve. Prueba `export_every_tab`.
+  - **Copiar/pegar**: el portapapeles de operaciones ya era del store (sirve entre pestañas);
+    ahora lleva sus fórmulas (`clipFormulas`/`pasteFormulas`: los campos vinculados de las copias
+    y los parámetros que usan y faltan, con los que esos usan; uno del mismo nombre se respeta) y
+    no se pega en un ensamble. «Pasar piezas»: en la lista de piezas, «Llevar a una pestaña
+    nueva» = pestaña de diseño con el nombre de la pieza y una pieza derivada de ella (F6), así
+    sigue al original (moverla de verdad rompería lo que la usa).
+  - **Variables del proyecto**: `Tabs.variables` (`serde(default)`): `prepared` agrega a cada
+    diseño las que no tiene como parámetro propio (el propio manda; también al recalcular el
+    original de una derivada y las variantes); `cad_eval_expr` las ve. Comandos `cad_variables`
+    (con su valor) y `cad_set_variables` (recalcula lo que se ve). Sección «Variables del
+    proyecto» bajo «Parámetros» (aviso si un parámetro del diseño la tapa). No entran en el
+    deshacer de la pestaña. Prueba `project_variables_reach_every_design`.
+  - **Subensambles** (rígidos, como en Onshape por defecto): una instancia con `studio` = otro
+    ensamble y la pieza `SUBASSEMBLY_PART` (0, 0). En el recálculo del ensamble cada
+    subensamble es una pieza: sus instancias en su lugar en un compuesto
+    (`Tabs::subassembly_part`, recursivo hasta 8 niveles); ciclos fuera (`subassemblies` /
+    `contains_assembly`: esa instancia queda sin pieza, en rojo). La huella del ensamble suma
+    la de sus subensambles (arrastrar adentro del propio no recalcula). Su nombre es el de la
+    pestaña; en la lista de materiales, una fila. «Insertar» ofrece «Ensamble «X»» para los
+    que no lo llevan (`nestableAssemblies`). Pruebas `subassembly_is_a_rigid_part`,
+    `subassemblies_skip_cycles`.
+- Falta (si se pide): subensamble flexible (sus uniones libres adentro del otro) y lista de
+  materiales desplegada por piezas.
 
 ## Archivos que se tocan (guía)
 

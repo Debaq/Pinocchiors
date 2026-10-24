@@ -792,3 +792,8 @@ cargo test -p cad-model
 - **2026-10-23 Pestañas F5 (cierre)**: cada instancia de un ensamble en la configuración de su
   diseño que se elija (variantes), instancias sin pieza en rojo en el panel y «Armar en una
   pestaña de ensamble nueva» después de crear un planetario. Sin probar todavía en la app.
+- **2026-10-23 Pestañas F8** ([PLAN_PESTANAS.md](PLAN_PESTANAS.md)): exportar todas las
+  pestañas (un archivo cada una o todos los diseños en uno), copiar y pegar operaciones entre
+  pestañas con sus fórmulas, «Llevar a una pestaña nueva» (pieza derivada), variables del
+  proyecto que ven todos los diseños y subensambles rígidos (sin ciclos). Sin probar todavía en
+  la app.

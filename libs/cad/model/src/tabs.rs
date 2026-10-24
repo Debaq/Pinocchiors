@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::assembly::Assembly;
-use crate::document::{Document, PartProps};
+use crate::document::{Document, Parameter, PartProps};
 use crate::eval::Evaluation;
 use crate::feature::{Derived, DerivedSource, FeatureId, FeatureKind, PartId};
 
@@ -42,6 +42,10 @@ fn tab_part(tab: TabId, p: PartId) -> PartId {
     PartId { feature: tab_feature(tab, p.feature), index: p.index }
 }
 
+/// La pieza que es un subensamble entero, en su pestaña (una instancia con
+/// `studio` = el ensamble y esta pieza lo pone adentro de otro, rígido).
+pub const SUBASSEMBLY_PART: PartId = PartId { feature: FeatureId(0), index: 0 };
+
 /// Junta los recálculos de varias pestañas en uno: sus piezas y engranes con
 /// los números de [`tab_feature`] (lo que el ensamble lee de un recálculo).
 pub fn merge_evaluations<'a>(evals: impl IntoIterator<Item = (TabId, &'a Evaluation)>) -> Evaluation {
@@ -70,6 +74,10 @@ pub struct Tabs {
     pub active: TabId,
     #[serde(default)]
     pub next_id: TabId,
+    /// Variables del proyecto: parámetros que ven todos los diseños (como las
+    /// de Onshape). Un parámetro propio del diseño con el mismo nombre manda.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub variables: Vec<Parameter>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -107,6 +115,7 @@ impl Tabs {
                 tabs: vec![Tab { id: 0, name: format!("{DESIGN_NAME} 1"), kind: TabKind::Design { document: Box::new(document) } }],
                 active: 0,
                 next_id: 1,
+                variables: Vec::new(),
             },
         }
     }
@@ -259,6 +268,15 @@ impl Tabs {
         self.fill_derived_in(&mut vec![tab], doc, eval);
     }
 
+    /// Agrega a `doc` las variables del proyecto que no tiene como parámetro
+    /// propio (antes de recalcularlo); si no agregó ninguna, `false`.
+    pub fn add_variables(&self, doc: &mut Document) -> bool {
+        let missing: Vec<Parameter> = self.variables.iter().filter(|v| !doc.parameters.iter().any(|p| p.name == v.name)).cloned().collect();
+        let any = !missing.is_empty();
+        doc.parameters.extend(missing);
+        any
+    }
+
     /// Si `doc` trae piezas de otra pestaña
     pub fn has_derived(doc: &Document) -> bool {
         doc.features.iter().any(|f| matches!(f.kind, FeatureKind::Derived(_)))
@@ -310,6 +328,7 @@ impl Tabs {
             return DerivedSource::failed("las piezas se traen de un diseño, no de un ensamble");
         };
         let mut src = (**document).clone();
+        self.add_variables(&mut src);
         src.active_configuration = match &d.configuration {
             None => None,
             Some(cfg) => match src.configurations.iter().position(|c| &c.name == cfg) {
@@ -366,6 +385,53 @@ impl Tabs {
         moved
     }
 
+    fn is_assembly(&self, id: TabId) -> bool {
+        self.get(id).is_some_and(|t| !t.kind.is_design())
+    }
+
+    /// Si el ensamble `outer` lleva adentro (directa o indirectamente) al ensamble `inner`.
+    pub fn contains_assembly(&self, outer: TabId, inner: TabId) -> bool {
+        self.contains_in(outer, inner, &mut Vec::new())
+    }
+
+    fn contains_in(&self, outer: TabId, inner: TabId, seen: &mut Vec<TabId>) -> bool {
+        if seen.contains(&outer) {
+            return false;
+        }
+        seen.push(outer);
+        let Some(TabKind::Assembly { assembly, .. }) = self.get(outer).map(|t| &t.kind) else { return false };
+        assembly.instances.iter().any(|i| i.studio == inner || (self.is_assembly(i.studio) && self.contains_in(i.studio, inner, seen)))
+    }
+
+    /// Los ensambles que van adentro del ensamble `asm` como subensambles
+    /// (rígidos): los de sus instancias, salvo él mismo y los que lo llevan a él
+    /// (un ciclo: esas instancias quedan sin pieza).
+    pub fn subassemblies(&self, asm: TabId) -> Vec<TabId> {
+        let Some(TabKind::Assembly { assembly, .. }) = self.get(asm).map(|t| &t.kind) else { return Vec::new() };
+        let mut out = Vec::new();
+        for i in &assembly.instances {
+            if i.studio != asm && !out.contains(&i.studio) && self.is_assembly(i.studio) && !self.contains_assembly(i.studio, asm) {
+                out.push(i.studio);
+            }
+        }
+        out
+    }
+
+    /// El subensamble `sub` como pieza rígida de quien lo lleva: sus instancias
+    /// en su lugar (con `sub_eval`, el recálculo juntado de ese ensamble) en un
+    /// compuesto. `None` si no tiene instancias que dibujar.
+    pub fn subassembly_part(&self, sub: TabId, sub_eval: &Evaluation) -> Option<crate::eval::Part> {
+        let flat = self.flat_assembly(sub)?;
+        let shapes: Vec<crate::Shape> = crate::assembly::instance_shapes(sub_eval, &flat, &crate::assembly::solve(&flat)).into_iter().map(|(_, s)| s).collect();
+        let shape = match shapes.len() {
+            0 => return None,
+            1 => shapes[0].clone(),
+            _ => crate::Shape::compound(&shapes).ok()?,
+        };
+        let tags = vec![Vec::new(); shape.face_count()];
+        Some(crate::eval::Part { id: tab_part(sub, SUBASSEMBLY_PART), shape, tags })
+    }
+
     /// Los diseños en otra configuración que usan las instancias del ensamble
     /// `id` (pestaña y nombre), en orden: la k-ésima se numera `VARIANT_BASE + k`.
     pub fn variants(&self, id: TabId) -> Vec<(TabId, String)> {
@@ -390,6 +456,7 @@ impl Tabs {
             .filter_map(|(k, (studio, cfg))| {
                 let mut doc = self.design(studio)?.clone();
                 doc.active_configuration = doc.configurations.iter().position(|c| c.name == cfg);
+                self.add_variables(&mut doc);
                 Some((VARIANT_BASE + k as TabId, studio, doc))
             })
             .collect()

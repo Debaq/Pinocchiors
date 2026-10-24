@@ -51,3 +51,66 @@ export function swapTabHistory<T>(saved: Map<number, TabHistory<T>>, undo: T[], 
     saved.delete(next.active!);
   }
 }
+
+/** Las fórmulas que llevan unas operaciones copiadas: sus campos vinculados (`<id>.<campo>`) y los parámetros del documento */
+export interface ClipFormulas {
+  bindings: Record<string, string>;
+  parameters: { name: string; expr: string }[];
+}
+
+/** Lo que las operaciones `ids` toman de las fórmulas de `doc` (para pegarlas en esta pestaña o en otra) */
+export function clipFormulas(doc: { bindings?: Record<string, string>; parameters?: { name: string; expr: string }[] } | null | undefined, ids: number[]): ClipFormulas {
+  const bindings = Object.fromEntries(Object.entries(doc?.bindings ?? {}).filter(([k]) => ids.includes(Number(k.split(".")[0]))));
+  return { bindings, parameters: (doc?.parameters ?? []).map((p) => ({ ...p })) };
+}
+
+/**
+ * Pega en `doc` las fórmulas de las copias (`map`: id original → id de la
+ * copia) y agrega los parámetros que usan y le faltan (con los que esos usan).
+ * Los que ya tiene con el mismo nombre quedan como están. Devuelve los agregados.
+ */
+export function pasteFormulas(doc: { bindings?: Record<string, string>; parameters?: { name: string; expr: string }[] }, clip: ClipFormulas, map: Map<number, number>): string[] {
+  const known = new Set(clip.parameters.map((p) => p.name));
+  const used: string[] = [];
+  const scan = (expr: string) => {
+    for (const m of expr.matchAll(/[\p{L}_][\p{L}\p{N}_]*/gu)) if (known.has(m[0]) && !used.includes(m[0])) used.push(m[0]);
+  };
+  for (const [k, expr] of Object.entries(clip.bindings)) {
+    const dot = k.indexOf(".");
+    const id = map.get(Number(k.slice(0, dot)));
+    if (id === undefined) continue;
+    (doc.bindings ??= {})[`${id}${k.slice(dot)}`] = expr;
+    scan(expr);
+  }
+  const have = new Set((doc.parameters ?? []).map((p) => p.name));
+  const added: string[] = [];
+  // `used` crece mientras se recorre: los parámetros de los parámetros también
+  for (let i = 0; i < used.length; i++) {
+    const p = clip.parameters.find((x) => x.name === used[i]);
+    if (!p || have.has(p.name)) continue;
+    have.add(p.name);
+    added.push(p.name);
+    (doc.parameters ??= []).push({ ...p });
+    scan(p.expr);
+  }
+  return added;
+}
+
+/**
+ * Los ensambles que pueden ir dentro del ensamble `outer` como subensambles:
+ * los demás, salvo los que ya lo llevan a él (directa o indirectamente: sería un ciclo)
+ */
+export function nestableAssemblies(tabs: { id: number; kind: string; used_by: number[] }[], outer: number): number[] {
+  const holders = new Set<number>([outer]);
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const t of tabs)
+      if (holders.has(t.id))
+        for (const u of t.used_by)
+          if (!holders.has(u) && tabs.some((x) => x.id === u && x.kind === "assembly")) {
+            holders.add(u);
+            grew = true;
+          }
+  }
+  return tabs.filter((t) => t.kind === "assembly" && !holders.has(t.id)).map((t) => t.id);
+}
