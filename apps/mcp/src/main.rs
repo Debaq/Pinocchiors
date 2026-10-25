@@ -40,7 +40,17 @@ fn main() {
     });
     eprintln!("pinocchio-mcp {} listo (motor propio, sin ventana)", env!("CARGO_PKG_VERSION"));
 
-    let mut working = Vec::new();
+    // Las herramientas van a una cola con un solo hilo: corren en el orden en
+    // que llegan, y mientras tanto se atienden ping y cancelaciones
+    let (queue, jobs) = std::sync::mpsc::channel::<protocol::Incoming>();
+    let worker = {
+        let (server, send) = (server.clone(), send.clone());
+        std::thread::spawn(move || {
+            for msg in jobs {
+                server.handle(msg, &*send);
+            }
+        })
+    };
     for line in std::io::stdin().lock().lines() {
         let Ok(line) = line else { break };
         if line.trim().is_empty() {
@@ -49,17 +59,14 @@ fn main() {
         match protocol::parse(&line) {
             Err(reply) => send(reply),
             Ok(None) => {}
-            // Las herramientas corren aparte: mientras tanto se atienden ping y cancelaciones
             Ok(Some(msg)) if msg.method == "tools/call" => {
-                let (server, send) = (server.clone(), send.clone());
-                working.retain(|h: &std::thread::JoinHandle<()>| !h.is_finished());
-                working.push(std::thread::spawn(move || server.handle(msg, &*send)));
+                server.queued(&msg);
+                let _ = queue.send(msg);
             }
             Ok(Some(msg)) => server.handle(msg, &*send),
         }
     }
-    // El cliente cerró la entrada: las herramientas en curso terminan y responden
-    for h in working {
-        let _ = h.join();
-    }
+    // El cliente cerró la entrada: lo que quedó en la cola termina y responde
+    drop(queue);
+    let _ = worker.join();
 }

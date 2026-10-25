@@ -1696,6 +1696,99 @@ fn face_info_impl(state: &AppState, face: usize) -> Result<FaceDescription, Stri
     }
 }
 
+/// Caras y aristas del sólido de la pestaña activa, con su pieza y su origen:
+/// para elegirlas por número (el conector MCP; los números valen hasta el
+/// próximo cambio)
+#[derive(Debug, Clone, Serialize)]
+pub struct GeometryView {
+    pub faces: Vec<FaceView>,
+    pub edges: Vec<EdgeView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FaceView {
+    pub index: usize,
+    pub part: Option<cad_model::PartId>,
+    /// Operación que la creó y qué parte de ella es ("fin", "lado:7", "+z"…)
+    pub origin: Vec<cad_model::FaceTag>,
+    pub surface: String,
+    pub area: f64,
+    pub center: [f64; 3],
+    /// Punto sobre la cara y normal saliente ahí
+    pub point: [f64; 3],
+    pub normal: [f64; 3],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub radius: Option<f64>,
+    /// Eje de cilindros, conos y toros (origen, dirección)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub axis: Option<([f64; 3], [f64; 3])>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EdgeView {
+    pub index: usize,
+    pub part: Option<cad_model::PartId>,
+    pub curve: String,
+    pub length: f64,
+    pub start: [f64; 3],
+    pub end: [f64; 3],
+    pub mid: [f64; 3],
+    pub closed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub radius: Option<f64>,
+    /// Las dos caras que separa
+    pub faces: [Option<usize>; 2],
+}
+
+fn geometry_impl(state: &AppState) -> Result<GeometryView, String> {
+    let parts = evaluate(state)?.parts;
+    let part_of = |i: usize, faces: bool| {
+        parts.iter().find(|p| {
+            let r = if faces { p.faces } else { p.edges };
+            (r[0]..r[1]).contains(&i)
+        }).map(|p| p.id)
+    };
+    let cache = state.cad_cache.lock().unwrap();
+    let Some(eval) = cache.as_ref().map(|c| &c.eval) else { return Ok(GeometryView { faces: vec![], edges: vec![] }) };
+    let Some(body) = eval.body.as_ref() else { return Ok(GeometryView { faces: vec![], edges: vec![] }) };
+    let mut faces = Vec::new();
+    for i in 0..body.face_count() {
+        let f = body.face_info(i).map_err(|e| e.to_string())?;
+        faces.push(FaceView {
+            index: i,
+            part: part_of(i, true),
+            origin: eval.face_tags.get(i).cloned().unwrap_or_default(),
+            surface: format!("{:?}", f.surface).to_lowercase(),
+            area: f.area,
+            center: f.center,
+            point: f.point,
+            normal: f.normal,
+            radius: f.radius,
+            axis: f.axis.map(|a| (a.origin, a.dir)),
+        });
+    }
+    let pairs = body.edge_face_pairs().map_err(|e| e.to_string())?;
+    let edges = body
+        .edges()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .enumerate()
+        .map(|(i, e)| EdgeView {
+            index: i,
+            part: part_of(i, false),
+            curve: format!("{:?}", e.curve).to_lowercase(),
+            length: e.length,
+            start: e.start,
+            end: e.end,
+            mid: e.mid,
+            closed: e.closed,
+            radius: e.circle.map(|c| c.2),
+            faces: pairs.get(i).copied().unwrap_or([None, None]),
+        })
+        .collect();
+    Ok(GeometryView { faces, edges })
+}
+
 /// Piezas que hay justo antes de la operación `index` de `document` (para
 /// elegirlas en su diálogo: la vista previa ya las muestra cambiadas).
 #[tauri::command]
@@ -3096,6 +3189,7 @@ pub mod bridge {
             "cad_edge_ref" => ok(edge_ref_impl(state, arg(args, "edge")?)?),
             "cad_vertex_spec" => ok(vertex_spec_impl(state, arg(args, "point")?)?),
             "cad_face_info" => ok(face_info_impl(state, arg(args, "face")?)?),
+            "cad_geometry" => ok(geometry_impl(state)?),
             "cad_face_edges" => ok(face_edges_impl(state, arg(args, "face")?)?),
             "cad_feature_faces" => ok(feature_faces_impl(state, arg(args, "feature")?)?),
             "cad_deviation" => deviation_impl(state, arg(args, "tolerance")?).map(Reply::Bytes),

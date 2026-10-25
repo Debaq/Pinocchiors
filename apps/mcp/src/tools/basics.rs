@@ -103,22 +103,23 @@ const HELP: Tool = Tool {
     name: "help",
     title: "Read the guide",
     description: "Guide on how to use Pinocchio: workflows, units and conventions. Topics: \
-`overview` (start here), `conventions` (units, axes, names, errors), `projects` (open, save, undo). \
-Without a topic it returns the overview and the list of topics. Example: {\"topic\": \"conventions\"}.",
+`overview` (start here), `conventions` (units, axes, names, errors), `cad` (designing parts), `sketch` (every sketch \
+constraint with an example), `features` (every operation type for `cad_add_feature` with an example), `projects` \
+(open, save, undo). Without a topic it returns the overview and the list of topics. Example: {\"topic\": \"cad\"}.",
     input: || object(&[("topic", one_of("Guide topic", &topic_names()), false)]),
     effect: Effect::Read,
     run: help,
 };
 
 fn topic_names() -> Vec<&'static str> {
-    guide::TOPICS.iter().map(|t| t.0).collect()
+    guide::topic_list().into_iter().map(|t| t.0).collect()
 }
 
 fn help(_: &Ctx, args: &Value) -> Result<Output, Fail> {
     let name = arg_str(args, "topic").unwrap_or("overview");
     let text = guide::topic(name).ok_or_else(|| Fail::new(format!("no topic \"{name}\"")).hint(format!("topics: {}", topic_names().join(", "))))?;
-    let topics: Vec<Value> = guide::TOPICS.iter().map(|t| json!({ "topic": t.0, "title": t.1 })).collect();
-    let others: Vec<String> = guide::TOPICS.iter().filter(|t| t.0 != name).map(|t| format!("`{}` ({})", t.0, t.1)).collect();
+    let topics: Vec<Value> = guide::topic_list().into_iter().map(|t| json!({ "topic": t.0, "title": t.1 })).collect();
+    let others: Vec<String> = guide::topic_list().into_iter().filter(|t| t.0 != name).map(|t| format!("`{}` ({})", t.0, t.1)).collect();
     Ok(Output::new(format!("{text}\n\nOther topics: {}.", others.join(", ")), json!({ "topic": name, "topics": topics })))
 }
 

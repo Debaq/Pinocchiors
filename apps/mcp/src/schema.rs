@@ -45,6 +45,21 @@ pub fn one_of(description: &str, options: &[&str]) -> Value {
     json!({ "type": "string", "description": description, "enum": options })
 }
 
+/// Id (número) o nombre (texto) de algo
+pub fn id_or_name(description: &str) -> Value {
+    json!({ "type": ["integer", "string"], "description": description })
+}
+
+/// Objeto abierto (sus campos los verifica quien lo usa), con un ejemplo
+pub fn any_object(description: &str) -> Value {
+    json!({ "type": "object", "description": description })
+}
+
+/// Lista de largo fijo de números: un punto 2D o 3D
+pub fn point(description: &str, n: usize) -> Value {
+    json!({ "type": "array", "description": description, "items": { "type": "number" }, "minItems": n, "maxItems": n })
+}
+
 pub fn array(description: &str, items: Value) -> Value {
     json!({ "type": "array", "description": description, "items": items })
 }
@@ -54,9 +69,8 @@ pub fn check(schema: &Value, value: &Value) -> Result<(), String> {
     check_at(schema, value, "args")
 }
 
-fn check_at(schema: &Value, value: &Value, at: &str) -> Result<(), String> {
-    let ty = schema.get("type").and_then(Value::as_str).unwrap_or("any");
-    let ok = match ty {
+fn is_type(ty: &str, value: &Value) -> bool {
+    match ty {
         "object" => value.is_object(),
         "string" => value.is_string(),
         "boolean" => value.is_boolean(),
@@ -64,9 +78,18 @@ fn check_at(schema: &Value, value: &Value, at: &str) -> Result<(), String> {
         "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
         "array" => value.is_array(),
         _ => true,
+    }
+}
+
+fn check_at(schema: &Value, value: &Value, at: &str) -> Result<(), String> {
+    // Un tipo o varios (`["integer", "string"]`)
+    let types: Vec<&str> = match schema.get("type") {
+        Some(Value::String(t)) => vec![t.as_str()],
+        Some(Value::Array(ts)) => ts.iter().filter_map(Value::as_str).collect(),
+        _ => vec![],
     };
-    if !ok {
-        return Err(format!("{at}: expected {ty}, got {}", kind(value)));
+    if !types.is_empty() && !types.iter().any(|t| is_type(t, value)) {
+        return Err(format!("{at}: expected {}, got {}", types.join(" or "), kind(value)));
     }
     if let Some(options) = schema.get("enum").and_then(Value::as_array)
         && !options.contains(value)
@@ -104,6 +127,14 @@ fn check_at(schema: &Value, value: &Value, at: &str) -> Result<(), String> {
             }
         }
     }
+    if let Some(list) = value.as_array() {
+        let (min, max) = (schema.get("minItems").and_then(Value::as_u64), schema.get("maxItems").and_then(Value::as_u64));
+        let n = list.len() as u64;
+        if min.is_some_and(|m| n < m) || max.is_some_and(|m| n > m) {
+            let want = if min == max { format!("{}", min.unwrap_or(0)) } else { format!("{}..{}", min.unwrap_or(0), max.map_or("".into(), |m| m.to_string())) };
+            return Err(format!("{at}: expected {want} items, got {n}"));
+        }
+    }
     if let (Some(items), Some(list)) = (schema.get("items"), value.as_array()) {
         for (i, v) in list.iter().enumerate() {
             check_at(items, v, &format!("{at}[{i}]"))?;
@@ -124,7 +155,11 @@ fn kind(v: &Value) -> &'static str {
 }
 
 fn describe(schema: &Value) -> String {
-    let ty = schema.get("type").and_then(Value::as_str).unwrap_or("value");
+    let ty = match schema.get("type") {
+        Some(Value::String(t)) => t.clone(),
+        Some(Value::Array(ts)) => ts.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" or "),
+        _ => "value".into(),
+    };
     match schema.get("description").and_then(Value::as_str) {
         Some(d) => format!("{ty}: {d}"),
         None => ty.to_string(),

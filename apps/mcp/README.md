@@ -57,12 +57,21 @@ command = "/home/USUARIO/.cargo-target/release/pinocchio-mcp"
 | Herramienta | Qué hace |
 |---|---|
 | `status` | Modo, proyecto, pestañas CAD, malla, esqueleto e historial |
-| `help` | Guía por tema (`overview`, `conventions`, `projects`) |
+| `help` | Guía por tema (`overview`, `conventions`, `cad`, `sketch`, `features`, `projects`) |
 | `undo` / `redo` | Deshacer y rehacer los últimos 20 cambios |
 | `project_new` / `project_open` / `project_save` | Proyectos `.pinocchio` |
+| `cad_tab_create` / `cad_tab_rename` / `cad_tab_delete` | Pestañas de diseño y ensamble |
+| `cad_design` | Operaciones, estado, parámetros y piezas de un diseño |
+| `cad_geometry` | Caras y aristas numeradas para elegirlas |
+| `sketch_create` / `sketch_add` | Sketches con figuras y restricciones |
+| `cad_extrude` / `cad_revolve` / `cad_primitive` | Sólidos |
+| `cad_fillet` / `cad_chamfer` / `cad_shell` | Redondeo, chaflán, vaciado |
+| `cad_add_feature` / `cad_edit_feature` / `cad_delete_feature` | Cualquier operación en JSON |
+| `cad_parameters` | Parámetros y fórmulas |
+| `cad_export` | STEP, STL, 3MF, OBJ, PLY, GLB |
 
-Las herramientas de CAD, mallas, impresión, esqueleto, animación y render se suman por
-fases (M2–M7).
+Ver y medir, ensambles, planos, mallas, impresión, esqueleto, animación y render se
+suman por fases (M3–M7).
 
 ## Probar
 

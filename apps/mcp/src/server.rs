@@ -1,6 +1,6 @@
 //! El servidor MCP: atiende cada mensaje y manda respuestas y avisos por
-//! `send`. Las herramientas corren de a una (una a la vez cambia el trabajo);
-//! `ping` y la cancelación se atienden mientras tanto.
+//! `send`. Las herramientas corren de a una y en el orden en que llegan (una
+//! cola en `main`); `ping` y la cancelación se atienden mientras tanto.
 
 use std::collections::HashMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -36,6 +36,13 @@ impl Server {
 
     pub fn session(&self) -> &Session {
         &self.session
+    }
+
+    /// Un pedido de herramienta entra a la cola: desde ya se puede cancelar
+    pub fn queued(&self, msg: &Incoming) {
+        if let Some(id) = &msg.id {
+            self.running.lock().unwrap().entry(id.to_string()).or_insert_with(|| Arc::new(AtomicBool::new(false)));
+        }
     }
 
     /// Atiende un mensaje
@@ -104,8 +111,11 @@ impl Server {
                 ));
             }
         };
-        let cancel = Arc::new(AtomicBool::new(false));
-        self.running.lock().unwrap().insert(id.to_string(), cancel.clone());
+        let cancel = self.running.lock().unwrap().entry(id.to_string()).or_insert_with(|| Arc::new(AtomicBool::new(false))).clone();
+        if cancel.load(Ordering::SeqCst) {
+            self.running.lock().unwrap().remove(&id.to_string());
+            return Ok(self.result(Err(Fail::new("cancelled by the client before it started"))));
+        }
 
         let outcome = {
             let _turn = self.work.lock().unwrap_or_else(|e| e.into_inner());
@@ -173,7 +183,7 @@ fn resources() -> Vec<Value> {
         "description": "How to use Pinocchio through these tools: workflows, units and conventions",
         "mimeType": "text/markdown",
     })];
-    for (name, title, _) in guide::TOPICS {
+    for (name, title) in guide::topic_list() {
         list.push(json!({ "uri": format!("pinocchio://guide/{name}"), "name": format!("guide-{name}"), "title": title, "mimeType": "text/markdown" }));
     }
     list
@@ -183,7 +193,7 @@ fn read_resource(params: &Value) -> Result<Value, (i64, String)> {
     let uri = params.get("uri").and_then(Value::as_str).unwrap_or_default();
     let text = match uri.strip_prefix("pinocchio://guide") {
         Some("") => guide::full(),
-        Some(rest) => rest.strip_prefix('/').and_then(guide::topic).map(String::from).ok_or((protocol::INVALID_PARAMS, format!("Unknown resource: {uri}")))?,
+        Some(rest) => rest.strip_prefix('/').and_then(guide::topic).ok_or((protocol::INVALID_PARAMS, format!("Unknown resource: {uri}")))?,
         None => return Err((protocol::INVALID_PARAMS, format!("Unknown resource: {uri}"))),
     };
     Ok(json!({ "contents": [{ "uri": uri, "mimeType": "text/markdown", "text": text }] }))

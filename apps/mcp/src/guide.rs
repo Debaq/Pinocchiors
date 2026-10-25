@@ -41,6 +41,25 @@ change and can undo it there too). `status` tells you which one is active.",
 - Texts shown to the user (tab, part and feature names) may be in Spanish; that is expected.",
     ),
     (
+        "cad",
+        "Designing parts: sketch, operations, references",
+        "\
+A design tab is a list of operations computed in order. Typical part:
+1. `sketch_create` on a plane with shapes (rectangle, circle, slot…), optionally constrained.
+2. `cad_extrude` (or `cad_revolve`) the sketch: op `join` adds material, `cut` removes it.
+3. More sketches on faces (`sketch_create` with `on_face`) for holes and bosses; or `cad_primitive` with op `cut`.
+4. `cad_fillet` / `cad_chamfer` / `cad_shell` using face and edge numbers from `cad_geometry`.
+5. Check with `cad_design` (operations, errors, size, volume); `cad_export` to STEP/STL.
+
+- Planes: xy = top (sketch x→X, y→Y, normal +Z); xz = front (x→X, y→Z, normal −Y); yz = right (x→Y, y→Z, normal +X).
+- Face and edge numbers change after every change: list them again with `cad_geometry` before picking.
+- `cad_geometry` `facing` filters planar faces by direction, e.g. \"+Z\" for top faces.
+- Parameters (`cad_parameters`) make designs editable: `width = 40`, then formulas bind fields to them.
+- Anything without its own tool: `cad_add_feature` with the JSON from `help` topic `features`.
+- Edit an operation with `cad_edit_feature` (see its JSON with `cad_design` {\"detail\": true}); delete with \
+`cad_delete_feature`.",
+    ),
+    (
         "projects",
         "Opening, saving and undoing",
         "\
@@ -52,17 +71,108 @@ if the file exists.
     ),
 ];
 
+/// Ejemplos de operaciones para `cad_add_feature`: (tipo, para qué, JSON).
+/// Una prueba verifica que cada uno es una operación válida.
+pub const FEATURE_EXAMPLES: &[(&str, &str, &str)] = &[
+    ("extrude", "push a sketch into a solid (or cut with op cut)", r#"{"type":"extrude","sketch":0,"extent":{"type":"blind","distance":10},"op":"join"}"#),
+    ("revolve", "spin a sketch around an axis", r#"{"type":"revolve","sketch":0,"axis":{"type":"z"},"angle":360}"#),
+    ("primitive", "box, cylinder, cone, sphere, torus, bolt, nut, washer", r#"{"type":"primitive","shape":{"type":"box","dx":40,"dy":20,"dz":10,"centered":true},"origin":[0,0,0]}"#),
+    ("fillet", "round edges", r#"{"type":"fillet","edges":[{"$edge":3}],"radius":2}"#),
+    ("chamfer", "bevel edges", r#"{"type":"chamfer","edges":[{"$edge":3}],"distance":1}"#),
+    ("shell", "hollow out, opening some faces", r#"{"type":"shell","faces":[{"$face":4}],"thickness":2}"#),
+    ("hole", "drilled holes at the points (or circle centres) of a sketch; style simple, counterbore, countersink", r#"{"type":"hole","sketch":5,"diameter":6.6,"depth":{"type":"through_all"},"style":{"type":"counterbore","diameter":11,"depth":6.5}}"#),
+    ("pattern (linear)", "repeat operations along a direction", r#"{"type":"pattern","features":[3],"pattern":{"type":"linear","direction":[1,0,0],"count":4,"spacing":15}}"#),
+    ("pattern (circular)", "repeat operations around an axis", r#"{"type":"pattern","features":[3],"pattern":{"type":"circular","axis":{"type":"z"},"count":6,"angle":360}}"#),
+    ("mirror", "mirror operations (empty list = the whole solid) across a plane", r#"{"type":"mirror","features":[],"plane":{"type":"yz"}}"#),
+    ("draft", "tilt faces for moulding", r#"{"type":"draft","faces":[{"$face":2}],"neutral":{"type":"xy"},"angle":3}"#),
+    ("split", "cut the solid with a plane, keep the side the normal points to", r#"{"type":"split","plane":{"type":"xy"},"flip":false}"#),
+    ("transform", "move or rotate parts (empty list = all), optionally as a copy", r#"{"type":"transform","parts":[],"motion":{"type":"translate","vector":[0,0,10]},"copy":false}"#),
+    ("boolean", "union, subtract or intersect parts (ids from cad_design)", r#"{"type":"boolean","op":"subtract","targets":[{"feature":1,"index":0}],"tools":[{"feature":4,"index":0}]}"#),
+    ("move_face", "push or pull planar faces", r#"{"type":"move_face","faces":[{"$face":4}],"distance":2}"#),
+    ("delete_face", "remove faces and heal (holes, fillets)", r#"{"type":"delete_face","faces":[{"$face":7}]}"#),
+    ("plane", "reference plane: offset, angle, midplane, three points", r#"{"type":"plane","def":{"type":"offset","base":{"type":"xy"},"distance":25}}"#),
+    ("axis", "reference axis", r#"{"type":"axis","def":{"type":"two_points","a":{"type":"at","point":[0,0,0]},"b":{"type":"at","point":[0,0,10]}}}"#),
+    ("point", "reference point", r#"{"type":"point","def":{"type":"at","point":[10,0,5]}}"#),
+    ("helix", "helical curve (path for springs and threads)", r#"{"type":"helix","axis":{"type":"z"},"radius":10,"pitch":3,"turns":5}"#),
+    ("sweep", "move a profile sketch along a path sketch (or a helix: path {type: curve, feature: id})", r#"{"type":"sweep","sketch":2,"path":{"type":"sketch","sketch":1,"entities":[]}}"#),
+    ("loft", "blend between profile sketches on different planes", r#"{"type":"loft","sections":[{"sketch":0},{"sketch":2}]}"#),
+];
+
+/// Ejemplos de restricciones del sketch: (tipo, qué hace, JSON). Validados en una prueba.
+pub const CONSTRAINT_EXAMPLES: &[(&str, &str, &str)] = &[
+    ("coincident", "two points at the same place", r#"{"type":"coincident","a":1,"b":2}"#),
+    ("fixed", "a point at fixed sketch coordinates", r#"{"type":"fixed","point":1,"x":0,"y":0}"#),
+    ("horizontal / vertical", "a line parallel to sketch x / y", r#"{"type":"horizontal","line":5}"#),
+    ("horizontal_points / vertical_points", "two points at the same y / x", r#"{"type":"vertical_points","a":1,"b":2}"#),
+    ("parallel / perpendicular / collinear", "between two lines", r#"{"type":"perpendicular","a":5,"b":6}"#),
+    ("equal", "same length (lines) or same radius (circles, arcs)", r#"{"type":"equal","a":5,"b":7}"#),
+    ("tangent", "line–circle/arc or circle–circle", r#"{"type":"tangent","a":5,"b":9}"#),
+    ("concentric", "same centre", r#"{"type":"concentric","a":9,"b":10}"#),
+    ("point_on_line / point_on_circle / point_on_curve", "a point lies on an entity", r#"{"type":"point_on_line","point":1,"line":5}"#),
+    ("midpoint", "a point at the middle of a line", r#"{"type":"midpoint","point":1,"line":5}"#),
+    ("symmetric", "two points mirrored across a line", r#"{"type":"symmetric","a":1,"b":2,"line":5}"#),
+    ("distance", "distance between two points (mm)", r#"{"type":"distance","a":1,"b":2,"value":25}"#),
+    ("horizontal_distance / vertical_distance", "b.x − a.x (or b.y − a.y) = value", r#"{"type":"horizontal_distance","a":1,"b":2,"value":25}"#),
+    ("length", "length of a line", r#"{"type":"length","line":5,"value":40}"#),
+    ("radius / diameter", "size of a circle or arc", r#"{"type":"diameter","entity":9,"value":8}"#),
+    ("angle", "angle from line a to line b in degrees (counter-clockwise positive)", r#"{"type":"angle","a":5,"b":6,"degrees":30}"#),
+    ("point_line_distance", "distance from a point to a line", r#"{"type":"point_line_distance","point":1,"line":5,"value":12}"#),
+    ("lock", "freeze an entity where it is", r#"{"type":"lock","entity":5}"#),
+];
+
+/// Temas que se arman con datos (los ejemplos de arriba)
+fn generated(name: &str) -> Option<String> {
+    match name {
+        "features" => {
+            let mut out = String::from(
+                "Operations for `cad_add_feature` (and the JSON `cad_design` {\"detail\": true} shows). Lengths mm, angles degrees. \
+Faces/edges: {\"$face\": n} / {\"$edge\": n} with numbers from `cad_geometry`. Planes: {\"type\":\"xy\"|\"xz\"|\"yz\"}, \
+{\"type\":\"face\",\"face\":{\"$face\":n}}, {\"type\":\"reference\",\"feature\":id}. Axes: {\"type\":\"x\"|\"y\"|\"z\"}, \
+{\"type\":\"edge\",\"edge\":{\"$edge\":n}}, {\"type\":\"sketch_line\",\"sketch\":id,\"line\":entity}. Part ids: {\"feature\":id,\"index\":n}. \
+`op`: join | cut | intersect | new.\n",
+            );
+            for (ty, what, json) in FEATURE_EXAMPLES {
+                out.push_str(&format!("\n- {ty} — {what}:\n  {json}"));
+            }
+            Some(out)
+        }
+        "sketch" => {
+            let mut out = String::from(
+                "Sketch constraints for `sketch_create` / `sketch_add`. Ids are sketch point or entity ids (they share one \
+numbering); in the same call you can use names like \"s0.top\", \"s1\", \"s1.center\" and \"origin\" instead. \
+Distances mm, angles degrees. A dimension with \"reference\": true only measures (does not constrain).\n\
+Tips: shapes drawn at exact coordinates already have their size; add constraints when the sketch must keep its \
+shape when edited, e.g. tie a corner to \"origin\" and give length/diameter dimensions until it is fully defined. \
+Conflicting constraints are reported with their indices; remove them with `sketch_add` {\"remove_constraints\": [i]}.\n",
+            );
+            for (ty, what, json) in CONSTRAINT_EXAMPLES {
+                out.push_str(&format!("\n- {ty} — {what}: {json}"));
+            }
+            Some(out)
+        }
+        _ => None,
+    }
+}
+
+/// Nombres y títulos de todos los temas
+pub fn topic_list() -> Vec<(&'static str, &'static str)> {
+    let mut list: Vec<(&str, &str)> = TOPICS.iter().map(|t| (t.0, t.1)).collect();
+    list.push(("sketch", "Sketch constraints, with an example of each"));
+    list.push(("features", "Every operation type for cad_add_feature, with an example of each"));
+    list
+}
+
 /// El texto de un tema, o `None` si no existe
-pub fn topic(name: &str) -> Option<&'static str> {
-    TOPICS.iter().find(|t| t.0 == name).map(|t| t.2)
+pub fn topic(name: &str) -> Option<String> {
+    TOPICS.iter().find(|t| t.0 == name).map(|t| t.2.to_string()).or_else(|| generated(name))
 }
 
 /// Toda la guía en un texto (recurso `pinocchio://guide`)
 pub fn full() -> String {
     let mut out = String::from("# Pinocchio guide\n\n");
     out.push_str(INSTRUCTIONS);
-    for (_, title, text) in TOPICS {
-        out.push_str(&format!("\n\n## {title}\n\n{text}"));
+    for (name, title) in topic_list() {
+        out.push_str(&format!("\n\n## {title}\n\n{}", topic(name).unwrap_or_default()));
     }
     out
 }

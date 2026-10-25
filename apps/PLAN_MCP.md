@@ -93,16 +93,31 @@ con las mismas herramientas:
   herramienta lo necesita (rig, pesos, UV, texturas, render, nube), y el avance real de
   los comandos largos (hoy el `Channel` del `dispatch` lo descarta).
 
-### M2 — Diseño CAD ❌
-- `cad_tabs` (listar, crear, renombrar, borrar pestañas), `cad_parameters`,
-  `cad_variables`.
-- `sketch_create` (plano o cara), `sketch_add` (líneas, rectángulos, círculos, arcos,
-  polígonos, ranuras, texto), `sketch_constrain` (restricciones y cotas),
-  `sketch_status` (grados libres, conflictos, si está cerrado).
-- `cad_feature` (extrusión, revolución, barrido, recubrimiento, agujero, rosca,
-  redondeo, chaflán, vaciado, patrón, simetría, chapa, engranes), `cad_edit_feature`,
-  `cad_delete_feature`, `cad_part_info` (volumen, caja, masa, errores), `cad_export`
-  (STEP, STL, 3MF, IGES, OBJ).
+### M2 — Diseño CAD ✅ 2026-10-24
+- Hecho: `cad_tab_create` / `cad_tab_rename` / `cad_tab_delete`; `cad_design` (operaciones
+  con estado y valores principales, sketches con su estado y regiones, parámetros,
+  fórmulas, piezas; `detail` da el JSON de cada operación); `cad_geometry` (caras y
+  aristas numeradas con origen —«Extrusión 1 · end»—, tipo, normal, centro, área, largo,
+  radio; filtros `feature`, `part`, `facing`); `sketch_create` / `sketch_add` (figuras
+  rectángulo, círculo, línea, polilínea, arco, polígono, ranura y punto; restricciones con
+  nombres de esta llamada —«s0.top», «s1.center», «origin»— en vez de ids; informa ids,
+  si está definido y el perfil que se extruye vs. regiones dentro de agujeros);
+  `cad_extrude`, `cad_revolve`, `cad_primitive` (caja, cilindro, cono, esfera, toro,
+  tornillo, tuerca, arandela), `cad_fillet`, `cad_chamfer`, `cad_shell`;
+  `cad_add_feature` (cualquier operación en JSON con `{"$face": n}` / `{"$edge": n}` /
+  `{"$vertex": [x,y,z]}`), `cad_edit_feature` (renombrar, suprimir, mezclar campos),
+  `cad_delete_feature` (con o sin dependientes), `cad_parameters` (parámetros y
+  fórmulas por ruta de campo), `cad_export` (STEP, STL, 3MF, OBJ, PLY, GLB).
+- Guía: temas `cad`, `sketch` (cada restricción con ejemplo) y `features` (cada tipo de
+  operación con ejemplo); una prueba verifica que todos los ejemplos son JSON válido.
+- App: comando `cad_geometry` (caras y aristas del sólido con pieza y origen).
+- Las herramientas corren de a una y en el orden en que llegan (cola con un hilo); una
+  cancelación alcanza también a lo que espera en la cola.
+- Pruebas `tests/cad.rs`: placa con agujero totalmente definida por nombres, extrusión con
+  el volumen exacto, cara de arriba por `facing`, redondeo, redondeo imposible que no deja
+  nada, parámetro con fórmula, corte con primitiva, borrar con dependientes, editar por
+  JSON y deshacer, exportar STEP sin pisar; JSON crudo (simetría, vaciado por número);
+  pestañas por nombre; ejemplos de la guía.
 
 ### M3 — Ver y medir ❌
 - `view` (PNG de la pestaña, pieza, ensamble, malla o pose; vistas estándar o ángulo),

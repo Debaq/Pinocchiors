@@ -8,7 +8,10 @@ use serde_json::{json, Value};
 use crate::session::Session;
 
 mod basics;
+mod cad;
+mod features;
 mod project;
+mod sketch;
 
 /// Una herramienta
 pub struct Tool {
@@ -61,6 +64,10 @@ pub fn all() -> Vec<&'static Tool> {
     let mut list: Vec<&'static Tool> = Vec::new();
     list.extend(basics::TOOLS);
     list.extend(project::TOOLS);
+    list.extend(cad::TOOLS[..5].iter());
+    list.extend(sketch::TOOLS);
+    list.extend(features::TOOLS);
+    list.extend(cad::TOOLS[5..].iter());
     list
 }
 
