@@ -99,6 +99,24 @@ fn bad_arguments_and_tools_explain_themselves() {
 }
 
 #[test]
+fn errors_are_noted_grouped_for_review() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("mcp-errors.json");
+    let s = server().with_error_log(Some(log.clone()));
+    call(&s, "help", json!({ "topic": "cooking" }));
+    call(&s, "help", json!({ "topic": "baking" }));
+    call(&s, "project_open", json!({ "path": "relative.pinocchio" }));
+    call(&s, "status", json!({}));
+    let list = pinocchio_mcp::errors::read(&log);
+    let counts: Vec<(&str, u32)> = list.iter().map(|e| (e.tool.as_str(), e.count)).collect();
+    // `help` con dos temas inventados: el mismo error (el tema va en los argumentos)
+    assert_eq!(counts.len(), 2, "{list:?}");
+    assert!(counts.contains(&("project_open", 1)), "{list:?}");
+    assert!(list.iter().all(|e| e.tool != "status"));
+    assert!(list.iter().any(|e| e.tool == "help" && e.args.contains("baking") && e.example.contains("see the inputSchema")), "{list:?}");
+}
+
+#[test]
 fn save_open_and_undo_round_trip() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("pieza.pinocchio");

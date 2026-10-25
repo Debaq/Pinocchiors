@@ -168,6 +168,10 @@ export const AiConnectorSettings: Component = () => {
         </ul>
       </Section>
 
+      <Section title={t("Errores de la IA")}>
+        <AiErrors />
+      </Section>
+
       <Section title={t("Descargables para el agente")}>
         <Download
           title={t("Configuración (mcp.json)")}
@@ -221,3 +225,88 @@ const Download: Component<{ title: string; hint: string; busy: boolean; onCopy: 
     </Button>
   </div>
 );
+
+/** Un error que la IA repite (`mcp::errors::Entry`) */
+interface AiError {
+  tool: string;
+  message: string;
+  count: number;
+  first: number;
+  last: number;
+  example: string;
+  args: string;
+}
+
+/** Cuántos se muestran (Copiar lleva todos) */
+const SHOWN = 8;
+
+/**
+ * Los errores de herramientas que la IA repite: cada uno es una descripción
+ * poco clara o una herramienta que debería aceptar más casos. Copiar los deja
+ * en Markdown para revisarlos y arreglar las herramientas.
+ */
+const AiErrors: Component = () => {
+  const [list, setList] = createSignal<AiError[]>([]);
+  const [note, setNote] = createSignal<string>();
+  const load = () => void invoke<AiError[]>("mcp_errors").then(setList).catch((e) => setNote(tBackend(String(e))));
+  onMount(load);
+
+  const markdown = () =>
+    [
+      "| Veces | Herramienta | Error | Último ejemplo | Argumentos |",
+      "|---|---|---|---|---|",
+      ...list().map((e) => `| ${e.count} | \`${e.tool}\` | ${cell(e.message)} | ${cell(e.example)} | \`${cell(e.args)}\` |`),
+    ].join("\n");
+
+  return (
+    <>
+      <Hint>{t("Lo que falló cuando una IA usó las herramientas, agrupado. Los que se repiten muestran qué herramienta conviene aclarar.")}</Hint>
+      <Show when={list().length} fallback={<Hint>{t("Sin errores anotados.")}</Hint>}>
+        <ul class="divide-y divide-border/60">
+          <For each={list().slice(0, SHOWN)}>
+            {(e) => (
+              <li class="flex items-start gap-3 py-1.5" title={`${e.example}\n${e.args}`}>
+                <span class="w-8 shrink-0 text-right text-xs font-mono text-text-muted">{e.count}×</span>
+                <div class="flex-1 min-w-0">
+                  <div class="text-xs font-mono text-text">{e.tool}</div>
+                  <div class="text-xs text-text-muted truncate">{e.message}</div>
+                </div>
+              </li>
+            )}
+          </For>
+        </ul>
+        <Show when={list().length > SHOWN}>
+          <Hint>{t("Y {n} más (van en Copiar).", { n: list().length - SHOWN })}</Hint>
+        </Show>
+      </Show>
+      <div class="flex gap-2">
+        <Button size="sm" variant="ghost" disabled={!list().length} onClick={() => void navigator.clipboard.writeText(markdown()).then(() => setNote(t("Copiado al portapapeles.")))}>
+          <Icons.Copy size={13} /> {t("Copiar")}
+        </Button>
+        <Button size="sm" variant="ghost" onClick={load}>
+          {t("Recargar")}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={!list().length}
+          onClick={() =>
+            void invoke("mcp_errors_clear")
+              .then(() => setList([]))
+              .catch((e) => setNote(tBackend(String(e))))
+          }
+        >
+          {t("Borrar")}
+        </Button>
+      </div>
+      <Show when={note()}>
+        <p class="text-xs text-text-muted" role="status">
+          {note()}
+        </p>
+      </Show>
+    </>
+  );
+};
+
+/** Texto para una celda de tabla Markdown */
+const cell = (s: string) => s.replace(/\|/g, "\\|").replace(/\s+/g, " ");

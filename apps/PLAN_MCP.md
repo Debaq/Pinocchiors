@@ -72,9 +72,13 @@ con las mismas herramientas:
    al terminar (fin de la respuesta del chat, o 30 s sin pasos con un cliente de afuera)
    vuelve a la última que eligió el usuario, si después del último paso no se movió ni
    está editando (`mcpLive.ts`).
-2. ❌ **Errores del chat juntados**: el chat anota cada error de herramienta (herramienta,
-   mensaje, cuántas veces) para ver cuáles se repiten; cada uno se arregla en la
-   herramienta, no en el prompt (ver M9).
+2. ✅ **Errores de la IA juntados** (2026-10-25, `mcp/errors.rs`): el servidor (chat,
+   proveedores y clientes de afuera) anota en `mcp-errors.json`, junto a `mcp-live.json`,
+   cada herramienta que falla por lo que pidió la IA (esquema o pedido imposible; no el
+   turno negado ni la cancelación), agrupado por herramienta y mensaje sin números ni lo
+   que va entre comillas, con cuenta, fechas, último ejemplo y argumentos. Configuración ▸
+   Conector para IA ▸ Errores de la IA: los más repetidos, Copiar (tabla Markdown para
+   revisarlos) y Borrar. Cada uno se arregla en la herramienta, no en el prompt (ver M9).
 3. ❌ **Avance real de los comandos largos** (M1): hoy el `Channel` del `dispatch` lo
    descarta; pasa a `notifications/progress` y al indicador en vivo. Hace falta antes de
    M5 para que la IA no crea que se colgó.
@@ -273,7 +277,8 @@ con las mismas herramientas:
 - Errores que la IA repite (salen del uso del chat): cada uno es una descripción poco
   clara o una herramienta que debería aceptar más casos. Se arreglan en la herramienta,
   no en el prompt. Arreglados: `asm_check` sobre una pestaña de diseño (2026-10-25:
-  ahora revisa las piezas entre sí).
+  ahora revisa las piezas entre sí). Por revisar: lo que junte Configuración ▸ Errores de
+  la IA tras usar el chat un tiempo.
 
 ## Riesgos
 

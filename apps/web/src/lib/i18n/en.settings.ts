@@ -229,4 +229,9 @@ Object.assign(en_settings, {
   "Proveedor borrado": "Deleted provider",
   "Usa la API de {name} con tu clave. Los proveedores se agregan en Configuración ▸ Conector para IA.": "Uses the {name} API with your key. Providers are added in Settings ▸ AI connector.",
   "¿DeepSeek, OpenAI u Ollama? Agrégalos en Configuración ▸ Conector para IA ▸ Proveedores para el chat.": "DeepSeek, OpenAI or Ollama? Add them in Settings ▸ AI connector ▸ Chat providers.",
+  "Errores de la IA": "AI errors",
+  "Lo que falló cuando una IA usó las herramientas, agrupado. Los que se repiten muestran qué herramienta conviene aclarar.": "What failed when an AI used the tools, grouped. The ones that repeat show which tool needs to be clearer.",
+  "Sin errores anotados.": "No errors noted.",
+  "Recargar": "Reload",
+  "Y {n} más (van en Copiar).": "And {n} more (included in Copy).",
 });

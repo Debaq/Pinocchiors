@@ -117,6 +117,8 @@ pub fn run() {
             mcp::live::mcp_live_pause,
             mcp::live::mcp_live_status,
             mcp::live::mcp_live_answer,
+            mcp::errors::mcp_errors,
+            mcp::errors::mcp_errors_clear,
             mcp::chat::ai_chat_status,
             mcp::chat::ai_chat_send,
             mcp::chat::ai_chat_stop,

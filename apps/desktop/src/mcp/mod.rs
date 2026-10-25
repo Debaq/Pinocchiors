@@ -7,6 +7,7 @@ pub mod agent;
 pub mod backend;
 pub mod chat;
 pub mod clients;
+pub mod errors;
 pub mod guide;
 pub mod live;
 pub mod protocol;
@@ -63,7 +64,7 @@ pub fn run(args: &[String]) -> i32 {
 
 /// Atiende MCP por stdin/stdout hasta que el cliente cierra la entrada
 fn serve_stdio() {
-    let server = Arc::new(Server::new(Session::new(Box::new(Auto::new()))));
+    let server = Arc::new(Server::new(Session::new(Box::new(Auto::new()))).with_error_log(errors::file()));
     let stdout = Arc::new(Mutex::new(std::io::stdout()));
     let send: Arc<Sender<'static>> = Arc::new(move |msg| {
         let mut out = stdout.lock().unwrap();

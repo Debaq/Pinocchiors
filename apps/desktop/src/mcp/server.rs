@@ -3,6 +3,7 @@
 //! cola en `main`); `ping` y la cancelación se atienden mientras tanto.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -10,6 +11,7 @@ use std::sync::{Arc, Mutex};
 use base64::Engine;
 use serde_json::{json, Value};
 
+use crate::mcp::errors;
 use crate::mcp::guide;
 use crate::mcp::protocol::{self, Incoming};
 use crate::mcp::schema;
@@ -27,11 +29,25 @@ pub struct Server {
     work: Mutex<()>,
     /// Pedidos en curso, para cancelarlos
     running: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// Dónde se anotan los errores de la IA (ver [`errors`]); sin él, no se anotan
+    errors: Option<PathBuf>,
 }
 
 impl Server {
     pub fn new(session: Session) -> Self {
-        Self { session, version: Mutex::new(protocol::VERSIONS[0]), work: Mutex::new(()), running: Mutex::new(HashMap::new()) }
+        Self { session, version: Mutex::new(protocol::VERSIONS[0]), work: Mutex::new(()), running: Mutex::new(HashMap::new()), errors: None }
+    }
+
+    /// Anota los errores de la IA en `path` (el conector de verdad; las pruebas no)
+    pub fn with_error_log(mut self, path: Option<PathBuf>) -> Self {
+        self.errors = path;
+        self
+    }
+
+    fn note(&self, tool: &str, fail: &Fail, args: &Value) {
+        if let Some(path) = &self.errors {
+            errors::record(path, tool, &fail.message, fail.hint.as_deref(), args);
+        }
     }
 
     pub fn session(&self) -> &Session {
@@ -99,7 +115,9 @@ impl Server {
             Some(a) => a.clone(),
         };
         if let Err(e) = schema::check(&(tool.input)(), &args) {
-            return Ok(self.result(Err(Fail::new(e).hint(format!("see the inputSchema of `{}` in tools/list", tool.name)))));
+            let fail = Fail::new(e).hint(format!("see the inputSchema of `{}` in tools/list", tool.name));
+            self.note(tool.name, &fail, &args);
+            return Ok(self.result(Err(fail)));
         }
 
         let token = params.pointer("/_meta/progressToken").cloned();
@@ -133,6 +151,12 @@ impl Server {
         // La ventana muestra qué hace la IA por el nombre de la herramienta (lo traduce)
         self.session.backend.begin(tool.name).map_err(|e| Fail::new(e).hint("the user has priority in the open app: wait a few seconds and try again"))?;
         let outcome = self.run_turn(tool, ctx, args);
+        // Lo que falló por lo que pidió la IA (no el turno negado ni la cancelación)
+        if let Err(fail) = &outcome
+            && !ctx.cancel.load(Ordering::SeqCst)
+        {
+            self.note(tool.name, fail, args);
+        }
         self.session.backend.end(tool.name, outcome.is_ok(), matches!(tool.effect, Effect::Change | Effect::Replace));
         outcome
     }

@@ -233,7 +233,7 @@ impl Agent {
     fn run(&self, p: &Provider, emit: &impl Fn(Value)) -> Result<(), String> {
         use super::{backend::Auto, protocol, server::Server, session::Session};
         // Las herramientas corren con el conector (en vivo: por turnos y con el deshacer de la ventana)
-        let server = self.server.lock().unwrap().get_or_insert_with(|| Arc::new(Server::new(Session::new(Box::new(Auto::new()))))).clone();
+        let server = self.server.lock().unwrap().get_or_insert_with(|| Arc::new(Server::new(Session::new(Box::new(Auto::new()))).with_error_log(super::errors::file()))).clone();
         let tools = functions();
         emit(json!({ "kind": "start", "model": p.model }));
         let (mut tokens_in, mut tokens_cache, mut tokens_out) = (0u64, 0u64, 0u64);
