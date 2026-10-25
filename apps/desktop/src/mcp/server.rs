@@ -129,6 +129,15 @@ impl Server {
     /// Corre la herramienta. Un cambio que falla (o entra en pánico) vuelve
     /// el trabajo a como estaba; uno que sale bien queda para `undo`.
     fn run(&self, tool: &tools::Tool, ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
+        // En vivo: turno de la ventana (lo niega si el usuario está editando)
+        // La ventana muestra qué hace la IA por el nombre de la herramienta (lo traduce)
+        self.session.backend.begin(tool.name).map_err(|e| Fail::new(e).hint("the user has priority in the open app: wait a few seconds and try again"))?;
+        let outcome = self.run_turn(tool, ctx, args);
+        self.session.backend.end(tool.name, outcome.is_ok(), matches!(tool.effect, Effect::Change | Effect::Replace));
+        outcome
+    }
+
+    fn run_turn(&self, tool: &tools::Tool, ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
         let before = match tool.effect {
             Effect::Change => Some(self.session.before_change()?),
             _ => None,

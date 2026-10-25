@@ -6,7 +6,7 @@ use super::{arg_str, Ctx, Effect, Fail, Output, Tool};
 use crate::mcp::guide;
 use crate::mcp::schema::{object, one_of};
 
-pub const TOOLS: &[Tool] = &[STATUS, HELP, UNDO, REDO];
+pub const TOOLS: &[Tool] = &[STATUS, HELP, SELECTION, UNDO, REDO];
 
 const STATUS: Tool = Tool {
     name: "status",
@@ -123,11 +123,54 @@ fn help(_: &Ctx, args: &Value) -> Result<Output, Fail> {
     Ok(Output::new(format!("{text}\n\nOther topics: {}.", others.join(", ")), json!({ "topic": name, "topics": topics })))
 }
 
+const SELECTION: Tool = Tool {
+    name: "selection",
+    title: "What the user selected",
+    description: "Live mode only: what the user has selected with the mouse in the open Pinocchio window — faces, edges, \
+vertices, sketches, regions or planes, with the same numbers the other tools use, and the active tab. Use it when the \
+user says \"this\", \"here\" or \"the one I selected\" (e.g. \"round this edge\" → `selection`, then `cad_fillet` \
+with those edges). No arguments.",
+    input: || object(&[]),
+    effect: Effect::Read,
+    run: selection,
+};
+
+fn selection(ctx: &Ctx, _: &Value) -> Result<Output, Fail> {
+    let Some(answer) = ctx.session.backend.ask("selection") else {
+        return Err(Fail::new("there is no open Pinocchio window to look at").hint(
+            "selection works in live mode: the user turns on \"Let an AI drive this window\" in Settings ▸ AI connector",
+        ));
+    };
+    let v = answer?;
+    let picks = v["picks"].as_array().cloned().unwrap_or_default();
+    let words: Vec<String> = picks
+        .iter()
+        .map(|p| match p["kind"].as_str().unwrap_or("") {
+            "face" => format!("face {}", p["face"]),
+            "edge" => format!("edge {}", p["edge"]),
+            "vertex" => format!("vertex at {}", super::cad::vec3(&p["at"])),
+            "sketch" => format!("sketch (feature {})", p["sketch"]),
+            "region" => format!("region {} of sketch {}", p["region"], p["sketch"]),
+            "plane" => format!("plane {}", p["plane"].as_str().unwrap_or("")),
+            "refplane" => format!("reference plane (feature {})", p["feature"]),
+            other => other.to_string(),
+        })
+        .collect();
+    let tab = v["tab"]["name"].as_str().map_or(String::new(), |n| format!(" in tab \"{n}\" (id {})", v["tab"]["id"]));
+    let text = if words.is_empty() {
+        format!("The user has nothing selected{tab}. Ask them to click what they mean (Ctrl+click adds more).")
+    } else {
+        format!("The user selected{tab}: {}.", words.join(", "))
+    };
+    Ok(Output::new(text, json!({ "tab": v["tab"], "picks": picks })))
+}
+
 const UNDO: Tool = Tool {
     name: "undo",
     title: "Undo the last change",
     description: "Reverts the last change made through these tools (up to 20 steps), including opening or creating a \
-project. Returns what was undone. `status` shows what would be undone. No arguments.",
+project. In live mode it uses the app's own undo and only reverts the AI's last step (never the user's). Returns what \
+was undone. `status` shows what would be undone. No arguments.",
     input: || object(&[]),
     effect: Effect::History,
     run: undo,

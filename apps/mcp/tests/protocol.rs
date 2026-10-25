@@ -150,7 +150,9 @@ fn resources_and_prompts() {
 
 #[test]
 fn binary_speaks_mcp_over_stdio() {
+    // Sin modo en vivo: que no encuentre una app abierta en esta máquina
     let mut child = Command::new(env!("CARGO_BIN_EXE_pinocchio-mcp"))
+        .env("PINOCCHIO_MCP_LIVE_FILE", std::env::temp_dir().join("pinocchio-mcp-test-no-live.json"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

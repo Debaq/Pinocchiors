@@ -6,6 +6,7 @@
 pub mod backend;
 pub mod clients;
 pub mod guide;
+pub mod live;
 pub mod protocol;
 pub mod render;
 pub mod schema;
@@ -16,7 +17,7 @@ pub mod tools;
 use std::io::{BufRead, Write};
 use std::sync::{Arc, Mutex};
 
-use backend::Local;
+use backend::Auto;
 use server::{Sender, Server};
 use session::Session;
 
@@ -60,14 +61,14 @@ pub fn run(args: &[String]) -> i32 {
 
 /// Atiende MCP por stdin/stdout hasta que el cliente cierra la entrada
 fn serve_stdio() {
-    let server = Arc::new(Server::new(Session::new(Box::new(Local::new()))));
+    let server = Arc::new(Server::new(Session::new(Box::new(Auto::new()))));
     let stdout = Arc::new(Mutex::new(std::io::stdout()));
     let send: Arc<Sender<'static>> = Arc::new(move |msg| {
         let mut out = stdout.lock().unwrap();
         let _ = writeln!(out, "{msg}");
         let _ = out.flush();
     });
-    eprintln!("pinocchio-mcp {} listo (motor propio, sin ventana)", env!("CARGO_PKG_VERSION"));
+    eprintln!("pinocchio-mcp {} listo (la app abierta con el modo en vivo, o motor propio)", env!("CARGO_PKG_VERSION"));
 
     // Las herramientas van a una cola con un solo hilo: corren en el orden en
     // que llegan, y mientras tanto se atienden ping y cancelaciones

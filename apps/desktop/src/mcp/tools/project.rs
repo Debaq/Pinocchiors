@@ -10,6 +10,16 @@ use crate::mcp::schema::{boolean, object, string};
 
 pub const TOOLS: &[Tool] = &[NEW, OPEN, SAVE];
 
+/// En vivo los archivos los maneja el usuario en la app
+fn not_live(ctx: &Ctx, what: &str) -> Result<(), Fail> {
+    if ctx.session.backend.mode() == crate::mcp::backend::Mode::Live {
+        return Err(Fail::new(format!("{what} is disabled while driving the open Pinocchio app (live mode)"))
+            .hint("the user opens and saves files in the app; ask them, or use cad_export / drawing_export to write files"));
+    }
+    Ok(())
+}
+
+
 const NEW: Tool = Tool {
     name: "project_new",
     title: "Start an empty project",
@@ -21,6 +31,7 @@ Unsaved changes are not lost for good: `undo` brings the previous project back. 
 };
 
 fn new(ctx: &Ctx, _: &Value) -> Result<Output, Fail> {
+    not_live(ctx, "`project_new`")?;
     let before = ctx.session.before_change()?;
     ctx.call("new_project", json!({}))?;
     ctx.session.replaced("New project", before, None, "{}".into());
@@ -39,6 +50,7 @@ Example: {\"path\": \"/home/me/bracket.pinocchio\"}.",
 };
 
 fn open(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
+    not_live(ctx, "`project_open`")?;
     let path = absolute(arg_str(args, "path").unwrap_or_default())?;
     if !path.is_file() {
         return Err(Fail::new(format!("{} does not exist", path.display())).hint("pass the absolute path of an existing .pinocchio file"));
@@ -72,6 +84,7 @@ the file the project was opened from or last saved to. Writing over a different 
 };
 
 fn save(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
+    not_live(ctx, "`project_save`")?;
     let own = ctx.session.project.lock().unwrap().path.clone();
     let path = match arg_str(args, "path") {
         Some(p) => absolute(p)?,

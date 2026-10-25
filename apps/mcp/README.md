@@ -14,6 +14,13 @@ agente: la configuración `mcp.json`, la guía en Markdown (`--mcp --guide`) y l
 Claude Code. El código vive en `apps/desktop/src/mcp/`; este crate es el binario suelto
 `pinocchio-mcp` (desarrollo) y las pruebas.
 
+## Modo en vivo
+
+Con **«Permitir que una IA maneje esta ventana»** prendido, la IA trabaja en la app
+abierta y se ve cada cambio. Va por turnos (si estás editando, espera), cada cambio suyo es
+un paso de Ctrl+Z, se la puede pausar desde el indicador de arriba, y con `selection` ve lo
+que el usuario eligió con el mouse. Solo escucha en 127.0.0.1, con clave.
+
 ## A mano
 
 ```sh

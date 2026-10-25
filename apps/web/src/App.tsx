@@ -5,6 +5,8 @@ import { tBackend } from "./lib/i18nBackend";
 import { Component, batch, createEffect, createMemo, createSignal, on, onMount, onCleanup, Show, untrack, type JSX } from "solid-js";
 import { invoke as tauriInvoke, Channel, type InvokeArgs, type InvokeOptions } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { startMcpLive } from "./lib/mcpLive";
+import { LiveAiBadge } from "./components/layout/LiveAiBadge";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open, save } from "@tauri-apps/plugin-dialog";
@@ -559,6 +561,8 @@ export const App: Component = () => {
     Object.assign(window, { __objects: objects, __activeObject: activeObjectId, __selectedObjects: () => selectedObjects().map((o) => o.id), __viewer: () => viewer() });
   const inDesign = () => pipeline.workspace()?.id === "design";
   onMount(() => void cad.init().catch(() => {}));
+  // Modo en vivo del conector MCP: la IA maneja esta ventana por turnos
+  onMount(() => onCleanup(startMcpLive(cad, cadUi, (m) => setStatusMessage(m))));
   // Dibujando un sketch, el panel muestra lo elegido y sus restricciones
   createEffect(
     on(
@@ -9774,6 +9778,8 @@ export const App: Component = () => {
           />
           </Show>
         </div>
+
+        <LiveAiBadge cad={cad} />
 
         {/* Status Bar */}
         <StatusBar

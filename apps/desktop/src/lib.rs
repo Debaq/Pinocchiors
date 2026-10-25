@@ -49,6 +49,8 @@ pub fn run() {
             app.manage(scanner::ScannerHandle::default());
             app.manage(ray_render::RayRender::default());
             app.manage(scan_cloud::CloudEditor::default());
+            // Modo en vivo del conector MCP (lo prende la Configuración)
+            app.manage(std::sync::Arc::new(mcp::live::Bridge::default()));
             #[cfg(target_os = "linux")]
             enable_camera(app);
             #[cfg(target_os = "linux")]
@@ -107,6 +109,10 @@ pub fn run() {
             mcp::clients::mcp_connect,
             mcp::clients::mcp_skill,
             mcp::clients::mcp_download,
+            mcp::live::mcp_live_set,
+            mcp::live::mcp_live_pause,
+            mcp::live::mcp_live_status,
+            mcp::live::mcp_live_answer,
             commands::remove_object,
             commands::remove_scene_node,
             commands::set_scene_node_transform,

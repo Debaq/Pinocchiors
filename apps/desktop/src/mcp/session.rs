@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use crate::mcp::backend::Backend;
+use crate::mcp::backend::{Backend, Mode};
 
 /// Pasos que se pueden deshacer
 const HISTORY: usize = 20;
@@ -53,8 +53,12 @@ impl Session {
         self.backend.snapshot()
     }
 
-    /// El cambio salió bien: `before` queda para deshacer
+    /// El cambio salió bien: `before` queda para deshacer (en vivo, el
+    /// deshacer es el de la app)
     pub fn commit(&self, label: &str, before: Vec<u8>) {
+        if self.backend.mode() == Mode::Live {
+            return;
+        }
         let mut project = self.project.lock().unwrap();
         let mut h = self.history.lock().unwrap();
         h.undo.push(Step { label: label.into(), state: before, file: project.clone() });
@@ -80,6 +84,10 @@ impl Session {
     }
 
     fn travel(&self, back: bool) -> Result<Option<String>, String> {
+        // En vivo: el deshacer de la app (solo pasos de la IA)
+        if let Some(r) = self.backend.ask(if back { "undo" } else { "redo" }) {
+            return r.map(|v| v.as_str().map(str::to_string));
+        }
         // Mismo orden de candados que `commit`: primero el proyecto
         let mut project = self.project.lock().unwrap();
         let mut h = self.history.lock().unwrap();

@@ -1,10 +1,11 @@
 import { Component, For, JSX, Show, createSignal, onMount } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
-import { Button } from "../ui";
+import { Button, Checkbox } from "../ui";
 import * as Icons from "../icons";
 import { t } from "../../lib/i18n";
 import { tBackend } from "../../lib/i18nBackend";
+import { live, liveWanted, setLiveMode, setLivePaused } from "../../lib/mcpLive";
 
 /** Un cliente de IA y si tiene el conector (`mcp::clients::ClientStatus`) */
 interface ClientStatus {
@@ -105,7 +106,7 @@ export const AiConnectorSettings: Component = () => {
       <Section title={t("Conector MCP")}>
         <Hint>
           {t(
-            "Con el conector, una IA (Claude, Cursor, Gemini, Codex…) usa Pinocchio: diseña piezas, arma ensambles, saca planos y exporta STEP o STL. Trabaja con su propio motor, sin abrir esta ventana, y guarda proyectos que abres aquí.",
+            "Con el conector, una IA (Claude, Cursor, Gemini, Codex…) usa Pinocchio: diseña piezas, arma ensambles, saca planos y exporta STEP o STL. Con el modo en vivo trabaja en esta ventana; si no, con su propio motor y guarda proyectos que abres aquí.",
           )}
         </Hint>
         <div class="space-y-1">
@@ -119,6 +120,22 @@ export const AiConnectorSettings: Component = () => {
             </Button>
           </div>
         </div>
+      </Section>
+
+      <Section title={t("Modo en vivo")}>
+        <Checkbox
+          label={t("Permitir que una IA maneje esta ventana")}
+          checked={liveWanted()}
+          onChange={(on) => void run("live", () => setLiveMode(on), on ? t("Modo en vivo prendido: la IA trabaja en esta ventana.") : t("Modo en vivo apagado: la IA vuelve a su propio motor."))}
+        />
+        <Hint>
+          {t(
+            "La IA diseña en esta ventana y ves cada cambio. Trabaja por turnos: si estás editando un sketch o una operación, espera; cada cambio suyo se deshace con Ctrl+Z; y puedes señalarle con el mouse («redondea esta arista»). Solo escucha en este equipo.",
+          )}
+        </Hint>
+        <Show when={live().on}>
+          <Checkbox label={t("Pausar la IA")} checked={live().paused} onChange={(p) => void setLivePaused(p)} />
+        </Show>
       </Section>
 
       <Section title={t("Conectar con una IA")}>
@@ -180,7 +197,6 @@ export const AiConnectorSettings: Component = () => {
       <Show when={message()}>
         {(m) => <p class={`text-xs ${m().error ? "text-error" : "text-text-muted"}`} role="status">{m().text}</p>}
       </Show>
-      <Hint>{t("Que la IA maneje esta misma ventana en vivo llegará más adelante.")}</Hint>
     </>
   );
 };

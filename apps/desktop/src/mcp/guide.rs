@@ -28,8 +28,17 @@ Typical loop:
 3. Check the result (tools return a short summary; `view` returns an image when available).
 4. `undo` if something went wrong; `project_save` when done.
 
-Modes: `standalone` runs its own engine without a window. `live` drives the open Pinocchio app (the user sees every \
-change and can undo it there too). `status` tells you which one is active.",
+Modes: `standalone` runs its own engine without a window. `live` drives the open Pinocchio app (when the user turned \
+on \"Let an AI drive this window\"). `status` tells you which one is active.
+
+Live mode — you share the window with the user:
+- The user has priority. A tool may answer that the user is busy (editing a sketch, a dialog open) or paused you: wait \
+a few seconds and try again; do not loop quickly.
+- When the user says \"this\", \"here\" or \"the one I selected\", call `selection`: it returns the faces/edges they
+  clicked, with the numbers other tools use.
+- Each of your changes is one undo step in the app; `undo` only reverts your own last step.
+- Files are the user's: `project_new`, `project_open` and `project_save` are disabled (exports still work).
+- The user may change things between your calls: read the state again (`cad_design`, `cad_geometry`) before picking.",
     ),
     (
         "conventions",

@@ -65,8 +65,8 @@ con las mismas herramientas:
 
 Hecho (2026-10-24): M0, M2, M3 y M4 (CAD completo: diseño, ver y medir, ensambles y
 planos), M1 en lo que el CAD necesita. **Para después** (decisión del usuario, 2026-10-25):
-M5 mallas e impresión, M6 esqueleto y animación, M7 render y escáner, M8 modo en vivo
-y M9 pulido; el resto de M1 se hace dentro de cada una.
+M5 mallas e impresión, M6 esqueleto y animación, M7 render y escáner y M9 pulido
+(M8, el modo en vivo, se hizo el 2026-10-25); el resto de M1 se hace dentro de cada una.
 
 ## Activación desde la app ✅ 2026-10-25
 
@@ -196,11 +196,29 @@ y M9 pulido; el resto de M1 se hace dentro de cada una.
 - `render_image` (GeppettoRay: cámara, luces, materiales, tamaño), `scan_import`
   (nubes y escaneos guardados; el control del escáner físico queda fuera).
 
-### M8 — Modo en vivo ❌
-- Puente en la app (puerto, token, archivo `mcp-live.json`), interruptor en
-  Configuración, aviso `mcp://changed` y recarga en el frontend con paso de deshacer.
-- `status` dice en qué modo está; si la app se cierra a mitad, el servidor vuelve a su
-  propio motor y lo avisa.
+### M8 — Modo en vivo ✅ 2026-10-25
+- Puente en la app (`mcp/live.rs`): con «Permitir que una IA maneje esta ventana»
+  (Configuración ▸ Conector para IA, se recuerda) escucha en 127.0.0.1 con clave y deja
+  `mcp-live.json` en la carpeta de datos. El conector (`Auto`) lo busca al empezar cada
+  herramienta: si la app está, le manda los comandos; si no, usa su propio motor.
+- **Por turnos, el usuario primero**: cada herramienta pide turno; la ventana lo niega si
+  hay un sketch o un diálogo abiertos, una versión a la vista o si el usuario pausó la IA
+  (la IA recibe «ocupado, espera y reintenta»). Durante el turno la ventana bloquea las
+  ediciones (se puede seguir mirando); una sola IA a la vez.
+- Al terminar: si la herramienta falló, las pestañas vuelven a como estaban; si cambió el
+  trabajo, la ventana recibe cada pestaña cambiada con su documento de antes y lo pone en
+  su deshacer (Ctrl+Z deshace el paso de la IA). `undo`/`redo` de la IA solo tocan sus
+  propios pasos. Herramientas de proyecto deshabilitadas en vivo (los archivos son del
+  usuario).
+- `selection`: lo que el usuario eligió con el mouse (caras, aristas, vértices,
+  sketches…) con la numeración de las herramientas — «redondea esta arista».
+- Indicador arriba al centro: «IA en vivo» / «IA: Redondeando aristas…» / «IA en pausa»,
+  con Pausar/Reanudar.
+- Pruebas `tests/live.rs`: con una ventana de prueba, lo de la IA queda en la app, la
+  ventana recibe el cambio con el documento de antes, ocupado y pausado niegan sin tocar
+  nada, un fallo revierte, la selección llega, los proyectos están bloqueados y al apagar
+  el conector vuelve a su motor.
+- Falta: probarlo con la app Tauri real y un cliente de IA de verdad.
 
 ### M9 — Guía, prompts y pulido ❌
 - Recurso `pinocchio://guide` y uno por área; `prompts` de tareas completas.
