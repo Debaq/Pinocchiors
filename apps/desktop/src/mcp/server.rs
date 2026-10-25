@@ -149,7 +149,7 @@ impl Server {
     fn run(&self, tool: &tools::Tool, ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
         // En vivo: turno de la ventana (lo niega si el usuario está editando)
         // La ventana muestra qué hace la IA por el nombre de la herramienta (lo traduce)
-        self.session.backend.begin(tool.name).map_err(|e| Fail::new(e).hint("the user has priority in the open app: wait a few seconds and try again"))?;
+        self.session.backend.begin(tool.name, tool.effect == Effect::Model).map_err(|e| Fail::new(e).hint("the user has priority in the open app: wait a few seconds and try again"))?;
         let outcome = self.run_turn(tool, ctx, args);
         // Lo que falló por lo que pidió la IA (no el turno negado ni la cancelación)
         if let Err(fail) = &outcome
@@ -157,13 +157,13 @@ impl Server {
         {
             self.note(tool.name, fail, args);
         }
-        self.session.backend.end(tool.name, outcome.is_ok(), matches!(tool.effect, Effect::Change | Effect::Replace));
+        self.session.backend.end(tool.name, outcome.is_ok(), matches!(tool.effect, Effect::Change | Effect::Model | Effect::Replace));
         outcome
     }
 
     fn run_turn(&self, tool: &tools::Tool, ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
         let before = match tool.effect {
-            Effect::Change => Some(self.session.before_change()?),
+            Effect::Change | Effect::Model => Some(self.session.before_change()?),
             _ => None,
         };
         let outcome = catch_unwind(AssertUnwindSafe(|| (tool.run)(ctx, args)))
@@ -171,7 +171,7 @@ impl Server {
         if let Some(before) = before {
             match &outcome {
                 Ok(_) => self.session.commit(tool.title, before),
-                Err(_) => self.session.rollback(&before).map_err(|e| Fail::new(format!("could not restore the previous state: {e}")))?,
+                Err(_) => self.session.rollback(before).map_err(|e| Fail::new(format!("could not restore the previous state: {e}")))?,
             }
         }
         outcome

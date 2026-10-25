@@ -254,6 +254,7 @@ pub fn run() {
             scan_cloud::scan_cloud_reference,
             scan_cloud::scan_cloud_align_reference,
             scan_cloud::scan_cloud_compare,
+            scan_cloud::scan_mesh_file,
             // CAD paramétrico y escaneo → CAD
             cad::cad_status,
             cad::cad_new,

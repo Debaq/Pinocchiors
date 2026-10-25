@@ -4,8 +4,9 @@
 /// Lo que se manda en `initialize.instructions`: lo justo para empezar bien
 pub const INSTRUCTIONS: &str = "\
 Pinocchio is a 3D app. Through these tools you do parametric CAD: parts (sketches, extrusions, fillets…), \
-assemblies with mates, 2D engineering drawings and STEP/STL export. (Mesh, rigging and animation tools are not \
-available through this connector yet.)
+assemblies with mates, 2D engineering drawings and STEP/STL export; and you work on mesh models: import, repair, \
+remesh, UV-unwrap, prepare for 3D printing (check, orient, cut into pieces, pegs, plates), render realistic images \
+and rebuild scans. (Rigging and animation tools are not available through this connector yet.)
 Start with `status` to see what is loaded and which mode you are in. Call `help` with a topic for workflows.
 Use `view` to look at your work: it returns an image with the numbers of faces or edges you can pick.
 Conventions: lengths in millimetres, angles in degrees, Z is up. Every change can be reverted with `undo`; \
@@ -20,7 +21,9 @@ pub const TOPICS: &[(&str, &str, &str)] = &[
 Pinocchio works on one project at a time. Through these tools a project holds:
 - Design tabs: parametric CAD parts (sketches + operations such as extrude, revolve, fillet).
 - Assembly tabs: instances of parts from design tabs, positioned with mates.
-(Projects made in the app can also hold meshes, skeletons and animation; `status` reports them.)
+- Scene objects: mesh models (imported files, scans, or CAD parts turned into meshes). One is active; the mesh and
+  print tools work on it (`help` topics `mesh` and `print`).
+(Projects made in the app can also hold skeletons and animation; `status` reports them.)
 
 Typical loop:
 1. `status` — see what is loaded.
@@ -91,6 +94,39 @@ Assemblies put parts from design tabs together and connect them with mates (like
    the bill of materials and balloons); look at the returned preview.
 - `cad_design`, `cad_geometry`, `view` and `measure` also work on assembly tabs (the \"part\" of a face is its instance).
 - Tools without `tab` use the active tab, and most tools activate the tab they work on: pass `tab` when switching.",
+    ),
+    (
+        "mesh",
+        "Mesh models: import, repair, remesh, UV, render, scans",
+        "\
+Mesh tools work on the active scene object (a triangle mesh, in mm with Z up).
+1. Get a model: `mesh_import` (GLB/glTF, OBJ, STL, PLY), `scan_import` (a PLY point cloud → surface) or
+   `mesh_from_part` (a part of a design tab). Each one is a new scene object; the others stay. `undo` takes it back.
+2. `mesh_info` — size, triangles, closed or not; `diagnose: true` counts holes, non-manifold edges, flipped faces.
+3. `mesh_repair` — fills holes, fixes normals and non-manifold geometry (needed before printing an open scan).
+4. `mesh_remesh` — `simplify` (fewer triangles), `smooth`, `isotropic` (even triangles), `voxel` (rebuild as a closed
+   skin: fixes anything, loses fine detail), `quads`.
+5. `mesh_uv` — unwrap UVs and bake the textures onto a new map.
+6. `view` {\"show\": \"model\"} — a quick picture; `render_image` — a realistic one (path tracer) to show the result.
+7. `mesh_export` — GLB/glTF, OBJ, STL, PLY, 3MF, USDZ.
+- Mesh tools change the model of the active object; every step can be undone.
+- In live mode imports and scans appear in the app as new objects in the Outliner, like when the user imports.",
+    ),
+    (
+        "print",
+        "Preparing a model for 3D printing (FDM)",
+        "\
+Works on the active mesh model (import one, or `mesh_from_part` for a CAD part).
+1. `print_check` {\"printer\": ..., \"material\": ...} — watertight? thin walls? overhangs and support? fits the bed?
+   grams of filament. Printers: Creality Ender 3 (default), Creality K1, Prusa MK4, Prusa MINI, Bambu Lab X1 / P1,
+   Voron 2.4 (350), or {\"build_volume\": [x, y, z]}. Materials: PLA (default), PETG, ABS, ASA, TPU.
+2. Not watertight → `mesh_repair`. Wrong size → `print_scale`.
+3. `print_orient` — lays it on the face that needs the least support.
+4. Too big → `print_cut` (pieces that fit, flat cuts) and `print_joints` (pegs and holes between the pieces, with the
+   clearance for the printer and material). Look at them with `view` {\"show\": \"pieces\"}.
+5. `print_plates` {\"path\": \"/abs/plate.3mf\"} — arranges the pieces on beds and writes one file per plate (optional
+   hollowing with `hollow_wall` and a drain hole).
+Or all at once: `print_prepare` (check → cut if needed → joints → hollow → plates), which reports each step.",
     ),
     (
         "projects",

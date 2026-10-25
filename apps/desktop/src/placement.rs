@@ -381,3 +381,52 @@ mod tests {
 
     use pinocchio_skeleton::{BasicSkeleton, Bone, Skeleton};
 }
+
+/// Transformación que deja abajo la cara de normal `down` (Y arriba): gira en
+/// torno al centro de la caja, apoya en la grilla y centra en X y Z (como
+/// `floorMatrix` de la interfaz). Por columnas, para [`apply_placement_impl`]
+pub(crate) fn floor_matrix(state: &AppState, down: [f64; 3]) -> Result<[f64; 16], String> {
+    let mesh = state.mesh.lock().unwrap();
+    let mesh = mesh.as_ref().ok_or("No hay malla cargada")?;
+    let len = (down[0] * down[0] + down[1] * down[1] + down[2] * down[2]).sqrt();
+    if !(len > 1e-9) {
+        return Err("La dirección de apoyo es cero".into());
+    }
+    let a = down.map(|x| x / len);
+    // Giro de `a` a -Y (Rodrigues); opuestos: media vuelta en torno a X
+    let b = [0.0, -1.0, 0.0];
+    let c = a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let r: [[f64; 3]; 3] = if c < -1.0 + 1e-9 {
+        [[1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, -1.0]]
+    } else {
+        let v = [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+        let k = 1.0 / (1.0 + c);
+        [
+            [c + v[0] * v[0] * k, v[0] * v[1] * k - v[2], v[0] * v[2] * k + v[1]],
+            [v[1] * v[0] * k + v[2], c + v[1] * v[1] * k, v[1] * v[2] * k - v[0]],
+            [v[2] * v[0] * k - v[1], v[2] * v[1] * k + v[0], c + v[2] * v[2] * k],
+        ]
+    };
+    let bounds = |f: &dyn Fn([f64; 3]) -> [f64; 3]| {
+        let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+        for v in &mesh.vertices {
+            let p = f([v.position.x(), v.position.y(), v.position.z()]);
+            for i in 0..3 {
+                lo[i] = lo[i].min(p[i]);
+                hi[i] = hi[i].max(p[i]);
+            }
+        }
+        (lo, hi)
+    };
+    let (lo, hi) = bounds(&|p| p);
+    let center = [0, 1, 2].map(|i| (lo[i] + hi[i]) / 2.0);
+    let rotate = |p: [f64; 3]| {
+        let d = [p[0] - center[0], p[1] - center[1], p[2] - center[2]];
+        [0, 1, 2].map(|i| r[i][0] * d[0] + r[i][1] * d[1] + r[i][2] * d[2] + center[i])
+    };
+    let (lo, hi) = bounds(&rotate);
+    // Traslación final: lo girado queda centrado en X y Z y apoyado en Y = 0
+    let shift = [-(lo[0] + hi[0]) / 2.0, -lo[1], -(lo[2] + hi[2]) / 2.0];
+    let t = [0, 1, 2].map(|i| center[i] - (r[i][0] * center[0] + r[i][1] * center[1] + r[i][2] * center[2]) + shift[i]);
+    Ok([r[0][0], r[1][0], r[2][0], 0.0, r[0][1], r[1][1], r[2][1], 0.0, r[0][2], r[1][2], r[2][2], 0.0, t[0], t[1], t[2], 1.0])
+}

@@ -497,8 +497,12 @@ pub struct WorkspaceSummary {
     pub model: Option<ModelSummary>,
     /// Objetos de la escena además del activo
     pub other_objects: usize,
+    /// Número del objeto activo (`None`: el modelo todavía no es un objeto)
+    pub active_object: Option<u64>,
     pub skeleton: Option<&'static str>,
     pub rigged: bool,
+    /// Hay malla retopologizada
+    pub retopology: bool,
 }
 
 #[derive(Serialize)]
@@ -559,8 +563,10 @@ pub fn workspace_summary(state: &AppState) -> WorkspaceSummary {
         active_tab: tabs.active_tab().map(|t| t.id),
         model,
         other_objects: state.objects.lock().unwrap().stored.len(),
+        active_object: state.objects.lock().unwrap().active,
         skeleton,
         rigged: state.result.lock().unwrap().is_some(),
+        retopology: state.quad_mesh.lock().unwrap().is_some(),
     }
 }
 

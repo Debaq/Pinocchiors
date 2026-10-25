@@ -35,6 +35,12 @@ struct History {
     redo: Vec<Step>,
 }
 
+/// Lo de antes de un cambio: el estado del motor y el archivo (con su interfaz)
+pub struct Before {
+    state: Vec<u8>,
+    file: ProjectFile,
+}
+
 /// Un paso: qué herramienta fue y el estado de antes (o de después, en `redo`)
 struct Step {
     label: String,
@@ -53,19 +59,19 @@ impl Session {
     }
 
     /// Estado de antes de un cambio (se guarda con [`commit`](Self::commit))
-    pub fn before_change(&self) -> Result<Vec<u8>, String> {
-        self.backend.snapshot()
+    pub fn before_change(&self) -> Result<Before, String> {
+        Ok(Before { state: self.backend.snapshot()?, file: self.project.lock().unwrap().clone() })
     }
 
     /// El cambio salió bien: `before` queda para deshacer (en vivo, el
     /// deshacer es el de la app)
-    pub fn commit(&self, label: &str, before: Vec<u8>) {
+    pub fn commit(&self, label: &str, before: Before) {
         if self.backend.mode() == Mode::Live {
             return;
         }
         let mut project = self.project.lock().unwrap();
         let mut h = self.history.lock().unwrap();
-        h.undo.push(Step { label: label.into(), state: before, file: project.clone() });
+        h.undo.push(Step { label: label.into(), state: before.state, file: before.file });
         if h.undo.len() > HISTORY {
             h.undo.remove(0);
         }
@@ -74,8 +80,30 @@ impl Session {
     }
 
     /// El cambio falló a mitad: vuelve a como estaba
-    pub fn rollback(&self, before: &[u8]) -> Result<(), String> {
-        self.backend.restore(before)
+    pub fn rollback(&self, before: Before) -> Result<(), String> {
+        self.backend.restore(&before.state)?;
+        if self.backend.mode() != Mode::Live {
+            *self.project.lock().unwrap() = before.file;
+        }
+        Ok(())
+    }
+
+    /// Cambia el estado de la interfaz guardado en el proyecto (lista de
+    /// objetos, nombre del modelo…): lo que el conector agrega para que la app
+    /// lo muestre al abrir el archivo
+    pub fn edit_ui(&self, edit: impl FnOnce(&mut serde_json::Value)) {
+        let mut project = self.project.lock().unwrap();
+        let mut ui: serde_json::Value = serde_json::from_str(&project.ui).unwrap_or_else(|_| serde_json::json!({}));
+        if !ui.is_object() {
+            ui = serde_json::json!({});
+        }
+        edit(&mut ui);
+        project.ui = ui.to_string();
+    }
+
+    /// El estado de la interfaz guardado en el proyecto
+    pub fn ui(&self) -> serde_json::Value {
+        serde_json::from_str(&self.project.lock().unwrap().ui).unwrap_or_else(|_| serde_json::json!({}))
     }
 
     /// Deshace el último cambio; devuelve qué se deshizo
@@ -115,10 +143,10 @@ impl Session {
     }
 
     /// Proyecto nuevo o abierto: se puede volver al anterior con `undo`
-    pub fn replaced(&self, label: &str, before: Vec<u8>, path: Option<PathBuf>, ui: String) {
+    pub fn replaced(&self, label: &str, before: Before, path: Option<PathBuf>, ui: String) {
         let mut project = self.project.lock().unwrap();
         let mut h = self.history.lock().unwrap();
-        h.undo.push(Step { label: label.into(), state: before, file: project.clone() });
+        h.undo.push(Step { label: label.into(), state: before.state, file: before.file });
         if h.undo.len() > HISTORY {
             h.undo.remove(0);
         }

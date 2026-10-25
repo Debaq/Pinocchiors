@@ -116,7 +116,7 @@ fn the_ai_drives_the_open_window_by_turns() {
     // Un comando largo avisa su avance al conector y al indicador de la ventana
     let stl = stl_file(dir.path());
     let seen = Mutex::new(Vec::new());
-    s.session().backend.begin("import").unwrap();
+    s.session().backend.begin("import", false).unwrap();
     s.session().backend.call_with("import_model", json!({ "path": stl }), &|f, m| seen.lock().unwrap().push((f, m.to_string()))).unwrap();
     s.session().backend.end("import", true, false);
     let seen = seen.into_inner().unwrap();

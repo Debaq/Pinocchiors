@@ -10,6 +10,7 @@ pub mod clients;
 pub mod errors;
 pub mod guide;
 pub mod live;
+pub mod model;
 pub mod protocol;
 pub mod render;
 pub mod schema;
@@ -28,7 +29,7 @@ use session::Session;
 pub const FLAG: &str = "--mcp";
 
 const USAGE: &str = "\
-Pinocchio MCP server (CAD parts, assemblies, 2D drawings) over stdin/stdout.
+Pinocchio MCP server (CAD parts, assemblies, 2D drawings, meshes, 3D printing, renders) over stdin/stdout.
 
 Usage: pinocchio --mcp            speak MCP (what AI clients launch)
        pinocchio --mcp --guide    print the guide for agents (Markdown)

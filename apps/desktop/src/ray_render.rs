@@ -972,3 +972,87 @@ mod tests {
         assert!(validate(&r).is_err());
     }
 }
+
+/// Una imagen del modelo activo para el conector MCP: la cámara mira al centro desde
+/// `azimuth`/`elevation` (grados, Z arriba como se muestra) y encuadra todo el modelo
+#[derive(Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewRender {
+    pub azimuth: f32,
+    pub elevation: f32,
+    pub width: u32,
+    pub height: u32,
+    pub samples: u32,
+    /// "studio" (ciclorama), "transparent", "white" o un color lineal en `color`
+    pub background: String,
+    #[serde(default)]
+    pub color: Option<[f32; 3]>,
+    /// Entorno HDR (`builtin:studio`, `builtin:sky`… o la ruta a un .hdr); sin él, luz de estudio
+    #[serde(default)]
+    pub hdri: Option<String>,
+}
+
+/// Renderiza el modelo activo de una vez (sin trabajo en segundo plano) y devuelve el PNG
+pub(crate) fn render_view_impl(state: &AppState, view: ViewRender, progress: &tauri::ipc::Channel<crate::commands::Progress>) -> Result<Vec<u8>, String> {
+    let mut scene = state.scene.lock().unwrap().clone().ok_or("No hay ningún modelo cargado")?;
+    crate::crease::crease_shade(&mut scene, crate::crease::CREASE_DEG);
+    let animated = gr::AnimatedScene::new(&scene);
+    let probe = animated.at(None, 0.0);
+    if probe.triangles.is_empty() {
+        return Err("La escena no tiene geometría para renderizar".to_string());
+    }
+    // Hacia la cámara, de Z arriba (como se muestra) a Y arriba (la escena)
+    let (a, e) = (view.azimuth.to_radians(), view.elevation.to_radians());
+    let toward = Vec3::new(e.cos() * a.cos(), e.sin(), -e.cos() * a.sin());
+    let b = probe.bvh.bounds();
+    let center = (Vec3::from(b.min) + Vec3::from(b.max)) * 0.5;
+    let radius = (Vec3::from(b.max) - Vec3::from(b.min)).length() * 0.5;
+    let aspect = view.width as f32 / view.height.max(1) as f32;
+    let vfov = 30.0f32;
+    // El campo más angosto (vertical u horizontal) debe abarcar la esfera del modelo
+    let half = (vfov.to_radians() / 2.0).tan().min((vfov.to_radians() / 2.0).tan() * aspect).atan();
+    let distance = radius / half.sin() * 1.05;
+    let up = if toward.y.abs() > 0.99 { Vec3::new(0.0, 0.0, -toward.y.signum()) } else { Vec3::Y };
+    let (studio, transparent, background) = match view.background.as_str() {
+        "studio" => (Some(StudioDto { color: [0.8, 0.8, 0.8], gloss: 0.0 }), false, None),
+        "transparent" => (None, true, None),
+        "white" => (None, false, Some([1.0, 1.0, 1.0])),
+        _ => (None, false, Some(view.color.unwrap_or([1.0, 1.0, 1.0]))),
+    };
+    let key = Vec3::new(0.45, 0.75, 0.5).normalize();
+    let req = RayRequest {
+        width: view.width,
+        height: view.height,
+        samples: view.samples,
+        passes: view.samples.min(4),
+        max_depth: 6,
+        denoise: true,
+        transparent,
+        background,
+        camera: CameraDto { position: (center + toward * distance).into(), target: center.into(), up: up.into(), vfov_deg: vfov },
+        suns: vec![
+            SunDto { direction: key.into(), color: [2.6, 2.5, 2.4] },
+            SunDto { direction: [-key.x, 0.35, -key.z], color: [0.35, 0.45, 0.55] },
+        ],
+        ambient: [0.3, 0.3, 0.3],
+        sun_angular_radius: 0.035,
+        tone_map: true,
+        exposure: 1.0,
+        shadow_floor: if studio.is_none() && !transparent { Some(0.7) } else { None },
+        studio,
+        hdri: view.hdri.map(|path| HdriDto { path, intensity: 1.0, rotation_deg: 0.0 }),
+    };
+    validate(&req)?;
+    let settings = settings_from(&req, &probe)?;
+    let ray_scene = match studio_from(&req, &probe) {
+        Some(studio) => animated.with_studio(studio).at(None, 0.0),
+        None => probe,
+    };
+    drop(scene);
+    let options = gr::ProgressiveOptions { passes: req.passes, denoise: req.denoise.then(gr::DenoiseSettings::default), ..Default::default() };
+    let cancel = AtomicBool::new(false);
+    let outcome = gr::render_progressive(&ray_scene, &camera_from(&req), &settings, &options, &cancel, |info, _| {
+        crate::commands::report(progress, "render", (100 * info.samples / info.total_samples.max(1)) as u32, format!("Renderizando: pasada {} de {}", info.pass, info.passes));
+    });
+    encode_png(&outcome.frame, tone_of(&req), None)
+}

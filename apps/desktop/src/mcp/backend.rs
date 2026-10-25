@@ -53,15 +53,20 @@ pub trait Backend: Send + Sync {
     /// Copia de todo el estado, para deshacer
     fn snapshot(&self) -> Result<Vec<u8>, String>;
     fn restore(&self, snapshot: &[u8]) -> Result<(), String>;
-    /// Empieza una herramienta (en vivo: pide turno a la ventana)
-    fn begin(&self, _title: &str) -> Result<(), String> {
+    /// Empieza una herramienta (en vivo: pide turno a la ventana). `model`:
+    /// la herramienta cambia el modelo de malla (en vivo se copia para el deshacer de la ventana)
+    fn begin(&self, _title: &str, _model: bool) -> Result<(), String> {
         Ok(())
     }
     /// Termina la herramienta; `ok = false` deshace lo que hizo (en vivo).
     /// `changed`: la herramienta cambia el trabajo (su cambio va al deshacer de la app)
     fn end(&self, _title: &str, _ok: bool, _changed: bool) {}
     /// Pregunta a la ventana ("selection", "undo", "redo"); sin ventana, `None`
-    fn ask(&self, _what: &str) -> Option<Result<Value, String>> {
+    fn ask(&self, what: &str) -> Option<Result<Value, String>> {
+        self.ask_with(what, Value::Null)
+    }
+    /// Como [`ask`](Self::ask), con datos ("import" con la ruta)
+    fn ask_with(&self, _what: &str, _args: Value) -> Option<Result<Value, String>> {
         None
     }
 }
@@ -178,11 +183,11 @@ impl Backend for Auto {
         if self.mode() == Mode::Live { Ok(()) } else { self.local.restore(snapshot) }
     }
 
-    fn begin(&self, title: &str) -> Result<(), String> {
+    fn begin(&self, title: &str, model: bool) -> Result<(), String> {
         let live = self.going_live();
         *self.current.lock().unwrap() = if live { Mode::Live } else { Mode::Standalone };
         if live {
-            self.live_request(serde_json::json!({ "op": "begin", "title": title }))?;
+            self.live_request(serde_json::json!({ "op": "begin", "title": title, "model": model }))?;
         }
         Ok(())
     }
@@ -193,7 +198,7 @@ impl Backend for Auto {
         }
     }
 
-    fn ask(&self, what: &str) -> Option<Result<Value, String>> {
-        (self.mode() == Mode::Live).then(|| self.live_request(serde_json::json!({ "op": what })).map(|r| r.get("value").cloned().unwrap_or(Value::Null)))
+    fn ask_with(&self, what: &str, args: Value) -> Option<Result<Value, String>> {
+        (self.mode() == Mode::Live).then(|| self.live_request(serde_json::json!({ "op": what, "args": args })).map(|r| r.get("value").cloned().unwrap_or(Value::Null)))
     }
 }

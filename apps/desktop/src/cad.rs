@@ -3253,7 +3253,7 @@ pub mod bridge {
     }
 
     /// Comandos que avisan su avance por un `Channel`
-    const REPORTS_PROGRESS: &[&str] = &["import_model", "cad_part_to_model", "remesh_preview", "remesh_apply"];
+    const REPORTS_PROGRESS: &[&str] = &["import_model", "cad_part_to_model", "remesh_preview", "remesh_apply", "repair_mesh", "unwrap_original_mesh", "ray_render_view", "scan_mesh_file"];
 
     /// Hacia dónde va el avance de un comando (`None`: no se usa)
     struct Ticks(Option<std::sync::mpsc::Sender<(f64, String)>>);
@@ -3484,6 +3484,11 @@ pub mod bridge {
             "subdivide_mesh" => ok(crate::commands::subdivide_mesh_impl(arg(args, "config")?, state)?),
             "get_placement_info" => ok(crate::placement::placement_info(state)?),
             "apply_placement" => ok(crate::placement::apply_placement_impl(state, arg(args, "matrix")?)?),
+            // Apoyar en la cara de normal `down` (Y arriba): gira, apoya y centra
+            "placement_floor" => {
+                let matrix = crate::placement::floor_matrix(state, arg(args, "down")?)?;
+                ok(crate::placement::apply_placement_impl(state, matrix)?)
+            }
             "get_supported_formats" => ok(crate::commands::get_supported_formats()),
             "remesh_preview" => ok(crate::remesh::preview_impl(state, arg(args, "params")?, &ticks.channel())?),
             "get_remesh_preview_data" => crate::remesh::preview_bytes(state).map(Reply::Bytes),
@@ -3497,6 +3502,34 @@ pub mod bridge {
             }
             "remesh_info" => ok(crate::remesh::info_impl(state)?),
             "export_model" => ok(crate::commands::export_model_impl(arg(args, "config")?, state)?),
+            "ray_render_view" => crate::ray_render::render_view_impl(state, arg(args, "view")?, &ticks.channel()).map(Reply::Bytes),
+            "scan_mesh_file" => {
+                let path: String = arg(args, "path")?;
+                let (info, points) = crate::scan_cloud::mesh_cloud_file_impl(state, std::path::Path::new(&path), arg(args, "settings")?, &ticks.channel())?;
+                ok(json!({ "info": info, "points": points }))
+            }
+            "mcp_model_mesh" => crate::mcp::model::view_bytes(state, &arg::<String>(args, "what")?).map(Reply::Bytes),
+            "analyze_mesh" => ok(crate::commands::analyze_mesh_impl(state, &arg(args, "config")?)?),
+            "repair_mesh" => ok(crate::commands::repair_mesh_impl(state, &arg(args, "config")?, &ticks.channel())?),
+            "get_repair_diagnostics" => {
+                let diagnostics = state.diagnostics.lock().unwrap();
+                ok(crate::commands::diagnostics_to_info(diagnostics.as_ref().ok_or("No hay diagnósticos disponibles")?))
+            }
+            "unwrap_original_mesh" => ok(crate::commands::unwrap_original_impl(state, &arg(args, "config")?, ticks.channel())?),
+            "get_uv_info" => ok(crate::commands::uv_info_impl(state)),
+            "export_print3d_piece" => ok(crate::commands::export_print3d_piece_impl(arg(args, "pieceIndex")?, arg(args, "path")?, state)?),
+            "get_print_presets" => ok(crate::print_prep::get_print_presets()),
+            "get_fab_tolerances" => ok(crate::print_prep::get_fab_tolerances(arg(args, "printer")?, arg(args, "material")?)),
+            "check_print_readiness" => ok(crate::print_prep::check_print_readiness_impl(state, &arg(args, "printer")?, &arg(args, "material")?)?),
+            "suggest_print_orientation" => ok(crate::print_prep::suggest_print_orientation_impl(state, &arg(args, "printer")?, &arg(args, "material")?)?),
+            "add_print_joints" => {
+                let fit: Option<crate::print_prep::FitInput> = arg(args, "fit")?;
+                ok(crate::print_prep::add_print_joints_impl(state, &arg(args, "config")?, fit.as_ref())?)
+            }
+            "estimate_print_material" => ok(crate::print_prep::estimate_print_material_impl(state, &arg(args, "material")?, arg(args, "infill")?, arg(args, "hollowWall")?)?),
+            "preview_print_plates" => ok(crate::print_prep::preview_print_plates_impl(state, arg(args, "input")?)?),
+            "export_print_plates" => ok(crate::print_prep::export_print_plates_impl(state, arg(args, "input")?)?),
+            "prepare_for_printing" => ok(crate::print_all::prepare_for_printing_impl(state, arg(args, "input")?)?),
             "remesh_voxel_grid" => ok(crate::remesh::voxel_grid_impl(state, arg(args, "voxelMm")?)?),
             "new_project" => ok(crate::project::new_project_impl(state)?),
             "workspace_summary" => ok(crate::project::workspace_summary(state)),

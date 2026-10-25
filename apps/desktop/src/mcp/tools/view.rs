@@ -16,16 +16,18 @@ const VIEWS: &[&str] = &["iso", "iso_back", "iso_below", "top", "bottom", "front
 
 const VIEW: Tool = Tool {
     name: "view",
-    title: "Look at the design (image)",
-    description: "Returns a PNG image of a design tab so you can check your work: shaded solid, visible edges, each part \
+    title: "Look at the design or the mesh (image)",
+    description: "Returns a PNG image so you can check your work. By default a design tab: shaded solid, visible edges, each part \
 in its own colour, an X/Y/Z axis triad, and the number of every visible face (or edge) printed on it — the same \
 numbers `cad_geometry`, `cad_fillet`, `sketch_create` `on_face` etc. use. `highlight_faces` / `highlight_edges` paint \
-some orange to confirm a pick before using it. Views: iso (front-right-top), iso_back, iso_below, top, bottom, front \
-(looking along +Y), back, left, right; or `azimuth`/`elevation` in degrees. Example: {\"view\": \"iso\", \"labels\": \
-\"faces\"}.",
+some orange to confirm a pick before using it. `show: \"model\"` shows the active mesh model instead (sharp edges \
+drawn, no numbers) and `show: \"pieces\"` the pieces from `print_cut`, each in its colour. Views: iso \
+(front-right-top), iso_back, iso_below, top, bottom, front (looking along +Y), back, left, right; or \
+`azimuth`/`elevation` in degrees. Example: {\"view\": \"iso\", \"labels\": \"faces\"}.",
     input: || {
         object(&[
             tab_prop(),
+            ("show", one_of("What to look at: a design tab (default), the mesh model, or the cut pieces", &["design", "model", "pieces"]), false),
             ("view", one_of("Named view (default iso)", VIEWS), false),
             ("azimuth", number_in("Custom view: degrees around Z from +X toward +Y (use with elevation)", -360.0, 360.0), false),
             ("elevation", number_in("Custom view: degrees above the XY plane", -89.0, 89.0), false),
@@ -51,6 +53,9 @@ fn open_any(ctx: &Ctx, args: &Value) -> Result<(u32, String, bool), Fail> {
 }
 
 fn view(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
+    if let Some(what @ ("model" | "pieces")) = arg_str(args, "show") {
+        return view_mesh(ctx, args, what);
+    }
     let (tab, tab_name, assembly) = open_any(ctx, args)?;
     let mm = ctx.call("cad_mm_per_unit", json!({}))?.as_f64().unwrap_or(1.0) as f32;
     // Pieza (o instancia) de cada cara: rangos de caras de cada una
@@ -71,21 +76,17 @@ fn view(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
         let k = ranges.iter().position(|r| (r.0..r.1).contains(&(f as u64))).unwrap_or(0);
         PALETTE[k % PALETTE.len()]
     };
-    let name = arg_str(args, "view").unwrap_or("iso");
-    let camera = match (args.get("azimuth").and_then(Value::as_f64), args.get("elevation").and_then(Value::as_f64)) {
-        (Some(a), Some(e)) => Camera::orbit(a as f32, e as f32),
-        (None, None) => Camera::named(name).unwrap_or_else(|| Camera::named("iso").unwrap()),
-        _ => return Err(Fail::new("give both `azimuth` and `elevation`, or neither")),
-    };
+    let (camera, view_name) = camera(args)?;
     let labels = match arg_str(args, "labels").unwrap_or("faces") {
         "edges" => Labels::Edges,
         "none" => Labels::None,
         _ => Labels::Faces,
     };
     let ints = |k: &str| args.get(k).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_u64).collect::<Vec<_>>();
+    let (width, height) = image_size(args);
     let opts = Options {
-        width: args.get("width").and_then(Value::as_u64).unwrap_or(800).clamp(160, 1600) as u32,
-        height: args.get("height").and_then(Value::as_u64).unwrap_or(600).clamp(120, 1200) as u32,
+        width,
+        height,
         camera,
         labels,
         highlight_faces: ints("highlight_faces").into_iter().map(|f| f as u32).collect::<HashSet<_>>(),
@@ -98,7 +99,6 @@ fn view(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
         Labels::Edges => format!("Edge numbers shown: {}.", list(&pic.labeled)),
         Labels::None => "No numbers shown.".into(),
     };
-    let view_name = if args.get("azimuth").is_some() { format!("azimuth {} / elevation {}", args["azimuth"], args["elevation"]) } else { name.to_string() };
     let mut out = Output::new(
         format!(
             "View {view_name} of tab \"{tab_name}\" ({}×{} px). {what} {} have different colours; the triad shows X (red), Y (green), Z (blue). Small faces may have no number: use `cad_geometry` for the full list.",
@@ -107,6 +107,47 @@ fn view(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
             if assembly { "Instances" } else { "Parts" }
         ),
         json!({ "tab": tab, "view": view_name, "labels": pic.labeled, "faces": mesh.triangle_face.iter().max().map_or(0, |m| m + 1), "edges": mesh.edges.len() }),
+    );
+    out.images.push(pic.png);
+    Ok(out)
+}
+
+/// La cámara pedida y cómo se llama esa vista
+fn camera(args: &Value) -> Result<(Camera, String), Fail> {
+    let name = arg_str(args, "view").unwrap_or("iso");
+    match (args.get("azimuth").and_then(Value::as_f64), args.get("elevation").and_then(Value::as_f64)) {
+        (Some(a), Some(e)) => Ok((Camera::orbit(a as f32, e as f32), format!("azimuth {a} / elevation {e}"))),
+        (None, None) => Ok((Camera::named(name).unwrap_or_else(|| Camera::named("iso").unwrap()), name.to_string())),
+        _ => Err(Fail::new("give both `azimuth` and `elevation`, or neither")),
+    }
+}
+
+fn image_size(args: &Value) -> (u32, u32) {
+    (args.get("width").and_then(Value::as_u64).unwrap_or(800).clamp(160, 1600) as u32, args.get("height").and_then(Value::as_u64).unwrap_or(600).clamp(120, 1200) as u32)
+}
+
+/// El modelo de malla o las piezas del corte, sin números
+fn view_mesh(ctx: &Ctx, args: &Value, what: &str) -> Result<Output, Fail> {
+    super::mesh::need_model(ctx)?;
+    let bytes = ctx.call_bytes("mcp_model_mesh", json!({ "what": what })).map_err(|e| if what == "pieces" { e.hint("cut the model first with `print_cut`") } else { e })?;
+    let mesh = render::decode_cad_mesh(&bytes, 1.0).map_err(Fail::new)?;
+    let (camera, view_name) = camera(args)?;
+    let (width, height) = image_size(args);
+    let pieces = mesh.triangle_face.iter().max().map_or(0, |m| m + 1);
+    let opts = Options {
+        width,
+        height,
+        camera,
+        labels: Labels::None,
+        highlight_faces: HashSet::new(),
+        highlight_edges: HashSet::new(),
+        face_color: Box::new(|f: u32| PALETTE[f as usize % PALETTE.len()]),
+    };
+    let pic = render::render(&mesh, &opts).map_err(Fail::new)?;
+    let subject = if what == "pieces" { format!("the {pieces} cut pieces (one colour each)") } else { "the mesh model".into() };
+    let mut out = Output::new(
+        format!("View {view_name} of {subject} ({width}×{height} px); sharp edges drawn; the triad shows X (red), Y (green), Z (blue)."),
+        json!({ "show": what, "view": view_name, "triangles": mesh.triangles.len(), "pieces": pieces }),
     );
     out.images.push(pic.png);
     Ok(out)

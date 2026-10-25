@@ -39,6 +39,8 @@ pub const EV_PROGRESS: &str = "mcp-live://progress";
 
 /// Cuánto se espera a que la ventana conteste
 const ANSWER: Duration = Duration::from_secs(15);
+/// Lo que espera a que la ventana importe un modelo (los grandes tardan)
+const IMPORT: Duration = Duration::from_secs(600);
 
 /// Dónde la app deja el puerto y la clave para el conector
 pub fn live_file() -> Option<PathBuf> {
@@ -179,13 +181,17 @@ impl Bridge {
     }
 
     /// Pregunta a la ventana y espera la respuesta
-    fn ask(&self, host: &dyn Host, event: &str, mut payload: Value) -> Result<Value, String> {
+    fn ask(&self, host: &dyn Host, event: &str, payload: Value) -> Result<Value, String> {
+        self.ask_for(host, event, payload, ANSWER)
+    }
+
+    fn ask_for(&self, host: &dyn Host, event: &str, mut payload: Value, wait: Duration) -> Result<Value, String> {
         let id = self.next.fetch_add(1, Ordering::SeqCst) + 1;
         let (tx, rx) = channel();
         self.pending.lock().unwrap().insert(id, tx);
         payload["id"] = json!(id);
         host.emit(event, payload);
-        let out = rx.recv_timeout(ANSWER);
+        let out = rx.recv_timeout(wait);
         self.pending.lock().unwrap().remove(&id);
         out.map_err(|_| "Pinocchio did not answer (the window may be closed or frozen)".to_string())
     }
@@ -195,8 +201,8 @@ impl Bridge {
         let _ = stream.set_nonblocking(false);
         let Ok(mut out) = stream.try_clone() else { return };
         let reader = BufReader::new(stream);
-        // Pestañas al empezar el turno (para volver si la herramienta falla, y para el deshacer)
-        let mut before: Option<cad_model::Tabs> = None;
+        // Lo de antes del turno (para volver si la herramienta falla, y para el deshacer)
+        let mut before = Before::default();
         for line in reader.lines() {
             let Ok(line) = line else { break };
             let reply = match serde_json::from_str::<Value>(&line) {
@@ -224,7 +230,7 @@ impl Bridge {
         }
     }
 
-    fn handle(&self, req: &Value, host: &dyn Host, conn: u64, before: &mut Option<cad_model::Tabs>, tick: &(dyn Fn(f64, &str) + Sync)) -> Result<Value, String> {
+    fn handle(&self, req: &Value, host: &dyn Host, conn: u64, before: &mut Before, tick: &(dyn Fn(f64, &str) + Sync)) -> Result<Value, String> {
         let holds = || *self.turn.lock().unwrap() == Some(conn);
         // Apagado: las conexiones abiertas ya no sirven (el conector vuelve a su motor)
         if !self.is_on() {
@@ -246,7 +252,10 @@ impl Bridge {
                 let answer = self.ask(host, EV_TURN, json!({ "title": req["title"] }));
                 match answer {
                     Ok(a) if a["ok"] == true => {
-                        *before = Some(host.state().cad_tabs.lock().unwrap().clone());
+                        let state = host.state();
+                        before.tabs = Some(state.cad_tabs.lock().unwrap().clone());
+                        // Cambia la malla: copia del modelo para volver o para el deshacer de la ventana
+                        before.model = (req["model"] == true).then(|| crate::project::take_snapshot_impl(state).id);
                         Ok(json!({ "ok": true }))
                     }
                     other => {
@@ -276,7 +285,17 @@ impl Bridge {
                 }
                 let ok = req["ok"] == true;
                 let state = host.state();
-                let changes = match before.take() {
+                let model = before.model.take().and_then(|id| {
+                    if ok && req["changed"] == true {
+                        return Some(id);
+                    }
+                    if !ok {
+                        let _ = crate::project::swap_snapshot_impl(state, id);
+                    }
+                    state.undo_snapshots.lock().unwrap().remove(id);
+                    None
+                });
+                let changes = match before.tabs.take() {
                     // Falló: todo vuelve a como estaba
                     Some(old) if !ok => {
                         state.set_cad_tabs(old);
@@ -287,12 +306,19 @@ impl Bridge {
                     _ => Vec::new(),
                 };
                 *self.turn.lock().unwrap() = None;
-                host.emit(EV_DONE, json!({ "ok": ok, "title": req["title"], "changes": changes }));
+                host.emit(EV_DONE, json!({ "ok": ok, "title": req["title"], "changes": changes, "model": model }));
                 Ok(json!({ "ok": true }))
             }
-            // Preguntas a la ventana: lo que el usuario tiene elegido, deshacer, rehacer
-            "selection" | "undo" | "redo" => {
-                let a = self.ask(host, EV_ASK, json!({ "what": req["op"] }))?;
+            // Preguntas a la ventana: lo que el usuario tiene elegido, deshacer,
+            // rehacer, importar un modelo o un escaneo (como objeto nuevo) o traer la malla
+            // de una pieza del diseño: los hace la ventana, como el usuario
+            "selection" | "undo" | "redo" | "import" | "scan" | "use_part" => {
+                let model = matches!(req["op"].as_str(), Some("import" | "scan" | "use_part"));
+                if model && !holds() {
+                    return Err("no turn: call begin first".into());
+                }
+                let wait = if model { IMPORT } else { ANSWER };
+                let a = self.ask_for(host, EV_ASK, json!({ "what": req["op"], "args": req["args"] }), wait)?;
                 match a["error"].as_str() {
                     Some(e) => Err(e.to_string()),
                     None => Ok(json!({ "ok": true, "value": a["value"] })),
@@ -301,6 +327,15 @@ impl Bridge {
             other => Err(format!("unknown op {other}")),
         }
     }
+}
+
+/// Lo de antes de un turno de la IA
+#[derive(Default)]
+struct Before {
+    /// Las pestañas (para volver si la herramienta falla, y para el deshacer)
+    tabs: Option<cad_model::Tabs>,
+    /// Copia del modelo de malla (`take_snapshot`), si la herramienta lo cambia
+    model: Option<u64>,
 }
 
 /// Pestañas que cambiaron entre `old` y `new`, con su documento de antes

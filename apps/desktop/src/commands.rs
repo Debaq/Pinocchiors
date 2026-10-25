@@ -3370,6 +3370,10 @@ fn uv_info<const N: usize>(skin: &uv_core::Skin<N>, scene: Option<&Scene>) -> Uv
 /// Piel actual de la malla retopologizada (`None` si no tiene)
 #[tauri::command]
 pub fn get_uv_info(state: State<'_, AppState>) -> Option<UvInfo> {
+    uv_info_impl(&state)
+}
+
+pub(crate) fn uv_info_impl(state: &AppState) -> Option<UvInfo> {
     let skin = state.quad_skin.lock().unwrap();
     let scene = state.scene.lock().unwrap();
     skin.as_ref().map(|s| uv_info(s, scene.as_ref()))
@@ -3489,7 +3493,7 @@ pub async fn unwrap_original_mesh(
     in_background(app, move |state| unwrap_original_impl(state, &config, on_progress)).await
 }
 
-fn unwrap_original_impl(state: &AppState, config: &UvUnwrapConfig, on_progress: Channel<Progress>) -> Result<UnwrapOriginalInfo, String> {
+pub(crate) fn unwrap_original_impl(state: &AppState, config: &UvUnwrapConfig, on_progress: Channel<Progress>) -> Result<UnwrapOriginalInfo, String> {
     {
         let _guard = state.try_begin_processing().ok_or("Ya hay un proceso en curso")?;
         let scene = state.scene.lock().unwrap().clone().ok_or("No hay escena cargada")?;
@@ -3759,21 +3763,18 @@ pub struct PieceInfo {
 
 /// Analiza la malla buscando problemas
 #[tauri::command]
-pub async fn analyze_mesh(
-    config: RepairAnalysisConfigInput,
-    state: State<'_, AppState>,
-) -> Result<MeshDiagnosticsInfo, String> {
+pub async fn analyze_mesh(app: AppHandle, config: RepairAnalysisConfigInput) -> Result<MeshDiagnosticsInfo, String> {
+    in_background(app, move |state| analyze_mesh_impl(state, &config)).await
+}
+
+pub(crate) fn analyze_mesh_impl(state: &AppState, config: &RepairAnalysisConfigInput) -> Result<MeshDiagnosticsInfo, String> {
     let mesh = state.mesh.lock().unwrap().clone().ok_or("No hay malla cargada")?;
     let scene = state.scene.lock().unwrap().clone().ok_or("No hay escena cargada")?;
     let analysis_config = RepairAnalysisConfig {
         check_self_intersections: config.check_self_intersections.unwrap_or(false),
         ..RepairAnalysisConfig::default()
     };
-
-    let diagnostics = tauri::async_runtime::spawn_blocking(move || analyze_scene_mesh(&mesh, &scene, &analysis_config))
-        .await
-        .map_err(|e| format!("El análisis terminó inesperadamente: {e}"))?;
-
+    let diagnostics = analyze_scene_mesh(&mesh, &scene, &analysis_config);
     let info = diagnostics_to_info(&diagnostics);
     *state.diagnostics.lock().unwrap() = Some(diagnostics);
     Ok(info)
@@ -3781,15 +3782,14 @@ pub async fn analyze_mesh(
 
 /// Repara la malla con la configuración dada
 ///
-/// Corre en un hilo bloqueante. Guarda la malla y la escena previas para
+/// Corre en un hilo de trabajo. Guarda la malla y la escena previas para
 /// poder deshacer.
 #[tauri::command]
-pub async fn repair_mesh(
-    app: AppHandle,
-    config: RepairConfigInput,
-    on_progress: Channel<Progress>,
-    state: State<'_, AppState>,
-) -> Result<RepairResultInfo, String> {
+pub async fn repair_mesh(app: AppHandle, config: RepairConfigInput, on_progress: Channel<Progress>) -> Result<RepairResultInfo, String> {
+    in_background(app, move |state| repair_mesh_impl(state, &config, &on_progress)).await
+}
+
+pub(crate) fn repair_mesh_impl(state: &AppState, config: &RepairConfigInput, on_progress: &Channel<Progress>) -> Result<RepairResultInfo, String> {
     let _guard = state
         .try_begin_processing()
         .ok_or("Ya hay un proceso en curso")?;
@@ -3798,35 +3798,28 @@ pub async fn repair_mesh(
     let original_scene = state.scene.lock().unwrap().clone().ok_or("No hay escena cargada")?;
     let repair_config = config.to_repair_config();
 
-    let mesh = original_mesh.clone();
-    let progress = on_progress.clone();
-    let (mesh, summary, diagnostics) = tauri::async_runtime::spawn_blocking(move || {
-        let mut mesh = mesh;
-        let mut last = u32::MAX;
-        let summary = pinocchio_repair::repair_all_with_progress(&mut mesh, &repair_config, |fraction, stage| {
-            // Solo enviar cuando cambia el porcentaje: el canal no es gratis
-            let percent = (fraction * 90.0) as u32;
-            if percent != last {
-                last = percent;
-                report(&progress, "repair", percent, format!("{stage}..."));
-            }
-        })?;
-        report(&progress, "analyze", 92, "Analizando resultado...");
-        // Tras unir, comprobar que no quedaron cruces
-        let analysis = RepairAnalysisConfig {
-            check_self_intersections: repair_config.resolve_intersections,
-            ..RepairAnalysisConfig::default()
-        };
-        let diagnostics = pinocchio_repair::analyze(&mesh, &analysis);
-        Ok::<_, pinocchio_repair::RepairError>((mesh, summary, diagnostics))
+    let mut mesh = original_mesh.clone();
+    let mut last = u32::MAX;
+    let summary = pinocchio_repair::repair_all_with_progress(&mut mesh, &repair_config, |fraction, stage| {
+        // Solo enviar cuando cambia el porcentaje: el canal no es gratis
+        let percent = (fraction * 90.0) as u32;
+        if percent != last {
+            last = percent;
+            report(on_progress, "repair", percent, format!("{stage}..."));
+        }
     })
-    .await
-    .map_err(|e| format!("La reparación terminó inesperadamente: {e}"))?
     .map_err(|e| format!("Error en reparación: {e}"))?;
+    report(on_progress, "analyze", 92, "Analizando resultado...");
+    // Tras unir, comprobar que no quedaron cruces
+    let analysis = RepairAnalysisConfig {
+        check_self_intersections: repair_config.resolve_intersections,
+        ..RepairAnalysisConfig::default()
+    };
+    let diagnostics = pinocchio_repair::analyze(&mesh, &analysis);
 
     // Reconstruir Scene desde la malla reparada (la topología cambió), con la
     // piel del original. La malla queda en el orden de vértices de la escena
-    report(&on_progress, "skin", 96, "Trasladando la piel...");
+    report(on_progress, "skin", 96, "Trasladando la piel...");
     let (new_scene, mesh) = repaired_scene(&mesh, &original_scene);
     let (num_vertices, num_faces, has_normals, has_uvs) = calculate_scene_stats(&new_scene);
     let new_mesh_info = MeshInfo {
@@ -3843,16 +3836,11 @@ pub async fn repair_mesh(
         textures_skipped: Vec::new(),
     };
 
-    report(&on_progress, "rig", 98, "Trasladando los pesos...");
+    report(on_progress, "rig", 98, "Trasladando los pesos...");
     *state.mesh.lock().unwrap() = Some(mesh);
     *state.scene.lock().unwrap() = Some(new_scene);
     // La topología cambió: la retopología se descarta y el rig pasa a la malla reparada
-    let (rig_kept, original_mesh) = tauri::async_runtime::spawn_blocking(move || {
-        let kept = mesh_replaced(&app.state::<AppState>(), &original_mesh);
-        (kept, original_mesh)
-    })
-    .await
-    .map_err(|e| format!("El traslado de los pesos terminó inesperadamente: {e}"))?;
+    let rig_kept = mesh_replaced(state, &original_mesh);
     *state.mesh_before_repair.lock().unwrap() = Some(original_mesh);
     *state.scene_before_repair.lock().unwrap() = Some(original_scene);
     // Deshacer un desplegado anterior ya no aplica: descartaría la reparación
@@ -4194,7 +4182,7 @@ pub async fn export_print3d_piece(app: AppHandle, piece_index: usize, path: Stri
     in_background(app, move |state| export_print3d_piece_impl(piece_index, path, state)).await
 }
 
-fn export_print3d_piece_impl(piece_index: usize, path: String, state: &AppState) -> Result<ExportResult, String> {
+pub(crate) fn export_print3d_piece_impl(piece_index: usize, path: String, state: &AppState) -> Result<ExportResult, String> {
     let pieces_lock = state.print3d_pieces.lock().unwrap();
     let pieces = pieces_lock.as_ref().ok_or("No hay piezas subdivididas")?;
 
@@ -4324,7 +4312,7 @@ fn split_vertices(scene: &Scene) -> usize {
     corners.len() - positions.len()
 }
 
-fn diagnostics_to_info(d: &pinocchio_repair::MeshDiagnostics) -> MeshDiagnosticsInfo {
+pub(crate) fn diagnostics_to_info(d: &pinocchio_repair::MeshDiagnostics) -> MeshDiagnosticsInfo {
     MeshDiagnosticsInfo { diagnostics: d.clone(), needs_repair: d.needs_repair(), is_healthy: d.is_healthy() }
 }
 

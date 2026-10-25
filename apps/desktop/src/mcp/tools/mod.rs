@@ -12,6 +12,9 @@ mod basics;
 mod cad;
 mod drawing;
 mod features;
+mod mesh;
+mod print;
+mod render_scan;
 mod project;
 mod sketch;
 mod view;
@@ -34,6 +37,10 @@ pub enum Effect {
     Read,
     /// Cambia el trabajo y se puede deshacer con `undo`
     Change,
+    /// Cambia el modelo de malla del objeto activo (reparar, remallar,
+    /// imprimir…); se deshace igual. En vivo la ventana recarga el modelo y
+    /// pone el paso en su deshacer
+    Model,
     /// Reemplaza el trabajo entero (abrir, nuevo); también se deshace. La
     /// herramienta guarda ella misma el paso (`Session::replaced`)
     Replace,
@@ -73,6 +80,9 @@ pub fn all() -> Vec<&'static Tool> {
     list.extend(features::TOOLS);
     list.extend(assembly::TOOLS);
     list.extend(drawing::TOOLS);
+    list.extend(mesh::TOOLS);
+    list.extend(print::TOOLS);
+    list.extend(render_scan::TOOLS);
     list.extend(cad::TOOLS[5..].iter());
     list
 }

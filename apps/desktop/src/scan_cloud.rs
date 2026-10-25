@@ -813,3 +813,36 @@ pub async fn scan_cloud_compare(
     })
     .await
 }
+
+/// Malla una nube PLY guardada como modelo de trabajo (la IA en vivo: la ventana deja antes un objeto nuevo)
+#[tauri::command]
+pub async fn scan_mesh_file(app: AppHandle, path: PathBuf, settings: MeshSettingsDto, on_progress: Channel<Progress>) -> Result<serde_json::Value, String> {
+    in_background(app, move |state| {
+        let (info, points) = mesh_cloud_file_impl(state, &path, settings, &on_progress)?;
+        Ok(serde_json::json!({ "info": info, "points": points }))
+    })
+    .await
+}
+
+/// Malla una nube PLY guardada (mm) y la deja como modelo de trabajo, sin pasar por
+/// el editor de tomas (lo usa el conector MCP). Sin `voxel_mm` (0) sale de la
+/// separación entre puntos. Devuelve la malla y la cantidad de puntos de la nube
+pub(crate) fn mesh_cloud_file_impl(state: &crate::state::AppState, path: &std::path::Path, mut settings: MeshSettingsDto, on_progress: &Channel<Progress>) -> Result<(MeshInfo, usize), String> {
+    report(on_progress, "reading", 5, "Leyendo la nube...");
+    let cloud = edit::load_ply(path).map_err(|e| format!("No se pudo leer {}: {e}", path.display()))?;
+    if cloud.points.is_empty() {
+        return Err(format!("{} no tiene puntos", path.display()));
+    }
+    if settings.voxel_mm <= 0.0 {
+        settings.voxel_mm = (edit::point_spacing(&cloud) * 2.0).max(0.2);
+    }
+    report(on_progress, "meshing", 10, "Reconstruyendo la malla...");
+    let voxel = settings.voxel_mm.max(0.2);
+    let mesh = if settings.poisson {
+        orizon3d_core::poisson::reconstruct_poisson(&cloud, voxel, settings.fill, settings.smooth)
+    } else {
+        mesh::reconstruct(&cloud, voxel, settings.fill, settings.smooth)
+    };
+    let mesh = finish_mesh(mesh, &settings, on_progress)?;
+    Ok((load_scan(&mesh, on_progress, state)?, cloud.points.len()))
+}

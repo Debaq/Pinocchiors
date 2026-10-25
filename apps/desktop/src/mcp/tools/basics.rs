@@ -104,7 +104,8 @@ const HELP: Tool = Tool {
     title: "Read the guide",
     description: "Guide on how to use Pinocchio: workflows, units and conventions. Topics: \
 `overview` (start here), `conventions` (units, axes, names, errors), `cad` (designing parts), `assembly` (assemblies and 2D drawings), `sketch` (every sketch \
-constraint with an example), `features` (every operation type for `cad_add_feature` with an example), `projects` \
+constraint with an example), `features` (every operation type for `cad_add_feature` with an example), `mesh` (mesh \
+models: import, repair, remesh, UV, render, scans), `print` (preparing for 3D printing), `projects` \
 (open, save, undo). Without a topic it returns the overview and the list of topics. Example: {\"topic\": \"cad\"}.",
     input: || object(&[("topic", one_of("Guide topic", &topic_names()), false)]),
     effect: Effect::Read,

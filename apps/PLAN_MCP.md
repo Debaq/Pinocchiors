@@ -59,11 +59,11 @@ con las mismas herramientas:
 ## Hoja de ruta
 
 - Hecho: M0, M2, M3, M4 (2026-10-24: CAD completo — diseño, ver y medir, ensambles y
-  planos), M8 modo en vivo, activación desde la app y chat dentro de la app (2026-10-25).
-  M1 en lo que el CAD necesita.
-- **Para después** (decisión del usuario, 2026-10-25): M5 mallas e impresión, M6
-  esqueleto y animación, M7 render y escáner, y M9 pulido. El resto de M1 se hace dentro
-  de cada una.
+  planos), M8 modo en vivo, activación desde la app y chat dentro de la app (2026-10-25),
+  M5 mallas e impresión y M7 render y escaneos (2026-10-25). M1 en lo que el CAD, las
+  mallas y la impresión necesitan.
+- **Falta**: M6 esqueleto y animación, M9 pulido, lo pendiente de M4 (editar las láminas
+  de la app, cotas de detalle, cortes) y cancelar a mitad un comando largo.
 
 ### Próximo (orden propuesto, 2026-10-25)
 
@@ -239,20 +239,56 @@ con las mismas herramientas:
   rechazada, choques y lista, medir en el ensamble (0 mm entre eje y agujero), copias y
   quitar, PDF del ensamble con lista, SVG en tercer ángulo 2:1 con ocultas, sin pisar.
 
-### M5 — Mallas, conversión e impresión ❌
-- `mesh_import`, `mesh_export` (todos los formatos del conversor), `mesh_info`,
-  `mesh_repair`, `mesh_remesh` (simplificar, isótropo, vóxeles, quads, suavizar),
-  `mesh_uv`, `mesh_texture`.
-- `print_check`, `print_orient`, `print_cut`, `print_joints`, `print_hollow`,
-  `print_plates` (exportar placas).
+### M5 — Mallas, conversión e impresión ✅ 2026-10-25
+- Trabajan sobre el modelo del **objeto activo** de la escena. Importar, un escaneo o
+  una pieza del diseño dejan un **objeto nuevo** (los demás quedan): sin ventana el
+  conector lleva la lista de objetos en la interfaz del proyecto como la app (casillero
+  con la interfaz y el historial del que deja de estar activo), así el `.pinocchio`
+  guardado se abre con todos; en vivo lo hace la ventana (`importModel`, `showAiPart`).
+- `mesh_import` (GLB/glTF, OBJ+MTL, STL, PLY, texturas extra), `mesh_from_part` (pieza
+  de una pestaña de diseño → objeto `cad` con su huella; otra vez actualiza el mismo),
+  `mesh_info` (medidas Z arriba, volumen, cerrado, arista media, objetos; `diagnose`
+  cuenta defectos), `mesh_repair`, `mesh_remesh` (simplify, smooth, isotropic, voxel,
+  quads), `mesh_uv` (desplegar y hornear), `mesh_export` (GLB/glTF con Draco y
+  simplificado, OBJ, STL, PLY, 3MF, USDZ/USDA; no pisa sin `overwrite`).
+- `print_check` (impresora y material por nombre o medidas: estanco, paredes, voladizos
+  y soporte, si cabe y cuántas piezas, gramos), `print_scale` (factor, caja, por eje o
+  volumen), `print_orient` (apoya en la mejor cara: `placement_floor` en Rust, como
+  `floorMatrix`), `print_cut` (grid, optimal, zlayers, manual con planos),
+  `print_joints` (7 formas, holgura por ajuste), `print_plates` (camas, vaciado con
+  drenaje, contracción) y `print_prepare` (todo en un paso con informe por paso).
+  `print_hollow` quedó dentro de `print_plates`/`print_prepare` (`hollow_wall`).
+- `view` con `show: "model"` (aristas vivas, sin números) o `"pieces"` (un color por
+  pieza): `mcp_model_mesh` arma la malla en el formato de `cad_mesh`.
+- App: `analyze_mesh`, `repair_mesh` y `unwrap_original_mesh` con su `*_impl` sin
+  `AppHandle`; al dispatch se suman reparar, diagnósticos, UV, impresión (verificar,
+  orientar, uniones, material, placas, todo en uno), `placement_floor` y
+  `workspace_summary` con el objeto activo y si hay retopología.
+- Efecto nuevo `Model`: sin ventana se deshace como `Change`; en vivo la app copia el
+  modelo al empezar el turno (`take_snapshot`) y al terminar la ventana lo recarga y
+  pone el paso en su deshacer (`adoptAiModelChange`); si falla, vuelve la copia. El
+  deshacer del conector guarda también la interfaz del proyecto de antes (`Before`).
+- Pendiente: `mesh_texture` (editar texturas) y las pieles imprimibles; elegir otro
+  objeto activo por nombre; los pasos de la IA no se rehacen solos si cambia la pieza
+  del diseño de la que sale el objeto (la app sí rehace los suyos).
+- Pruebas `tests/mesh.rs`: cubo que no cabe → piezas, uniones, placas sin pisar y
+  deshacer; malla abierta → diagnóstico, reparar, remallar, vista, exportar; escalar y
+  apoyar; cada importación es un objeto y `undo` lo quita; el proyecto guardado conserva
+  los objetos; render; nube de puntos → malla; pieza CAD → objeto (con OCCT).
 
 ### M6 — Esqueleto, pesos, pose y animación ❌
 - `rig_skeleton` (plantilla o cuerpo por partes), `rig_fit`, `rig_weights`,
   `rig_pose` (por hueso, IK), `anim_keys`, `anim_export` (GLB, FBX vía conversor, USDZ).
 
-### M7 — Render y escáner ❌
-- `render_image` (GeppettoRay: cámara, luces, materiales, tamaño), `scan_import`
-  (nubes y escaneos guardados; el control del escáner físico queda fuera).
+### M7 — Render y escáner ✅ 2026-10-25
+- `render_image`: GeppettoRay sobre el modelo activo, de una vez (`render_view_impl`,
+  sin el trabajo en segundo plano de la app), cámara que encuadra todo desde una vista o
+  azimut/elevación, fondo de estudio, blanco, transparente o de color, entorno HDR
+  incluido (studio, loft, sky, overcast, sunset), calidad draft/normal/high; devuelve la
+  imagen y, con `path`, la guarda. Avanza por pasadas.
+- `scan_import`: nube PLY guardada → malla (MLS o Poisson, tapa agujeros, color horneado)
+  como objeto nuevo (`mesh_cloud_file_impl`; en vivo, comando `scan_mesh_file` desde la
+  ventana). El control del escáner físico queda fuera.
 
 ### M8 — Modo en vivo ✅ 2026-10-25
 - Puente en la app (`mcp/live.rs`): con «Permitir que una IA maneje esta ventana»

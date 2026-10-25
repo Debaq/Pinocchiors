@@ -563,7 +563,16 @@ export const App: Component = () => {
   const inDesign = () => pipeline.workspace()?.id === "design";
   onMount(() => void cad.init().catch(() => {}));
   // Modo en vivo del conector MCP: la IA maneja esta ventana por turnos
-  onMount(() => onCleanup(startMcpLive(cad, cadUi, (m) => setStatusMessage(m))));
+  onMount(() =>
+    onCleanup(
+      startMcpLive(cad, cadUi, (m) => setStatusMessage(m), {
+        adopt: adoptAiModelChange,
+        import: (path, textures) => importModel(path, textures),
+        scan: importScanFile,
+        usePart: showAiPart,
+      })
+    )
+  );
   /** Chat con la IA (Claude Code instalado, en modo en vivo) */
   const [chatOpen, setChatOpen] = createSignal(false);
   // Dibujando un sketch, el panel muestra lo elegido y sus restricciones
@@ -2416,6 +2425,30 @@ export const App: Component = () => {
     await restoreProjectUi(ui[side], true);
   };
 
+  // ─── Modo en vivo: lo que la IA hace con el modelo ───────────────────────
+  /** La IA cambió el modelo: se recarga lo que dibuja el visor y su paso queda en el deshacer (copia `id` del backend) */
+  const adoptAiModelChange = async (id: number, title: string) => {
+    const before = projectUi(false);
+    const summary = await invoke<{ model: { vertices: number; faces: number } | null; skeleton: string | null; rigged: boolean; retopology: boolean }>("workspace_summary");
+    const ui = JSON.parse(before || "{}");
+    ui.model = summary.model !== null;
+    ui.meshInfo = { ...ui.meshInfo, vertices: summary.model?.vertices ?? 0, faces: summary.model?.faces ?? 0 };
+    ui.skeleton = { ...ui.skeleton, loaded: summary.skeleton !== null };
+    ui.autorig = { ...ui.autorig, complete: summary.rigged };
+    ui.retopology = { ...ui.retopology, loaded: summary.retopology };
+    await restoreProjectUi(JSON.stringify(ui), true);
+    snapshotUi.set(id, { before, after: projectUi(false) });
+    await history.execute(title, { kind: "snapshot", data: { id, ops: [] } }, { applied: true });
+  };
+
+  /** La IA pide la malla de una pieza del diseño: su objeto queda activo */
+  const showAiPart = async (studio: number, part: PartId) => {
+    const found = objects().find((o) => isCadObject(o) && studioOf(o) === studio && partKey(o.source.part) === partKey(part));
+    const id = found?.id ?? (await newObject(t("Pieza"), { kind: "cad", studio, part }));
+    await activateObject(id, true);
+    if (activeObjectId() !== id || !meshLoaded()) throw new Error("the part could not be turned into a mesh in the app (is its design tab still there?)");
+  };
+
   /** Modelo nuevo: historial nuevo (y sin copias del anterior) */
   const resetHistory = () => {
     dropSnapshotsOf(history.save());
@@ -2699,13 +2732,23 @@ export const App: Component = () => {
       }
       const filePath = models[0];
       const textures = files.filter((f) => f !== filePath && TEXTURE_FILE_EXTENSIONS.includes(extensionOf(f)));
-      const name = filePath.split(/[\\/]/).pop() ?? filePath;
       if (peekBeforeImport() && !(await confirmImport(filePath))) return;
-      setStatusMessage(t("Importando {name}...", { name }));
+      await importModel(filePath, textures);
+      pipeline.setActiveStep(opts.then ?? "structure");
+    } catch (e) {
+      console.error("Import error:", e);
+      setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
+      setProgress(undefined);
+    }
+  };
 
-      // El modelo importado es un objeto nuevo de la escena (los demás quedan)
-      const target = await objectForNewModel(name);
-      setSwitching(true);
+  /** Importa `filePath` como un objeto nuevo de la escena (los demás quedan); si falla, lanza el error */
+  const importModel = async (filePath: string, textures: string[]) => {
+    const name = filePath.split(/[\\/]/).pop() ?? filePath;
+    setStatusMessage(t("Importando {name}...", { name }));
+    const target = await objectForNewModel(name);
+    setSwitching(true);
+    try {
       let info: MeshInfo;
       try {
         info = await busy(t("Importando {name}...", { name }), () =>
@@ -2729,11 +2772,28 @@ export const App: Component = () => {
         setStatusMessage(loaded);
         watchEditMesh(loaded);
       }
-      pipeline.setActiveStep(opts.then ?? "structure");
-    } catch (e) {
-      console.error("Import error:", e);
-      setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) }));
-      setProgress(undefined);
+      return info;
+    } finally {
+      setSwitching(false);
+    }
+  };
+
+  /** Malla una nube de puntos PLY guardada como objeto nuevo (lo pide la IA en vivo); si falla, lanza el error */
+  const importScanFile = async (path: string, settings: unknown) => {
+    const name = path.split(/[\\/]/).pop() ?? path;
+    const target = await objectForNewModel(name);
+    setSwitching(true);
+    try {
+      let r: { info: MeshInfo; points: number };
+      try {
+        r = await busy(t("Reconstruyendo la malla..."), () => invoke<{ info: MeshInfo; points: number }>("scan_mesh_file", { path, settings, onProgress: progressChannel() }));
+      } catch (e) {
+        if (target.created) await removeObject(target.id);
+        throw e;
+      }
+      await showNewModel(r.info, t("Escaneo {name}", { name }));
+      setFileName(name);
+      return r;
     } finally {
       setSwitching(false);
     }

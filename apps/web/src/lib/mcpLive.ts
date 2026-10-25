@@ -11,7 +11,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { createSignal } from "solid-js";
-import type { CadDocument, CadStore } from "./cad";
+import type { CadDocument, CadStore, PartId } from "./cad";
 import type { CadUi } from "./cadUi";
 import { t } from "./i18n";
 import { createPersisted } from "./ui-state";
@@ -64,6 +64,22 @@ export function aiLabel(tool: string): string {
     asm_mate_edit: () => t("Cambiando una unión"),
     asm_check: () => t("Revisando el ensamble"),
     drawing_export: () => t("Haciendo el plano"),
+    mesh_import: () => t("Importando un modelo"),
+    mesh_from_part: () => t("Pasando una pieza a malla"),
+    mesh_info: () => t("Mirando la malla"),
+    mesh_repair: () => t("Reparando la malla"),
+    mesh_remesh: () => t("Remallando"),
+    mesh_uv: () => t("Desplegando UV"),
+    mesh_export: () => t("Exportando la malla"),
+    print_check: () => t("Revisando si se puede imprimir"),
+    print_scale: () => t("Escalando para imprimir"),
+    print_orient: () => t("Orientando para imprimir"),
+    print_cut: () => t("Cortando en piezas"),
+    print_joints: () => t("Poniendo uniones"),
+    print_plates: () => t("Exportando las placas"),
+    print_prepare: () => t("Preparando para imprimir"),
+    render_image: () => t("Renderizando"),
+    scan_import: () => t("Importando un escaneo"),
   };
   return labels[tool]?.() ?? tool;
 }
@@ -92,11 +108,23 @@ export function busyReason(cad: CadStore, ui: CadUi): string | undefined {
   return undefined;
 }
 
+/** Lo que la ventana hace por la IA con el modelo de malla (vive en App) */
+export interface LiveModelHooks {
+  /** La IA cambió el modelo: recargarlo y poner su paso (copia `id` del backend) en el deshacer */
+  adopt: (id: number, title: string) => Promise<void>;
+  /** Importar un archivo como objeto nuevo (lanza si falla) */
+  import: (path: string, textures: string[]) => Promise<unknown>;
+  /** Mallar una nube de puntos PLY como objeto nuevo (lanza si falla) */
+  scan: (path: string, settings: unknown) => Promise<unknown>;
+  /** Dejar activo el objeto de una pieza del diseño, con su malla */
+  usePart: (studio: number, part: PartId) => Promise<void>;
+}
+
 /** Sin pasos durante este rato, un cliente de afuera (no el chat) terminó */
 const IDLE_MS = 30_000;
 
 /** Atiende al backend; devuelve con qué dejar de escuchar */
-export function startMcpLive(cad: CadStore, ui: CadUi, notify: (message: string) => void): () => void {
+export function startMcpLive(cad: CadStore, ui: CadUi, notify: (message: string) => void, model: LiveModelHooks): () => void {
   const answer = (id: number, payload: unknown) => void invoke("mcp_live_answer", { id, payload }).catch(() => {});
   // Trabajo de la IA en curso: la pestaña a la que se vuelve (la última que
   // eligió el usuario) y la que quedó a la vista tras el último paso
@@ -126,10 +154,13 @@ export function startMcpLive(cad: CadStore, ui: CadUi, notify: (message: string)
       cad.setAiTurn(e.payload.title || "…");
       answer(e.payload.id, { ok: true });
     }),
-    listen<{ ok: boolean; title: string; changes: { tab: number; before: CadDocument }[] }>("mcp-live://done", async (e) => {
+    listen<{ ok: boolean; title: string; changes: { tab: number; before: CadDocument }[]; model: number | null }>("mcp-live://done", async (e) => {
       const before = cad.tabs().active;
       try {
         await cad.adoptExternal(e.payload.ok ? e.payload.changes : []);
+        if (e.payload.ok && e.payload.model != null) await model.adopt(e.payload.model, t("IA: {title}", { title: aiLabel(e.payload.title) }));
+      } catch (err) {
+        notify(String(err));
       } finally {
         cad.setAiTurn(undefined);
         setAiProgress(undefined);
@@ -142,8 +173,21 @@ export function startMcpLive(cad: CadStore, ui: CadUi, notify: (message: string)
       const title = e.payload.title && aiLabel(e.payload.title);
       if (title) notify(e.payload.ok ? t("IA: {title}", { title }) : t("IA: {title} — no se pudo, quedó como estaba", { title }));
     }),
-    listen<{ id: number; what: string }>("mcp-live://ask", async (e) => {
-      const { id, what } = e.payload;
+    listen<{ id: number; what: string; args: { path?: string; textures?: string[]; settings?: unknown; studio?: number; part?: PartId } | null }>("mcp-live://ask", async (e) => {
+      const { id, what, args } = e.payload;
+      if (what === "import" || what === "scan" || what === "use_part") {
+        try {
+          const value =
+            what === "import"
+              ? await model.import(args?.path ?? "", args?.textures ?? [])
+              : what === "scan"
+                ? await model.scan(args?.path ?? "", args?.settings)
+                : await model.usePart(args?.studio ?? 0, args!.part!);
+          return answer(id, { value: value ?? null });
+        } catch (err) {
+          return answer(id, { error: String(err) });
+        }
+      }
       if (what === "selection") {
         const tab = cad.activeTab();
         return answer(id, { value: { tab: tab ? { id: tab.id, name: tab.name } : null, picks: ui.picks() } });
