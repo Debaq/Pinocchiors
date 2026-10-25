@@ -67,9 +67,11 @@ con las mismas herramientas:
 
 ### Próximo (orden propuesto, 2026-10-25)
 
-1. ❌ **Pestaña de la IA a la vista en vivo**: durante su turno la ventana muestra la
-   pestaña donde trabaja la IA y al terminar vuelve a la del usuario, si él no se movió
-   (hoy a veces salta entre pasos; `cad_set_tab_document` ya escribe en la correcta).
+1. ✅ **Pestaña de la IA a la vista en vivo** (2026-10-25): cada herramienta activa su
+   pestaña en el motor y la ventana la sigue (suelta la selección, como un clic en otra);
+   al terminar (fin de la respuesta del chat, o 30 s sin pasos con un cliente de afuera)
+   vuelve a la última que eligió el usuario, si después del último paso no se movió ni
+   está editando (`mcpLive.ts`).
 2. ❌ **Errores del chat juntados**: el chat anota cada error de herramienta (herramienta,
    mensaje, cuántas veces) para ver cuáles se repiten; cada uno se arregla en la
    herramienta, no en el prompt (ver M9).
