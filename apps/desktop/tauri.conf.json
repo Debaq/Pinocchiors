@@ -29,13 +29,15 @@
         "label": "splash",
         "url": "splash.html",
         "title": "Pinocchio",
-        "width": 520,
-        "height": 300,
+        "width": 560,
+        "height": 336,
         "resizable": false,
         "decorations": false,
         "center": true,
         "skipTaskbar": true,
-        "backgroundColor": "#0b0b0d"
+        "transparent": true,
+        "shadow": false,
+        "backgroundColor": "#00000000"
       }
     ],
     "security": {

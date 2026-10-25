@@ -4,38 +4,61 @@
     <meta charset="UTF-8" />
     <title>Pinocchio</title>
     <!-- Ventana chica sin bordes mientras carga la principal. La cierra el
-         comando app_ready (apps/desktop/src/lib.rs) -->
+         comando app_ready (apps/desktop/src/lib.rs). Es la misma tarjeta que
+         la pantalla de inicio (WelcomeScreen): esquinas, borde, sombra y los
+         colores del tema guardado; la ventana es transparente alrededor -->
+    <script>
+      // Tema antes del primer cuadro: el guardado por la app (lib/theme.ts), o el del sistema
+      (function () {
+        var themes = ["dark", "graphite", "nord", "warm", "light", "sepia"];
+        var saved = "dark";
+        try { saved = JSON.parse(localStorage.getItem("pinocchio.ui.settings.theme")) || "dark"; } catch (e) {}
+        if (saved === "system") saved = window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+        document.documentElement.dataset.theme = themes.indexOf(saved) >= 0 ? saved : "dark";
+      })();
+    </script>
+    <link rel="stylesheet" href="/src/styles/app.css" />
     <style>
-      html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0b0d; }
-      body {
-        box-sizing: border-box; border: 1px solid #26231f;
-        display: flex; align-items: center; gap: 28px; padding: 0 40px 0 28px;
-        color: #f6f1e8; font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-        user-select: none; cursor: default;
+      /* Alrededor de la tarjeta, transparente (la sombra se ve sobre el escritorio) */
+      html, body { margin: 0; height: 100%; overflow: hidden; background: transparent !important; }
+      body { user-select: none; cursor: default; }
+      .card {
+        position: absolute; inset: 18px; display: flex; overflow: hidden;
+        border-radius: 16px; border: 1px solid var(--color-border);
+        background: var(--color-bg-darker);
+        box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.5);
       }
-      body > svg { width: auto; height: 236px; flex: none; }
-      main { flex: 1; display: flex; flex-direction: column; }
-      .name { font-size: 30px; font-weight: 700; letter-spacing: -0.02em; line-height: 1; }
-      .tagline { margin-top: 8px; font-size: 12px; line-height: 1.4; color: #a8998a; }
-      .loading { margin-top: 36px; font-size: 11px; color: #a8998a; }
-      .bar { margin-top: 8px; height: 2px; border-radius: 1px; background: #24211e; overflow: hidden; }
+      .lamina {
+        width: 44%; flex: none; background: var(--color-splash);
+        display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 18px;
+      }
+      .lamina > svg { width: auto; height: 170px; }
+      .name { margin-top: 10px; font-size: 24px; font-weight: 700; letter-spacing: -0.02em; line-height: 1; color: var(--color-splash-text); }
+      .tagline { margin-top: 4px; font-size: 11px; line-height: 1.35; text-align: center; color: var(--color-splash-muted); }
+      main { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; padding: 24px; }
+      .loading { font-size: 12px; color: var(--color-text-muted); }
+      .bar { margin-top: 10px; height: 3px; border-radius: 2px; background: var(--color-surface); overflow: hidden; }
       .bar::after {
-        content: ""; display: block; width: 35%; height: 100%; background: #e9a93c;
+        content: ""; display: block; width: 35%; height: 100%; background: var(--color-accent);
         animation: bar 1.2s ease-in-out infinite;
       }
       @keyframes bar { from { transform: translateX(-100%); } to { transform: translateX(290%); } }
-      .version { position: fixed; right: 14px; bottom: 10px; font: 10px ui-monospace, monospace; color: #5f574f; }
+      .version { position: absolute; right: 14px; bottom: 10px; font: 10px ui-monospace, monospace; color: var(--color-text-dim); }
     </style>
   </head>
   <body>
-    <!-- logo -->
-    <main>
-      <div class="name">Pinocchio</div>
-      <div class="tagline" data-es="Escanear, reparar, animar<br />y fabricar modelos 3D" data-en="Scan, repair, animate<br />and fabricate 3D models">Escanear, reparar, animar<br />y fabricar modelos 3D</div>
-      <div class="loading" data-es="Cargando…" data-en="Loading…">Cargando…</div>
-      <div class="bar"></div>
-    </main>
-    <div class="version">%VITE_APP_VERSION%</div>
+    <div class="card">
+      <div class="lamina">
+        <!-- logo -->
+        <div class="name">Pinocchio</div>
+        <div class="tagline" data-es="Escanear, reparar, animar<br />y fabricar modelos 3D" data-en="Scan, repair, animate<br />and fabricate 3D models">Escanear, reparar, animar<br />y fabricar modelos 3D</div>
+      </div>
+      <main>
+        <div class="loading" data-es="Cargando…" data-en="Loading…">Cargando…</div>
+        <div class="bar"></div>
+      </main>
+      <div class="version">%VITE_APP_VERSION%</div>
+    </div>
     <!-- Mismo idioma que la app (lib/i18n.ts): la elección guardada o, si es
          "Según el sistema", el del sistema; sin soporte, inglés. Comparte
          localStorage con la ventana principal -->
