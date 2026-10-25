@@ -1,7 +1,7 @@
 //! Quién ejecuta los comandos: el motor propio del conector (sin ventana) o,
 //! en el modo en vivo, la app abierta. Las herramientas no saben cuál es.
 
-use crate::cad::bridge::{try_dispatch, Reply as AppReply};
+use crate::cad::bridge::{try_dispatch_with, Reply as AppReply};
 use crate::AppState;
 use std::sync::Mutex;
 
@@ -44,7 +44,12 @@ pub trait Backend: Send + Sync {
     fn mode(&self) -> Mode;
     /// Ejecuta un comando de la app por nombre, con los argumentos como los
     /// manda el frontend
-    fn call(&self, cmd: &str, args: Value) -> Result<Reply, String>;
+    fn call(&self, cmd: &str, args: Value) -> Result<Reply, String> {
+        self.call_with(cmd, args, &|_, _| {})
+    }
+    /// Como [`call`](Self::call), con el avance de los comandos largos
+    /// (fracción de 0 a 1 y qué está haciendo)
+    fn call_with(&self, cmd: &str, args: Value, progress: &(dyn Fn(f64, &str) + Sync)) -> Result<Reply, String>;
     /// Copia de todo el estado, para deshacer
     fn snapshot(&self) -> Result<Vec<u8>, String>;
     fn restore(&self, snapshot: &[u8]) -> Result<(), String>;
@@ -83,8 +88,8 @@ impl Backend for Local {
         Mode::Standalone
     }
 
-    fn call(&self, cmd: &str, args: Value) -> Result<Reply, String> {
-        match try_dispatch(&self.state, cmd, &args) {
+    fn call_with(&self, cmd: &str, args: Value, progress: &(dyn Fn(f64, &str) + Sync)) -> Result<Reply, String> {
+        match try_dispatch_with(&self.state, cmd, &args, progress) {
             Some(Ok(AppReply::Json(v))) => Ok(Reply::Json(v)),
             Some(Ok(AppReply::Bytes(b))) => Ok(Reply::Bytes(b)),
             Some(Err(e)) => Err(e),
@@ -116,9 +121,13 @@ impl Auto {
 
     /// La conexión con la app (se reintenta si se cortó)
     fn live_request(&self, req: Value) -> Result<Value, String> {
+        self.live_request_with(req, &|_, _| {})
+    }
+
+    fn live_request_with(&self, req: Value, progress: &(dyn Fn(f64, &str) + Sync)) -> Result<Value, String> {
         let mut live = self.live.lock().unwrap();
         let client = live.as_ref().ok_or("Pinocchio closed the connection")?;
-        let out = client.request(req);
+        let out = client.request_with(req, progress);
         if out.as_ref().is_err_and(|e| e.contains("closed")) {
             *live = None;
         }
@@ -146,11 +155,11 @@ impl Backend for Auto {
         *self.current.lock().unwrap()
     }
 
-    fn call(&self, cmd: &str, args: Value) -> Result<Reply, String> {
+    fn call_with(&self, cmd: &str, args: Value, progress: &(dyn Fn(f64, &str) + Sync)) -> Result<Reply, String> {
         if self.mode() == Mode::Standalone {
-            return self.local.call(cmd, args);
+            return self.local.call_with(cmd, args, progress);
         }
-        let r = self.live_request(serde_json::json!({ "op": "call", "cmd": cmd, "args": args }))?;
+        let r = self.live_request_with(serde_json::json!({ "op": "call", "cmd": cmd, "args": args }), progress)?;
         match r.get("bytes").and_then(Value::as_str) {
             Some(b) => {
                 use base64::Engine;

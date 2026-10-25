@@ -3226,16 +3226,57 @@ pub mod bridge {
     /// Como [`dispatch`], pero `None` si el comando no existe (el conector MCP
     /// avisa en vez de seguir con un `null`).
     pub fn try_dispatch(state: &AppState, cmd: &str, args: &Value) -> Option<Result<Reply, String>> {
-        match run(state, cmd, args) {
+        try_dispatch_with(state, cmd, args, &|_, _| {})
+    }
+
+    /// Como [`try_dispatch`], con el avance de los comandos largos (fracción
+    /// de 0 a 1 y qué está haciendo) en `progress`
+    pub fn try_dispatch_with(state: &AppState, cmd: &str, args: &Value, progress: &(dyn Fn(f64, &str) + Sync)) -> Option<Result<Reply, String>> {
+        let out = if REPORTS_PROGRESS.contains(&cmd) {
+            // El `Channel` de Tauri pide algo `'static`: el comando corre en otro
+            // hilo y este le pasa a `progress` lo que va mandando
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::scope(|s| {
+                let worker = s.spawn(move || run(state, cmd, args, &Ticks(Some(tx))));
+                for (fraction, message) in rx {
+                    progress(fraction, &message);
+                }
+                worker.join().unwrap_or_else(|p| std::panic::resume_unwind(p))
+            })
+        } else {
+            run(state, cmd, args, &Ticks(None))
+        };
+        match out {
             Err(e) if e == UNKNOWN => None,
             r => Some(r),
+        }
+    }
+
+    /// Comandos que avisan su avance por un `Channel`
+    const REPORTS_PROGRESS: &[&str] = &["import_model", "cad_part_to_model", "remesh_preview", "remesh_apply"];
+
+    /// Hacia dónde va el avance de un comando (`None`: no se usa)
+    struct Ticks(Option<std::sync::mpsc::Sender<(f64, String)>>);
+
+    impl Ticks {
+        fn channel(&self) -> Channel<Progress> {
+            let Some(tx) = self.0.clone() else { return Channel::new(|_| Ok(())) };
+            Channel::new(move |body| {
+                if let tauri::ipc::InvokeResponseBody::Json(text) = body
+                    && let Ok(p) = serde_json::from_str::<Value>(&text)
+                {
+                    let message = p["message"].as_str().filter(|m| !m.is_empty()).or(p["stage"].as_str()).unwrap_or("").to_string();
+                    let _ = tx.send((p["percent"].as_f64().unwrap_or(0.0) / 100.0, message));
+                }
+                Ok(())
+            })
         }
     }
 
     /// Error de `run` para un comando que no existe (no lo puede dar un comando real)
     const UNKNOWN: &str = "\u{0}comando desconocido";
 
-    fn run(state: &AppState, cmd: &str, args: &Value) -> Result<Reply, String> {
+    fn run(state: &AppState, cmd: &str, args: &Value, ticks: &Ticks) -> Result<Reply, String> {
         match cmd {
             "cad_status" => ok(status_impl(state)),
             "cad_new" => ok(new_impl(state)?),
@@ -3394,7 +3435,7 @@ pub mod bridge {
             "cad_scan_mold" => ok(scan_mold_impl(state, arg(args, "options")?)?),
             "cad_scan_add" => ok(scan_add_impl(state, arg(args, "feature")?, arg::<Option<ScanPickOptions>>(args, "options")?.unwrap_or_default())?),
             "import_model" => {
-                let channel = Channel::new(|_| Ok(()));
+                let channel = ticks.channel();
                 ok(crate::commands::import_model_impl(arg(args, "path")?, vec![], &channel, state)?)
             }
             "get_mesh_data" => crate::commands::get_mesh_data_impl(state).map(|d| Reply::Bytes(d.to_bytes())),
@@ -3414,7 +3455,7 @@ pub mod bridge {
                 ok(scene.materials.iter().map(crate::structure::material_info).collect::<Vec<_>>())
             }
             "cad_part_to_model" => {
-                let channel = Channel::new(|_| Ok(()));
+                let channel = ticks.channel();
                 let studio: Option<TabId> = arg(args, "studio")?;
                 ok(part_to_model_impl(state, arg(args, "part")?, studio.unwrap_or(0), arg(args, "known")?, &channel)?)
             }
@@ -3444,7 +3485,7 @@ pub mod bridge {
             "get_placement_info" => ok(crate::placement::placement_info(state)?),
             "apply_placement" => ok(crate::placement::apply_placement_impl(state, arg(args, "matrix")?)?),
             "get_supported_formats" => ok(crate::commands::get_supported_formats()),
-            "remesh_preview" => ok(crate::remesh::preview_impl(state, arg(args, "params")?, &Channel::new(|_| Ok(())))?),
+            "remesh_preview" => ok(crate::remesh::preview_impl(state, arg(args, "params")?, &ticks.channel())?),
             "get_remesh_preview_data" => crate::remesh::preview_bytes(state).map(Reply::Bytes),
             "remesh_discard" => {
                 *state.remesh_preview.lock().unwrap() = None;
@@ -3452,7 +3493,7 @@ pub mod bridge {
             }
             "remesh_apply" => {
                 let options = args.get("options").cloned().map(serde_json::from_value).transpose().map_err(|e| e.to_string())?;
-                ok(crate::remesh::apply_impl(state, arg(args, "params")?, options.unwrap_or_default(), &Channel::new(|_| Ok(())))?)
+                ok(crate::remesh::apply_impl(state, arg(args, "params")?, options.unwrap_or_default(), &ticks.channel())?)
             }
             "remesh_info" => ok(crate::remesh::info_impl(state)?),
             "export_model" => ok(crate::commands::export_model_impl(arg(args, "config")?, state)?),

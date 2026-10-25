@@ -79,9 +79,13 @@ con las mismas herramientas:
    que va entre comillas, con cuenta, fechas, último ejemplo y argumentos. Configuración ▸
    Conector para IA ▸ Errores de la IA: los más repetidos, Copiar (tabla Markdown para
    revisarlos) y Borrar. Cada uno se arregla en la herramienta, no en el prompt (ver M9).
-3. ❌ **Avance real de los comandos largos** (M1): hoy el `Channel` del `dispatch` lo
-   descarta; pasa a `notifications/progress` y al indicador en vivo. Hace falta antes de
-   M5 para que la IA no crea que se colgó.
+3. ✅ **Avance real de los comandos largos** (2026-10-25, M1): `try_dispatch_with` le da a
+   los comandos con `Channel` (importar, pieza a malla, remallar) uno que reenvía su avance
+   (el comando corre en otro hilo con `thread::scope`, porque el `Channel` pide `'static`);
+   `Backend::call_with` lo lleva a `notifications/progress`. En vivo el puente manda
+   líneas `{"progress", "message"}` antes de la respuesta y la ventana lo muestra en el
+   indicador («IA: Importando… 42 %»). Falta, con M5: cancelar a mitad un comando largo
+   (hoy la cancelación se ve entre comandos).
 4. ❌ **Prueba real**: app Tauri abierta + cliente de IA de verdad (chat y Claude Code),
    cubre M8 y los tres puntos anteriores.
 
@@ -161,7 +165,7 @@ con las mismas herramientas:
   `project_save` (no pisa otro archivo sin `overwrite`), `undo`, `redo`.
 - Falta: el resto de los comandos sin `AppHandle` se separa en cada fase, cuando la
   herramienta lo necesita (rig, pesos, UV, texturas, render, nube), y el avance real de
-  los comandos largos (hoy el `Channel` del `dispatch` lo descarta).
+  los comandos largos (hecho 2026-10-25, Próximo 3).
 
 ### M2 — Diseño CAD ✅ 2026-10-24
 - Hecho: `cad_tab_create` / `cad_tab_rename` / `cad_tab_delete`; `cad_design` (operaciones
@@ -285,6 +289,6 @@ con las mismas herramientas:
 - Separar comandos de `AppHandle` toca código compartido con la otra sesión: se hace por
   archivo, cuando una herramienta lo necesita, y con commits chicos.
 - Las operaciones largas (rig, remallado, render) necesitan avance y cancelación para
-  que la IA no crea que se colgó (Próximo 3).
+  que la IA no crea que se colgó: el avance está (Próximo 3); falta cancelar a mitad.
 - ~~Modo en vivo con el frontend como dueño del deshacer~~: resuelto en M8 (la ventana
   recibe el documento de antes y lo pone en su deshacer).

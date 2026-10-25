@@ -24,8 +24,10 @@ export interface LiveStatus {
 /** Lo que eligió el usuario (se recuerda entre sesiones) */
 const [liveWanted, setLiveWanted] = createPersisted("mcp.live", false);
 const [live, setLive] = createSignal<LiveStatus>({ on: false, paused: false, port: null });
+/** Avance del comando largo que corre la IA (0..1 y qué hace), mientras dura su turno */
+const [aiProgress, setAiProgress] = createSignal<{ fraction: number; message: string }>();
 
-export { live, liveWanted };
+export { aiProgress, live, liveWanted };
 
 /** Lo que está haciendo la IA, por el nombre de la herramienta, para mostrarlo */
 export function aiLabel(tool: string): string {
@@ -129,6 +131,7 @@ export function startMcpLive(cad: CadStore, ui: CadUi, notify: (message: string)
         await cad.adoptExternal(e.payload.ok ? e.payload.changes : []);
       } finally {
         cad.setAiTurn(undefined);
+        setAiProgress(undefined);
       }
       // La IA trabajó en otra pestaña: la ventana la sigue
       if (cad.tabs().active !== before) leaveTab(ui);
@@ -148,6 +151,7 @@ export function startMcpLive(cad: CadStore, ui: CadUi, notify: (message: string)
       if (await cad.aiUndo(back)) return answer(id, { value: back ? "the AI's last change" : "the AI's last undone change" });
       answer(id, { error: back ? "the last change in the app is the user's (or there is none): the AI only undoes its own steps" : "there is no undone AI step to redo" });
     }),
+    listen<{ fraction: number; message: string }>("mcp-live://progress", (e) => setAiProgress(e.payload)),
     // El chat de la app dice cuándo termina su respuesta
     listen<{ kind: string }>("ai-chat://event", (e) => {
       chatting = e.payload.kind !== "done";

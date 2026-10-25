@@ -130,13 +130,13 @@ impl Ctx<'_> {
     /// Un comando de la app; devuelve su JSON
     pub fn call(&self, cmd: &str, args: Value) -> Result<Value, Fail> {
         self.check_cancel()?;
-        Ok(self.session.backend.call(cmd, args)?.json())
+        Ok(self.session.backend.call_with(cmd, args, self.progress)?.json())
     }
 
     /// Un comando de la app que devuelve bytes (mallas, imágenes)
     pub fn call_bytes(&self, cmd: &str, args: Value) -> Result<Vec<u8>, Fail> {
         self.check_cancel()?;
-        match self.session.backend.call(cmd, args)? {
+        match self.session.backend.call_with(cmd, args, self.progress)? {
             crate::mcp::backend::Reply::Bytes(b) => Ok(b),
             crate::mcp::backend::Reply::Json(v) => Err(Fail::new(format!("{cmd} returned {v} instead of data"))),
         }

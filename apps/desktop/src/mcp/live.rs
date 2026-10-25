@@ -12,7 +12,8 @@
 //! deshacer por pestaña).
 //!
 //! Mensajes: una línea JSON por pedido, `{"token", "op", ...}`; respuesta
-//! `{"ok": true, "value" | "bytes"}` o `{"ok": false, "error"}`.
+//! `{"ok": true, "value" | "bytes"}` o `{"ok": false, "error"}`. Antes de la
+//! respuesta, un comando largo manda su avance: `{"progress": 0..1, "message"}`.
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -27,13 +28,14 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::cad::bridge::{try_dispatch, Reply};
+use crate::cad::bridge::{try_dispatch_with, Reply};
 use crate::AppState;
 
 /// Eventos a la ventana
 pub const EV_TURN: &str = "mcp-live://turn";
 pub const EV_DONE: &str = "mcp-live://done";
 pub const EV_ASK: &str = "mcp-live://ask";
+pub const EV_PROGRESS: &str = "mcp-live://progress";
 
 /// Cuánto se espera a que la ventana conteste
 const ANSWER: Duration = Duration::from_secs(15);
@@ -198,7 +200,14 @@ impl Bridge {
         for line in reader.lines() {
             let Ok(line) = line else { break };
             let reply = match serde_json::from_str::<Value>(&line) {
-                Ok(req) if req["token"] == token => self.handle(&req, host, conn, &mut before).unwrap_or_else(|e| json!({ "ok": false, "error": e })),
+                Ok(req) if req["token"] == token => {
+                    // El avance va a la ventana (su indicador) y al conector
+                    let tick = |fraction: f64, message: &str| {
+                        host.emit(EV_PROGRESS, json!({ "fraction": fraction, "message": message }));
+                        let _ = writeln!(&out, "{}", json!({ "progress": fraction, "message": message }));
+                    };
+                    self.handle(&req, host, conn, &mut before, &tick).unwrap_or_else(|e| json!({ "ok": false, "error": e }))
+                }
                 Ok(_) => json!({ "ok": false, "error": "wrong token" }),
                 Err(e) => json!({ "ok": false, "error": format!("invalid JSON: {e}") }),
             };
@@ -215,7 +224,7 @@ impl Bridge {
         }
     }
 
-    fn handle(&self, req: &Value, host: &dyn Host, conn: u64, before: &mut Option<cad_model::Tabs>) -> Result<Value, String> {
+    fn handle(&self, req: &Value, host: &dyn Host, conn: u64, before: &mut Option<cad_model::Tabs>, tick: &(dyn Fn(f64, &str) + Sync)) -> Result<Value, String> {
         let holds = || *self.turn.lock().unwrap() == Some(conn);
         // Apagado: las conexiones abiertas ya no sirven (el conector vuelve a su motor)
         if !self.is_on() {
@@ -254,7 +263,7 @@ impl Bridge {
                     return Err("no turn: call begin first".into());
                 }
                 let cmd = req["cmd"].as_str().unwrap_or("");
-                match try_dispatch(host.state(), cmd, &req["args"]) {
+                match try_dispatch_with(host.state(), cmd, &req["args"], tick) {
                     Some(Ok(Reply::Json(v))) => Ok(json!({ "ok": true, "value": v })),
                     Some(Ok(Reply::Bytes(b))) => Ok(json!({ "ok": true, "bytes": base64::engine::general_purpose::STANDARD.encode(b) })),
                     Some(Err(e)) => Err(e),
@@ -333,17 +342,28 @@ impl Client {
     }
 
     /// Un pedido y su respuesta (`value` o `bytes`)
-    pub fn request(&self, mut req: Value) -> Result<Value, String> {
+    pub fn request(&self, req: Value) -> Result<Value, String> {
+        self.request_with(req, &|_, _| {})
+    }
+
+    /// Como [`request`](Self::request); el avance que manda la app va a `progress`
+    pub fn request_with(&self, mut req: Value, progress: &(dyn Fn(f64, &str) + Sync)) -> Result<Value, String> {
         req["token"] = json!(self.info.token);
         let mut io = self.io.lock().unwrap();
         writeln!(io.1, "{req}").and_then(|_| io.1.flush()).map_err(|e| format!("Pinocchio closed the connection: {e}"))?;
-        let mut line = String::new();
-        io.0.read_line(&mut line).map_err(|e| format!("Pinocchio closed the connection: {e}"))?;
-        if line.is_empty() {
-            return Err("Pinocchio closed the connection".into());
+        loop {
+            let mut line = String::new();
+            io.0.read_line(&mut line).map_err(|e| format!("Pinocchio closed the connection: {e}"))?;
+            if line.is_empty() {
+                return Err("Pinocchio closed the connection".into());
+            }
+            let reply: Value = serde_json::from_str(&line).map_err(|e| e.to_string())?;
+            if let Some(fraction) = reply.get("progress").and_then(Value::as_f64) {
+                progress(fraction, reply["message"].as_str().unwrap_or(""));
+                continue;
+            }
+            return if reply["ok"] == true { Ok(reply) } else { Err(reply["error"].as_str().unwrap_or("error").to_string()) };
         }
-        let reply: Value = serde_json::from_str(&line).map_err(|e| e.to_string())?;
-        if reply["ok"] == true { Ok(reply) } else { Err(reply["error"].as_str().unwrap_or("error").to_string()) }
     }
 }
 
