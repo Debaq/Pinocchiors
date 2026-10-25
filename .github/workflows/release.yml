@@ -23,7 +23,7 @@
 #   - Paquete WASM          converter-wasm (wasm-bindgen --target web)
 #   - latest.json           para que la app se actualice sola (tauri-plugin-updater):
 #                           AppImage, -setup.exe/.msi y .app.tar.gz firmados con
-#                           el secreto TAURI_SIGNING_PRIVATE_KEY (clave pública en
+#                           los secretos TAURI_SIGNING_PRIVATE_KEY y _PASSWORD (pública en
 #                           apps/desktop/tauri.conf.json)
 #
 # Versión de la app: la fecha y hora del commit en UTC como semver
@@ -43,6 +43,10 @@ on:
         type: choice
         options: [linux, windows, macos, linux-windows, linux-macos, windows-macos, todas]
         default: linux
+      cli:
+        description: "También la CLI y el paquete WASM (sin ellos, más rápido)"
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -244,7 +248,8 @@ jobs:
         env:
           # Firma de las actualizaciones (.sig junto a cada instalador)
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+          # Con contraseña: la clave sin contraseña de `signer generate` no firma
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           SEMVER: ${{ needs.version.outputs.semver }}
         run: |
           # La versión y los artefactos de actualización solo acá: un build
@@ -300,6 +305,8 @@ jobs:
   cli:
     name: CLI (${{ matrix.target }})
     needs: [version, test]
+    # A mano se pueden saltar (input `cli`); con tag van siempre
+    if: github.event_name != 'workflow_dispatch' || inputs.cli
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -345,6 +352,8 @@ jobs:
   wasm:
     name: WASM
     needs: [version, test]
+    # A mano se pueden saltar (input `cli`); con tag van siempre
+    if: github.event_name != 'workflow_dispatch' || inputs.cli
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -387,6 +396,8 @@ jobs:
   release:
     name: Publicar release
     needs: [version, desktop, cli, wasm]
+    # CLI y WASM saltados no la frenan; que alguno falle, sí
+    if: ${{ !cancelled() && !failure() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
