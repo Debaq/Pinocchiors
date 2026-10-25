@@ -257,6 +257,14 @@ M5 mallas e impresión, M6 esqueleto y animación, M7 render y escáner y M9 pul
   cualquiera puede): una prueba por herramienta con un pedido en lenguaje natural.
 - Pruebas de punta a punta: un cliente MCP que diseña una pieza, la exporta, importa
   una malla, la repara y la prepara para imprimir.
+- Errores que la IA repite (salen del uso del chat): cada uno es una descripción poco
+  clara o una herramienta que debería aceptar más casos. Se anotan aquí y se arreglan
+  en la herramienta, no en el prompt. Arreglados: `asm_check` sobre una pestaña de
+  diseño (2026-10-25: ahora revisa las piezas entre sí). Por revisar: juntar los
+  errores del chat (tool + mensaje + cuántas veces) para ver cuáles se repiten.
+- Modo en vivo: la ventana a veces cambia de pestaña entre pasos de la IA (cosmético;
+  `cad_set_tab_document` ya escribe en la pestaña correcta). Mostrar la pestaña de la IA
+  durante todo su turno y volver a la del usuario al terminar, si él no se movió.
 
 ## Riesgos
 
