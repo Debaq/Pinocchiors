@@ -138,7 +138,7 @@ export const en_print: Catalog = {
   "Elige una impresora y un material en Fabricar para compensar.": "Choose a printer and a material in Fabricate to compensate.",
   "Compensar los huecos del diseño": "Compensate the design's holes",
   "En Diseñar, los agujeros, las roscas interiores, las tuercas, las arandelas y los ejes y chaveteros de los engranes salen ya más anchos lo que esta impresora los achica. Cambia la medida de lo que ves.": "In Design, holes, internal threads, nuts, washers and the bores and keyways of gears come out already wider by what this printer shrinks them. It changes the size of what you see.",
-  "Contracción del material por eje": "Material shrinkage per axis",
+  "Contracción del material por eje (%)": "Material shrinkage per axis (%)",
   "Factor de holgura": "Clearance factor",
   "Nombre del material": "Material name",
   "Calibrar con piezas de prueba": "Calibrate with test pieces",

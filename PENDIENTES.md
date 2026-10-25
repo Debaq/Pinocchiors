@@ -117,11 +117,15 @@ escaneos y comparación con referencia, atajos reasignables por área
   app real. ✅ Luces e Historial ya usan Hint y los párrafos `leading-relaxed`
   de los paneles laterales pasaron a Hint (quedan avisos de estado y los de
   diálogos, Escáner y Diseñar, fuera del plan).
-- ✅ **Paneles angostos pisaban rótulos con sus campos** (visto el 2026-10-16;
-  arreglado el mismo día en los componentes, sin verlo aún en la app real a
-  1280 px): `NumberInput` y `Num` con rótulo largo ahora envuelven (`flex-wrap`,
-  campo `min-w` propio), `Checkbox` es de bloque (dos casillas seguidas ya no
-  quedan en una línea) y `Select` no desborda las celdas de grilla.
+- ✅ **Paneles angostos pisaban rótulos con sus campos** (visto el 2026-10-16; primer
+  arreglo ese día; revisado el 2026-10-24 montando los paneles reales en Chromium a 192,
+  240, 288 y 448 px de contenido, con un detector de cajas encimadas o fuera del panel):
+  las filas X/Y/Z con rótulo de eje se salían hasta 380 px (volumen de impresión,
+  posición y rotación del esqueleto, medidas en Fabricar) y las grillas de 3 columnas se
+  encimaban. `NumberInput` y `Num` (Diseñar): con rótulo de eje, campo compacto que
+  reparte la fila (`flex-1 min-w-0`); con rótulo largo, el campo y su unidad van juntos
+  (la unidad ya no baja sola). Contracción por eje: el «%» pasa al rótulo. «Auto-fit /
+  Volver al preset» envuelven. Sin encimados en esos anchos; falta verlo en la app Tauri.
 - ✅ Cámara de Diseñar: un sólido de otra escala que la vista heredada del visor
   principal ahora se encuadra solo (`frameIfLost`); falta ver el caso real
   engranes mm + humanoide.

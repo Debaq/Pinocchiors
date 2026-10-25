@@ -88,13 +88,13 @@ export const SkeletonTransformPanel: Component<SkeletonTransformPanelProps> = (p
         </div>
 
         {/* Actions */}
-        <div class="flex gap-2">
+        <div class="flex flex-wrap gap-2">
           <Show when={props.onAutoFit}>
             <Button
               onClick={props.onAutoFit}
               disabled={props.disabled}
               variant="primary"
-              fullWidth
+              class="flex-1 whitespace-nowrap"
             >
               <span class="flex items-center gap-1.5">
                 <Icons.MagicWand size={14} />
@@ -106,7 +106,7 @@ export const SkeletonTransformPanel: Component<SkeletonTransformPanelProps> = (p
             onClick={props.onReset}
             disabled={props.disabled}
             variant="ghost"
-            fullWidth={!props.onAutoFit}
+            class="flex-1 whitespace-nowrap"
           >
             {t("Volver al preset")}
           </Button>

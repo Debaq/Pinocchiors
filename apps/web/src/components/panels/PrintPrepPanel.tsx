@@ -382,12 +382,11 @@ export const PrinterMaterial: Component<{
               min={0}
               max={5}
               step={0.05}
-              suffix="%"
             />
           )}
         </For>
       </div>
-      <p class="text-[10px] text-text-dim">{t("Contracción del material por eje")}</p>
+      <p class="text-[10px] text-text-dim">{t("Contracción del material por eje (%)")}</p>
       <NumberInput
         label={t("Factor de holgura")}
         value={props.material.clearance_factor ?? 1}
