@@ -64,7 +64,30 @@ con las mismas herramientas:
   mallas y la impresión necesitan.
 - M4 completo (2026-10-25): láminas de la app, cortes, detalles, cotas puntuales y
   relaciones de engranes/tornillo.
-- **Falta**: M6 esqueleto y animación, M9 pulido y cancelar a mitad un comando largo.
+- **Pausado aquí (2026-10-25, decisión del usuario).** Claude Code ya carga las
+  herramientas del conector a pedido (búsqueda de herramientas diferidas), así que con
+  él el tamaño de la lista no pesa. Queda para después: M6 (solo en vivo, ver su fase),
+  M9, cancelar a mitad un comando largo y el ahorro de tokens de abajo.
+
+### Ahorro de tokens (trabajo futuro, medido 2026-10-25)
+
+- `tools/list`: 52 herramientas, ~84 KB ≈ 21 000 tokens. Las más pesadas:
+  `drawing_export` y `drawing_sheet` (~1 300 cada una, repiten casi los mismos
+  argumentos), `sketch_create` (~870), `cad_primitive` (~790), `sketch_add` (~725),
+  `print_prepare` (~710), `cad_extrude` (~660), `view` (~640).
+- Donde más cuesta: el chat de la app con proveedores por API (`mcp/agent.rs`) manda las
+  52 funciones en cada paso (hasta 60 por respuesta). La caché de prefijo de algunos
+  proveedores lo abarata, pero igual cuenta. Otros clientes que no difieren
+  herramientas (Cursor, Claude Desktop…) pagan la lista entera en cada pedido.
+- Ideas, de más a menos rendimiento:
+  1. Herramientas por área en `agent.rs`: las básicas siempre y las de CAD, mallas o
+     impresión cuando la tarea las pide (una herramienta que «abre» un área). De
+     ~21 000 a ~5 000–8 000 tokens por paso.
+  2. Descripciones más cortas: los ejemplos largos a la guía (`help`), y
+     `drawing_sheet`/`drawing_export` con un esquema común más corto. ~30 % menos.
+  3. Imágenes más chicas por defecto: `view` 800×600 ≈ 600 tokens; 640×480 la mitad.
+  4. No mandar el resultado dos veces (texto y `structuredContent`) a clientes que le
+     pasan los dos al modelo.
 
 ### Próximo (orden propuesto, 2026-10-25)
 
@@ -288,9 +311,19 @@ con las mismas herramientas:
   apoyar; cada importación es un objeto y `undo` lo quita; el proyecto guardado conserva
   los objetos; render; nube de puntos → malla; pieza CAD → objeto (con OCCT).
 
-### M6 — Esqueleto, pesos, pose y animación ❌
+### M6 — Esqueleto, pesos, pose y animación ❌ (trabajo futuro)
 - `rig_skeleton` (plantilla o cuerpo por partes), `rig_fit`, `rig_weights`,
-  `rig_pose` (por hueso, IK), `anim_keys`, `anim_export` (GLB, FBX vía conversor, USDZ).
+  `rig_pose` (por hueso, IK), `anim_keys`, `anim_export` (GLB, USDZ; el conversor no
+  exporta FBX) y `view` con la pose.
+- Decidido (2026-10-25): **solo con la app abierta (modo en vivo)**. Las herramientas le
+  piden a la ventana que corra sus propias acciones (`handleSkeletonChange`,
+  `handleAutoFit`, `handleAutorig`, pose, `handleInsertKey`, exportar), como `import`
+  y `use_part`: mismo código que a mano, deshacer de la app, la animación sigue en la
+  interfaz y `view` captura el visor con el skinning de la GPU. Sin ventana devuelven
+  un error con la pista de prender el modo en vivo. Evita separar el rig de `AppHandle`
+  en `commands.rs`. Falta: adaptadores en `App.tsx` que devuelvan errores en vez de
+  avisar en la barra, pose y claves por nombre de hueso, exportar a una ruta sin
+  diálogo, y pruebas en Chromium o Tauri real.
 
 ### M7 — Render y escáner ✅ 2026-10-25
 - `render_image`: GeppettoRay sobre el modelo activo, de una vez (`render_view_impl`,
