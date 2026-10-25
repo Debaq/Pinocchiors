@@ -178,12 +178,19 @@ fn scale(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
         "factors" => json!({ "mode": "axes", "factors": args["factors"] }),
         "volume_cm3" => json!({ "mode": "volume", "target_volume": args["volume_cm3"].as_f64().unwrap_or(0.0) * 1000.0 }),
         _ => {
-            // 0 = sin límite: se manda un tope enorme en ese eje
-            let s: Vec<f64> = (0..3).map(|k| args["size"][k].as_f64().unwrap_or(0.0)).map(|v| if v > 0.0 { v } else { 1e9 }).collect();
-            if s.iter().all(|v| *v >= 1e9) {
+            // Factor uniforme para entrar en la caja (agranda o achica); 0 = sin límite en ese eje
+            let now = ctx.call("analyze_print3d", json!({}))?;
+            let factor = (0..3)
+                .filter_map(|k| {
+                    let want = args["size"][k].as_f64().unwrap_or(0.0);
+                    let have = now["dimensions"][k].as_f64().unwrap_or(0.0);
+                    (want > 0.0 && have > 1e-9).then(|| want / have)
+                })
+                .fold(f64::INFINITY, f64::min);
+            if !factor.is_finite() {
                 return Err(Fail::new("`size` needs at least one axis above 0"));
             }
-            json!({ "mode": "fit", "target_size": s })
+            json!({ "mode": "uniform", "factor": factor })
         }
     };
     let before = ctx.call("analyze_print3d", json!({}))?;

@@ -70,8 +70,10 @@ args = ["--mcp"]
 | `cad_parameters` | Parámetros y fórmulas |
 | `cad_export` | STEP, STL, 3MF, OBJ, PLY, GLB |
 | `asm_insert` / `asm_mate` / `asm_instance` / `asm_mate_edit` | Ensambles: poner piezas, unirlas, moverlas |
+| `asm_relation` | Engranes, piñón-cremallera y tornillo entre uniones |
 | `asm_check` | Relaciones, grados libres, choques, holguras y lista de materiales |
-| `drawing_export` | Lámina 2D (PDF/SVG) de un diseño o ensamble, con vista previa |
+| `drawing_export` | Lámina 2D (PDF/SVG) de un diseño o ensamble: cortes, detalles, cotas, lista de materiales; vista previa |
+| `drawing_sheet` | Láminas 2D dentro del proyecto, las que el usuario abre en «Planos 2D» |
 | `mesh_import` / `mesh_from_part` / `scan_import` | Modelo de malla como objeto nuevo: archivo, pieza del diseño o nube de puntos |
 | `mesh_info` | Medidas, triángulos, si es cerrado; con `diagnose`, los defectos |
 | `mesh_repair` / `mesh_remesh` / `mesh_uv` | Reparar, remallar (simplificar, suavizar, isótropo, vóxeles, quads), desplegar UV |

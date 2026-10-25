@@ -3,14 +3,14 @@
 
 use std::collections::BTreeMap;
 
-use cad_model::{Assembly, Document, Instance, Mate, MateKind, PartId};
+use cad_model::{Assembly, Document, Instance, Mate, MateKind, PartId, Relation};
 use serde_json::{json, Value};
 
 use super::cad::{find_part, find_tab, num, vec3};
 use super::{arg_bool, arg_str, Ctx, Effect, Fail, Output, Tool};
 use crate::mcp::schema::{any_object, boolean, id_or_name, integer, number, number_in, object, one_of, point, string, Prop};
 
-pub const TOOLS: &[Tool] = &[INSERT, MATE, INSTANCE, MATE_EDIT, CHECK];
+pub const TOOLS: &[Tool] = &[INSERT, MATE, INSTANCE, MATE_EDIT, RELATION, CHECK];
 
 /// Un ensamble abierto: su pestaña (ya activa) y su documento virtual
 pub(super) struct Asm {
@@ -240,6 +240,9 @@ pub(super) fn describe(ctx: &Ctx, a: &Asm, result: &Value) -> Vec<String> {
             m.b.instance,
             if extra.is_empty() { String::new() } else { format!(" ({})", extra.join(", ")) }
         ));
+    }
+    for (k, r) in asm.relations.iter().enumerate() {
+        lines.push(format!("  relation {k}: {}", relation_text(r)));
     }
     lines.push(solution_text(result).0);
     let rows = bom(ctx, &asm);
@@ -558,6 +561,120 @@ fn mate_edit(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
         return Err(Fail::new(format!("after that change the mates cannot be satisfied: {text}")).hint("nothing was changed; try another value or `flip`"));
     }
     Ok(Output::new(format!("Mate {id}: {}.\n{text}", done.join(", ")), json!({ "tab": a.tab, "mate": id, "solution": result["assembly"]["solution"] })))
+}
+
+// ─── Engranes, cremallera y tornillo ────────────────────────────────────────
+
+fn relation_text(r: &Relation) -> String {
+    match r {
+        Relation::Gear { a, b, ratio, phase, carrier, carrier_ratio } => format!(
+            "gear: mate {b} turns {} × mate {a}{}{}",
+            num(*ratio),
+            if *phase != 0.0 { format!(" + {}°", num(*phase)) } else { String::new() },
+            carrier.map_or(String::new(), |c| format!(" + {} × carrier mate {c}", num(*carrier_ratio)))
+        ),
+        Relation::RackPinion { revolute, slider, per_turn, .. } => format!("rack and pinion: mate {slider} slides {} mm per turn of mate {revolute}", num(*per_turn)),
+        Relation::Screw { cylindrical, pitch, .. } => format!("screw: mate {cylindrical} advances {} mm per turn", num(*pitch)),
+    }
+}
+
+const RELATION: Tool = Tool {
+    name: "asm_relation",
+    title: "Couple joints: gears, rack and pinion, screw",
+    description: "Couples the motion of existing mates so driving one moves the other. `gear`: two revolute mates, \
+`ratio` = turns of `b` per turn of `a` (negative when they turn opposite ways, as external gears do: -z_a/z_b). \
+`rack_pinion`: a revolute (`a`) and a slider (`b`), `per_turn` mm the rack moves per pinion turn (π × pitch \
+diameter). `screw`: one cylindrical mate (`a`), `pitch` mm per turn. `auto: true` adds the couplings Pinocchio finds \
+between meshing gear parts (from their teeth). `remove` deletes relation number n (from `cad_design`). Then \
+`asm_mate_edit` with `angle` on one mate drives the rest. Example: {\"kind\": \"gear\", \"a\": \"revolute 1\", \"b\": \
+\"revolute 2\", \"ratio\": -0.5}.",
+    input: || {
+        object(&[
+            asm_tab_prop(),
+            ("kind", one_of("What to couple", &["gear", "rack_pinion", "screw"]), false),
+            ("a", id_or_name("Mate: the driving revolute (gear, rack_pinion) or the cylindrical (screw)"), false),
+            ("b", id_or_name("Mate: the driven revolute (gear) or the slider (rack_pinion)"), false),
+            ("ratio", number("gear: turns of b per turn of a (negative = opposite directions)"), false),
+            ("per_turn", number("rack_pinion: mm per turn"), false),
+            ("pitch", number("screw: mm per turn"), false),
+            ("phase", number("Offset: degrees (gear) or mm (rack_pinion, screw) at angle 0 (default 0)"), false),
+            ("auto", boolean("Add the couplings found between meshing gear parts"), false),
+            ("remove", integer("Delete relation number n", 0), false),
+        ])
+    },
+    effect: Effect::Change,
+    run: relation,
+};
+
+fn relation(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
+    let mut a = open_assembly(ctx, args)?;
+    let mut done = Vec::new();
+    if let Some(n) = args["remove"].as_u64() {
+        let asm = a.assembly();
+        if n as usize >= asm.relations.len() {
+            return Err(Fail::new(format!("there is no relation {n} (the assembly has {})", asm.relations.len())));
+        }
+        let r = asm.relations.remove(n as usize);
+        done.push(format!("removed {}", relation_text(&r)));
+    }
+    if arg_bool(args, "auto") == Some(true) {
+        let found: Vec<Relation> = serde_json::from_value(ctx.call("cad_assembly_suggest", json!({}))?).map_err(|e| Fail::new(e.to_string()))?;
+        if found.is_empty() {
+            done.push("no new gear couplings found (the gears need revolute mates on their axes and must mesh)".into());
+        }
+        for r in found {
+            done.push(format!("added {}", relation_text(&r)));
+            a.assembly().relations.push(r);
+        }
+    }
+    if let Some(kind) = arg_str(args, "kind") {
+        let asm = a.assembly();
+        let want = |k: &str| args.get(k).ok_or_else(|| Fail::new(format!("{kind} needs `{k}`")));
+        let mate_of = |k: &str, need: &[MateKind]| -> Result<u32, Fail> {
+            let id = find_mate(asm, want(k)?)?;
+            let m = asm.mates.iter().find(|m| m.id == id).unwrap();
+            if !need.contains(&m.kind) {
+                let names: Vec<&str> = need.iter().map(|k| kind_name(*k)).collect();
+                return Err(Fail::new(format!("mate {id} \"{}\" is {}, {kind} needs {}", m.name, kind_name(m.kind), names.join(" or "))).hint("make the joint with `asm_mate` first (a revolute on each gear axis, a slider for a rack, a cylindrical for a screw)"));
+            }
+            Ok(id)
+        };
+        let phase = args["phase"].as_f64().unwrap_or(0.0);
+        let r = match kind {
+            "gear" => {
+                let (ma, mb) = (mate_of("a", &[MateKind::Revolute, MateKind::Cylindrical])?, mate_of("b", &[MateKind::Revolute, MateKind::Cylindrical])?);
+                if ma == mb {
+                    return Err(Fail::new("`a` and `b` are the same mate"));
+                }
+                let ratio = want("ratio")?.as_f64().filter(|r| *r != 0.0).ok_or_else(|| Fail::new("`ratio` must be a number other than 0"))?;
+                Relation::Gear { a: ma, b: mb, ratio, phase, carrier: None, carrier_ratio: 0.0 }
+            }
+            "rack_pinion" => {
+                let per_turn = want("per_turn")?.as_f64().filter(|r| *r != 0.0).ok_or_else(|| Fail::new("`per_turn` must be a number other than 0"))?;
+                Relation::RackPinion { revolute: mate_of("a", &[MateKind::Revolute, MateKind::Cylindrical])?, slider: mate_of("b", &[MateKind::Slider, MateKind::Cylindrical])?, per_turn, phase }
+            }
+            _ => {
+                let pitch = want("pitch")?.as_f64().filter(|r| *r != 0.0).ok_or_else(|| Fail::new("`pitch` must be a number other than 0"))?;
+                Relation::Screw { cylindrical: mate_of("a", &[MateKind::Cylindrical])?, pitch, phase }
+            }
+        };
+        done.push(format!("added {}", relation_text(&r)));
+        asm.relations.push(r);
+    }
+    if done.is_empty() {
+        return Err(Fail::new("nothing to do").hint("pass `kind` with its mates, `auto: true` or `remove`"));
+    }
+    let result = apply(ctx, &a)?;
+    let (text, ok) = solution_text(&result);
+    if !ok {
+        return Err(Fail::new(format!("with that coupling the mates cannot be satisfied: {text}")).hint("nothing was changed; check the ratio sign, or free an imposed angle with `asm_mate_edit`"));
+    }
+    let warnings = ctx.call("cad_assembly_gear_warnings", json!({})).ok().and_then(|w| w.as_array().cloned()).unwrap_or_default();
+    let mut lines = vec![format!("{}.", done.join("; ")), text];
+    for w in warnings.iter().filter_map(Value::as_str) {
+        lines.push(format!("Warning: {w}"));
+    }
+    Ok(Output::new(lines.join("\n"), json!({ "tab": a.tab, "relations": a.doc.assembly.as_ref().map(|x| x.relations.clone()), "solution": result["assembly"]["solution"] })))
 }
 
 // ─── Revisar ────────────────────────────────────────────────────────────────

@@ -147,6 +147,8 @@ Object.assign(en_settings, {
   "Cambiando una unión": "Changing a mate",
   "Revisando el ensamble": "Checking the assembly",
   "Haciendo el plano": "Making the drawing",
+  "Armando un plano 2D": "Setting up a 2D drawing",
+  "Acoplando uniones": "Coupling joints",
   "Importando un modelo": "Importing a model",
   "Pasando una pieza a malla": "Turning a part into a mesh",
   "Mirando la malla": "Looking at the mesh",

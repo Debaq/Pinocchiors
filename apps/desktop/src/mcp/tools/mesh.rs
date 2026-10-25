@@ -597,19 +597,21 @@ Example: {\"path\": \"/home/me/model.glb\", \"draco\": true}.",
 };
 
 fn export(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
-    need_model(ctx)?;
+    let summary = need_model(ctx)?;
     let path = output_path(args)?;
     let ext = extension(&path);
     if !EXPORTS.contains(&ext.as_str()) {
         return Err(Fail::new(format!(".{ext} is not an export format")).hint(format!("use one of: {}", EXPORTS.join(", "))));
     }
+    // Solo lo que hay: sin esqueleto o sin pesos, la exportación los pediría y fallaría
     let rig = arg_bool(args, "include_rig").unwrap_or(true);
+    let rigged = rig && summary["rigged"] == true;
     let config = json!({
         "format": ext,
         "path": path,
-        "include_skeleton": rig,
-        "include_weights": rig,
-        "export_animations": rig,
+        "include_skeleton": rig && !summary["skeleton"].is_null(),
+        "include_weights": rigged,
+        "export_animations": rigged,
         "simplify_ratio": args["simplify"].as_f64(),
         "draco": arg_bool(args, "draco"),
         "scale_factor": args["scale"].as_f64(),

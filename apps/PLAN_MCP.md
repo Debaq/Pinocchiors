@@ -62,8 +62,9 @@ con las mismas herramientas:
   planos), M8 modo en vivo, activación desde la app y chat dentro de la app (2026-10-25),
   M5 mallas e impresión y M7 render y escaneos (2026-10-25). M1 en lo que el CAD, las
   mallas y la impresión necesitan.
-- **Falta**: M6 esqueleto y animación, M9 pulido, lo pendiente de M4 (editar las láminas
-  de la app, cotas de detalle, cortes) y cancelar a mitad un comando largo.
+- M4 completo (2026-10-25): láminas de la app, cortes, detalles, cotas puntuales y
+  relaciones de engranes/tornillo.
+- **Falta**: M6 esqueleto y animación, M9 pulido y cancelar a mitad un comando largo.
 
 ### Próximo (orden propuesto, 2026-10-25)
 
@@ -215,7 +216,7 @@ con las mismas herramientas:
   número; con OCCT, la vista superior numera justo la cara `facing +Z` y las cuentas de
   caras/aristas coinciden con `cad_geometry`; medidas entre caras y desde un punto.
 
-### M4 — Ensambles y planos ✅ 2026-10-24
+### M4 — Ensambles y planos ✅ 2026-10-24 (completo 2026-10-25)
 - `asm_insert` (piezas de una pestaña de diseño, o un ensamble entero como subensamble;
   posición, giro eje+ángulo, copias, fija, configuración; nombres por pestaña: «Base 1»),
   `asm_mate` (8 tipos; conectores desde caras del ensamble: plana → centro y normal,
@@ -233,8 +234,19 @@ con las mismas herramientas:
   vista previa PNG (resvg) para que la IA la mire.
 - App: `cad_assembly_geometry`; `cad_measure` en un ensamble mide las instancias en su
   lugar (antes medía el cuerpo de diseño sin colocar).
-- Falta: editar las láminas de la app (formato de `drawing` del frontend), cotas de
-  detalle, cortes y relaciones de engranes/tornillo desde el conector.
+- Completado 2026-10-25: la lámina del conector entiende lo mismo que la de la app —
+  seis vistas e iso ubicadas por el diedro, corte A-A del frente (`section`), cortes por
+  una línea simple o escalonada sobre una vista (`cuts`, rayados; prisma y dirección
+  portados de `drawingCuts.ts`), detalles ampliados recortados al círculo (`details`),
+  cotas puntuales (`dims`: largo, diámetro, radio, distancia, ángulo; como
+  `userDimensions`, por puntos del modelo o números de arista) y hoja Carta.
+  `drawing_sheet` crea, cambia y borra las láminas de la app en el documento
+  (`drawing.sheets`, la forma de `drawingDoc.ts`: refs y centros en coordenadas de la
+  vista, lo oculto se conserva) y `drawing_export {drawing}` dibuja una de ellas.
+  `asm_relation`: engranes (razón), piñón-cremallera, tornillo y `auto` (las que sugiere
+  `suggest_gear_relations`), con los avisos de ejes de engranes.
+- Falta: vistas personalizadas, medios cortes, roturas y vistas sombreadas de la app no
+  se dibujan en el PDF del conector (quedan en la lámina); lo dibujado a mano tampoco.
 - Pruebas: eje en placa (cilíndrica → 2 grados, centrado → 1), misma instancia
   rechazada, choques y lista, medir en el ensamble (0 mm entre eje y agujero), copias y
   quitar, PDF del ensamble con lista, SVG en tercer ángulo 2:1 con ocultas, sin pisar.

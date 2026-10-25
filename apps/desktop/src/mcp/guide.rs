@@ -90,8 +90,18 @@ Assemblies put parts from design tabs together and connect them with mates (like
    fastened or planar with `flip: true`.
 5. `asm_mate_edit` with `distance` / `angle` positions or drives a joint; `asm_instance` moves, fixes or removes.
 6. `asm_check`: unsatisfied mates, degrees of freedom, collisions, clearance and the bill of materials. On a design tab with several parts it checks those parts against each other (collisions, clearance).
-7. `drawing_export` {\"tab\": ..., \"path\": \"/abs/file.pdf\"} makes a drawing sheet of a design or an assembly (with
-   the bill of materials and balloons); look at the returned preview.
+7. Gears, racks and screws: `asm_relation` couples two mates (`gear` with a ratio, `rack_pinion`, `screw`; `auto: true`
+   finds meshing gear parts). Driving one mate (`asm_mate_edit` `angle`) then moves the others.
+8. `drawing_export` {\"tab\": ..., \"path\": \"/abs/file.pdf\"} makes a drawing sheet of a design or an assembly (with
+   the bill of materials and balloons); look at the returned preview. Views: front, top, bottom, left, right, back, iso.
+   - `section: true` cuts the front view through the middle (A-A; a number = the Y of the cut).
+   - `cuts` [{\"view\": \"top\", \"points\": [[x,y,z], [x,y,z]]}] adds hatched section views (B-B, C-C…) along a line.
+   - `details` [{\"view\": \"front\", \"center\": [x,y,z], \"radius\": r}] draws a circled area bigger.
+   - `dims` dimension specific edges: {\"view\": \"top\", \"kind\": \"diameter\", \"at\": [x,y,z]} with a model point on the
+     edge (or `edges` numbers from `cad_geometry`); kinds length, diameter (a circle seen round), radius, distance (two
+     parallel edges), angle. The answer lists what was dimensioned and what was left out.
+9. `drawing_sheet` makes the same sheet inside the project, where the user opens and edits it (2D drawings in the app);
+   `drawing_export` {\"drawing\": \"<sheet name>\"} writes one of those sheets to PDF.
 - `cad_design`, `cad_geometry`, `view` and `measure` also work on assembly tabs (the \"part\" of a face is its instance).
 - Tools without `tab` use the active tab, and most tools activate the tab they work on: pass `tab` when switching.",
     ),

@@ -558,12 +558,17 @@ pub fn workspace_summary(state: &AppState) -> WorkspaceSummary {
         SkeletonType::Template(_) => "template",
         SkeletonType::Custom(_) => "custom",
     });
+    // Una sola vez: dos `lock()` en el mismo literal se bloquean entre sí
+    let (other_objects, active_object) = {
+        let objects = state.objects.lock().unwrap();
+        (objects.stored.len(), objects.active)
+    };
     WorkspaceSummary {
         design_tabs,
         active_tab: tabs.active_tab().map(|t| t.id),
         model,
-        other_objects: state.objects.lock().unwrap().stored.len(),
-        active_object: state.objects.lock().unwrap().active,
+        other_objects,
+        active_object,
         skeleton,
         rigged: state.result.lock().unwrap().is_some(),
         retopology: state.quad_mesh.lock().unwrap().is_some(),

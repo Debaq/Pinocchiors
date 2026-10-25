@@ -64,6 +64,8 @@ export function aiLabel(tool: string): string {
     asm_mate_edit: () => t("Cambiando una unión"),
     asm_check: () => t("Revisando el ensamble"),
     drawing_export: () => t("Haciendo el plano"),
+    drawing_sheet: () => t("Armando un plano 2D"),
+    asm_relation: () => t("Acoplando uniones"),
     mesh_import: () => t("Importando un modelo"),
     mesh_from_part: () => t("Pasando una pieza a malla"),
     mesh_info: () => t("Mirando la malla"),
