@@ -35,9 +35,22 @@
       .lamina > svg { width: auto; height: 170px; }
       .name { margin-top: 10px; font-size: 24px; font-weight: 700; letter-spacing: -0.02em; line-height: 1; color: var(--color-splash-text); }
       .tagline { margin-top: 4px; font-size: 11px; line-height: 1.35; text-align: center; color: var(--color-splash-muted); }
-      main { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; padding: 24px; }
-      .loading { font-size: 12px; color: var(--color-text-muted); }
-      .bar { margin-top: 10px; height: 3px; border-radius: 2px; background: var(--color-surface); overflow: hidden; }
+      main { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 26px 24px 30px; }
+      .loading { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--color-text-muted); }
+      /* Pasos del arranque: ◌ cargando, ✓ listo, – no está */
+      .steps { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 7px; font-size: 12.5px; color: var(--color-text); }
+      .steps li { display: flex; align-items: center; gap: 9px; min-width: 0; }
+      .steps li span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .mark { width: 14px; height: 14px; flex: none; display: grid; place-items: center; font-size: 11px; line-height: 1; }
+      .wait .mark::before { content: ""; width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid var(--color-surface); border-top-color: var(--color-accent); animation: spin 0.8s linear infinite; }
+      .ok .mark::before { content: "✓"; color: var(--color-success); font-weight: 700; }
+      .no .mark::before { content: "–"; color: var(--color-text-dim); }
+      .wait span:last-child, .no span:last-child { color: var(--color-text-muted); }
+      .note { margin-top: 10px; font-size: 11.5px; color: var(--color-warning); }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      .tip { margin-top: auto; font-size: 11.5px; line-height: 1.45; color: var(--color-text-muted); }
+      .tip b { color: var(--color-text); font-weight: 600; }
+      .bar { margin-top: 14px; height: 3px; border-radius: 2px; background: var(--color-surface); overflow: hidden; }
       .bar::after {
         content: ""; display: block; width: 35%; height: 100%; background: var(--color-accent);
         animation: bar 1.2s ease-in-out infinite;
@@ -55,7 +68,10 @@
       </div>
       <main>
         <div class="loading" data-es="Cargando…" data-en="Loading…">Cargando…</div>
+        <ul class="steps" id="steps"></ul>
         <div class="bar"></div>
+        <div class="note" id="note" hidden></div>
+        <div class="tip" id="tip"></div>
       </main>
       <div class="version">%VITE_APP_VERSION%</div>
     </div>
@@ -78,6 +94,72 @@
         document.documentElement.lang = lang;
         var els = document.querySelectorAll("[data-" + lang + "]");
         for (var j = 0; j < els.length; j++) els[j].innerHTML = els[j].getAttribute("data-" + lang);
+      })();
+    </script>
+    <script>
+      // Pasos reales del arranque: el backend contesta, el motor CAD que trae, y
+      // los avisos de la ventana principal (boot_step: "ui" empezó, "app" lista)
+      (function () {
+        var es = document.documentElement.lang === "es";
+        var L = es
+          ? { core: "Núcleo de Pinocchio", cad: "Motor CAD · OpenCASCADE ", nocad: "Motor CAD no incluido en esta compilación", ui: "Interfaz", app: "Espacio de trabajo", rec: "Hay una sesión para recuperar: ", tip: "Consejo" }
+          : { core: "Pinocchio core", cad: "CAD engine · OpenCASCADE ", nocad: "CAD engine not included in this build", ui: "Interface", app: "Workspace", rec: "There is a session to recover: ", tip: "Tip" };
+        var tips = es
+          ? [
+              "Arrastra un modelo 3D sobre la ventana para importarlo.",
+              "Con la varita de la cabecera, una IA diseña contigo en esta misma ventana.",
+              "Ctrl+Z también deshace lo que hizo la IA.",
+              "En Diseñar, cada pieza puede tener su pestaña; los ensambles van en otra.",
+              "Los planos 2D salen con lista de materiales y globos.",
+              "Configuración ▸ Conector para IA conecta Claude, Cursor, Gemini o Codex.",
+              "Preparar para imprimir corta el modelo, lo orienta y arma las placas.",
+              "Los atajos se cambian en Configuración ▸ Atajos de teclado.",
+            ]
+          : [
+              "Drag a 3D model onto the window to import it.",
+              "With the wand in the header, an AI designs with you in this very window.",
+              "Ctrl+Z also undoes what the AI did.",
+              "In Design, each part can have its own tab; assemblies go in another.",
+              "2D drawings come with a bill of materials and balloons.",
+              "Settings ▸ AI connector connects Claude, Cursor, Gemini or Codex.",
+              "Prepare for printing cuts the model, orients it and lays out the plates.",
+              "Shortcuts are changed in Settings ▸ Keyboard shortcuts.",
+            ];
+        document.getElementById("tip").innerHTML = "<b>" + L.tip + ":</b> " + tips[Math.floor(Math.random() * tips.length)];
+
+        var state = { core: "wait", cad: "wait", ui: "wait", app: "wait" };
+        var cadLabel = L.cad.trim();
+        function draw() {
+          var rows = [["core", L.core], ["cad", cadLabel], ["ui", L.ui], ["app", L.app]];
+          document.getElementById("steps").innerHTML = rows
+            .map(function (r) { return '<li class="' + state[r[0]] + '"><span class="mark"></span><span>' + r[1] + "</span></li>"; })
+            .join("");
+        }
+        draw();
+        var tauri = window.__TAURI_INTERNALS__;
+        if (!tauri) return;
+        var invoke = function (cmd, args) { return tauri.invoke(cmd, args || {}); };
+        invoke("cad_status").then(function (s) {
+          state.core = "ok";
+          if (s && s.available) { state.cad = "ok"; cadLabel = L.cad + s.occt_version; }
+          else { state.cad = "no"; cadLabel = L.nocad; }
+          draw();
+        }).catch(function () {});
+        invoke("recovery_info").then(function (r) {
+          if (!r) return;
+          var note = document.getElementById("note");
+          note.textContent = L.rec + (r.source_name || new Date(r.saved_at * 1000).toLocaleString());
+          note.hidden = false;
+        }).catch(function () {});
+        (function poll() {
+          invoke("boot_steps").then(function (steps) {
+            state.core = "ok";
+            if (steps.indexOf("ui") >= 0) state.ui = "ok";
+            if (steps.indexOf("app") >= 0) state.app = "ok";
+            draw();
+            if (state.app !== "ok") setTimeout(poll, 120);
+          }).catch(function () { setTimeout(poll, 250); });
+        })();
       })();
     </script>
   </body>

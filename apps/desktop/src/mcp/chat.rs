@@ -8,7 +8,7 @@
 //! (`--setting-sources project`): no hereda hooks ni servidores MCP del
 //! usuario. Las herramientas permitidas son solo las de Pinocchio.
 
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -35,6 +35,31 @@ pub const EFFORTS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 
 /// Prefijo de las herramientas del conector en Claude Code
 const PREFIX: &str = "mcp__pinocchio__";
+
+/// Imagen adjunta a un mensaje (base64)
+#[derive(serde::Deserialize, Serialize, Clone)]
+pub struct Image {
+    pub mime: String,
+    pub data: String,
+}
+
+/// Imágenes que entiende el modelo, y el máximo por imagen
+const IMAGE_TYPES: &[(&str, &str)] = &[("png", "image/png"), ("jpg", "image/jpeg"), ("jpeg", "image/jpeg"), ("webp", "image/webp"), ("gif", "image/gif")];
+const MAX_IMAGE: u64 = 5 * 1024 * 1024;
+
+/// Lee una imagen elegida por el usuario para adjuntarla
+pub fn read_image(path: &str) -> Result<Image, String> {
+    use base64::Engine;
+    let p = std::path::Path::new(path);
+    let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+    let mime = IMAGE_TYPES.iter().find(|t| t.0 == ext).map(|t| t.1).ok_or("Solo imágenes PNG, JPG, WebP o GIF")?;
+    let size = std::fs::metadata(p).map_err(|e| format!("No se pudo leer {path}: {e}"))?.len();
+    if size > MAX_IMAGE {
+        return Err(format!("La imagen pesa {:.1} MB; el máximo es 5 MB", size as f64 / 1048576.0));
+    }
+    let bytes = std::fs::read(p).map_err(|e| format!("No se pudo leer {path}: {e}"))?;
+    Ok(Image { mime: mime.into(), data: base64::engine::general_purpose::STANDARD.encode(bytes) })
+}
 
 #[derive(Default)]
 pub struct Chat {
@@ -107,7 +132,18 @@ pub fn translate(event: &Value) -> Vec<Value> {
                 }
             }
         }
-        Some("result") => out.push(json!({ "kind": "done", "ok": event["is_error"] != true, "session": event["session_id"], "cost": event["total_cost_usd"] })),
+        Some("result") => {
+            // Tokens de este turno: nuevos, leídos de la caché, escritos en ella y de salida
+            let u = &event["usage"];
+            let n = |k: &str| u[k].as_u64().unwrap_or(0);
+            out.push(json!({
+                "kind": "done",
+                "ok": event["is_error"] != true,
+                "session": event["session_id"],
+                "cost": event["total_cost_usd"],
+                "tokens": { "input": n("input_tokens"), "cache_read": n("cache_read_input_tokens"), "cache_write": n("cache_creation_input_tokens"), "output": n("output_tokens") },
+            }))
+        }
         _ => {}
     }
     out
@@ -118,24 +154,24 @@ impl Chat {
         self.child.lock().unwrap().as_mut().is_some_and(|c| c.try_wait().ok().flatten().is_none())
     }
 
-    /// Manda un mensaje; la respuesta llega por `emit` a medida que sale.
-    /// `model` y `effort`: los de Claude Code (`None` = los suyos por defecto)
-    pub fn send(self: &Arc<Self>, message: &str, model: Option<&str>, effort: Option<&str>, emit: impl Fn(Value) + Send + 'static) -> Result<(), String> {
+    /// Manda un mensaje (texto e imágenes); la respuesta llega por `emit` a
+    /// medida que sale. `model` y `effort`: los de Claude Code (`None` = los suyos)
+    pub fn send(self: &Arc<Self>, message: &str, images: &[Image], model: Option<&str>, effort: Option<&str>, emit: impl Fn(Value) + Send + 'static) -> Result<(), String> {
         if self.busy() {
             return Err("Todavía está respondiendo el mensaje anterior".into());
         }
         let claude = find_claude().ok_or("No se encontró Claude Code (`claude`). Instálalo desde claude.com/claude-code e inicia sesión una vez en la terminal.")?;
         let dir = workdir()?;
         let mut cmd = Command::new(&claude);
+        // El mensaje va por la entrada en JSON (así lleva imágenes sin tocar archivos)
         cmd.current_dir(&dir)
             .arg("-p")
-            .arg(message)
-            .args(["--output-format", "stream-json", "--verbose", "--strict-mcp-config", "--setting-sources", "project"])
+            .args(["--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--strict-mcp-config", "--setting-sources", "project"])
             .arg("--mcp-config")
             .arg(dir.join("mcp.json"))
             .args(["--allowedTools", "mcp__pinocchio"])
             .args(["--append-system-prompt", PROMPT])
-            .stdin(Stdio::null())
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         if let Some(s) = self.session.lock().unwrap().clone() {
@@ -149,6 +185,12 @@ impl Chat {
             cmd.args(["--effort", e]);
         }
         let mut child = cmd.spawn().map_err(|e| format!("No se pudo abrir Claude Code: {e}"))?;
+        let mut content = vec![json!({ "type": "text", "text": message })];
+        content.extend(images.iter().map(|i| json!({ "type": "image", "source": { "type": "base64", "media_type": i.mime, "data": i.data } })));
+        let line = json!({ "type": "user", "message": { "role": "user", "content": content } });
+        if let Some(mut stdin) = child.stdin.take() {
+            writeln!(stdin, "{line}").map_err(|e| format!("No se pudo hablar con Claude Code: {e}"))?;
+        }
         let stdout = child.stdout.take().ok_or("sin salida")?;
         let mut stderr = child.stderr.take().ok_or("sin salida de errores")?;
         *self.child.lock().unwrap() = Some(child);
@@ -219,15 +261,31 @@ pub fn ai_chat_send(
     chat: tauri::State<'_, Arc<Chat>>,
     bridge: tauri::State<'_, Arc<Bridge>>,
     message: String,
+    images: Option<Vec<Image>>,
     model: Option<String>,
     effort: Option<String>,
+    session: Option<String>,
 ) -> Result<(), String> {
+    let images = images.unwrap_or_default();
+    if images.iter().any(|i| !IMAGE_TYPES.iter().any(|t| t.1 == i.mime)) {
+        return Err("Solo imágenes PNG, JPG, WebP o GIF".into());
+    }
     super::live::start_for(&app, &bridge)?;
+    // La ventana guarda la conversación: tras reiniciar la app sigue la misma sesión
+    if let Some(s) = session.filter(|s| s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')) {
+        chat.session.lock().unwrap().get_or_insert(s);
+    }
     let handle = app.clone();
-    chat.send(&message, model.as_deref(), effort.as_deref(), move |msg| {
+    chat.send(&message, &images, model.as_deref(), effort.as_deref(), move |msg| {
         use tauri::Emitter;
         let _ = handle.emit(EV_CHAT, msg);
     })
+}
+
+/// Una imagen del disco para adjuntarla a un mensaje
+#[tauri::command]
+pub fn ai_chat_read_image(path: String) -> Result<Image, String> {
+    read_image(&path)
 }
 
 #[tauri::command]
@@ -265,7 +323,10 @@ mod tests {
         assert_eq!(out.len(), 2, "{out:?}");
         assert_eq!(out[0]["text"], "Rounded 4 edge(s).");
         assert_eq!(out[1]["kind"], "image");
-        let done = json!({ "type": "result", "is_error": false, "session_id": "s1", "total_cost_usd": 0.01 });
-        assert_eq!(translate(&done)[0]["kind"], "done");
+        let done = json!({ "type": "result", "is_error": false, "session_id": "s1", "total_cost_usd": 0.01, "usage": { "input_tokens": 6, "cache_read_input_tokens": 60079, "cache_creation_input_tokens": 13547, "output_tokens": 193 } });
+        let d = &translate(&done)[0];
+        assert_eq!(d["kind"], "done");
+        assert_eq!(d["tokens"]["cache_read"], 60079);
+        assert_eq!(d["tokens"]["output"], 193);
     }
 }

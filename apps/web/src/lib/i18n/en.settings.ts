@@ -183,6 +183,21 @@ Object.assign(en_settings, {
   "Muy alto": "Very high",
   "Máximo (lento)": "Maximum (slow)",
   "costo estimado": "estimated cost",
+  "{n} de entrada · {m} de salida": "{n} in · {m} out",
+  "Conversación": "Conversation",
+  "Guardar la conversación": "Save the conversation",
+  "Descargar la imagen": "Download the image",
+  "Copiado": "Copied",
+  "Tú": "You",
+  "Imágenes": "Images",
+  "Adjuntar una imagen": "Attach an image",
+  "Adjuntar una imagen (también puedes pegarla con Ctrl+V)": "Attach an image (you can also paste it with Ctrl+V)",
+  "Mira la imagen.": "Look at the image.",
+  "La imagen pesa más de 5 MB": "The image is larger than 5 MB",
+  "de entrada": "in",
+  "de salida": "out",
+  "Tokens de esta conversación: entrada nueva {a}, leída de la caché {b}, escrita en la caché {c}; salida {d}":
+    "Tokens in this conversation: new input {a}, read from cache {b}, written to cache {c}; output {d}",
   "Más esfuerzo piensa más antes de actuar: mejor para piezas complejas, más lento y gasta más de tu cuota. Vale desde el próximo mensaje.":
     "More effort thinks more before acting: better for complex parts, slower and uses more of your quota. Applies from the next message.",
 });

@@ -12,6 +12,10 @@ import { applyLocale, t } from "./lib/i18n";
 applyTheme(storedTheme());
 applyLocale();
 
+// El splash muestra cada paso del arranque (sin Tauri no hay a quién avisar)
+const bootStep = (step: string) => void invoke("boot_step", { step }).catch(() => {});
+bootStep("ui");
+
 const root = document.getElementById("root");
 
 if (!root) {
@@ -70,4 +74,7 @@ render(
 // La interfaz ya está armada: se cierra el splash (otra ventana) y aparece
 // esta. Con setTimeout y no requestAnimationFrame, que no corre mientras la
 // ventana está oculta. Sin Tauri (vista previa) no hay nada que avisar
-setTimeout(() => void invoke("app_ready").catch(() => {}));
+setTimeout(() => {
+  bootStep("app");
+  void invoke("app_ready").catch(() => {});
+});

@@ -66,6 +66,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             app_ready,
+            boot_step,
+            boot_steps,
             // Import/Export multi-formato
             commands::get_supported_formats,
             commands::import_model,
@@ -117,6 +119,7 @@ pub fn run() {
             mcp::chat::ai_chat_status,
             mcp::chat::ai_chat_send,
             mcp::chat::ai_chat_stop,
+            mcp::chat::ai_chat_read_image,
             mcp::chat::ai_chat_reset,
             commands::remove_object,
             commands::remove_scene_node,
@@ -334,6 +337,23 @@ pub fn run() {
 #[tauri::command]
 fn app_ready(app: tauri::AppHandle) {
     show_main_window(&app);
+}
+
+/// Pasos del arranque que ya cumplió la ventana principal ("ui": empezó a
+/// correr la interfaz; "app": quedó armada). Los muestra el splash
+static BOOT_STEPS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+#[tauri::command]
+fn boot_step(step: String) {
+    let mut steps = BOOT_STEPS.lock().unwrap();
+    if !steps.contains(&step) {
+        steps.push(step);
+    }
+}
+
+#[tauri::command]
+fn boot_steps() -> Vec<String> {
+    BOOT_STEPS.lock().unwrap().clone()
 }
 
 /// Una sola vez: las siguientes llamadas no encuentran el splash y no hacen nada
