@@ -28,6 +28,8 @@ import {
 } from "../../lib/settings";
 import { MOUSE_HINTS, type ShortcutHint } from "./ContextPanel";
 import { AiConnectorSettings } from "./AiConnectorSettings";
+import { getVersion } from "@tauri-apps/api/app";
+import { checkForUpdate, setUpdateSettings, showUpdate, updateSettings, updateState } from "../../lib/updater";
 import {
   AREAS,
   conflictFor,
@@ -107,6 +109,37 @@ const Section = (props: { title?: string; children: JSX.Element }) => (
 );
 
 const Hint = (props: { children: JSX.Element }) => <p class="text-xs text-text-muted leading-relaxed">{props.children}</p>;
+
+/** Versión instalada y cómo se buscan las nuevas (releases de GitHub) */
+const UpdatesSection = () => {
+  const [version, setVersion] = createSignal("");
+  onMount(() => void getVersion().then(setVersion).catch(() => {}));
+  const ready = () => updateState()?.phase === "ready" || updateState()?.phase === "downloading";
+  return (
+    <Section title={t("Actualizaciones")}>
+      <Hint>
+        {t("Versión instalada")} <span class="text-text font-mono">{version() || "—"}</span>
+      </Hint>
+      <Checkbox
+        label={t("Buscar versiones nuevas al abrir")}
+        checked={updateSettings().check}
+        onChange={(check) => setUpdateSettings({ ...updateSettings(), check })}
+      />
+      <Checkbox
+        label={t("Descargarlas solas en segundo plano")}
+        checked={updateSettings().auto}
+        onChange={(auto) => setUpdateSettings({ ...updateSettings(), auto })}
+      />
+      <Hint>{t("Con la descarga sola, solo se pregunta cuándo reiniciar para instalarla. Nada se instala sin tu permiso.")}</Hint>
+      <button
+        class="h-8 px-3 rounded-md text-xs border border-border text-text hover:border-accent hover:text-accent"
+        onClick={() => (ready() ? showUpdate() : void checkForUpdate(true))}
+      >
+        {ready() ? t("Ver la versión nueva") : t("Buscar ahora")}
+      </button>
+    </Section>
+  );
+};
 
 export interface SettingsDialogProps {
   autosave: AutosaveSettings;
@@ -301,6 +334,8 @@ export const SettingsDialog: Component<SettingsDialogProps> = (props) => {
                   </Hint>
                 </Show>
               </Section>
+
+              <UpdatesSection />
 
               <Section title={t("Disposición")}>
                 <Hint>

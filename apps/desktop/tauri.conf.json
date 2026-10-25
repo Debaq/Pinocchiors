@@ -58,6 +58,11 @@
   "plugins": {
     "shell": {
       "open": true
+    },
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDY0MkQ2MzEwOUQwRjU2NTAKUldSUVZnK2RFR010Wk0zMk1XdjlOWk9oWE04TUdIcE9iU3Y3QTFEVlVtVjF4TVVJMU9VTTYzVXAK",
+      "endpoints": ["https://github.com/Debaq/Pinocchiors/releases/latest/download/latest.json"],
+      "windows": { "installMode": "passive" }
     }
   }
 }

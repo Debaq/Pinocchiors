@@ -42,6 +42,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             // Inicializar estado
             app.manage(AppState::new());
@@ -67,6 +69,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             app_ready,
+            update_can_install,
             boot_step,
             boot_steps,
             // Import/Export multi-formato
@@ -339,6 +342,13 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// Si la actualización se puede instalar sola: en Linux solo la AppImage se
+/// reemplaza (el binario suelto se baja a mano); en Windows y macOS, siempre
+#[tauri::command]
+fn update_can_install() -> bool {
+    !cfg!(target_os = "linux") || std::env::var_os("APPIMAGE").is_some()
 }
 
 /// La interfaz ya se dibujó: se cierra el splash y aparece la ventana principal

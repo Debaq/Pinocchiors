@@ -21,6 +21,14 @@
 #   - App de escritorio     binario Linux + .AppImage, .msi/-setup.exe, .dmg (arm64)
 #   - CLI `converter`       Linux x86_64, Windows x86_64, macOS arm64 + x86_64
 #   - Paquete WASM          converter-wasm (wasm-bindgen --target web)
+#   - latest.json           para que la app se actualice sola (tauri-plugin-updater):
+#                           AppImage, -setup.exe/.msi y .app.tar.gz firmados con
+#                           el secreto TAURI_SIGNING_PRIVATE_KEY (clave pública en
+#                           apps/desktop/tauri.conf.json)
+#
+# Versión de la app: la fecha y hora del commit en UTC como semver
+# (AAAA.MMDD.HHMM sin ceros a la izquierda, p. ej. 2026.1022.413): crece con
+# cada release y es la que la app compara para saber si hay una nueva.
 
 name: Release
 
@@ -50,6 +58,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
+      semver: ${{ steps.tag.outputs.semver }}
       cli: ${{ steps.matrix.outputs.cli }}
       desktop: ${{ steps.matrix.outputs.desktop }}
     steps:
@@ -70,8 +79,12 @@ jobs:
             echo "::error::Tag '${TAG}' no coincide con el commit. Esperado: '${expected}' (usa scripts/release.sh)"
             exit 1
           fi
+          # 10#: que 08 o 09 no se lean en octal
+          read -r y m d hh mm <<< "$(TZ=UTC0 git show -s --format=%cd --date=format-local:'%Y %m %d %H %M' HEAD)"
+          semver="${y}.$((10#$m * 100 + 10#$d)).$((10#$hh * 100 + 10#$mm))"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "Versión: ${TAG}" >> "$GITHUB_STEP_SUMMARY"
+          echo "semver=${semver}" >> "$GITHUB_OUTPUT"
+          echo "Versión: ${TAG} (${semver})" >> "$GITHUB_STEP_SUMMARY"
 
       - id: matrix
         env:
@@ -228,12 +241,20 @@ jobs:
 
       - name: Build Tauri
         working-directory: apps/desktop
+        env:
+          # Firma de las actualizaciones (.sig junto a cada instalador)
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+          SEMVER: ${{ needs.version.outputs.semver }}
         run: |
+          # La versión y los artefactos de actualización solo acá: un build
+          # local no necesita la clave
+          config="{\"version\":\"${SEMVER}\",\"bundle\":{\"createUpdaterArtifacts\":true}}"
           # Linux: sin .deb ni .rpm; el binario suelto se publica aparte
           if [[ "${{ matrix.platform }}" == linux ]]; then
-            node ../web/node_modules/@tauri-apps/cli/tauri.js build --bundles appimage
+            node ../web/node_modules/@tauri-apps/cli/tauri.js build --bundles appimage --config "$config"
           else
-            node ../web/node_modules/@tauri-apps/cli/tauri.js build
+            node ../web/node_modules/@tauri-apps/cli/tauri.js build --config "$config"
           fi
 
       - name: Renombrar instaladores
@@ -244,14 +265,24 @@ jobs:
           shopt -s nullglob
           for f in target/release/bundle/*/*; do
             case "$f" in
-              *.AppImage)  out="linux-amd64.AppImage" ;;
-              *.msi)       out="windows-x64.msi" ;;
-              *-setup.exe) out="windows-x64-setup.exe" ;;
-              *.dmg)       out="macos-arm64.dmg" ;;
-              *)           continue ;;
+              *.AppImage)      out="linux-amd64.AppImage" ;;
+              *.AppImage.sig)  out="linux-amd64.AppImage.sig" ;;
+              *.msi)           out="windows-x64.msi" ;;
+              *.msi.sig)       out="windows-x64.msi.sig" ;;
+              *-setup.exe)     out="windows-x64-setup.exe" ;;
+              *-setup.exe.sig) out="windows-x64-setup.exe.sig" ;;
+              *.dmg)           out="macos-arm64.dmg" ;;
+              *.app.tar.gz)    out="macos-arm64.app.tar.gz" ;;
+              *.app.tar.gz.sig) out="macos-arm64.app.tar.gz.sig" ;;
+              *)               continue ;;
             esac
             cp "$f" "dist/Pinocchio-${TAG}-${out}"
           done
+          # Sin firma la app no se actualiza sola: que falle acá y no en los usuarios
+          if ! ls dist/*.sig > /dev/null 2>&1; then
+            echo "::error::No se firmaron los instaladores (¿falta el secreto TAURI_SIGNING_PRIVATE_KEY?)"
+            exit 1
+          fi
           # Binario Linux suelto (requiere webkit2gtk-4.1 instalado en el sistema)
           if [[ "${{ matrix.platform }}" == linux ]]; then
             cp target/release/pinocchio-app "dist/Pinocchio-${TAG}-linux-x86_64"
@@ -366,6 +397,36 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+
+      - name: latest.json (actualizaciones de la app)
+        working-directory: dist
+        env:
+          TAG: ${{ needs.version.outputs.tag }}
+          SEMVER: ${{ needs.version.outputs.semver }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Solo las plataformas compiladas en esta release: las demás no
+          # encuentran la suya y siguen en su versión (sin error a la vista)
+          url="https://github.com/${REPO}/releases/download/${TAG}"
+          platforms='{}'
+          add() { # clave archivo
+            local f="Pinocchio-${TAG}-$2"
+            [[ -f "$f" && -f "$f.sig" ]] || return 0
+            platforms=$(jq --arg k "$1" --arg u "$url/$f" --arg s "$(cat "$f.sig")" '. + {($k): {url: $u, signature: $s}}' <<< "$platforms")
+          }
+          add linux-x86_64 linux-amd64.AppImage
+          add linux-x86_64-appimage linux-amd64.AppImage
+          add windows-x86_64 windows-x64-setup.exe
+          add windows-x86_64-nsis windows-x64-setup.exe
+          add windows-x86_64-msi windows-x64.msi
+          add darwin-aarch64 macos-arm64.app.tar.gz
+          add darwin-aarch64-app macos-arm64.app.tar.gz
+          # Novedades: los commits desde la release anterior (las muestra la app)
+          prev=$(git describe --tags --abbrev=0 --match 'pre.*' "${GITHUB_SHA}^" 2>/dev/null || true)
+          notes=$(git log --no-merges --format='- %s' ${prev:+"$prev.."}"$GITHUB_SHA" | head -n 40)
+          jq -n --arg v "$SEMVER" --arg n "**${TAG}**"$'\n\n'"$notes" --arg d "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson p "$platforms" \
+            '{version: $v, notes: $n, pub_date: $d, platforms: $p}' > latest.json
+          cat latest.json
 
       - name: Checksums
         working-directory: dist

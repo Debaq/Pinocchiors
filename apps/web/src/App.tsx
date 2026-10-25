@@ -128,6 +128,8 @@ type SceneEdit =
 import { bvhMotion, parseBvh } from "./lib/bvh";
 import { autoMap, retargetClip, type RetargetMap, type SourceMotion } from "./lib/retarget";
 import { ConfirmDialog, type ConfirmChoice, type ConfirmRequest } from "./components/layout/ConfirmDialog";
+import { UpdateDialog } from "./components/layout/UpdateDialog";
+import { checkForUpdate, setBeforeRestart, updateSettings, updateState } from "./lib/updater";
 import { cameraFileSuffix, renderCameraById } from "./lib/renderCameras";
 import { renderLightById } from "./lib/renderLights";
 import { composeSheet, type RenderStillOptions, type SheetCell, type StillImage } from "./lib/renderStill";
@@ -8912,6 +8914,24 @@ export const App: Component = () => {
     }
   });
 
+  // Versión nueva en GitHub: se busca al rato de abrir (no en desarrollo, que
+  // tiene la versión 0.1.0 de tauri.conf.json); antes de reiniciar para
+  // instalarla, lo mismo que al cerrar con cambios sin guardar
+  setBeforeRestart(async () =>
+    !(await hasUnsavedWork()) ||
+    confirmAction({
+      title: t("Reiniciar para actualizar"),
+      message: t("Hay cambios sin guardar: se pierden (queda la última copia de recuperación, que se ofrece al volver a abrir)."),
+      confirmLabel: t("Reiniciar sin guardar"),
+      danger: true,
+    }),
+  );
+  onMount(() => {
+    if (import.meta.env.DEV || !updateSettings().check) return;
+    const timer = setTimeout(() => void checkForUpdate(), 8000);
+    onCleanup(() => clearTimeout(timer));
+  });
+
   // Ningún error asíncrono queda mudo: si nadie lo atrapó, va a la barra de estado
   const onUnhandled = (e: PromiseRejectionEvent) => {
     console.error("Unhandled rejection:", e.reason);
@@ -9899,6 +9919,10 @@ export const App: Component = () => {
 
       <Show when={retargeting()}>
         {(request) => <RetargetDialog {...request()} onConfirm={(r) => void confirmRetarget(r)} onCancel={() => setRetargeting(undefined)} />}
+      </Show>
+
+      <Show when={updateState()?.shown}>
+        <UpdateDialog />
       </Show>
 
       {/* Con clave: cada pregunta nueva arma el diálogo de cero (sus casillas) */}
