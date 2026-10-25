@@ -64,6 +64,8 @@ fn design_a_plate_with_a_hole() {
     assert!(text.contains("s0.top=") && text.contains("s1.center="), "{text}");
     assert!(text.contains("Profile used by default (1 region(s))") && text.contains("1 hole"), "{text}");
     assert!(text.contains("fully defined"), "{text}");
+    // Las cotas dicen su índice real (el rectángulo pone antes sus 4 restricciones)
+    assert!(text.contains("[4] length = 40 → formula path \"0.sketch.constraints.4.value\""), "{text}");
     let sketch = data["feature"].as_u64().unwrap();
 
     // Extrusión de 10: 40·20·10 − π·3²·10

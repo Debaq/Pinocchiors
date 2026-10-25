@@ -166,7 +166,9 @@ numbering); in the same call you can use names like \"s0.top\", \"s1\", \"s1.cen
 Distances mm, angles degrees. A dimension with \"reference\": true only measures (does not constrain).\n\
 Tips: shapes drawn at exact coordinates already have their size; add constraints when the sketch must keep its \
 shape when edited, e.g. tie a corner to \"origin\" and give length/diameter dimensions until it is fully defined. \
-Conflicting constraints are reported with their indices; remove them with `sketch_add` {\"remove_constraints\": [i]}.\n",
+Conflicting constraints are reported with their indices; remove them with `sketch_add` {\"remove_constraints\": [i]}.\n\
+Shapes add their own constraints first (a rectangle adds 4: horizontal/vertical), so your dimensions do not start at \
+index 0: the result of `sketch_create` / `sketch_add` lists every dimension with its index and the formula path.\n",
             );
             for (ty, what, json) in CONSTRAINT_EXAMPLES {
                 out.push_str(&format!("\n- {ty} — {what}: {json}"));

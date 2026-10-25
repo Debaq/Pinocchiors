@@ -267,6 +267,22 @@ fn constraint(raw: &Value, names: &Names, k: usize) -> Result<SketchConstraint, 
     serde_json::from_value(v).map_err(|e| Fail::new(format!("constraint {k} ({}): {e}", raw.get("type").and_then(Value::as_str).unwrap_or("?"))).hint("see `help` topic `sketch` for the fields of each constraint type"))
 }
 
+/// Cotas del sketch (las restricciones con valor) con su índice y la ruta para
+/// atarlas a un parámetro con `cad_parameters`
+fn dimension_lines(sketch: &Sketch, feature: u64) -> Vec<String> {
+    sketch
+        .constraints
+        .iter()
+        .enumerate()
+        .filter_map(|(i, c)| {
+            let v = c.value()?;
+            let ty = serde_json::to_value(c).ok()?["type"].as_str()?.to_string();
+            let field = if ty == "angle" { "degrees" } else { "value" };
+            Some(format!("  [{i}] {ty} = {} → formula path \"{feature}.sketch.constraints.{i}.{field}\"", num(v)))
+        })
+        .collect()
+}
+
 fn base_names(sketch: &mut Sketch) -> Names {
     let mut names = Names::new();
     names.insert("origin".into(), sketch.ensure_origin());
@@ -324,15 +340,21 @@ fn create(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
     for (k, c) in args.get("constraints").and_then(Value::as_array).into_iter().flatten().enumerate() {
         sketch.constrain(constraint(c, &names, k)?);
     }
+    let drawn = sketch.clone();
     let kind = FeatureKind::Sketch { plane, offset: args.get("offset").and_then(Value::as_f64).unwrap_or(0.0), sketch };
     let mut out = add_feature(ctx, d, kind, arg_str(args, "name"), "")?;
     let id = out.data["feature"].as_u64().unwrap_or(0) as u32;
+    let dims = dimension_lines(&drawn, id as u64);
     let result = ctx.call("cad_evaluate", json!({}))?;
     let (state, report) = sketch_report(&result, id);
     let mut text = vec![out.text.lines().next().unwrap_or("").to_string(), format!("Origin point = {}.", names["origin"])];
     if !shape_lines.is_empty() {
         text.push("Ids of what was drawn (name=id):".into());
         text.extend(shape_lines);
+    }
+    if !dims.is_empty() {
+        text.push("Dimensions (index, value, path for `cad_parameters` formulas):".into());
+        text.extend(dims);
     }
     text.push(state);
     text.push(format!("Next: `cad_extrude` or `cad_revolve` with {{\"sketch\": {id}}}."));
@@ -374,6 +396,7 @@ fn add(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
         return Err(Fail::new("nothing to add").hint("pass `shapes`, `constraints` or `remove_constraints`"));
     }
     let origin = names["origin"];
+    let dims = dimension_lines(sketch, id.0 as u64);
     let result = apply(ctx, &d)?;
     let mut out = finish(ctx, &d, &result, &before, Some((id, &fname)), &format!("Changed sketch \"{fname}\" (feature {}): {} shape(s), {added} constraint(s) added, {removed} removed.", id.0, shape_lines.len()), "")?;
     let (state, report) = sketch_report(&result, id.0);
@@ -381,6 +404,10 @@ fn add(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
     if !shape_lines.is_empty() {
         text.push("Ids of what was drawn (name=id):".into());
         text.extend(shape_lines);
+    }
+    if !dims.is_empty() {
+        text.push("Dimensions (index, value, path for `cad_parameters` formulas):".into());
+        text.extend(dims);
     }
     text.push(state);
     text.extend(out.text.lines().skip(1).filter(|l| l.starts_with("Warning")).map(str::to_string));
