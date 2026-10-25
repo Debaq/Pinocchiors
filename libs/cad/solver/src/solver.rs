@@ -106,7 +106,7 @@ pub fn solve(system: &mut ConstraintSystem, params: &SolverParams) -> Result<Sol
     }
 
     // Descomponer en sub-sistemas independientes
-    let subsystems = system.decompose();
+    let subsystems = system.decompose_indexed();
 
     if subsystems.len() > 1 {
         return solve_decomposed(system, subsystems, params);
@@ -119,7 +119,7 @@ pub fn solve(system: &mut ConstraintSystem, params: &SolverParams) -> Result<Sol
 /// Resolver sub-sistemas independientes y recombinar resultados.
 fn solve_decomposed(
     system: &mut ConstraintSystem,
-    mut subsystems: Vec<ConstraintSystem>,
+    subsystems: Vec<(ConstraintSystem, Vec<usize>)>,
     params: &SolverParams,
 ) -> Result<SolveResult> {
     let mut total_dof = 0i32;
@@ -127,34 +127,9 @@ fn solve_decomposed(
     let mut max_residual = 0.0f64;
     let mut worst_status = SolveStatus::Converged;
 
-    // Construir mapeo inverso: para cada sub-sistema, qué puntos globales tiene
-    // Reconstruir desde el decompose — los puntos están en orden sorted
-    let n_points = system.points.len();
-    let mut visited = vec![false; n_points];
-    let mut subsystem_point_maps: Vec<Vec<usize>> = Vec::new();
-
-    for sub in &subsystems {
-        let mut global_indices = Vec::new();
-        // Encontrar qué puntos globales corresponden a este sub-sistema
-        // buscando por coordenadas (decompose los crea en orden sorted)
-        for sub_pt in &sub.points {
-            for gi in 0..n_points {
-                if !visited[gi]
-                    && (system.points[gi].x() - sub_pt.x()).abs() < 1e-15
-                    && (system.points[gi].y() - sub_pt.y()).abs() < 1e-15
-                {
-                    global_indices.push(gi);
-                    visited[gi] = true;
-                    break;
-                }
-            }
-        }
-        subsystem_point_maps.push(global_indices);
-    }
-
     // Resolver cada sub-sistema
-    for (i, sub) in subsystems.iter_mut().enumerate() {
-        let result = solve_single(sub, params)?;
+    for (mut sub, map) in subsystems {
+        let result = solve_single(&mut sub, params)?;
 
         total_dof += result.dof;
         total_iterations = total_iterations.max(result.iterations);
@@ -173,11 +148,9 @@ fn solve_decomposed(
         }
 
         // Copiar resultados de vuelta al sistema global
-        if let Some(map) = subsystem_point_maps.get(i) {
-            for (local, &global) in map.iter().enumerate() {
-                if local < result.points.len() && global < system.points.len() {
-                    system.points[global] = result.points[local];
-                }
+        for (local, &global) in map.iter().enumerate() {
+            if local < result.points.len() && global < system.points.len() {
+                system.points[global] = result.points[local];
             }
         }
     }

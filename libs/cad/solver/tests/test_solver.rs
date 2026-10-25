@@ -815,3 +815,36 @@ fn test_equal_rotation_shared_point_follows_angle() {
     assert_relative_eq!(result.points[p2].x(), 10.0 * a.cos(), epsilon = 1e-6);
     assert_relative_eq!(result.points[p2].y(), 10.0 * a.sin(), epsilon = 1e-6);
 }
+
+#[test]
+fn decomposed_points_in_same_place_keep_their_owner() {
+    // Un cuadrado y una línea que empieza en su esquina sin estar unida a ella:
+    // dos puntos en el mismo lugar, en sub-sistemas distintos. El resultado de
+    // cada uno tiene que volver a su punto, no al otro que está en el mismo lugar
+    let mut sys = ConstraintSystem::new();
+    let a = sys.add_point(4.0, 0.0);
+    let b = sys.add_point(4.0, 4.0);
+    let c = sys.add_point(0.0, 4.0);
+    let start = sys.add_point(0.0, 0.0);
+    let end = sys.add_point(10.0, 0.0);
+    let corner = sys.add_point(0.0, 0.0);
+    sys.add_constraint(Constraint::Fixed { p_idx: corner, position: Point2::new(0.0, 0.0) });
+    sys.add_constraint(Constraint::Horizontal { p1_idx: corner, p2_idx: a });
+    sys.add_constraint(Constraint::Vertical { p1_idx: a, p2_idx: b });
+    sys.add_constraint(Constraint::Horizontal { p1_idx: c, p2_idx: b });
+    sys.add_constraint(Constraint::Vertical { p1_idx: corner, p2_idx: c });
+    sys.add_constraint(Constraint::HorizontalDist { p1_idx: a, p2_idx: corner, distance: 4.0 });
+    sys.add_constraint(Constraint::VerticalDist { p1_idx: c, p2_idx: corner, distance: 4.0 });
+    // La línea, con su propia referencia: el inicio va a otro lado
+    sys.add_constraint(Constraint::Fixed { p_idx: start, position: Point2::new(2.0, -3.0) });
+    sys.add_constraint(Constraint::Distance { p1_idx: start, p2_idx: end, distance: 10.0 });
+    assert_eq!(sys.decompose().len(), 2);
+
+    let r = solve(&mut sys, &default_params()).unwrap();
+    assert_relative_eq!(r.points[corner].x(), 0.0, epsilon = 1e-9);
+    assert_relative_eq!(r.points[corner].y(), 0.0, epsilon = 1e-9);
+    assert_relative_eq!(r.points[start].x(), 2.0, epsilon = 1e-9);
+    assert_relative_eq!(r.points[start].y(), -3.0, epsilon = 1e-9);
+    assert_relative_eq!(r.points[b].x(), 4.0, epsilon = 1e-9);
+    assert_relative_eq!(r.points[b].y(), 4.0, epsilon = 1e-9);
+}

@@ -152,11 +152,19 @@ impl ConstraintSystem {
     /// Si punto A no comparte ningún constraint con punto B, se resuelven
     /// en sistemas separados — reduce O(n³) a O(k³) donde k < n.
     pub fn decompose(&self) -> Vec<ConstraintSystem> {
+        self.decompose_indexed().into_iter().map(|(sub, _)| sub).collect()
+    }
+
+    /// Como [`decompose`](Self::decompose), con el índice global de cada punto
+    /// de cada sub-sistema (`map[local] = global`): dos puntos en el mismo lugar
+    /// no se pueden distinguir por sus coordenadas.
+    pub fn decompose_indexed(&self) -> Vec<(ConstraintSystem, Vec<usize>)> {
         use std::collections::{HashMap, HashSet, VecDeque};
 
         let n_points = self.points.len();
+        let whole = || vec![(self.clone(), (0..n_points).collect())];
         if n_points == 0 || self.constraints.is_empty() {
-            return vec![self.clone()];
+            return whole();
         }
 
         // Construir grafo: para cada punto, qué constraints lo afectan
@@ -202,7 +210,7 @@ impl ConstraintSystem {
 
         // Si solo hay un componente, no vale la pena descomponer
         if components.len() <= 1 {
-            return vec![self.clone()];
+            return whole();
         }
 
         // Construir sub-sistemas
@@ -233,7 +241,7 @@ impl ConstraintSystem {
                 }
             }
 
-            subsystems.push(sub);
+            subsystems.push((sub, sorted_points));
         }
 
         subsystems

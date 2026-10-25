@@ -205,3 +205,32 @@ fn jacobiano_casi_vacio_no_da_nan() {
     assert_eq!(r.status, SketchStatus::UnderConstrained);
     assert!(r.free_dirs.iter().all(|(_, d)| d.iter().all(|v| v.is_finite())));
 }
+
+#[test]
+fn line_from_a_corner_does_not_drag_the_rectangle() {
+    // Un cuadrado fijo y una línea que empieza en su esquina sin quedar unida
+    // a ella, con su propia referencia: el cuadrado no se mueve ni se deforma
+    let mut s = Sketch::new();
+    let a = s.add_point(4.0, 0.0);
+    let b = s.add_point(4.0, 4.0);
+    let c = s.add_point(0.0, 4.0);
+    let start = s.add_point(0.0, 0.0);
+    let end = s.add_point(10.0, 0.0);
+    let corner = s.add_point(0.0, 0.0);
+    let sides = [s.add_line(corner, a), s.add_line(a, b), s.add_line(b, c), s.add_line(c, corner)];
+    s.constrain(SketchConstraint::Fixed { point: corner, x: 0.0, y: 0.0 });
+    s.constrain(SketchConstraint::Horizontal { line: sides[0] });
+    s.constrain(SketchConstraint::Vertical { line: sides[1] });
+    s.constrain(SketchConstraint::Horizontal { line: sides[2] });
+    s.constrain(SketchConstraint::Vertical { line: sides[3] });
+    s.constrain(SketchConstraint::Length { line: sides[0], value: 4.0, reference: false, opts: Default::default() });
+    s.constrain(SketchConstraint::Length { line: sides[1], value: 4.0, reference: false, opts: Default::default() });
+    let line = s.add_line(start, end);
+    s.constrain(SketchConstraint::Fixed { point: start, x: 2.0, y: -3.0 });
+    s.constrain(SketchConstraint::Length { line, value: 10.0, reference: false, opts: Default::default() });
+    s.solve().unwrap();
+    for (id, want) in [(corner, [0.0, 0.0]), (a, [4.0, 0.0]), (b, [4.0, 4.0]), (c, [0.0, 4.0]), (start, [2.0, -3.0])] {
+        assert_relative_eq!(pt(&s, id)[0], want[0], epsilon = 1e-6);
+        assert_relative_eq!(pt(&s, id)[1], want[1], epsilon = 1e-6);
+    }
+}
