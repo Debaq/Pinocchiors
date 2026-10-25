@@ -66,6 +66,11 @@ tauri-plugin-shell = "2"
 # Conector MCP: imágenes en las respuestas y vista previa de los planos (SVG → PNG)
 base64 = "0.22"
 resvg = "0.45"
+# Chat con proveedores compatibles con OpenAI (DeepSeek, OpenAI, OpenRouter,
+# Ollama…): HTTPS con rustls y `ring` (compila en todas las plataformas sin
+# herramientas extra) y los certificados del sistema
+reqwest = { version = "0.13", default-features = false, features = ["json", "blocking", "rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

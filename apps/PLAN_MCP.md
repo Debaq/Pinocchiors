@@ -94,7 +94,21 @@ M5 mallas e impresión, M6 esqueleto y animación, M7 render y escáner y M9 pul
   eventos `stream-json` a mensajes (texto, herramienta con su etiqueta, resultado,
   imágenes de `view`, modelo y costo estimado); continúa la conversación con `--resume`.
 - Modelo (Fable, Opus, Sonnet, Haiku o el de Claude Code) y esfuerzo (bajo…máximo),
-  recordados.
+  recordados. La conversación queda guardada (sigue la sesión con `--resume`), con
+  tokens y costo por respuesta y total; copiar cada línea, descargar imágenes, guardar
+  la conversación en Markdown, adjuntar o pegar imágenes (van por `--input-format
+  stream-json`).
+- **Proveedores con API** (`mcp/agent.rs`): cualquier API compatible con OpenAI —
+  DeepSeek, OpenAI, OpenRouter, Ollama y LM Studio locales, u otra—. El agente vive en
+  la app: manda la conversación con las herramientas del conector como funciones,
+  ejecuta lo que pide el modelo con el mismo servidor MCP (en vivo, por turnos, con el
+  deshacer de la ventana) y repite (hasta 60 pasos). Con modelos que ven, las imágenes
+  de `view` y las adjuntas van como `image_url`. Se configuran en Configuración ▸
+  Conector para IA ▸ Proveedores para el chat (clave en `providers.json`, 0600; Probar
+  manda un mensaje mínimo); en el chat se elige el «Motor». HTTPS con `reqwest` +
+  rustls + `ring` (sin aws-lc) y los certificados del sistema. Pruebas: API falsa
+  (pide una herramienta, recibe el resultado, contesta; tokens) y, a mano, HTTPS real
+  (`--ignored`).
 - Arreglos de ese día: guardar con un ensamble activo (antes «nada que guardar», y al
   cerrar no avisaba del trabajo sin guardar); la IA tiene su propio foco de pestaña y
   escribe en la pestaña nombrada (`cad_set_tab_document`), y la ventana no cambia de

@@ -52,6 +52,7 @@ pub fn run() {
             // Modo en vivo del conector MCP (lo prende la Configuración)
             app.manage(std::sync::Arc::new(mcp::live::Bridge::default()));
             app.manage(std::sync::Arc::new(mcp::chat::Chat::default()));
+            app.manage(std::sync::Arc::new(mcp::agent::Agent::default()));
             #[cfg(target_os = "linux")]
             enable_camera(app);
             #[cfg(target_os = "linux")]
@@ -120,6 +121,10 @@ pub fn run() {
             mcp::chat::ai_chat_send,
             mcp::chat::ai_chat_stop,
             mcp::chat::ai_chat_read_image,
+            mcp::agent::ai_providers,
+            mcp::agent::ai_provider_save,
+            mcp::agent::ai_provider_delete,
+            mcp::agent::ai_provider_test,
             mcp::chat::ai_chat_reset,
             commands::remove_object,
             commands::remove_scene_node,

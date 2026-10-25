@@ -3,6 +3,7 @@
 //! stdio sin abrir ventana (lo registra Configuración ▸ Conector para IA).
 //! Plan en `apps/PLAN_MCP.md`.
 
+pub mod agent;
 pub mod backend;
 pub mod chat;
 pub mod clients;

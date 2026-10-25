@@ -201,3 +201,32 @@ Object.assign(en_settings, {
   "Más esfuerzo piensa más antes de actuar: mejor para piezas complejas, más lento y gasta más de tu cuota. Vale desde el próximo mensaje.":
     "More effort thinks more before acting: better for complex parts, slower and uses more of your quota. Applies from the next message.",
 });
+
+/** Proveedores con API para el chat */
+Object.assign(en_settings, {
+  "Proveedores para el chat": "Chat providers",
+  "Ollama (en este equipo)": "Ollama (on this computer)",
+  "LM Studio (en este equipo)": "LM Studio (on this computer)",
+  "Otro compatible con OpenAI": "Other OpenAI-compatible",
+  "Proveedor guardado. Elígelo en el chat, en «Motor».": "Provider saved. Choose it in the chat, under “Engine”.",
+  "Además de Claude Code, el chat puede usar cualquier API compatible con OpenAI: DeepSeek, OpenAI, OpenRouter, o un modelo en este equipo con Ollama o LM Studio. Se paga por uso con tu clave (los locales son gratis). Los modelos chicos se equivocan más con piezas complejas.":
+    "Besides Claude Code, the chat can use any OpenAI-compatible API: DeepSeek, OpenAI, OpenRouter, or a model on this computer with Ollama or LM Studio. You pay per use with your key (local ones are free). Small models make more mistakes with complex parts.",
+  "con clave": "with key",
+  "sin clave": "no key",
+  "ve imágenes": "sees images",
+  "Probar": "Test",
+  "Editar": "Edit",
+  "Agregar un proveedor": "Add a provider",
+  "Proveedor": "Provider",
+  "Nombre": "Name",
+  "Dirección de la API": "API address",
+  "Clave de la API": "API key",
+  "guardada (escribe otra para cambiarla)": "saved (type another to change it)",
+  "El modelo ve imágenes": "The model sees images",
+  "Cancelar": "Cancel",
+  "Borrar": "Delete",
+  "Motor": "Engine",
+  "Proveedor borrado": "Deleted provider",
+  "Usa la API de {name} con tu clave. Los proveedores se agregan en Configuración ▸ Conector para IA.": "Uses the {name} API with your key. Providers are added in Settings ▸ AI connector.",
+  "¿DeepSeek, OpenAI u Ollama? Agrégalos en Configuración ▸ Conector para IA ▸ Proveedores para el chat.": "DeepSeek, OpenAI or Ollama? Add them in Settings ▸ AI connector ▸ Chat providers.",
+});

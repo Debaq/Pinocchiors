@@ -6,6 +6,7 @@ import * as Icons from "../icons";
 import { t } from "../../lib/i18n";
 import { tBackend } from "../../lib/i18nBackend";
 import { live, liveWanted, setLiveMode, setLivePaused } from "../../lib/mcpLive";
+import { AiProviders } from "./AiProviders";
 
 /** Un cliente de IA y si tiene el conector (`mcp::clients::ClientStatus`) */
 interface ClientStatus {
@@ -136,6 +137,10 @@ export const AiConnectorSettings: Component = () => {
         <Show when={live().on}>
           <Checkbox label={t("Pausar la IA")} checked={live().paused} onChange={(p) => void setLivePaused(p)} />
         </Show>
+      </Section>
+
+      <Section title={t("Proveedores para el chat")}>
+        <AiProviders />
       </Section>
 
       <Section title={t("Conectar con una IA")}>

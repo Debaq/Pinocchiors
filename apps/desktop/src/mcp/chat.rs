@@ -201,10 +201,10 @@ impl Chat {
                 let Ok(line) = line else { break };
                 let Ok(event) = serde_json::from_str::<Value>(&line) else { continue };
                 for msg in translate(&event) {
-                    if msg["kind"] == "start" || msg["kind"] == "done" {
-                        if let Some(s) = msg["session"].as_str() {
-                            *chat.session.lock().unwrap() = Some(s.to_string());
-                        }
+                    if (msg["kind"] == "start" || msg["kind"] == "done")
+                        && let Some(s) = msg["session"].as_str()
+                    {
+                        *chat.session.lock().unwrap() = Some(s.to_string());
                     }
                     finished |= msg["kind"] == "done";
                     emit(msg);
@@ -250,18 +250,21 @@ pub struct ChatStatus {
 }
 
 #[tauri::command]
-pub fn ai_chat_status(chat: tauri::State<'_, Arc<Chat>>) -> ChatStatus {
-    ChatStatus { claude: find_claude().map(|p| p.to_string_lossy().into_owned()), busy: chat.busy(), ongoing: chat.session.lock().unwrap().is_some() }
+pub fn ai_chat_status(chat: tauri::State<'_, Arc<Chat>>, agent: tauri::State<'_, Arc<super::agent::Agent>>) -> ChatStatus {
+    ChatStatus { claude: find_claude().map(|p| p.to_string_lossy().into_owned()), busy: chat.busy() || agent.busy(), ongoing: chat.session.lock().unwrap().is_some() }
 }
 
 /// Manda un mensaje al chat; prende el modo en vivo para que los cambios se vean
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn ai_chat_send(
     app: tauri::AppHandle,
     chat: tauri::State<'_, Arc<Chat>>,
+    agent: tauri::State<'_, Arc<super::agent::Agent>>,
     bridge: tauri::State<'_, Arc<Bridge>>,
     message: String,
     images: Option<Vec<Image>>,
+    engine: Option<String>,
     model: Option<String>,
     effort: Option<String>,
     session: Option<String>,
@@ -271,6 +274,14 @@ pub fn ai_chat_send(
         return Err("Solo imágenes PNG, JPG, WebP o GIF".into());
     }
     super::live::start_for(&app, &bridge)?;
+    // Un proveedor con API (DeepSeek, OpenAI…): el agente de la app
+    if let Some(id) = engine.filter(|e| e != "claude") {
+        let handle = app.clone();
+        return agent.send(&id, &message, &images, move |msg| {
+            use tauri::Emitter;
+            let _ = handle.emit(EV_CHAT, msg);
+        });
+    }
     // La ventana guarda la conversación: tras reiniciar la app sigue la misma sesión
     if let Some(s) = session.filter(|s| s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')) {
         chat.session.lock().unwrap().get_or_insert(s);
@@ -289,14 +300,16 @@ pub fn ai_chat_read_image(path: String) -> Result<Image, String> {
 }
 
 #[tauri::command]
-pub fn ai_chat_stop(chat: tauri::State<'_, Arc<Chat>>) {
+pub fn ai_chat_stop(chat: tauri::State<'_, Arc<Chat>>, agent: tauri::State<'_, Arc<super::agent::Agent>>) {
     chat.stop();
+    agent.stop();
 }
 
 /// Conversación nueva (la próxima no continúa la anterior)
 #[tauri::command]
-pub fn ai_chat_reset(chat: tauri::State<'_, Arc<Chat>>) {
+pub fn ai_chat_reset(chat: tauri::State<'_, Arc<Chat>>, agent: tauri::State<'_, Arc<super::agent::Agent>>) {
     chat.reset();
+    agent.reset();
 }
 
 #[cfg(test)]
