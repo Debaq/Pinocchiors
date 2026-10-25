@@ -9,6 +9,7 @@ import { tBackend } from "../../lib/i18nBackend";
 import { aiLabel, refreshLive } from "../../lib/mcpLive";
 import { createPersisted, startDrag } from "../../lib/ui-state";
 import type { ProviderView } from "./AiProviders";
+import { Markdown } from "./Markdown";
 
 /** Imagen adjunta o vista (base64) */
 interface Picture {
@@ -416,7 +417,7 @@ export const AiChatPanel: Component<{ onClose: () => void }> = (props) => {
                   )}
                 </Match>
                 <Match when={e.kind === "text" && e}>
-                  {(a) => <div class="mr-6 text-text whitespace-pre-wrap leading-relaxed">{a().text}</div>}
+                  {(a) => <Markdown class="mr-6 text-text leading-relaxed" text={a().text} />}
                 </Match>
                 <Match when={e.kind === "tool" && e}>
                   {(tool) => (
