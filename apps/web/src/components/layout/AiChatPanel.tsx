@@ -386,7 +386,7 @@ export const AiChatPanel: Component<{ onClose: () => void }> = (props) => {
         </div>
       </Show>
 
-      <div ref={list} class="flex-1 overflow-y-auto px-3 py-3 space-y-2 text-sm">
+      <div ref={list} class="flex-1 overflow-y-auto px-3 py-3 space-y-2 text-sm select-text">
         <Show when={status() && !status()!.claude && engine() === "claude"}>
           <p class="text-xs text-warning leading-relaxed">
             {t("No se encontró Claude Code en este equipo. Instálalo (claude.com/claude-code) e inicia sesión una vez en la terminal; el chat usa tu cuenta.")}

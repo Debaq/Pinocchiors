@@ -169,6 +169,8 @@ export function createShortcutManager(): ShortcutManager {
       (tag === "INPUT" && !["range", "checkbox", "radio", "button", "color"].includes((target as HTMLInputElement).type));
     if (typing) return;
     if (target.isContentEditable) return;
+    // Ctrl+C con texto seleccionado (chat, mensajes) copia: no es un atajo
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c" && window.getSelection()?.toString()) return;
 
     for (const shortcut of shortcuts) {
       const b = bindingOf(shortcut);
