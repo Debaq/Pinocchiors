@@ -265,11 +265,11 @@ const AiErrors: Component = () => {
         <ul class="divide-y divide-border/60">
           <For each={list().slice(0, SHOWN)}>
             {(e) => (
-              <li class="flex items-start gap-3 py-1.5" title={`${e.example}\n${e.args}`}>
+              <li class="flex items-start gap-3 py-1.5" title={`${e.message}\n${e.args}`}>
                 <span class="w-8 shrink-0 text-right text-xs font-mono text-text-muted">{e.count}×</span>
                 <div class="flex-1 min-w-0">
                   <div class="text-xs font-mono text-text">{e.tool}</div>
-                  <div class="text-xs text-text-muted truncate">{e.message}</div>
+                  <div class="text-xs text-text-muted truncate">{e.example}</div>
                 </div>
               </li>
             )}

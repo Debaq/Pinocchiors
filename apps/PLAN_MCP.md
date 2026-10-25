@@ -70,8 +70,8 @@ con las mismas herramientas:
 1. ✅ **Pestaña de la IA a la vista en vivo** (2026-10-25): cada herramienta activa su
    pestaña en el motor y la ventana la sigue (suelta la selección, como un clic en otra);
    al terminar (fin de la respuesta del chat, o 30 s sin pasos con un cliente de afuera)
-   vuelve a la última que eligió el usuario, si después del último paso no se movió ni
-   está editando (`mcpLive.ts`).
+   vuelve a la última que eligió el usuario, si después del último paso no se movió, no
+   tocó la ventana (fuera del chat) ni está editando (`mcpLive.ts`).
 2. ✅ **Errores de la IA juntados** (2026-10-25, `mcp/errors.rs`): el servidor (chat,
    proveedores y clientes de afuera) anota en `mcp-errors.json`, junto a `mcp-live.json`,
    cada herramienta que falla por lo que pidió la IA (esquema o pedido imposible; no el
@@ -86,8 +86,14 @@ con las mismas herramientas:
    líneas `{"progress", "message"}` antes de la respuesta y la ventana lo muestra en el
    indicador («IA: Importando… 42 %»). Falta, con M5: cancelar a mitad un comando largo
    (hoy la cancelación se ve entre comandos).
-4. ❌ **Prueba real**: app Tauri abierta + cliente de IA de verdad (chat y Claude Code),
-   cubre M8 y los tres puntos anteriores.
+4. ✅ **Prueba real** (2026-10-25): app Tauri (debug, X11) en vivo con Claude Code como
+   cliente. Visto: la ventana sigue la pestaña nueva de la IA y a los 30 s vuelve a la del
+   usuario; si el usuario toca la ventana entre pasos (Ctrl+Z deshace el paso de la IA) se
+   queda donde está; errores forzados con el binario nuevo quedan agrupados en
+   Configuración, que los muestra con su mensaje real, y Borrar los quita. Sin probar a
+   mano: el regreso al terminar una respuesta del chat de la app (gasta una respuesta de
+   la IA) y el avance en vivo (ninguna herramienta usa todavía un comando largo; lo
+   cubren las pruebas).
 
 ## Activación desde la app ✅ 2026-10-25
 
@@ -270,7 +276,7 @@ con las mismas herramientas:
   ventana recibe el cambio con el documento de antes, ocupado y pausado niegan sin tocar
   nada, un fallo revierte, la selección llega, los proyectos están bloqueados y al apagar
   el conector vuelve a su motor.
-- Falta: probarlo con la app Tauri real y un cliente de IA de verdad (Próximo 4).
+- Probado con la app Tauri real y Claude Code (2026-10-25, Próximo 4).
 
 ### M9 — Guía, prompts y pulido ❌
 - Recurso `pinocchio://guide` y uno por área; `prompts` de tareas completas.

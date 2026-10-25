@@ -5,7 +5,8 @@
 //
 // Mientras la IA trabaja la ventana muestra su pestaña; al terminar (fin de la
 // respuesta del chat, o un rato sin pasos si es un cliente de afuera) vuelve a
-// la que tenía el usuario, si él no se movió.
+// la que tenía el usuario, si él no se movió ni tocó nada (fuera del chat)
+// después del último paso.
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -152,6 +153,15 @@ export function startMcpLive(cad: CadStore, ui: CadUi, notify: (message: string)
       answer(id, { error: back ? "the last change in the app is the user's (or there is none): the AI only undoes its own steps" : "there is no undone AI step to redo" });
     }),
     listen<{ fraction: number; message: string }>("mcp-live://progress", (e) => setAiProgress(e.payload)),
+    // El usuario hace algo en la ventana entre pasos: se queda donde está
+    // (escribir en el chat no cuenta)
+    ...(["pointerdown", "keydown"] as const).map((type) => {
+      const touched = (e: Event) => {
+        if (work && cad.aiTurn() === undefined && !(e.target as Element | null)?.closest?.("[data-ai-chat]")) work.userTab = null;
+      };
+      window.addEventListener(type, touched, true);
+      return Promise.resolve(() => window.removeEventListener(type, touched, true));
+    }),
     // El chat de la app dice cuándo termina su respuesta
     listen<{ kind: string }>("ai-chat://event", (e) => {
       chatting = e.payload.kind !== "done";

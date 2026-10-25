@@ -317,7 +317,7 @@ export const AiChatPanel: Component<{ onClose: () => void }> = (props) => {
   };
 
   return (
-    <aside class="relative flex flex-col shrink-0 bg-bg-darker border-r border-border overflow-hidden" style={{ width: `${width()}px` }} aria-label={t("Chat con IA")}>
+    <aside data-ai-chat class="relative flex flex-col shrink-0 bg-bg-darker border-r border-border overflow-hidden" style={{ width: `${width()}px` }} aria-label={t("Chat con IA")}>
       {/* Borde para cambiar el ancho */}
       <div
         class="absolute inset-y-0 right-0 w-1 z-10 cursor-col-resize hover:bg-accent/50 transition-colors"
