@@ -105,6 +105,7 @@ import { packHistory } from "./lib/historyPack";
 import { PlaybackBar, type PlaybackSegment } from "./components/layout/PlaybackBar";
 import { TextureEditor, TEXTURE_SLOTS, type TextureExportKind, type TextureSelection, type TextureSlot } from "./components/layout/TextureEditor";
 import { applyTheme, followSystemTheme, type ThemeSetting } from "./lib/theme";
+import { toggleFullscreen, windowFullscreen, windowMaximized } from "./lib/windowState";
 import type { MenuEntry } from "./components/ui/ContextMenu";
 import {
   SettingsDialog,
@@ -2547,6 +2548,7 @@ export const App: Component = () => {
     { key: "f", shift: true, action: () => viewerRef?.startModal("strength"), area: "rig", get description() { return t("Intensidad del pincel"); } },
     { key: "q", ctrl: true, alt: true, action: () => !showCad() && setQuadView(!quadView()), area: "view", get description() { return t("Cuatro vistas"); } },
     { key: "n", action: () => setShowContextPanel(!showContextPanel()), area: "view", get description() { return t("Mostrar/ocultar panel"); } },
+    { key: "F11", action: () => void toggleFullscreen(), area: "view", get description() { return t("Pantalla completa"); } },
     {
       key: "z",
       alt: true,
@@ -8842,6 +8844,7 @@ export const App: Component = () => {
       { label: t("A los vértices"), checked: gizmoSnap() === "vertex", disabled: !v3d, onSelect: () => setGizmoSnap("vertex") },
       { separator: true },
       { label: t("Mostrar el panel derecho"), shortcut: "N", checked: showContextPanel(), onSelect: () => setShowContextPanel(!showContextPanel()) },
+      { label: t("Pantalla completa"), shortcut: "F11", checked: windowFullscreen(), onSelect: () => void toggleFullscreen() },
     ];
   };
   const meshMenuItems = (): MenuEntry[] => {
@@ -9031,8 +9034,9 @@ export const App: Component = () => {
   // ═══════════════════════════════════════════════════════════════════════════
 
   return (
-    <div class="flex flex-col h-full w-full overflow-hidden bg-bg-darker p-2.5">
-      <div class="flex flex-col flex-1 min-h-0 overflow-hidden rounded-lg border border-border bg-bg">
+    <div class="flex flex-col h-full w-full overflow-hidden bg-bg-darker">
+      {/* Sin marco alrededor: maximizada o en pantalla completa ni el borde (es pantalla perdida) */}
+      <div class="flex flex-col flex-1 min-h-0 overflow-hidden bg-bg" classList={{ "border border-border": !windowMaximized() && !windowFullscreen() }}>
         {/* Header */}
         <Header
           title="Pinocchio"

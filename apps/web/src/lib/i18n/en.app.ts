@@ -824,6 +824,7 @@ export const en_app: Catalog = {
   "Frontal": "Front",
   "Trasera": "Back",
   "Cuatro vistas": "Four views",
+  "Pantalla completa": "Full screen",
   "Mostrar el panel derecho": "Show the right panel",
   "Ajuste al mover": "Snap when moving",
   "Sin ajuste": "No snap",

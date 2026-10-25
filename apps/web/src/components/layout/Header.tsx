@@ -1,4 +1,4 @@
-import { Component, For, JSX, Show, createSignal, onMount, onCleanup } from "solid-js";
+import { Component, For, JSX, Show, createSignal, onMount } from "solid-js";
 import { WORKSPACES, type WorkspaceId } from "../../lib/pipeline";
 import { clsx } from "clsx";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -6,6 +6,7 @@ import { IconButton, Tooltip } from "../ui";
 import * as Icons from "../icons";
 import { ContextMenu, type MenuEntry } from "../ui/ContextMenu";
 import { t } from "../../lib/i18n";
+import { watchWindow, windowMaximized } from "../../lib/windowState";
 import appIcon from "../../../../desktop/icons/icon-small.svg";
 
 export interface HeaderProps {
@@ -36,21 +37,11 @@ export interface HeaderProps {
 }
 
 export const Header: Component<HeaderProps> = (props) => {
-  const [isMaximized, setIsMaximized] = createSignal(false);
+  const isMaximized = windowMaximized;
   const [fileMenu, setFileMenu] = createSignal<{ x: number; y: number; items: MenuEntry[]; index: number } | null>(null);
   let menuClosedAt = 0;
 
-  let unlisten: (() => void) | undefined;
-
-  onMount(async () => {
-    const win = getCurrentWindow();
-    setIsMaximized(await win.isMaximized());
-    unlisten = await win.onResized(async () => {
-      setIsMaximized(await win.isMaximized());
-    });
-  });
-
-  onCleanup(() => unlisten?.());
+  onMount(watchWindow);
 
   const handleMinimize = () => getCurrentWindow().minimize();
   const handleToggleMaximize = () => getCurrentWindow().toggleMaximize();
