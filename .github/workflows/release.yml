@@ -27,8 +27,9 @@
 #                           apps/desktop/tauri.conf.json)
 #
 # Versión de la app: la fecha y hora del commit en UTC como semver
-# (AAAA.MMDD.HHMM sin ceros a la izquierda, p. ej. 2026.1022.413): crece con
-# cada release y es la que la app compara para saber si hay una nueva.
+# AA.M.<minuto del mes> (p. ej. 26.10.35849 = 25 de octubre de 2026, 21:29):
+# crece con cada release y es la que la app compara para saber si hay una
+# nueva. El instalador MSI no acepta más de 255.255.65535.
 
 name: Release
 
@@ -88,8 +89,8 @@ jobs:
             exit 1
           fi
           # 10#: que 08 o 09 no se lean en octal
-          read -r y m d hh mm <<< "$(TZ=UTC0 git show -s --format=%cd --date=format-local:'%Y %m %d %H %M' HEAD)"
-          semver="${y}.$((10#$m * 100 + 10#$d)).$((10#$hh * 100 + 10#$mm))"
+          read -r y m d hh mm <<< "$(TZ=UTC0 git show -s --format=%cd --date=format-local:'%y %m %d %H %M' HEAD)"
+          semver="$((10#$y)).$((10#$m)).$(((10#$d - 1) * 1440 + 10#$hh * 60 + 10#$mm))"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "semver=${semver}" >> "$GITHUB_OUTPUT"
           echo "Versión: ${TAG} (${semver})" >> "$GITHUB_STEP_SUMMARY"
