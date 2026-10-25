@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use super::assembly::bom;
 use super::cad::{find_tab, num};
 use super::{arg_bool, arg_str, Ctx, Effect, Fail, Output, Tool};
-use crate::schema::{array, boolean, id_or_name, object, one_of, string};
+use crate::mcp::schema::{array, boolean, id_or_name, object, one_of, string};
 
 pub const TOOLS: &[Tool] = &[EXPORT];
 

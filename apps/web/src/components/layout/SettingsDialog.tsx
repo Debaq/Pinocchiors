@@ -27,6 +27,7 @@ import {
   type MeshBuildMode,
 } from "../../lib/settings";
 import { MOUSE_HINTS, type ShortcutHint } from "./ContextPanel";
+import { AiConnectorSettings } from "./AiConnectorSettings";
 import {
   AREAS,
   conflictFor,
@@ -86,12 +87,13 @@ const EXPORT_FORMAT_OPTIONS = [
 ];
 const SCALE_OPTIONS = UI_SCALES.map((s) => ({ value: String(s), label: `${Math.round(s * 100)} %` }));
 
-type TabId = "general" | "viewer" | "shortcuts" | "files" | "about";
+type TabId = "general" | "viewer" | "shortcuts" | "files" | "ai" | "about";
 const TABS: { id: TabId; label: () => string; icon: Component<{ size?: number }> }[] = [
   { id: "general", label: () => t("General"), icon: Icons.Gear },
   { id: "viewer", label: () => t("Visor y navegación"), icon: Icons.Eye },
   { id: "shortcuts", label: () => t("Atajos de teclado"), icon: Icons.Lightning },
   { id: "files", label: () => t("Archivos y exportación"), icon: Icons.Folder },
+  { id: "ai", label: () => t("Conector para IA"), icon: Icons.MagicWand },
   { id: "about", label: () => t("Acerca de"), icon: Icons.Info },
 ];
 
@@ -509,6 +511,10 @@ export const SettingsDialog: Component<SettingsDialogProps> = (props) => {
                 />
                 <Hint>{t("Con el que arranca Exportar en un proyecto nuevo. Cada proyecto recuerda el suyo.")}</Hint>
               </Section>
+            </Show>
+
+            <Show when={tab() === "ai"}>
+              <AiConnectorSettings />
             </Show>
 
             <Show when={tab() === "about"}>

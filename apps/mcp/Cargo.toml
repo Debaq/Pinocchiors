@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Conector MCP: cualquier IA usa Pinocchio (CAD, mallas, impresión, rig, animación, render)"
+description = "Conector MCP suelto (la app instalada lo es con `--mcp`): cualquier IA usa Pinocchio"
 
 [lib]
 name = "pinocchio_mcp"
@@ -17,13 +17,8 @@ path = "src/main.rs"
 
 [dependencies]
 pinocchio-app = { path = "../desktop" }
-cad-model = { workspace = true }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-base64 = "0.22"
-image = { workspace = true }
-# Vista previa PNG de los planos (SVG)
-resvg = "0.45"
 
 [dev-dependencies]
+cad-model = { workspace = true }
+serde_json = "1"
 tempfile = "3"

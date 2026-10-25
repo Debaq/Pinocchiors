@@ -1,8 +1,8 @@
 //! Quién ejecuta los comandos: el motor propio del conector (sin ventana) o,
 //! en el modo en vivo, la app abierta. Las herramientas no saben cuál es.
 
-use pinocchio_app_lib::cad::bridge::{try_dispatch, Reply as AppReply};
-use pinocchio_app_lib::AppState;
+use crate::cad::bridge::{try_dispatch, Reply as AppReply};
+use crate::AppState;
 use serde_json::Value;
 
 /// Respuesta de un comando
@@ -80,10 +80,10 @@ impl Backend for Local {
     }
 
     fn snapshot(&self) -> Result<Vec<u8>, String> {
-        pinocchio_app_lib::project::snapshot_state(&self.state)
+        crate::project::snapshot_state(&self.state)
     }
 
     fn restore(&self, snapshot: &[u8]) -> Result<(), String> {
-        pinocchio_app_lib::project::restore_state(&self.state, snapshot)
+        crate::project::restore_state(&self.state, snapshot)
     }
 }

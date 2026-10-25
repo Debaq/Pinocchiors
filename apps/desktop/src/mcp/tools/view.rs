@@ -7,8 +7,8 @@ use serde_json::{json, Value};
 
 use super::cad::{direction, find_tab, num, tab_prop, vec3};
 use super::{arg_str, Ctx, Effect, Fail, Output, Tool};
-use crate::render::{self, Camera, Labels, Options};
-use crate::schema::{any_object, array, integer, number_in, object, one_of};
+use crate::mcp::render::{self, Camera, Labels, Options};
+use crate::mcp::schema::{any_object, array, integer, number_in, object, one_of};
 
 pub const TOOLS: &[Tool] = &[VIEW, MEASURE];
 

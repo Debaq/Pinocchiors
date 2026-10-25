@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 
 use super::cad::{add_feature, find_feature, open_design, resolve_refs, tab_prop};
 use super::{arg_bool, arg_str, Ctx, Effect, Fail, Output, Tool};
-use crate::schema::{array, boolean, id_or_name, integer, number_in, object, one_of, point, string, Prop};
+use crate::mcp::schema::{array, boolean, id_or_name, integer, number_in, object, one_of, point, string, Prop};
 
 pub const TOOLS: &[Tool] = &[EXTRUDE, REVOLVE, PRIMITIVE, FILLET, CHAMFER, SHELL];
 

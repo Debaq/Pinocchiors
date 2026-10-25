@@ -72,3 +72,42 @@ Object.assign(en_settings, {
   "Buscar atajos": "Search shortcuts",
   "Ningún atajo coincide con «{q}».": "No shortcut matches “{q}”.",
 });
+
+Object.assign(en_settings, {
+  "Conector para IA": "AI connector",
+  "Conector MCP": "MCP connector",
+  "Con el conector, una IA (Claude, Cursor, Gemini, Codex…) usa Pinocchio: diseña piezas, arma ensambles, saca planos y exporta STEP o STL. Trabaja con su propio motor, sin abrir esta ventana, y guarda proyectos que abres aquí.":
+    "With the connector, an AI (Claude, Cursor, Gemini, Codex…) uses Pinocchio: it designs parts, builds assemblies, makes drawings and exports STEP or STL. It works with its own engine, without opening this window, and saves projects you open here.",
+  "Comando que lanza la IA": "Command the AI launches",
+  "Copiar el comando": "Copy the command",
+  "Copiado al portapapeles.": "Copied to the clipboard.",
+  "Conectar con una IA": "Connect an AI",
+  "Agrega el conector a la configuración del programa elegido (antes guarda una copia del archivo). Después reinicia ese programa.":
+    "Adds the connector to the chosen program's settings (a copy of the file is saved first). Then restart that program.",
+  "Conectado": "Connected",
+  "Conectado a otra versión de la app": "Connected to another version of the app",
+  "No conectado": "Not connected",
+  "No instalado": "Not installed",
+  "Conectar": "Connect",
+  "Desconectar": "Disconnect",
+  "Actualizar": "Update",
+  "Listo: reinicia {name} para que vea el conector.": "Done: restart {name} so it sees the connector.",
+  "Se quitó el conector de {name}.": "The connector was removed from {name}.",
+  "Descargables para el agente": "Downloads for the agent",
+  "Configuración (mcp.json)": "Configuration (mcp.json)",
+  "Para pegar en cualquier otro cliente MCP.": "To paste into any other MCP client.",
+  "Guía para el agente": "Guide for the agent",
+  "Convenciones, flujos de trabajo y cada herramienta con sus argumentos (Markdown). Sirve como AGENTS.md o para pegar en las instrucciones de la IA.":
+    "Conventions, workflows and every tool with its arguments (Markdown). Use it as AGENTS.md or paste it into the AI's instructions.",
+  "Skill de Claude Code": "Claude Code skill",
+  "Instalada: Claude Code sabe cuándo y cómo usar Pinocchio.": "Installed: Claude Code knows when and how to use Pinocchio.",
+  "Le enseña a Claude Code cuándo y cómo usar Pinocchio.": "Teaches Claude Code when and how to use Pinocchio.",
+  "Se quitó la skill.": "The skill was removed.",
+  "Skill instalada en {path}.": "Skill installed in {path}.",
+  "Instalar": "Install",
+  "Quitar": "Remove",
+  "Copiar": "Copy",
+  "Guardar…": "Save…",
+  "Guardado en {path}.": "Saved to {path}.",
+  "Que la IA maneje esta misma ventana en vivo llegará más adelante.": "Letting the AI drive this very window live will come later.",
+});

@@ -10,11 +10,11 @@ use std::sync::{Arc, Mutex};
 use base64::Engine;
 use serde_json::{json, Value};
 
-use crate::guide;
-use crate::protocol::{self, Incoming};
-use crate::schema;
-use crate::session::Session;
-use crate::tools::{self, Ctx, Effect, Fail, Output};
+use crate::mcp::guide;
+use crate::mcp::protocol::{self, Incoming};
+use crate::mcp::schema;
+use crate::mcp::session::Session;
+use crate::mcp::tools::{self, Ctx, Effect, Fail, Output};
 
 /// Por dónde salen respuestas y avisos
 pub type Sender<'a> = dyn Fn(Value) + Send + Sync + 'a;

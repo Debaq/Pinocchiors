@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 
 use super::basics::describe_workspace;
 use super::{arg_bool, arg_str, Ctx, Effect, Fail, Output, Tool};
-use crate::schema::{boolean, object, string};
+use crate::mcp::schema::{boolean, object, string};
 
 pub const TOOLS: &[Tool] = &[NEW, OPEN, SAVE];
 

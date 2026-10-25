@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 
 use super::cad::{find_part, find_tab, num, vec3};
 use super::{arg_bool, arg_str, Ctx, Effect, Fail, Output, Tool};
-use crate::schema::{any_object, boolean, id_or_name, integer, number, number_in, object, one_of, point, string, Prop};
+use crate::mcp::schema::{any_object, boolean, id_or_name, integer, number, number_in, object, one_of, point, string, Prop};
 
 pub const TOOLS: &[Tool] = &[INSERT, MATE, INSTANCE, MATE_EDIT, CHECK];
 

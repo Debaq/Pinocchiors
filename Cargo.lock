@@ -3797,6 +3797,7 @@ checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
 name = "pinocchio-app"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "cad-model",
  "cad-scan",
  "converter-3mf",
@@ -3823,6 +3824,7 @@ dependencies = [
  "pinocchio-skeleton",
  "quadriflow-core",
  "rayon",
+ "resvg",
  "rmp-serde",
  "serde",
  "serde_bytes",
@@ -3913,12 +3915,8 @@ dependencies = [
 name = "pinocchio-mcp"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
  "cad-model",
- "image",
  "pinocchio-app",
- "resvg",
- "serde",
  "serde_json",
  "tempfile",
 ]

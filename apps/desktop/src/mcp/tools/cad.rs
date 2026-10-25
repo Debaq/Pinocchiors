@@ -7,7 +7,7 @@ use cad_model::{Document, FeatureId, FeatureKind};
 use serde_json::{json, Map, Value};
 
 use super::{arg_bool, arg_str, Ctx, Effect, Fail, Output, Tool};
-use crate::schema::{any_object, array, boolean, id_or_name, integer, object, one_of, string, Prop};
+use crate::mcp::schema::{any_object, array, boolean, id_or_name, integer, object, one_of, string, Prop};
 
 pub const TOOLS: &[Tool] = &[TAB_CREATE, TAB_RENAME, TAB_DELETE, DESIGN, GEOMETRY, ADD_FEATURE, EDIT_FEATURE, DELETE_FEATURE, PARAMETERS, EXPORT];
 

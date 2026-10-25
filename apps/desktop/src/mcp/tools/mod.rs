@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde_json::{json, Value};
 
-use crate::session::Session;
+use crate::mcp::session::Session;
 
 mod assembly;
 mod basics;
@@ -137,8 +137,8 @@ impl Ctx<'_> {
     pub fn call_bytes(&self, cmd: &str, args: Value) -> Result<Vec<u8>, Fail> {
         self.check_cancel()?;
         match self.session.backend.call(cmd, args)? {
-            crate::backend::Reply::Bytes(b) => Ok(b),
-            crate::backend::Reply::Json(v) => Err(Fail::new(format!("{cmd} returned {v} instead of data"))),
+            crate::mcp::backend::Reply::Bytes(b) => Ok(b),
+            crate::mcp::backend::Reply::Json(v) => Err(Fail::new(format!("{cmd} returned {v} instead of data"))),
         }
     }
 

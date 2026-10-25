@@ -3,8 +3,8 @@
 use serde_json::{json, Value};
 
 use super::{arg_str, Ctx, Effect, Fail, Output, Tool};
-use crate::guide;
-use crate::schema::{object, one_of};
+use crate::mcp::guide;
+use crate::mcp::schema::{object, one_of};
 
 pub const TOOLS: &[Tool] = &[STATUS, HELP, UNDO, REDO];
 
@@ -29,8 +29,8 @@ fn status(ctx: &Ctx, _: &Value) -> Result<Output, Fail> {
     let mut lines = vec![format!(
         "Mode: {}.",
         match s.backend.mode() {
-            crate::backend::Mode::Standalone => "standalone (own engine, no window)",
-            crate::backend::Mode::Live => "live (driving the open Pinocchio app)",
+            crate::mcp::backend::Mode::Standalone => "standalone (own engine, no window)",
+            crate::mcp::backend::Mode::Live => "live (driving the open Pinocchio app)",
         }
     )];
     lines.push(match &project.path {

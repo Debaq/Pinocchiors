@@ -68,6 +68,21 @@ planos), M1 en lo que el CAD necesita. **Para después** (decisión del usuario,
 M5 mallas e impresión, M6 esqueleto y animación, M7 render y escáner, M8 modo en vivo
 y M9 pulido; el resto de M1 se hace dentro de cada una.
 
+## Activación desde la app ✅ 2026-10-25
+
+- El conector vive en la app (`apps/desktop/src/mcp/`): `Pinocchio --mcp` habla MCP por
+  stdio sin ventana; no hace falta empaquetar otro binario (`apps/mcp` queda como binario
+  suelto de desarrollo y sus pruebas). `--mcp --guide` imprime la guía para agentes.
+- Configuración ▸ **Conector para IA**: el comando que lanzan los clientes (la app o el
+  AppImage), conectar/desconectar Claude Code (`~/.claude.json`), Claude Desktop, Cursor,
+  Gemini CLI (JSON `mcpServers`) y Codex (`[mcp_servers.pinocchio]` en TOML), con copia
+  `.pinocchio.bak` antes del primer cambio, escritura atómica y sin tocar un archivo
+  ilegible; aviso si quedó registrada otra versión de la app. Descargables: `mcp.json`,
+  la guía en Markdown y la skill de Claude Code (instalar en `~/.claude/skills/pinocchio`
+  o guardar).
+- Pruebas: JSON conserva lo demás y respalda; JSON roto no se toca; bloque de Codex se
+  agrega, reemplaza y quita; la guía lista todas las herramientas.
+
 ## Fases
 
 ### M0 — Protocolo y esqueleto ✅ 2026-10-24

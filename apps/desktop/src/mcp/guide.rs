@@ -3,8 +3,9 @@
 
 /// Lo que se manda en `initialize.instructions`: lo justo para empezar bien
 pub const INSTRUCTIONS: &str = "\
-Pinocchio is a 3D app: parametric CAD (parts, assemblies, 2D drawings), mesh import/conversion/repair/remeshing, \
-3D-print preparation, skeleton rigging, posing, animation and rendering.
+Pinocchio is a 3D app. Through these tools you do parametric CAD: parts (sketches, extrusions, fillets…), \
+assemblies with mates, 2D engineering drawings and STEP/STL export. (Mesh, rigging and animation tools are not \
+available through this connector yet.)
 Start with `status` to see what is loaded and which mode you are in. Call `help` with a topic for workflows.
 Use `view` to look at your work: it returns an image with the numbers of faces or edges you can pick.
 Conventions: lengths in millimetres, angles in degrees, Z is up. Every change can be reverted with `undo`; \
@@ -16,10 +17,10 @@ pub const TOPICS: &[(&str, &str, &str)] = &[
         "overview",
         "What Pinocchio does and how to work with it",
         "\
-Pinocchio works on one project at a time. A project holds:
+Pinocchio works on one project at a time. Through these tools a project holds:
 - Design tabs: parametric CAD parts (sketches + operations such as extrude, revolve, fillet).
 - Assembly tabs: instances of parts from design tabs, positioned with mates.
-- Scene objects: polygon meshes (imported models or meshed CAD parts), with optional skeleton, weights and animation.
+(Projects made in the app can also hold meshes, skeletons and animation; `status` reports them.)
 
 Typical loop:
 1. `status` — see what is loaded.
@@ -198,6 +199,38 @@ pub fn full() -> String {
     out.push_str(INSTRUCTIONS);
     for (name, title) in topic_list() {
         out.push_str(&format!("\n\n## {title}\n\n{}", topic(name).unwrap_or_default()));
+    }
+    out
+}
+
+/// La guía para un agente, en Markdown: convenciones, temas y cada herramienta
+/// con sus argumentos (`pinocchio --mcp --guide`, y el descargable de Configuración)
+pub fn agent_markdown() -> String {
+    let mut out = full();
+    out.push_str("\n\n## Tools\n");
+    for tool in crate::mcp::tools::all() {
+        out.push_str(&format!("\n### `{}` — {}\n\n{}\n", tool.name, tool.title, tool.description));
+        let schema = (tool.input)();
+        let required: Vec<&str> = schema["required"].as_array().into_iter().flatten().filter_map(|r| r.as_str()).collect();
+        let props = schema["properties"].as_object().cloned().unwrap_or_default();
+        if props.is_empty() {
+            out.push_str("\nNo arguments.\n");
+            continue;
+        }
+        out.push_str("\nArguments:\n");
+        for (name, p) in &props {
+            let ty = match &p["type"] {
+                serde_json::Value::String(t) => t.clone(),
+                serde_json::Value::Array(ts) => ts.iter().filter_map(|t| t.as_str()).collect::<Vec<_>>().join(" | "),
+                _ => "value".into(),
+            };
+            let options = p["enum"].as_array().map(|o| format!(" One of: {}.", o.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(", "))).unwrap_or_default();
+            out.push_str(&format!(
+                "- `{name}` ({ty}{}): {}{options}\n",
+                if required.contains(&name.as_str()) { ", required" } else { "" },
+                p["description"].as_str().unwrap_or("")
+            ));
+        }
     }
     out
 }

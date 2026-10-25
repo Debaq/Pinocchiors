@@ -7,6 +7,7 @@ pub mod bvh;
 pub mod hdri;
 pub mod imported_rig;
 pub mod lod;
+pub mod mcp;
 pub mod mesh_slot;
 pub mod peek;
 #[cfg(target_os = "linux")]
@@ -102,6 +103,10 @@ pub fn run() {
             commands::apply_rest_pose,
             commands::set_skeleton_bones,
             commands::write_text_file,
+            mcp::clients::mcp_status,
+            mcp::clients::mcp_connect,
+            mcp::clients::mcp_skill,
+            mcp::clients::mcp_download,
             commands::remove_object,
             commands::remove_scene_node,
             commands::set_scene_node_transform,

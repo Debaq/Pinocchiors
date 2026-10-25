@@ -3,46 +3,37 @@
 Conector MCP de Pinocchio: cualquier IA que hable MCP (Claude Code, Claude Desktop, Cursor,
 Codex, Gemini CLI, LM Studio…) usa la app. Plan y avance en [`../PLAN_MCP.md`](../PLAN_MCP.md).
 
-Habla MCP por stdio (un mensaje JSON por línea). Por ahora trabaja **sin ventana**, con su
-propio motor: abre y guarda proyectos `.pinocchio` que la app abre igual que los suyos. El
-modo en vivo (la IA maneja la app abierta) llega en la fase M8.
+Habla MCP por stdio (un mensaje JSON por línea) y trabaja **sin ventana**, con su propio
+motor: abre y guarda proyectos `.pinocchio` que la app abre igual que los suyos.
 
-## Compilar
+**La app instalada es el conector**: `Pinocchio --mcp` (o el AppImage con `--mcp`). Se
+activa desde la app, en **Configuración ▸ Conector para IA**: un botón por cliente (Claude
+Code, Claude Desktop, Cursor, Gemini CLI, Codex) agrega el conector a su configuración
+(antes guarda `<archivo>.pinocchio.bak`), y ahí mismo están los descargables para el
+agente: la configuración `mcp.json`, la guía en Markdown (`--mcp --guide`) y la skill de
+Claude Code. El código vive en `apps/desktop/src/mcp/`; este crate es el binario suelto
+`pinocchio-mcp` (desarrollo) y las pruebas.
 
-```sh
-cargo build --release -p pinocchio-mcp
-```
-
-El binario queda en `$CARGO_TARGET_DIR/release/pinocchio-mcp` (en este equipo,
-`~/.cargo-target/release/pinocchio-mcp`). `pinocchio-mcp --help` muestra el uso.
-
-## Conectarlo a una IA
-
-En todos los casos va la **ruta absoluta** del binario.
-
-**Claude Code**
+## A mano
 
 ```sh
-claude mcp add pinocchio -- ~/.cargo-target/release/pinocchio-mcp
+cargo build --release -p pinocchio-mcp        # binario suelto, o usar la app con --mcp
+claude mcp add pinocchio -- /ruta/Pinocchio.AppImage --mcp
 ```
 
-**Claude Desktop** (`~/.config/Claude/claude_desktop_config.json`), **Cursor**
-(`~/.cursor/mcp.json`), **Gemini CLI** (`~/.gemini/settings.json`) y la mayoría de los
-clientes usan la misma forma:
+Los demás clientes usan la misma forma (`claude_desktop_config.json`, `~/.cursor/mcp.json`,
+`~/.gemini/settings.json`):
 
 ```json
-{
-  "mcpServers": {
-    "pinocchio": { "command": "/home/USUARIO/.cargo-target/release/pinocchio-mcp" }
-  }
-}
+{ "mcpServers": { "pinocchio": { "command": "/ruta/Pinocchio.AppImage", "args": ["--mcp"] } } }
 ```
 
-**Codex CLI** (`~/.codex/config.toml`):
+Codex (`~/.codex/config.toml`):
 
 ```toml
 [mcp_servers.pinocchio]
-command = "/home/USUARIO/.cargo-target/release/pinocchio-mcp"
+command = "/ruta/Pinocchio.AppImage"
+args = ["--mcp"]
 ```
 
 ## Qué ve la IA

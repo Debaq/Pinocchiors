@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 
 use super::cad::{add_feature, apply, finish, find_feature, num, open_design, resolve_refs, sketch_state, tab_prop, Design};
 use super::{arg_str, Ctx, Effect, Fail, Output, Tool};
-use crate::schema::{any_object, array, id_or_name, integer, number, object, one_of, string};
+use crate::mcp::schema::{any_object, array, id_or_name, integer, number, object, one_of, string};
 
 pub const TOOLS: &[Tool] = &[CREATE, ADD];
 

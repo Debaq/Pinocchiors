@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use crate::backend::Backend;
+use crate::mcp::backend::Backend;
 
 /// Pasos que se pueden deshacer
 const HISTORY: usize = 20;
