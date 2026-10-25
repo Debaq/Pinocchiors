@@ -567,13 +567,23 @@ const CHECK: Tool = Tool {
     title: "Check an assembly",
     description: "Checks an assembly: whether the mates are satisfied and how many degrees of freedom are left, which \
 instances collide (shared volume in mm³), which are closer than `min_gap` mm (or the printer clearance of the \
-design), gear warnings, and the bill of materials (parts and quantities). Example: {\"min_gap\": 0.2}.",
-    input: || object(&[asm_tab_prop(), ("min_gap", number_in("Report pairs closer than this (mm)", 0.0, 100.0), false)]),
+design), gear warnings, and the bill of materials (parts and quantities). On a design tab it checks the parts of \
+that design against each other instead (collisions and clearance; there are no mates). Example: {\"min_gap\": 0.2}.",
+    input: || {
+        object(&[
+            ("tab", id_or_name("Tab to check, by id or name: an assembly, or a design with several parts. Default: the tab you worked on last (or the active one)"), false),
+            ("min_gap", number_in("Report pairs closer than this (mm)", 0.0, 100.0), false),
+        ])
+    },
     effect: Effect::Read,
     run: check,
 };
 
 fn check(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
+    let (tab, tab_name, kind) = find_tab(ctx, args.get("tab"), false)?;
+    if kind != "assembly" {
+        return check_design(ctx, args, tab, &tab_name);
+    }
     let a = open_assembly(ctx, args)?;
     let asm = a.doc.assembly.clone().unwrap_or_default();
     if asm.instances.is_empty() {
@@ -612,4 +622,33 @@ fn check(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
             "bom": rows.iter().map(BomRow::json).collect::<Vec<_>>(),
         }),
     ))
+}
+
+/// `asm_check` sobre una pestaña de diseño: sus piezas, una contra otra
+fn check_design(ctx: &Ctx, args: &Value, tab: u32, tab_name: &str) -> Result<Output, Fail> {
+    super::cad::focus(ctx, tab)?;
+    let parts = ctx.call("cad_evaluate", json!({}))?["parts"].clone();
+    let count = parts.as_array().map_or(0, Vec::len);
+    let name = |id: &Value| {
+        let found = parts.as_array().into_iter().flatten().find(|p| p["id"] == *id);
+        let n = found.and_then(|p| p["name"].as_str()).unwrap_or("");
+        format!("{}:{} \"{n}\"", id["feature"], id["index"])
+    };
+    let r = ctx.call("cad_part_interference", json!({ "min_gap": args.get("min_gap") }))?;
+    let pairs = |key: &str, unit: &str| -> Vec<String> {
+        r[key].as_array().into_iter().flatten().map(|c| format!("{} with {} ({} {unit})", name(&c[0]), name(&c[1]), num(c[2].as_f64().unwrap_or(0.0)))).collect()
+    };
+    let collisions = pairs("collisions", "mm³");
+    let close = pairs("close", "mm");
+    let mut lines = vec![format!("Design \"{tab_name}\" (tab {tab}): {count} part(s). This is a design, not an assembly: parts were checked against each other where they are modeled; there are no mates or degrees of freedom.")];
+    lines.push(if collisions.is_empty() { "No collisions between parts.".into() } else { format!("COLLISIONS: {}.", collisions.join("; ")) });
+    lines.push(match r["gap"].as_f64() {
+        Some(g) if close.is_empty() => format!("No pairs closer than {} mm.", num(g)),
+        Some(g) => format!("Closer than {} mm: {}.", num(g), close.join("; ")),
+        None => "Clearance not checked (pass `min_gap`, or set a printer in the design).".into(),
+    });
+    if count > 1 {
+        lines.push("To check motion (mates, degrees of freedom) make an assembly: `cad_tab_create` {\"kind\": \"assembly\"}, then `asm_insert` these parts.".into());
+    }
+    Ok(Output::new(lines.join("\n"), json!({ "tab": tab, "kind": "design", "parts": count, "collisions": r["collisions"], "close": r["close"], "gap": r["gap"] })))
 }

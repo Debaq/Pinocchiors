@@ -1202,6 +1202,56 @@ fn assembly_clearance_impl(state: &AppState, min_gap: Option<f64>) -> Result<Vec
     Ok(cad_model::assembly::tight_gaps(ev, &asm, &shapes, gap))
 }
 
+/// Choques entre las piezas de un diseño (sin ensamble): cuáles se pisan (mm³) y, con `min_gap`
+/// (o la holgura de la impresora del diseño), cuáles quedan más cerca. Los engranes enlazados se
+/// saltan en la holgura, como en el ensamble. Lo usa `asm_check` del conector sobre un diseño.
+#[derive(Serialize)]
+pub struct PartClashes {
+    pub collisions: Vec<(cad_model::PartId, cad_model::PartId, f64)>,
+    pub close: Vec<(cad_model::PartId, cad_model::PartId, f64)>,
+    /// La holgura usada; sin ella no se revisó
+    pub gap: Option<f64>,
+}
+
+fn part_interference_impl(state: &AppState, min_gap: Option<f64>) -> Result<PartClashes, String> {
+    let doc = state.cad_doc().ok_or("No hay un diseño abierto")?;
+    let gap = min_gap.or_else(|| doc.fabrication.as_ref().map(|f| f.tolerances().fit_clearance(f.fit)));
+    evaluate_committed(state)?;
+    let cache = state.cad_cache.lock().unwrap();
+    let ev = &cache.as_ref().ok_or("El diseño todavía no tiene un sólido")?.eval;
+    let solids: Vec<&cad_model::Part> = ev.parts.iter().filter(|p| !p.is_surface()).collect();
+    let shapes: Vec<(u32, cad_model::Shape)> = solids.iter().enumerate().map(|(i, p)| (i as u32, p.shape.clone())).collect();
+    let id = |i: u32| solids[i as usize].id;
+    let collisions = cad_model::assembly::interferences(&shapes).into_iter().map(|(a, b, v)| (id(a), id(b), v)).collect();
+    let mut close = Vec::new();
+    if let Some(gap) = gap {
+        // Engranes enlazados: ahí el juego lo da el backlash
+        let linked = |a: cad_model::FeatureId, b: cad_model::FeatureId| {
+            let l = |x, y| ev.gears.iter().any(|g| g.feature == x && g.part.link.is_some_and(|l| l.feature == y));
+            l(a, b) || l(b, a)
+        };
+        let boxes: Vec<_> = shapes.iter().map(|(_, s)| s.mass().ok().map(|m| (m.bbox_min, m.bbox_max))).collect();
+        for i in 0..shapes.len() {
+            for j in i + 1..shapes.len() {
+                let (Some((a0, a1)), Some((b0, b1))) = (boxes[i], boxes[j]) else { continue };
+                if (0..3).any(|k| a0[k] > b1[k] + gap || b0[k] > a1[k] + gap) || linked(solids[i].id.feature, solids[j].id.feature) {
+                    continue;
+                }
+                let overlap = shapes[i].1.intersect(&shapes[j].1).ok().and_then(|c| c.mass().ok()).is_some_and(|m| m.volume > 1e-9);
+                if overlap {
+                    continue;
+                }
+                if let Some((d, _, _)) = shapes[i].1.min_distance(&shapes[j].1)
+                    && d < gap
+                {
+                    close.push((solids[i].id, solids[j].id, d));
+                }
+            }
+        }
+    }
+    Ok(PartClashes { collisions, close, gap })
+}
+
 /// Acoplamientos que piden los engranes enlazados que están en el ensamble.
 #[tauri::command]
 pub async fn cad_assembly_suggest(app: AppHandle) -> Result<Vec<cad_model::Relation>, String> {
@@ -3262,6 +3312,7 @@ pub mod bridge {
             "cad_assembly_interference" => ok(assembly_interference_impl(state)?),
             "cad_assembly_clearance" => ok(assembly_clearance_impl(state, arg::<Option<f64>>(args, "min_gap")?)?),
             "cad_assembly_suggest" => ok(assembly_suggest_impl(state)?),
+            "cad_part_interference" => ok(part_interference_impl(state, arg::<Option<f64>>(args, "min_gap")?)?),
             "cad_assembly_gear_warnings" => ok(assembly_gear_warnings_impl(state)?),
             "cad_drawing_info" => ok(drawing_info_impl(state)?),
             "cad_drawing" => ok(drawing_impl(state, &arg::<Vec<DrawingViewSpec>>(args, "views")?)?),

@@ -334,3 +334,27 @@ fn the_ai_keeps_working_on_its_own_tab_when_the_active_one_changes() {
     let (text, _) = ok(&s, "cad_primitive", json!({ "shape": "sphere", "radius": 2, "origin": [20, 0, 0] }));
     assert!(text.contains("tab \"Dos\""), "{text}");
 }
+
+#[test]
+fn asm_check_on_a_design_checks_its_parts() {
+    if !cad_model::occt::available() {
+        return;
+    }
+    let s = server();
+    ok(&s, "cad_tab_create", json!({ "kind": "design", "name": "Caja de cambios" }));
+    ok(&s, "cad_primitive", json!({ "shape": "box", "dimensions": [20, 20, 10], "name": "Placa" }));
+    // Un eje que atraviesa la placa (choca) y otro a 0,1 mm del borde
+    ok(&s, "cad_primitive", json!({ "shape": "cylinder", "diameter": 6, "height": 30, "origin": [0, 0, -10], "op": "new", "name": "Eje" }));
+    ok(&s, "cad_primitive", json!({ "shape": "box", "dimensions": [5, 5, 5], "origin": [12.6, 0, 0], "op": "new", "name": "Taco" }));
+
+    let (text, data) = ok(&s, "asm_check", json!({ "min_gap": 0.2 }));
+    assert_eq!(data["kind"], "design", "{text}");
+    assert_eq!(data["parts"], 3, "{text}");
+    let collisions = data["collisions"].as_array().unwrap();
+    assert_eq!(collisions.len(), 1, "{text}");
+    assert!((collisions[0][2].as_f64().unwrap() - std::f64::consts::PI * 9.0 * 10.0).abs() < 0.5, "{text}");
+    let close = data["close"].as_array().unwrap();
+    assert_eq!(close.len(), 1, "{text}");
+    assert!((close[0][2].as_f64().unwrap() - 0.1).abs() < 1e-6, "{text}");
+    assert!(text.contains("COLLISIONS") && text.contains("\"Pieza 2\"") && text.contains("asm_insert"), "{text}");
+}

@@ -86,7 +86,7 @@ Assemblies put parts from design tabs together and connect them with mates (like
    axis; the second instance moves. Shaft in a hole: cylindrical between the two cylinders. Faces touching each other:
    fastened or planar with `flip: true`.
 5. `asm_mate_edit` with `distance` / `angle` positions or drives a joint; `asm_instance` moves, fixes or removes.
-6. `asm_check`: unsatisfied mates, degrees of freedom, collisions, clearance and the bill of materials.
+6. `asm_check`: unsatisfied mates, degrees of freedom, collisions, clearance and the bill of materials. On a design tab with several parts it checks those parts against each other (collisions, clearance).
 7. `drawing_export` {\"tab\": ..., \"path\": \"/abs/file.pdf\"} makes a drawing sheet of a design or an assembly (with
    the bill of materials and balloons); look at the returned preview.
 - `cad_design`, `cad_geometry`, `view` and `measure` also work on assembly tabs (the \"part\" of a face is its instance).
