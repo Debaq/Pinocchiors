@@ -404,6 +404,56 @@
   --color-uv-edge: #a9b665b3;
 }
 
+/* Blender: gris neutro de su tema por defecto, acento azul y ejes rojo/verde/azul.
+   El azul del acento es más claro que el de Blender (#4772b3): sobre él va texto oscuro */
+:root[data-theme="blender"] {
+  --color-bg: #303030;
+  --color-bg-darker: #262626;
+  --color-bg-lighter: #3d3d3d;
+  --color-surface: #4a4a4a;
+  --color-fg: #e6e6e6;
+  --color-comment: #8c8c8c;
+
+  --color-cyan: #5fc4d8;
+  --color-green: #71c454;
+  --color-orange: #ffaf29;
+  --color-pink: #e06cb0;
+  --color-purple: #a98ae0;
+  --color-red: #ff5c5c;
+  --color-yellow: #f5d453;
+
+  --color-accent: #7aa2e0;
+  --color-accent-hover: #8db1e8;
+  --color-accent-dim: #4772b3;
+
+  --color-success: #71c454;
+  --color-warning: #ffaf29;
+  --color-error: #ff5c5c;
+  --color-info: #5fc4d8;
+  --color-sketch-free: #5aa9ff;
+  /* Sketch: línea de construcción (discontinua), más clara que el comentario para leerse */
+  --color-sketch-construction: #a8a8a8;
+  --color-preselect: #ffd166;
+
+  --color-text: #e6e6e6;
+  --color-text-muted: #c2c2c2;
+  --color-text-dim: #a6a6a6;
+
+  --color-border: #5e5e5e;
+  --color-border-hover: #8c8c8c;
+
+  --color-viewport: #393939;
+  --color-grid-minor: #4a4a4a;
+  --color-grid-major: #5e5e5e;
+  --color-axis-x: #ff3352;
+  --color-axis-y: #8bdc00;
+  --color-axis-z: #2890ff;
+  --color-cube-face: #4a4a4a;
+  --color-cube-border: #8c8c8c;
+  --color-cube-text: #e6e6e6;
+  --color-uv-edge: #8bdc00b3;
+}
+
 .theme-switching,
 .theme-switching * {
   transition: none !important;

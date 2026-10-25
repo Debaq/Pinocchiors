@@ -35,6 +35,7 @@ export const enShell: Catalog = {
   "Grafito (oscuro neutro)": "Graphite (neutral dark)",
   "Ártico (oscuro frío)": "Arctic (cool dark)",
   "Brasa (oscuro cálido)": "Ember (warm dark)",
+  "Blender (oscuro gris)": "Blender (gray dark)",
   "Claro": "Light",
   "Papel (claro cálido)": "Paper (warm light)",
   "Según el sistema": "Follow system",

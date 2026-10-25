@@ -7,7 +7,7 @@
 import { createSignal } from "solid-js";
 import { t } from "./i18n.ts";
 
-export type Theme = "dark" | "graphite" | "nord" | "warm" | "light" | "sepia";
+export type Theme = "dark" | "graphite" | "nord" | "warm" | "blender" | "light" | "sepia";
 export type ThemeSetting = Theme | "system";
 
 /** Temas, con sus colores en styles/app.css (`:root[data-theme="…"]`) */
@@ -16,6 +16,7 @@ export const THEMES: { value: Theme; label: string }[] = [
   { value: "graphite", get label() { return t("Grafito (oscuro neutro)"); } },
   { value: "nord", get label() { return t("Ártico (oscuro frío)"); } },
   { value: "warm", get label() { return t("Brasa (oscuro cálido)"); } },
+  { value: "blender", get label() { return t("Blender (oscuro gris)"); } },
   { value: "light", get label() { return t("Claro"); } },
   { value: "sepia", get label() { return t("Papel (claro cálido)"); } },
 ];
