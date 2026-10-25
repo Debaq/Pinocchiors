@@ -15,7 +15,8 @@
   /* Botones, campos y filas resaltadas (no usar `current`: en Tailwind es currentColor) */
   --color-surface: #44475a;
   --color-fg: #f8f8f2;
-  --color-comment: #6272a4;
+  /* Más claro que el de Drácula (#6272a4): los planos y la rejilla del sketch se pintan con él */
+  --color-comment: #7a88bc;
 
   --color-cyan: #8be9fd;
   --color-green: #50fa7b;
@@ -43,12 +44,15 @@
 
   /* Texto */
   --color-text: #f8f8f2;
-  --color-text-muted: #8a93bd;
-  --color-text-dim: #6272a4;
+  /* Secundario ≥ 4.5:1 sobre los campos (surface) y el tenue ≥ 5:1 sobre el fondo:
+     con #8a93bd / #6272a4 los títulos, ayudas y unidades no se leían */
+  --color-text-muted: #b0b8e0;
+  --color-text-dim: #8f99c6;
 
   /* Bordes */
-  --color-border: #44475a;
-  --color-border-hover: #6272a4;
+  /* Distinto de surface: si no, campos y botones quedan sin borde */
+  --color-border: #585c78;
+  --color-border-hover: #7a88bc;
 
   /* Visor 3D y lienzos */
   --color-viewport: #282a36;
@@ -58,7 +62,7 @@
   --color-axis-y: #50fa7b;
   --color-axis-z: #8be9fd;
   --color-cube-face: #44475a;
-  --color-cube-border: #6272a4;
+  --color-cube-border: #7a88bc;
   --color-cube-text: #f8f8f2;
   --color-uv-edge: #50fa7bb3;
 
@@ -147,7 +151,9 @@
 }
 
 /* Los temas para trabajar horas: nada de blanco ni negro puros, contraste
-   del texto alto pero no al máximo y acentos poco saturados */
+   del texto alto pero no al máximo y acentos poco saturados. Mínimos en los
+   oscuros: text-muted ≥ 4.5:1 sobre surface, text-dim ≥ 5:1 sobre bg y border
+   distinto de surface (si no, campos y botones quedan sin borde) */
 
 /* Claro: gris suave en vez de blanco (el visor un poco más oscuro que los paneles) */
 :root[data-theme="light"] {
@@ -258,7 +264,7 @@
   --color-bg-lighter: #27292d;
   --color-surface: #35383d;
   --color-fg: #d5d8dc;
-  --color-comment: #6c727c;
+  --color-comment: #7f858f;
 
   --color-cyan: #67bfca;
   --color-green: #8fc06b;
@@ -282,11 +288,11 @@
   --color-preselect: #e8c46a;
 
   --color-text: #d5d8dc;
-  --color-text-muted: #989ea8;
-  --color-text-dim: #6c727c;
+  --color-text-muted: #9da3ac;
+  --color-text-dim: #8c919b;
 
-  --color-border: #313439;
-  --color-border-hover: #4b5058;
+  --color-border: #474c52;
+  --color-border-hover: #7f858f;
 
   --color-viewport: #232528;
   --color-grid-minor: #33363b;
@@ -295,7 +301,7 @@
   --color-axis-y: #8fc06b;
   --color-axis-z: #67a8e0;
   --color-cube-face: #35383d;
-  --color-cube-border: #4b5058;
+  --color-cube-border: #7f858f;
   --color-cube-text: #d5d8dc;
   --color-uv-edge: #8fc06bb3;
 }
@@ -307,7 +313,7 @@
   --color-bg-lighter: #353c4a;
   --color-surface: #434c5e;
   --color-fg: #d8dee9;
-  --color-comment: #6b7891;
+  --color-comment: #8a95a9;
 
   --color-cyan: #88c0d0;
   --color-green: #a3be8c;
@@ -331,11 +337,11 @@
   --color-preselect: #ebcb8b;
 
   --color-text: #d8dee9;
-  --color-text-muted: #a0aabb;
-  --color-text-dim: #6b7891;
+  --color-text-muted: #b6becb;
+  --color-text-dim: #9ea6b7;
 
-  --color-border: #3b4252;
-  --color-border-hover: #4c566a;
+  --color-border: #546076;
+  --color-border-hover: #8a95a9;
 
   --color-viewport: #2e3440;
   --color-grid-minor: #3b4252;
@@ -344,7 +350,7 @@
   --color-axis-y: #a3be8c;
   --color-axis-z: #81a1c1;
   --color-cube-face: #3b4252;
-  --color-cube-border: #4c566a;
+  --color-cube-border: #8a95a9;
   --color-cube-text: #d8dee9;
   --color-uv-edge: #a3be8cb3;
 }
@@ -356,7 +362,7 @@
   --color-bg-lighter: #31302c;
   --color-surface: #44403a;
   --color-fg: #e2d6c0;
-  --color-comment: #7f7668;
+  --color-comment: #8e8475;
 
   --color-cyan: #7daea3;
   --color-green: #a9b665;
@@ -380,11 +386,11 @@
   --color-preselect: #e2b45c;
 
   --color-text: #e2d6c0;
-  --color-text-muted: #ab9f8b;
-  --color-text-dim: #7f7668;
+  --color-text-muted: #b7ac9b;
+  --color-text-dim: #9e9588;
 
-  --color-border: #3b3833;
-  --color-border-hover: #5a544a;
+  --color-border: #59544c;
+  --color-border-hover: #8e8475;
 
   --color-viewport: #282623;
   --color-grid-minor: #3b3833;
@@ -393,7 +399,7 @@
   --color-axis-y: #a9b665;
   --color-axis-z: #7daea3;
   --color-cube-face: #3b3833;
-  --color-cube-border: #5a544a;
+  --color-cube-border: #8e8475;
   --color-cube-text: #e2d6c0;
   --color-uv-edge: #a9b665b3;
 }

@@ -386,7 +386,7 @@ export class CadViewer {
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     if (this.preselectMark instanceof LineSegments2) this.preselectMark.material.resolution.set(w, h);
-    for (const o of this.sketchGroup.children) if (o instanceof Line2) o.material.resolution.set(w, h);
+    for (const o of [...this.sketchGroup.children, ...this.sketchesGroup.children]) if (o instanceof Line2) o.material.resolution.set(w, h);
     this.requestRender();
   }
 
@@ -1302,38 +1302,26 @@ export class CadViewer {
     const halos = hex("viewport");
     const lines = (pts: (P2 | undefined)[], color: number, dashed = false, width = 1) => {
       if (pts.some((p) => !p)) return;
-      if (width > 1) {
-        // Las líneas de WebGL tienen 1 px: las gruesas (elegidas, bajo el mouse) van con Line2
-        const g = new LineGeometry().setPositions((pts as P2[]).flatMap((p) => w(p).toArray()));
-        const m = new LineMaterial({
-          color,
-          linewidth: width,
-          resolution: this.renderer.getSize(new THREE.Vector2()),
-          depthTest: false,
-          dashed,
-          dashSize: 2 / this.mmPerUnit,
-          gapSize: 1.5 / this.mmPerUnit,
-        });
-        const l = new Line2(g, m);
-        if (dashed) l.computeLineDistances();
-        l.renderOrder = 8;
-        this.sketchGroup.add(l);
-        return;
-      }
-      // Contorno del color del visor: separa la línea del cuerpo gris que pueda haber detrás
-      const halo = new Line2(
-        new LineGeometry().setPositions((pts as P2[]).flatMap((p) => w(p).toArray())),
-        new LineMaterial({ color: halos, linewidth: 3, resolution: this.renderer.getSize(new THREE.Vector2()), depthTest: false, transparent: true, opacity: 0.85 }),
-      );
+      const positions = (pts as P2[]).flatMap((p) => w(p).toArray());
+      const resolution = this.renderer.getSize(new THREE.Vector2());
+      // Contorno opaco del color del visor: sobre una cara clara del cuerpo la
+      // línea fina se perdía y no se distinguía su color (libre, definida, construcción)
+      const halo = new Line2(new LineGeometry().setPositions(positions), new LineMaterial({ color: halos, linewidth: Math.max(width, 2) + 2.5, resolution, depthTest: false }));
       halo.renderOrder = 6;
       this.sketchGroup.add(halo);
-      const g = new THREE.BufferGeometry().setFromPoints((pts as P2[]).map(w));
-      const m = dashed
-        ? new THREE.LineDashedMaterial({ color, dashSize: 2 / this.mmPerUnit, gapSize: 1.5 / this.mmPerUnit, depthTest: false })
-        : new THREE.LineBasicMaterial({ color, depthTest: false });
-      const l = new THREE.Line(g, m);
+      // Las líneas de WebGL tienen 1 px: todas van con Line2, las normales de 2 px
+      const m = new LineMaterial({
+        color,
+        linewidth: width > 1 ? width : 2,
+        resolution,
+        depthTest: false,
+        dashed,
+        dashSize: 2 / this.mmPerUnit,
+        gapSize: 1.5 / this.mmPerUnit,
+      });
+      const l = new Line2(new LineGeometry().setPositions(positions), m);
       if (dashed) l.computeLineDistances();
-      l.renderOrder = 7;
+      l.renderOrder = width > 1 ? 8 : 7;
       this.sketchGroup.add(l);
     };
     const normal = hex("fg");
@@ -1467,6 +1455,10 @@ export class CadViewer {
     const pg = new THREE.BufferGeometry();
     pg.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
     pg.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
+    // Borde del color del visor detrás de cada punto: el amarillo y el verde no se leían sobre una cara clara
+    const ptsHalo = new THREE.Points(pg, new THREE.PointsMaterial({ color: halos, size: 10, sizeAttenuation: false, depthTest: false }));
+    ptsHalo.renderOrder = 8;
+    this.sketchGroup.add(ptsHalo);
     const pts = new THREE.Points(pg, new THREE.PointsMaterial({ size: 7, sizeAttenuation: false, vertexColors: true, depthTest: false }));
     pts.renderOrder = 8;
     this.sketchGroup.add(pts);
@@ -1489,7 +1481,8 @@ export class CadViewer {
       lines([[0, 0], [axisLen, 0]], hex("axis-x"));
       lines([[0, 0], [0, axisLen]], hex("axis-y"));
       // Debajo de lo dibujado: con el mismo orden iban después y tapaban las líneas sobre el eje
-      for (const l of this.sketchGroup.children.slice(-2)) l.renderOrder = 6;
+      // (cada eje deja su contorno y su línea)
+      this.sketchGroup.children.slice(-4).forEach((l, i) => (l.renderOrder = i % 2 ? 6 : 5.5));
     }
     // Todo en la pasada de lo transparente, donde vale `renderOrder`: si no, los calcos
     // (transparentes, se dibujan después de lo opaco) tapaban las líneas y los puntos
@@ -1544,9 +1537,14 @@ export class CadViewer {
         this.sketchesGroup.add(mesh);
       });
       const point = new Map(vs.sketch.points.map((p) => [p.id, [p.x, p.y] as P2]));
+      const resolution = this.renderer.getSize(new THREE.Vector2());
       for (const e of vs.sketch.entities) {
         const pts = entityPolyline(e.geometry, point);
         if (!pts) continue;
+        // Contorno del color del visor: la línea clara no se veía sobre una cara clara del cuerpo
+        const halo = new Line2(new LineGeometry().setPositions(pts.flatMap((p) => w(p).toArray())), new LineMaterial({ color: themeHex("viewport"), linewidth: 3.5, resolution }));
+        halo.renderOrder = 4;
+        this.sketchesGroup.add(halo);
         const g = new THREE.BufferGeometry().setFromPoints(pts.map(w));
         const color = themeHex(vs.whole ? "cyan" : e.construction ? "sketch-construction" : "fg");
         const l = e.construction
@@ -1892,7 +1890,8 @@ export class CadViewer {
     if (want.regions) {
       for (const o of this.sketchesGroup.children) {
         const m = o as THREE.Mesh;
-        if (!m.isMesh) continue;
+        // Solo las regiones (los contornos de las líneas también son Mesh)
+        if (o.userData.region === undefined) continue;
         const pos = m.geometry.getAttribute("position") as THREE.BufferAttribute;
         const idx = m.geometry.getIndex();
         const n = idx ? idx.count : pos.count;
@@ -2116,7 +2115,7 @@ export class CadViewer {
     const candidates: { d: number; rank: number; pick: CadPick }[] = [];
     const eps = dist * 1e-4;
     if (want.regions) {
-      const hit = this.raycaster.intersectObjects(this.sketchesGroup.children.filter((o) => (o as THREE.Mesh).isMesh))[0];
+      const hit = this.raycaster.intersectObjects(this.sketchesGroup.children.filter((o) => o.userData.region !== undefined))[0];
       if (hit) {
         const u = hit.object.userData as { sketch: number; region: number };
         candidates.push({ d: hit.distance - eps, rank: 0, pick: { kind: "region", sketch: u.sketch, region: u.region, point: hit.point } });
