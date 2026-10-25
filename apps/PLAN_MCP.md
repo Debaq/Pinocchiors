@@ -119,10 +119,21 @@ con las mismas herramientas:
   JSON y deshacer, exportar STEP sin pisar; JSON crudo (simetría, vaciado por número);
   pestañas por nombre; ejemplos de la guía.
 
-### M3 — Ver y medir ❌
-- `view` (PNG de la pestaña, pieza, ensamble, malla o pose; vistas estándar o ángulo),
-  `measure` (distancia, ángulo, radio entre caras, aristas y puntos), `describe_faces`
-  (caras con nombre, normal, área, para poder referirlas).
+### M3 — Ver y medir ✅ 2026-10-24 (diseños; mallas y poses en M5/M6)
+- `view`: PNG del diseño con un rasterizador propio (`render.rs`, sin ventana ni GPU):
+  proyección ortográfica, supermuestreo 2×, sombreado, aristas visibles con prueba de
+  profundidad, un color por pieza, triedro X/Y/Z y el **número de cada cara visible**
+  (en su punto más adentro, por transformada de distancia, cerca del centro) o de cada
+  arista visible; `highlight_faces` / `highlight_edges` en naranja para confirmar antes de
+  usar. Vistas iso, iso_back, iso_below, top, bottom, front, back, left, right, o
+  azimut/elevación. Los números son los de `cad_geometry` (prueba).
+- `measure`: una o dos cosas (cara, arista, punto): tipo, área, largo, radio, centro,
+  dirección; distancia mínima con sus puntos y ΔX/ΔY/ΔZ, distancia entre centros y ángulo
+  (sobre `cad_measure`).
+- `describe_faces` quedó en `cad_geometry` (M2).
+- Pruebas: cubo en iso numera sus 3 caras visibles y en planta 1; arista oculta sin
+  número; con OCCT, la vista superior numera justo la cara `facing +Z` y las cuentas de
+  caras/aristas coinciden con `cad_geometry`; medidas entre caras y desde un punto.
 
 ### M4 — Ensambles y planos ❌
 - `asm_insert`, `asm_mate`, `asm_move`, `asm_check` (interferencias, holguras),

@@ -61,6 +61,8 @@ command = "/home/USUARIO/.cargo-target/release/pinocchio-mcp"
 | `undo` / `redo` | Deshacer y rehacer los últimos 20 cambios |
 | `project_new` / `project_open` / `project_save` | Proyectos `.pinocchio` |
 | `cad_tab_create` / `cad_tab_rename` / `cad_tab_delete` | Pestañas de diseño y ensamble |
+| `view` | Imagen PNG del diseño con los números de caras o aristas, resaltados y ejes |
+| `measure` | Medidas, distancias y ángulos entre caras, aristas y puntos |
 | `cad_design` | Operaciones, estado, parámetros y piezas de un diseño |
 | `cad_geometry` | Caras y aristas numeradas para elegirlas |
 | `sketch_create` / `sketch_add` | Sketches con figuras y restricciones |
@@ -70,8 +72,8 @@ command = "/home/USUARIO/.cargo-target/release/pinocchio-mcp"
 | `cad_parameters` | Parámetros y fórmulas |
 | `cad_export` | STEP, STL, 3MF, OBJ, PLY, GLB |
 
-Ver y medir, ensambles, planos, mallas, impresión, esqueleto, animación y render se
-suman por fases (M3–M7).
+Ensambles, planos, mallas, impresión, esqueleto, animación y render se
+suman por fases (M4–M7).
 
 ## Probar
 

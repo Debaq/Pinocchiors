@@ -4,6 +4,7 @@
 pub mod backend;
 pub mod guide;
 pub mod protocol;
+pub mod render;
 pub mod schema;
 pub mod server;
 pub mod session;

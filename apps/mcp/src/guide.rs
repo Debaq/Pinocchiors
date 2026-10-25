@@ -6,6 +6,7 @@ pub const INSTRUCTIONS: &str = "\
 Pinocchio is a 3D app: parametric CAD (parts, assemblies, 2D drawings), mesh import/conversion/repair/remeshing, \
 3D-print preparation, skeleton rigging, posing, animation and rendering.
 Start with `status` to see what is loaded and which mode you are in. Call `help` with a topic for workflows.
+Use `view` to look at your work: it returns an image with the numbers of faces or edges you can pick.
 Conventions: lengths in millimetres, angles in degrees, Z is up. Every change can be reverted with `undo`; \
 a tool that fails changes nothing. Nothing is written to disk unless you call a save/export tool with a path.";
 
@@ -48,8 +49,12 @@ A design tab is a list of operations computed in order. Typical part:
 1. `sketch_create` on a plane with shapes (rectangle, circle, slot…), optionally constrained.
 2. `cad_extrude` (or `cad_revolve`) the sketch: op `join` adds material, `cut` removes it.
 3. More sketches on faces (`sketch_create` with `on_face`) for holes and bosses; or `cad_primitive` with op `cut`.
-4. `cad_fillet` / `cad_chamfer` / `cad_shell` using face and edge numbers from `cad_geometry`.
-5. Check with `cad_design` (operations, errors, size, volume); `cad_export` to STEP/STL.
+4. `cad_fillet` / `cad_chamfer` / `cad_shell` using face and edge numbers from `view` or `cad_geometry`.
+5. Check with `view` (an image) and `cad_design` (operations, errors, size, volume); `cad_export` to STEP/STL.
+
+- `view` prints the number of every visible face (or edge, with `labels: \"edges\"`) on the image: look at it to
+  pick the right one, and confirm a pick with `highlight_faces` / `highlight_edges` before cutting or rounding.
+- `measure` gives sizes, distances and angles between faces, edges and points.
 
 - Planes: xy = top (sketch x→X, y→Y, normal +Z); xz = front (x→X, y→Z, normal −Y); yz = right (x→Y, y→Z, normal +X).
 - Face and edge numbers change after every change: list them again with `cad_geometry` before picking.

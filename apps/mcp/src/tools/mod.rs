@@ -12,6 +12,7 @@ mod cad;
 mod features;
 mod project;
 mod sketch;
+mod view;
 
 /// Una herramienta
 pub struct Tool {
@@ -64,6 +65,7 @@ pub fn all() -> Vec<&'static Tool> {
     let mut list: Vec<&'static Tool> = Vec::new();
     list.extend(basics::TOOLS);
     list.extend(project::TOOLS);
+    list.extend(view::TOOLS);
     list.extend(cad::TOOLS[..5].iter());
     list.extend(sketch::TOOLS);
     list.extend(features::TOOLS);
@@ -125,6 +127,15 @@ impl Ctx<'_> {
     pub fn call(&self, cmd: &str, args: Value) -> Result<Value, Fail> {
         self.check_cancel()?;
         Ok(self.session.backend.call(cmd, args)?.json())
+    }
+
+    /// Un comando de la app que devuelve bytes (mallas, imágenes)
+    pub fn call_bytes(&self, cmd: &str, args: Value) -> Result<Vec<u8>, Fail> {
+        self.check_cancel()?;
+        match self.session.backend.call(cmd, args)? {
+            crate::backend::Reply::Bytes(b) => Ok(b),
+            crate::backend::Reply::Json(v) => Err(Fail::new(format!("{cmd} returned {v} instead of data"))),
+        }
     }
 
     /// Avance de 0 a 1 con lo que se está haciendo

@@ -94,7 +94,7 @@ pub(super) fn vec2(v: &Value) -> String {
 }
 
 /// Una dirección: «+Z» si es un eje, si no el vector
-fn direction(v: &Value) -> String {
+pub(super) fn direction(v: &Value) -> String {
     let c: Vec<f64> = (0..3).map(|k| v[k].as_f64().unwrap_or(0.0)).collect();
     for (k, axis) in ["X", "Y", "Z"].iter().enumerate() {
         if (c[k].abs() - 1.0).abs() < 1e-6 {

@@ -195,3 +195,37 @@ fn guide_examples_are_valid() {
         assert!(guide::topic(name).is_some_and(|t| t.len() > 100), "{name}");
     }
 }
+
+#[test]
+fn view_and_measure_use_the_same_numbers() {
+    if !cad_model::occt::available() {
+        return;
+    }
+    let s = server();
+    ok(&s, "cad_primitive", json!({ "shape": "box", "dimensions": [40, 20, 10] }));
+    let (_, geo) = ok(&s, "cad_geometry", json!({}));
+    let top = ok(&s, "cad_geometry", json!({ "kind": "faces", "facing": "+Z" })).1["faces"][0]["index"].as_u64().unwrap();
+    let bottom = ok(&s, "cad_geometry", json!({ "kind": "faces", "facing": "-Z" })).1["faces"][0]["index"].as_u64().unwrap();
+
+    // La imagen: PNG, con el número de la cara de arriba en la vista de arriba
+    let out = Mutex::new(Vec::new());
+    let line = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": "view", "arguments": { "view": "top" } } }).to_string();
+    s.handle(protocol::parse(&line).unwrap().unwrap(), &|m| out.lock().unwrap().push(m));
+    let r = out.into_inner().unwrap().pop().unwrap();
+    let content = r["result"]["content"].as_array().unwrap();
+    assert_eq!(content[1]["type"], "image");
+    assert_eq!(content[1]["mimeType"], "image/png");
+    let data = &r["result"]["structuredContent"];
+    assert_eq!(data["labels"], json!([top]), "{data}");
+    // Las aristas de la imagen son las de `cad_geometry`
+    assert_eq!(data["edges"].as_u64().unwrap() as usize, geo["edges"].as_array().unwrap().len());
+    assert_eq!(data["faces"].as_u64().unwrap() as usize, geo["faces"].as_array().unwrap().len());
+
+    let (text, data) = ok(&s, "measure", json!({ "items": [{ "face": top }, { "face": bottom }] }));
+    assert!(text.contains("Minimum distance: 10 mm") && text.contains("area 800 mm²"), "{text}");
+    assert_eq!(data["measurement"]["angle"], json!(0.0));
+    let (text, _) = ok(&s, "measure", json!({ "items": [{ "point": [0, 0, 30] }, { "face": top }] }));
+    assert!(text.contains("Minimum distance: 20 mm"), "{text}");
+    let (text, _, err) = call(&s, "view", json!({ "azimuth": 30 }));
+    assert!(err && text.contains("elevation"), "{text}");
+}

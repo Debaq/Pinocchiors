@@ -3915,6 +3915,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "cad-model",
+ "image",
  "pinocchio-app",
  "serde",
  "serde_json",
