@@ -4430,6 +4430,11 @@ export function createCadStore() {
      * relee su documento y su recálculo.
      */
     async changeTabs(cmd: "cad_tab_add" | "cad_tab_rename" | "cad_tab_duplicate" | "cad_tab_delete" | "cad_tab_move" | "cad_tab_activate", args: Record<string, unknown>) {
+      // Con la IA trabajando las pestañas no cambian (su herramienta escribe en la que eligió)
+      if (aiTurn() !== undefined) {
+        setError(tr("La IA está trabajando en el diseño: espera un momento"));
+        return;
+      }
       if (draft()) await acceptDraft();
       await lastSend;
       const before = tabs().active;

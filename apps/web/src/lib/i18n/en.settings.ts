@@ -158,3 +158,31 @@ Object.assign(en_settings, {
   "Pausar": "Pause",
   "La IA está trabajando en el diseño: espera un momento": "The AI is working on the design: wait a moment",
 });
+
+/** Chat con la IA */
+Object.assign(en_settings, {
+  "Chat con IA": "AI chat",
+  "Conversación nueva": "New conversation",
+  "No se encontró Claude Code en este equipo. Instálalo (claude.com/claude-code) e inicia sesión una vez en la terminal; el chat usa tu cuenta.":
+    "Claude Code was not found on this computer. Install it (claude.com/claude-code) and sign in once in the terminal; the chat uses your account.",
+  "Pídele lo que quieras diseñar: «haz una caja de 80 × 50 × 30 con tapa», «redondea las aristas que seleccioné», «arma un ensamble con estas piezas». Trabaja en esta ventana y cada cambio se deshace con Ctrl+Z.":
+    "Ask for what you want to design: “make an 80 × 50 × 30 box with a lid”, “round the edges I selected”, “assemble these parts”. It works in this window and every change is undone with Ctrl+Z.",
+  "no se pudo": "failed",
+  "Lo que vio la IA": "What the AI saw",
+  "Pensando…": "Thinking…",
+  "Escribe qué quieres hacer… (Enter envía)": "Type what you want to do… (Enter sends)",
+  "Enviar": "Send",
+  "Detener": "Stop",
+  "Modelo y esfuerzo": "Model and effort",
+  "Modelo": "Model",
+  "Esfuerzo": "Effort",
+  "El de Claude Code": "Claude Code's default",
+  "Bajo (rápido)": "Low (fast)",
+  "Medio": "Medium",
+  "Alto (piensa más)": "High (thinks more)",
+  "Muy alto": "Very high",
+  "Máximo (lento)": "Maximum (slow)",
+  "costo estimado": "estimated cost",
+  "Más esfuerzo piensa más antes de actuar: mejor para piezas complejas, más lento y gasta más de tu cuota. Vale desde el próximo mensaje.":
+    "More effort thinks more before acting: better for complex parts, slower and uses more of your quota. Applies from the next message.",
+});

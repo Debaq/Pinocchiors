@@ -307,3 +307,30 @@ fn assemble_a_shaft_in_a_plate_and_draw_it() {
     let (text, _, err) = call(&s, "drawing_export", json!({ "tab": "Base", "path": svg }));
     assert!(err && text.contains("overwrite"), "{text}");
 }
+
+#[test]
+fn the_ai_keeps_working_on_its_own_tab_when_the_active_one_changes() {
+    if !cad_model::occt::available() {
+        return;
+    }
+    let s = server();
+    ok(&s, "cad_tab_create", json!({ "kind": "design", "name": "Uno" }));
+    ok(&s, "cad_primitive", json!({ "shape": "box", "dimensions": [10, 10, 10] }));
+    ok(&s, "cad_tab_create", json!({ "kind": "design", "name": "Dos" }));
+    // El usuario (o la ventana) activa otra pestaña entre dos pasos de la IA
+    let (_, data) = ok(&s, "status", json!({}));
+    let uno = data["workspace"]["design_tabs"][0]["id"].clone();
+    s.session().backend.call("cad_tab_activate", json!({ "id": uno })).unwrap();
+    // Sin `tab`, la IA sigue en la suya
+    let (text, _) = ok(&s, "cad_primitive", json!({ "shape": "sphere", "radius": 4 }));
+    assert!(text.contains("tab \"Dos\""), "{text}");
+    let (_, data) = ok(&s, "status", json!({}));
+    let tabs = data["workspace"]["design_tabs"].as_array().unwrap();
+    assert_eq!(tabs[0]["items"], 1, "«Uno» sigue con su caja sola");
+    assert_eq!(tabs[1]["items"], 1, "la esfera fue a «Dos»");
+    // Nombrar una pestaña que no sirve no mueve el foco
+    let (_, _, err) = call(&s, "asm_insert", json!({ "tab": "Uno", "from": "Dos" }));
+    assert!(err);
+    let (text, _) = ok(&s, "cad_primitive", json!({ "shape": "sphere", "radius": 2, "origin": [20, 0, 0] }));
+    assert!(text.contains("tab \"Dos\""), "{text}");
+}

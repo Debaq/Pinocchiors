@@ -3222,6 +3222,13 @@ pub mod bridge {
                 ok(change_tabs(state, |t| t.activate(id))?)
             }
             "cad_set_document" => ok(set_document_impl(state, arg(args, "document")?)?),
+            // El documento de una pestaña dada: la activa y lo guarda en el mismo paso
+            // (el conector MCP no depende de cuál quedó activa en la ventana)
+            "cad_set_tab_document" => {
+                let id: TabId = arg(args, "tab")?;
+                change_tabs(state, |t| t.activate(id))?;
+                ok(set_document_impl(state, arg(args, "document")?)?)
+            }
             "cad_preview" => ok(preview_impl(state, arg(args, "document")?)?),
             "cad_evaluate" => ok(evaluate(state)?),
             "cad_solve_sketch" => ok(cad_solve_sketch(arg(args, "sketch")?, arg(args, "drag")?)?),

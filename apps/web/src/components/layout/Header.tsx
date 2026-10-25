@@ -1,4 +1,4 @@
-import { Component, For, Show, createSignal, onMount, onCleanup } from "solid-js";
+import { Component, For, JSX, Show, createSignal, onMount, onCleanup } from "solid-js";
 import { WORKSPACES, type WorkspaceId } from "../../lib/pipeline";
 import { clsx } from "clsx";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -19,6 +19,11 @@ export interface HeaderProps {
   /** Más menús junto a Archivo (Editar, Vista, Malla…); sus ítems se arman al abrirlos */
   menus?: { label: string; items: () => MenuEntry[] }[];
   onOpenSettings?: () => void;
+  /** Abre o cierra el chat con la IA */
+  onToggleChat?: () => void;
+  chatOpen?: boolean;
+  /** Estado de la IA en vivo (va junto al chat, al lado de Exportar) */
+  aiStatus?: JSX.Element;
   /** Espacio de trabajo activo (`undefined` mientras se exporta) */
   workspace?: WorkspaceId;
   onWorkspace?: (id: WorkspaceId) => void;
@@ -163,6 +168,20 @@ export const Header: Component<HeaderProps> = (props) => {
             <Icons.Export size={13} />
             {t("Exportar")}
           </button>
+        </Show>
+
+        {/* IA: estado en vivo y chat, juntos */}
+        <Show when={props.onToggleChat}>
+          <div class="w-px h-4 bg-border" />
+          <div class="flex items-center gap-1.5">
+            {props.aiStatus}
+            <Tooltip content={t("Chat con IA")}>
+              <IconButton variant={props.chatOpen ? "primary" : "ghost"} size="sm" aria-label={t("Chat con IA")} active={props.chatOpen} onClick={() => props.onToggleChat?.()}>
+                <Icons.MagicWand size={17} />
+              </IconButton>
+            </Tooltip>
+          </div>
+          <div class="w-px h-4 bg-border" />
         </Show>
 
         {/* FPS Counter */}

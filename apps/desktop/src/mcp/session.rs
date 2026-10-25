@@ -13,6 +13,9 @@ pub struct Session {
     pub backend: Box<dyn Backend>,
     pub project: Mutex<ProjectFile>,
     history: Mutex<History>,
+    /// Pestaña en la que la IA está trabajando: las herramientas sin `tab` van
+    /// a esta y no a la activa de la ventana (en vivo la puede cambiar el usuario)
+    pub focus: Mutex<Option<u32>>,
 }
 
 /// El archivo del proyecto abierto
@@ -45,6 +48,7 @@ impl Session {
             backend,
             project: Mutex::new(ProjectFile { ui: "{}".into(), ..Default::default() }),
             history: Mutex::new(History::default()),
+            focus: Mutex::new(None),
         }
     }
 

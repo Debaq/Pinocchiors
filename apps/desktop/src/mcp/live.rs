@@ -373,6 +373,11 @@ fn live_status(bridge: &Bridge) -> LiveStatus {
     LiveStatus { on: bridge.is_on(), paused: bridge.paused(), port: bridge.port() }
 }
 
+/// Prende el puente de la ventana (si no estaba): lo usa el chat de la app
+pub fn start_for(app: &tauri::AppHandle, bridge: &Arc<Bridge>) -> Result<(), String> {
+    bridge.start(Arc::new(TauriHost(app.clone()))).map(|_| ())
+}
+
 /// Prende o apaga el modo en vivo
 #[tauri::command]
 pub fn mcp_live_set(app: tauri::AppHandle, bridge: tauri::State<'_, Arc<Bridge>>, on: bool) -> Result<LiveStatus, String> {

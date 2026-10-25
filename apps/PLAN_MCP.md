@@ -83,6 +83,23 @@ M5 mallas e impresión, M6 esqueleto y animación, M7 render y escáner y M9 pul
 - Pruebas: JSON conserva lo demás y respalda; JSON roto no se toca; bloque de Codex se
   agrega, reemplaza y quita; la guía lista todas las herramientas.
 
+## Chat dentro de la app ✅ 2026-10-25
+
+- Panel «Chat con IA» acoplado a la izquierda del visor (botón de varita en la cabecera,
+  junto al indicador de IA en vivo y Exportar; ancho arrastrable y recordado).
+- Usa el Claude Code instalado (`claude -p`, con la cuenta del usuario, sin clave de
+  API) con el conector en vivo, en una carpeta propia y solo con la configuración de ese
+  proyecto (`--setting-sources project`, `--strict-mcp-config`): sin hooks ni servidores
+  del usuario; solo puede usar las herramientas de Pinocchio. `mcp/chat.rs` traduce los
+  eventos `stream-json` a mensajes (texto, herramienta con su etiqueta, resultado,
+  imágenes de `view`, modelo y costo estimado); continúa la conversación con `--resume`.
+- Modelo (Fable, Opus, Sonnet, Haiku o el de Claude Code) y esfuerzo (bajo…máximo),
+  recordados.
+- Arreglos de ese día: guardar con un ensamble activo (antes «nada que guardar», y al
+  cerrar no avisaba del trabajo sin guardar); la IA tiene su propio foco de pestaña y
+  escribe en la pestaña nombrada (`cad_set_tab_document`), y la ventana no cambia de
+  pestaña durante su turno.
+
 ## Fases
 
 ### M0 — Protocolo y esqueleto ✅ 2026-10-24

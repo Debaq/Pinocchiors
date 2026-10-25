@@ -26,7 +26,7 @@ impl Asm {
 }
 
 pub(super) fn asm_tab_prop() -> Prop {
-    ("tab", id_or_name("Assembly tab, by id or name. Default: the active tab (it must be an assembly)"), false)
+    ("tab", id_or_name("Assembly tab, by id or name. Default: the tab you worked on last (or the active one); it must be an assembly"), false)
 }
 
 /// Abre la pestaña de ensamble de `args.tab`
@@ -35,14 +35,14 @@ pub(super) fn open_assembly(ctx: &Ctx, args: &Value) -> Result<Asm, Fail> {
     if kind != "assembly" {
         return Err(Fail::new(format!("tab \"{tab_name}\" is a design, not an assembly")).hint("create one with `cad_tab_create` {\"kind\": \"assembly\"} or pass an assembly tab"));
     }
-    ctx.call("cad_tab_activate", json!({ "id": tab }))?;
+    super::cad::focus(ctx, tab)?;
     let doc: Document = serde_json::from_value(ctx.call("cad_get_document", json!({}))?).map_err(|e| Fail::new(format!("could not read the assembly: {e}")))?;
     Ok(Asm { tab, tab_name, doc })
 }
 
 /// Guarda el ensamble (con sus planos tal cual) y lo recalcula
 fn apply(ctx: &Ctx, a: &Asm) -> Result<Value, Fail> {
-    ctx.call("cad_set_document", json!({ "document": a.doc }))
+    ctx.call("cad_set_tab_document", json!({ "tab": a.tab, "document": a.doc }))
 }
 
 /// Estado del solver en palabras: (texto, resuelto)

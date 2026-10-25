@@ -22,7 +22,7 @@ pub(super) struct Design {
 
 /// Argumento `tab` de todas las herramientas de diseño
 pub(super) fn tab_prop() -> Prop {
-    ("tab", id_or_name("Design tab, by id or name (see `status`). Default: the active tab; if there are no tabs, a design tab is created"), false)
+    ("tab", id_or_name("Design tab, by id or name (see `status`). Default: the tab you worked on last (or the active one); if there are no tabs, a design tab is created"), false)
 }
 
 /// Una pestaña: (id, nombre, "design" | "assembly")
@@ -37,13 +37,22 @@ pub(super) fn find_tab(ctx: &Ctx, want: Option<&Value>, create: bool) -> Result<
     let tabs = view["tabs"].as_array().cloned().unwrap_or_default();
     let pick = |t: &Value| (t["id"].as_u64().unwrap_or(0) as u32, t["name"].as_str().unwrap_or("").to_string(), t["kind"].as_str().unwrap_or("").to_string());
     let list = || tabs.iter().map(|t| format!("{} \"{}\" ({})", t["id"], t["name"].as_str().unwrap_or(""), t["kind"].as_str().unwrap_or(""))).collect::<Vec<_>>().join(", ");
+    let focus = *ctx.session.focus.lock().unwrap();
     let found = match want {
-        None => tabs.iter().find(|t| t["id"] == view["active"]).or(tabs.first()),
+        // Sin pestaña pedida: la última en la que trabajó la IA, si sigue; si no, la activa
+        None => focus.and_then(|f| tabs.iter().find(|t| t["id"].as_u64() == Some(f as u64))).or_else(|| tabs.iter().find(|t| t["id"] == view["active"])).or(tabs.first()),
         Some(Value::Number(n)) => tabs.iter().find(|t| t["id"].as_u64() == n.as_u64()),
         Some(Value::String(s)) => tabs.iter().find(|t| t["name"].as_str().is_some_and(|n| n.eq_ignore_ascii_case(s.trim()))),
         Some(_) => None,
     };
     found.map(pick).ok_or_else(|| Fail::new(format!("no tab {}", want.map_or("".into(), |w| w.to_string()))).hint(format!("tabs: {}", list())))
+}
+
+/// La IA trabaja en la pestaña `tab`: la activa y la deja como su foco
+pub(super) fn focus(ctx: &Ctx, tab: u32) -> Result<(), Fail> {
+    ctx.call("cad_tab_activate", json!({ "id": tab }))?;
+    *ctx.session.focus.lock().unwrap() = Some(tab);
+    Ok(())
 }
 
 /// Abre la pestaña de diseño de `args.tab` (la deja activa) con su documento
@@ -52,15 +61,16 @@ pub(super) fn open_design(ctx: &Ctx, args: &Value) -> Result<Design, Fail> {
     if kind != "design" {
         return Err(Fail::new(format!("tab \"{tab_name}\" is an assembly, not a design")).hint("pass the id or name of a design tab (see `status`)"));
     }
-    ctx.call("cad_tab_activate", json!({ "id": tab }))?;
+    focus(ctx, tab)?;
     let doc = ctx.call("cad_tab_document", json!({ "id": tab }))?;
     let doc: Document = serde_json::from_value(doc).map_err(|e| Fail::new(format!("could not read the design of tab {tab}: {e}")))?;
     Ok(Design { tab, tab_name, doc })
 }
 
-/// Guarda el documento en su pestaña y lo recalcula; devuelve el resultado
+/// Guarda el documento en su pestaña (nombrada: no la que esté activa) y lo
+/// recalcula; devuelve el resultado
 pub(super) fn apply(ctx: &Ctx, d: &Design) -> Result<Value, Fail> {
-    ctx.call("cad_set_document", json!({ "document": d.doc }))
+    ctx.call("cad_set_tab_document", json!({ "tab": d.tab, "document": d.doc }))
 }
 
 /// Operaciones con error: (id, mensaje)
@@ -231,6 +241,7 @@ Example: {\"kind\": \"design\", \"name\": \"Bracket\"}.",
 fn tab_create(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
     let view = ctx.call("cad_tab_add", json!({ "kind": args["kind"], "name": args.get("name") }))?;
     let tab = view["tabs"].as_array().and_then(|t| t.iter().find(|t| t["id"] == view["active"])).cloned().unwrap_or_default();
+    *ctx.session.focus.lock().unwrap() = tab["id"].as_u64().map(|i| i as u32);
     Ok(Output::new(format!("Created {} tab \"{}\" (id {}); it is now active.", args["kind"].as_str().unwrap_or(""), tab["name"].as_str().unwrap_or(""), tab["id"]), json!({ "tab": tab["id"], "name": tab["name"] })))
 }
 
@@ -263,6 +274,7 @@ assembly instances) are reported as missing there. Can be undone. Example: {\"ta
 fn tab_delete(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
     let (id, name, _) = find_tab(ctx, args.get("tab"), false)?;
     ctx.call("cad_tab_delete", json!({ "id": id }))?;
+    *ctx.session.focus.lock().unwrap() = None;
     Ok(Output::new(format!("Deleted tab \"{name}\" (id {id})."), json!({ "tab": id })))
 }
 
@@ -321,7 +333,7 @@ fn design(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
         let lines = super::assembly::describe(ctx, &a, &result);
         return Ok(Output::new(lines.join("\n"), json!({ "tab": a.tab, "assembly": a.doc.assembly, "solution": result["assembly"]["solution"] })));
     }
-    ctx.call("cad_tab_activate", json!({ "id": tab }))?;
+    focus(ctx, tab)?;
     let doc: Document = serde_json::from_value(ctx.call("cad_tab_document", json!({ "id": tab }))?).map_err(|e| Fail::new(e.to_string()))?;
     let result = ctx.call("cad_evaluate", json!({}))?;
     let status = |id: u32| -> String {
@@ -473,7 +485,7 @@ fn origin_text(doc: &Document, tags: &Value) -> String {
 fn geometry(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
     let (tab, tab_name, kind) = find_tab(ctx, args.get("tab"), false)?;
     let assembly = kind == "assembly";
-    ctx.call("cad_tab_activate", json!({ "id": tab }))?;
+    focus(ctx, tab)?;
     // En un ensamble: las caras de cada instancia en su lugar; la «pieza» es la instancia
     let (doc, geo, parts) = if assembly {
         let a = super::assembly::open_assembly(ctx, args)?;

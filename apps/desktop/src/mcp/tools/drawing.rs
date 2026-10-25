@@ -153,7 +153,7 @@ fn export(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
         return Err(Fail::new(format!("folder {} does not exist", dir.display())));
     }
     let (tab, tab_name, kind) = find_tab(ctx, args.get("tab"), false)?;
-    ctx.call("cad_tab_activate", json!({ "id": tab }))?;
+    super::cad::focus(ctx, tab)?;
     let assembly = kind == "assembly";
     let info = ctx.call("cad_drawing_info", json!({})).map_err(|e| e.hint("the tab needs a solid (or, for an assembly, instances) first"))?;
     let (lo3, hi3): (P3, P3) = (serde_json::from_value(info["min"].clone()).unwrap_or_default(), serde_json::from_value(info["max"].clone()).unwrap_or_default());

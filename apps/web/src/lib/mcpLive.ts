@@ -67,6 +67,11 @@ export async function setLiveMode(on: boolean) {
   setLive(await invoke<LiveStatus>("mcp_live_set", { on }));
 }
 
+/** Vuelve a leer el estado del puente (el chat lo prende al mandar un mensaje) */
+export async function refreshLive() {
+  setLive(await invoke<LiveStatus>("mcp_live_status"));
+}
+
 /** Pausa (la IA recibe «pausada» y espera) o reanuda */
 export async function setLivePaused(paused: boolean) {
   setLive(await invoke<LiveStatus>("mcp_live_pause", { paused }));

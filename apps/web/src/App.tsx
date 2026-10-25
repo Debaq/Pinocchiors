@@ -7,6 +7,7 @@ import { invoke as tauriInvoke, Channel, type InvokeArgs, type InvokeOptions } f
 import { listen } from "@tauri-apps/api/event";
 import { startMcpLive } from "./lib/mcpLive";
 import { LiveAiBadge } from "./components/layout/LiveAiBadge";
+import { AiChatPanel } from "./components/layout/AiChatPanel";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open, save } from "@tauri-apps/plugin-dialog";
@@ -563,6 +564,8 @@ export const App: Component = () => {
   onMount(() => void cad.init().catch(() => {}));
   // Modo en vivo del conector MCP: la IA maneja esta ventana por turnos
   onMount(() => onCleanup(startMcpLive(cad, cadUi, (m) => setStatusMessage(m))));
+  /** Chat con la IA (Claude Code instalado, en modo en vivo) */
+  const [chatOpen, setChatOpen] = createSignal(false);
   // Dibujando un sketch, el panel muestra lo elegido y sus restricciones
   createEffect(
     on(
@@ -1168,7 +1171,12 @@ export const App: Component = () => {
   /** Hay algo con qué trabajar: un modelo o, sin modelo, un esqueleto */
   const hasWork = () => meshLoaded() || !!skeletonData();
   /** Algo que guardar en el proyecto: también un diseño CAD sin modelo */
-  const hasProjectWork = () => hasWork() || (cad.doc()?.features.length ?? 0) > 0;
+  /** Hay algo del CAD que guardar: varias pestañas, o la activa con operaciones (diseño) o instancias (ensamble) */
+  const hasCadWork = () => {
+    const d = cad.doc();
+    return cad.tabs().tabs.length > 1 || (d?.features.length ?? 0) > 0 || (d?.assembly?.instances.length ?? 0) > 0;
+  };
+  const hasProjectWork = () => hasWork() || hasCadWork();
   const [exportUseRetopology, setExportUseRetopology] = createSignal(false);
   /** Compactar el mapa UV al exportar; sin elegir, sí cuando el mapa es para pintar */
   const [exportCompactUv, setExportCompactUv] = createSignal<boolean | undefined>();
@@ -8968,6 +8976,9 @@ export const App: Component = () => {
         {/* Header */}
         <Header
           title="Pinocchio"
+          onToggleChat={() => setChatOpen(!chatOpen())}
+          chatOpen={chatOpen()}
+          aiStatus={<LiveAiBadge cad={cad} />}
           fps={showFps() ? fps() : undefined}
           fileName={projectPath() ? baseName(projectPath()!) : fileName()}
           unsaved={unsaved()}
@@ -8988,6 +8999,11 @@ export const App: Component = () => {
 
         {/* Main Content */}
         <div class="flex flex-1 min-h-0 overflow-hidden">
+          {/* Chat con la IA, acoplado a la izquierda */}
+          <Show when={chatOpen()}>
+            <AiChatPanel onClose={() => setChatOpen(false)} />
+          </Show>
+
           {/* Toolbar */}
           <Toolbar
             tools={tools()}
@@ -9779,7 +9795,6 @@ export const App: Component = () => {
           </Show>
         </div>
 
-        <LiveAiBadge cad={cad} />
 
         {/* Status Bar */}
         <StatusBar

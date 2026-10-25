@@ -4,6 +4,7 @@
 //! Plan en `apps/PLAN_MCP.md`.
 
 pub mod backend;
+pub mod chat;
 pub mod clients;
 pub mod guide;
 pub mod live;

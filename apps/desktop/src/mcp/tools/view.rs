@@ -46,7 +46,7 @@ const PALETTE: [[u8; 3]; 8] = [[150, 172, 205], [214, 176, 120], [140, 196, 150]
 /// Activa la pestaña (diseño o ensamble): (id, nombre, es ensamble)
 fn open_any(ctx: &Ctx, args: &Value) -> Result<(u32, String, bool), Fail> {
     let (tab, name, kind) = find_tab(ctx, args.get("tab"), false)?;
-    ctx.call("cad_tab_activate", json!({ "id": tab }))?;
+    super::cad::focus(ctx, tab)?;
     Ok((tab, name, kind == "assembly"))
 }
 
