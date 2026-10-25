@@ -36,37 +36,48 @@ con las mismas herramientas:
 7. **Deshacer**: `undo` / `redo` en los dos modos.
 8. **Guía incluida**: recurso `pinocchio://guide` (flujo de trabajo, convenciones,
    ejemplos completos) y `prompts` armados («diseñar una pieza», «preparar para
-   imprimir», «riggear un personaje»). `instructions` del `initialize` resume lo básico.
+   imprimir», «riggear un personaje»); hoy hay `get_started`, el resto en M9. `instructions` del `initialize` resume lo básico.
 9. **Seguro por defecto**: no escribe fuera de las rutas que se le piden, no pisa un
    archivo sin `overwrite: true`, y el modo en vivo se activa a mano en la app.
 
 ## Arquitectura
 
-- Crate nuevo `apps/mcp` (binario `pinocchio-mcp`) en el workspace. Protocolo MCP
-  (JSON-RPC 2.0 por stdio, versión 2025-06-18) escrito a mano con `serde_json`: no hay
-  SDK de MCP sin conexión y son pocos mensajes (`initialize`, `tools/list`,
-  `tools/call`, `resources/*`, `prompts/*`, `ping`, avisos de avance). Registro a stderr.
-- **Anfitrión sin Tauri** (`Host`): hoy unos 140 comandos reciben `AppHandle` solo para
-  leer `AppState` y avisar el avance. Se separa cada uno en `*_impl(&AppState,
-  &dyn Progress, args)` y el comando de Tauri queda como envoltorio de una línea. Se
-  generaliza `cad::bridge::dispatch` (que ya cubre 87 comandos CAD) a toda la app.
-  `cad_http` y el e2e ganan lo mismo.
-- **Modo en vivo**: la app, con «Permitir que una IA controle la app» encendido
-  (Configuración, apagado por defecto), escucha en 127.0.0.1 en un puerto libre y
-  escribe `~/.local/share/pinocchio/mcp-live.json` (`port`, `token`, `pid`). El servidor
-  MCP lo lee al empezar cada llamada: si la app está viva, le reenvía el comando con el
-  token; si no, usa su propio motor. Tras cada cambio la app avisa al frontend
-  (`mcp://changed`) para que recargue lo tocado y deje un paso de deshacer «Cambio de la
-  IA».
-- Las herramientas se describen en una tabla (`tools.rs`: nombre, descripción, esquema,
-  función) para que la lista, la guía y las pruebas salgan del mismo lugar.
+- El conector vive en la app (`apps/desktop/src/mcp/`): `Pinocchio --mcp` habla MCP por
+  stdio sin ventana. `apps/mcp` queda como binario suelto de desarrollo y sus pruebas.
+  Protocolo (JSON-RPC 2.0, versiones 2025-06-18, 2025-03-26 y 2024-11-05) escrito a mano
+  con `serde_json`: no hay SDK de MCP sin conexión y son pocos mensajes. Registro a stderr.
+- **Motor**: `Backend::call` → `cad::bridge::try_dispatch` con el `AppState` de la app.
+  Un comando que la herramienta necesita y que pide `AppHandle` se separa en
+  `*_impl(&AppState, …)` y el comando de Tauri queda como envoltorio; se hace por fase,
+  cuando hace falta, no todos de una vez.
+- **Modo en vivo** (M8, `mcp/live.rs`): la app escucha en 127.0.0.1 con clave y deja
+  `mcp-live.json`; el conector (`Auto`) lo busca en cada herramienta y, si la app está,
+  le pide turno y le manda los comandos; si no, usa su propio motor.
+- Las herramientas se describen en una tabla (`mcp/tools/`: nombre, descripción, esquema,
+  `Effect`) para que la lista, la guía y las pruebas salgan del mismo lugar.
 
 ## Hoja de ruta
 
-Hecho (2026-10-24): M0, M2, M3 y M4 (CAD completo: diseño, ver y medir, ensambles y
-planos), M1 en lo que el CAD necesita. **Para después** (decisión del usuario, 2026-10-25):
-M5 mallas e impresión, M6 esqueleto y animación, M7 render y escáner y M9 pulido
-(M8, el modo en vivo, se hizo el 2026-10-25); el resto de M1 se hace dentro de cada una.
+- Hecho: M0, M2, M3, M4 (2026-10-24: CAD completo — diseño, ver y medir, ensambles y
+  planos), M8 modo en vivo, activación desde la app y chat dentro de la app (2026-10-25).
+  M1 en lo que el CAD necesita.
+- **Para después** (decisión del usuario, 2026-10-25): M5 mallas e impresión, M6
+  esqueleto y animación, M7 render y escáner, y M9 pulido. El resto de M1 se hace dentro
+  de cada una.
+
+### Próximo (orden propuesto, 2026-10-25)
+
+1. ❌ **Pestaña de la IA a la vista en vivo**: durante su turno la ventana muestra la
+   pestaña donde trabaja la IA y al terminar vuelve a la del usuario, si él no se movió
+   (hoy a veces salta entre pasos; `cad_set_tab_document` ya escribe en la correcta).
+2. ❌ **Errores del chat juntados**: el chat anota cada error de herramienta (herramienta,
+   mensaje, cuántas veces) para ver cuáles se repiten; cada uno se arregla en la
+   herramienta, no en el prompt (ver M9).
+3. ❌ **Avance real de los comandos largos** (M1): hoy el `Channel` del `dispatch` lo
+   descarta; pasa a `notifications/progress` y al indicador en vivo. Hace falta antes de
+   M5 para que la IA no crea que se colgó.
+4. ❌ **Prueba real**: app Tauri abierta + cliente de IA de verdad (chat y Claude Code),
+   cubre M8 y los tres puntos anteriores.
 
 ## Activación desde la app ✅ 2026-10-25
 
@@ -249,7 +260,7 @@ M5 mallas e impresión, M6 esqueleto y animación, M7 render y escáner y M9 pul
   ventana recibe el cambio con el documento de antes, ocupado y pausado niegan sin tocar
   nada, un fallo revierte, la selección llega, los proyectos están bloqueados y al apagar
   el conector vuelve a su motor.
-- Falta: probarlo con la app Tauri real y un cliente de IA de verdad.
+- Falta: probarlo con la app Tauri real y un cliente de IA de verdad (Próximo 4).
 
 ### M9 — Guía, prompts y pulido ❌
 - Recurso `pinocchio://guide` y uno por área; `prompts` de tareas completas.
@@ -258,19 +269,15 @@ M5 mallas e impresión, M6 esqueleto y animación, M7 render y escáner y M9 pul
 - Pruebas de punta a punta: un cliente MCP que diseña una pieza, la exporta, importa
   una malla, la repara y la prepara para imprimir.
 - Errores que la IA repite (salen del uso del chat): cada uno es una descripción poco
-  clara o una herramienta que debería aceptar más casos. Se anotan aquí y se arreglan
-  en la herramienta, no en el prompt. Arreglados: `asm_check` sobre una pestaña de
-  diseño (2026-10-25: ahora revisa las piezas entre sí). Por revisar: juntar los
-  errores del chat (tool + mensaje + cuántas veces) para ver cuáles se repiten.
-- Modo en vivo: la ventana a veces cambia de pestaña entre pasos de la IA (cosmético;
-  `cad_set_tab_document` ya escribe en la pestaña correcta). Mostrar la pestaña de la IA
-  durante todo su turno y volver a la del usuario al terminar, si él no se movió.
+  clara o una herramienta que debería aceptar más casos. Se arreglan en la herramienta,
+  no en el prompt. Arreglados: `asm_check` sobre una pestaña de diseño (2026-10-25:
+  ahora revisa las piezas entre sí).
 
 ## Riesgos
 
-- Separar ~140 comandos de `AppHandle` toca mucho código compartido con la otra
-  sesión: se hace por archivo y con commits chicos.
+- Separar comandos de `AppHandle` toca código compartido con la otra sesión: se hace por
+  archivo, cuando una herramienta lo necesita, y con commits chicos.
 - Las operaciones largas (rig, remallado, render) necesitan avance y cancelación para
-  que la IA no crea que se colgó.
-- Modo en vivo con el frontend como dueño del deshacer: los cambios de la IA tienen que
-  entrar por el mismo camino que los del usuario.
+  que la IA no crea que se colgó (Próximo 3).
+- ~~Modo en vivo con el frontend como dueño del deshacer~~: resuelto en M8 (la ventana
+  recibe el documento de antes y lo pone en su deshacer).
