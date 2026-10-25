@@ -40,6 +40,7 @@ members = [
     # Apps
     "apps/desktop",
     "apps/converter",
+    "apps/mcp",
 ]
 
 [workspace.package]

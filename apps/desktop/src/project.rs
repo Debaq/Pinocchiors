@@ -487,6 +487,95 @@ fn capture(state: &AppState) -> ProjectState {
     }
 }
 
+/// Resumen de lo que hay cargado (lo usa el conector MCP para decir en qué
+/// estado está el trabajo)
+#[derive(Serialize)]
+pub struct WorkspaceSummary {
+    pub design_tabs: Vec<TabSummary>,
+    pub active_tab: Option<u32>,
+    /// Modelo de malla del objeto activo
+    pub model: Option<ModelSummary>,
+    /// Objetos de la escena además del activo
+    pub other_objects: usize,
+    pub skeleton: Option<&'static str>,
+    pub rigged: bool,
+}
+
+#[derive(Serialize)]
+pub struct TabSummary {
+    pub id: u32,
+    pub name: String,
+    /// "design" o "assembly"
+    pub kind: &'static str,
+    /// Operaciones del diseño o instancias del ensamble
+    pub items: usize,
+}
+
+#[derive(Serialize)]
+pub struct ModelSummary {
+    pub name: Option<String>,
+    pub format: Option<String>,
+    pub vertices: usize,
+    pub faces: usize,
+}
+
+pub fn workspace_summary(state: &AppState) -> WorkspaceSummary {
+    let tabs = state.cad_tabs.lock().unwrap();
+    let design_tabs = tabs
+        .tabs
+        .iter()
+        .map(|t| TabSummary {
+            id: t.id,
+            name: t.name.clone(),
+            kind: if t.kind.is_design() { "design" } else { "assembly" },
+            items: match &t.kind {
+                cad_model::TabKind::Design { document } => document.features.len(),
+                cad_model::TabKind::Assembly { assembly, .. } => assembly.instances.len(),
+            },
+        })
+        .collect();
+    let original = state.original_model.lock().unwrap();
+    let mesh = state.mesh.lock().unwrap();
+    let model = (original.is_some() || mesh.is_some()).then(|| ModelSummary {
+        name: original.as_ref().map(|o| o.name.clone()),
+        format: original.as_ref().map(|o| o.format.clone()),
+        vertices: mesh.as_ref().map_or(0, |m| m.vertices.len()),
+        faces: mesh.as_ref().map_or(0, |m| m.faces.len()),
+    });
+    let skeleton = state.skeleton.lock().unwrap().as_ref().map(|s| match s {
+        SkeletonType::Human => "human",
+        SkeletonType::Quad => "quadruped",
+        SkeletonType::Horse => "horse",
+        SkeletonType::Centaur => "centaur",
+        SkeletonType::Bird => "bird",
+        SkeletonType::Spider => "spider",
+        SkeletonType::Serpent => "serpent",
+        SkeletonType::Mech => "mech",
+        SkeletonType::Template(_) => "template",
+        SkeletonType::Custom(_) => "custom",
+    });
+    WorkspaceSummary {
+        design_tabs,
+        active_tab: tabs.active_tab().map(|t| t.id),
+        model,
+        other_objects: state.objects.lock().unwrap().stored.len(),
+        skeleton,
+        rigged: state.result.lock().unwrap().is_some(),
+    }
+}
+
+/// Todo el estado en bytes, para volver a él con [`restore_state`] (el
+/// deshacer del conector MCP sin ventana)
+pub fn snapshot_state(state: &AppState) -> Result<Vec<u8>, String> {
+    rmp_serde::to_vec_named(&capture(state)).map_err(|e| format!("No se pudo serializar: {e}"))
+}
+
+/// Vuelve al estado de [`snapshot_state`]
+pub fn restore_state(state: &AppState, bytes: &[u8]) -> Result<(), String> {
+    let project: ProjectState = rmp_serde::from_slice(bytes).map_err(|e| format!("Estado ilegible: {e}"))?;
+    restore(state, project)
+}
+
 /// Solo el modelo del objeto activo (para deshacer y para guardarlo en su casillero)
 fn capture_model(state: &AppState) -> ProjectState {
     let mesh = |m: &std::sync::Mutex<Option<Mesh>>| m.lock().unwrap().as_ref().map(MeshDto::from);
@@ -692,28 +781,30 @@ pub struct ProjectSaved {
 #[tauri::command]
 pub async fn save_project(app: AppHandle, path: String, ui: String, only_if_changed: bool) -> Result<ProjectSaved, String> {
     let is_recovery = recovery_path(&app).is_ok_and(|r| r == Path::new(&path));
-    in_background(app, move |state| {
-        let project = capture(state);
-        let source_name = project.original.as_ref().map(|o| o.name.clone());
-        let state_bytes = rmp_serde::to_vec_named(&project).map_err(|e| format!("No se pudo serializar: {e}"))?;
-        let hash = content_hash(&state_bytes, &ui);
-        let saved_hash = if is_recovery { &state.last_recovery_hash } else { &state.last_saved_hash };
-        if only_if_changed && *saved_hash.lock().unwrap() == Some(hash) {
-            return Ok(ProjectSaved { written: false, bytes: 0 });
-        }
-        let manifest = Manifest {
-            format: FORMAT.into(),
-            version: FORMAT_VERSION,
-            app_version: env!("CARGO_PKG_VERSION").into(),
-            saved_at: now_secs(),
-            source_name,
-        };
-        let path = Path::new(&path);
-        write_project(path, &manifest, &state_bytes, &ui)?;
-        *saved_hash.lock().unwrap() = Some(hash);
-        Ok(ProjectSaved { written: true, bytes: std::fs::metadata(path).map_or(0, |m| m.len()) })
-    })
-    .await
+    in_background(app, move |state| save_project_impl(state, &path, &ui, only_if_changed, is_recovery)).await
+}
+
+/// `save_project` sin la ventana (también lo usan el puente y el conector MCP)
+pub fn save_project_impl(state: &AppState, path: &str, ui: &str, only_if_changed: bool, is_recovery: bool) -> Result<ProjectSaved, String> {
+    let project = capture(state);
+    let source_name = project.original.as_ref().map(|o| o.name.clone());
+    let state_bytes = rmp_serde::to_vec_named(&project).map_err(|e| format!("No se pudo serializar: {e}"))?;
+    let hash = content_hash(&state_bytes, ui);
+    let saved_hash = if is_recovery { &state.last_recovery_hash } else { &state.last_saved_hash };
+    if only_if_changed && *saved_hash.lock().unwrap() == Some(hash) {
+        return Ok(ProjectSaved { written: false, bytes: 0 });
+    }
+    let manifest = Manifest {
+        format: FORMAT.into(),
+        version: FORMAT_VERSION,
+        app_version: env!("CARGO_PKG_VERSION").into(),
+        saved_at: now_secs(),
+        source_name,
+    };
+    let path = Path::new(path);
+    write_project(path, &manifest, &state_bytes, ui)?;
+    *saved_hash.lock().unwrap() = Some(hash);
+    Ok(ProjectSaved { written: true, bytes: std::fs::metadata(path).map_or(0, |m| m.len()) })
 }
 
 /// Hay cambios desde el último guardado o apertura del proyecto (`ui` es el
@@ -750,16 +841,17 @@ pub struct ProjectOpened {
 /// Abre un proyecto: reemplaza todo el estado del backend
 #[tauri::command]
 pub async fn open_project(app: AppHandle, path: String) -> Result<ProjectOpened, String> {
-    in_background(app, move |state| {
-        let (manifest, state_bytes, ui) = read_project(Path::new(&path))?;
-        let project: ProjectState =
-            rmp_serde::from_slice(&state_bytes).map_err(|e| format!("Estado del proyecto ilegible: {e}"))?;
-        restore(state, project)?;
-        state.undo_snapshots.lock().unwrap().entries.clear();
-        *state.last_saved_hash.lock().unwrap() = Some(content_hash(&state_bytes, &ui));
-        Ok(ProjectOpened { ui, source_name: manifest.source_name, saved_at: manifest.saved_at })
-    })
-    .await
+    in_background(app, move |state| open_project_impl(state, &path)).await
+}
+
+/// `open_project` sin la ventana
+pub fn open_project_impl(state: &AppState, path: &str) -> Result<ProjectOpened, String> {
+    let (manifest, state_bytes, ui) = read_project(Path::new(path))?;
+    let project: ProjectState = rmp_serde::from_slice(&state_bytes).map_err(|e| format!("Estado del proyecto ilegible: {e}"))?;
+    restore(state, project)?;
+    state.undo_snapshots.lock().unwrap().entries.clear();
+    *state.last_saved_hash.lock().unwrap() = Some(content_hash(&state_bytes, &ui));
+    Ok(ProjectOpened { ui, source_name: manifest.source_name, saved_at: manifest.saved_at })
 }
 
 /// Archivo donde el guardado automático deja los proyectos que aún no tienen
@@ -799,6 +891,11 @@ pub fn recovery_info(app: AppHandle) -> Option<RecoveryInfo> {
 /// Proyecto nuevo: descarta el modelo, el esqueleto y todo lo derivado
 #[tauri::command]
 pub fn new_project(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    new_project_impl(&state)
+}
+
+/// `new_project` sin la ventana
+pub fn new_project_impl(state: &AppState) -> Result<(), String> {
     let _guard = state.try_begin_processing().ok_or("Hay un proceso en curso: espera a que termine")?;
     state.clear_all();
     Ok(())

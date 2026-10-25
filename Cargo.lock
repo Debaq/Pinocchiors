@@ -3910,6 +3910,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "pinocchio-mcp"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "cad-model",
+ "pinocchio-app",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "pinocchio-mesh"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,26 @@
+[package]
+name = "pinocchio-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Conector MCP: cualquier IA usa Pinocchio (CAD, mallas, impresión, rig, animación, render)"
+
+[lib]
+name = "pinocchio_mcp"
+path = "src/lib.rs"
+
+[[bin]]
+name = "pinocchio-mcp"
+path = "src/main.rs"
+
+[dependencies]
+pinocchio-app = { path = "../desktop" }
+cad-model = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+
+[dev-dependencies]
+tempfile = "3"

@@ -3019,9 +3019,25 @@ pub mod bridge {
         serde_json::to_value(v).map(Reply::Json).map_err(|e| e.to_string())
     }
 
-    /// Ejecuta un comando por nombre. Los que no son del CAD devuelven `null`
-    /// (la app arranca igual), salvo importar un modelo y su malla.
+    /// Ejecuta un comando por nombre. Los que no conoce devuelven `null`, así
+    /// la app arranca igual en el navegador.
     pub fn dispatch(state: &AppState, cmd: &str, args: &Value) -> Result<Reply, String> {
+        try_dispatch(state, cmd, args).unwrap_or(Ok(Reply::Json(json!(null))))
+    }
+
+    /// Como [`dispatch`], pero `None` si el comando no existe (el conector MCP
+    /// avisa en vez de seguir con un `null`).
+    pub fn try_dispatch(state: &AppState, cmd: &str, args: &Value) -> Option<Result<Reply, String>> {
+        match run(state, cmd, args) {
+            Err(e) if e == UNKNOWN => None,
+            r => Some(r),
+        }
+    }
+
+    /// Error de `run` para un comando que no existe (no lo puede dar un comando real)
+    const UNKNOWN: &str = "\u{0}comando desconocido";
+
+    fn run(state: &AppState, cmd: &str, args: &Value) -> Result<Reply, String> {
         match cmd {
             "cad_status" => ok(status_impl(state)),
             "cad_new" => ok(new_impl(state)?),
@@ -3233,7 +3249,17 @@ pub mod bridge {
             "remesh_info" => ok(crate::remesh::info_impl(state)?),
             "export_model" => ok(crate::commands::export_model_impl(arg(args, "config")?, state)?),
             "remesh_voxel_grid" => ok(crate::remesh::voxel_grid_impl(state, arg(args, "voxelMm")?)?),
-            _ => Ok(Reply::Json(json!(null))),
+            "new_project" => ok(crate::project::new_project_impl(state)?),
+            "workspace_summary" => ok(crate::project::workspace_summary(state)),
+            "open_project" => ok(crate::project::open_project_impl(state, &arg::<String>(args, "path")?)?),
+            "save_project" => ok(crate::project::save_project_impl(
+                state,
+                &arg::<String>(args, "path")?,
+                &arg::<Option<String>>(args, "ui")?.unwrap_or_else(|| "{}".into()),
+                arg::<Option<bool>>(args, "onlyIfChanged")?.unwrap_or(false),
+                false,
+            )?),
+            _ => Err(UNKNOWN.into()),
         }
     }
 }
