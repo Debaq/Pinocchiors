@@ -47,6 +47,10 @@ on:
         description: "También la CLI y el paquete WASM (sin ellos, más rápido)"
         type: boolean
         default: true
+      tests:
+        description: "Correr los tests del workspace antes (~30 min)"
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -120,6 +124,8 @@ jobs:
   # sistema que el desktop de Linux, así este job deja OCCT en caché para él.
   test:
     name: Tests (con CAD)
+    # A mano se pueden saltar (input `tests`); con tag van siempre
+    if: github.event_name != 'workflow_dispatch' || inputs.tests
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v5
@@ -168,6 +174,8 @@ jobs:
   desktop:
     name: Desktop (${{ matrix.platform }})
     needs: [version, test]
+    # Tests saltados no la frenan; fallidos, sí
+    if: ${{ !cancelled() && !failure() }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -306,7 +314,7 @@ jobs:
     name: CLI (${{ matrix.target }})
     needs: [version, test]
     # A mano se pueden saltar (input `cli`); con tag van siempre
-    if: github.event_name != 'workflow_dispatch' || inputs.cli
+    if: ${{ !cancelled() && !failure() && (github.event_name != 'workflow_dispatch' || inputs.cli) }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -353,7 +361,7 @@ jobs:
     name: WASM
     needs: [version, test]
     # A mano se pueden saltar (input `cli`); con tag van siempre
-    if: github.event_name != 'workflow_dispatch' || inputs.cli
+    if: ${{ !cancelled() && !failure() && (github.event_name != 'workflow_dispatch' || inputs.cli) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
