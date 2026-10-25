@@ -3917,6 +3917,7 @@ dependencies = [
  "cad-model",
  "image",
  "pinocchio-app",
+ "resvg",
  "serde",
  "serde_json",
  "tempfile",

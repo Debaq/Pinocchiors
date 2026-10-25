@@ -65,6 +65,24 @@ A design tab is a list of operations computed in order. Typical part:
 `cad_delete_feature`.",
     ),
     (
+        "assembly",
+        "Assemblies and 2D drawings",
+        "\
+Assemblies put parts from design tabs together and connect them with mates (like Onshape).
+1. `cad_tab_create` {\"kind\": \"assembly\"} — the new tab becomes active.
+2. `asm_insert` {\"from\": \"<design tab>\"} for each part (`fixed: true` on the base; `count` for copies).
+3. `view` the assembly tab: faces carry assembly-wide numbers (instance by instance).
+4. `asm_mate` {\"kind\": ..., \"a\": face, \"b\": face}: a planar face gives its centre and normal, a cylindrical one its
+   axis; the second instance moves. Shaft in a hole: cylindrical between the two cylinders. Faces touching each other:
+   fastened or planar with `flip: true`.
+5. `asm_mate_edit` with `distance` / `angle` positions or drives a joint; `asm_instance` moves, fixes or removes.
+6. `asm_check`: unsatisfied mates, degrees of freedom, collisions, clearance and the bill of materials.
+7. `drawing_export` {\"tab\": ..., \"path\": \"/abs/file.pdf\"} makes a drawing sheet of a design or an assembly (with
+   the bill of materials and balloons); look at the returned preview.
+- `cad_design`, `cad_geometry`, `view` and `measure` also work on assembly tabs (the \"part\" of a face is its instance).
+- Tools without `tab` use the active tab, and most tools activate the tab they work on: pass `tab` when switching.",
+    ),
+    (
         "projects",
         "Opening, saving and undoing",
         "\

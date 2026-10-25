@@ -7,8 +7,10 @@ use serde_json::{json, Value};
 
 use crate::session::Session;
 
+mod assembly;
 mod basics;
 mod cad;
+mod drawing;
 mod features;
 mod project;
 mod sketch;
@@ -69,6 +71,8 @@ pub fn all() -> Vec<&'static Tool> {
     list.extend(cad::TOOLS[..5].iter());
     list.extend(sketch::TOOLS);
     list.extend(features::TOOLS);
+    list.extend(assembly::TOOLS);
+    list.extend(drawing::TOOLS);
     list.extend(cad::TOOLS[5..].iter());
     list
 }

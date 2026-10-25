@@ -26,7 +26,7 @@ pub(super) fn tab_prop() -> Prop {
 }
 
 /// Una pestaña: (id, nombre, "design" | "assembly")
-fn find_tab(ctx: &Ctx, want: Option<&Value>, create: bool) -> Result<(u32, String, String), Fail> {
+pub(super) fn find_tab(ctx: &Ctx, want: Option<&Value>, create: bool) -> Result<(u32, String, String), Fail> {
     let mut view = ctx.call("cad_tabs", json!({}))?;
     if view["tabs"].as_array().is_none_or(|t| t.is_empty()) {
         if !create {
@@ -316,7 +316,10 @@ fn kind_summary(kind: &FeatureKind) -> String {
 fn design(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
     let (tab, tab_name, kind) = find_tab(ctx, args.get("tab"), false)?;
     if kind != "design" {
-        return Err(Fail::new(format!("tab \"{tab_name}\" is an assembly")).hint("assembly tools are not available yet; pass a design tab"));
+        let a = super::assembly::open_assembly(ctx, args)?;
+        let result = ctx.call("cad_evaluate", json!({}))?;
+        let lines = super::assembly::describe(ctx, &a, &result);
+        return Ok(Output::new(lines.join("\n"), json!({ "tab": a.tab, "assembly": a.doc.assembly, "solution": result["assembly"]["solution"] })));
     }
     ctx.call("cad_tab_activate", json!({ "id": tab }))?;
     let doc: Document = serde_json::from_value(ctx.call("cad_tab_document", json!({ "id": tab }))?).map_err(|e| Fail::new(e.to_string()))?;
@@ -469,16 +472,25 @@ fn origin_text(doc: &Document, tags: &Value) -> String {
 
 fn geometry(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
     let (tab, tab_name, kind) = find_tab(ctx, args.get("tab"), false)?;
-    if kind != "design" {
-        return Err(Fail::new(format!("tab \"{tab_name}\" is an assembly")).hint("pass a design tab"));
-    }
+    let assembly = kind == "assembly";
     ctx.call("cad_tab_activate", json!({ "id": tab }))?;
-    let doc: Document = serde_json::from_value(ctx.call("cad_tab_document", json!({ "id": tab }))?).map_err(|e| Fail::new(e.to_string()))?;
-    let geo = ctx.call("cad_geometry", json!({}))?;
-    let parts = ctx.call("cad_evaluate", json!({}))?["parts"].clone();
+    // En un ensamble: las caras de cada instancia en su lugar; la «pieza» es la instancia
+    let (doc, geo, parts) = if assembly {
+        let a = super::assembly::open_assembly(ctx, args)?;
+        let insts = a.doc.assembly.clone().unwrap_or_default().instances;
+        let parts = json!(insts.iter().map(|i| json!({ "id": { "feature": i.id, "index": 0 }, "name": i.name })).collect::<Vec<_>>());
+        (a.doc, ctx.call("cad_assembly_geometry", json!({}))?, parts)
+    } else {
+        let doc: Document = serde_json::from_value(ctx.call("cad_tab_document", json!({ "id": tab }))?).map_err(|e| Fail::new(e.to_string()))?;
+        (doc, ctx.call("cad_geometry", json!({}))?, ctx.call("cad_evaluate", json!({}))?["parts"].clone())
+    };
+    let instance_name = |id: &Value| -> String {
+        parts.as_array().and_then(|l| l.iter().find(|p| &p["id"] == id)).and_then(|p| p["name"].as_str()).unwrap_or("").to_string()
+    };
     let what = arg_str(args, "kind").unwrap_or("both");
     let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(80) as usize;
     let feature = match args.get("feature") {
+        Some(_) if assembly => return Err(Fail::new("`feature` only works on design tabs").hint("use `part` with an instance name or \"id:0\" on an assembly")),
         Some(f) => Some(find_feature(&doc, f)?.0 as u64),
         None => None,
     };
@@ -517,7 +529,7 @@ fn geometry(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
                 "  face {}: {} — {}; normal {}, centre {}, area {} mm²{radius}",
                 f["index"],
                 f["surface"].as_str().unwrap_or(""),
-                origin_text(&doc, &f["origin"]),
+                if assembly { format!("instance {} \"{}\"", f["part"]["feature"], instance_name(&f["part"])) } else { origin_text(&doc, &f["origin"]) },
                 direction(&f["normal"]),
                 vec3(&f["center"]),
                 num(f["area"].as_f64().unwrap_or(0.0))

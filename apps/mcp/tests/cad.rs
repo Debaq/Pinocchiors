@@ -229,3 +229,79 @@ fn view_and_measure_use_the_same_numbers() {
     let (text, _, err) = call(&s, "view", json!({ "azimuth": 30 }));
     assert!(err && text.contains("elevation"), "{text}");
 }
+
+/// La cara cilíndrica de una instancia del ensamble (de `cad_geometry`)
+fn cylinder_of(s: &Server, instance: u64) -> u64 {
+    let (_, geo) = ok(s, "cad_geometry", json!({ "kind": "faces" }));
+    geo["faces"].as_array().unwrap().iter().find(|f| f["surface"] == "cylinder" && f["part"]["feature"] == instance).unwrap()["index"].as_u64().unwrap()
+}
+
+#[test]
+fn assemble_a_shaft_in_a_plate_and_draw_it() {
+    if !cad_model::occt::available() {
+        return;
+    }
+    let s = server();
+    ok(&s, "cad_tab_create", json!({ "kind": "design", "name": "Base" }));
+    ok(&s, "sketch_create", json!({ "shapes": [{ "type": "rectangle", "center": [0, 0], "width": 60, "height": 40 }, { "type": "circle", "center": [0, 0], "diameter": 10 }] }));
+    ok(&s, "cad_extrude", json!({ "sketch": 0, "distance": 10 }));
+    ok(&s, "cad_tab_create", json!({ "kind": "design", "name": "Eje" }));
+    ok(&s, "cad_primitive", json!({ "shape": "cylinder", "diameter": 10, "height": 40 }));
+    ok(&s, "cad_tab_create", json!({ "kind": "assembly", "name": "Conjunto" }));
+
+    // Una pestaña de diseño no sirve para insertar en ella
+    let (text, _, err) = call(&s, "asm_insert", json!({ "tab": "Base", "from": "Eje" }));
+    assert!(err && text.contains("not an assembly"), "{text}");
+
+    let (text, data) = ok(&s, "asm_insert", json!({ "from": "Base", "fixed": true }));
+    assert!(text.contains("\"Base 1\""), "{text}");
+    let base = data["instances"][0]["instance"].as_u64().unwrap();
+    let (_, data) = ok(&s, "asm_insert", json!({ "from": "Eje" }));
+    let shaft = data["instances"][0]["instance"].as_u64().unwrap();
+
+    // Eje en el agujero: cilíndrica (gira y desliza), luego centrado (solo gira)
+    let (text, data) = ok(&s, "asm_mate", json!({ "kind": "cylindrical", "a": cylinder_of(&s, base), "b": cylinder_of(&s, shaft) }));
+    assert!(text.contains("2 degree(s) of freedom"), "{text}");
+    let mate = data["mate"].as_u64().unwrap();
+    let (text, _) = ok(&s, "asm_mate_edit", json!({ "mate": mate, "distance": 0 }));
+    assert!(text.contains("1 degree(s) of freedom"), "{text}");
+    // Dos caras de la misma instancia no se pueden unir
+    let c = cylinder_of(&s, base);
+    let (text, _, err) = call(&s, "asm_mate", json!({ "kind": "fastened", "a": c, "b": c }));
+    assert!(err && text.contains("same instance"), "{text}");
+
+    let (text, data) = ok(&s, "asm_check", json!({}));
+    assert!(text.contains("No collisions") && text.contains("1 × \"Base\"") && text.contains("1 × \"Eje\""), "{text}");
+    assert_eq!(data["bom"].as_array().unwrap().len(), 2);
+    let (text, _) = ok(&s, "cad_design", json!({}));
+    assert!(text.contains("instance") && text.contains("cylindrical"), "{text}");
+
+    // Medir dentro del ensamble: el eje (Ø10) en el agujero (Ø10) los toca
+    let (text, _) = ok(&s, "measure", json!({ "items": [{ "face": cylinder_of(&s, base) }, { "face": cylinder_of(&s, shaft) }] }));
+    assert!(text.contains("Minimum distance: 0 mm"), "{text}");
+
+    // Mover y quitar
+    let (text, _) = ok(&s, "asm_instance", json!({ "instance": "Eje 1", "fixed": true }));
+    assert!(text.contains("fixed"), "{text}");
+    ok(&s, "asm_insert", json!({ "from": "Eje", "count": 2 }));
+    let (text, _) = ok(&s, "asm_check", json!({}));
+    assert!(text.contains("3 × \"Eje\""), "{text}");
+    let (text, _) = ok(&s, "asm_instance", json!({ "instance": "Eje 3", "remove": true }));
+    assert!(text.contains("removed"), "{text}");
+
+    // Planos: PDF del ensamble con lista de materiales, SVG de una pieza
+    let dir = tempfile::tempdir().unwrap();
+    let pdf = dir.path().join("conjunto.pdf");
+    let (text, data) = ok(&s, "drawing_export", json!({ "tab": "Conjunto", "path": pdf, "title": "Conjunto" }));
+    assert!(text.contains("assembly tab \"Conjunto\"") && text.contains("Bill of materials"), "{text}");
+    assert!(std::fs::read(&pdf).unwrap().starts_with(b"%PDF"));
+    assert_eq!(data["bom"].as_array().unwrap().len(), 2);
+    let svg = dir.path().join("base.svg");
+    let (text, data) = ok(&s, "drawing_export", json!({ "tab": "Base", "path": svg, "projection": "third", "scale": "2:1" }));
+    assert!(text.contains("scale 2:1") && text.contains("width 60 mm") && text.contains("depth 40 mm"), "{text}");
+    assert_eq!(data["scale"], "2:1");
+    let body = std::fs::read_to_string(&svg).unwrap();
+    assert!(body.starts_with("<svg") && body.contains("stroke-dasharray"), "líneas ocultas a trazos");
+    let (text, _, err) = call(&s, "drawing_export", json!({ "tab": "Base", "path": svg }));
+    assert!(err && text.contains("overwrite"), "{text}");
+}

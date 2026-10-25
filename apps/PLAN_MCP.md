@@ -61,6 +61,13 @@ con las mismas herramientas:
 - Las herramientas se describen en una tabla (`tools.rs`: nombre, descripción, esquema,
   función) para que la lista, la guía y las pruebas salgan del mismo lugar.
 
+## Hoja de ruta
+
+Hecho (2026-10-24): M0, M2, M3 y M4 (CAD completo: diseño, ver y medir, ensambles y
+planos), M1 en lo que el CAD necesita. **Para después** (decisión del usuario, 2026-10-25):
+M5 mallas e impresión, M6 esqueleto y animación, M7 render y escáner, M8 modo en vivo
+y M9 pulido; el resto de M1 se hace dentro de cada una.
+
 ## Fases
 
 ### M0 — Protocolo y esqueleto ✅ 2026-10-24
@@ -135,10 +142,29 @@ con las mismas herramientas:
   número; con OCCT, la vista superior numera justo la cara `facing +Z` y las cuentas de
   caras/aristas coinciden con `cad_geometry`; medidas entre caras y desde un punto.
 
-### M4 — Ensambles y planos ❌
-- `asm_insert`, `asm_mate`, `asm_move`, `asm_check` (interferencias, holguras),
-  `asm_bom`; `drawing_create`, `drawing_add_view`, `drawing_dimension`, `drawing_export`
-  (PDF, DXF, SVG).
+### M4 — Ensambles y planos ✅ 2026-10-24
+- `asm_insert` (piezas de una pestaña de diseño, o un ensamble entero como subensamble;
+  posición, giro eje+ángulo, copias, fija, configuración; nombres por pestaña: «Base 1»),
+  `asm_mate` (8 tipos; conectores desde caras del ensamble: plana → centro y normal,
+  cilíndrica → eje; si no se cumple con las demás, falla y no deja nada), `asm_instance`
+  (mover, fijar, renombrar, configuración, quitar con sus relaciones), `asm_mate_edit`
+  (ángulo/distancia impuestos, flip, tipo, quitar), `asm_check` (relaciones, grados libres,
+  choques, holguras, avisos de engranes y lista de materiales).
+- `cad_design`, `cad_geometry`, `view` y `measure` aceptan pestañas de ensamble (caras
+  numeradas de todo el ensamble, instancia por instancia).
+- `drawing_export`: lámina propia en Rust (no los planos editables de la app): vistas
+  frente/superior/lateral alineadas en primer (ISO) o tercer ángulo (ASME) e iso, líneas
+  ocultas exactas a trazos (`cad_drawing`), cotas generales, escala normalizada que entra
+  (o la pedida), cajetín con símbolo de proyección, A4/A3/A2; en ensambles, lista de
+  materiales y globos repartidos alrededor de la iso. PDF (`cad_write_pdf`) o SVG, con
+  vista previa PNG (resvg) para que la IA la mire.
+- App: `cad_assembly_geometry`; `cad_measure` en un ensamble mide las instancias en su
+  lugar (antes medía el cuerpo de diseño sin colocar).
+- Falta: editar las láminas de la app (formato de `drawing` del frontend), cotas de
+  detalle, cortes y relaciones de engranes/tornillo desde el conector.
+- Pruebas: eje en placa (cilíndrica → 2 grados, centrado → 1), misma instancia
+  rechazada, choques y lista, medir en el ensamble (0 mm entre eje y agujero), copias y
+  quitar, PDF del ensamble con lista, SVG en tercer ángulo 2:1 con ocultas, sin pisar.
 
 ### M5 — Mallas, conversión e impresión ❌
 - `mesh_import`, `mesh_export` (todos los formatos del conversor), `mesh_info`,

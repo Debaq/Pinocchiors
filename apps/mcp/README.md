@@ -57,7 +57,7 @@ command = "/home/USUARIO/.cargo-target/release/pinocchio-mcp"
 | Herramienta | Qué hace |
 |---|---|
 | `status` | Modo, proyecto, pestañas CAD, malla, esqueleto e historial |
-| `help` | Guía por tema (`overview`, `conventions`, `cad`, `sketch`, `features`, `projects`) |
+| `help` | Guía por tema (`overview`, `conventions`, `cad`, `assembly`, `sketch`, `features`, `projects`) |
 | `undo` / `redo` | Deshacer y rehacer los últimos 20 cambios |
 | `project_new` / `project_open` / `project_save` | Proyectos `.pinocchio` |
 | `cad_tab_create` / `cad_tab_rename` / `cad_tab_delete` | Pestañas de diseño y ensamble |
@@ -71,9 +71,11 @@ command = "/home/USUARIO/.cargo-target/release/pinocchio-mcp"
 | `cad_add_feature` / `cad_edit_feature` / `cad_delete_feature` | Cualquier operación en JSON |
 | `cad_parameters` | Parámetros y fórmulas |
 | `cad_export` | STEP, STL, 3MF, OBJ, PLY, GLB |
+| `asm_insert` / `asm_mate` / `asm_instance` / `asm_mate_edit` | Ensambles: poner piezas, unirlas, moverlas |
+| `asm_check` | Relaciones, grados libres, choques, holguras y lista de materiales |
+| `drawing_export` | Lámina 2D (PDF/SVG) de un diseño o ensamble, con vista previa |
 
-Ensambles, planos, mallas, impresión, esqueleto, animación y render se
-suman por fases (M4–M7).
+Mallas, impresión, esqueleto, animación y render se suman por fases (M5–M7).
 
 ## Probar
 

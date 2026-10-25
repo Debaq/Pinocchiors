@@ -5,7 +5,7 @@ use std::collections::HashSet;
 
 use serde_json::{json, Value};
 
-use super::cad::{direction, num, open_design, tab_prop, vec3};
+use super::cad::{direction, find_tab, num, tab_prop, vec3};
 use super::{arg_str, Ctx, Effect, Fail, Output, Tool};
 use crate::render::{self, Camera, Labels, Options};
 use crate::schema::{any_object, array, integer, number_in, object, one_of};
@@ -43,16 +43,30 @@ some orange to confirm a pick before using it. Views: iso (front-right-top), iso
 /// Colores de pieza: suaves y bien distintos
 const PALETTE: [[u8; 3]; 8] = [[150, 172, 205], [214, 176, 120], [140, 196, 150], [205, 145, 160], [175, 160, 214], [120, 190, 195], [210, 200, 130], [190, 150, 120]];
 
+/// Activa la pestaña (diseño o ensamble): (id, nombre, es ensamble)
+fn open_any(ctx: &Ctx, args: &Value) -> Result<(u32, String, bool), Fail> {
+    let (tab, name, kind) = find_tab(ctx, args.get("tab"), false)?;
+    ctx.call("cad_tab_activate", json!({ "id": tab }))?;
+    Ok((tab, name, kind == "assembly"))
+}
+
 fn view(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
-    let d = open_design(ctx, args)?;
-    let result = ctx.call("cad_evaluate", json!({}))?;
-    if result["body"].is_null() {
-        return Err(Fail::new(format!("tab \"{}\" has no solid yet", d.tab_name)).hint("make one with `cad_extrude`, `cad_revolve` or `cad_primitive`"));
-    }
+    let (tab, tab_name, assembly) = open_any(ctx, args)?;
     let mm = ctx.call("cad_mm_per_unit", json!({}))?.as_f64().unwrap_or(1.0) as f32;
-    let mesh = render::decode_cad_mesh(&ctx.call_bytes("cad_mesh", json!({}))?, mm).map_err(Fail::new)?;
-    // Pieza de cada cara (rango de caras de cada una)
-    let ranges: Vec<(u64, u64)> = result["parts"].as_array().into_iter().flatten().map(|p| (p["faces"][0].as_u64().unwrap_or(0), p["faces"][1].as_u64().unwrap_or(0))).collect();
+    // Pieza (o instancia) de cada cara: rangos de caras de cada una
+    let (bytes, ranges): (Vec<u8>, Vec<(u64, u64)>) = if assembly {
+        let faces = ctx.call("cad_assembly_faces", json!({}))?;
+        let ranges = faces.as_array().into_iter().flatten().map(|r| (r[1].as_u64().unwrap_or(0), r[2].as_u64().unwrap_or(0))).collect();
+        (ctx.call_bytes("cad_assembly_mesh", json!({}))?, ranges)
+    } else {
+        let result = ctx.call("cad_evaluate", json!({}))?;
+        let ranges = result["parts"].as_array().into_iter().flatten().map(|p| (p["faces"][0].as_u64().unwrap_or(0), p["faces"][1].as_u64().unwrap_or(0))).collect();
+        (ctx.call_bytes("cad_mesh", json!({}))?, ranges)
+    };
+    let mesh = render::decode_cad_mesh(&bytes, mm).map_err(Fail::new)?;
+    if mesh.triangles.is_empty() {
+        return Err(Fail::new(format!("tab \"{tab_name}\" has nothing to show yet")).hint(if assembly { "insert parts with `asm_insert`" } else { "make a solid with `cad_extrude`, `cad_revolve` or `cad_primitive`" }));
+    }
     let face_color = move |f: u32| {
         let k = ranges.iter().position(|r| (r.0..r.1).contains(&(f as u64))).unwrap_or(0);
         PALETTE[k % PALETTE.len()]
@@ -87,10 +101,12 @@ fn view(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
     let view_name = if args.get("azimuth").is_some() { format!("azimuth {} / elevation {}", args["azimuth"], args["elevation"]) } else { name.to_string() };
     let mut out = Output::new(
         format!(
-            "View {view_name} of tab \"{}\" ({}×{} px). {what} Parts have different colours; the triad shows X (red), Y (green), Z (blue). Small faces may have no number: use `cad_geometry` for the full list.",
-            d.tab_name, opts.width, opts.height
+            "View {view_name} of tab \"{tab_name}\" ({}×{} px). {what} {} have different colours; the triad shows X (red), Y (green), Z (blue). Small faces may have no number: use `cad_geometry` for the full list.",
+            opts.width,
+            opts.height,
+            if assembly { "Instances" } else { "Parts" }
         ),
-        json!({ "tab": d.tab, "view": view_name, "labels": pic.labeled, "faces": mesh.triangle_face.iter().max().map_or(0, |m| m + 1), "edges": mesh.edges.len() }),
+        json!({ "tab": tab, "view": view_name, "labels": pic.labeled, "faces": mesh.triangle_face.iter().max().map_or(0, |m| m + 1), "edges": mesh.edges.len() }),
     );
     out.images.push(pic.png);
     Ok(out)
@@ -114,7 +130,7 @@ Example: {\"items\": [{\"face\": 4}, {\"face\": 9}]}.",
 };
 
 fn measure(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
-    let d = open_design(ctx, args)?;
+    let (tab, tab_name, _) = open_any(ctx, args)?;
     let raw = args["items"].as_array().cloned().unwrap_or_default();
     if raw.is_empty() || raw.len() > 2 {
         return Err(Fail::new("give one or two items"));
@@ -135,7 +151,7 @@ fn measure(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
         names.push(label);
     }
     let m = ctx.call("cad_measure", json!({ "items": items })).map_err(|e| e.hint("face and edge numbers come from `cad_geometry` and change after every edit"))?;
-    let mut lines = vec![format!("Tab \"{}\":", d.tab_name)];
+    let mut lines = vec![format!("Tab \"{tab_name}\":")];
     for (it, name) in m["items"].as_array().into_iter().flatten().zip(&names) {
         let mut parts = vec![it["kind"].as_str().unwrap_or("").to_string()];
         if let Some(a) = it["area"].as_f64() {
@@ -170,5 +186,5 @@ fn measure(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
     if let Some(a) = m["angle"].as_f64() {
         lines.push(format!("Angle: {}°.", num(a)));
     }
-    Ok(Output::new(lines.join("\n"), json!({ "tab": d.tab, "measurement": m })))
+    Ok(Output::new(lines.join("\n"), json!({ "tab": tab, "measurement": m })))
 }

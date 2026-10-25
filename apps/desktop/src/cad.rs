@@ -1789,6 +1789,50 @@ fn geometry_impl(state: &AppState) -> Result<GeometryView, String> {
     Ok(GeometryView { faces, edges })
 }
 
+/// Caras y aristas del ensamble activo, con las instancias en su lugar y la
+/// numeración de `cad_assembly_mesh` / `cad_assembly_connector` (seguidas,
+/// instancia por instancia). `part` lleva el id de la instancia.
+fn assembly_geometry_impl(state: &AppState) -> Result<GeometryView, String> {
+    let (_, shapes) = assembly_shapes(state)?;
+    let (mut faces, mut edges) = (Vec::new(), Vec::new());
+    for (id, shape) in &shapes {
+        let instance = Some(cad_model::PartId { feature: cad_model::FeatureId(*id), index: 0 });
+        let (f0, e0) = (faces.len(), edges.len());
+        for i in 0..shape.face_count() {
+            let f = shape.face_info(i).map_err(|e| e.to_string())?;
+            faces.push(FaceView {
+                index: f0 + i,
+                part: instance,
+                origin: Vec::new(),
+                surface: format!("{:?}", f.surface).to_lowercase(),
+                area: f.area,
+                center: f.center,
+                point: f.point,
+                normal: f.normal,
+                radius: f.radius,
+                axis: f.axis.map(|a| (a.origin, a.dir)),
+            });
+        }
+        let pairs = shape.edge_face_pairs().map_err(|e| e.to_string())?;
+        for (i, e) in shape.edges().map_err(|e| e.to_string())?.into_iter().enumerate() {
+            let [a, b] = pairs.get(i).copied().unwrap_or([None, None]);
+            edges.push(EdgeView {
+                index: e0 + i,
+                part: instance,
+                curve: format!("{:?}", e.curve).to_lowercase(),
+                length: e.length,
+                start: e.start,
+                end: e.end,
+                mid: e.mid,
+                closed: e.closed,
+                radius: e.circle.map(|c| c.2),
+                faces: [a.map(|f| f + f0), b.map(|f| f + f0)],
+            });
+        }
+    }
+    Ok(GeometryView { faces, edges })
+}
+
 /// Piezas que hay justo antes de la operación `index` de `document` (para
 /// elegirlas en su diálogo: la vista previa ya las muestra cambiadas).
 #[tauri::command]
@@ -2173,6 +2217,17 @@ pub async fn cad_measure(app: AppHandle, items: Vec<cad_model::MeasureItem>) -> 
 }
 
 fn measure_impl(state: &AppState, items: &[cad_model::MeasureItem]) -> Result<cad_model::Measurement, String> {
+    // En un ensamble: las instancias en su lugar, con la numeración de su malla
+    if state.cad_in_assembly() {
+        let (_, shapes) = assembly_shapes(state)?;
+        let list: Vec<cad_model::Shape> = shapes.into_iter().map(|(_, s)| s).collect();
+        let all = match list.len() {
+            0 => return Err("El ensamble todavía no tiene piezas".into()),
+            1 => list[0].clone(),
+            _ => cad_model::Shape::compound(&list).map_err(|e| e.to_string())?,
+        };
+        return cad_model::measure(&all, items);
+    }
     evaluate(state)?;
     let cache = state.cad_cache.lock().unwrap();
     let eval = &cache.as_ref().ok_or("No hay sólido")?.eval;
@@ -3190,6 +3245,7 @@ pub mod bridge {
             "cad_vertex_spec" => ok(vertex_spec_impl(state, arg(args, "point")?)?),
             "cad_face_info" => ok(face_info_impl(state, arg(args, "face")?)?),
             "cad_geometry" => ok(geometry_impl(state)?),
+            "cad_assembly_geometry" => ok(assembly_geometry_impl(state)?),
             "cad_face_edges" => ok(face_edges_impl(state, arg(args, "face")?)?),
             "cad_feature_faces" => ok(feature_faces_impl(state, arg(args, "feature")?)?),
             "cad_deviation" => deviation_impl(state, arg(args, "tolerance")?).map(Reply::Bytes),
