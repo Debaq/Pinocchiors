@@ -290,6 +290,11 @@ export const AiChatPanel: Component<{ onClose: () => void }> = (props) => {
   const send = async () => {
     const text = draft().trim() || (attached().length ? t("Mira la imagen.") : "");
     if (!text || busy()) return;
+    // Como en las terminales de IA: /clear (o /limpiar) empieza de cero
+    if (/^\/(clear|limpiar)$/i.test(text)) {
+      setDraft("");
+      return reset();
+    }
     const images = attached();
     setDraft("");
     setAttached([]);
@@ -343,8 +348,8 @@ export const AiChatPanel: Component<{ onClose: () => void }> = (props) => {
         <IconButton variant="ghost" size="sm" aria-label={t("Guardar la conversación")} title={t("Guardar la conversación")} onClick={() => void saveConversation().catch((e) => setNote(tBackend(String(e))))} disabled={entries().length === 0}>
           <Icons.FloppyDisk size={14} />
         </IconButton>
-        <IconButton variant="ghost" size="sm" aria-label={t("Conversación nueva")} title={t("Conversación nueva")} onClick={reset} disabled={busy()}>
-          <Icons.FilePlus size={14} />
+        <IconButton variant="ghost" size="sm" aria-label={t("Limpiar el chat")} title={t("Limpiar el chat y empezar una conversación nueva (también /clear)")} onClick={reset} disabled={busy() || entries().length === 0}>
+          <Icons.Trash size={14} />
         </IconButton>
         <IconButton variant="ghost" size="sm" aria-label={t("Cerrar")} onClick={() => props.onClose()}>
           <Icons.X size={14} />

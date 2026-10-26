@@ -181,7 +181,8 @@ Object.assign(en_settings, {
 /** Chat con la IA */
 Object.assign(en_settings, {
   "Chat con IA": "AI chat",
-  "Conversación nueva": "New conversation",
+  "Limpiar el chat": "Clear the chat",
+  "Limpiar el chat y empezar una conversación nueva (también /clear)": "Clear the chat and start a new conversation (also /clear)",
   "No se encontró Claude Code en este equipo. Instálalo (claude.com/claude-code) e inicia sesión una vez en la terminal; el chat usa tu cuenta.":
     "Claude Code was not found on this computer. Install it (claude.com/claude-code) and sign in once in the terminal; the chat uses your account.",
   "Pídele lo que quieras diseñar: «haz una caja de 80 × 50 × 30 con tapa», «redondea las aristas que seleccioné», «arma un ensamble con estas piezas». Trabaja en esta ventana y cada cambio se deshace con Ctrl+Z.":
