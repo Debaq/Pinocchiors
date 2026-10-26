@@ -4104,10 +4104,16 @@ export function createCadStore() {
   const redoStack: CadDocument[] = [];
   const [historyVersion, setHistoryVersion] = createSignal(0);
   // Modo en vivo del conector MCP: la IA tiene el turno (lo que está haciendo;
-  // las ediciones esperan) y si el último paso del deshacer es suyo (la IA solo
-  // deshace o rehace lo propio)
+  // las ediciones esperan) y, por pestaña, cuántos pasos de arriba del deshacer
+  // (y del rehacer) son suyos: la IA solo deshace o rehace lo propio
   const [aiTurn, setAiTurn] = createSignal<string>();
-  let aiStep: "undo" | "redo" | null = null;
+  const aiSteps = new Map<number, { undo: number; redo: number }>();
+  const aiOf = (tab: number) => aiSteps.get(tab) ?? aiSteps.set(tab, { undo: 0, redo: 0 }).get(tab)!;
+  /** El usuario tocó el historial de la pestaña activa: lo de arriba ya no es de la IA */
+  const userStep = () => {
+    const tab = tabs().active;
+    if (tab !== null) aiSteps.delete(tab);
+  };
   const [tabs, setTabs] = createSignal<CadTabs>({ tabs: [], active: null });
   // Pestaña de la que es `result` (al cambiar de pestaña, `tabs` cambia antes que el recálculo)
   const [resultTab, setResultTab] = createSignal(0);
@@ -4214,7 +4220,7 @@ export function createCadStore() {
     mutate(next);
     // `join`: sigue un gesto ya abierto (arrastrar), que cuenta como un solo paso de deshacer
     if (!join) {
-      aiStep = null;
+      userStep();
       undoStack.push(current);
       if (undoStack.length > HISTORY_LIMIT) undoStack.shift();
       redoStack.length = 0;
@@ -4640,12 +4646,12 @@ export function createCadStore() {
 
     /** Con un diálogo abierto, deshacer lo cancela */
     undo() {
-      aiStep = null;
+      userStep();
       undoOnce();
     },
 
     redo() {
-      aiStep = null;
+      userStep();
       redoOnce();
     },
 
@@ -4665,6 +4671,9 @@ export function createCadStore() {
       swapTabHistory(tabHistory, undoStack, redoStack, before, next);
       setTabs(next);
       for (const c of changes) {
+        const ai = aiOf(c.tab);
+        ai.undo = Math.min(ai.undo + 1, HISTORY_LIMIT);
+        ai.redo = 0;
         if (c.tab === next.active) {
           undoStack.push(c.before);
           if (undoStack.length > HISTORY_LIMIT) undoStack.shift();
@@ -4676,17 +4685,24 @@ export function createCadStore() {
           tabHistory.set(c.tab, h);
         }
       }
-      if (changes.length) aiStep = "undo";
       setHistoryVersion((v) => v + 1);
       await loadActive();
     },
 
-    /** Modo en vivo: la IA deshace (o rehace) su último paso; `false` si el último no es suyo */
+    /** Modo en vivo: la IA deshace (o rehace) su último paso en la pestaña activa; `false` si el último no es suyo */
     async aiUndo(back: boolean) {
-      if (aiStep !== (back ? "undo" : "redo")) return false;
-      if (back) undoOnce();
-      else redoOnce();
-      aiStep = back ? "redo" : "undo";
+      const tab = tabs().active;
+      const ai = tab === null ? undefined : aiSteps.get(tab);
+      if (!ai || (back ? ai.undo : ai.redo) === 0 || (back ? undoStack : redoStack).length === 0) return false;
+      if (back) {
+        undoOnce();
+        ai.undo--;
+        ai.redo++;
+      } else {
+        redoOnce();
+        ai.redo--;
+        ai.undo++;
+      }
       await lastSend;
       return true;
     },
