@@ -7,7 +7,7 @@ use cad_model::{Document, FeatureId, FeatureKind};
 use serde_json::{json, Map, Value};
 
 use super::{arg_bool, arg_str, Ctx, Effect, Fail, Output, Tool};
-use crate::mcp::schema::{any_object, array, boolean, id_or_name, integer, object, one_of, string, Prop};
+use crate::mcp::schema::{any_object, array, boolean, find_id_or_name, id_or_name, integer, object, one_of, string, Prop};
 
 pub const TOOLS: &[Tool] = &[TAB_CREATE, TAB_RENAME, TAB_DELETE, DESIGN, GEOMETRY, ADD_FEATURE, EDIT_FEATURE, DELETE_FEATURE, PARAMETERS, EXPORT];
 
@@ -41,9 +41,7 @@ pub(super) fn find_tab(ctx: &Ctx, want: Option<&Value>, create: bool) -> Result<
     let found = match want {
         // Sin pestaña pedida: la última en la que trabajó la IA, si sigue; si no, la activa
         None => focus.and_then(|f| tabs.iter().find(|t| t["id"].as_u64() == Some(f as u64))).or_else(|| tabs.iter().find(|t| t["id"] == view["active"])).or(tabs.first()),
-        Some(Value::Number(n)) => tabs.iter().find(|t| t["id"].as_u64() == n.as_u64()),
-        Some(Value::String(s)) => tabs.iter().find(|t| t["name"].as_str().is_some_and(|n| n.eq_ignore_ascii_case(s.trim()))),
-        Some(_) => None,
+        Some(w) => find_id_or_name(&tabs, w, |t| t["id"].as_u64(), |t| t["name"].as_str().unwrap_or("")).map(|i| &tabs[i]),
     };
     found.map(pick).ok_or_else(|| Fail::new(format!("no tab {}", want.map_or("".into(), |w| w.to_string()))).hint(format!("tabs: {}", list())))
 }
@@ -187,7 +185,13 @@ pub(super) fn finish(_ctx: &Ctx, d: &Design, result: &Value, before: &[u64], tou
     if let Some((id, fname)) = touched
         && let Some((_, msg)) = errs.iter().find(|e| e.0 == id.0 as u64)
     {
-        return Err(Fail::new(format!("\"{fname}\" failed: {msg}")).hint("nothing was changed; check the references and sizes (`cad_design`, `cad_geometry`) and try again"));
+        // El radio que no cabe es lo más común: decir qué achicar
+        let hint = if msg.contains("radio demasiado grande") {
+            "nothing was changed; the radius (or distance) does not fit those edges: try a smaller one (below half the thinnest wall or face next to them, see `cad_geometry`) or pick fewer edges"
+        } else {
+            "nothing was changed; check the references and sizes (`cad_design`, `cad_geometry`) and try again"
+        };
+        return Err(Fail::new(format!("\"{fname}\" failed: {msg}")).hint(hint));
     }
     let mut lines = vec![headline.to_string()];
     if !extra.is_empty() {
@@ -214,11 +218,7 @@ pub(super) fn finish(_ctx: &Ctx, d: &Design, result: &Value, before: &[u64], tou
 
 /// Una operación del diseño por id o nombre
 pub(super) fn find_feature(doc: &Document, want: &Value) -> Result<FeatureId, Fail> {
-    let found = match want {
-        Value::Number(n) => doc.features.iter().find(|f| Some(f.id.0 as u64) == n.as_u64()),
-        Value::String(s) => doc.features.iter().find(|f| f.name.eq_ignore_ascii_case(s.trim())),
-        _ => None,
-    };
+    let found = find_id_or_name(&doc.features, want, |f| Some(f.id.0 as u64), |f| &f.name).map(|i| &doc.features[i]);
     found.map(|f| f.id).ok_or_else(|| {
         let list: Vec<String> = doc.features.iter().map(|f| format!("{} \"{}\"", f.id.0, f.name)).collect();
         Fail::new(format!("no feature {want}")).hint(if list.is_empty() { "the design has no features yet".into() } else { format!("features: {}", list.join(", ")) })
@@ -604,9 +604,20 @@ fn add_any(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
     let d = open_design(ctx, args)?;
     let mut raw = args["feature"].clone();
     resolve_refs(ctx, &mut raw)?;
-    let kind: FeatureKind = serde_json::from_value(raw)
-        .map_err(|e| Fail::new(format!("invalid operation: {e}")).hint("see `help` with topic `features` for the fields of each type"))?;
-    add_feature(ctx, d, kind, arg_str(args, "name"), "")
+    let invalid = |e: serde_json::Error| Fail::new(format!("invalid operation: {e}")).hint("see `help` with topic `features` for the fields of each type");
+    let (kind, extra) = match serde_json::from_value::<FeatureKind>(raw.clone()) {
+        Ok(kind) => (kind, ""),
+        // Sin `op`: lo de siempre en la app, unir con el sólido (que lo diga la respuesta)
+        Err(e) if e.to_string().contains("missing field `op`") && raw.is_object() => {
+            raw["op"] = json!("join");
+            let kind = serde_json::from_value(raw).map_err(|_| {
+                Fail::new(format!("invalid operation: {e}")).hint("add \"op\": \"join\" | \"cut\" | \"intersect\" | \"new\" (a boolean between parts uses \"union\" | \"subtract\" | \"intersect\"); see `help` topic `features`")
+            })?;
+            (kind, "No `op` given: it joins the solid (\"op\": \"join\"); use \"cut\", \"intersect\" or \"new\" for something else.")
+        }
+        Err(e) => return Err(invalid(e)),
+    };
+    add_feature(ctx, d, kind, arg_str(args, "name"), extra)
 }
 
 const EDIT_FEATURE: Tool = Tool {

@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 
 use super::cad::{find_part, find_tab, num, vec3};
 use super::{arg_bool, arg_str, Ctx, Effect, Fail, Output, Tool};
-use crate::mcp::schema::{any_object, boolean, id_or_name, integer, number, number_in, object, one_of, point, string, Prop};
+use crate::mcp::schema::{any_object, boolean, find_id_or_name, id_or_name, integer, number, number_in, object, one_of, point, string, Prop};
 
 pub const TOOLS: &[Tool] = &[INSERT, MATE, INSTANCE, MATE_EDIT, RELATION, CHECK];
 
@@ -65,11 +65,7 @@ pub(super) fn solution_text(result: &Value) -> (String, bool) {
 
 /// Instancia por id o nombre
 fn find_instance(asm: &Assembly, want: &Value) -> Result<u32, Fail> {
-    let found = match want {
-        Value::Number(n) => asm.instances.iter().find(|i| Some(i.id as u64) == n.as_u64()),
-        Value::String(s) => asm.instances.iter().find(|i| i.name.eq_ignore_ascii_case(s.trim())),
-        _ => None,
-    };
+    let found = find_id_or_name(&asm.instances, want, |i| Some(i.id as u64), |i| &i.name).map(|i| &asm.instances[i]);
     found.map(|i| i.id).ok_or_else(|| {
         let list: Vec<String> = asm.instances.iter().map(|i| format!("{} \"{}\"", i.id, i.name)).collect();
         Fail::new(format!("no instance {want}")).hint(if list.is_empty() { "the assembly is empty: use `asm_insert`".into() } else { format!("instances: {}", list.join(", ")) })
@@ -77,11 +73,7 @@ fn find_instance(asm: &Assembly, want: &Value) -> Result<u32, Fail> {
 }
 
 fn find_mate(asm: &Assembly, want: &Value) -> Result<u32, Fail> {
-    let found = match want {
-        Value::Number(n) => asm.mates.iter().find(|m| Some(m.id as u64) == n.as_u64()),
-        Value::String(s) => asm.mates.iter().find(|m| m.name.eq_ignore_ascii_case(s.trim())),
-        _ => None,
-    };
+    let found = find_id_or_name(&asm.mates, want, |m| Some(m.id as u64), |m| &m.name).map(|i| &asm.mates[i]);
     found.map(|m| m.id).ok_or_else(|| {
         let list: Vec<String> = asm.mates.iter().map(|m| format!("{} \"{}\"", m.id, m.name)).collect();
         Fail::new(format!("no mate {want}")).hint(if list.is_empty() { "the assembly has no mates: use `asm_mate`".into() } else { format!("mates: {}", list.join(", ")) })

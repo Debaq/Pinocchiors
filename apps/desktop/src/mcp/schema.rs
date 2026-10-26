@@ -50,6 +50,54 @@ pub fn id_or_name(description: &str) -> Value {
     json!({ "type": ["integer", "string"], "description": description })
 }
 
+/// Posición en `items` de lo pedido con `id_or_name`. Con texto vale el
+/// nombre; si nada se llama así y es un número, el id: hay clientes que
+/// mandan el id como texto ("1")
+pub fn find_id_or_name<T>(items: &[T], want: &Value, id: impl Fn(&T) -> Option<u64>, name: impl Fn(&T) -> &str) -> Option<usize> {
+    let by_id = |n: u64| items.iter().position(|x| id(x) == Some(n));
+    match want {
+        Value::Number(n) => n.as_u64().and_then(by_id),
+        Value::String(s) => {
+            let s = s.trim();
+            items.iter().position(|x| name(x).eq_ignore_ascii_case(s)).or_else(|| s.parse().ok().and_then(by_id))
+        }
+        _ => None,
+    }
+}
+
+/// Antes de `check`: un número escrito como texto ("3", "2.5") en un campo
+/// que solo acepta números pasa a número (algunos clientes los mandan así)
+pub fn coerce(schema: &Value, value: &mut Value) {
+    let types: Vec<&str> = match schema.get("type") {
+        Some(Value::String(t)) => vec![t.as_str()],
+        Some(Value::Array(ts)) => ts.iter().filter_map(Value::as_str).collect(),
+        _ => vec![],
+    };
+    if let Value::String(s) = value
+        && !types.contains(&"string")
+    {
+        let s = s.trim();
+        let n = if types.contains(&"integer") { s.parse::<i64>().ok().map(Value::from) } else { None };
+        let n = n.or_else(|| if types.contains(&"number") { s.parse::<f64>().ok().filter(|x| x.is_finite()).map(Value::from) } else { None });
+        if let Some(n) = n {
+            *value = n;
+        }
+        return;
+    }
+    if let (Some(obj), Some(props)) = (value.as_object_mut(), schema.get("properties").and_then(Value::as_object)) {
+        for (name, v) in obj.iter_mut() {
+            if let Some(p) = props.get(name) {
+                coerce(p, v);
+            }
+        }
+    }
+    if let (Some(items), Some(list)) = (schema.get("items"), value.as_array_mut()) {
+        for v in list {
+            coerce(items, v);
+        }
+    }
+}
+
 /// Objeto abierto (sus campos los verifica quien lo usa), con un ejemplo
 pub fn any_object(description: &str) -> Value {
     json!({ "type": "object", "description": description })
@@ -176,6 +224,37 @@ mod tests {
             ("format", one_of("File format", &["step", "stl"]), false),
             ("size", array("Size in mm", number_in("mm", 0.0, 1000.0)), false),
         ])
+    }
+
+    #[test]
+    fn id_or_name_accepts_the_id_as_text() {
+        let tabs = vec![json!({ "id": 0, "name": "Diseño 1" }), json!({ "id": 1, "name": "Cuerpo" }), json!({ "id": 2, "name": "1" })];
+        let find = |w: Value| find_id_or_name(&tabs, &w, |t| t["id"].as_u64(), |t| t["name"].as_str().unwrap_or(""));
+        assert_eq!(find(json!(1)), Some(1));
+        assert_eq!(find(json!("0")), Some(0));
+        assert_eq!(find(json!(" cuerpo ")), Some(1));
+        // Si una se llama "1", gana el nombre
+        assert_eq!(find(json!("1")), Some(2));
+        assert_eq!(find(json!("7")), None);
+        assert_eq!(find(json!(true)), None);
+    }
+
+    #[test]
+    fn coerce_turns_numeric_text_into_numbers() {
+        let schema = object(&[
+            ("count", integer("How many", 0), true),
+            ("size", array("Size in mm", number_in("mm", 0.0, 1000.0)), false),
+            ("tab", id_or_name("Tab"), false),
+            ("name", string("Name"), false),
+        ]);
+        let mut args = json!({ "count": "3", "size": ["2.5", 4], "tab": "1", "name": "12" });
+        coerce(&schema, &mut args);
+        assert_eq!(args, json!({ "count": 3, "size": [2.5, 4], "tab": "1", "name": "12" }));
+        assert!(check(&schema, &args).is_ok());
+        // Lo que no es número queda como está y lo rechaza `check`
+        let mut bad = json!({ "count": "tres" });
+        coerce(&schema, &mut bad);
+        assert!(check(&schema, &bad).is_err());
     }
 
     #[test]

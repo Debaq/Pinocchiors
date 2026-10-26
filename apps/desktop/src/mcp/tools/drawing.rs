@@ -18,7 +18,7 @@ use serde_json::{json, Value};
 use super::assembly::bom;
 use super::cad::{find_tab, num};
 use super::{arg_bool, arg_str, Ctx, Effect, Fail, Output, Tool};
-use crate::mcp::schema::{array, boolean, id_or_name, object, one_of, string, Prop};
+use crate::mcp::schema::{array, boolean, find_id_or_name, id_or_name, object, one_of, string, Prop};
 
 pub const TOOLS: &[Tool] = &[EXPORT, SHEET];
 
@@ -1306,11 +1306,7 @@ fn sheets_of(doc: &Value) -> Vec<Value> {
 
 fn find_sheet(doc: &Value, want: &Value) -> Result<(usize, Value), Fail> {
     let list = sheets_of(doc);
-    let found = list.iter().position(|s| match want {
-        Value::Number(n) => s["id"].as_u64() == n.as_u64(),
-        Value::String(w) => s["name"].as_str().is_some_and(|n| n.eq_ignore_ascii_case(w.trim())),
-        _ => false,
-    });
+    let found = find_id_or_name(&list, want, |s| s["id"].as_u64(), |s| s["name"].as_str().unwrap_or(""));
     found.map(|i| (i, list[i].clone())).ok_or_else(|| {
         let names: Vec<String> = list.iter().map(|s| format!("{} \"{}\"", s["id"], s["name"].as_str().unwrap_or(""))).collect();
         Fail::new(format!("no drawing sheet {want}")).hint(if names.is_empty() { "this tab has no drawing sheets yet: make one with `drawing_sheet`".into() } else { format!("sheets: {}", names.join(", ")) })

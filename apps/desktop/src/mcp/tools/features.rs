@@ -304,12 +304,12 @@ const SHELL: Tool = Tool {
     name: "cad_shell",
     title: "Hollow out the solid",
     description: "Hollows the solid leaving walls of `thickness` mm, removing the `open_faces` (face numbers from \
-`cad_geometry`) to make an opening — e.g. the top face for a box or cup. With no open faces it makes a closed hollow \
-solid. Example: {\"open_faces\": [4], \"thickness\": 2}.",
+`cad_geometry`) to make an opening — e.g. the top face for a box or cup. At least one face must be open (a closed \
+hollow solid is not supported yet). Example: {\"open_faces\": [4], \"thickness\": 2}.",
     input: || {
         object(&[
             tab_prop(),
-            ("open_faces", array("Faces to remove (numbers from `cad_geometry`)", integer("face", 0)), false),
+            ("open_faces", json!({ "type": "array", "description": "Faces to remove, at least one (numbers from `cad_geometry`)", "items": integer("face", 0), "minItems": 1 }), true),
             ("thickness", number_in("Wall thickness in mm", 0.0, 1e4), true),
             name_prop(),
         ])

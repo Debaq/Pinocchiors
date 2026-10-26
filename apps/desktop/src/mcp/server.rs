@@ -110,11 +110,13 @@ impl Server {
     fn call_tool(&self, id: &Value, params: &Value, send: &Sender<'_>) -> Result<Value, (i64, String)> {
         let name = params.get("name").and_then(Value::as_str).unwrap_or_default();
         let tool = tools::find(name).ok_or_else(|| (protocol::INVALID_PARAMS, format!("Unknown tool: {name}. Call tools/list to see them.")))?;
-        let args = match params.get("arguments") {
+        let mut args = match params.get("arguments") {
             None | Some(Value::Null) => json!({}),
             Some(a) => a.clone(),
         };
-        if let Err(e) = schema::check(&(tool.input)(), &args) {
+        let input = (tool.input)();
+        schema::coerce(&input, &mut args);
+        if let Err(e) = schema::check(&input, &args) {
             let fail = Fail::new(e).hint(format!("see the inputSchema of `{}` in tools/list", tool.name));
             self.note(tool.name, &fail, &args);
             return Ok(self.result(Err(fail)));
