@@ -1,0 +1,185 @@
+# APK de Android (arm64) CON el núcleo CAD.
+#
+# Solo a mano: Actions → Android → Run workflow, o
+#   gh workflow run Android --ref <rama>
+# El APK queda como artefacto del run (no se publica en una release).
+#
+# OpenCASCADE se compila con el mismo scripts/build-occt.sh que el escritorio,
+# pasando el toolchain del NDK por la variable CMAKE_TOOLCHAIN_FILE (así el
+# script no cambia y no invalida la caché de las otras plataformas). La
+# primera vez tarda ~30 min, después sale de caché. CAD_REQUIRE_OCCT=1 hace
+# que el APK no salga sin CAD.
+#
+# Firma: con los secretos ANDROID_KEYSTORE (keystore en base64),
+# ANDROID_KEYSTORE_PASSWORD y ANDROID_KEY_ALIAS. Sin ellos se firma con una
+# clave de prueba nueva en cada run: para instalar otra versión encima hay que
+# desinstalar la anterior.
+#
+# El proyecto Gradle (apps/desktop/gen/android) lo genera `tauri android init`
+# en cada run; no se versiona.
+
+name: Android
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  OCCT_VERSION: "7.9.3"
+  ANDROID_ABI: arm64-v8a
+  # Android 7.0: mínimo de Tauri
+  ANDROID_API: "24"
+
+jobs:
+  apk:
+    name: APK (arm64)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Versión
+        id: version
+        run: |
+          # Misma versión que la release (AA.M.minuto-del-mes); el versionCode
+          # de Android son los minutos desde 1970 del commit: crece siempre
+          read -r y m d hh mm <<< "$(TZ=UTC0 git show -s --format=%cd --date=format-local:'%y %m %d %H %M' HEAD)"
+          semver="$((10#$y)).$((10#$m)).$(((10#$d - 1) * 1440 + 10#$hh * 60 + 10#$mm))"
+          code=$(( $(git show -s --format=%ct HEAD) / 60 ))
+          echo "semver=${semver}" >> "$GITHUB_OUTPUT"
+          echo "code=${code}" >> "$GITHUB_OUTPUT"
+          echo "Versión: ${semver} (versionCode ${code})" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: NDK
+        id: ndk
+        run: |
+          # El runner ya trae el SDK y el NDK de Android
+          echo "NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+          echo "version=$(basename "$ANDROID_NDK_LATEST_HOME")" >> "$GITHUB_OUTPUT"
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+
+      - name: OCCT en caché
+        id: occt-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: occt-android
+          key: occt-${{ env.OCCT_VERSION }}-android-${{ env.ANDROID_ABI }}-${{ env.ANDROID_API }}-ndk${{ steps.ndk.outputs.version }}-${{ hashFiles('scripts/build-occt.sh') }}
+
+      - name: Compilar OCCT estático (NDK)
+        if: steps.occt-cache.outputs.cache-hit != 'true'
+        env:
+          CMAKE_GENERATOR: Ninja
+        run: |
+          # CMake toma el toolchain de la variable de entorno; este envoltorio
+          # fija ABI, API y libc++ antes de cargar el del NDK
+          toolchain="$RUNNER_TEMP/android.toolchain.cmake"
+          cat > "$toolchain" <<EOF
+          set(ANDROID_ABI ${ANDROID_ABI})
+          set(ANDROID_PLATFORM android-${ANDROID_API})
+          set(ANDROID_STL c++_static)
+          include("${NDK_HOME}/build/cmake/android.toolchain.cmake")
+          EOF
+          CMAKE_TOOLCHAIN_FILE="$toolchain" OCCT_WORK_DIR="$RUNNER_TEMP/occt" \
+            scripts/build-occt.sh "$PWD/occt-android" "$OCCT_VERSION"
+
+      - name: Guardar OCCT en caché
+        if: steps.occt-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: occt-android
+          key: ${{ steps.occt-cache.outputs.cache-primary-key }}
+
+      - name: Rutas de OCCT
+        run: |
+          # En Android OCCT puede instalar las librerías en libs/<abi>: se buscan
+          lib=$(find "$PWD/occt-android" -name libTKernel.a -printf '%h\n' | head -n 1)
+          inc=$(find "$PWD/occt-android" -name Standard.hxx -printf '%h\n' | head -n 1)
+          if [[ -z "$lib" || -z "$inc" ]]; then
+            echo "::error::No se encontró OCCT en occt-android"
+            find occt-android -maxdepth 3
+            exit 1
+          fi
+          echo "OCCT_STATIC=1" >> "$GITHUB_ENV"
+          echo "CAD_REQUIRE_OCCT=1" >> "$GITHUB_ENV"
+          echo "OCCT_INCLUDE_DIR=$inc" >> "$GITHUB_ENV"
+          echo "OCCT_LIB_DIR=$lib" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android-cad
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Instalar frontend
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Proyecto Android
+        working-directory: apps/desktop
+        run: |
+          tauri() { node ../web/node_modules/@tauri-apps/cli/tauri.js "$@"; }
+          tauri android init --ci
+          # Íconos de la app (mipmaps) a partir del de escritorio
+          tauri icon icons/icon.png
+
+      - name: Build APK
+        working-directory: apps/desktop
+        env:
+          SEMVER: ${{ steps.version.outputs.semver }}
+          CODE: ${{ steps.version.outputs.code }}
+        run: |
+          config="{\"version\":\"${SEMVER}\",\"bundle\":{\"android\":{\"versionCode\":${CODE}}}}"
+          node ../web/node_modules/@tauri-apps/cli/tauri.js android build --ci --apk --target aarch64 --config "$config"
+
+      - name: Firmar
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          SEMVER: ${{ steps.version.outputs.semver }}
+        run: |
+          ks="$RUNNER_TEMP/release.jks"
+          if [[ -n "$KEYSTORE" ]]; then
+            base64 -d <<< "$KEYSTORE" > "$ks"
+          else
+            echo "::warning::Sin ANDROID_KEYSTORE: APK firmado con una clave de prueba (desinstalar la versión anterior antes de instalar)"
+            KEYSTORE_PASSWORD=android
+            KEY_ALIAS=pinocchio
+            keytool -genkeypair -keystore "$ks" -storepass "$KEYSTORE_PASSWORD" -keypass "$KEYSTORE_PASSWORD" \
+              -alias "$KEY_ALIAS" -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Pinocchio prueba"
+          fi
+          unsigned=$(find apps/desktop/gen/android/app/build/outputs/apk -name '*-unsigned.apk' | head -n 1)
+          if [[ -z "$unsigned" ]]; then
+            echo "::error::No apareció el APK"
+            find apps/desktop/gen/android/app/build/outputs -name '*.apk'
+            exit 1
+          fi
+          tools=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)
+          mkdir -p dist
+          out="dist/Pinocchio-${SEMVER}-android-arm64.apk"
+          "$tools/zipalign" -f -p 4 "$unsigned" "$RUNNER_TEMP/aligned.apk"
+          "$tools/apksigner" sign --ks "$ks" --ks-pass "pass:$KEYSTORE_PASSWORD" --ks-key-alias "$KEY_ALIAS" \
+            --out "$out" "$RUNNER_TEMP/aligned.apk"
+          "$tools/apksigner" verify "$out"
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-arm64
+          path: dist/*.apk
+          if-no-files-found: error

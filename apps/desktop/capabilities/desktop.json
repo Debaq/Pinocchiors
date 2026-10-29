@@ -1,0 +1,8 @@
+{
+  "$schema": "https://schema.tauri.app/config/2/capability",
+  "identifier": "desktop",
+  "description": "Auto-actualización (solo escritorio; en Android se instala el APK nuevo)",
+  "windows": ["main"],
+  "platforms": ["linux", "macOS", "windows"],
+  "permissions": ["updater:default", "process:allow-restart"]
+}

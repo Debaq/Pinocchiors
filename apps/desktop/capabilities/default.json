@@ -15,8 +15,6 @@
     "core:window:allow-toggle-maximize",
     "core:window:allow-is-maximized",
     "core:window:allow-set-fullscreen",
-    "updater:default",
-    "process:allow-restart",
     "core:window:allow-close",
     "core:window:allow-destroy",
     "core:webview:allow-set-webview-zoom"

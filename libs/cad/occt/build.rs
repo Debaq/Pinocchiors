@@ -108,6 +108,10 @@ fn main() {
         // Sin esto los headers de OCCT marcan todo como dllimport en Windows
         build.define("OCCT_STATIC_BUILD", None);
     }
+    if target_os == "android" {
+        // cc enlaza c++_shared, que habría que meter aparte en el APK
+        build.cpp_link_stdlib(None);
+    }
     if target_os != "windows" {
         build.flag_if_supported("-w");
     } else {
@@ -135,6 +139,11 @@ fn main() {
     match target_os.as_str() {
         "macos" => println!("cargo:rustc-link-lib=c++"),
         "windows" => {}
+        // libc++ del NDK en estático: queda dentro de la .so de la app
+        "android" => {
+            println!("cargo:rustc-link-lib=c++_static");
+            println!("cargo:rustc-link-lib=c++abi");
+        }
         _ => println!("cargo:rustc-link-lib=stdc++"),
     }
     // OCCT estático trae lo que antes resolvían sus .so/.dll
@@ -146,6 +155,11 @@ fn main() {
                 }
             }
             "macos" => {}
+            // Bionic trae pthread en libc; los mensajes de OCCT van a logcat
+            "android" => {
+                println!("cargo:rustc-link-lib=dl");
+                println!("cargo:rustc-link-lib=log");
+            }
             _ => {
                 println!("cargo:rustc-link-lib=dl");
                 println!("cargo:rustc-link-lib=pthread");

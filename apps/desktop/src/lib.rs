@@ -33,17 +33,22 @@ pub use state::{AppState, SkeletonType};
 use tauri::Manager;
 
 /// Ejecuta la aplicación Tauri
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(target_os = "linux")]
     {
         linux_desktop::set_program_name();
         linux_desktop::ensure_desktop_entry();
     }
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_shell::init());
+    // En Android no hay auto-actualización: se instala el APK nuevo
+    #[cfg(desktop)]
+    let builder = builder
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_process::init());
+    builder
         .setup(|app| {
             // Inicializar estado
             app.manage(AppState::new());
