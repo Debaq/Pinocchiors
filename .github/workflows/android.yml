@@ -125,26 +125,24 @@ jobs:
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
 
-      # Gradle vuelve a llamar al CLI con el mismo comando que corrió `init`:
-      # tiene que ser `npm run tauri` (con `node .../tauri.js` se pierde la
-      # ruta). El script solo existe en CI y TAURI_APP_PATH le indica dónde
-      # está la app, porque se corre desde apps/web
       - name: Instalar frontend
         working-directory: apps/web
-        run: |
-          npm ci
-          npm pkg set scripts.tauri=tauri
-          echo "TAURI_APP_PATH=$GITHUB_WORKSPACE/apps/desktop" >> "$GITHUB_ENV"
+        run: npm ci
 
+      # Gradle vuelve a llamar al CLI con el mismo comando que corrió `init`,
+      # desde apps/desktop: tiene que ser `npm run tauri` (con `node .../tauri.js`
+      # se pierde la ruta). Este package.json solo existe en CI y reenvía al
+      # CLI instalado en apps/web
       - name: Proyecto Android
-        working-directory: apps/web
+        working-directory: apps/desktop
         run: |
+          echo '{"private":true,"scripts":{"tauri":"node ../web/node_modules/@tauri-apps/cli/tauri.js"}}' > package.json
           npm run tauri -- android init --ci
           # Íconos de la app (mipmaps) a partir del de escritorio
-          npm run tauri -- icon "$TAURI_APP_PATH/icons/icon.png"
+          npm run tauri -- icon icons/icon.png
 
       - name: Build APK
-        working-directory: apps/web
+        working-directory: apps/desktop
         env:
           SEMVER: ${{ steps.version.outputs.semver }}
           CODE: ${{ steps.version.outputs.code }}
