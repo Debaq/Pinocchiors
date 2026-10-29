@@ -1,8 +1,10 @@
 # APK de Android (arm64) CON el núcleo CAD.
 #
 # Solo a mano: Actions → Android → Run workflow, o
-#   gh workflow run Android --ref <rama>
-# El APK queda como artefacto del run (no se publica en una release).
+#   gh workflow run Android --ref <rama> [-f publicar=false]
+# El APK queda como artefacto del run y, con `publicar`, en una release propia
+# android.<YYYY>.<MM>.<DD>.<sha7>, marcada como pre-release y nunca como la más
+# reciente: el latest.json de las actualizaciones de escritorio no se toca.
 #
 # OpenCASCADE se compila con el mismo scripts/build-occt.sh que el escritorio,
 # pasando el toolchain del NDK por la variable CMAKE_TOOLCHAIN_FILE (así el
@@ -22,9 +24,14 @@ name: Android
 
 on:
   workflow_dispatch:
+    inputs:
+      publicar:
+        description: "Publicar el APK en una release (pre-release, sin tocar la última del escritorio)"
+        type: boolean
+        default: true
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -48,7 +55,9 @@ jobs:
           read -r y m d hh mm <<< "$(TZ=UTC0 git show -s --format=%cd --date=format-local:'%y %m %d %H %M' HEAD)"
           semver="$((10#$y)).$((10#$m)).$(((10#$d - 1) * 1440 + 10#$hh * 60 + 10#$mm))"
           code=$(( $(git show -s --format=%ct HEAD) / 60 ))
+          tag="android.$(TZ=UTC0 git show -s --format=%cd --date=format-local:%Y.%m.%d HEAD).$(git rev-parse --short=7 HEAD)"
           echo "semver=${semver}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
           echo "code=${code}" >> "$GITHUB_OUTPUT"
           echo "Versión: ${semver} (versionCode ${code})" >> "$GITHUB_STEP_SUMMARY"
 
@@ -187,3 +196,31 @@ jobs:
           name: android-arm64
           path: dist/*.apk
           if-no-files-found: error
+
+      - name: Publicar release
+        if: inputs.publicar
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          SEMVER: ${{ steps.version.outputs.semver }}
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" dist/*.apk --clobber
+            exit 0
+          fi
+          cat > "$RUNNER_TEMP/notes.md" <<EOF
+          **⚠️ Sin verificar: versión experimental para Android (arm64), todavía no probada en teléfonos.**
+
+          - Incluye el CAD (OpenCASCADE). Quedan fuera en Android: actualización automática, conector MCP y chat con IA, Editar en GIMP, cámara en vivo y escáneres Orizon3D.
+          - Android 7 o superior. Al instalar, Android avisa que la app es de origen desconocido o no verificada (no viene de Play Store): hay que permitir la instalación.
+          - Para instalar una versión nueva encima puede ser necesario desinstalar la anterior.
+
+          Versión ${SEMVER}, commit ${GITHUB_SHA::7}.
+          EOF
+          # El tag lo crea GitHub con el token del workflow: no relanza ningún workflow
+          gh release create "$TAG" dist/*.apk \
+            --target "$GITHUB_SHA" \
+            --title "Android ${SEMVER} (sin verificar)" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            --prerelease \
+            --latest=false
