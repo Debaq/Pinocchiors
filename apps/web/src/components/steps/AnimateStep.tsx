@@ -133,12 +133,14 @@ export const AnimateStep: Component<AnimateStepProps> = (props) => {
         {/* Captura de movimiento */}
         <div class="space-y-1.5">
           <span class="text-xs font-semibold text-text">{t("Captura de movimiento")}</span>
-          <Button size="sm" fullWidth variant={props.puppeteering ? "default" : "primary"} onClick={props.onTogglePuppet}>
-            <span class="flex items-center gap-1">
-              <Icons.PersonArmsSpread size={12} /> {props.puppeteering ? t("Apagar la cámara") : t("Mover con la cámara en vivo")}
-            </span>
-          </Button>
-          <Hint label={t("Cómo funciona")} text={t("El esqueleto copia tus movimientos frente a la cámara; graba para guardarlos como animación.")} />
+          <Show when={props.onTogglePuppet}>
+            <Button size="sm" fullWidth variant={props.puppeteering ? "default" : "primary"} onClick={props.onTogglePuppet}>
+              <span class="flex items-center gap-1">
+                <Icons.PersonArmsSpread size={12} /> {props.puppeteering ? t("Apagar la cámara") : t("Mover con la cámara en vivo")}
+              </span>
+            </Button>
+            <Hint label={t("Cómo funciona")} text={t("El esqueleto copia tus movimientos frente a la cámara; graba para guardarlos como animación.")} />
+          </Show>
           <div class="grid grid-cols-2 gap-1">
             <Button size="sm" variant="ghost" onClick={props.onCaptureVideo} title={t("Detecta los movimientos de una persona en un video grabado")}>
               {t("Desde un video…")}

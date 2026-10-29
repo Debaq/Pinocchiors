@@ -4,6 +4,7 @@ import * as Icons from "../icons";
 import { captureMotion, type CaptureMotion } from "../../lib/capture";
 import type { LiveCapture } from "../../lib/captureRunner";
 import { locale, t } from "../../lib/i18n";
+import { IS_ANDROID } from "../../lib/platform";
 
 /** Uniones que se dibujan sobre la vista previa (índices de MediaPipe Pose) */
 const BONES: [number, number][] = [
@@ -200,6 +201,8 @@ export const CaptureDialog: Component<CaptureDialogProps> = (props) => {
           <p class="text-xs text-text-muted leading-relaxed">
             {t("Una persona, de cuerpo entero, con buena luz y ropa que no tape las articulaciones. La profundidad sale de una sola cámara: el giro del antebrazo y lo que queda tapado son poco fiables. Empezar quieto, de frente, ayuda.")}
           </p>
+          {/* En Android la cámara del WebView no tiene permiso: solo archivo de video */}
+          <Show when={!IS_ANDROID}>
           <div class="grid grid-cols-2 gap-1">
             <Button size="sm" variant={source() === "file" ? "primary" : "default"} disabled={!!progress() || !!live()} onClick={() => setSource("file")}>
               {t("Archivo de video")}
@@ -208,6 +211,7 @@ export const CaptureDialog: Component<CaptureDialogProps> = (props) => {
               {t("Cámara en vivo")}
             </Button>
           </div>
+          </Show>
           <Show when={source() === "file"}>
             <div class="flex items-center gap-2">
               <Button size="sm" onClick={async () => setVideo(await pickFile("video/*"))} disabled={!!progress()}>

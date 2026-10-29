@@ -1,6 +1,7 @@
 import { createSignal, type Component } from "solid-js";
 import * as Icons from "../components/icons";
 import { t } from "./i18n.ts";
+import { IS_ANDROID } from "./platform.ts";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -137,7 +138,7 @@ export interface Workspace {
   withoutModel?: boolean;
 }
 
-export const WORKSPACES: Workspace[] = [
+export const WORKSPACES: Workspace[] = ([
   { id: "prepare", get label() { return t("Preparar"); }, sections: ["structure", "repair", "remesh"] },
   { id: "materials", get label() { return t("Materiales"); }, sections: ["uv", "materials"] },
   // Sin modelo se puede armar y animar un esqueleto solo, y exportarlo
@@ -147,7 +148,8 @@ export const WORKSPACES: Workspace[] = [
   { id: "scan", label: "Orizon3D", sections: ["scan"], withoutModel: true },
   // CAD paramétrico: se diseña desde cero o calcando el modelo cargado
   { id: "design", get label() { return t("Diseñar"); }, sections: ["design", "design_part", "design_inspect", "design_scan"], withoutModel: true },
-];
+  // Los escáneres van por USB/V4L2: en Android no hay
+] satisfies Workspace[]).filter((w) => !(IS_ANDROID && w.id === "scan"));
 
 /**
  * Secciones de proyectos viejos: "import" ya no es una sección y

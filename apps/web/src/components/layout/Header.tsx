@@ -6,6 +6,7 @@ import { IconButton, Tooltip } from "../ui";
 import * as Icons from "../icons";
 import { ContextMenu, type MenuEntry } from "../ui/ContextMenu";
 import { t } from "../../lib/i18n";
+import { IS_ANDROID } from "../../lib/platform";
 import { watchWindow, windowMaximized } from "../../lib/windowState";
 import appIcon from "../../../../desktop/icons/icon-small.svg";
 
@@ -189,7 +190,8 @@ export const Header: Component<HeaderProps> = (props) => {
           </IconButton>
         </Tooltip>
 
-        {/* Window Controls */}
+        {/* Window Controls (en Android la ventana es la pantalla entera) */}
+        <Show when={!IS_ANDROID}>
         <div class="w-px h-4 bg-border" />
 
         <Tooltip content={t("Minimizar")}>
@@ -227,6 +229,7 @@ export const Header: Component<HeaderProps> = (props) => {
             <Icons.X size={16} />
           </IconButton>
         </Tooltip>
+        </Show>
       </div>
     </header>
   );

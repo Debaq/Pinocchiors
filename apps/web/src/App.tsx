@@ -6,6 +6,7 @@ import { Component, batch, createEffect, createMemo, createSignal, on, onMount, 
 import { invoke as tauriInvoke, Channel, type InvokeArgs, type InvokeOptions } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { startMcpLive } from "./lib/mcpLive";
+import { IS_ANDROID } from "./lib/platform";
 import { LiveAiBadge } from "./components/layout/LiveAiBadge";
 import { AiChatPanel } from "./components/layout/AiChatPanel";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -8927,7 +8928,7 @@ export const App: Component = () => {
     }),
   );
   onMount(() => {
-    if (import.meta.env.DEV || !updateSettings().check) return;
+    if (import.meta.env.DEV || IS_ANDROID || !updateSettings().check) return;
     const timer = setTimeout(() => void checkForUpdate(), 8000);
     onCleanup(() => clearTimeout(timer));
   });
@@ -9060,7 +9061,7 @@ export const App: Component = () => {
         {/* Header */}
         <Header
           title="Pinocchio"
-          onToggleChat={() => setChatOpen(!chatOpen())}
+          onToggleChat={IS_ANDROID ? undefined : () => setChatOpen(!chatOpen())}
           chatOpen={chatOpen()}
           aiStatus={<LiveAiBadge cad={cad} />}
           fps={showFps() ? fps() : undefined}
@@ -9151,7 +9152,7 @@ export const App: Component = () => {
                         onClose={closeMaterialArea}
                         onExport={handleTextureExport}
                         onImport={handleTextureImport}
-                        onEditExternally={handleTextureEditExternally}
+                        onEditExternally={IS_ANDROID ? undefined : handleTextureEditExternally}
                         external={externalEdit()}
                         onStopExternal={stopExternalEdit}
                       />
@@ -9232,7 +9233,7 @@ export const App: Component = () => {
                     onClose={() => setTextureEditor(undefined)}
                     onExport={handleTextureExport}
                     onImport={handleTextureImport}
-                    onEditExternally={handleTextureEditExternally}
+                    onEditExternally={IS_ANDROID ? undefined : handleTextureEditExternally}
                     external={externalEdit()}
                     onStopExternal={stopExternalEdit}
                   />
@@ -9798,7 +9799,7 @@ export const App: Component = () => {
               editorOpen: rigEditorOpen(),
               onToggleEditor: toggleRigEditor,
               puppeteering: puppeteering(),
-              onTogglePuppet: togglePuppet,
+              onTogglePuppet: IS_ANDROID ? undefined : togglePuppet,
               onCaptureVideo: handleCapture,
               onImportBvh: () => void handleImportBvh(),
             }}

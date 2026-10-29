@@ -28,6 +28,7 @@ import {
 } from "../../lib/settings";
 import { MOUSE_HINTS, type ShortcutHint } from "./ContextPanel";
 import { AiConnectorSettings } from "./AiConnectorSettings";
+import { IS_ANDROID } from "../../lib/platform";
 import { getVersion } from "@tauri-apps/api/app";
 import { checkForUpdate, setUpdateSettings, showUpdate, updateSettings, updateState } from "../../lib/updater";
 import {
@@ -90,14 +91,16 @@ const EXPORT_FORMAT_OPTIONS = [
 const SCALE_OPTIONS = UI_SCALES.map((s) => ({ value: String(s), label: `${Math.round(s * 100)} %` }));
 
 type TabId = "general" | "viewer" | "shortcuts" | "files" | "ai" | "about";
-const TABS: { id: TabId; label: () => string; icon: Component<{ size?: number }> }[] = [
+type Tab = { id: TabId; label: () => string; icon: Component<{ size?: number }> };
+const TABS: Tab[] = ([
   { id: "general", label: () => t("General"), icon: Icons.Gear },
   { id: "viewer", label: () => t("Visor y navegación"), icon: Icons.Eye },
   { id: "shortcuts", label: () => t("Atajos de teclado"), icon: Icons.Lightning },
   { id: "files", label: () => t("Archivos y exportación"), icon: Icons.Folder },
   { id: "ai", label: () => t("Conector para IA"), icon: Icons.MagicWand },
   { id: "about", label: () => t("Acerca de"), icon: Icons.Info },
-];
+  // En Android no hay conector MCP ni chat
+] satisfies Tab[]).filter((tab) => !(IS_ANDROID && tab.id === "ai"));
 
 const Section = (props: { title?: string; children: JSX.Element }) => (
   <section class="space-y-3 pb-4 mb-4 border-b border-border last:border-0 last:mb-0 last:pb-0">
@@ -335,7 +338,10 @@ export const SettingsDialog: Component<SettingsDialogProps> = (props) => {
                 </Show>
               </Section>
 
-              <UpdatesSection />
+              {/* En Android se instala el APK nuevo */}
+              <Show when={!IS_ANDROID}>
+                <UpdatesSection />
+              </Show>
 
               <Section title={t("Disposición")}>
                 <Hint>
