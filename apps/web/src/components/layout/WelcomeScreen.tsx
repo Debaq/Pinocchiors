@@ -127,7 +127,8 @@ export const WelcomeScreen: Component<WelcomeScreenProps> = (props) => {
           </div>
 
           <div class="flex flex-col gap-1.5" onMouseLeave={() => setHovered(undefined)}>
-            <For each={choices()}>
+            {/* Sin acción no se ofrece (Escanear en Android) */}
+            <For each={choices().filter((c) => c.action)}>
               {(choice, i) => (
                 <button
                   class={clsx(

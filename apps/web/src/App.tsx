@@ -9394,7 +9394,7 @@ export const App: Component = () => {
             <Show when={!hasWork() && pipeline.activeStep() !== "scan" && pipeline.workspace()?.id !== "rig" && !showCad()}>
               <WelcomeScreen
                 onOpen={() => handleLoad({ projects: true })}
-                onScan={() => openScanEditor("capture")}
+                onScan={IS_ANDROID ? undefined : () => openScanEditor("capture")}
                 onAnimate={() => pipeline.openWorkspace("rig")}
                 onDesign={() => pipeline.openWorkspace("design")}
                 onFabricate={() => handleLoad({ then: "print3d" })}
