@@ -192,6 +192,9 @@ pub struct AppState {
     // ── Objetos ──
     /// Objetos de la escena que no están activos (el activo es todo lo de arriba)
     pub objects: Mutex<crate::project::ObjectSlots>,
+    /// Guardar, abrir, empezar de cero y cambiar de objeto, de a uno: guardar
+    /// a mitad de una apertura mezclaría los dos proyectos en el archivo
+    pub project_io: Mutex<()>,
 }
 
 impl AppState {
@@ -238,6 +241,7 @@ impl AppState {
             cad_scan: Mutex::new(None),
             cad_scan_object: Mutex::new(None),
             objects: Mutex::new(Default::default()),
+            project_io: Mutex::new(()),
         }
     }
 }
@@ -322,6 +326,11 @@ impl AppState {
     pub fn active_mesh_changed(&self) {
         *self.result.lock().unwrap() = None;
         *self.joint_centering.lock().unwrap() = None;
+    }
+
+    /// Toma el turno de [`Self::project_io`] (un pánico anterior no lo deja trabado)
+    pub fn project_io(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.project_io.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Intenta marcar un proceso largo como en curso. `None` si ya hay uno.

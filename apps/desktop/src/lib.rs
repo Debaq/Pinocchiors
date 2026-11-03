@@ -147,6 +147,7 @@ pub fn run() {
             project::recovery_project_path,
             project::recovery_info,
             project::project_changed,
+            project::project_mark_saved,
             project::clear_recovery,
             project::take_snapshot,
             project::swap_snapshot,

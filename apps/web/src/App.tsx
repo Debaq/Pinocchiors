@@ -8370,6 +8370,14 @@ export const App: Component = () => {
       // no se guardan en el proyecto: esos pasos quedan como hitos
       snapshotUi.clear();
       history.load(ui.history, ["snapshot", "sceneEdit"]);
+      // Otro proyecto: las mallas en gris y lo elegido eran del anterior (los
+      // números de objeto se repiten entre proyectos)
+      ghostCache.clear();
+      setHiddenGhosts([]);
+      setExtraObjects([]);
+      setJointsReport(undefined);
+      lastJointConfig = undefined;
+      setTextureEditor(undefined);
       setObjects(Array.isArray(ui.objects) ? ui.objects : []);
       setActiveObjectId(typeof ui.activeObject === "number" ? ui.activeObject : undefined);
     }
@@ -8446,6 +8454,9 @@ export const App: Component = () => {
       viewerRef?.unloadMesh();
       setMeshData(undefined);
       setMeshLoaded(false);
+      // Sin modelo no hay archivo de origen (con modelo, fetchMeshData los relee)
+      setSceneStructure(undefined);
+      setSceneMaterials([]);
     } else {
       setMeshData(await fetchMeshData());
       setMeshLoaded(true);
@@ -8534,7 +8545,12 @@ export const App: Component = () => {
       await adoptCurrentModel();
       // La recuperación no es el archivo del usuario: el próximo Guardar pregunta dónde
       setProjectPath(recovered ? undefined : path);
-      if (!recovered) rememberRecent(path);
+      if (!recovered) {
+        rememberRecent(path);
+        // Recién abierto no hay cambios, aunque la interfaz rearmada no sea letra por letra la del archivo
+        await invoke("project_mark_saved", { ui: projectUi() }).catch(() => {});
+        scheduleUnsavedCheck(0);
+      }
       setRecovery(undefined);
       setStatusMessage(recovered ? t("Sesión recuperada") : t("Proyecto abierto: {name}", { name: baseName(path) }));
     } catch (e) {

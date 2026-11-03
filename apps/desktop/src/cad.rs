@@ -3541,6 +3541,7 @@ pub mod bridge {
                 arg::<Option<bool>>(args, "onlyIfChanged")?.unwrap_or(false),
                 false,
             )?),
+            "project_mark_saved" => ok(crate::project::project_mark_saved_impl(state, &arg::<String>(args, "ui")?)?),
             _ => Err(UNKNOWN.into()),
         }
     }

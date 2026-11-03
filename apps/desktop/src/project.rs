@@ -68,6 +68,8 @@ struct ProjectState {
     mesh_before_unwrap: Option<MeshDto>,
     scene_before_unwrap: Option<Scene>,
     print3d_pieces: Option<Vec<PieceDto>>,
+    /// Las piezas antes de las uniones (las uniones se ponen sobre estas)
+    print3d_pieces_plain: Option<Vec<PieceDto>>,
     mesh_before_print_scale: Option<MeshDto>,
     scene_before_print_scale: Option<Scene>,
     /// Pieles imprimibles: caras elegidas e imágenes importadas
@@ -578,13 +580,30 @@ pub fn workspace_summary(state: &AppState) -> WorkspaceSummary {
 /// Todo el estado en bytes, para volver a él con [`restore_state`] (el
 /// deshacer del conector MCP sin ventana)
 pub fn snapshot_state(state: &AppState) -> Result<Vec<u8>, String> {
+    let _io = state.project_io();
     rmp_serde::to_vec_named(&capture(state)).map_err(|e| format!("No se pudo serializar: {e}"))
 }
 
 /// Vuelve al estado de [`snapshot_state`]
 pub fn restore_state(state: &AppState, bytes: &[u8]) -> Result<(), String> {
     let project: ProjectState = rmp_serde::from_slice(bytes).map_err(|e| format!("Estado ilegible: {e}"))?;
+    let _io = state.project_io();
     restore(state, project)
+}
+
+fn pieces_dto(pieces: &std::sync::Mutex<Option<Vec<LabeledPiece>>>) -> Option<Vec<PieceDto>> {
+    pieces.lock().unwrap().as_ref().map(|pieces| pieces.iter().map(|p| PieceDto { piece: p.clone(), mesh: MeshDto::from(&p.mesh) }).collect())
+}
+
+fn pieces_from(pieces: Option<Vec<PieceDto>>) -> Result<Option<Vec<LabeledPiece>>, String> {
+    pieces
+        .map(|pieces| {
+            pieces
+                .into_iter()
+                .map(|d| d.mesh.into_mesh().map(|mesh| LabeledPiece { mesh, ..d.piece }))
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()
 }
 
 /// Solo el modelo del objeto activo (para deshacer y para guardarlo en su casillero)
@@ -618,9 +637,8 @@ fn capture_model(state: &AppState) -> ProjectState {
         scene_before_repair: state.scene_before_repair.lock().unwrap().clone(),
         mesh_before_unwrap: mesh(&state.mesh_before_unwrap),
         scene_before_unwrap: state.scene_before_unwrap.lock().unwrap().clone(),
-        print3d_pieces: state.print3d_pieces.lock().unwrap().as_ref().map(|pieces| {
-            pieces.iter().map(|p| PieceDto { piece: p.clone(), mesh: MeshDto::from(&p.mesh) }).collect()
-        }),
+        print3d_pieces: pieces_dto(&state.print3d_pieces),
+        print3d_pieces_plain: pieces_dto(&state.print3d_pieces_plain),
         mesh_before_print_scale: mesh(&state.mesh_before_print_scale),
         scene_before_print_scale: state.scene_before_print_scale.lock().unwrap().clone(),
         print_skin: {
@@ -647,7 +665,7 @@ fn restore(state: &AppState, mut p: ProjectState) -> Result<(), String> {
     // Los ensambles que estaban dentro de un diseño pasan a su pestaña
     tabs.lift_assemblies();
     let objects = ObjectSlots { active: p.active_object, stored: std::mem::take(&mut p.objects) };
-    restore_model(state, p)?;
+    restore_model(state, p, true)?;
     *state.objects.lock().unwrap() = objects;
     state.set_cad_tabs(tabs);
     state.cad_ops.lock().unwrap().clear();
@@ -655,22 +673,18 @@ fn restore(state: &AppState, mut p: ProjectState) -> Result<(), String> {
     Ok(())
 }
 
-/// Reemplaza el modelo del objeto activo (no toca el diseño ni los demás objetos)
-fn restore_model(state: &AppState, p: ProjectState) -> Result<(), String> {
+/// Reemplaza el modelo del objeto activo (no toca el diseño ni los demás
+/// objetos). Las imágenes de las pieles son de la biblioteca: con
+/// `replace_library` quedan las del estado restaurado (otro proyecto); si
+/// no, se suman a las que hay (otro objeto del mismo proyecto)
+fn restore_model(state: &AppState, p: ProjectState, replace_library: bool) -> Result<(), String> {
     let mesh = |m: Option<MeshDto>| m.map(MeshDto::into_mesh).transpose();
     let mesh_now = mesh(p.mesh)?;
     let before_repair = mesh(p.mesh_before_repair)?;
     let before_unwrap = mesh(p.mesh_before_unwrap)?;
     let before_print = mesh(p.mesh_before_print_scale)?;
-    let pieces = p
-        .print3d_pieces
-        .map(|pieces| {
-            pieces
-                .into_iter()
-                .map(|d| d.mesh.into_mesh().map(|mesh| LabeledPiece { mesh, ..d.piece }))
-                .collect::<Result<Vec<_>, _>>()
-        })
-        .transpose()?;
+    let pieces = pieces_from(p.print3d_pieces)?;
+    let pieces_plain = pieces_from(p.print3d_pieces_plain)?;
 
     *state.original_model.lock().unwrap() =
         p.original.map(|o| OriginalModel { name: o.name, format: o.format, scene: o.scene });
@@ -694,6 +708,10 @@ fn restore_model(state: &AppState, p: ProjectState) -> Result<(), String> {
     *state.mesh_before_unwrap.lock().unwrap() = before_unwrap;
     *state.scene_before_unwrap.lock().unwrap() = p.scene_before_unwrap;
     *state.print3d_pieces.lock().unwrap() = pieces;
+    *state.print3d_pieces_plain.lock().unwrap() = pieces_plain;
+    // Lo que era del modelo anterior y no se guarda
+    *state.remesh_preview.lock().unwrap() = None;
+    state.scene_edits.lock().unwrap().clear();
     *state.mesh_before_print_scale.lock().unwrap() = before_print;
     *state.scene_before_print_scale.lock().unwrap() = p.scene_before_print_scale;
     // Pieles: la zona es de este objeto; las imágenes son de la biblioteca y se suman (sin repetir id)
@@ -701,6 +719,9 @@ fn restore_model(state: &AppState, p: ProjectState) -> Result<(), String> {
     *state.print_skin_zone.lock().unwrap() = crate::print_skin::SkinZone { total: skin.zone_total, faces: skin.zone, protected: skin.protected };
     {
         let mut images = state.print_skin_images.lock().unwrap();
+        if replace_library {
+            images.clear();
+        }
         for i in skin.images {
             if images.iter().all(|x| x.id != i.id)
                 && let Ok(map) = pinocchio_print3d::HeightMap::from_gray8(i.width, i.height, &i.gray)
@@ -797,6 +818,7 @@ pub async fn save_project(app: AppHandle, path: String, ui: String, only_if_chan
 
 /// `save_project` sin la ventana (también lo usan el puente y el conector MCP)
 pub fn save_project_impl(state: &AppState, path: &str, ui: &str, only_if_changed: bool, is_recovery: bool) -> Result<ProjectSaved, String> {
+    let _io = state.project_io();
     let project = capture(state);
     let source_name = project.original.as_ref().map(|o| o.name.clone());
     let state_bytes = rmp_serde::to_vec_named(&project).map_err(|e| format!("No se pudo serializar: {e}"))?;
@@ -824,10 +846,26 @@ pub fn save_project_impl(state: &AppState, path: &str, ui: &str, only_if_changed
 pub async fn project_changed(app: AppHandle, ui: String) -> Result<bool, String> {
     in_background(app, move |state| {
         let Some(saved) = *state.last_saved_hash.lock().unwrap() else { return Ok(true) };
+        let _io = state.project_io();
         let state_bytes = rmp_serde::to_vec_named(&capture(state)).map_err(|e| format!("No se pudo serializar: {e}"))?;
         Ok(content_hash(&state_bytes, &ui) != saved)
     })
     .await
+}
+
+/// El proyecto recién abierto cuenta como guardado con la interfaz ya
+/// restaurada (`ui`): al rearmarla cambia el texto (valores por defecto,
+/// pasos que quedan como hitos…) aunque el trabajo sea el mismo del archivo
+#[tauri::command]
+pub async fn project_mark_saved(app: AppHandle, ui: String) -> Result<(), String> {
+    in_background(app, move |state| project_mark_saved_impl(state, &ui)).await
+}
+
+pub fn project_mark_saved_impl(state: &AppState, ui: &str) -> Result<(), String> {
+    let _io = state.project_io();
+    let state_bytes = rmp_serde::to_vec_named(&capture(state)).map_err(|e| format!("No se pudo serializar: {e}"))?;
+    *state.last_saved_hash.lock().unwrap() = Some(content_hash(&state_bytes, ui));
+    Ok(())
 }
 
 /// Borra el archivo de recuperación: el trabajo quedó guardado o se descartó a propósito
@@ -857,6 +895,7 @@ pub async fn open_project(app: AppHandle, path: String) -> Result<ProjectOpened,
 
 /// `open_project` sin la ventana
 pub fn open_project_impl(state: &AppState, path: &str) -> Result<ProjectOpened, String> {
+    let _io = state.project_io();
     let (manifest, state_bytes, ui) = read_project(Path::new(path))?;
     let project: ProjectState = rmp_serde::from_slice(&state_bytes).map_err(|e| format!("Estado del proyecto ilegible: {e}"))?;
     restore(state, project)?;
@@ -908,6 +947,7 @@ pub fn new_project(state: tauri::State<'_, AppState>) -> Result<(), String> {
 /// `new_project` sin la ventana
 pub fn new_project_impl(state: &AppState) -> Result<(), String> {
     let _guard = state.try_begin_processing().ok_or("Hay un proceso en curso: espera a que termine")?;
+    let _io = state.project_io();
     state.clear_all();
     Ok(())
 }
@@ -929,6 +969,7 @@ pub async fn object_activate(app: AppHandle, id: u64) -> Result<(), String> {
 }
 
 pub(crate) fn activate_impl(state: &AppState, id: u64) -> Result<(), String> {
+    let _io = state.project_io();
     let mut objects = state.objects.lock().unwrap();
     if objects.active == Some(id) {
         return Ok(());
@@ -951,7 +992,7 @@ pub(crate) fn activate_impl(state: &AppState, id: u64) -> Result<(), String> {
     // Las ediciones de nodos para deshacer eran del otro objeto
     state.scene_edits.lock().unwrap().clear();
     match target {
-        Some(p) => restore_model(state, p),
+        Some(p) => restore_model(state, p, false),
         None => {
             state.clear_model();
             Ok(())
@@ -1238,7 +1279,7 @@ pub(crate) fn swap_snapshot_impl(state: &AppState, id: u64) -> Result<(), String
         .remove(&id)
         .ok_or("La copia para deshacer ya no está (no se guarda en el proyecto, y las más viejas se descartan)")?;
     let current = capture_model(state);
-    restore_model(state, other)?;
+    restore_model(state, other, false)?;
     snapshots.entries.insert(id, current);
     Ok(())
 }
@@ -1329,6 +1370,45 @@ mod tests {
         assert!(state.print_skin_zone.lock().unwrap().faces.is_empty() || state.mesh.lock().unwrap().is_none());
         activate_impl(&state, 1).unwrap();
         assert_eq!(state.print_skin_zone.lock().unwrap().faces, vec![2, 3]);
+    }
+
+    /// Abrir otro proyecto reemplaza las imágenes de las pieles (no se suman a
+    /// las del anterior) y trae las piezas sin uniones, sobre las que se ponen
+    #[test]
+    fn opening_replaces_library_and_keeps_plain_pieces() {
+        let image = |id: &str| crate::print_skin::SkinImage {
+            id: id.into(),
+            name: id.into(),
+            map: pinocchio_print3d::HeightMap::from_gray8(1, 1, &[255]).unwrap(),
+        };
+        let piece = |label: &str| LabeledPiece { mesh: cube(), label: label.into(), ..Default::default() };
+        let saved = AppState::new();
+        *saved.mesh.lock().unwrap() = Some(cube());
+        saved.print_skin_images.lock().unwrap().push(image("del_b"));
+        *saved.print3d_pieces.lock().unwrap() = Some(vec![piece("1A con uniones")]);
+        *saved.print3d_pieces_plain.lock().unwrap() = Some(vec![piece("1A")]);
+        let bytes = rmp_serde::to_vec_named(&capture(&saved)).unwrap();
+
+        // La app tenía abierto otro proyecto, con su imagen y sus piezas
+        let state = AppState::new();
+        state.print_skin_images.lock().unwrap().push(image("del_a"));
+        *state.print3d_pieces_plain.lock().unwrap() = Some(vec![piece("de A")]);
+        state.scene_edits.lock().unwrap().push((Scene::new(), cube()));
+        restore(&state, rmp_serde::from_slice(&bytes).unwrap()).unwrap();
+        let ids: Vec<String> = state.print_skin_images.lock().unwrap().iter().map(|i| i.id.clone()).collect();
+        assert_eq!(ids, ["del_b"]);
+        let plain = state.print3d_pieces_plain.lock().unwrap();
+        assert_eq!(plain.as_ref().unwrap()[0].label, "1A");
+        assert_eq!(plain.as_ref().unwrap()[0].mesh.num_faces(), cube().num_faces());
+        drop(plain);
+        assert!(state.scene_edits.lock().unwrap().is_empty());
+
+        // Cambiar de objeto dentro del proyecto: la biblioteca se suma
+        adopt_impl(&state, 1);
+        state.print_skin_images.lock().unwrap().push(image("nueva"));
+        activate_impl(&state, 2).unwrap();
+        activate_impl(&state, 1).unwrap();
+        assert_eq!(state.print_skin_images.lock().unwrap().len(), 2);
     }
 
     /// Cambiar de objeto guarda el activo en su casillero y trae el otro; el
