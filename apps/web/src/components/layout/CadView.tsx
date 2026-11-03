@@ -1819,11 +1819,13 @@ export const CadView: Component<CadViewProps> = (props) => {
           ].map(([start, end]) => ui.addEntity(sk, { type: "line", start, end }));
           sk.constraints.push({ type: "horizontal", line: l[0] }, { type: "horizontal", line: l[2] });
           sk.constraints.push({ type: "vertical", line: l[1] }, { type: "vertical", line: l[3] });
-          // Diagonal de construcción partida en el centro: dos mitades alineadas e iguales
-          const d1 = ui.addEntity(sk, { type: "line", start: p0, end: c });
-          const d2 = ui.addEntity(sk, { type: "line", start: c, end: p2 });
-          for (const d of [d1, d2]) sk.entities.find((e) => e.id === d)!.construction = true;
-          sk.constraints.push({ type: "parallel", a: d1, b: d2 }, { type: "equal", a: d1, b: d2 });
+          // El centro, en el medio de dos esquinas opuestas (c − p0 = p2 − c), sin dibujar la diagonal
+          sk.constraints.push({ type: "equal_offset", a1: p0, a2: c, b1: c, b2: p2 });
+          // Un centro nuevo queda como punto de construcción (si no, se borraría por suelto)
+          if (c !== sk.origin && !sk.entities.some((e) => geometryPoints(e.geometry).includes(c))) {
+            const pe = ui.addEntity(sk, { type: "point", point: c });
+            sk.entities.find((e) => e.id === pe)!.construction = true;
+          }
           if (C.id === undefined || K.id === undefined) {
             dims.push(dim(sk, { type: "length", line: l[0], value: round(Math.abs(2 * dx)) }));
             dims.push(dim(sk, { type: "length", line: l[1], value: round(Math.abs(2 * dy)) }));

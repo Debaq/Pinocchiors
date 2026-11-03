@@ -362,3 +362,27 @@ fn offset_of_circles_and_round_corners() {
     assert_relative_eq!(s.radius(c2).unwrap(), 7.0, epsilon = 1e-6);
     assert_relative_eq!(s.radius(arc).unwrap(), 2.0, epsilon = 1e-6);
 }
+
+#[test]
+fn center_rectangle_without_diagonal() {
+    // Rectángulo por el centro: el centro en el medio de dos esquinas opuestas (patrón lineal)
+    let mut s = Sketch::new();
+    let c = s.add_point(5.0, 5.0);
+    s.add_entity(Geometry::Point { point: c });
+    fix(&mut s, c);
+    let p = [s.add_point(8.0, 7.0), s.add_point(2.0, 7.0), s.add_point(2.0, 3.0), s.add_point(8.0, 3.0)];
+    let l: Vec<u32> = (0..4).map(|i| s.add_entity(Geometry::Line { start: p[i], end: p[(i + 1) % 4] })).collect();
+    s.constrain(SketchConstraint::Horizontal { line: l[0] });
+    s.constrain(SketchConstraint::Horizontal { line: l[2] });
+    s.constrain(SketchConstraint::Vertical { line: l[1] });
+    s.constrain(SketchConstraint::Vertical { line: l[3] });
+    s.constrain(SketchConstraint::EqualOffset { a1: p[0], a2: c, b1: c, b2: p[2] });
+    s.constrain(SketchConstraint::Length { line: l[0], value: 10.0, reference: false, opts: no_opts() });
+    s.constrain(SketchConstraint::Length { line: l[1], value: 6.0, reference: false, opts: no_opts() });
+    let r = s.solve().unwrap();
+    assert_eq!(r.status, SketchStatus::WellConstrained, "{r:?}");
+    assert_relative_eq!(pt(&s, p[0])[0], 10.0, epsilon = 1e-6);
+    assert_relative_eq!(pt(&s, p[0])[1], 8.0, epsilon = 1e-6);
+    assert_relative_eq!(pt(&s, p[2])[0], 0.0, epsilon = 1e-6);
+    assert_relative_eq!(pt(&s, p[2])[1], 2.0, epsilon = 1e-6);
+}
