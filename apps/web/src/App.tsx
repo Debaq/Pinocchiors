@@ -586,10 +586,12 @@ export const App: Component = () => {
       (editing) => editing && inDesign() && pipeline.activeStep() !== "design" && pipeline.setActiveStep("design"),
     )
   );
-  // Entrar a Diseñar sin diseño crea uno vacío: no hay que "empezar" nada
+  // Entrar a Diseñar sin diseño crea uno vacío: no hay que "empezar" nada.
+  // No mientras se abre un proyecto: su diseño todavía no llegó a la interfaz
+  // y `cad_new` reemplazaría todas sus pestañas por una vacía
   let creatingDesign = false;
   createEffect(() => {
-    if (!inDesign() || !cad.status()?.available || cad.doc() || creatingDesign) return;
+    if (!inDesign() || switching() || !cad.status()?.available || cad.doc() || creatingDesign) return;
     creatingDesign = true;
     void cad
       .newDesign()
@@ -2299,11 +2301,12 @@ export const App: Component = () => {
 
   // Cada pieza del diseño es un objeto (solo con el diseño guardado, no con la vista previa de un
   // diálogo; las piezas que ve un ensamble son de sus diseños y ya tienen el suyo)
-  createEffect(() => {
+  const syncDesignObjects = () => {
     const r = cad.result();
     if (!r || cad.draft() || cad.tabs().tabs.find((x) => x.id === cad.resultTab())?.kind === "assembly") return;
     setObjects((list) => syncCadObjects(list, r.parts.map((p) => ({ id: p.id, name: p.name })), cad.resultTab()));
-  });
+  };
+  createEffect(syncDesignObjects);
 
   // Salir de Diseñar a un espacio que trabaja sobre la malla: la pieza elegida
   // (la activa, la abierta en la lista de piezas o la primera) tiene su malla al día
@@ -8520,9 +8523,13 @@ export const App: Component = () => {
     setSwitching(true);
     try {
       opened = await busy(t("Abriendo proyecto..."), () => invoke<ProjectOpened>("open_project", { path }));
-      await restoreProjectUi(opened.ui);
+      // El diseño primero: la interfaz restaurada puede entrar a Diseñar, y
+      // las piezas del recálculo anterior no deben mezclarse con los objetos nuevos
       cadUi.cancelSketch(false);
       await cad.reload();
+      await restoreProjectUi(opened.ui);
+      // La lista guardada reemplazó a la sincronizada con el recálculo: las piezas que falten se suman
+      untrack(syncDesignObjects);
       // Proyecto de antes de los objetos: su modelo pasa a ser uno
       await adoptCurrentModel();
       // La recuperación no es el archivo del usuario: el próximo Guardar pregunta dónde
