@@ -514,9 +514,10 @@ export type OffsetCaps = "open" | "round" | "line";
  * `both`: a los dos lados. `caps` cierra una cadena abierta: con arcos
  * alrededor de las puntas (a los dos lados) o con líneas. Los arcos
  * desplazados comparten el centro con el original; las líneas quedan
- * paralelas (o horizontales/verticales como la original).
+ * paralelas (o horizontales/verticales como la original). Con `dim` (lo
+ * normal) queda atada a la original por una sola cota de equidistante.
  */
-export function offsetChain(s: Sketch, ids: number[], d: number, opts: { both?: boolean; caps?: OffsetCaps } = {}): { entities: number[] } | string {
+export function offsetChain(s: Sketch, ids: number[], d: number, opts: { both?: boolean; caps?: OffsetCaps; dim?: boolean } = {}): { entities: number[] } | string {
   const order = orderChain(s, ids);
   if (typeof order === "string") return order;
   if (!(Math.abs(d) > 0)) return tr("La distancia no puede ser cero");
@@ -530,6 +531,8 @@ export function offsetChain(s: Sketch, ids: number[], d: number, opts: { both?: 
   const tailId = pieces[pieces.length - 1].reversed ? lastPiece.start : lastPiece.end;
   const sides = opts.both ? [Math.abs(d), -Math.abs(d)] : [d];
   const made: number[] = [];
+  // [original, copia] para la cota: tramo y su copia, o vértice y el arco que lo rodea
+  const pairs: [number, number][] = [];
   const sideEnds: { head: number; tail: number }[] = [];
   // El original, para ver qué queda demasiado cerca de él
   const source = pieces.map((pc) => polylineOf(s, s.entities.find((e) => e.id === pc.entity)!.geometry));
@@ -583,7 +586,9 @@ export function offsetChain(s: Sketch, ids: number[], d: number, opts: { both?: 
         // Arco alrededor del vértice original: antihorario según de qué lado va
         const v = verts[i] ?? vertexIds[i];
         const [a, b] = side > 0 ? [r.b, r.a] : [r.a, r.b];
-        made.push(addEntity(s, { type: "arc", center: v, start: pid(a), end: pid(b) }));
+        const arc = addEntity(s, { type: "arc", center: v, start: pid(a), end: pid(b) });
+        made.push(arc);
+        pairs.push([v, arc]);
       }
       const [a, b] = [pid(o.a), pid(o.b)];
       if (o.kind === "line") {
@@ -596,7 +601,12 @@ export function offsetChain(s: Sketch, ids: number[], d: number, opts: { both?: 
           }
         if (!axis) s.constraints.push({ type: "parallel", a: o.from, b: id });
         made.push(id);
-      } else made.push(addEntity(s, o.ccw ? { type: "arc", center: o.center, start: a, end: b } : { type: "arc", center: o.center, start: b, end: a }));
+        pairs.push([o.from, id]);
+      } else {
+        const arc = addEntity(s, o.ccw ? { type: "arc", center: o.center, start: a, end: b } : { type: "arc", center: o.center, start: b, end: a });
+        made.push(arc);
+        pairs.push([o.from, arc]);
+      }
     });
     sideEnds.push({ head: pid(off[0].a), tail: pid(off[off.length - 1].b) });
   }
@@ -608,8 +618,10 @@ export function offsetChain(s: Sketch, ids: number[], d: number, opts: { both?: 
       const [L, R] = sideEnds;
       if (caps === "round") {
         // Al final: de la derecha a la izquierda por delante; al comienzo, al revés
-        made.push(addEntity(s, { type: "arc", center: tailId, start: R.tail, end: L.tail }));
-        made.push(addEntity(s, { type: "arc", center: headId, start: L.head, end: R.head }));
+        const tail = addEntity(s, { type: "arc", center: tailId, start: R.tail, end: L.tail });
+        const head = addEntity(s, { type: "arc", center: headId, start: L.head, end: R.head });
+        made.push(tail, head);
+        pairs.push([tailId, tail], [headId, head]);
       } else {
         made.push(addEntity(s, { type: "line", start: R.tail, end: L.tail }));
         made.push(addEntity(s, { type: "line", start: L.head, end: R.head }));
@@ -619,6 +631,7 @@ export function offsetChain(s: Sketch, ids: number[], d: number, opts: { both?: 
       made.push(addEntity(s, { type: "line", start: sideEnds[0].head, end: headId }));
     }
   }
+  if (opts.dim !== false && pairs.length) s.constraints.push({ type: "offset", pairs, value: +Math.abs(d).toFixed(6) });
   return { entities: made };
 }
 

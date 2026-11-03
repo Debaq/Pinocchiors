@@ -3503,6 +3503,26 @@ export const CadView: Component<CadViewProps> = (props) => {
           return curveMid(c.entities[0]);
         case "circle_distance":
           return mid(targetAt(c.a), targetAt(c.b));
+        case "offset": {
+          // Entre el medio de la copia y la original (el primer par)
+          const [from, to] = c.pairs[0] ?? [];
+          const m = curveMid(to);
+          const g = ent.get(from);
+          if (!m) return undefined;
+          if (g?.type === "line") {
+            const [a, b] = [pt.get(g.start), pt.get(g.end)];
+            if (!a || !b) return m;
+            const d: P2 = [b[0] - a[0], b[1] - a[1]];
+            const t = ((m[0] - a[0]) * d[0] + (m[1] - a[1]) * d[1]) / (d[0] * d[0] + d[1] * d[1] || 1);
+            return mid(m, [a[0] + t * d[0], a[1] + t * d[1]]);
+          }
+          const k = targetAt(from);
+          if (!k) return m;
+          // Hacia el centro, hasta la original (un punto: el centro mismo)
+          const r = g && (g.type === "circle" || g.type === "arc") ? (g.type === "circle" ? g.radius : dist(k, pt.get(g.start) ?? k)) : 0;
+          const l = dist(k, m) || 1;
+          return mid(m, [k[0] + ((m[0] - k[0]) * r) / l, k[1] + ((m[1] - k[1]) * r) / l]);
+        }
         case "point_line_distance":
         case "axis_diameter":
           return mid(pt.get(c.point), foot(c.point, c.line));

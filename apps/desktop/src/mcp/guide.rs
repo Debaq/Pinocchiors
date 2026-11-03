@@ -196,6 +196,7 @@ pub const CONSTRAINT_EXAMPLES: &[(&str, &str, &str)] = &[
     ("radius / diameter", "size of a circle or arc", r#"{"type":"diameter","entity":9,"value":8}"#),
     ("angle", "angle from line a to line b in degrees (counter-clockwise positive)", r#"{"type":"angle","a":5,"b":6,"degrees":30}"#),
     ("point_line_distance", "distance from a point to a line", r#"{"type":"point_line_distance","point":1,"line":5,"value":12}"#),
+    ("offset", "each [original, copy] pair at the same distance (line and its parallel, concentric arcs/circles, or a point and the arc around it); one value drives a whole offset", r#"{"type":"offset","pairs":[[5,12],[6,13]],"value":2}"#),
     ("lock", "freeze an entity where it is", r#"{"type":"lock","entity":5}"#),
 ];
 

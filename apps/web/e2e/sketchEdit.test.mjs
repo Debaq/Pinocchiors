@@ -183,6 +183,12 @@ test("equidistante de una L abierta a los dos lados con extremos redondos: conto
   // Horizontales y verticales copiadas
   assert.equal(s.constraints.filter((k) => k.type === "horizontal").length, 3);
   assert.equal(s.constraints.filter((k) => k.type === "vertical").length, 3);
+  // Una sola cota ata todo: cada línea a su original y los arcos de punta a su vértice
+  const off = s.constraints.filter((k) => k.type === "offset");
+  assert.equal(off.length, 1);
+  assert.equal(off[0].value, 1);
+  assert.equal(off[0].pairs.length, 6);
+  assert.ok(off[0].pairs.some(([v]) => v === c) && off[0].pairs.some(([v]) => v === a), "los arcos de punta, por su vértice");
 });
 
 test("equidistante con extremos rectos de un solo lado: cierra contra la original", () => {
@@ -211,7 +217,14 @@ test("equidistante de línea con arco tangente: el arco comparte el centro", () 
   assert.deepEqual([at(s, g.start), at(s, g.end)], [[10, 1], [14, 5]]);
   // La línea termina donde empieza el arco (tangentes: mismo punto)
   assert.equal(s.entities.find((x) => x.id === r.entities[0]).geometry.end, g.start);
+  // La cota: la línea con su paralela y el arco con su copia
+  assert.deepEqual(s.constraints.find((k) => k.type === "offset").pairs, [[l, r.entities[0]], [arc, r.entities[1]]]);
   assert.match(offsetChain(s, [arc], 6), /radio/);
+  // Sin cota si se pide
+  const n = s.constraints.length;
+  offsetChain(s, [l], 1, { dim: false });
+  assert.equal(s.constraints.filter((k) => k.type === "offset").length, 1);
+  assert.ok(s.constraints.length > n, "la paralela sí");
 });
 
 test("eliminar duplicados: la repetida se va y sus restricciones pasan a la otra", () => {

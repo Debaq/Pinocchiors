@@ -316,3 +316,49 @@ fn locked_entity_does_not_move() {
     s.remove_entity(l).unwrap();
     assert_eq!(s.constraints.len(), 1);
 }
+
+#[test]
+fn offset_moves_the_whole_chain_with_one_value() {
+    // Esquina fija y su equidistante a 1 (hacia adentro), con la esquina compartida
+    let mut s = Sketch::new();
+    let l1 = s.line([0.0, 0.0], [10.0, 0.0]);
+    let (a, b) = ends(&s, l1);
+    let c = s.add_point(10.0, 10.0);
+    let l2 = s.add_entity(Geometry::Line { start: b, end: c });
+    for p in [a, b, c] {
+        fix(&mut s, p);
+    }
+    let (m0, m1, m2) = (s.add_point(0.0, 1.0), s.add_point(9.0, 1.0), s.add_point(9.0, 10.0));
+    let k1 = s.add_entity(Geometry::Line { start: m0, end: m1 });
+    let k2 = s.add_entity(Geometry::Line { start: m1, end: m2 });
+    s.constrain(SketchConstraint::Parallel { a: l1, b: k1 });
+    s.constrain(SketchConstraint::Parallel { a: l2, b: k2 });
+    let k = s.constrain(SketchConstraint::Offset { pairs: vec![[l1, k1], [l2, k2]], value: 1.0, reference: false, opts: no_opts() });
+    s.constraints[k].set_value(3.0);
+    s.solve().unwrap();
+    assert_relative_eq!(pt(&s, m1)[0], 7.0, epsilon = 1e-6);
+    assert_relative_eq!(pt(&s, m1)[1], 3.0, epsilon = 1e-6);
+    assert_relative_eq!(pt(&s, m0)[1], 3.0, epsilon = 1e-6);
+    assert_relative_eq!(pt(&s, m2)[0], 7.0, epsilon = 1e-6);
+    assert_relative_eq!(s.measure(&s.constraints[k].clone()).unwrap(), 3.0, epsilon = 1e-6);
+}
+
+#[test]
+fn offset_of_circles_and_round_corners() {
+    // Círculo de radio 5 fijo; la copia concéntrica (más grande) a 2
+    let mut s = Sketch::new();
+    let c1 = s.circle([0.0, 0.0], 5.0);
+    let o = center(&s, c1);
+    fix(&mut s, o);
+    s.constrain(SketchConstraint::Radius { entity: c1, value: 5.0, reference: false, opts: no_opts() });
+    let c2 = s.add_entity(Geometry::Circle { center: o, radius: 6.0 });
+    // Y un arco alrededor de un punto fijo (esquina redondeada): su radio es la distancia
+    let v = s.add_point(20.0, 0.0);
+    fix(&mut s, v);
+    let (p, q) = (s.add_point(21.0, 0.0), s.add_point(20.0, 1.0));
+    let arc = s.add_entity(Geometry::Arc { center: v, start: p, end: q });
+    s.constrain(SketchConstraint::Offset { pairs: vec![[c1, c2], [v, arc]], value: 2.0, reference: false, opts: no_opts() });
+    s.solve().unwrap();
+    assert_relative_eq!(s.radius(c2).unwrap(), 7.0, epsilon = 1e-6);
+    assert_relative_eq!(s.radius(arc).unwrap(), 2.0, epsilon = 1e-6);
+}

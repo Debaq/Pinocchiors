@@ -397,6 +397,16 @@ export function measureConstraint(s: Sketch, c: SketchConstraint): number | unde
     }
     case "circle_distance":
       return circleGap(s, c.a, c.b, !!c.max);
+    case "offset": {
+      // El primer par: línea y su paralela, o la diferencia de radios (punto: el radio)
+      const [from, to] = c.pairs[0] ?? [];
+      const [lf, lt] = [lineOf(s, from), lineOf(s, to)];
+      if (lf && lt) return toLine(lt[0], lf);
+      const rt = radiusOf(s, to);
+      if (rt === undefined) return undefined;
+      const rf = radiusOf(s, from);
+      return rf === undefined ? rt : Math.abs(rt - rf);
+    }
     case "angle":
       return angleView(s, c)?.degrees;
     default:

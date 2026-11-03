@@ -8457,26 +8457,13 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                     // Una copia por vez, cada una más lejos (d, 2d, 3d…)
                     for (let k = 1; k <= offsetCopies(); k++) {
                       const d = offsetDist() * k;
-                      const before = new Set(sk.entities.map((e) => e.id));
-                      if (!byChain) msg = offsetEntities(sk, regions, ids, d);
+                      // La distancia como cota editable (una sola para toda la copia)
+                      if (!byChain) msg = offsetEntities(sk, regions, ids, d, offsetDim());
                       else {
-                        const r = offsetChain(sk, ids, d, { both: offsetBoth(), caps: offsetCaps() });
+                        const r = offsetChain(sk, ids, d, { both: offsetBoth(), caps: offsetCaps(), dim: offsetDim() });
                         if (typeof r === "string") msg = r;
                       }
                       if (msg) return;
-                      // La distancia como cota editable: de una línea original a su paralela nueva
-                      if (offsetDim()) {
-                        const pt = (id: number) => sk.points.find((q) => q.id === id)!;
-                        const dir = (e: SketchEntity) => {
-                          const g = e.geometry as { start: number; end: number };
-                          const [a, b] = [pt(g.start), pt(g.end)];
-                          const l = Math.hypot(b.x - a.x, b.y - a.y) || 1;
-                          return [(b.x - a.x) / l, (b.y - a.y) / l];
-                        };
-                        const orig = sk.entities.find((e) => ids.includes(e.id) && e.geometry.type === "line");
-                        const twin = orig && sk.entities.find((e) => !before.has(e.id) && e.geometry.type === "line" && Math.abs(dir(e)[0] * dir(orig)[1] - dir(e)[1] * dir(orig)[0]) < 1e-6);
-                        if (orig && twin) sk.constraints.push({ type: "point_line_distance", point: (twin.geometry as { start: number }).start, line: orig.id, value: +Math.abs(d).toFixed(6) });
-                      }
                     }
                     // El original pasa a construcción
                     if (offsetToConstruction()) for (const e of sk.entities) if (ids.includes(e.id)) e.construction = true;

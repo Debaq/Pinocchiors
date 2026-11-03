@@ -350,6 +350,12 @@ export type SketchConstraint =
    * punto o una línea (`a` y `b`: ids de punto o de entidad)
    */
   | ({ type: "circle_distance"; a: number; b: number; max?: boolean; value: number } & Dim)
+  /**
+   * Equidistante: cada par `[original, copia]` queda a `value` (línea y su
+   * paralela, círculos/arcos por diferencia de radios, o un punto y el arco
+   * alrededor de él). Una sola cota para toda la equidistante
+   */
+  | ({ type: "offset"; pairs: [number, number][]; value: number } & Dim)
   /** Mismo centro y mismo radio */
   | { type: "coradial"; a: number; b: number }
   /** Dos entidades del mismo tipo simétricas respecto de una línea */
@@ -3379,10 +3385,11 @@ export function trimLine(s: Sketch, lineId: number, p: P2, limits: TrimLimits = 
 /**
  * Equidistante de lo elegido a distancia `d` (positiva = hacia afuera):
  * círculos concéntricos (mismo centro) y lazos cerrados de líneas como
- * polígono paralelo (horizontal/vertical se copian). Devuelve un mensaje si
- * algo no se pudo.
+ * polígono paralelo (horizontal/vertical se copian; si no, paralelas). Con
+ * `dim`, cada copia queda atada a lo suyo por una cota de equidistante.
+ * Devuelve un mensaje si algo no se pudo.
  */
-export function offsetEntities(s: Sketch, regions: Region[], ids: number[], d: number): string | undefined {
+export function offsetEntities(s: Sketch, regions: Region[], ids: number[], d: number, dim = true): string | undefined {
   const pos = (id: number): P2 => {
     const q = s.points.find((x) => x.id === id)!;
     return [q.x, q.y];
@@ -3399,7 +3406,8 @@ export function offsetEntities(s: Sketch, regions: Region[], ids: number[], d: n
         skipped++;
         continue;
       }
-      addEntity(s, { type: "circle", center: e.geometry.center, radius: r });
+      const copy = addEntity(s, { type: "circle", center: e.geometry.center, radius: r });
+      if (dim) s.constraints.push({ type: "offset", pairs: [[id, copy]], value: +Math.abs(d).toFixed(6) });
       done.add(id);
       continue;
     }
@@ -3430,13 +3438,21 @@ export function offsetEntities(s: Sketch, regions: Region[], ids: number[], d: n
       return [l1.a[0] + l1.dir[0] * t, l1.a[1] + l1.dir[1] * t];
     };
     const pts = lines.map((l, i) => addPoint(s, corner(lines[(i + n - 1) % n], l)));
+    const pairs: [number, number][] = [];
     loop.pieces.forEach((piece, i) => {
       const line = addEntity(s, { type: "line", start: pts[i], end: pts[(i + 1) % n] });
+      let axis = false;
       for (const k of [...s.constraints]) {
-        if ((k.type === "horizontal" || k.type === "vertical") && k.line === piece.entity) s.constraints.push({ type: k.type, line });
+        if ((k.type === "horizontal" || k.type === "vertical") && k.line === piece.entity) {
+          s.constraints.push({ type: k.type, line });
+          axis = true;
+        }
       }
+      if (!axis) s.constraints.push({ type: "parallel", a: piece.entity, b: line });
+      pairs.push([piece.entity, line]);
       done.add(piece.entity);
     });
+    if (dim) s.constraints.push({ type: "offset", pairs, value: +Math.abs(d).toFixed(6) });
   }
   return skipped ? tr("Algunas entidades no se pudieron desplazar (solo círculos y lazos cerrados de líneas)") : undefined;
 }
@@ -3874,7 +3890,7 @@ const notIds = (c: SketchConstraint) => (c.type === "pierce" ? [...NOT_IDS, "cur
 export function constraintIds(c: SketchConstraint): number[] {
   const skip = notIds(c);
   return Object.entries(c).flatMap(([k, v]) =>
-    skip.includes(k) ? [] : typeof v === "number" ? [v] : k === "entities" && Array.isArray(v) ? (v as number[]) : [],
+    skip.includes(k) ? [] : typeof v === "number" ? [v] : k === "entities" && Array.isArray(v) ? (v as number[]) : k === "pairs" && Array.isArray(v) ? (v as number[][]).flat() : [],
   );
 }
 
@@ -3886,6 +3902,7 @@ export function mapConstraintIds<C extends SketchConstraint>(c: C, f: (id: numbe
     if (skip.includes(key)) continue;
     if (typeof v === "number") (k as Record<string, unknown>)[key] = f(v);
     else if (key === "entities" && Array.isArray(v)) (k as Record<string, unknown>)[key] = (v as number[]).map(f);
+    else if (key === "pairs" && Array.isArray(v)) (k as Record<string, unknown>)[key] = (v as number[][]).map((p) => p.map(f));
   }
   return k;
 }
@@ -4032,6 +4049,7 @@ export const CONSTRAINT_LABELS: Record<SketchConstraint["type"], string> = {
   get arc_length() { return tr("Largo de arco"); },
   get curve_length() { return tr("Largo total"); },
   get circle_distance() { return tr("Distancia mín./máx."); },
+  get offset() { return tr("Equidistante"); },
   get coradial() { return tr("Coradiales"); },
   get symmetric_entities() { return tr("Simétricas"); },
   get point_on_curve() { return tr("Punto en la curva"); },

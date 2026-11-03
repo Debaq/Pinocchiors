@@ -200,6 +200,11 @@ pub enum SketchConstraint {
         #[serde(default, skip_serializing_if = "is_false")] reference: bool,
         #[serde(default, skip_serializing_if = "DimOpts::is_default")] opts: DimOpts,
     },
+    /// Equidistante: cada par `[original, copia]` queda a `value` de
+    /// distancia. Línea y su paralela (un extremo de la copia a la recta
+    /// original), círculos o arcos (diferencia de radios) o un punto y un arco
+    /// a su alrededor (el radio). Una sola cota mueve toda la equidistante.
+    Offset { pairs: Vec<[u32; 2]>, value: f64, #[serde(default, skip_serializing_if = "is_false")] reference: bool, #[serde(default, skip_serializing_if = "DimOpts::is_default")] opts: DimOpts },
     /// Mismo centro y mismo radio.
     Coradial { a: u32, b: u32 },
     /// Dos entidades del mismo tipo simétricas respecto de una línea.
@@ -259,6 +264,7 @@ impl SketchConstraint {
             | AxisDiameter { value, .. }
             | ArcLength { value, .. }
             | CurveLength { value, .. }
+            | Offset { value, .. }
             | CircleDistance { value, .. } => Some(*value),
             Angle { degrees, .. } => Some(*degrees),
             _ => None,
@@ -281,6 +287,7 @@ impl SketchConstraint {
                 | AxisDiameter { reference: true, .. }
                 | ArcLength { reference: true, .. }
                 | CurveLength { reference: true, .. }
+                | Offset { reference: true, .. }
                 | CircleDistance { reference: true, .. }
         )
     }
@@ -298,6 +305,7 @@ impl SketchConstraint {
             | AxisDiameter { value, .. }
             | ArcLength { value, .. }
             | CurveLength { value, .. }
+            | Offset { value, .. }
             | CircleDistance { value, .. } => *value = v,
             Angle { degrees, .. } => *degrees = v,
             _ => return false,
@@ -328,6 +336,7 @@ impl SketchConstraint {
             Distance { a, b, .. } | HorizontalDistance { a, b, .. } | VerticalDistance { a, b, .. } => p(a) || p(b),
             Radius { entity: x, .. } | Diameter { entity: x, .. } | Lock { entity: x } => e(x),
             CurveLength { entities, .. } => entities.iter().any(e),
+            Offset { pairs, .. } => pairs.iter().flatten().any(|id| p(id) || e(id)),
             // Ids de punto o de entidad
             CircleDistance { a, b, .. } => p(a) || e(a) || p(b) || e(b),
             Coradial { a, b } | Curvature { a, b } => e(a) || e(b),
@@ -1273,6 +1282,7 @@ impl Sketch {
             }
             S::CurveLength { ref entities, .. } => entities.iter().map(|&e| self.curve_length(e)).sum::<Result<f64, _>>().ok()?,
             S::CircleDistance { a, b, max, .. } => self.circle_gap(a, b, max).ok()?.0,
+            S::Offset { ref pairs, .. } => self.offset_gap(*pairs.first()?).ok()?,
             _ => return None,
         })
     }
@@ -1311,6 +1321,21 @@ impl Sketch {
             Geometry::Circle { center, .. } | Geometry::Arc { center, .. } => Ok(Target::Round(id, center)),
             Geometry::Point { point } => Ok(Target::Point(point)),
             _ => Err(SketchError::WrongKind(id, "un punto, una línea, un círculo o un arco")),
+        }
+    }
+
+    /// Distancia actual de un par de la equidistante (`[original, copia]`).
+    fn offset_gap(&self, [from, to]: [u32; 2]) -> Result<f64, SketchError> {
+        match (self.dim_target(from)?, self.dim_target(to)?) {
+            (Target::Line(s, e), Target::Line(q, _)) => {
+                let (s, e, q) = (self.point(s)?, self.point(e)?, self.point(q)?);
+                let d = [e[0] - s[0], e[1] - s[1]];
+                let l = d[0].hypot(d[1]);
+                Ok(if l < 1e-15 { dist2(s, q) } else { (d[0] * (q[1] - s[1]) - d[1] * (q[0] - s[0])).abs() / l })
+            }
+            (Target::Round(a, _), Target::Round(b, _)) => Ok((self.radius(b)? - self.radius(a)?).abs()),
+            (Target::Point(_), Target::Round(b, _)) => self.radius(b),
+            _ => Err(SketchError::Unsupported("equidistante: líneas, círculos o arcos, o un punto y un arco".into())),
         }
     }
 
@@ -1663,6 +1688,24 @@ impl Sketch {
                     Target::Round(e, c) => (ix(c)?, None, Some(round(e)?.1)),
                 };
                 vec![Constraint::RimDistance { a: pa, a_rim, b: pb, b_end, b_rim, signs, distance: value }]
+            }
+            S::Offset { ref pairs, value, .. } => {
+                let mut out = Vec::new();
+                for &[from, to] in pairs {
+                    out.push(match (self.dim_target(from)?, self.dim_target(to)?) {
+                        (Target::Line(s, e), Target::Line(q, _)) => {
+                            Constraint::DistancePointLine { p_idx: ix(q)?, line_p1: ix(s)?, line_p2: ix(e)?, distance: value }
+                        }
+                        (Target::Round(a, ca), Target::Round(b, cb)) => {
+                            // La copia más grande o más chica, según cómo está
+                            let signs = if self.radius(b)? >= self.radius(a)? { [0.0, -1.0, 1.0] } else { [0.0, 1.0, -1.0] };
+                            Constraint::RimDistance { a: ix(ca)?, a_rim: Some(round(a)?.1), b: ix(cb)?, b_end: None, b_rim: Some(round(b)?.1), signs, distance: value }
+                        }
+                        (Target::Point(p), Target::Round(b, _)) => Constraint::Distance { p1_idx: ix(p)?, p2_idx: round(b)?.1, distance: value },
+                        _ => return Err(SketchError::Unsupported("equidistante: líneas, círculos o arcos, o un punto y un arco".into())),
+                    });
+                }
+                out
             }
             S::Coradial { a, b } => {
                 let ((c1, r1), (c2, r2)) = (round(a)?, round(b)?);
