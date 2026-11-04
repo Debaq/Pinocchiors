@@ -4018,6 +4018,7 @@ dependencies = [
  "pinocchio-print3d",
  "pinocchio-repair",
  "pinocchio-skeleton",
+ "pinocchio-slicer",
  "quadriflow-core",
  "rayon",
  "reqwest",
@@ -4174,6 +4175,15 @@ dependencies = [
  "converter-scene",
  "glam",
  "pinocchio-math",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "pinocchio-slicer"
+version = "0.1.0"
+dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",

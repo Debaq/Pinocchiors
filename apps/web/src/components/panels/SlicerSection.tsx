@@ -1,0 +1,405 @@
+import { Component, For, Show, createEffect, createResource, createSignal, on, onCleanup } from "solid-js";
+import { Channel, invoke } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
+import { Button, Checkbox, NumberInput, Select } from "../ui";
+import * as Icons from "../icons";
+import { fmtNumber, t } from "../../lib/i18n";
+import { tBackend } from "../../lib/i18nBackend.ts";
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TIPOS (espejo de apps/desktop/src/slicer.rs)
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface SlicerPrinter {
+  name: string;
+  model: string;
+  nozzle: number;
+  default_process: string;
+  default_filament: string;
+  processes: string[];
+  filaments: string[];
+}
+
+export interface SlicerInfo {
+  available: boolean;
+  engine: string | null;
+  orca_version: string;
+  printers: SlicerPrinter[];
+}
+
+/** Lo elegido en «Laminar»; se guarda en el proyecto con el resto de Fabricar */
+export interface SlicerSettings {
+  printer?: string;
+  process?: string;
+  filament?: string;
+  /** Cambios sobre el perfil, con las claves de Orca (valores en texto) */
+  overrides: Record<string, string>;
+  /** Líneas `clave = valor` para cualquier otro ajuste de Orca */
+  advanced?: string;
+  plate?: number;
+}
+
+export const defaultSlicer: SlicerSettings = { overrides: {} };
+
+export interface SliceResult {
+  plate: number;
+  plates: number;
+  time_s: number;
+  filament_mm: number;
+  filament_cm3: number;
+  filament_g: number;
+  layers: number;
+  warnings: string[];
+  gcode_bytes: number;
+  unplaced: string[];
+  preview: { layer_z: number[]; segments: number; length_by_feature: number[] };
+}
+
+interface Progress {
+  stage: string;
+  percent: number;
+  message: string;
+}
+
+/** Datos que necesita el acomodo de placas (igual que «Exportar para imprimir», sin ruta) */
+export type PlateInputArgs = Record<string, unknown>;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AYUDAS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** La impresora del laminador que corresponde a la de Fabricar (por nombre) */
+export function matchSlicerPrinter(printers: SlicerPrinter[], name: string | undefined): SlicerPrinter | undefined {
+  if (!name) return undefined;
+  const n = name.toLowerCase().replace(/\s+/g, "");
+  const key = (p: SlicerPrinter) => p.model.toLowerCase().replace(/\s+/g, "");
+  return printers.find((p) => key(p) === n) ?? printers.find((p) => n.includes(key(p)) || key(p).includes(n));
+}
+
+/** Nombre corto de un proceso: «0.20mm Standard @Creality K1 (0.4 nozzle)» → «0.20mm Standard» */
+const shortName = (name: string) => name.split("@")[0].trim();
+
+function parseAdvanced(text: string | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const raw of (text ?? "").split("\n")) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const i = line.indexOf("=");
+    if (i <= 0) continue;
+    out[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+  }
+  return out;
+}
+
+function fmtTime(seconds: number): string {
+  const s = Math.round(seconds);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return h > 0 ? `${h} h ${m} min` : `${m} min ${s % 60} s`;
+}
+
+/** Valor de una clave del perfil como texto (las listas por extrusor usan el primero) */
+function first(v: unknown): string {
+  if (Array.isArray(v)) return String(v[0] ?? "");
+  return v == null ? "" : String(v);
+}
+
+const num = (v: string, fallback: number) => {
+  const x = parseFloat(v);
+  return Number.isFinite(x) ? x : fallback;
+};
+
+const INFILL_PATTERNS = [
+  ["grid", "Rejilla"],
+  ["gyroid", "Giroide"],
+  ["cubic", "Cúbico"],
+  ["adaptivecubic", "Cúbico adaptativo"],
+  ["crosshatch", "Entramado"],
+  ["rectilinear", "Rectilíneo"],
+  ["line", "Líneas"],
+  ["triangles", "Triángulos"],
+  ["honeycomb", "Panal"],
+  ["3dhoneycomb", "Panal 3D"],
+  ["lightning", "Rayo (solo sostiene el techo)"],
+  ["concentric", "Concéntrico"],
+] as const;
+
+const SEAMS = [
+  ["aligned", "Alineada"],
+  ["aligned_back", "Alineada atrás"],
+  ["nearest", "Más cercana"],
+  ["back", "Atrás"],
+  ["random", "Al azar"],
+] as const;
+
+const BRIMS = [
+  ["auto_brim", "Automático"],
+  ["no_brim", "Sin borde"],
+  ["outer_only", "Solo por fuera"],
+  ["brim_ears", "Orejas en las esquinas"],
+] as const;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SECCIÓN
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const SlicerSection: Component<{
+  settings: SlicerSettings;
+  onSettings: (s: SlicerSettings) => void;
+  /** Nombre de la impresora elegida en Fabricar (para proponer la del laminador) */
+  printerName?: string;
+  /** Datos para acomodar las placas; undefined si falta impresora o material */
+  plateInput: () => PlateInputArgs | undefined;
+  /** Cuántas placas salen (de «Ver cómo quedan en la cama»), si se sabe */
+  plateCount?: number;
+  disabled?: boolean;
+}> = (props) => {
+  const [open, setOpen] = createSignal(true);
+  const [info] = createResource(() => invoke<SlicerInfo>("slicer_presets").catch(() => undefined));
+  const [showAdvanced, setShowAdvanced] = createSignal(false);
+  const [busy, setBusy] = createSignal(false);
+  const [progress, setProgress] = createSignal<Progress>();
+  const [result, setResult] = createSignal<SliceResult>();
+  const [error, setError] = createSignal<string>();
+  const [saved, setSaved] = createSignal<string>();
+
+  const set = (patch: Partial<SlicerSettings>) => props.onSettings({ ...props.settings, ...patch });
+  const printers = () => info()?.printers ?? [];
+  const printer = () =>
+    printers().find((p) => p.name === props.settings.printer) ?? matchSlicerPrinter(printers(), props.printerName) ?? printers()[0];
+  const process = () => {
+    const p = printer();
+    if (!p) return undefined;
+    return p.processes.includes(props.settings.process ?? "") ? props.settings.process : p.default_process;
+  };
+  const filament = () => {
+    const p = printer();
+    if (!p) return undefined;
+    return p.filaments.includes(props.settings.filament ?? "") ? props.settings.filament : p.default_filament;
+  };
+
+  // Valores del perfil elegido (sin cambios): de ahí salen los números que se muestran
+  const [base] = createResource(
+    () => {
+      const p = printer();
+      const pr = process();
+      const f = filament();
+      return p && pr && f ? { printer: p.name, process: pr, filament: f } : undefined;
+    },
+    (args) => invoke<Record<string, unknown>>("slicer_config", args).catch(() => ({}) as Record<string, unknown>),
+  );
+  const value = (key: string) => props.settings.overrides[key] ?? first(base()?.[key]);
+  const setValue = (key: string, v: string) => {
+    const overrides = { ...props.settings.overrides };
+    if (v === first(base()?.[key])) delete overrides[key];
+    else overrides[key] = v;
+    set({ overrides });
+  };
+  const changed = () => Object.keys(props.settings.overrides).length;
+
+  // Al cambiar de perfil, los cambios hechos sobre el anterior se descartan
+  createEffect(on([() => props.settings.process, () => props.settings.filament, () => props.settings.printer], () => setResult(undefined), { defer: true }));
+
+  const plate = () => Math.min(props.settings.plate ?? 0, Math.max(0, (props.plateCount ?? 1) - 1));
+
+  const slice = async () => {
+    const input = props.plateInput();
+    const p = printer();
+    const pr = process();
+    const f = filament();
+    if (!input || !p || !pr || !f) return;
+    setBusy(true);
+    setError(undefined);
+    setSaved(undefined);
+    setProgress({ stage: "start", percent: 0, message: t("Empezando...") });
+    const channel = new Channel<Progress>();
+    channel.onmessage = (m) => {
+      if (m.stage !== "warning") setProgress(m);
+    };
+    try {
+      const overrides = { ...props.settings.overrides, ...parseAdvanced(props.settings.advanced) };
+      const r = await invoke<SliceResult>("slice_plate", {
+        input,
+        plate: plate(),
+        settings: { printer: p.name, process: pr, filament: f, overrides },
+        onProgress: channel,
+      });
+      setResult(r);
+    } catch (e) {
+      const msg = typeof e === "string" ? tBackend(e) : String(e);
+      if (!/cancelad/i.test(String(e))) setError(msg);
+    } finally {
+      setBusy(false);
+      setProgress(undefined);
+    }
+  };
+  onCleanup(() => {
+    if (busy()) void invoke("slicer_cancel");
+  });
+
+  const saveGcode = async () => {
+    const path = await save({ title: t("Guardar gcode"), filters: [{ name: "G-code", extensions: ["gcode"] }] });
+    if (!path) return;
+    try {
+      await invoke<number>("save_gcode", { path });
+      setSaved(path);
+    } catch (e) {
+      setError(typeof e === "string" ? tBackend(e) : String(e));
+    }
+  };
+
+  return (
+    <div class="space-y-2 pt-2 border-t border-border/50">
+      <button class="flex w-full items-center justify-between" onClick={() => setOpen(!open())}>
+        <h4 class="text-xs font-semibold uppercase tracking-wider text-text-muted">{t("Laminar")}</h4>
+      </button>
+      <Show when={open()}>
+        <Show
+          when={info()?.available}
+          fallback={
+            <p class="text-[11px] text-warning">
+              {info.loading ? t("Buscando el motor de laminado...") : t("Falta el motor de laminado (pinocchio-slicer). Se compila con scripts/build-orca-engine.sh.")}
+            </p>
+          }
+        >
+          <Select
+            label={t("Impresora")}
+            options={printers().map((p) => ({ value: p.name, label: p.name }))}
+            value={printer()?.name}
+            onChange={(v) => set({ printer: v, process: undefined, filament: undefined, overrides: {} })}
+          />
+          <Select
+            label={t("Calidad")}
+            options={(printer()?.processes ?? []).map((p) => ({ value: p, label: shortName(p) }))}
+            value={process()}
+            onChange={(v) => set({ process: v, overrides: {} })}
+          />
+          <Select
+            label={t("Filamento")}
+            options={(printer()?.filaments ?? []).map((f) => ({ value: f, label: shortName(f) }))}
+            value={filament()}
+            onChange={(v) => set({ filament: v })}
+          />
+
+          <Show when={base()}>
+            <NumberInput label={t("Altura de capa")} value={num(value("layer_height"), 0.2)} onChange={(v) => setValue("layer_height", String(v))} min={0.04} max={0.32} step={0.02} suffix="mm" />
+            <NumberInput label={t("Paredes")} value={num(value("wall_loops"), 2)} onChange={(v) => setValue("wall_loops", String(Math.round(v)))} min={1} max={10} step={1} />
+            <NumberInput label={t("Capas arriba")} value={num(value("top_shell_layers"), 5)} onChange={(v) => setValue("top_shell_layers", String(Math.round(v)))} min={0} max={20} step={1} />
+            <NumberInput label={t("Capas abajo")} value={num(value("bottom_shell_layers"), 3)} onChange={(v) => setValue("bottom_shell_layers", String(Math.round(v)))} min={0} max={20} step={1} />
+            <NumberInput label={t("Relleno")} value={num(value("sparse_infill_density"), 15)} onChange={(v) => setValue("sparse_infill_density", `${Math.round(v)}%`)} min={0} max={100} step={5} suffix="%" />
+            <Select
+              label={t("Patrón de relleno")}
+              options={INFILL_PATTERNS.map(([value, label]) => ({ value, label: t(label) }))}
+              value={value("sparse_infill_pattern")}
+              onChange={(v) => setValue("sparse_infill_pattern", v)}
+            />
+            <Checkbox small label={t("Soportes")} checked={value("enable_support") === "1"} onChange={(v) => setValue("enable_support", v ? "1" : "0")} hint={t("Pone soportes debajo de los voladizos más inclinados que el ángulo límite.")} />
+            <Show when={value("enable_support") === "1"}>
+              <Select
+                label={t("Tipo de soporte")}
+                options={[
+                  { value: "normal(auto)", label: t("Normal") },
+                  { value: "tree(auto)", label: t("Árbol") },
+                ]}
+                value={value("support_type").startsWith("tree") ? "tree(auto)" : "normal(auto)"}
+                onChange={(v) => setValue("support_type", v)}
+              />
+              <NumberInput label={t("Ángulo límite")} value={num(value("support_threshold_angle"), 30)} onChange={(v) => setValue("support_threshold_angle", String(Math.round(v)))} min={0} max={90} step={5} suffix="°" />
+              <Checkbox small label={t("Solo apoyados en la cama")} checked={value("support_on_build_plate_only") === "1"} onChange={(v) => setValue("support_on_build_plate_only", v ? "1" : "0")} />
+            </Show>
+            <Select label={t("Borde (brim)")} options={BRIMS.map(([value, label]) => ({ value, label: t(label) }))} value={value("brim_type")} onChange={(v) => setValue("brim_type", v)} />
+            <Select label={t("Costura")} options={SEAMS.map(([value, label]) => ({ value, label: t(label) }))} value={value("seam_position")} onChange={(v) => setValue("seam_position", v)} />
+            <NumberInput label={t("Temperatura boquilla")} value={num(value("nozzle_temperature"), 220)} onChange={(v) => setValue("nozzle_temperature", String(Math.round(v)))} min={150} max={320} step={5} suffix="°C" />
+            <NumberInput label={t("Temperatura cama")} value={num(props.settings.overrides["bed_temperature"] ?? first(base()?.["hot_plate_temp"]), 60)} onChange={(v) => setValue("bed_temperature", String(Math.round(v)))} min={0} max={120} step={5} suffix="°C" />
+            <NumberInput label={t("Velocidad pared externa")} value={num(value("outer_wall_speed"), 200)} onChange={(v) => setValue("outer_wall_speed", String(Math.round(v)))} min={10} max={600} step={10} suffix="mm/s" />
+            <NumberInput label={t("Velocidad relleno")} value={num(value("sparse_infill_speed"), 270)} onChange={(v) => setValue("sparse_infill_speed", String(Math.round(v)))} min={10} max={600} step={10} suffix="mm/s" />
+
+            <button class="text-[11px] text-accent hover:underline" onClick={() => setShowAdvanced(!showAdvanced())}>
+              {showAdvanced() ? t("Ocultar avanzado") : t("Avanzado")}
+            </button>
+            <Show when={showAdvanced()}>
+              <p class="text-[10px] text-text-dim">{t("Cualquier ajuste de Orca, uno por línea: clave = valor (por ejemplo ironing_type = top).")}</p>
+              <textarea
+                class="w-full h-24 rounded border border-border bg-surface/30 p-1.5 font-mono text-[11px] text-text"
+                spellcheck={false}
+                value={props.settings.advanced ?? ""}
+                onChange={(e) => set({ advanced: e.currentTarget.value })}
+              />
+            </Show>
+            <Show when={changed() > 0}>
+              <button class="text-[11px] text-text-dim hover:underline" onClick={() => set({ overrides: {} })}>
+                {t("Volver al perfil ({n} cambios)", { n: changed() })}
+              </button>
+            </Show>
+          </Show>
+
+          <Show when={(props.plateCount ?? 1) > 1}>
+            <Select
+              label={t("Placa")}
+              options={Array.from({ length: props.plateCount ?? 1 }, (_, i) => ({ value: String(i), label: t("Placa {n}", { n: i + 1 }) }))}
+              value={String(plate())}
+              onChange={(v) => set({ plate: Number(v) })}
+            />
+          </Show>
+
+          <Show
+            when={busy()}
+            fallback={
+              <Button onClick={slice} disabled={props.disabled || !props.plateInput()} fullWidth size="sm" variant="primary" icon={<Icons.Stack size={14} />}>
+                {t("Laminar")}
+              </Button>
+            }
+          >
+            <div class="space-y-1">
+              <div class="h-1.5 w-full rounded bg-surface/50 overflow-hidden">
+                <div class="h-full bg-accent transition-all" style={{ width: `${progress()?.percent ?? 0}%` }} />
+              </div>
+              <p class="text-[10px] text-text-dim truncate">{tBackend(progress()?.message ?? "")}</p>
+              <Button onClick={() => void invoke("slicer_cancel")} fullWidth size="sm" variant="ghost" icon={<Icons.X size={14} />}>
+                {t("Cancelar")}
+              </Button>
+            </div>
+          </Show>
+
+          <Show when={error()}>
+            <p class="text-[11px] text-red">{error()}</p>
+          </Show>
+
+          <Show when={result()}>
+            {(r) => (
+              <div class="space-y-1 p-2 rounded-md bg-surface/30 border border-border">
+                <ResultRow label={t("Tiempo estimado")} value={fmtTime(r().time_s)} />
+                <ResultRow
+                  label={t("Filamento")}
+                  value={`${fmtNumber(r().filament_mm / 1000, { maximumFractionDigits: 2 })} m · ${fmtNumber(r().filament_g, { maximumFractionDigits: 1 })} g`}
+                />
+                <ResultRow label={t("Capas")} value={String(r().layers)} />
+                <Show when={r().plates > 1}>
+                  <ResultRow label={t("Placa")} value={`${r().plate + 1} / ${r().plates}`} />
+                </Show>
+                <Show when={r().unplaced.length > 0}>
+                  <p class="text-[11px] text-red">{t("No caben en la cama: {names}", { names: r().unplaced.join(", ") })}</p>
+                </Show>
+                <For each={r().warnings}>{(w) => <p class="text-[11px] text-warning">{w}</p>}</For>
+                <Button onClick={saveGcode} fullWidth size="sm" icon={<Icons.Download size={14} />}>
+                  {t("Guardar gcode")}
+                </Button>
+                <Show when={saved()}>
+                  <p class="text-[10px] text-green truncate">{t("Guardado en {path}", { path: saved()! })}</p>
+                </Show>
+              </div>
+            )}
+          </Show>
+          <p class="text-[10px] text-text-dim">{t("Motor de OrcaSlicer {v}", { v: info()?.orca_version ?? "" })}</p>
+        </Show>
+      </Show>
+    </div>
+  );
+};
+
+const ResultRow: Component<{ label: string; value: string }> = (props) => (
+  <div class="flex justify-between text-xs gap-2">
+    <span class="text-text-muted">{props.label}</span>
+    <span class="text-text font-mono">{props.value}</span>
+  </div>
+);

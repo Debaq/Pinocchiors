@@ -12,6 +12,8 @@ members = [
     "libs/pinocchio/embedding",
     "libs/pinocchio/repair",
     "libs/pinocchio/print3d",
+    # Laminado (motor de OrcaSlicer como proceso aparte)
+    "libs/slicer",
     "libs/pinocchio/core",
     # QuadriFlow - Quad remeshing
     "libs/quadriflow/core",
@@ -120,6 +122,7 @@ pinocchio-attachment = { path = "libs/pinocchio/attachment" }
 pinocchio-embedding = { path = "libs/pinocchio/embedding" }
 pinocchio-repair = { path = "libs/pinocchio/repair" }
 pinocchio-print3d = { path = "libs/pinocchio/print3d" }
+pinocchio-slicer = { path = "libs/slicer" }
 pinocchio-core = { path = "libs/pinocchio/core" }
 
 # Crates internos - QuadriFlow

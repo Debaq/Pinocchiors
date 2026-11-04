@@ -4,6 +4,7 @@ import * as Icons from "../icons";
 import { fmtNumber, t, tx } from "../../lib/i18n";
 import { CalibrationWizard, type CalibrationApply } from "../layout/CalibrationWizard";
 import { SkinPanel, type SkinPanelProps } from "./SkinPanel";
+import { SlicerSection, defaultSlicer } from "./SlicerSection";
 import type { CutPlane } from "../../lib/printCuts.ts";
 import { saveCustomMaterial, saveCustomPrinter } from "../../lib/settings.ts";
 import {
@@ -228,6 +229,20 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
   const setDrainDiameter = (drainDiameter: number) => patch({ drainDiameter });
   const plate = () => prep().plate;
   const setPlate = (plate: PlateSettings) => patch({ plate });
+  /** Lo mismo que «Exportar para imprimir» (con vaciado), sin archivo: lo usa «Laminar» */
+  const plateInput = () => ({
+    printer: printer(),
+    material: material(),
+    format: "stl",
+    spacing: plate().spacing,
+    orient: plate().orient,
+    contour: plate().contour !== false,
+    hollow_wall: hollow() ? wall() : null,
+    drain: hollow() && drain() ? drainDiameter() : null,
+    vent: hollow() && drain() && vent(),
+    compensate: plate().compensate !== false,
+    path: "",
+  });
 
   // Asistente de calibración: lo que calcula se aplica a la impresora y al material elegidos
   const [calibrating, setCalibrating] = createSignal(false);
@@ -601,6 +616,14 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
           disabled={!props.canAnalyze}
           hasPieces={!!props.subdivideResult}
           onExport={() => props.onExportPlates?.(printer(), material(), { ...plate(), hollowWall: hollow() ? wall() : null, drain: hollow() && drain() ? drainDiameter() : null, vent: hollow() && drain() && vent() })}
+        />
+        <SlicerSection
+          settings={prep().slicer ?? defaultSlicer}
+          onSettings={(slicer) => patch({ slicer })}
+          printerName={printer().name}
+          plateInput={plateInput}
+          plateCount={props.platePreview?.plates.length}
+          disabled={props.isProcessing || !props.canAnalyze}
         />
         <PrepareAllSection
           withJoints={prep().prepareJoints ?? true}

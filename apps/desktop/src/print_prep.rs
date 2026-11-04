@@ -47,7 +47,7 @@ fn point_to_scene(p: [f64; 3], k: f64) -> [f64; 3] {
 }
 
 /// Mallas a preparar, en milímetros con Z arriba: las piezas si se dividió, o el modelo
-fn sources(state: &AppState) -> Result<Vec<(String, Mesh)>, String> {
+pub(crate) fn sources(state: &AppState) -> Result<Vec<(String, Mesh)>, String> {
     let k = mm_per_unit(state);
     if let Some(pieces) = state.print3d_pieces.lock().unwrap().as_ref() {
         return Ok(pieces.iter().map(|p| (p.label.clone(), to_print_space(&p.mesh, k))).collect());

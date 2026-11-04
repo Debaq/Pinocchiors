@@ -17,6 +17,7 @@ pub mod placement;
 pub mod print_all;
 pub mod print_prep;
 pub mod print_skin;
+pub mod slicer;
 pub mod project;
 pub mod crease;
 pub mod ray_render;
@@ -235,6 +236,12 @@ pub fn run() {
             print_all::prepare_for_printing,
             print_prep::preview_print_plates,
             print_prep::preview_print_plate_view,
+            slicer::slicer_presets,
+            slicer::slicer_config,
+            slicer::slice_plate,
+            slicer::slicer_cancel,
+            slicer::slicer_preview,
+            slicer::save_gcode,
             // Escáneres 3D (Orizon3D)
             scanner::scanner_connect,
             scanner::scanner_disconnect,
