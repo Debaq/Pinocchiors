@@ -132,4 +132,6 @@ fn lamina_un_cubo_para_la_ad5x() {
     assert!(gcode.contains("; filament_type = PLA;PLA;PLA;PLA"), "faltan los 4 carretes al final");
     assert!(!gcode.contains("SET_PRINT_STATS_INFO"));
     assert!((95..=105).contains(&summary.layers), "capas {}", summary.layers);
+    // La pantalla de la AD5X muestra la pieza con la miniatura de 140×110 que pide su perfil
+    assert!(gcode.contains("; thumbnail begin 140x110"), "falta la miniatura de la AD5X");
 }
