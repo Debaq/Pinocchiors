@@ -169,8 +169,16 @@ fn catmull_rom(p: &[P2]) -> Vec<P2> {
     if p.len() < 3 {
         return p.to_vec();
     }
-    let closed = dist2(p[0], p[p.len() - 1]) < 1e-12;
     let n = p.len();
+    let mut out: Vec<P2> = (0..(n - 1) * 8).map(|k| catmull_at(p, k as f64)).collect();
+    out.push(p[n - 1]);
+    out
+}
+
+/// Punto de la spline interpolada en `k` (8 muestras por tramo, como `catmull_rom`).
+fn catmull_at(p: &[P2], k: f64) -> P2 {
+    let n = p.len();
+    let closed = dist2(p[0], p[n - 1]) < 1e-12;
     let get = |i: isize| -> P2 {
         if closed {
             let m = (n - 1) as isize;
@@ -179,20 +187,130 @@ fn catmull_rom(p: &[P2]) -> Vec<P2> {
             p[i.clamp(0, n as isize - 1) as usize]
         }
     };
-    let mut out = Vec::new();
-    for i in 0..n - 1 {
-        let (p0, p1, p2, p3) = (get(i as isize - 1), get(i as isize), get(i as isize + 1), get(i as isize + 2));
-        for k in 0..8 {
-            let t = k as f64 / 8.0;
-            let (t2, t3) = (t * t, t * t * t);
-            let f = |a: f64, b: f64, c: f64, d: f64| {
-                0.5 * (2.0 * b + (-a + c) * t + (2.0 * a - 5.0 * b + 4.0 * c - d) * t2 + (-a + 3.0 * b - 3.0 * c + d) * t3)
+    let i = ((k / 8.0).floor().max(0.0) as usize).min(n - 2);
+    let t = k / 8.0 - i as f64;
+    let (p0, p1, p2, p3) = (get(i as isize - 1), get(i as isize), get(i as isize + 1), get(i as isize + 2));
+    let (t2, t3) = (t * t, t * t * t);
+    let f = |a: f64, b: f64, c: f64, d: f64| 0.5 * (2.0 * b + (-a + c) * t + (2.0 * a - 5.0 * b + 4.0 * c - d) * t2 + (-a + 3.0 * b - 3.0 * c + d) * t3);
+    [f(p0[0], p1[0], p2[0], p3[0]), f(p0[1], p1[1], p2[1], p3[1])]
+}
+
+/// La curva en función de la posición en su muestreo (`k`: tramo + fracción,
+/// como los puntos de `sample_geometry`, que tiene `n` puntos): para llevar
+/// los cruces de las cuerdas a la curva.
+type Eval = Box<dyn Fn(f64) -> P2>;
+
+fn curve_eval(g: &Geometry, point: &impl Fn(u32) -> Result<P2, SketchError>, n: usize) -> Option<Eval> {
+    let segs = n.checked_sub(1).filter(|&m| m > 0)? as f64;
+    Some(match g {
+        Geometry::Line { start, end } => {
+            let (a, b) = (point(*start).ok()?, point(*end).ok()?);
+            Box::new(move |k| [a[0] + k * (b[0] - a[0]), a[1] + k * (b[1] - a[1])])
+        }
+        Geometry::Circle { center, radius } => {
+            let (c, r) = (point(*center).ok()?, *radius);
+            Box::new(move |k| {
+                let a = k / segs * 2.0 * PI;
+                [c[0] + r * a.cos(), c[1] + r * a.sin()]
+            })
+        }
+        Geometry::Arc { center, start, end } => {
+            let (c, a, b) = (point(*center).ok()?, point(*start).ok()?, point(*end).ok()?);
+            let r = dist2(c, a);
+            let a0 = (a[1] - c[1]).atan2(a[0] - c[0]);
+            let sweep = arc_sweep(c, a, b);
+            Box::new(move |k| {
+                let t = a0 + sweep * k / segs;
+                [c[0] + r * t.cos(), c[1] + r * t.sin()]
+            })
+        }
+        Geometry::Ellipse { center, major, minor } => {
+            let (c, a, b) = (point(*center).ok()?, point(*major).ok()?, point(*minor).ok()?);
+            let (u, v) = ([a[0] - c[0], a[1] - c[1]], [b[0] - c[0], b[1] - c[1]]);
+            Box::new(move |k| {
+                let t = k / segs * 2.0 * PI;
+                [c[0] + u[0] * t.cos() + v[0] * t.sin(), c[1] + u[1] * t.cos() + v[1] * t.sin()]
+            })
+        }
+        Geometry::EllipseArc { center, major, minor, start, end } => {
+            let (c, a, b) = (point(*center).ok()?, point(*major).ok()?, point(*minor).ok()?);
+            let (p0, p1) = (point(*start).ok()?, point(*end).ok()?);
+            let (u, v) = ([a[0] - c[0], a[1] - c[1]], [b[0] - c[0], b[1] - c[1]]);
+            let sense = if u[0] * v[1] - u[1] * v[0] >= 0.0 { 1.0 } else { -1.0 };
+            let d = |x: [f64; 2], y: [f64; 2]| x[0] * y[0] + x[1] * y[1];
+            let param = |p: P2| {
+                let q = [p[0] - c[0], p[1] - c[1]];
+                (d(q, v) / d(v, v)).atan2(d(q, u) / d(u, u))
             };
-            out.push([f(p0[0], p1[0], p2[0], p3[0]), f(p0[1], p1[1], p2[1], p3[1])]);
+            let t0 = param(p0);
+            let mut sweep = (param(p1) - t0) * sense;
+            while sweep <= 1e-12 {
+                sweep += 2.0 * PI;
+            }
+            Box::new(move |k| {
+                let t = t0 + sense * sweep * k / segs;
+                [c[0] + u[0] * t.cos() + v[0] * t.sin(), c[1] + u[1] * t.cos() + v[1] * t.sin()]
+            })
+        }
+        Geometry::Spline { points, closed, .. } => {
+            let mut pts: Vec<P2> = points.iter().map(|p| point(*p)).collect::<Result<_, _>>().ok()?;
+            if *closed && let Some(&f) = pts.first() {
+                pts.push(f);
+            }
+            if pts.len() < 3 {
+                return None;
+            }
+            Box::new(move |k| catmull_at(&pts, k))
+        }
+        Geometry::BSpline { poles, degree, closed, weights, knots } => {
+            let pts: Vec<nalgebra::Vector2<f64>> = poles.iter().map(|p| point(*p).map(|q| nalgebra::Vector2::new(q[0], q[1]))).collect::<Result<_, _>>().ok()?;
+            let curve = cad_solver::BSpline::new(&pts, weights, *degree as usize, *closed, knots)?;
+            let br = curve.breaks();
+            let spans = br.len() - 1;
+            let per = 16.max(64usize.div_ceil(spans.max(1))) as f64;
+            Box::new(move |k| {
+                let k = k.clamp(0.0, segs);
+                let j = ((k / per).floor() as usize).min(spans - 1);
+                let u = br[j] + (br[j + 1] - br[j]) * (k - j as f64 * per) / per;
+                let q = curve.eval(u);
+                [q.x, q.y]
+            })
+        }
+        Geometry::Point { .. } => return None,
+    })
+}
+
+/// Lleva un cruce de las cuerdas (posiciones `ka`, `kb` en el muestreo de
+/// cada curva) al cruce de las curvas: Newton sobre las dos posiciones. None
+/// si no converge cerca.
+fn refine_on_curves(fa: &Eval, fb: &Eval, ka: f64, kb: f64, eps: f64) -> Option<(f64, f64, P2)> {
+    let (mut a, mut b) = (ka, kb);
+    let h = 1e-4;
+    let deriv = |f: &Eval, k: f64| {
+        let (p, q) = (f(k + h), f(k - h));
+        [(p[0] - q[0]) / (2.0 * h), (p[1] - q[1]) / (2.0 * h)]
+    };
+    for _ in 0..16 {
+        let (pa, pb) = (fa(a), fb(b));
+        let f = [pa[0] - pb[0], pa[1] - pb[1]];
+        if f[0].hypot(f[1]) <= eps {
+            return Some((a, b, [(pa[0] + pb[0]) / 2.0, (pa[1] + pb[1]) / 2.0]));
+        }
+        let (da, db) = (deriv(fa, a), deriv(fb, b));
+        // [da, −db]·[x, y] = −f
+        let (m00, m01, m10, m11) = (da[0], -db[0], da[1], -db[1]);
+        let det = m00 * m11 - m01 * m10;
+        if det.abs() < 1e-300 || !det.is_finite() {
+            return None;
+        }
+        let (r0, r1) = (-f[0], -f[1]);
+        a += (r0 * m11 - m01 * r1) / det;
+        b += (m00 * r1 - r0 * m10) / det;
+        if !(a - ka).is_finite() || (a - ka).abs() > 2.0 || (b - kb).abs() > 2.0 {
+            return None;
         }
     }
-    out.push(p[n - 1]);
-    out
+    None
 }
 
 pub fn signed_area(poly: &[P2]) -> f64 {
@@ -383,6 +501,8 @@ struct Cuttable {
     pts: Vec<P2>,
     closed: bool,
     exact: Option<Exact>,
+    /// La curva por posición en `pts` (para llevar los cruces a la curva)
+    eval: Option<Eval>,
     cuts: Vec<(f64, P2)>,
 }
 
@@ -427,28 +547,25 @@ fn cut_crossings(curves: &mut [Cuttable], tol: f64) {
                     if sb[0] > vb[2] + touch || vb[0] > sb[2] + touch || sb[1] > vb[3] + touch || vb[1] > sb[3] + touch {
                         continue;
                     }
+                    let (si, sj) = (si as f64, sj as f64);
                     let hits = match seg_cross(w[0], w[1], v[0], v[1], touch) {
                         Some((t, u)) => {
                             // Un extremo de una curva sobre la otra: el punto es ese extremo
-                            let x = if t == 0.0 || t == 1.0 {
-                                w[t as usize]
+                            if t == 0.0 || t == 1.0 {
+                                vec![(si + t, sj + u, w[t as usize])]
                             } else if u == 0.0 || u == 1.0 {
-                                v[u as usize]
+                                vec![(si + t, sj + u, v[u as usize])]
                             } else {
                                 let p = [w[0][0] + t * (w[1][0] - w[0][0]), w[0][1] + t * (w[1][1] - w[0][1])];
-                                match (curves[i].exact, curves[j].exact) {
-                                    (Some(ea), Some(eb)) => refine(ea, eb, p),
-                                    _ => p,
-                                }
-                            };
-                            vec![(t, u, x)]
+                                vec![settle(&curves[i], &curves[j], si + t, sj + u, p, tol)]
+                            }
                         }
                         // Paralelos: si van encimados, se parten donde termina cada uno
-                        None => seg_overlap(w[0], w[1], v[0], v[1], touch),
+                        None => seg_overlap(w[0], w[1], v[0], v[1], touch).into_iter().map(|(t, u, x)| (si + t, sj + u, x)).collect(),
                     };
-                    for (t, u, x) in hits {
+                    for (ka, kb, x) in hits {
                         if !found.iter().any(|f| dist2(f.2, x) <= touch) {
-                            found.push((si as f64 + t, sj as f64 + u, x));
+                            found.push((ka, kb, x));
                         }
                     }
                 }
@@ -458,6 +575,58 @@ fn cut_crossings(curves: &mut [Cuttable], tol: f64) {
                 curves[j].cuts.push((tj, x));
             }
         }
+    }
+    // Curvas que se cruzan a sí mismas (una spline en ocho): las líneas, los
+    // círculos y los arcos no pueden
+    for (i, c) in curves.iter_mut().enumerate() {
+        if c.exact.is_some() || c.pts.len() < 4 {
+            continue;
+        }
+        let segs = c.pts.len() - 1;
+        let mut found: Vec<(f64, f64, P2)> = Vec::new();
+        for si in 0..segs {
+            let sb = seg_boxes[i][si];
+            for sj in si + 2..segs {
+                // La primera y la última de una cerrada se tocan en la unión
+                if c.closed && si == 0 && sj == segs - 1 {
+                    continue;
+                }
+                let vb = seg_boxes[i][sj];
+                if sb[0] > vb[2] || vb[0] > sb[2] || sb[1] > vb[3] || vb[1] > sb[3] {
+                    continue;
+                }
+                let (w, v) = ([c.pts[si], c.pts[si + 1]], [c.pts[sj], c.pts[sj + 1]]);
+                let Some((t, u)) = seg_cross(w[0], w[1], v[0], v[1], 0.0) else { continue };
+                let p = [w[0][0] + t * (w[1][0] - w[0][0]), w[0][1] + t * (w[1][1] - w[0][1])];
+                let (ka, kb, x) = settle(c, c, si as f64 + t, sj as f64 + u, p, tol);
+                if (ka - kb).abs() > 0.5 && !found.iter().any(|f| dist2(f.2, x) <= touch) {
+                    found.push((ka, kb, x));
+                }
+            }
+        }
+        for (ka, kb, x) in found {
+            c.cuts.push((ka, x));
+            c.cuts.push((kb, x));
+        }
+    }
+}
+
+/// Cruce de las cuerdas llevado a las curvas: en forma cerrada entre rectas
+/// y círculos, por Newton si alguna es elipse o spline. Posiciones en el
+/// muestreo de cada una y el punto.
+fn settle(a: &Cuttable, b: &Cuttable, ka: f64, kb: f64, chord: P2, tol: f64) -> (f64, f64, P2) {
+    if let (Some(ea), Some(eb)) = (a.exact, b.exact) {
+        return (ka, kb, refine(ea, eb, chord));
+    }
+    let (Some(fa), Some(fb)) = (&a.eval, &b.eval) else { return (ka, kb, chord) };
+    // Cerrada: la posición da la vuelta; abierta: dentro de la curva
+    let wrap = |c: &Cuttable, k: f64| {
+        let last = (c.pts.len() - 1) as f64;
+        if c.closed { k.rem_euclid(last) } else { k.clamp(0.0, last) }
+    };
+    match refine_on_curves(fa, fb, ka, kb, tol) {
+        Some((x, y, p)) => (wrap(a, x), wrap(b, y), p),
+        None => (ka, kb, chord),
     }
 }
 
@@ -479,7 +648,10 @@ fn split_curve(c: &Cuttable, tol: f64) -> Vec<(Vec<P2>, Option<[P2; 2]>)> {
         if !c.closed && (dist2(x, c.pts[0]) <= touch || dist2(x, c.pts[n - 1]) <= touch) {
             continue;
         }
-        if keep.iter().any(|q| dist2(q.1, x) <= touch) {
+        // El mismo punto en otra parte de la curva no es repetido: es donde se cruza consigo misma
+        let last = (n - 1) as f64;
+        let same_place = |q: f64| (q - k).abs() < 1.0 || (c.closed && last - (q - k).abs() < 1.0);
+        if keep.iter().any(|q| dist2(q.1, x) <= touch && same_place(q.0)) {
             continue;
         }
         keep.push((k, x));
@@ -528,7 +700,7 @@ pub fn piece_points(s: &Sketch, piece: &LoopPiece) -> Result<Vec<P2>, SketchErro
     let pts = sample_entity(s, piece.entity)?;
     let Some([from, to]) = piece.span else { return Ok(pts) };
     let closed = s.entity(piece.entity)?.geometry.is_closed();
-    let c = Cuttable { entity: piece.entity, pts: pts.clone(), closed, exact: None, cuts: Vec::new() };
+    let c = Cuttable { entity: piece.entity, pts: pts.clone(), closed, exact: None, eval: None, cuts: Vec::new() };
     let pos = |p: P2| -> f64 {
         let mut best = (f64::MAX, 0.0);
         for (i, w) in pts.windows(2).enumerate() {
@@ -553,17 +725,67 @@ pub fn piece_points(s: &Sketch, piece: &LoopPiece) -> Result<Vec<P2>, SketchErro
         .unwrap_or(pts))
 }
 
+/// Podar ramas sueltas: se sacan las aristas de los nodos con una sola, y los
+/// nodos que quedan así siguen en la cola.
+fn prune(edges: &[Edge], n_nodes: usize, alive: &mut [bool]) {
+    let mut degree = vec![0usize; n_nodes];
+    let mut touching: Vec<Vec<usize>> = vec![Vec::new(); n_nodes];
+    for (i, e) in edges.iter().enumerate().filter(|(i, _)| alive[*i]) {
+        for n in e.nodes {
+            degree[n] += 1;
+            touching[n].push(i);
+        }
+    }
+    let mut queue: Vec<usize> = (0..n_nodes).filter(|&n| degree[n] < 2).collect();
+    while let Some(n) = queue.pop() {
+        for &i in &touching[n] {
+            if !alive[i] {
+                continue;
+            }
+            alive[i] = false;
+            for m in edges[i].nodes {
+                degree[m] -= 1;
+                if degree[m] == 1 {
+                    queue.push(m);
+                }
+            }
+        }
+    }
+}
+
 /// Todas las regiones cerradas del sketch (sin geometría de construcción).
 pub fn find_regions(s: &Sketch) -> Result<Vec<Region>, SketchError> {
     let mut loops: Vec<Loop> = Vec::new();
 
-    // Escala para tolerancias
-    let span = s.points.iter().fold(0.0f64, |m, p| m.max(p.x.abs()).max(p.y.abs())).max(1.0);
+    let index: HashMap<u32, P2> = s.points.iter().map(|p| (p.id, [p.x, p.y])).collect();
+    let point = |id: u32| index.get(&id).copied().ok_or(SketchError::NoPoint(id));
+    let mut curves: Vec<Cuttable> = Vec::new();
+    for e in s.entities.iter().filter(|e| !e.construction && !matches!(e.geometry, Geometry::Point { .. })) {
+        // Una curva que no se puede muestrear (le falta un punto…) no forma regiones, pero no tumba las demás
+        let Ok(pts) = sample_geometry(&e.geometry, &point) else { continue };
+        // También una abierta que termina donde empieza (una spline cerrada pasada a polos)
+        let closed = e.geometry.is_closed() || e.geometry.ends().is_some_and(|(a, b)| a == b);
+        if pts.len() < 2 || pts.iter().any(|p| !p[0].is_finite() || !p[1].is_finite()) {
+            continue;
+        }
+        let eval = curve_eval(&e.geometry, &point, pts.len());
+        curves.push(Cuttable { entity: e.id, pts, closed, exact: exact(&e.geometry, &point), eval, cuts: Vec::new() });
+    }
+
+    // Escala para tolerancias: lo que forma regiones (una construcción lejos
+    // no puede agrandarla y fusionar nodos chicos)
+    let span = curves.iter().flat_map(|c| c.pts.iter()).fold(0.0f64, |m, p| m.max(p[0].abs()).max(p[1].abs())).max(1.0);
     let tol = span * 1e-9;
+    // Radio de fusión de nodos; un lazo con menos área que esto por su
+    // perímetro no tiene adentro (círculo de radio casi 0, elipse aplastada)
+    let merge = tol * 100.0;
+    let flat = |poly: &[P2], area: f64| {
+        let perimeter: f64 = (0..poly.len()).map(|i| dist2(poly[i], poly[(i + 1) % poly.len()])).sum();
+        area <= merge * perimeter
+    };
 
     // Nodos en una rejilla de celdas del tamaño del radio de fusión: se busca
     // en la celda y sus vecinas (con miles de extremos, la lista era cuadrática)
-    let merge = tol * 100.0;
     let mut nodes: Vec<P2> = Vec::new();
     let mut cells: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
     let cell = |p: P2| ((p[0] / merge).floor() as i64, (p[1] / merge).floor() as i64);
@@ -589,19 +811,6 @@ pub fn find_regions(s: &Sketch) -> Result<Vec<Region>, SketchError> {
     };
     let mut edges: Vec<Edge> = Vec::new();
 
-    let index: HashMap<u32, P2> = s.points.iter().map(|p| (p.id, [p.x, p.y])).collect();
-    let point = |id: u32| index.get(&id).copied().ok_or(SketchError::NoPoint(id));
-    let mut curves: Vec<Cuttable> = Vec::new();
-    for e in s.entities.iter().filter(|e| !e.construction && !matches!(e.geometry, Geometry::Point { .. })) {
-        // Una curva que no se puede muestrear (le falta un punto…) no forma regiones, pero no tumba las demás
-        let Ok(pts) = sample_geometry(&e.geometry, &point) else { continue };
-        // También una abierta que termina donde empieza (una spline cerrada pasada a polos)
-        let closed = e.geometry.is_closed() || e.geometry.ends().is_some_and(|(a, b)| a == b);
-        if pts.len() < 2 {
-            continue;
-        }
-        curves.push(Cuttable { entity: e.id, pts, closed, exact: exact(&e.geometry, &point), cuts: Vec::new() });
-    }
     cut_crossings(&mut curves, tol);
 
     for c in &curves {
@@ -610,6 +819,9 @@ pub fn find_regions(s: &Sketch) -> Result<Vec<Region>, SketchError> {
                 let mut poly = pts.clone();
                 poly.pop();
                 let a = signed_area(&poly);
+                if flat(&poly, a.abs()) {
+                    continue;
+                }
                 let reversed = a < 0.0;
                 if reversed {
                     poly.reverse();
@@ -618,8 +830,12 @@ pub fn find_regions(s: &Sketch) -> Result<Vec<Region>, SketchError> {
                 continue;
             }
             let (a, b) = (node_of(pts[0]), node_of(*pts.last().unwrap()));
-            if a == b {
-                continue; // curva abierta que vuelve sobre sí misma: no soportada
+            // Que vuelve a donde empezó: un lazo de una sola arista (el tramo de
+            // una curva que se cruza a sí misma, un arco de vuelta entera); sin
+            // largo, nada
+            let length: f64 = pts.windows(2).map(|w| dist2(w[0], w[1])).sum();
+            if a == b && (pts.len() < 3 || length <= merge * 4.0) {
+                continue;
             }
             edges.push(Edge { entity: c.entity, nodes: [a, b], pts, span });
         }
@@ -641,35 +857,6 @@ pub fn find_regions(s: &Sketch) -> Result<Vec<Region>, SketchError> {
     }
     let edges = kept;
 
-    // Podar ramas sueltas: se sacan las aristas de los nodos con una sola, y
-    // los nodos que quedan así siguen en la cola
-    let mut alive = vec![true; edges.len()];
-    let mut degree = vec![0usize; nodes.len()];
-    let mut touching: Vec<Vec<usize>> = vec![Vec::new(); nodes.len()];
-    for (i, e) in edges.iter().enumerate() {
-        for n in e.nodes {
-            degree[n] += 1;
-            touching[n].push(i);
-        }
-    }
-    let mut queue: Vec<usize> = (0..nodes.len()).filter(|&n| degree[n] < 2).collect();
-    while let Some(n) = queue.pop() {
-        for &i in &touching[n] {
-            if !alive[i] {
-                continue;
-            }
-            alive[i] = false;
-            for m in edges[i].nodes {
-                degree[m] -= 1;
-                if degree[m] == 1 {
-                    queue.push(m);
-                }
-            }
-        }
-    }
-
-    // Medias aristas: (arista, sentido). Ángulo de salida medido hacia un punto
-    // cercano sobre la curva (desempata curvas tangentes mejor que la tangente).
     let half_pts = |h: Half| -> Vec<P2> {
         let mut p = edges[h.0].pts.clone();
         if h.1 {
@@ -677,67 +864,87 @@ pub fn find_regions(s: &Sketch) -> Result<Vec<Region>, SketchError> {
         }
         p
     };
-    let mut outgoing: HashMap<usize, Vec<(Half, f64)>> = HashMap::new();
-    for (i, e) in edges.iter().enumerate() {
-        if !alive[i] {
-            continue;
-        }
-        for rev in [false, true] {
-            let p = half_pts((i, rev));
-            let from = if rev { e.nodes[1] } else { e.nodes[0] };
-            let k = (p.len() / 8).clamp(1, p.len() - 1);
-            let ang = (p[k][1] - p[0][1]).atan2(p[k][0] - p[0][0]);
-            outgoing.entry(from).or_default().push(((i, rev), ang));
-        }
-    }
-    for list in outgoing.values_mut() {
-        list.sort_by(|a, b| a.1.total_cmp(&b.1));
-    }
     let to_node = |h: Half| if h.1 { edges[h.0].nodes[0] } else { edges[h.0].nodes[1] };
-
-    let mut used: HashMap<Half, bool> = HashMap::new();
-    for (i, _) in edges.iter().enumerate().filter(|(i, _)| alive[*i]) {
-        for rev in [false, true] {
-            let start = (i, rev);
-            if used.contains_key(&start) {
+    let mut alive = vec![true; edges.len()];
+    // Caras; si alguna pasa dos veces por la misma arista, esa arista es un
+    // puente (una línea del contorno a una isla, o entre dos contornos): se
+    // saca y se vuelve a armar. Con el puente, el contorno y la isla salían
+    // como una sola cara en forma de cerradura y la isla quedaba sin ser agujero.
+    let faces: Vec<Vec<Half>> = loop {
+        prune(&edges, nodes.len(), &mut alive);
+        // Medias aristas: (arista, sentido). Ángulo de salida medido hacia un punto
+        // cercano sobre la curva (desempata curvas tangentes mejor que la tangente).
+        let mut outgoing: HashMap<usize, Vec<(Half, f64)>> = HashMap::new();
+        for (i, e) in edges.iter().enumerate() {
+            if !alive[i] {
                 continue;
             }
-            let mut face = Vec::new();
-            let mut h = start;
-            let mut broken = false;
-            loop {
-                used.insert(h, true);
-                face.push(h);
-                // Siguiente: en el nodo destino, la anterior (en orden antihorario)
-                // a la media arista de vuelta: deja la cara a la izquierda.
-                let v = to_node(h);
-                let (Some(list), twin) = (outgoing.get(&v), (h.0, !h.1)) else {
-                    broken = true;
-                    break;
-                };
-                // Grafo inconsistente (aristas casi encimadas): esta cara se salta
-                let Some(pos) = list.iter().position(|x| x.0 == twin) else {
-                    broken = true;
-                    break;
-                };
-                h = list[(pos + list.len() - 1) % list.len()].0;
-                if h == start || face.len() > edges.len() * 2 {
-                    break;
+            for rev in [false, true] {
+                let p = half_pts((i, rev));
+                let from = if rev { e.nodes[1] } else { e.nodes[0] };
+                let k = (p.len() / 8).clamp(1, p.len() - 1);
+                let ang = (p[k][1] - p[0][1]).atan2(p[k][0] - p[0][0]);
+                outgoing.entry(from).or_default().push(((i, rev), ang));
+            }
+        }
+        for list in outgoing.values_mut() {
+            list.sort_by(|a, b| a.1.total_cmp(&b.1));
+        }
+        let mut used: HashMap<Half, usize> = HashMap::new();
+        let mut faces: Vec<Vec<Half>> = Vec::new();
+        for i in (0..edges.len()).filter(|&i| alive[i]) {
+            for rev in [false, true] {
+                let start = (i, rev);
+                if used.contains_key(&start) {
+                    continue;
                 }
+                let mut face = Vec::new();
+                let mut h = start;
+                let mut broken = false;
+                loop {
+                    used.insert(h, faces.len());
+                    face.push(h);
+                    // Siguiente: en el nodo destino, la anterior (en orden antihorario)
+                    // a la media arista de vuelta: deja la cara a la izquierda.
+                    let v = to_node(h);
+                    let (Some(list), twin) = (outgoing.get(&v), (h.0, !h.1)) else {
+                        broken = true;
+                        break;
+                    };
+                    // Grafo inconsistente (aristas casi encimadas): esta cara se salta
+                    let Some(pos) = list.iter().position(|x| x.0 == twin) else {
+                        broken = true;
+                        break;
+                    };
+                    h = list[(pos + list.len() - 1) % list.len()].0;
+                    if h == start || face.len() > edges.len() * 2 {
+                        break;
+                    }
+                }
+                // Rota: igual queda anotada (sus medias aristas no se recorren de nuevo)
+                faces.push(if broken { Vec::new() } else { face });
             }
-            if broken {
-                continue;
-            }
-            let mut poly: Vec<P2> = Vec::new();
-            for &h in &face {
-                let p = half_pts(h);
-                poly.extend_from_slice(&p[..p.len() - 1]);
-            }
-            let a = signed_area(&poly);
-            if a > tol {
-                let pieces = face.iter().map(|&(e, r)| LoopPiece { entity: edges[e].entity, reversed: r, span: edges[e].span }).collect();
-                loops.push(Loop { pieces, polygon: poly, area: a });
-            }
+        }
+        let bridges: Vec<usize> = (0..edges.len())
+            .filter(|&i| alive[i] && used.get(&(i, false)).is_some_and(|&f| !faces[f].is_empty() && used.get(&(i, true)) == Some(&f)))
+            .collect();
+        if bridges.is_empty() {
+            break faces;
+        }
+        for i in bridges {
+            alive[i] = false;
+        }
+    };
+    for face in faces.into_iter().filter(|f| !f.is_empty()) {
+        let mut poly: Vec<P2> = Vec::new();
+        for &h in &face {
+            let p = half_pts(h);
+            poly.extend_from_slice(&p[..p.len() - 1]);
+        }
+        let a = signed_area(&poly);
+        if a > 0.0 && !flat(&poly, a) {
+            let pieces = face.iter().map(|&(e, r)| LoopPiece { entity: edges[e].entity, reversed: r, span: edges[e].span }).collect();
+            loops.push(Loop { pieces, polygon: poly, area: a });
         }
     }
 

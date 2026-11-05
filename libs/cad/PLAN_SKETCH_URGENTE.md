@@ -178,16 +178,30 @@ El orden de las fases es el de urgencia: primero lo que pierde trabajo del usuar
 
 ## U5 — Geometría y regiones correctas (medio)
 
-- [ ] Regiones de área ≈ 0 (círculo r 1e-9, elipse con semieje 0) entran a «All» y rompen la
+- [x] Regiones de área ≈ 0 (círculo r 1e-9, elipse con semieje 0) entran a «All» y rompen la
   extrusión (`regions.rs:~600`, `eval.rs:4898`).
-- [ ] Puente entre contorno e isla: arista duplicada y la isla sale como región aparte (`regions.rs:~620`).
-- [ ] Curva que se cruza a sí misma (spline en 8) no se parte (`cut_crossings` solo i<j).
-- [ ] Cruces con elipse/spline quedan en la cuerda, no en la curva (`regions.rs:~230` `refine`);
+- [x] Puente entre contorno e isla: arista duplicada y la isla sale como región aparte (`regions.rs:~620`).
+- [x] Curva que se cruza a sí misma (spline en 8) no se parte (`cut_crossings` solo i<j).
+- [x] Cruces con elipse/spline quedan en la cuerda, no en la curva (`regions.rs:~230` `refine`);
   lo mismo en «Reparar» (`sketchEdit.ts:849`, punto movido a 0,12 % de R fuera del círculo).
-- [ ] Arco con inicio ≈ fin desaparece sin aviso (`regions.rs:575`).
-- [ ] Tolerancias absolutas: `regions.rs:537` usa la coordenada máxima de todos los puntos (una
+- [x] Arco con inicio ≈ fin desaparece sin aviso (`regions.rs:575`).
+- [x] Tolerancias absolutas: `regions.rs:537` usa la coordenada máxima de todos los puntos (una
   construcción lejos fusiona nodos chicos); `Parallel`/`Perpendicular` con residual ∝ L²;
   `sketchTrim.ts:73` `den < 1e-9` sin normalizar; `sketch3d.rs:~290` `nn < 1e-18`.
+- **Hecho 2026-11-05**: un lazo con área ≤ tolerancia × perímetro no es región (ni suelto ni
+  cara), así que «Todas» no los toma; la revisión lo avisa («no tiene tamaño», también al
+  extruir sin regiones). Arista con sus dos medias en la misma cara = puente: se saca y se
+  rearman las caras (el contorno queda con su agujero y la isla adentro). Auto-cruces de
+  splines y B-splines; los tramos que vuelven a su nodo son lazos de una arista (también el
+  arco de vuelta entera con inicio y fin distintos). Cruces llevados a la curva: forma cerrada
+  entre rectas y círculos, Newton con la curva evaluada (`curve_eval`) si hay elipse o spline;
+  en TS la revisión y «Reparar» usan el cruce exacto entre rectas, arcos y círculos. Escala de
+  tolerancias solo con lo que forma regiones (Rust y `checkSketch`); paralela y perpendicular
+  divididas por √(L1·L2) con su jacobiano; paralelos relativos a los largos en `sketchTrim` y
+  `checkSketch`; `circumcenter` relativo a los lados. Pruebas: `regions_geometry.rs` (8, fallan
+  sin el arreglo), `test_solver.rs` (jacobiano numérico, paralela en 1 µm), `sketch3d.rs`,
+  `sketchCheck.test.mjs` y `sketchEdit.test.mjs`. Falta probarlo en la app. Queda: «Reparar»
+  no parte cruces con elipses ni splines (como antes).
 
 ## U6 — Importar/exportar y fórmulas (medio)
 

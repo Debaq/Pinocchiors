@@ -1,4 +1,5 @@
 use crate::types::Point2;
+use nalgebra::Vector2;
 
 /// Restricción geométrica entre entidades de un sketch.
 /// Cada variante genera una o más ecuaciones f_i(x) = 0.
@@ -697,7 +698,7 @@ impl Constraint {
             } => {
                 let d1 = points[*l1_p2].co - points[*l1_p1].co;
                 let d2 = points[*l2_p2].co - points[*l2_p1].co;
-                vec![d1.dot(&d2)]
+                vec![d1.dot(&d2) / angle_scale(&d1, &d2)]
             }
 
             Constraint::Parallel {
@@ -709,7 +710,7 @@ impl Constraint {
                 let d1 = points[*l1_p2].co - points[*l1_p1].co;
                 let d2 = points[*l2_p2].co - points[*l2_p1].co;
                 // Producto cruzado 2D: d1.x * d2.y - d1.y * d2.x = 0
-                vec![d1.x * d2.y - d1.y * d2.x]
+                vec![(d1.x * d2.y - d1.y * d2.x) / angle_scale(&d1, &d2)]
             }
 
             Constraint::Angle {
@@ -1064,17 +1065,14 @@ impl Constraint {
             } => {
                 let d1 = points[*l1_p2].co - points[*l1_p1].co;
                 let d2 = points[*l2_p2].co - points[*l2_p1].co;
-                // f = d1·d2 = d1x*d2x + d1y*d2y
-                // d1 = l1_p2 - l1_p1, d2 = l2_p2 - l2_p1
-                // df/dl1_p1 = (-d2x, -d2y)
-                // df/dl1_p2 = (d2x, d2y)
-                // df/dl2_p1 = (-d1x, -d1y)
-                // df/dl2_p2 = (d1x, d1y)
+                // f = d1·d2 / s (ver `angle_scale`); g = d1·d2:
+                // dg/dl1_p2 = d2, dg/dl2_p2 = d1 (los p1, al revés)
+                let (g1, g2) = angle_scaled_grads(&d1, &d2, d1.dot(&d2), d2, d1);
                 vec![
-                    (0, *l1_p1, -d2.x, -d2.y),
-                    (0, *l1_p2, d2.x, d2.y),
-                    (0, *l2_p1, -d1.x, -d1.y),
-                    (0, *l2_p2, d1.x, d1.y),
+                    (0, *l1_p1, -g1.x, -g1.y),
+                    (0, *l1_p2, g1.x, g1.y),
+                    (0, *l2_p1, -g2.x, -g2.y),
+                    (0, *l2_p2, g2.x, g2.y),
                 ]
             }
 
@@ -1086,16 +1084,15 @@ impl Constraint {
             } => {
                 let d1 = points[*l1_p2].co - points[*l1_p1].co;
                 let d2 = points[*l2_p2].co - points[*l2_p1].co;
-                // f = d1x*d2y - d1y*d2x
-                // df/dl1_p1 = (-d2y, d2x)
-                // df/dl1_p2 = (d2y, -d2x)
-                // df/dl2_p1 = (d1y, -d1x)
-                // df/dl2_p2 = (-d1y, d1x)
+                // f = (d1x*d2y - d1y*d2x) / s; g = el producto cruzado:
+                // dg/dl1_p2 = (d2y, -d2x), dg/dl2_p2 = (-d1y, d1x) (los p1, al revés)
+                let g = d1.x * d2.y - d1.y * d2.x;
+                let (g1, g2) = angle_scaled_grads(&d1, &d2, g, Vector2::new(d2.y, -d2.x), Vector2::new(-d1.y, d1.x));
                 vec![
-                    (0, *l1_p1, -d2.y, d2.x),
-                    (0, *l1_p2, d2.y, -d2.x),
-                    (0, *l2_p1, d1.y, -d1.x),
-                    (0, *l2_p2, -d1.y, d1.x),
+                    (0, *l1_p1, -g1.x, -g1.y),
+                    (0, *l1_p2, g1.x, g1.y),
+                    (0, *l2_p1, -g2.x, -g2.y),
+                    (0, *l2_p2, g2.x, g2.y),
                 ]
             }
 
@@ -1319,4 +1316,25 @@ impl Constraint {
 
         entries
     }
+}
+
+/// Escala de paralela y perpendicular: √(|d1|·|d2|). Dividido por esto, el
+/// residual es como un desplazamiento (√(L1·L2)·sen θ) y no crece con L² (con
+/// líneas de 1 µm la tolerancia del solver aceptaba cualquier ángulo; con
+/// metros, pesaba un millón de veces más que lo demás).
+fn angle_scale(d1: &Vector2<f64>, d2: &Vector2<f64>) -> f64 {
+    let s = (d1.norm() * d2.norm()).sqrt();
+    if s > 1e-12 { s } else { 1.0 }
+}
+
+/// Gradientes de f = g / s respecto de l1_p2 y l2_p2 (los de l1_p1 y l2_p1
+/// son los opuestos), dados los de g: df = dg/s − g·ds/s², con
+/// ds/dl1_p2 = s·d1/(2·|d1|²).
+fn angle_scaled_grads(d1: &Vector2<f64>, d2: &Vector2<f64>, g: f64, dg1: Vector2<f64>, dg2: Vector2<f64>) -> (Vector2<f64>, Vector2<f64>) {
+    let s = (d1.norm() * d2.norm()).sqrt();
+    if s <= 1e-12 {
+        return (dg1, dg2);
+    }
+    let (n1, n2) = (d1.norm_squared(), d2.norm_squared());
+    ((dg1 - d1 * (g / (2.0 * n1))) / s, (dg2 - d2 * (g / (2.0 * n2))) / s)
 }

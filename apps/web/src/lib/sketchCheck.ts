@@ -17,6 +17,8 @@ export interface SketchProblems {
   crossings: { p: P2; a: number; b: number }[];
   /** Entidades encimadas (la misma recta o el mismo círculo) */
   overlaps: [number, number][];
+  /** Curvas sin tamaño (línea sin largo, círculo o arco de radio casi cero, elipse aplastada): no forman región */
+  degenerate: { p: P2; entity: number }[];
 }
 
 const dist = (a: P2, b: P2) => Math.hypot(a[0] - b[0], a[1] - b[1]);
@@ -70,13 +72,80 @@ function segCross(a: P2, b: P2, c: P2, d: P2, eps: number): P2 | undefined {
   const r: P2 = [b[0] - a[0], b[1] - a[1]];
   const q: P2 = [d[0] - c[0], d[1] - c[1]];
   const den = r[0] * q[1] - r[1] * q[0];
-  if (Math.abs(den) < 1e-15) return undefined; // paralelos: los encimados se ven aparte
+  if (Math.abs(den) <= 1e-12 * Math.hypot(r[0], r[1]) * Math.hypot(q[0], q[1])) return undefined; // paralelos: los encimados se ven aparte
   const t = ((c[0] - a[0]) * q[1] - (c[1] - a[1]) * q[0]) / den;
   const u = ((c[0] - a[0]) * r[1] - (c[1] - a[1]) * r[0]) / den;
   const tl = eps / (Math.hypot(r[0], r[1]) || 1);
   const ul = eps / (Math.hypot(q[0], q[1]) || 1);
   if (t < -tl || t > 1 + tl || u < -ul || u > 1 + ul) return undefined;
   return [a[0] + t * r[0], a[1] + t * r[1]];
+}
+
+/** Recta o círculo exacto de una línea, un arco o un círculo */
+type Exact = { line: [P2, P2] } | { circle: [P2, number] };
+function exactOf(s: Sketch, g: Geometry): Exact | undefined {
+  const at = (id: number): P2 | undefined => {
+    const p = s.points.find((q) => q.id === id);
+    return p && [p.x, p.y];
+  };
+  if (g.type === "line") {
+    const [a, b] = [at(g.start), at(g.end)];
+    return a && b ? { line: [a, b] } : undefined;
+  }
+  if (g.type === "circle") {
+    const c = at(g.center);
+    return c ? { circle: [c, g.radius] } : undefined;
+  }
+  if (g.type === "arc") {
+    const [c, a] = [at(g.center), at(g.start)];
+    return c && a ? { circle: [c, dist(c, a)] } : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * El cruce exacto de dos rectas/círculos más cercano a `x` (el de las
+ * polilíneas queda sobre la cuerda: en un círculo, hasta 0,12 % del radio
+ * adentro, y «Reparar» ponía el punto ahí, fuera de la curva)
+ */
+export function exactCrossing(a: Exact, b: Exact, x: P2): P2 {
+  const nearest = (cands: P2[]) => cands.filter((p) => Number.isFinite(p[0]) && Number.isFinite(p[1])).sort((p, q) => dist(p, x) - dist(q, x))[0] ?? x;
+  const lineCircle = ([p, q]: [P2, P2], [c, r]: [P2, number]): P2 => {
+    const d: P2 = [q[0] - p[0], q[1] - p[1]];
+    const f: P2 = [p[0] - c[0], p[1] - c[1]];
+    const aa = d[0] * d[0] + d[1] * d[1];
+    if (aa <= 0) return x;
+    const bb = 2 * (f[0] * d[0] + f[1] * d[1]);
+    const cc = f[0] * f[0] + f[1] * f[1] - r * r;
+    const disc = Math.sqrt(Math.max(0, bb * bb - 4 * aa * cc));
+    return nearest([(-bb - disc) / (2 * aa), (-bb + disc) / (2 * aa)].map((t) => [p[0] + t * d[0], p[1] + t * d[1]] as P2));
+  };
+  if ("line" in a && "line" in b) return x;
+  if ("line" in a && "circle" in b) return lineCircle(a.line, b.circle);
+  if ("circle" in a && "line" in b) return lineCircle(b.line, a.circle);
+  if ("circle" in a && "circle" in b) {
+    const [[c0, r0], [c1, r1]] = [a.circle, b.circle];
+    const d = dist(c0, c1);
+    if (d <= 0) return x;
+    const k = (r0 * r0 - r1 * r1 + d * d) / (2 * d);
+    const h = Math.sqrt(Math.max(0, r0 * r0 - k * k));
+    const u: P2 = [(c1[0] - c0[0]) / d, (c1[1] - c0[1]) / d];
+    const m: P2 = [c0[0] + k * u[0], c0[1] + k * u[1]];
+    return nearest([
+      [m[0] - h * u[1], m[1] + h * u[0]],
+      [m[0] + h * u[1], m[1] - h * u[0]],
+    ]);
+  }
+  return x;
+}
+
+function polyArea(pts: P2[]): number {
+  let a = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const [p, q] = [pts[i], pts[(i + 1) % pts.length]];
+    a += p[0] * q[1] - q[0] * p[1];
+  }
+  return a / 2;
 }
 
 function bbox(pts: P2[]): [number, number, number, number] {
@@ -134,11 +203,13 @@ export function overlapping(s: Sketch, a: Geometry, b: Geometry, tol: number): b
 
 /** Lo que impide que el sketch forme regiones */
 export function checkSketch(s: Sketch): SketchProblems {
-  const span = s.points.reduce((m, p) => Math.max(m, Math.abs(p.x), Math.abs(p.y)), 1);
+  const curves = s.entities.filter(isCurve);
+  // La escala de lo que forma regiones, como allá (una construcción lejos no la agranda)
+  const used = new Set(curves.flatMap((e) => geometryPoints(e.geometry)));
+  const span = s.points.reduce((m, p) => (used.has(p.id) ? Math.max(m, Math.abs(p.x), Math.abs(p.y)) : m), 1);
   // La misma tolerancia que las regiones para unir extremos; un poco más para cruces
   const tolNode = span * 1e-9;
   const tol = span * 1e-7;
-  const curves = s.entities.filter(isCurve);
 
   // Extremos: nodos por posición, como las regiones
   const nodes: { p: P2; ents: number[] }[] = [];
@@ -183,14 +254,27 @@ export function checkSketch(s: Sketch): SketchProblems {
       const shared = ends.get(a)!.filter((p) => ends.get(b)!.some((q) => dist(p, q) <= tolNode));
       for (let k = 0; k + 1 < pa.length; k++)
         for (let m = 0; m + 1 < pb.length; m++) {
-          const x = segCross(pa[k], pa[k + 1], pb[m], pb[m + 1], tol);
-          if (!x || shared.some((p) => dist(p, x) <= tol * 10)) continue;
+          const chord = segCross(pa[k], pa[k + 1], pb[m], pb[m + 1], tol);
+          if (!chord) continue;
+          // Sobre las curvas de verdad (rectas, arcos y círculos)
+          const ea = exactOf(s, curves[i].geometry);
+          const eb = exactOf(s, curves[j].geometry);
+          const x = ea && eb ? exactCrossing(ea, eb, chord) : chord;
+          if (shared.some((p) => dist(p, x) <= tol * 10)) continue;
           if (!crossings.some((c) => dist(c.p, x) <= tol * 10)) crossings.push({ p: x, a, b });
         }
     }
   // Un extremo apoyado en el medio de otra curva (en T) no queda suelto
   const looseEnds = ones.filter((n) => !crossings.some((c) => dist(c.p, n.p) <= tol * 10)).map((n) => ({ p: n.p, entity: n.ents[0] }));
-  return { looseEnds, crossings, overlaps };
+  // Sin tamaño: las regiones no las toman (área menor que la tolerancia por el perímetro)
+  const degenerate: SketchProblems["degenerate"] = [];
+  for (const e of curves) {
+    const pl = poly.get(e.id)!;
+    if (!pl.length) continue;
+    const length = pl.slice(1).reduce((t, q, i) => t + dist(pl[i], q), 0);
+    if (length <= tol * 4 || (!isOpen(e.geometry) && Math.abs(polyArea(pl)) <= tol * length)) degenerate.push({ p: pl[0], entity: e.id });
+  }
+  return { looseEnds, crossings, overlaps, degenerate };
 }
 
 /**
@@ -272,6 +356,7 @@ export function sketchIssues(
   for (const [a, b] of p.overlaps) out.push({ kind: "warning", text: tr("{a} y {b} encimadas (cuenta una sola)", { a: name(a), b: name(b) }), ids: [a, b], at: center([a, b]) });
   for (const x of p.looseEnds) out.push({ kind: "warning", text: tr("Extremo suelto de {nombre} (el contorno no cierra)", { nombre: name(x.entity) }), ids: [x.entity], at: x.p, mark: true });
   for (const x of p.crossings) out.push({ kind: "info", text: tr("{a} cruza {b} sin un punto común", { a: name(x.a), b: name(x.b) }), ids: [x.a, x.b], at: x.p, mark: true });
+  for (const x of p.degenerate) out.push({ kind: "warning", text: tr("{nombre} no tiene tamaño (no forma región)", { nombre: name(x.entity) }), ids: [x.entity], at: x.p, mark: true });
   return out;
 }
 
@@ -280,7 +365,12 @@ export function whyNoRegions(s: Sketch): string {
   const p = checkSketch(s);
   if (!s.entities.some(isCurve)) return tr("El sketch no tiene curvas (la construcción no cuenta)");
   const k = p.looseEnds.length;
-  const parts = [...(k ? [tn(k, "el contorno no cierra ({n} extremo sin unir)", "el contorno no cierra ({n} extremos sin unir)")] : []), ...(problemsText(p) ? [problemsText(p)!] : [])];
+  const d = p.degenerate.length;
+  const parts = [
+    ...(k ? [tn(k, "el contorno no cierra ({n} extremo sin unir)", "el contorno no cierra ({n} extremos sin unir)")] : []),
+    ...(d ? [tn(d, "{n} curva sin tamaño", "{n} curvas sin tamaño")] : []),
+    ...(problemsText(p) ? [problemsText(p)!] : []),
+  ];
   return parts.length ? tr("El sketch no tiene regiones cerradas: {motivos}", { motivos: parts.join(" · ") }) : tr("El sketch no tiene regiones cerradas");
 }
 

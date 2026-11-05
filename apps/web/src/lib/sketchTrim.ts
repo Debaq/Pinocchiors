@@ -60,7 +60,8 @@ function crossings(s: Sketch, id: number, pl: P2[], limits: TrimLimits): Cut[] {
         const c = other[j];
         const f = sub(other[j + 1], c);
         const den = cross(d, f);
-        if (Math.abs(den) < 1e-15) continue;
+        // Paralelos: relativo a los largos (un umbral fijo dejaba pasar tramos de µm casi paralelos o cortaba los de metros)
+        if (Math.abs(den) <= 1e-12 * Math.hypot(d[0], d[1]) * Math.hypot(f[0], f[1])) continue;
         const t = cross(sub(c, a), f) / den;
         const w = cross(sub(c, a), d) / den;
         if (t >= 0 && t < 1 && w >= -1e-9 && w <= 1 + 1e-9) out.push({ u: i + t, p: [a[0] + t * d[0], a[1] + t * d[1]], hit });

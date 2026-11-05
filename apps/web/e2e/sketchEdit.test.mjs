@@ -423,3 +423,17 @@ test("equidistante: una muesca angosta no deja la equidistante cruzada consigo m
     if (Math.max(...ys) > 10) assert.equal(Math.max(...ys), 12);
   }
 });
+
+test("reparar: el punto del cruce de una línea con un círculo queda sobre el círculo", () => {
+  const s = sketch();
+  addEntity(s, { type: "circle", center: addPoint(s, [0, 0]), radius: 10 });
+  line(s, [3, 0], [3, 20]);
+  const r = repairSketch(s, 0.01);
+  assert.equal(r.split, 1);
+  // El punto común de los dos tramos de la línea (el que comparte con el círculo partido)
+  const lines = s.entities.filter((e) => e.geometry.type === "line").map((e) => e.geometry);
+  assert.equal(lines.length, 2);
+  const shared = [lines[0].start, lines[0].end].find((id) => [lines[1].start, lines[1].end].includes(id));
+  const q = s.points.find((p) => p.id === shared);
+  assert.ok(Math.abs(Math.hypot(q.x, q.y) - 10) < 1e-9, `${q.x}, ${q.y}`);
+});

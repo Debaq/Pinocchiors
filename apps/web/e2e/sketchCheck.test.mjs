@@ -18,7 +18,7 @@ test("rectángulo, ranura y círculo cerrados: sin problemas", () => {
   addSlot(s, addPoint(s, [20, 0]), addPoint(s, [30, 0]), 2);
   addEntity(s, { type: "circle", center: addPoint(s, [50, 0]), radius: 3 });
   const p = checkSketch(s);
-  assert.deepEqual(p, { looseEnds: [], crossings: [], overlaps: [] });
+  assert.deepEqual(p, { looseEnds: [], crossings: [], overlaps: [], degenerate: [] });
   assert.equal(problemsText(p), undefined);
 });
 
@@ -69,7 +69,7 @@ test("la construcción no cuenta", () => {
   addRectangle(s, [0, 0], [10, 5]);
   const c = line(s, [-5, 2], [15, 2]);
   s.entities.find((e) => e.id === c).construction = true;
-  assert.deepEqual(checkSketch(s), { looseEnds: [], crossings: [], overlaps: [] });
+  assert.deepEqual(checkSketch(s), { looseEnds: [], crossings: [], overlaps: [], degenerate: [] });
 });
 
 test("encimadas: la misma recta y el mismo círculo", () => {
@@ -112,4 +112,32 @@ test("elegir por tipo", () => {
   assert.deepEqual(selectByKind(s, "construction"), [l[0]]);
   assert.deepEqual(selectByKind(s, "points"), [p]);
   assert.deepEqual(selectByKind(s, "free", [circle, 999]), [circle]);
+});
+
+test("un círculo de radio casi cero no tiene tamaño: se avisa (las regiones no lo toman)", () => {
+  const s = sketch();
+  addRectangle(s, [0, 0], [10, 5]);
+  const c = addEntity(s, { type: "circle", center: addPoint(s, [20, 0]), radius: 1e-9 });
+  const p = checkSketch(s);
+  assert.deepEqual(p.degenerate.map((x) => x.entity), [c]);
+  assert.match(whyNoRegions(s), /1 curva sin tamaño/);
+});
+
+test("el cruce de una línea con un círculo queda sobre el círculo (no sobre la cuerda)", () => {
+  const s = sketch();
+  addEntity(s, { type: "circle", center: addPoint(s, [0, 0]), radius: 10 });
+  line(s, [3, -20], [3, 20]);
+  const p = checkSketch(s);
+  assert.equal(p.crossings.length, 2);
+  for (const x of p.crossings) assert.ok(Math.abs(Math.hypot(x.p[0], x.p[1]) - 10) < 1e-9, `${x.p}`);
+});
+
+test("una construcción lejísimos no agranda la tolerancia", () => {
+  const s = sketch();
+  line(s, [0, 0], [0.05, 0]);
+  line(s, [0.05, 0], [0.05, 0.05]);
+  const far = line(s, [0, 0], [1e6, 0]);
+  s.entities.find((e) => e.id === far).construction = true;
+  // Dos extremos sueltos de verdad, no unidos por una tolerancia de 0,1
+  assert.equal(checkSketch(s).looseEnds.length, 2);
 });

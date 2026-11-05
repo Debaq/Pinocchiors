@@ -290,7 +290,9 @@ pub fn circumcenter(a: P3, b: P3, c: P3) -> Option<P3> {
     let (ab, ac) = (sub(b, a), sub(c, a));
     let n = cross(ab, ac);
     let nn = dot(n, n);
-    if nn < 1e-18 {
+    // Alineados: relativo a los lados (|n|² = |ab|²·|ac|²·sen²; un umbral fijo
+    // rechazaba círculos de micras y aceptaba casi rectas de metros)
+    if nn <= 1e-20 * dot(ab, ab) * dot(ac, ac) || nn == 0.0 {
         return None;
     }
     let t = add(scale(cross(n, ab), dot(ac, ac)), scale(cross(ac, n), dot(ab, ab)));

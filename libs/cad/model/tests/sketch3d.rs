@@ -241,3 +241,13 @@ fn pierce_finds_the_helix_crossing() {
 }
 
 
+
+/// Tres puntos de un arco de micras tienen centro (el umbral era fijo: con
+/// lados de 10 µm decía «alineados»); tres alineados de verdad, no
+#[test]
+fn circumcenter_is_relative_to_the_size() {
+    let r = 1e-5;
+    let c = sketch3d::circumcenter([r, 0.0, 0.0], [0.0, r, 0.0], [-r, 0.0, 0.0]).expect("arco chico");
+    assert!(c.iter().all(|v| v.abs() < 1e-12), "{c:?}");
+    assert!(sketch3d::circumcenter([0.0, 0.0, 0.0], [1000.0, 0.0, 0.0], [2000.0, 1e-12, 0.0]).is_none());
+}

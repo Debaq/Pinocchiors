@@ -877,3 +877,52 @@ fn bspline_rejects_bad_weights() {
         assert!(BSpline::new(&poles, &[1.0, w, 1.0], 2, false, &[]).is_none(), "peso {w}");
     }
 }
+
+/// Paralela y perpendicular divididas por √(L1·L2): el jacobiano analítico
+/// coincide con el numérico
+#[test]
+fn test_parallel_perpendicular_jacobian_matches_numeric() {
+    let pts = vec![Point2::new(0.3, -1.2), Point2::new(7.1, 2.5), Point2::new(-2.0, 4.0), Point2::new(3.3, 9.7)];
+    for c in [
+        Constraint::Parallel { l1_p1: 0, l1_p2: 1, l2_p1: 2, l2_p2: 3 },
+        Constraint::Perpendicular { l1_p1: 0, l1_p2: 1, l2_p1: 2, l2_p2: 3 },
+    ] {
+        let entries = c.jacobian_entries(&pts);
+        let h = 1e-7;
+        for p in 0..4 {
+            for axis in 0..2 {
+                let mut a = pts.clone();
+                let mut b = pts.clone();
+                if axis == 0 {
+                    a[p] = Point2::new(a[p].x() + h, a[p].y());
+                    b[p] = Point2::new(b[p].x() - h, b[p].y());
+                } else {
+                    a[p] = Point2::new(a[p].x(), a[p].y() + h);
+                    b[p] = Point2::new(b[p].x(), b[p].y() - h);
+                }
+                let numeric = (c.residuals(&a)[0] - c.residuals(&b)[0]) / (2.0 * h);
+                let analytic: f64 = entries.iter().filter(|e| e.1 == p).map(|e| if axis == 0 { e.2 } else { e.3 }).sum();
+                assert_relative_eq!(numeric, analytic, epsilon = 1e-6);
+            }
+        }
+    }
+}
+
+/// Con líneas de 1 µm la paralela se cumple de verdad (antes el residual era
+/// L²·sen θ y la tolerancia aceptaba casi cualquier ángulo)
+#[test]
+fn test_parallel_holds_on_tiny_lines() {
+    let mut sys = ConstraintSystem::new();
+    let a = sys.add_point(0.0, 0.0);
+    let b = sys.add_point(1e-3, 0.0);
+    let c = sys.add_point(0.0, 1e-3);
+    let d = sys.add_point(1e-3, 1.3e-3);
+    sys.add_constraint(Constraint::Fixed { p_idx: a, position: Point2::new(0.0, 0.0) });
+    sys.add_constraint(Constraint::Fixed { p_idx: b, position: Point2::new(1e-3, 0.0) });
+    sys.add_constraint(Constraint::Fixed { p_idx: c, position: Point2::new(0.0, 1e-3) });
+    sys.add_constraint(Constraint::Parallel { l1_p1: a, l1_p2: b, l2_p1: c, l2_p2: d });
+    let r = solve(&mut sys, &default_params()).unwrap();
+    let (pc, pd) = (r.points[c], r.points[d]);
+    let angle = (pd.y() - pc.y()).atan2(pd.x() - pc.x());
+    assert!(angle.abs() < 1e-5, "ángulo {angle}");
+}
