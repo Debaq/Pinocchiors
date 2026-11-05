@@ -16,7 +16,8 @@ const ENGINE_NAME: &str = if cfg!(windows) { "pinocchio-slicer.exe" } else { "pi
 
 /// Busca el binario del motor:
 /// 1. `PINOCCHIO_SLICER` (ruta explícita).
-/// 2. Junto al ejecutable de la app (sidecar empaquetado).
+/// 2. Junto al ejecutable de la app: `pinocchio-slicer` (sidecar del AppImage) o
+///    `<ejecutable>-slicer` (como se publica junto al binario suelto de Linux).
 /// 3. `libs/slicer/bin/` del repositorio (desarrollo, ver scripts/build-orca-engine.sh).
 pub fn find_engine() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("PINOCCHIO_SLICER")
@@ -32,9 +33,23 @@ pub fn find_engine() -> Option<PathBuf> {
         if p.is_file() {
             return Some(p);
         }
+        if let Some(p) = exe.file_name().map(|n| dir.join(sibling_engine_name(&n.to_string_lossy())))
+            && p.is_file()
+        {
+            return Some(p);
+        }
     }
     let dev = Path::new(env!("CARGO_MANIFEST_DIR")).join("bin").join(ENGINE_NAME);
     dev.is_file().then_some(dev)
+}
+
+/// `Pinocchio-pre.2026.11.04.abc1234-linux-x86_64` → `…-linux-x86_64-slicer` (el nombre
+/// publicado tiene puntos: no se puede usar `file_stem`).
+fn sibling_engine_name(exe_name: &str) -> String {
+    match exe_name.strip_suffix(".exe") {
+        Some(base) if cfg!(windows) => format!("{base}-slicer.exe"),
+        _ => format!("{exe_name}-slicer"),
+    }
 }
 
 /// Un laminado: configuración ya unida y las piezas en coordenadas de la cama.
@@ -231,6 +246,11 @@ fn write_thumbnails(config: &Map<String, Value>, parts: &[Vec<[[f32; 3]; 3]>], d
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nombre_del_motor_suelto() {
+        assert_eq!(sibling_engine_name("Pinocchio-pre.2026.11.04.abc1234-linux-x86_64"), "Pinocchio-pre.2026.11.04.abc1234-linux-x86_64-slicer");
+    }
 
     #[test]
     fn tamanos_de_miniatura() {

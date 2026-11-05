@@ -13,6 +13,10 @@
 #   ORCA_WORK_DIR    carpeta de trabajo, grande (~15 GB) ($HOME/.cargo-target/orca)
 #   ORCA_DEPS_JOBS   compilaciones en paralelo de las dependencias (8)
 #   ORCA_NO_CONTAINER=1  compilar en el sistema actual (CI con Ubuntu 24.04)
+#   ORCA_STAGE       deps (solo dependencias), engine (solo el motor) o all (por defecto)
+#
+# Las dependencias quedan instaladas en $ORCA_WORK_DIR/OrcaSlicer-<v>/deps/build/OrcaSlicer_dep
+# (~600 MB, lo que guarda la caché del CI); si ya están (marca .pinocchio-deps-ok), no se recompilan.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -20,6 +24,7 @@ OUT="${1:-$ROOT/libs/slicer/bin}"
 VERSION="${ORCA_VERSION:-2.4.2}"
 WORK="${ORCA_WORK_DIR:-$HOME/.cargo-target/orca}"
 JOBS="${ORCA_DEPS_JOBS:-8}"
+STAGE="${ORCA_STAGE:-all}"
 IMAGE="localhost/pinocchio-orca-builder:24.04"
 SRC="$WORK/OrcaSlicer-$VERSION"
 
@@ -28,7 +33,8 @@ DEPS=(dep_Boost dep_TBB dep_Cereal dep_Draco dep_NLopt dep_OpenVDB dep_OpenCV de
 
 mkdir -p "$WORK" "$OUT"
 
-if [[ ! -d "$SRC" ]]; then
+# (se mira un archivo y no la carpeta: la caché del CI la crea al restaurar las dependencias)
+if [[ ! -f "$SRC/CMakeLists.txt" ]]; then
   echo "Descargando OrcaSlicer $VERSION..."
   curl -fsSL "https://github.com/OrcaSlicer/OrcaSlicer/archive/refs/tags/v${VERSION}.tar.gz" -o "$WORK/orca.tar.gz"
   tar xzf "$WORK/orca.tar.gz" -C "$WORK"
@@ -47,14 +53,29 @@ if ! grep -q pinocchio-engine "$SRC/src/CMakeLists.txt"; then
   echo 'add_subdirectory(pinocchio-engine)' >> "$SRC/src/CMakeLists.txt"
 fi
 
-BUILD_CMDS="set -e
+PREFIX_REL="deps/build/OrcaSlicer_dep"
+DEPS_CMDS="set -e
 export CMAKE_POLICY_VERSION_MINIMUM=3.5 ORCA_DEPS_JOBS=$JOBS
-cmake -S deps -B deps/build -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build deps/build -j1 --target ${DEPS[*]}
+if [ -f $PREFIX_REL/.pinocchio-deps-ok ]; then
+  echo 'Dependencias ya instaladas'
+else
+  cmake -S deps -B deps/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+  cmake --build deps/build -j1 --target ${DEPS[*]}
+  touch $PREFIX_REL/.pinocchio-deps-ok
+fi"
+ENGINE_CMDS="set -e
+export CMAKE_POLICY_VERSION_MINIMUM=3.5
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DSLIC3R_GUI=0 -DSLIC3R_STATIC=1 -DSLIC3R_PCH=0 \
-  -DCMAKE_PREFIX_PATH=\$PWD/deps/build/OrcaSlicer_dep/usr/local
+  -DCMAKE_PREFIX_PATH=\$PWD/$PREFIX_REL/usr/local
 cmake --build build -j$JOBS --target pinocchio-slicer
 strip build/src/pinocchio-engine/pinocchio-slicer"
+case "$STAGE" in
+  deps) BUILD_CMDS="$DEPS_CMDS" ;;
+  engine) BUILD_CMDS="$ENGINE_CMDS" ;;
+  all) BUILD_CMDS="$DEPS_CMDS
+$ENGINE_CMDS" ;;
+  *) echo "ORCA_STAGE desconocido: $STAGE" >&2; exit 1 ;;
+esac
 
 if [[ -n "${ORCA_NO_CONTAINER:-}" ]]; then
   (cd "$SRC" && bash -c "$BUILD_CMDS")
@@ -65,5 +86,7 @@ else
   podman run --rm -v "$WORK:/work:Z" -w "/work/OrcaSlicer-$VERSION" "$IMAGE" bash -c "$BUILD_CMDS"
 fi
 
-cp "$SRC/build/src/pinocchio-engine/pinocchio-slicer" "$OUT/"
-echo "Listo: $OUT/pinocchio-slicer"
+if [[ "$STAGE" != deps ]]; then
+  cp "$SRC/build/src/pinocchio-engine/pinocchio-slicer" "$OUT/"
+  echo "Listo: $OUT/pinocchio-slicer"
+fi

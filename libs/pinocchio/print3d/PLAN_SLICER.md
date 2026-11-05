@@ -46,7 +46,7 @@ FFMPEG, WebView2, CURL, OpenSSL ni Assimp (son de la GUI).
 | S5 | Vista previa en el visor: líneas por tipo (pared, relleno, soporte, puente, viaje), deslizador de capas, color por tipo/velocidad/ancho, tiempo y filamento por tipo | hecha (2026-11-04): `lib/gcodeView.ts` (cintas del ancho de línea, color por tipo, cama con cuadrícula), capa con deslizador, viajes, tipos ocultables, % y gramos por tipo. Sin color por velocidad/ancho todavía; probado en Chromium headless, falta en la app 🧪 |
 | S6 | Miniaturas renderizadas por nosotros e insertadas en el gcode; guardar `.gcode` | hecha: `thumbnail.rs` (rasterizador propio, color del filamento) → el motor las escribe en PNG (96×96 y 300×300 de la K1). Falta ver que la pantalla de la K1 las muestre 🧪 |
 | S7 | Enviar a la K1: Moonraker (subir + imprimir, estado y progreso). Sin root: protocolo propio de Creality | pendiente: la K1 del usuario está rooteada → Moonraker (firmware a reparar antes de probar) |
-| S8 | CI/release: deps de Orca en caché (como OCCT), binario como sidecar de Tauri en Linux; Windows después | pendiente |
+| S8 | CI/release: deps de Orca en caché (como OCCT), binario como sidecar de Tauri en Linux; Windows después | hecha en los workflows (sin correr todavía): `slicer-engine.yml` (reutilizable, también a mano) compila en Ubuntu 24.04 con caché de dependencias y del binario; `release.yml` lo mete en el AppImage como sidecar (`externalBin` solo por `--config` en CI) y lo publica suelto como `…-linux-x86_64-slicer`. Windows/macOS después |
 
 ## Trampas encontradas al compilar
 

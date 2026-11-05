@@ -1,0 +1,98 @@
+# Motor de laminado (pinocchio-slicer): libslic3r de OrcaSlicer congelado.
+#
+# Lo llama release.yml (Linux) y también se lanza solo, a mano, para dejar la
+# caché lista sin publicar nada:
+#   gh workflow run "Motor de laminado" --ref master
+#
+# Dos cachés:
+#   - el binario, por versión de Orca + fuentes del motor + script: si nada de
+#     eso cambió, el job termina en segundos;
+#   - las dependencias de Orca ya instaladas (~600 MB), por versión de Orca y
+#     ORCA_DEPS_REV: la primera vez tardan horas (Boost, CGAL, OpenCV, OpenVDB,
+#     OCCT 7.6...), después solo se recompila libslic3r y el motor (~30 min).
+#
+# Corre directo en Ubuntu 24.04 (el mismo sistema que el contenedor de
+# libs/slicer/engine/Containerfile, que es el que se usa en el PC).
+
+name: Motor de laminado
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+env:
+  ORCA_VERSION: "2.4.2"
+  # Subir para forzar que las dependencias se recompilen
+  ORCA_DEPS_REV: "1"
+
+jobs:
+  engine:
+    name: pinocchio-slicer (Linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 340
+    env:
+      ORCA_WORK_DIR: ${{ github.workspace }}/orca-work
+      ORCA_NO_CONTAINER: "1"
+      ORCA_DEPS_JOBS: "4"
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Motor en caché
+        id: bin
+        uses: actions/cache/restore@v4
+        with:
+          path: libs/slicer/bin/pinocchio-slicer
+          key: slicer-bin-${{ env.ORCA_VERSION }}-ubuntu-24.04-${{ hashFiles('libs/slicer/engine/**', 'scripts/build-orca-engine.sh') }}
+
+      # Mismos paquetes que libs/slicer/engine/Containerfile
+      - name: Dependencias del sistema
+        if: steps.bin.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build clang lld git wget curl ca-certificates file \
+            autoconf automake libtool texinfo m4 pkg-config gettext \
+            libssl-dev libcurl4-openssl-dev libfreetype-dev libfontconfig-dev \
+            libgl-dev libglu1-mesa-dev libegl-dev libglfw3-dev libglew-dev libdbus-1-dev \
+            libgtk-3-dev libudev-dev extra-cmake-modules
+
+      - name: Dependencias de Orca en caché
+        if: steps.bin.outputs.cache-hit != 'true'
+        id: deps
+        uses: actions/cache/restore@v4
+        with:
+          path: orca-work/OrcaSlicer-${{ env.ORCA_VERSION }}/deps/build/OrcaSlicer_dep
+          key: orca-deps-${{ env.ORCA_VERSION }}-ubuntu-24.04-r${{ env.ORCA_DEPS_REV }}
+
+      - name: Compilar dependencias de Orca
+        if: steps.bin.outputs.cache-hit != 'true' && steps.deps.outputs.cache-hit != 'true'
+        run: ORCA_STAGE=deps scripts/build-orca-engine.sh
+
+      # Aparte del motor: si después falla el motor, las dependencias ya quedan guardadas
+      - name: Guardar dependencias de Orca
+        if: steps.bin.outputs.cache-hit != 'true' && steps.deps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: orca-work/OrcaSlicer-${{ env.ORCA_VERSION }}/deps/build/OrcaSlicer_dep
+          key: ${{ steps.deps.outputs.cache-primary-key }}
+
+      - name: Compilar el motor
+        if: steps.bin.outputs.cache-hit != 'true'
+        run: ORCA_STAGE=engine scripts/build-orca-engine.sh
+
+      - name: Probar el motor (lamina un cubo para la K1)
+        if: steps.bin.outputs.cache-hit != 'true'
+        run: cargo test -p pinocchio-slicer --test engine
+
+      - name: Guardar el motor
+        if: steps.bin.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: libs/slicer/bin/pinocchio-slicer
+          key: ${{ steps.bin.outputs.cache-primary-key }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: slicer-engine
+          path: libs/slicer/bin/pinocchio-slicer
+          if-no-files-found: error
