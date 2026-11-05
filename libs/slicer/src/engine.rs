@@ -16,31 +16,121 @@ const ENGINE_NAME: &str = if cfg!(windows) { "pinocchio-slicer.exe" } else { "pi
 
 /// Busca el binario del motor:
 /// 1. `PINOCCHIO_SLICER` (ruta explícita).
-/// 2. Junto al ejecutable de la app: `pinocchio-slicer` (sidecar del AppImage) o
-///    `<ejecutable>-slicer` (como se publica junto al binario suelto de Linux).
-/// 3. `libs/slicer/bin/` del repositorio (desarrollo, ver scripts/build-orca-engine.sh).
+/// 2. El que va dentro de la app (release): se extrae a la caché la primera vez.
+/// 3. Junto al ejecutable de la app: `pinocchio-slicer` o `<ejecutable>-slicer`.
+/// 4. `libs/slicer/bin/` del repositorio (desarrollo, ver scripts/build-orca-engine.sh).
+///
+/// Un motor sin permiso de ejecución (descargado suelto) se marca ejecutable.
 pub fn find_engine() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("PINOCCHIO_SLICER")
         && !p.is_empty()
     {
         let p = PathBuf::from(p);
-        return p.is_file().then_some(p);
+        return p.is_file().then(|| executable(p));
+    }
+    if let Some(p) = embedded::extract() {
+        return Some(p);
     }
     if let Ok(exe) = std::env::current_exe()
         && let Some(dir) = exe.parent()
     {
         let p = dir.join(ENGINE_NAME);
         if p.is_file() {
-            return Some(p);
+            return Some(executable(p));
         }
         if let Some(p) = exe.file_name().map(|n| dir.join(sibling_engine_name(&n.to_string_lossy())))
             && p.is_file()
         {
-            return Some(p);
+            return Some(executable(p));
         }
     }
     let dev = Path::new(env!("CARGO_MANIFEST_DIR")).join("bin").join(ENGINE_NAME);
-    dev.is_file().then_some(dev)
+    dev.is_file().then(|| executable(dev))
+}
+
+/// Si al archivo le falta el permiso de ejecución (un navegador no lo deja), se lo pone.
+fn executable(path: PathBuf) -> PathBuf {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(&path)
+            && meta.permissions().mode() & 0o111 == 0
+        {
+            let mut perms = meta.permissions();
+            perms.set_mode(perms.mode() | 0o755);
+            let _ = std::fs::set_permissions(&path, perms);
+        }
+    }
+    path
+}
+
+/// El motor dentro del binario de la app (`PINOCCHIO_SLICER_EMBED` al compilar).
+mod embedded {
+    use std::path::PathBuf;
+
+    #[cfg(embedded_engine)]
+    include!(concat!(env!("OUT_DIR"), "/engine_embed.rs"));
+
+    /// Lo deja en `<caché>/pinocchio/slicer/<id>/` (una vez por versión del motor).
+    #[cfg(embedded_engine)]
+    pub fn extract() -> Option<PathBuf> {
+        use std::sync::Mutex;
+        static DONE: Mutex<Option<PathBuf>> = Mutex::new(None);
+        let mut done = DONE.lock().ok()?;
+        if let Some(p) = done.as_ref().filter(|p| p.is_file()) {
+            return Some(p.clone());
+        }
+        let dir = cache_dir()?.join("pinocchio").join("slicer").join(ENGINE_ID);
+        let path = dir.join(super::ENGINE_NAME);
+        if !path.is_file() {
+            std::fs::create_dir_all(&dir).ok()?;
+            // Se escribe aparte y se renombra: un corte a medias no deja un motor roto
+            let tmp = dir.join(format!(".{}.{}", super::ENGINE_NAME, std::process::id()));
+            let ok = (|| -> std::io::Result<()> {
+                let mut out = std::fs::File::create(&tmp)?;
+                std::io::copy(&mut flate2::read::GzDecoder::new(ENGINE_GZ), &mut out)?;
+                out.sync_all()?;
+                Ok(())
+            })();
+            if ok.is_err() {
+                let _ = std::fs::remove_file(&tmp);
+                return None;
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755)).ok()?;
+            }
+            std::fs::rename(&tmp, &path).ok()?;
+            // Las versiones viejas del motor sobran
+            if let Ok(entries) = std::fs::read_dir(dir.parent()?) {
+                for e in entries.flatten() {
+                    if e.file_name() != ENGINE_ID {
+                        let _ = std::fs::remove_dir_all(e.path());
+                    }
+                }
+            }
+        }
+        *done = Some(path.clone());
+        Some(path)
+    }
+
+    #[cfg(not(embedded_engine))]
+    pub fn extract() -> Option<PathBuf> {
+        None
+    }
+
+    #[cfg(embedded_engine)]
+    fn cache_dir() -> Option<PathBuf> {
+        let env = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
+        if cfg!(windows) {
+            env("LOCALAPPDATA")
+        } else if cfg!(target_os = "macos") {
+            env("HOME").map(|h| h.join("Library").join("Caches"))
+        } else {
+            env("XDG_CACHE_HOME").or_else(|| env("HOME").map(|h| h.join(".cache")))
+        }
+    }
 }
 
 /// `Pinocchio-pre.2026.11.04.abc1234-linux-x86_64` → `…-linux-x86_64-slicer` (el nombre
@@ -250,6 +340,21 @@ mod tests {
     #[test]
     fn nombre_del_motor_suelto() {
         assert_eq!(sibling_engine_name("Pinocchio-pre.2026.11.04.abc1234-linux-x86_64"), "Pinocchio-pre.2026.11.04.abc1234-linux-x86_64-slicer");
+    }
+
+    /// Solo con `PINOCCHIO_SLICER_EMBED` al compilar: el motor sale igual al original y ejecutable
+    #[cfg(embedded_engine)]
+    #[test]
+    fn motor_embebido_se_extrae() {
+        let p = embedded::extract().expect("extraer el motor");
+        let original = std::fs::read(std::env::var("PINOCCHIO_SLICER_EMBED").unwrap()).unwrap();
+        assert_eq!(std::fs::read(&p).unwrap(), original);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_ne!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o111, 0);
+        }
+        assert_eq!(embedded::extract(), Some(p));
     }
 
     #[test]

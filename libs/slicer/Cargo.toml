@@ -11,3 +11,7 @@ description = "Laminado FDM con el motor de OrcaSlicer (proceso aparte): perfile
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+flate2 = { workspace = true }
+
+[build-dependencies]
+flate2 = { workspace = true }

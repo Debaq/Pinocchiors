@@ -36,7 +36,7 @@ pub struct SlicerInfo {
 
 /// Impresoras, procesos y filamentos del laminador, y si el motor está.
 #[tauri::command]
-pub fn slicer_presets() -> SlicerInfo {
+pub async fn slicer_presets() -> SlicerInfo {
     let engine = slicer::find_engine();
     SlicerInfo {
         available: engine.is_some(),

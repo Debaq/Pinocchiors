@@ -19,9 +19,10 @@
 #
 # Artefactos:
 #   - App de escritorio     binario Linux + .AppImage, .msi/-setup.exe, .dmg (arm64)
-#   - Motor de laminado     dentro del AppImage (sidecar de Tauri) y suelto junto al
-#                           binario Linux (…-linux-x86_64-slicer); lo compila
-#                           slicer-engine.yml (con caché). Windows/macOS: todavía no
+#   - Motor de laminado     dentro del ejecutable de la app (PINOCCHIO_SLICER_EMBED,
+#                           comprimido; se extrae a ~/.cache la primera vez): el
+#                           binario Linux y el AppImage son un solo archivo. Lo
+#                           compila slicer-engine.yml (con caché). Windows/macOS: todavía no
 #   - CLI `converter`       Linux x86_64, Windows x86_64, macOS arm64 + x86_64
 #   - Paquete WASM          converter-wasm (wasm-bindgen --target web)
 #   - latest.json           para que la app se actualice sola (tauri-plugin-updater):
@@ -263,19 +264,13 @@ jobs:
         working-directory: apps/web
         run: npm ci
 
-      # Tauri copia el sidecar `<ruta>-<triple>` junto a la app (en el AppImage, usr/bin/pinocchio-slicer)
+      # Va dentro del ejecutable (ver PINOCCHIO_SLICER_EMBED en «Build Tauri»)
       - name: Motor de laminado (Linux)
         if: matrix.platform == 'linux'
         uses: actions/download-artifact@v4
         with:
           name: slicer-engine
           path: libs/slicer/bin
-
-      - name: Preparar sidecar (Linux)
-        if: matrix.platform == 'linux'
-        run: |
-          chmod +x libs/slicer/bin/pinocchio-slicer
-          cp libs/slicer/bin/pinocchio-slicer libs/slicer/bin/pinocchio-slicer-x86_64-unknown-linux-gnu
 
       - name: Build Tauri
         working-directory: apps/desktop
@@ -290,9 +285,9 @@ jobs:
           # local no necesita la clave
           config="{\"version\":\"${SEMVER}\",\"bundle\":{\"createUpdaterArtifacts\":true}}"
           # Linux: sin .deb ni .rpm; el binario suelto se publica aparte.
-          # El motor de laminado va como sidecar solo acá (un build local no lo necesita)
+          # El motor de laminado se embebe solo acá (un build local lo busca en libs/slicer/bin)
           if [[ "${{ matrix.platform }}" == linux ]]; then
-            config="{\"version\":\"${SEMVER}\",\"bundle\":{\"createUpdaterArtifacts\":true,\"externalBin\":[\"../../libs/slicer/bin/pinocchio-slicer\"]}}"
+            export PINOCCHIO_SLICER_EMBED="$GITHUB_WORKSPACE/libs/slicer/bin/pinocchio-slicer"
             node ../web/node_modules/@tauri-apps/cli/tauri.js build --bundles appimage --config "$config"
           else
             node ../web/node_modules/@tauri-apps/cli/tauri.js build --config "$config"
@@ -328,9 +323,6 @@ jobs:
           if [[ "${{ matrix.platform }}" == linux ]]; then
             cp target/release/pinocchio-app "dist/Pinocchio-${TAG}-linux-x86_64"
             chmod +x "dist/Pinocchio-${TAG}-linux-x86_64"
-            # El motor suelto: la app lo busca junto a ella como <ejecutable>-slicer
-            cp libs/slicer/bin/pinocchio-slicer "dist/Pinocchio-${TAG}-linux-x86_64-slicer"
-            chmod +x "dist/Pinocchio-${TAG}-linux-x86_64-slicer"
           fi
           ls -la dist
 
@@ -443,8 +435,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Solo lo que se publica: el motor (slicer-engine) ya va dentro del AppImage y
-      # suelto con el nombre de la release
+      # Solo lo que se publica: el motor (slicer-engine) ya va dentro de la app
       - uses: actions/download-artifact@v4
         with:
           path: dist
