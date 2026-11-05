@@ -1107,22 +1107,13 @@ export const CadView: Component<CadViewProps> = (props) => {
     ),
   );
 
-  // Dibujo del sketch con la vista previa de la herramienta
+  // Lo que sigue al mouse: vista previa de la herramienta, lo que se recortaría, guías y anclaje
+  // Lo que resalta el anclaje (la paralela, el arco tangente…): cambia pocas veces aunque el mouse se mueva
+  const snapRefs = createMemo(() => snapView()?.refs ?? [], [], { equals: (a, b) => a.length === b.length && a.every((x, i) => x === b[i]) });
   createEffect(() => {
     const s = ui.session();
     if (!viewer) return;
-    if (!s) {
-      // Eligiendo regiones: el sketch de esa operación con las elegidas resaltadas
-      const mode = ui.pick();
-      if (mode.kind === "region" || mode.kind === "axis") {
-        const view = store.sketchView(mode.sketch);
-        viewer.setSketch(view ? { plane: view.plane, sketch: view.sketch, regions: view.regions, chosen: mode.kind === "region" ? mode.chosen() : [] } : null);
-        return;
-      }
-      // Fuera de la edición los sketches se ven como sketches visibles
-      viewer.setSketch(null);
-      return;
-    }
+    if (!s) return viewer.setSketchPreview(null);
     // Fuera del visor no hay vista previa (salvo con el campo escrito, que la usa)
     const c = pointerInside() || typedField() ? cursor() : undefined;
     // Lo que haría el botón del panel bajo el mouse
@@ -1303,6 +1294,33 @@ export const CadView: Component<CadViewProps> = (props) => {
       if (t === "calibrate" && cal?.a && !cal.b) preview.push([cal.a, c]);
       if (t === "slot" && an.length === 2) preview.push(slotOutline(an[0], an[1], slotRadius(an[0], an[1], c)));
     }
+    viewer.setSketchPreview({
+      plane: s.plane,
+      paper: !!s.sheet,
+      preview,
+      removed: ui.tool() === "trim" ? trimGone() : undefined,
+      snap: snapView()?.p,
+      guides: snapView()?.guides,
+    });
+  });
+
+  // Dibujo del sketch (la vista previa de la herramienta va aparte, abajo:
+  // así lo que sigue al mouse no rehace el sketch entero)
+  createEffect(() => {
+    const s = ui.session();
+    if (!viewer) return;
+    if (!s) {
+      // Eligiendo regiones: el sketch de esa operación con las elegidas resaltadas
+      const mode = ui.pick();
+      if (mode.kind === "region" || mode.kind === "axis") {
+        const view = store.sketchView(mode.sketch);
+        viewer.setSketch(view ? { plane: view.plane, sketch: view.sketch, regions: view.regions, chosen: mode.kind === "region" ? mode.chosen() : [] } : null);
+        return;
+      }
+      // Fuera de la edición los sketches se ven como sketches visibles
+      viewer.setSketch(null);
+      return;
+    }
     const as = ui.assist();
     let grid: ReturnType<typeof gridSegments> | undefined;
     if (as.grid) {
@@ -1331,7 +1349,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       }),
       hover: [
         ...ui.hoverIds(),
-        ...(snapView()?.refs ?? []),
+        ...snapRefs(),
         ...tanPicks().map((x) => x.entity),
         ...(preHover() !== undefined ? [preHover()!] : []),
         // Lo que atan las restricciones elegidas
@@ -1383,10 +1401,6 @@ export const CadView: Component<CadViewProps> = (props) => {
         const c = s.sketch.constraints[i];
         return c ? constraintIds(c).filter((id) => s.sketch.entities.some((e) => e.id === id)) : [];
       }),
-      preview,
-      removed: ui.tool() === "trim" ? trimGone() : undefined,
-      snap: snapView()?.p,
-      guides: snapView()?.guides,
     });
   });
 
@@ -2790,6 +2804,26 @@ export const CadView: Component<CadViewProps> = (props) => {
     ui.setScanHighlight([...brush.tris]);
   };
 
+  // Preselección del sketch pendiente para el próximo cuadro (ver onPointerMove)
+  let sketchHoverAt: [number, number] | undefined;
+  let sketchHoverFrame = 0;
+  const sketchHover = () => {
+    sketchHoverFrame = 0;
+    const at = sketchHoverAt;
+    const ss = ui.session();
+    if (!at || !ss || !viewer || !PRESELECT.has(ui.tool())) return;
+    const raw = viewer.planePoint(at[0], at[1], ss.plane);
+    const h = raw ? hitTest(ss.sketch, raw, viewer.pixelSizeMm() * 8, ui.tool() === "select") : {};
+    setPreHover(h.point ?? h.entity);
+    setTrimGone(ui.tool() === "trim" && raw && h.entity !== undefined ? trimRemoved(ss.sketch, h.entity, raw, sheetLimits(), trimBounds()) : undefined);
+    // Extender: hasta dónde llegaría, antes del clic
+    if (ui.tool() === "extend") {
+      const id = h.entity;
+      if (raw && id !== undefined) ui.previewOf(() => ui.change((sk) => void extendAny(sk, id, raw, sheetLimits(), trimBounds())));
+      else ui.clearPreview();
+    }
+  };
+  onCleanup(() => cancelAnimationFrame(sketchHoverFrame));
   const onPointerMove = (e: PointerEvent) => {
     if (brush) return (e.buttons & 1) === 1 ? brushAt(e) : undefined;
     if (partDrag) return movePartDrag(e);
@@ -2828,20 +2862,14 @@ export const CadView: Component<CadViewProps> = (props) => {
       if (Math.hypot(e.clientX - last[0], e.clientY - last[1]) >= 3) setLasso([...ls, [e.clientX, e.clientY]]);
       return;
     }
-    // Preselección: lo que elegiría un clic, resaltado
+    // Preselección: lo que elegiría un clic, resaltado (una vez por cuadro, con
+    // la última posición: con sketches grandes cada búsqueda recorre todo)
     const ss = ui.session();
     if (ss && viewer && e.buttons === 0 && PRESELECT.has(ui.tool())) {
-      const raw = viewer.planePoint(e.clientX, e.clientY, ss.plane);
-      const h = raw ? hitTest(ss.sketch, raw, viewer.pixelSizeMm() * 8, ui.tool() === "select") : {};
-      setPreHover(h.point ?? h.entity);
-      setTrimGone(ui.tool() === "trim" && raw && h.entity !== undefined ? trimRemoved(ss.sketch, h.entity, raw, sheetLimits(), trimBounds()) : undefined);
-      // Extender: hasta dónde llegaría, antes del clic
-      if (ui.tool() === "extend") {
-        const id = h.entity;
-        if (raw && id !== undefined) ui.previewOf(() => ui.change((sk) => void extendAny(sk, id, raw, sheetLimits(), trimBounds())));
-        else ui.clearPreview();
-      }
+      sketchHoverAt = [e.clientX, e.clientY];
+      if (!sketchHoverFrame) sketchHoverFrame = requestAnimationFrame(sketchHover);
     } else {
+      sketchHoverAt = undefined;
       if (preHover() !== undefined) setPreHover(undefined);
       if (trimGone()) setTrimGone(undefined);
     }
@@ -3888,6 +3916,7 @@ export const CadView: Component<CadViewProps> = (props) => {
         onPointerLeave={() => {
           setSnapView(undefined);
           clearPreselect();
+          sketchHoverAt = undefined;
           // La vista previa de la herramienta no queda congelada en el borde
           setPointerInside(false);
         }}

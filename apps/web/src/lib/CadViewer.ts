@@ -72,14 +72,6 @@ export interface SketchOverlay {
   conflictEntities?: number[];
   /** Entidades ligadas al modelo (Usar): violeta */
   linkedEntities?: number[];
-  /** Vista previa de lo que se está dibujando (coordenadas del sketch) */
-  preview?: P2[][];
-  /** Lo que se quitaría (recortar bajo el mouse): en rojo */
-  removed?: P2[][];
-  /** Punto al que se pega el cursor (anclaje activo) */
-  snap?: P2;
-  /** Líneas guía del anclaje (alineaciones, dirección) */
-  guides?: [P2, P2][];
   /** Eligiendo regiones: se muestran todas y se resaltan las que contienen estos puntos */
   chosen?: P2[];
   /** Ocultar la construcción y los puntos (salvo lo elegido) */
@@ -112,6 +104,21 @@ export interface SketchOverlay {
   textBoxes?: { min: P2; max: P2; selected: boolean }[];
   /** Dibujando sobre la hoja del plano (papel blanco): colores de la paleta clara */
   paper?: boolean;
+}
+
+/** Lo que sigue al mouse en el sketch (se dibuja aparte, ver `setSketchPreview`) */
+export interface SketchPreview {
+  plane: Plane;
+  /** Dibujando sobre la hoja del plano: colores de la paleta clara */
+  paper?: boolean;
+  /** Vista previa de lo que se está dibujando (coordenadas del sketch) */
+  preview?: P2[][];
+  /** Lo que se quitaría (recortar bajo el mouse): en rojo */
+  removed?: P2[][];
+  /** Punto al que se pega el cursor (anclaje activo) */
+  snap?: P2;
+  /** Líneas guía del anclaje (alineaciones, dirección) */
+  guides?: [P2, P2][];
 }
 
 /** Sketch 3D en edición: lo elegido, lo libre, lo que choca, el plano activo y lo que se está dibujando */
@@ -259,6 +266,8 @@ export class CadViewer {
   /** Corte del escaneo por el plano del sketch en edición (guía) */
   private scanSection?: THREE.LineSegments;
   private sketchGroup = new THREE.Group();
+  /** Vista previa de la herramienta del sketch (cambia con cada movimiento del mouse) */
+  private sketchPreviewGroup = new THREE.Group();
   /** Dibujando sobre la hoja del plano: otro fondo y la paleta clara */
   private paper = false;
   /** Sketch 3D en edición */
@@ -350,6 +359,7 @@ export class CadViewer {
     this.lightRig.place(new THREE.Vector3(), this.gridExtent);
     this.scene.add(this.grid);
     this.scene.add(this.sketchGroup);
+    this.scene.add(this.sketchPreviewGroup);
     this.scene.add(this.sketch3dGroup);
     this.scene.add(this.sketchesGroup);
     this.scene.add(this.planesGroup);
@@ -386,7 +396,7 @@ export class CadViewer {
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     if (this.preselectMark instanceof LineSegments2) this.preselectMark.material.resolution.set(w, h);
-    for (const o of [...this.sketchGroup.children, ...this.sketchesGroup.children]) if (o instanceof Line2) o.material.resolution.set(w, h);
+    for (const o of [...this.sketchGroup.children, ...this.sketchPreviewGroup.children, ...this.sketchesGroup.children]) if (o instanceof LineSegments2) o.material.resolution.set(w, h);
     this.requestRender();
   }
 
@@ -1219,6 +1229,48 @@ export class CadViewer {
     this.pulseFrame = requestAnimationFrame(this.beat);
   };
 
+  /**
+   * Lo que sigue al mouse (vista previa de la herramienta, lo que se
+   * recortaría, guías y anclaje): aparte del sketch, que así no se rehace
+   * entero con cada movimiento.
+   */
+  setSketchPreview(p: SketchPreview | null) {
+    for (const child of [...this.sketchPreviewGroup.children]) {
+      this.sketchPreviewGroup.remove(child);
+      this.retired.push(child as THREE.Mesh);
+    }
+    if (p) {
+      const hex = (name: string) => themeHex(name, !!p.paper);
+      const w = (q: P2) => this.toView(planeToWorld(p.plane, q));
+      const resolution = this.renderer.getSize(new THREE.Vector2());
+      const halos = hex("viewport");
+      const lines = (pts: P2[], color: number, dashed = false, width = 1) => {
+        if (pts.length < 2) return;
+        const positions = pts.flatMap((q) => w(q).toArray());
+        const halo = new Line2(new LineGeometry().setPositions(positions), new LineMaterial({ color: halos, linewidth: Math.max(width, 2) + 2.5, resolution, depthTest: false, transparent: true }));
+        halo.renderOrder = 6;
+        this.sketchPreviewGroup.add(halo);
+        const m = new LineMaterial({ color, linewidth: width > 1 ? width : 2, resolution, depthTest: false, transparent: true, dashed, dashSize: 2 / this.mmPerUnit, gapSize: 1.5 / this.mmPerUnit });
+        const l = new Line2(new LineGeometry().setPositions(positions), m);
+        if (dashed) l.computeLineDistances();
+        l.renderOrder = width > 1 ? 8 : 7;
+        this.sketchPreviewGroup.add(l);
+      };
+      for (const pv of p.preview ?? []) lines(pv, hex("orange"));
+      for (const pv of p.removed ?? []) lines(pv, hex("error"), false, 3);
+      for (const g of p.guides ?? []) lines(g, hex("cyan"), true);
+      if (p.snap) {
+        const v = w(p.snap);
+        const g = new THREE.BufferGeometry();
+        g.setAttribute("position", new THREE.Float32BufferAttribute([v.x, v.y, v.z], 3));
+        const m = new THREE.Points(g, new THREE.PointsMaterial({ color: hex("cyan"), size: 12, sizeAttenuation: false, depthTest: false, transparent: true }));
+        m.renderOrder = 9;
+        this.sketchPreviewGroup.add(m);
+      }
+    }
+    this.requestRender();
+  }
+
   setSketch(overlay: SketchOverlay | null) {
     if (!overlay?.pulse) {
       cancelAnimationFrame(this.pulseFrame);
@@ -1300,29 +1352,55 @@ export class CadViewer {
     }
 
     const halos = hex("viewport");
-    const lines = (pts: (P2 | undefined)[], color: number, dashed = false, width = 1) => {
+    // Las líneas van en lotes (un objeto por grosor, trazo y orden, con el color
+    // en cada vértice): un objeto por entidad eran miles de dibujos por cuadro
+    // con sketches grandes
+    const batches = new Map<string, { pos: number[]; col: number[]; width: number; dashed: boolean; order: number; halo: boolean }>();
+    const tint = new THREE.Color();
+    const addTo = (key: string, spec: { width: number; dashed: boolean; order: number; halo: boolean }, v: THREE.Vector3[], color: number) => {
+      let b = batches.get(key);
+      if (!b) batches.set(key, (b = { ...spec, pos: [], col: [] }));
+      tint.set(color);
+      for (let i = 0; i + 1 < v.length; i++) {
+        b.pos.push(v[i].x, v[i].y, v[i].z, v[i + 1].x, v[i + 1].y, v[i + 1].z);
+        b.col.push(tint.r, tint.g, tint.b, tint.r, tint.g, tint.b);
+      }
+    };
+    const lines = (pts: (P2 | undefined)[], color: number, dashed = false, width = 1, order?: number) => {
       if (pts.some((p) => !p)) return;
-      const positions = (pts as P2[]).flatMap((p) => w(p).toArray());
-      const resolution = this.renderer.getSize(new THREE.Vector2());
+      const v = (pts as P2[]).map(w);
+      const lineOrder = order ?? (width > 1 ? 8 : 7);
+      const haloOrder = order !== undefined ? order - 0.5 : 6;
       // Contorno opaco del color del visor: sobre una cara clara del cuerpo la
       // línea fina se perdía y no se distinguía su color (libre, definida, construcción)
-      const halo = new Line2(new LineGeometry().setPositions(positions), new LineMaterial({ color: halos, linewidth: Math.max(width, 2) + 2.5, resolution, depthTest: false }));
-      halo.renderOrder = 6;
-      this.sketchGroup.add(halo);
+      const hw = Math.max(width, 2) + 2.5;
+      addTo(`h${hw}|${haloOrder}`, { width: hw, dashed: false, order: haloOrder, halo: true }, v, halos);
       // Las líneas de WebGL tienen 1 px: todas van con Line2, las normales de 2 px
-      const m = new LineMaterial({
-        color,
-        linewidth: width > 1 ? width : 2,
-        resolution,
-        depthTest: false,
-        dashed,
-        dashSize: 2 / this.mmPerUnit,
-        gapSize: 1.5 / this.mmPerUnit,
-      });
-      const l = new Line2(new LineGeometry().setPositions(positions), m);
-      if (dashed) l.computeLineDistances();
-      l.renderOrder = width > 1 ? 8 : 7;
-      this.sketchGroup.add(l);
+      const lw = width > 1 ? width : 2;
+      addTo(`l${lw}|${dashed}|${lineOrder}`, { width: lw, dashed, order: lineOrder, halo: false }, v, color);
+    };
+    const flushLines = () => {
+      const resolution = this.renderer.getSize(new THREE.Vector2());
+      for (const b of batches.values()) {
+        if (!b.pos.length) continue;
+        const g = new LineSegmentsGeometry().setPositions(b.pos);
+        if (!b.halo) g.setColors(b.col);
+        const m = new LineMaterial({
+          color: b.halo ? halos : 0xffffff,
+          vertexColors: !b.halo,
+          linewidth: b.width,
+          resolution,
+          depthTest: false,
+          dashed: b.dashed,
+          dashSize: 2 / this.mmPerUnit,
+          gapSize: 1.5 / this.mmPerUnit,
+        });
+        const l = new LineSegments2(g, m);
+        if (b.dashed) l.computeLineDistances();
+        l.renderOrder = b.order;
+        this.sketchGroup.add(l);
+      }
+      batches.clear();
     };
     const normal = hex("fg");
     const construction = hex("sketch-construction");
@@ -1408,14 +1486,11 @@ export class CadViewer {
       const width = sp ? 2.5 : selected.has(e.id) ? (hover.has(e.id) ? 5 : 3.5) : hover.has(e.id) ? 2.5 : 1;
       if (pts.length && pts.every(Boolean)) lines(pts, sp ? hex(sp.color) : color, !!e.construction, width);
     }
-    for (const pv of overlay.preview ?? []) lines(pv, sel);
-    for (const pv of overlay.removed ?? []) lines(pv, hex("error"), false, 3);
     if (overlay.curvature) {
       const combColor = hex("purple");
       for (const [a, b] of overlay.curvature.comb) lines([a, b], combColor);
       lines(overlay.curvature.comb.map((t) => t[1]), combColor);
     }
-    for (const g of overlay.guides ?? []) lines(g, hex("cyan"), true);
 
     // Textos: una caja punteada alrededor (se eligen enteros)
     for (const b of overlay.textBoxes ?? []) {
@@ -1463,7 +1538,6 @@ export class CadViewer {
     pts.renderOrder = 8;
     this.sketchGroup.add(pts);
     if (overlay.freedom) this.drawFreedom(overlay.freedom, sketch, lines);
-    if (overlay.snap) marker(overlay.snap, hex("cyan"), 12);
     for (const p of overlay.problems ?? []) marker(p, hex("error"), 11);
     this.startPulse(overlay.pulse, pulsePts, sketch.points.filter((p) => pulseIds.has(p.id)).map((p) => [p.x, p.y] as P2), hex, w);
     if (overlay.crossings?.length) {
@@ -1478,12 +1552,11 @@ export class CadViewer {
     // Ejes del plano (en la hoja no: su origen es la esquina del papel)
     if (!paper) {
       const axisLen = 20;
-      lines([[0, 0], [axisLen, 0]], hex("axis-x"));
-      lines([[0, 0], [0, axisLen]], hex("axis-y"));
       // Debajo de lo dibujado: con el mismo orden iban después y tapaban las líneas sobre el eje
-      // (cada eje deja su contorno y su línea)
-      this.sketchGroup.children.slice(-4).forEach((l, i) => (l.renderOrder = i % 2 ? 6 : 5.5));
+      lines([[0, 0], [axisLen, 0]], hex("axis-x"), false, 1, 6);
+      lines([[0, 0], [0, axisLen]], hex("axis-y"), false, 1, 6);
     }
+    flushLines();
     // Todo en la pasada de lo transparente, donde vale `renderOrder`: si no, los calcos
     // (transparentes, se dibujan después de lo opaco) tapaban las líneas y los puntos
     for (const o of this.sketchGroup.children) {

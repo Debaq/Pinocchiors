@@ -20,8 +20,9 @@ pub struct DiagnosticResult {
     /// pueden mover (con dos, se mueven en cualquier dirección).
     pub free_dirs: Vec<(usize, [f64; 2])>,
     /// Base del espacio nulo del jacobiano (columnas): los movimientos que
-    /// las restricciones permiten.
-    pub nullspace: nalgebra::DMatrix<f64>,
+    /// las restricciones permiten. Por bloques: uno por grupo de puntos unidos
+    /// por restricciones.
+    pub nullspace: Nullspace,
     /// Resumen general
     pub status: DiagnosticStatus,
 }
@@ -38,14 +39,148 @@ pub enum DiagnosticStatus {
     OverConstrainedConflicting,
 }
 
+/// Espacio nulo del jacobiano por bloques. Los grupos de puntos que no
+/// comparten restricciones se mueven por separado: su espacio nulo es la suma
+/// de los de cada grupo. Guardarlo entero era una matriz densa de
+/// variables × libres (con un texto de miles de puntos, gigas).
+#[derive(Debug, Clone, Default)]
+pub struct Nullspace {
+    /// Por punto: (bloque, índice del punto dentro del bloque)
+    at: Vec<(usize, usize)>,
+    /// Base de cada bloque (2·puntos del bloque × libres)
+    blocks: Vec<nalgebra::DMatrix<f64>>,
+}
+
+impl Nullspace {
+    /// Un bloque solo con todos los puntos.
+    fn whole(null: nalgebra::DMatrix<f64>, n_points: usize) -> Self {
+        Nullspace { at: (0..n_points).map(|i| (0, i)).collect(), blocks: vec![null] }
+    }
+
+    /// Cantidad de movimientos libres.
+    pub fn dim(&self) -> usize {
+        self.blocks.iter().map(|b| b.ncols()).sum()
+    }
+}
+
+/// Grupos de puntos unidos por restricciones: (puntos, restricciones) de
+/// cada uno, en orden. `None` si alguna restricción no toca ningún punto
+/// (entonces no se puede repartir).
+fn components(system: &ConstraintSystem) -> Option<Vec<(Vec<usize>, Vec<usize>)>> {
+    let n = system.points.len();
+    let mut parent: Vec<usize> = (0..n).collect();
+    fn find(parent: &mut [usize], mut i: usize) -> usize {
+        while parent[i] != i {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
+        }
+        i
+    }
+    let mut first = Vec::with_capacity(system.constraints.len());
+    for c in &system.constraints {
+        let pts: Vec<usize> = c.point_indices().into_iter().filter(|&p| p < n).collect();
+        let &f = pts.first()?;
+        for &p in &pts[1..] {
+            let (a, b) = (find(&mut parent, f), find(&mut parent, p));
+            if a != b {
+                parent[a.max(b)] = a.min(b);
+            }
+        }
+        first.push(f);
+    }
+    let mut slot: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    let mut out: Vec<(Vec<usize>, Vec<usize>)> = Vec::new();
+    for p in 0..n {
+        let r = find(&mut parent, p);
+        let k = *slot.entry(r).or_insert_with(|| {
+            out.push((Vec::new(), Vec::new()));
+            out.len() - 1
+        });
+        out[k].0.push(p);
+    }
+    for (ci, f) in first.into_iter().enumerate() {
+        let r = find(&mut parent, f);
+        out[slot[&r]].1.push(ci);
+    }
+    Some(out)
+}
+
 /// Analizar sistema y diagnosticar problemas.
+///
+/// Cada grupo de puntos unidos por restricciones se diagnostica aparte (los
+/// SVD densos de todo el sketch tardaban decenas de segundos con mil
+/// entidades); los puntos sin restricciones quedan libres sin calcular nada.
+pub fn diagnose(system: &ConstraintSystem) -> DiagnosticResult {
+    let n_points = system.points.len();
+    let Some(groups) = components(system).filter(|g| g.len() > 1) else {
+        return diagnose_single(system);
+    };
+    let mut out = DiagnosticResult {
+        conflicting: vec![],
+        redundant: vec![],
+        minimal_conflict_set: vec![],
+        free_points: vec![],
+        dof_per_point: Vec::with_capacity(n_points),
+        free_dirs: vec![],
+        nullspace: Nullspace { at: vec![(0, 0); n_points], blocks: Vec::new() },
+        status: DiagnosticStatus::WellConstrained,
+    };
+    let (mut dof, mut inconsistent, mut redundant_any) = (0i32, false, false);
+    for (points, cons) in groups {
+        let block = out.nullspace.blocks.len();
+        for (local, &p) in points.iter().enumerate() {
+            out.nullspace.at[p] = (block, local);
+        }
+        // Sin restricciones: libre del todo
+        if cons.is_empty() {
+            for &p in &points {
+                out.dof_per_point.push((p, 2));
+            }
+            dof += 2 * points.len() as i32;
+            out.nullspace.blocks.push(nalgebra::DMatrix::identity(points.len() * 2, points.len() * 2));
+            continue;
+        }
+        let mut sub = ConstraintSystem::new();
+        let local: std::collections::HashMap<usize, usize> = points.iter().enumerate().map(|(l, &g)| (g, l)).collect();
+        sub.points = points.iter().map(|&g| system.points[g]).collect();
+        sub.constraints = cons.iter().map(|&ci| system.constraints[ci].remap_indices(&local)).collect();
+        let d = diagnose_single(&sub);
+        out.conflicting.extend(d.conflicting.iter().map(|&i| cons[i]));
+        out.redundant.extend(d.redundant.iter().map(|&i| cons[i]));
+        out.minimal_conflict_set.extend(d.minimal_conflict_set.iter().map(|&i| cons[i]));
+        out.dof_per_point.extend(d.dof_per_point.iter().map(|&(i, k)| (points[i], k)));
+        out.free_dirs.extend(d.free_dirs.iter().map(|&(i, dir)| (points[i], dir)));
+        dof += d.nullspace.dim() as i32;
+        inconsistent |= d.status == DiagnosticStatus::OverConstrainedConflicting;
+        redundant_any |= !d.redundant.is_empty();
+        out.nullspace.blocks.extend(d.nullspace.blocks);
+    }
+    for v in [&mut out.conflicting, &mut out.redundant, &mut out.minimal_conflict_set] {
+        v.sort_unstable();
+    }
+    out.dof_per_point.sort_unstable_by_key(|x| x.0);
+    out.free_dirs.sort_by_key(|x| x.0);
+    out.free_points = out.dof_per_point.iter().filter(|(_, d)| *d > 0).map(|(p, _)| *p).collect();
+    out.status = if inconsistent {
+        DiagnosticStatus::OverConstrainedConflicting
+    } else if redundant_any && dof == 0 {
+        DiagnosticStatus::OverConstrainedConsistent
+    } else if dof > 0 {
+        DiagnosticStatus::UnderConstrained
+    } else {
+        DiagnosticStatus::WellConstrained
+    };
+    out
+}
+
+/// Diagnóstico de un sistema entero (sin repartirlo).
 ///
 /// Pasos:
 /// 1. Resolver el sistema (con un clon, no muta el original)
 /// 2. Calcular residual por constraint para detectar conflictos reales
 /// 3. Análisis de rank del Jacobiano para detectar redundancia
 /// 4. Si hay conflicto, encontrar subset mínimo
-pub fn diagnose(system: &ConstraintSystem) -> DiagnosticResult {
+fn diagnose_single(system: &ConstraintSystem) -> DiagnosticResult {
     use crate::solver::{solve, SolverParams};
 
     let n_var = system.num_variables();
@@ -60,7 +195,7 @@ pub fn diagnose(system: &ConstraintSystem) -> DiagnosticResult {
             free_points: (0..n_points).collect(),
             dof_per_point: (0..n_points).map(|i| (i, 2)).collect(),
             free_dirs: vec![],
-            nullspace: nalgebra::DMatrix::identity(n_var, n_var),
+            nullspace: Nullspace::whole(nalgebra::DMatrix::identity(n_var, n_var), n_points),
             status: DiagnosticStatus::UnderConstrained,
         };
     }
@@ -148,7 +283,7 @@ pub fn diagnose(system: &ConstraintSystem) -> DiagnosticResult {
         free_points,
         dof_per_point,
         free_dirs,
-        nullspace: null,
+        nullspace: Nullspace::whole(null, n_points),
         status,
     }
 }
@@ -317,8 +452,19 @@ fn point_dof_in_nullspace(null: &nalgebra::DMatrix<f64>, point_idx: usize) -> (i
     (keep.len() as i32, dir)
 }
 
-/// Grados libres de un grupo de puntos (rango del espacio nulo en sus columnas).
-pub fn points_dof(null: &nalgebra::DMatrix<f64>, points: &[usize]) -> i32 {
+/// Grados libres de un grupo de puntos (rango del espacio nulo en sus
+/// columnas): la suma de lo de cada bloque, que se mueven por separado.
+pub fn points_dof(null: &Nullspace, points: &[usize]) -> i32 {
+    let mut by_block: std::collections::BTreeMap<usize, Vec<usize>> = std::collections::BTreeMap::new();
+    for &p in points {
+        if let Some(&(b, l)) = null.at.get(p) {
+            by_block.entry(b).or_default().push(l);
+        }
+    }
+    by_block.iter().map(|(&b, locals)| null.blocks.get(b).map_or(0, |m| dense_points_dof(m, locals))).sum()
+}
+
+fn dense_points_dof(null: &nalgebra::DMatrix<f64>, points: &[usize]) -> i32 {
     if null.ncols() == 0 || points.is_empty() {
         return 0;
     }

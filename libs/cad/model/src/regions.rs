@@ -61,18 +61,23 @@ const SEGMENTS_PER_TURN: f64 = 64.0;
 
 /// Puntos de una entidad en su sentido natural (para muestrear y orientar).
 pub fn sample_entity(s: &Sketch, id: u32) -> Result<Vec<P2>, SketchError> {
-    let e = s.entity(id)?;
-    Ok(match &e.geometry {
-        Geometry::Line { start, end } => vec![s.point(*start)?, s.point(*end)?],
+    sample_geometry(&s.entity(id)?.geometry, &|p| s.point(p))
+}
+
+/// Puntos de una geometría con los puntos que da `point` (con un índice armado
+/// una vez: buscar cada punto en la lista del sketch es lineal).
+fn sample_geometry(g: &Geometry, point: &impl Fn(u32) -> Result<P2, SketchError>) -> Result<Vec<P2>, SketchError> {
+    Ok(match g {
+        Geometry::Line { start, end } => vec![point(*start)?, point(*end)?],
         Geometry::Circle { center, radius } => {
-            let c = s.point(*center)?;
+            let c = point(*center)?;
             (0..=64).map(|i| {
                 let a = i as f64 / 64.0 * 2.0 * PI;
                 [c[0] + radius * a.cos(), c[1] + radius * a.sin()]
             }).collect()
         }
         Geometry::Arc { center, start, end } => {
-            let (c, a, b) = (s.point(*center)?, s.point(*start)?, s.point(*end)?);
+            let (c, a, b) = (point(*center)?, point(*start)?, point(*end)?);
             let r = dist2(c, a);
             let a0 = (a[1] - c[1]).atan2(a[0] - c[0]);
             let sweep = arc_sweep(c, a, b);
@@ -86,15 +91,15 @@ pub fn sample_entity(s: &Sketch, id: u32) -> Result<Vec<P2>, SketchError> {
             pts
         }
         Geometry::Spline { points, closed, .. } => {
-            let mut pts: Vec<P2> = points.iter().map(|p| s.point(*p)).collect::<Result<_, _>>()?;
+            let mut pts: Vec<P2> = points.iter().map(|p| point(*p)).collect::<Result<_, _>>()?;
             if *closed && let Some(&f) = pts.first() {
                 pts.push(f);
             }
             catmull_rom(&pts)
         }
-        Geometry::Point { point } => vec![s.point(*point)?],
+        Geometry::Point { point: p } => vec![point(*p)?],
         Geometry::Ellipse { center, major, minor } => {
-            let (c, a, b) = (s.point(*center)?, s.point(*major)?, s.point(*minor)?);
+            let (c, a, b) = (point(*center)?, point(*major)?, point(*minor)?);
             let (u, v) = ([a[0] - c[0], a[1] - c[1]], [b[0] - c[0], b[1] - c[1]]);
             (0..=64)
                 .map(|i| {
@@ -104,8 +109,8 @@ pub fn sample_entity(s: &Sketch, id: u32) -> Result<Vec<P2>, SketchError> {
                 .collect()
         }
         Geometry::EllipseArc { center, major, minor, start, end } => {
-            let (c, a, b) = (s.point(*center)?, s.point(*major)?, s.point(*minor)?);
-            let (p0, p1) = (s.point(*start)?, s.point(*end)?);
+            let (c, a, b) = (point(*center)?, point(*major)?, point(*minor)?);
+            let (p0, p1) = (point(*start)?, point(*end)?);
             let (u, v) = ([a[0] - c[0], a[1] - c[1]], [b[0] - c[0], b[1] - c[1]]);
             // Antihorario en el plano, sea cual sea el lado del semieje menor
             let sense = if u[0] * v[1] - u[1] * v[0] >= 0.0 { 1.0 } else { -1.0 };
@@ -132,7 +137,7 @@ pub fn sample_entity(s: &Sketch, id: u32) -> Result<Vec<P2>, SketchError> {
             pts
         }
         Geometry::BSpline { poles, degree, closed, weights, knots } => {
-            let pts: Vec<nalgebra::Vector2<f64>> = poles.iter().map(|p| s.point(*p).map(|q| nalgebra::Vector2::new(q[0], q[1]))).collect::<Result<_, _>>()?;
+            let pts: Vec<nalgebra::Vector2<f64>> = poles.iter().map(|p| point(*p).map(|q| nalgebra::Vector2::new(q[0], q[1]))).collect::<Result<_, _>>()?;
             let curve = cad_solver::BSpline::new(&pts, weights, *degree as usize, *closed, knots)
                 .ok_or_else(|| SketchError::Unsupported("B-spline con nudos que no cuadran con los polos".into()))?;
             // 16 por tramo y al menos 64 en total (una cónica es un tramo solo)
@@ -264,13 +269,13 @@ enum Exact {
     Circle(P2, f64),
 }
 
-fn exact(s: &Sketch, g: &Geometry) -> Option<Exact> {
+fn exact(g: &Geometry, point: &impl Fn(u32) -> Result<P2, SketchError>) -> Option<Exact> {
     match g {
-        Geometry::Line { start, end } => Some(Exact::Line(s.point(*start).ok()?, s.point(*end).ok()?)),
-        Geometry::Circle { center, radius } => Some(Exact::Circle(s.point(*center).ok()?, *radius)),
+        Geometry::Line { start, end } => Some(Exact::Line(point(*start).ok()?, point(*end).ok()?)),
+        Geometry::Circle { center, radius } => Some(Exact::Circle(point(*center).ok()?, *radius)),
         Geometry::Arc { center, start, .. } => {
-            let c = s.point(*center).ok()?;
-            Some(Exact::Circle(c, dist2(c, s.point(*start).ok()?)))
+            let c = point(*center).ok()?;
+            Some(Exact::Circle(c, dist2(c, point(*start).ok()?)))
         }
         _ => None,
     }
@@ -387,18 +392,38 @@ fn cut_crossings(curves: &mut [Cuttable], tol: f64) {
         p.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, q| [b[0].min(q[0]), b[1].min(q[1]), b[2].max(q[0]), b[3].max(q[1])])
     };
     let boxes: Vec<[f64; 4]> = curves.iter().map(|c| bbox(&c.pts)).collect();
+    let seg_boxes: Vec<Vec<[f64; 4]>> = curves.iter().map(|c| c.pts.windows(2).map(bbox).collect()).collect();
     let touch = tol * 100.0;
-    for i in 0..curves.len() {
-        for j in i + 1..curves.len() {
+    // Barrido por x: solo se miran los pares cuyas cajas se pisan en x (con
+    // miles de curvas, todos contra todos era cuadrático)
+    let mut order: Vec<usize> = (0..curves.len()).collect();
+    order.sort_by(|&a, &b| boxes[a][0].total_cmp(&boxes[b][0]));
+    let mut pairs: Vec<(usize, usize)> = Vec::new();
+    for (k, &a) in order.iter().enumerate() {
+        for &b in &order[k + 1..] {
+            if boxes[b][0] > boxes[a][2] + touch {
+                break;
+            }
+            pairs.push((a.min(b), a.max(b)));
+        }
+    }
+    // En el orden de antes (los cortes de cada curva salen en el mismo orden)
+    pairs.sort_unstable();
+    for (i, j) in pairs {
+        {
             let (a, b) = (boxes[i], boxes[j]);
             if a[0] > b[2] + touch || b[0] > a[2] + touch || a[1] > b[3] + touch || b[1] > a[3] + touch {
                 continue;
             }
             let mut found: Vec<(f64, f64, P2)> = Vec::new();
             for (si, w) in curves[i].pts.windows(2).enumerate() {
-                let sb = bbox(w);
+                let sb = seg_boxes[i][si];
+                // Este segmento lejos de toda la otra curva
+                if sb[0] > b[2] + touch || b[0] > sb[2] + touch || sb[1] > b[3] + touch || b[1] > sb[3] + touch {
+                    continue;
+                }
                 for (sj, v) in curves[j].pts.windows(2).enumerate() {
-                    let vb = bbox(v);
+                    let vb = seg_boxes[j][sj];
                     if sb[0] > vb[2] + touch || vb[0] > sb[2] + touch || sb[1] > vb[3] + touch || vb[1] > sb[3] + touch {
                         continue;
                     }
@@ -536,26 +561,46 @@ pub fn find_regions(s: &Sketch) -> Result<Vec<Region>, SketchError> {
     let span = s.points.iter().fold(0.0f64, |m, p| m.max(p.x.abs()).max(p.y.abs())).max(1.0);
     let tol = span * 1e-9;
 
+    // Nodos en una rejilla de celdas del tamaño del radio de fusión: se busca
+    // en la celda y sus vecinas (con miles de extremos, la lista era cuadrática)
+    let merge = tol * 100.0;
     let mut nodes: Vec<P2> = Vec::new();
+    let mut cells: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    let cell = |p: P2| ((p[0] / merge).floor() as i64, (p[1] / merge).floor() as i64);
     let mut node_of = |p: P2| -> usize {
-        if let Some(i) = nodes.iter().position(|q| dist2(*q, p) <= tol * 100.0) {
+        let (cx, cy) = cell(p);
+        let mut best: Option<usize> = None;
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for &i in cells.get(&(cx + dx, cy + dy)).map(Vec::as_slice).unwrap_or(&[]) {
+                    // El primero que se creó, como antes
+                    if dist2(nodes[i], p) <= merge && best.is_none_or(|b| i < b) {
+                        best = Some(i);
+                    }
+                }
+            }
+        }
+        if let Some(i) = best {
             return i;
         }
         nodes.push(p);
+        cells.entry((cx, cy)).or_default().push(nodes.len() - 1);
         nodes.len() - 1
     };
     let mut edges: Vec<Edge> = Vec::new();
 
+    let index: HashMap<u32, P2> = s.points.iter().map(|p| (p.id, [p.x, p.y])).collect();
+    let point = |id: u32| index.get(&id).copied().ok_or(SketchError::NoPoint(id));
     let mut curves: Vec<Cuttable> = Vec::new();
     for e in s.entities.iter().filter(|e| !e.construction && !matches!(e.geometry, Geometry::Point { .. })) {
         // Una curva que no se puede muestrear (le falta un punto…) no forma regiones, pero no tumba las demás
-        let Ok(pts) = sample_entity(s, e.id) else { continue };
+        let Ok(pts) = sample_geometry(&e.geometry, &point) else { continue };
         // También una abierta que termina donde empieza (una spline cerrada pasada a polos)
         let closed = e.geometry.is_closed() || e.geometry.ends().is_some_and(|(a, b)| a == b);
         if pts.len() < 2 {
             continue;
         }
-        curves.push(Cuttable { entity: e.id, pts, closed, exact: exact(s, &e.geometry), cuts: Vec::new() });
+        curves.push(Cuttable { entity: e.id, pts, closed, exact: exact(&e.geometry, &point), cuts: Vec::new() });
     }
     cut_crossings(&mut curves, tol);
 
@@ -582,37 +627,44 @@ pub fn find_regions(s: &Sketch) -> Result<Vec<Region>, SketchError> {
 
     // Tramos encimados (una línea sobre otra): queda uno solo, si no las caras
     // no se arman (dos aristas iguales salen con el mismo ángulo de un nodo)
+    // (las candidatas a gemela son las que unen los mismos dos nodos)
     let mut kept: Vec<Edge> = Vec::new();
+    let mut by_ends: HashMap<(usize, usize), Vec<(usize, P2)>> = HashMap::new();
     for e in edges {
-        let twin = kept.iter().any(|k| {
-            let same_ends = k.nodes == e.nodes || k.nodes == [e.nodes[1], e.nodes[0]];
-            same_ends && dist2(half_way(&k.pts), half_way(&e.pts)) <= tol * 1000.0
-        });
-        if !twin {
+        let key = (e.nodes[0].min(e.nodes[1]), e.nodes[0].max(e.nodes[1]));
+        let mid = half_way(&e.pts);
+        let same = by_ends.entry(key).or_default();
+        if !same.iter().any(|&(_, m)| dist2(m, mid) <= tol * 1000.0) {
+            same.push((kept.len(), mid));
             kept.push(e);
         }
     }
     let edges = kept;
 
-    // Podar ramas sueltas
+    // Podar ramas sueltas: se sacan las aristas de los nodos con una sola, y
+    // los nodos que quedan así siguen en la cola
     let mut alive = vec![true; edges.len()];
-    loop {
-        let mut degree = vec![0usize; nodes.len()];
-        for (i, e) in edges.iter().enumerate() {
-            if alive[i] {
-                degree[e.nodes[0]] += 1;
-                degree[e.nodes[1]] += 1;
-            }
+    let mut degree = vec![0usize; nodes.len()];
+    let mut touching: Vec<Vec<usize>> = vec![Vec::new(); nodes.len()];
+    for (i, e) in edges.iter().enumerate() {
+        for n in e.nodes {
+            degree[n] += 1;
+            touching[n].push(i);
         }
-        let mut changed = false;
-        for (i, e) in edges.iter().enumerate() {
-            if alive[i] && (degree[e.nodes[0]] < 2 || degree[e.nodes[1]] < 2) {
-                alive[i] = false;
-                changed = true;
+    }
+    let mut queue: Vec<usize> = (0..nodes.len()).filter(|&n| degree[n] < 2).collect();
+    while let Some(n) = queue.pop() {
+        for &i in &touching[n] {
+            if !alive[i] {
+                continue;
             }
-        }
-        if !changed {
-            break;
+            alive[i] = false;
+            for m in edges[i].nodes {
+                degree[m] -= 1;
+                if degree[m] == 1 {
+                    queue.push(m);
+                }
+            }
         }
     }
 
@@ -690,18 +742,36 @@ pub fn find_regions(s: &Sketch) -> Result<Vec<Region>, SketchError> {
     }
 
     // Contención: el padre de un lazo es el lazo más chico que lo contiene.
-    let probe = |l: &Loop| interior_point(&l.polygon, &[]);
-    let contains = |outer: &Loop, inner: &Loop| -> bool {
-        inner.area < outer.area && point_in_polygon(probe(inner), &outer.polygon)
-            && inner.polygon.iter().step_by((inner.polygon.len() / 8).max(1)).all(|p| point_in_polygon(*p, &outer.polygon) || on_ring(*p, &outer.polygon, tol * 10.0))
-    };
+    // El punto interior y la caja de cada uno, una vez; los candidatos, de
+    // menor a mayor área: el primero que lo contiene es el padre
     let n = loops.len();
+    let probes: Vec<P2> = loops.iter().map(|l| interior_point(&l.polygon, &[])).collect();
+    let boxes: Vec<[f64; 4]> = loops
+        .iter()
+        .map(|l| l.polygon.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, q| [b[0].min(q[0]), b[1].min(q[1]), b[2].max(q[0]), b[3].max(q[1])]))
+        .collect();
+    let slack = tol * 10.0;
+    let contains = |o: usize, i: usize| -> bool {
+        let (outer, inner) = (&loops[o], &loops[i]);
+        let (bo, bi) = (boxes[o], boxes[i]);
+        inner.area < outer.area
+            && bi[0] >= bo[0] - slack
+            && bi[1] >= bo[1] - slack
+            && bi[2] <= bo[2] + slack
+            && bi[3] <= bo[3] + slack
+            && point_in_polygon(probes[i], &outer.polygon)
+            && inner.polygon.iter().step_by((inner.polygon.len() / 8).max(1)).all(|p| point_in_polygon(*p, &outer.polygon) || on_ring(*p, &outer.polygon, slack))
+    };
+    let mut by_area: Vec<usize> = (0..n).collect();
+    by_area.sort_by(|&a, &b| loops[a].area.total_cmp(&loops[b].area).then(a.cmp(&b)));
     let mut parent: Vec<Option<usize>> = vec![None; n];
-    for i in 0..n {
-        for j in 0..n {
-            if i != j && contains(&loops[j], &loops[i]) && parent[i].is_none_or(|p| loops[j].area < loops[p].area) {
-                parent[i] = Some(j);
-            }
+    for (k, &i) in by_area.iter().enumerate() {
+        parent[i] = by_area[k + 1..].iter().copied().find(|&j| contains(j, i));
+    }
+    let mut children: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for j in 0..n {
+        if let Some(p) = parent[j] {
+            children[p].push(j);
         }
     }
     let depth = |mut i: usize| {
@@ -714,7 +784,7 @@ pub fn find_regions(s: &Sketch) -> Result<Vec<Region>, SketchError> {
     };
     let mut regions = Vec::new();
     for i in 0..n {
-        let holes: Vec<Loop> = (0..n).filter(|&j| parent[j] == Some(i)).map(|j| loops[j].clone()).collect();
+        let holes: Vec<Loop> = children[i].iter().map(|&j| loops[j].clone()).collect();
         let hole_polys: Vec<&[P2]> = holes.iter().map(|h| h.polygon.as_slice()).collect();
         let sample = interior_point(&loops[i].polygon, &hole_polys);
         regions.push(Region { outer: loops[i].clone(), holes, depth: depth(i), sample });

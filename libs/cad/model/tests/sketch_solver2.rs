@@ -234,3 +234,30 @@ fn line_from_a_corner_does_not_drag_the_rectangle() {
         assert_relative_eq!(pt(&s, id)[1], want[1], epsilon = 1e-6);
     }
 }
+
+/// Varias piezas sueltas y casi iguales (cada una su bloque; las relaciones
+/// entre ellas los juntan y, si mueven algo, se rearman): queda definido igual
+#[test]
+fn auto_define_with_many_loose_pieces() {
+    for relations in [true, false] {
+        let mut s = Sketch::new();
+        s.ensure_origin();
+        for i in 0..3 {
+            for j in 0..2 {
+                let (x, y) = (i as f64 * 15.0 + 3.0, j as f64 * 15.0 + 3.0);
+                // Casi del mismo tamaño y apenas torcidos: las relaciones mueven algo
+                let w = 10.0 + 0.01 * (i + j) as f64;
+                s.polyline(&[[x, y], [x + w, y + 0.02], [x + w, y + 8.0], [x, y + 8.0 + 0.01 * i as f64]]);
+                s.circle([x + 5.0, y + 4.0], 2.0 + 0.005 * j as f64);
+            }
+        }
+        let add = s.auto_define(relations).unwrap();
+        for c in add {
+            s.constrain(c);
+        }
+        let r = s.solve().unwrap();
+        assert_eq!(r.status, SketchStatus::WellConstrained, "relaciones {relations}: {r:?}");
+        assert!(r.conflicting.is_empty());
+        assert!(s.auto_define(relations).unwrap().is_empty());
+    }
+}

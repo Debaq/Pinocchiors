@@ -1198,7 +1198,8 @@ impl Sketch {
         // Arrastrando y cumplido: sin el diagnóstico (SVD densos, que con
         // sketches grandes tardan segundos por cuadro); la interfaz conserva
         // lo libre del último y lo rehace al soltar
-        if drag.is_some() && !failed && invalid.is_empty() && status == SolveStatus::Converged && residual <= 1e-6 {
+        // (sin definir del todo también: el solver lo da `UnderConstrained`)
+        if drag.is_some() && !failed && invalid.is_empty() && matches!(status, SolveStatus::Converged | SolveStatus::UnderConstrained) && residual <= 1e-6 {
             self.measure_references();
             let status = if dof > 0 { SketchStatus::UnderConstrained } else { SketchStatus::WellConstrained };
             return Ok(SolveReport {

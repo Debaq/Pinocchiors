@@ -77,6 +77,21 @@ fn a_drag_that_converges_skips_the_diagnosis() {
     assert!((s.point(b).unwrap()[0] - 14.0).abs() < 1e-6);
 }
 
+/// Con algo libre en otro lado (el solver dice «sin definir») el arrastre
+/// también va sin diagnóstico: antes solo con el sketch entero definido
+#[test]
+fn a_drag_with_something_free_elsewhere_is_quick_too() {
+    let mut s = Sketch::new();
+    let o = s.ensure_origin();
+    let b = s.add_point(10.0, 0.0);
+    let line = s.add_line(o, b);
+    s.constrain(SketchConstraint::Horizontal { line });
+    s.line([0.0, 5.0], [8.0, 7.0]);
+    let r = s.solve_drag(b, [14.0, 0.0]).unwrap();
+    assert!(r.quick, "{:?}", r.status);
+    assert_eq!(r.status, SketchStatus::UnderConstrained);
+}
+
 /// Un arrastre con conflicto sí diagnostica (para marcar lo que choca)
 #[test]
 fn a_drag_with_a_conflict_still_reports_it() {

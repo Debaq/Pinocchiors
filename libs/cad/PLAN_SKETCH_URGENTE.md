@@ -138,15 +138,43 @@ El orden de las fases es el de urgencia: primero lo que pierde trabajo del usuar
 
 ## U4 — Rendimiento con sketches grandes (alto)
 
-- [ ] **Overlay entero rehecho en cada movimiento** [V] (`CadView.tsx:1096` → `CadViewer.ts:1222`):
+- [x] **Overlay entero rehecho en cada movimiento** [V] (`CadView.tsx:1096` → `CadViewer.ts:1222`):
   separar capa estática (sketch, regiones) de la vista previa; throttle a rAF de `hitTest`,
   `trimRemoved`, `extendAny` en `onPointerMove`.
-- [ ] **El sketch entero por IPC en cada arrastre** [V] (`cadUi.ts:518`).
-- [ ] **`find_regions` cuadrático** [V] (`regions.rs:586`, `:682`, `cut_crossings ~217`;
+- [ ] **El sketch entero por IPC en cada arrastre** [V] (`cadUi.ts:518`). Medido: 1,3 MB de
+  JSON con 1125 entidades, ~3 ms en Rust; falta medir el lado de WebKit antes de cambiarlo.
+- [x] **`find_regions` cuadrático** [V] (`regions.rs:586`, `:682`, `cut_crossings ~217`;
   `system.rs:219` `decompose_indexed`): hash espacial, `probe` una vez por lazo, rejilla para cruces.
-- [ ] **`sketch_assist` O(n²) memoria / O(n³) tiempo** [V] (`sketch_assist.rs:34,61`): por
+- [x] **`sketch_assist` O(n²) memoria / O(n³) tiempo** [V] (`sketch_assist.rs:34,61`): por
   componente, con tope de candidatas.
-- [ ] Banco: sketch con 1000+ entidades (DXF, texto largo) con tiempos de solve, regiones y arrastre.
+- [x] Banco: sketch con 1000+ entidades (DXF, texto largo) con tiempos de solve, regiones y arrastre.
+- **Hecho 2026-11-05**: banco `model/tests/sketch_bench.rs` (`--release -- --ignored`).
+  Causa principal: `diagnose` armaba jacobiano denso + SVD + espacio nulo de todo el sketch
+  (texto sin restricciones: identidad 12000×12000). Ahora va por grupos de puntos unidos por
+  restricciones, con el espacio nulo por bloques (`cad_solver::Nullspace`); los puntos sueltos
+  no pasan por SVD. Además el arrastre rápido exigía `Converged` y un sketch sin definir da
+  `UnderConstrained`: nunca era rápido. Regiones: muestreo con índice de puntos, nodos en
+  rejilla, cruces con barrido por x y cajas de segmentos, gemelas por hash, poda con cola,
+  contención ordenada por área. Ayudas: `Freedom` por bloques que se juntan al unir grupos,
+  `gain` sin copiar bases (Gram-Schmidt sobre Bᵀ·fila), grados libres contados, relación que
+  ya se cumple se suma sin resolver; iguales/paralelas/radios contra la primera de su grupo,
+  vecinos por rejilla y cajas. Visor: líneas del sketch en lotes (`LineSegments2` con color
+  por vértice, antes 2 objetos por entidad) y vista previa en `setSketchPreview` (su propio
+  grupo y efecto: el mouse ya no rehace el sketch); preselección una vez por cuadro.
+
+  | caso (release) | antes | después |
+  |---|---|---|
+  | placa 1125 ent.: resolver / arrastrar | 44 303 / 45 063 ms | 14 / 12 ms |
+  | placa: regiones | 130 ms | 4 ms |
+  | rejilla 60+60 (3481 regiones) | 254 ms | 19 ms |
+  | texto 6000 ent.: resolver | 9 213 ms | 5 ms |
+  | placa 80 ent.: sugerir / definir | 395 / 432 ms | 0,7 / 4,5 ms |
+  | placa 320 ent.: sugerir / definir | > 60 s | 2 / 485 ms |
+
+  Pruebas: `sketch_robust.rs` (arrastre rápido con algo libre), `sketch_solver2.rs` (definir
+  con piezas sueltas casi iguales). Falta probarlo en la app (colores y grosores del visor).
+  Queda: definir con relaciones en 1125 entidades iguales tarda 24 s (las iguales juntan todo
+  en un bloque de ~2700 variables: costo cúbico; haría falta QR ralo); IPC del arrastre.
 
 ## U5 — Geometría y regiones correctas (medio)
 
