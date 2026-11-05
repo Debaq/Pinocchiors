@@ -4,6 +4,7 @@
 
 import { detachSelection, freeFromConstraints } from "./sketchFree";
 import { t as tr } from "./i18n.ts";
+import { tBackend } from "./i18nBackend";
 import type { SketchFilter } from "./sketchPick";
 import { batch, createEffect, createSignal, on } from "solid-js";
 import { blockSketch, layerState, saveBlock } from "./sketchBlocks";
@@ -525,9 +526,31 @@ export function createCadUi(store: CadStore) {
         if (expr && r.sketch.constraints[i]) (r.sketch.constraints[i] as { expr?: string }).expr = expr;
       });
       const now = session();
-      if (now && now.feature === s.feature) setSession({ ...now, sketch: r.sketch, report: r.report, regions: r.regions });
+      if (now && now.feature === s.feature) {
+        // Arrastre rápido (sin diagnóstico): lo libre y las flechas del último completo
+        const prev = now.report;
+        const report: SolveReport =
+          r.report.quick && prev
+            ? {
+                ...r.report,
+                // El estado y los grados del arrastre cuentan el punto arrastrado como fijo
+                status: prev.status,
+                dof: prev.dof,
+                free_points: prev.free_points,
+                free_entities: prev.free_entities,
+                free_dirs: prev.free_dirs,
+                entity_dof: prev.entity_dof,
+                free_radius: prev.free_radius,
+              }
+            : r.report;
+        setSession({ ...now, sketch: r.sketch, report, regions: r.regions });
+        // Una restricción nueva que no se puede usar: por qué (las de antes ya se avisaron)
+        const fresh = (report.invalid ?? []).filter(([i]) => !(prev?.invalid ?? []).some(([j]) => j === i));
+        if (fresh.length) setMessage(tr("Hay restricciones que no se pueden usar (en rojo): {e}", { e: tBackend(fresh[0][1]) }));
+      }
     } catch (e) {
-      setMessage(String(e));
+      // Un error de un pedido viejo (deshecho después) no se muestra
+      if (asked === generation) setMessage(String(e));
     }
   };
 
@@ -935,9 +958,15 @@ export function createCadUi(store: CadStore) {
         solving = false;
       }
     },
-    /** Termina un arrastre: el próximo empieza un paso nuevo */
+    /** Termina un arrastre: el próximo empieza un paso nuevo, y lo libre se recalcula entero */
     endDrag() {
       dragSaved = false;
+      void (async () => {
+        // Después del último pedido del arrastre
+        while (solving) await new Promise((r) => setTimeout(r, 16));
+        const s = session();
+        if (s?.report?.quick) await solve(clone(s.sketch));
+      })();
     },
 
     /** Arrastre de un punto (se resuelve el último pedido cuando termina el anterior) */

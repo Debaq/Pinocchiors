@@ -609,7 +609,7 @@ pub fn restore_state(state: &AppState, bytes: &[u8]) -> Result<(), String> {
     restore(state, project)
 }
 
-fn pieces_dto(pieces: &std::sync::Mutex<Option<Vec<LabeledPiece>>>) -> Option<Vec<PieceDto>> {
+fn pieces_dto(pieces: &crate::sync::Mutex<Option<Vec<LabeledPiece>>>) -> Option<Vec<PieceDto>> {
     pieces.lock().unwrap().as_ref().map(|pieces| pieces.iter().map(|p| PieceDto { piece: p.clone(), mesh: MeshDto::from(&p.mesh) }).collect())
 }
 
@@ -626,8 +626,8 @@ fn pieces_from(pieces: Option<Vec<PieceDto>>) -> Result<Option<Vec<LabeledPiece>
 
 /// Solo el modelo del objeto activo (para deshacer y para guardarlo en su casillero)
 fn capture_model(state: &AppState) -> ProjectState {
-    let mesh = |m: &std::sync::Mutex<Option<Mesh>>| m.lock().unwrap().as_ref().map(MeshDto::from);
-    let skeleton = |s: &std::sync::Mutex<Option<SkeletonType>>| s.lock().unwrap().as_ref().map(SkeletonDto::from);
+    let mesh = |m: &crate::sync::Mutex<Option<Mesh>>| m.lock().unwrap().as_ref().map(MeshDto::from);
+    let skeleton = |s: &crate::sync::Mutex<Option<SkeletonType>>| s.lock().unwrap().as_ref().map(SkeletonDto::from);
     ProjectState {
         original: state.original_model.lock().unwrap().as_ref().map(|o| OriginalDto {
             name: o.name.clone(),

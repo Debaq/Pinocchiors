@@ -548,7 +548,8 @@ pub fn find_regions(s: &Sketch) -> Result<Vec<Region>, SketchError> {
 
     let mut curves: Vec<Cuttable> = Vec::new();
     for e in s.entities.iter().filter(|e| !e.construction && !matches!(e.geometry, Geometry::Point { .. })) {
-        let pts = sample_entity(s, e.id)?;
+        // Una curva que no se puede muestrear (le falta un punto…) no forma regiones, pero no tumba las demás
+        let Ok(pts) = sample_entity(s, e.id) else { continue };
         // También una abierta que termina donde empieza (una spline cerrada pasada a polos)
         let closed = e.geometry.is_closed() || e.geometry.ends().is_some_and(|(a, b)| a == b);
         if pts.len() < 2 {
@@ -651,19 +652,29 @@ pub fn find_regions(s: &Sketch) -> Result<Vec<Region>, SketchError> {
             }
             let mut face = Vec::new();
             let mut h = start;
+            let mut broken = false;
             loop {
                 used.insert(h, true);
                 face.push(h);
                 // Siguiente: en el nodo destino, la anterior (en orden antihorario)
                 // a la media arista de vuelta: deja la cara a la izquierda.
                 let v = to_node(h);
-                let list = &outgoing[&v];
-                let twin = (h.0, !h.1);
-                let pos = list.iter().position(|x| x.0 == twin).unwrap();
+                let (Some(list), twin) = (outgoing.get(&v), (h.0, !h.1)) else {
+                    broken = true;
+                    break;
+                };
+                // Grafo inconsistente (aristas casi encimadas): esta cara se salta
+                let Some(pos) = list.iter().position(|x| x.0 == twin) else {
+                    broken = true;
+                    break;
+                };
                 h = list[(pos + list.len() - 1) % list.len()].0;
                 if h == start || face.len() > edges.len() * 2 {
                     break;
                 }
+            }
+            if broken {
+                continue;
             }
             let mut poly: Vec<P2> = Vec::new();
             for &h in &face {

@@ -7,7 +7,7 @@ use pinocchio_repair::MeshDiagnostics;
 use pinocchio_skeleton::BasicSkeleton;
 use quadriflow_core::QuadMesh;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use crate::sync::Mutex;
 
 /// Tipos de esqueleto disponibles
 #[derive(Debug, Clone)]
@@ -330,7 +330,17 @@ impl AppState {
 
     /// Toma el turno de [`Self::project_io`] (un pánico anterior no lo deja trabado)
     pub fn project_io(&self) -> std::sync::MutexGuard<'_, ()> {
-        self.project_io.lock().unwrap_or_else(|e| e.into_inner())
+        self.project_io.lock().unwrap()
+    }
+
+    /// Después de un pánico en un comando: lo derivado del diseño pudo quedar
+    /// a medias (el caché del recálculo, la vista previa), así que se descarta
+    /// y el próximo recálculo lo rehace. Los documentos no se tocan.
+    pub fn after_panic(&self) {
+        *self.cad_preview.lock().unwrap() = None;
+        *self.cad_cache.lock().unwrap() = None;
+        *self.cad_tab_caches.lock().unwrap() = Default::default();
+        *self.cad_ops.lock().unwrap() = cad_model::EvalCache::default();
     }
 
     /// Intenta marcar un proceso largo como en curso. `None` si ya hay uno.

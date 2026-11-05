@@ -129,7 +129,19 @@ fn solve_decomposed(
 
     // Resolver cada sub-sistema
     for (mut sub, map) in subsystems {
-        let result = solve_single(&mut sub, params)?;
+        // Un sub-sistema que falla no frena a los demás: el suyo queda donde
+        // estaba (sin copiar nada) y el total sale sin converger
+        let result = match solve_single(&mut sub, params) {
+            Ok(r) => r,
+            Err(_) => {
+                let r = DVector::from_vec(sub.residuals()).norm();
+                max_residual = max_residual.max(if r.is_finite() { r } else { f64::MAX });
+                if worst_status != SolveStatus::OverConstrained {
+                    worst_status = SolveStatus::NotConverged;
+                }
+                continue;
+            }
+        };
 
         total_dof += result.dof;
         total_iterations = total_iterations.max(result.iterations);

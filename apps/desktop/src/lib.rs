@@ -25,6 +25,7 @@ pub mod remesh;
 pub mod scan_cloud;
 pub mod scanner;
 pub mod state;
+pub mod sync;
 pub mod structure;
 pub mod textures;
 

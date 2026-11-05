@@ -848,3 +848,32 @@ fn decomposed_points_in_same_place_keep_their_owner() {
     assert_relative_eq!(r.points[b].x(), 4.0, epsilon = 1e-9);
     assert_relative_eq!(r.points[b].y(), 4.0, epsilon = 1e-9);
 }
+
+/// Un sub-sistema que no se puede resolver (destino no finito) no frena a los
+/// demás: lo sano se resuelve y el total sale sin converger
+#[test]
+fn a_failing_subsystem_does_not_block_the_others() {
+    let mut sys = ConstraintSystem::new();
+    let a = sys.add_point(0.0, 0.0);
+    let b = sys.add_point(10.0, 3.0);
+    sys.add_constraint(Constraint::Fixed { p_idx: a, position: Point2::new(0.0, 0.0) });
+    sys.add_constraint(Constraint::Horizontal { p1_idx: a, p2_idx: b });
+    let c = sys.add_point(50.0, 50.0);
+    sys.add_constraint(Constraint::Fixed { p_idx: c, position: Point2::new(f64::NAN, 0.0) });
+    let r = solve(&mut sys, &SolverParams::default()).expect("no aborta todo");
+    assert_relative_eq!(r.points[b].y(), 0.0, epsilon = 1e-8);
+    assert_ne!(r.status, SolveStatus::Converged);
+    assert!(r.residual > 1e-6);
+}
+
+/// Pesos de una B-spline racional que no sirven (0, negativos, no finitos)
+#[test]
+fn bspline_rejects_bad_weights() {
+    use cad_solver::BSpline;
+    use nalgebra::Vector2;
+    let poles = [Vector2::new(0.0, 0.0), Vector2::new(1.0, 1.0), Vector2::new(2.0, 0.0)];
+    assert!(BSpline::new(&poles, &[1.0, 1.0, 1.0], 2, false, &[]).is_some());
+    for w in [0.0, -1.0, f64::INFINITY, f64::NAN] {
+        assert!(BSpline::new(&poles, &[1.0, w, 1.0], 2, false, &[]).is_none(), "peso {w}");
+    }
+}

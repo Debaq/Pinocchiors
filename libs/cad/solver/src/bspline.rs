@@ -28,6 +28,10 @@ impl BSpline {
             return None;
         }
         let w: Vec<f64> = if weights.len() == n { weights.to_vec() } else { vec![1.0; n] };
+        // Un peso 0, negativo o no finito divide por cero al evaluar (NaN)
+        if w.iter().any(|x| !x.is_finite() || *x <= 0.0) || poles.iter().any(|p| !p.iter().all(|c| c.is_finite())) {
+            return None;
+        }
         if closed {
             let p = degree.clamp(1, n.max(2) - 1);
             let mut poles = poles.to_vec();

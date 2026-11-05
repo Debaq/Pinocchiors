@@ -386,6 +386,26 @@ pub struct SolveReport {
     /// Hubo conflicto y se resolvió todo menos las que chocan.
     #[serde(default)]
     pub partial: bool,
+    /// Arrastre que se cumplió: sin diagnóstico (lo libre y lo que choca
+    /// vienen vacíos; la interfaz conserva los del último completo).
+    #[serde(default)]
+    pub quick: bool,
+    /// Restricciones que no se pudieron usar (índice y por qué): quedaron
+    /// fuera y van también en `conflicting` para quitarlas.
+    #[serde(default)]
+    pub invalid: Vec<(usize, String)>,
+}
+
+/// Por qué el valor de una cota no se puede cumplir (no es un número, o un
+/// tamaño que no es positivo); `None` si está bien o no tiene valor.
+fn bad_value(c: &SketchConstraint) -> Option<&'static str> {
+    use SketchConstraint as S;
+    let v = c.value()?;
+    if !v.is_finite() {
+        return Some("no es un número");
+    }
+    let size = matches!(c, S::Radius { .. } | S::Diameter { .. } | S::Length { .. } | S::ArcLength { .. } | S::CurveLength { .. } | S::AxisDiameter { .. });
+    (size && v <= 0.0).then_some("tiene que ser mayor que cero")
 }
 
 /// Sistema del solver armado desde un sketch.
@@ -399,6 +419,9 @@ pub(crate) struct Built {
     pub implicit: usize,
     /// Restricción del sketch de cada ecuación desde `implicit`
     pub origin: Vec<usize>,
+    /// Restricciones que no se pudieron armar (nombran algo que no está o de
+    /// otro tipo): quedan fuera del solver y el resto se resuelve igual
+    pub invalid: Vec<(usize, String)>,
 }
 
 /// Extremo de un arco o curva donde se toma su tangente para un ángulo.
@@ -437,6 +460,8 @@ pub enum SketchError {
     WrongKind(u32, &'static str),
     #[error("restricción no soportada: {0}")]
     Unsupported(String),
+    #[error("cota inválida: {0}")]
+    BadValue(String),
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -877,8 +902,9 @@ impl Sketch {
             None => (p, t),
         });
         let result = self.solve_system(drag);
+        // Todos vuelven aunque algo fallara (el ancla siempre queda en el sketch)
         for &(id, a, d) in &held {
-            let at = self.point(a)?;
+            let at = self.point(a).unwrap_or([0.0, 0.0]);
             self.points.push(SketchPoint { id, x: at[0] + d[0], y: at[1] + d[1] });
         }
         self.points.sort_by_key(|p| order.get(&p.id).copied().unwrap_or(usize::MAX));
@@ -1010,14 +1036,21 @@ impl Sketch {
         // Qué restricción de alto nivel generó cada ecuación del solver
         let implicit = sys.constraints.len();
         let mut origin: Vec<usize> = Vec::new();
+        let mut invalid = Vec::new();
         for (ci, c) in self.constraints.iter().enumerate() {
-            for low in self.lower(c, &ix, &rims, &sys.points)? {
-                sys.add_constraint(low);
-                origin.push(ci);
+            // Una restricción rota no tumba el sketch entero (ni las operaciones que lo usan)
+            match self.lower(c, &ix, &rims, &sys.points) {
+                Ok(lows) => {
+                    for low in lows {
+                        sys.add_constraint(low);
+                        origin.push(ci);
+                    }
+                }
+                Err(e) => invalid.push((ci, e.to_string())),
             }
         }
 
-        Ok(Built { sys, index, rims, implicit, origin })
+        Ok(Built { sys, index, rims, implicit, origin, invalid })
     }
 
     /// Copia al sketch los puntos resueltos (y los radios de los círculos).
@@ -1067,7 +1100,7 @@ impl Sketch {
         let mut moves: Vec<(usize, f64, f64, bool)> = Vec::new();
         let mut steps = 1.0f64;
         for (i, c) in self.constraints.iter().enumerate() {
-            if c.is_reference() {
+            if c.is_reference() || bad_value(c).is_some() {
                 continue;
             }
             let (Some(to), Some(from)) = (c.value(), self.measure(c)) else { continue };
@@ -1126,7 +1159,7 @@ impl Sketch {
             self.ease_large_changes();
             self.turn_angles();
         }
-        let Built { mut sys, index, rims, implicit, origin } = self.build()?;
+        let Built { mut sys, index, rims, implicit, origin, invalid } = self.build()?;
         let ix = |id: u32| index.get(&id).copied().ok_or(SketchError::NoPoint(id));
         let start = sys.points.clone();
 
@@ -1140,8 +1173,32 @@ impl Sketch {
                 self.write_back(&index, &rims, &pts);
                 (r.status, r.dof, r.residual)
             }
-            Err(_) => (SolveStatus::NotConverged, 0, f64::INFINITY),
+            // f64::MAX y no infinito: en JSON el infinito sale `null` y no se vuelve a leer
+            Err(_) => (SolveStatus::NotConverged, 0, f64::MAX),
         };
+        let failed = result.is_err();
+
+        // Arrastrando y cumplido: sin el diagnóstico (SVD densos, que con
+        // sketches grandes tardan segundos por cuadro); la interfaz conserva
+        // lo libre del último y lo rehace al soltar
+        if drag.is_some() && !failed && invalid.is_empty() && status == SolveStatus::Converged && residual <= 1e-6 {
+            self.measure_references();
+            let status = if dof > 0 { SketchStatus::UnderConstrained } else { SketchStatus::WellConstrained };
+            return Ok(SolveReport {
+                status,
+                dof,
+                residual,
+                conflicting: Vec::new(),
+                free_points: Vec::new(),
+                free_entities: Vec::new(),
+                free_dirs: Vec::new(),
+                entity_dof: Vec::new(),
+                free_radius: Vec::new(),
+                partial: false,
+                quick: true,
+                invalid: Vec::new(),
+            });
+        }
 
         let mut conflicting = Vec::new();
         let mut free_points = Vec::new();
@@ -1223,15 +1280,15 @@ impl Sketch {
         }
         let free_dirs: Vec<(u32, [f64; 2])> =
             diag.free_dirs.iter().filter(|(pi, _)| *pi < self.points.len()).map(|&(pi, d)| (self.points[pi].id, d)).collect();
-        // Las cotas de referencia muestran lo que mide el sketch resuelto
-        for i in 0..self.constraints.len() {
-            if self.constraints[i].is_reference()
-                && let Some(v) = self.measure(&self.constraints[i])
-            {
-                self.constraints[i].set_value(v);
+        self.measure_references();
+        for &(ci, _) in &invalid {
+            if !conflicting.contains(&ci) {
+                conflicting.push(ci);
             }
         }
-        let status = if redundant_dim || residual > 1e-6 || matches!(status, SolveStatus::OverConstrained) && residual > 1e-9 {
+        let status = if failed {
+            SketchStatus::Failed
+        } else if redundant_dim || !invalid.is_empty() || residual > 1e-6 || matches!(status, SolveStatus::OverConstrained) && residual > 1e-9 {
             SketchStatus::OverConstrained
         } else {
             match status {
@@ -1240,7 +1297,18 @@ impl Sketch {
                 _ => SketchStatus::WellConstrained,
             }
         };
-        Ok(SolveReport { status, dof, residual, conflicting, free_points, free_entities, free_dirs, entity_dof, free_radius, partial })
+        Ok(SolveReport { status, dof, residual, conflicting, free_points, free_entities, free_dirs, entity_dof, free_radius, partial, quick: false, invalid })
+    }
+
+    /// Las cotas de referencia muestran lo que mide el sketch resuelto
+    fn measure_references(&mut self) {
+        for i in 0..self.constraints.len() {
+            if self.constraints[i].is_reference()
+                && let Some(v) = self.measure(&self.constraints[i])
+            {
+                self.constraints[i].set_value(v);
+            }
+        }
     }
 
     /// Lo que mide una cota en la geometría actual.
@@ -1395,6 +1463,11 @@ impl Sketch {
         if c.is_reference() {
             return Ok(vec![]);
         }
+        // Una cota que no es un número, o un tamaño que no es positivo, no se
+        // puede cumplir: queda afuera (marcada) en vez de romper el solver
+        if let Some(why) = bad_value(c) {
+            return Err(SketchError::BadValue(why.into()));
+        }
         // Centro y punto de borde (radio variable) de un círculo o arco
         let round = |id: u32| -> Result<(usize, usize), SketchError> {
             match (&self.entity(id)?.geometry, rims.get(&id)) {
@@ -1439,6 +1512,10 @@ impl Sketch {
             let tip = |g: &Geometry| -> Option<(usize, usize)> {
                 let Geometry::BSpline { poles, .. } = g else { return None };
                 let n = poles.len();
+                // Con menos de dos polos no hay dirección en la punta
+                if n < 2 {
+                    return None;
+                }
                 let (p, q) = if poles[0] == shared { (poles[0], poles[1]) } else { (poles[n - 1], poles[n - 2]) };
                 Some((ix(p).ok()?, ix(q).ok()?))
             };
@@ -1458,7 +1535,7 @@ impl Sketch {
             Ok(Some(match (tip(ga), tip(gb)) {
                 (Some(t), _) => other(gb, t)?,
                 (None, Some(t)) => other(ga, t)?,
-                _ => unreachable!(),
+                _ => return Err(SketchError::Unsupported("tangencia con una B-spline de menos de dos polos".into())),
             }))
         };
         // Punto (índice del solver) sobre cualquier curva

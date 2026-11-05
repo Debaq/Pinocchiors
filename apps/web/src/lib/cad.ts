@@ -1592,6 +1592,10 @@ export interface SolveReport {
   free_radius?: number[];
   /** Hubo conflicto: se resolvió todo menos las que chocan */
   partial?: boolean;
+  /** Arrastre cumplido sin diagnóstico: lo libre viene vacío (se conserva el del último completo) */
+  quick?: boolean;
+  /** Restricciones que no se pudieron usar (índice y por qué); también van en `conflicting` */
+  invalid?: [number, string][];
 }
 
 /** Restricción que le falta al sketch y por qué */

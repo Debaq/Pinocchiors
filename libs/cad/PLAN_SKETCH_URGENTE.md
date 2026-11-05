@@ -32,32 +32,44 @@ El orden de las fases es el de urgencia: primero lo que pierde trabajo del usuar
 
 ## U1 — Que la app no se caiga ni se congele (crítico)
 
-- [ ] **Mutex envenenados** [V]. `state.rs:10` usa `std::sync::Mutex` y `cad.rs` hace ~70
+- [x] **Mutex envenenados** [V]. `state.rs:10` usa `std::sync::Mutex` y `cad.rs` hace ~70
   `.lock().unwrap()`. Un panic con el lock tomado (solver, regiones, evaluate) deja todos los
   comandos CAD rotos hasta reiniciar. Arreglo: `parking_lot::Mutex` o `unwrap_or_else(into_inner)`
   + `catch_unwind` alrededor de evaluate/solve.
-- [ ] **Solve en el hilo principal** [V]. `cad_solve_sketch`, `cad_sketch_suggest`,
+- [x] **Solve en el hilo principal** [V]. `cad_solve_sketch`, `cad_sketch_suggest`,
   `cad_sketch_define` (`cad.rs:941/1005/1012`) son comandos síncronos: en Tauri v2 corren en el
   hilo principal, y el solve se llama en cada movimiento al arrastrar (`cadUi.ts:518`). Arreglo:
   `async` + `spawn_blocking`; en el front un solo solve en vuelo, coalescer el último arrastre.
-- [ ] **`diagnose` en cada solve y arrastre** [V] (`sketch.rs:1148`): Jacobiano denso + SVD +
+- [x] **`diagnose` en cada solve y arrastre** [V] (`sketch.rs:1148`): Jacobiano denso + SVD +
   nullspace O(n³). Con cientos de puntos, segundos por frame. Arreglo: saltarlo al arrastrar
   (o solo la componente tocada) y diagnosticar al soltar.
-- [ ] **Panics alcanzables** [V]:
+- [x] **Panics alcanzables** [V]:
   - `sketch.rs:1442`: `poles[1]` / `poles[n-2]` con B-spline de 1 polo.
   - `regions.rs:662`: `position(..).unwrap()` en el grafo de medias aristas [S].
   - `solver/bspline.rs:~127`: pesos 0 → NaN que llega al JSON (`null`).
-- [ ] **Un dato malo tumba el sketch entero** [V] (`sketch.rs:936-1022`, `:1387-1470`,
+- [x] **Un dato malo tumba el sketch entero** [V] (`sketch.rs:936-1022`, `:1387-1470`,
   `regions.rs:551`): una restricción a una entidad de otro tipo o una B-spline con nudos
   inconsistentes aborta `build()` → sin regiones → fallan todas las operaciones siguientes.
   Arreglo: saltar la restricción/entidad inválida, marcarla en `SolveReport` y avisar.
-- [ ] **Un subsistema que no converge congela todo el sketch** [V] (`solver.rs`
+- [x] **Un subsistema que no converge congela todo el sketch** [V] (`solver.rs`
   `solve_decomposed`, `?` al primer error; `sketch.rs:1124` no escribe nada). Conservar las
   componentes que convergieron.
-- [ ] **`residual = INFINITY` rompe el reporte** [V] (`sketch.rs:~1155`): serde lo da `null` y no
+- [x] **`residual = INFINITY` rompe el reporte** [V] (`sketch.rs:~1155`): serde lo da `null` y no
   se vuelve a leer; además el estado sale `OverConstrained` en vez de `Failed`.
-- [ ] **Validar entradas**: cotas ≤ 0, NaN o inf (`sketch.rs:295` `set_value`, `lower`); MCP
+- [x] **Validar entradas**: cotas ≤ 0, NaN o inf (`sketch.rs:295` `set_value`, `lower`); MCP
   `draw` sin validar radio, lados (`sides: 1e9` → OOM) ni puntos (`mcp/tools/sketch.rs`).
+- **Hecho 2026-11-05**: `crate::sync::Mutex` (no se envenena; `.lock().unwrap()` igual) y
+  `AppState::after_panic` limpia los cachés del diseño cuando `in_background` atrapa un pánico.
+  `cad_solve_sketch`/`cad_sketch_suggest`/`cad_sketch_define` son `async` fuera del hilo
+  principal (el front ya juntaba los arrastres). Arrastre cumplido sin `diagnose`
+  (`SolveReport.quick`; el front conserva lo libre y lo recalcula al soltar). Restricción
+  rota o cota no válida (NaN, tamaño ≤ 0) queda afuera en `SolveReport.invalid` (y en
+  `conflicting`) con aviso; `ease_large_changes` las salta. Curva que no se puede muestrear no
+  tumba las regiones; sin pánico en `regions.rs` ni con B-spline de un polo; pesos ≤ 0
+  rechazados. Sub-sistema que falla no frena a los demás. Residual `f64::MAX` y estado
+  `Failed`. MCP `draw` valida tamaños, puntos distintos, lados ≤ 1000 y puntos ≤ 10 000.
+  Pruebas: `model/tests/sketch_robust.rs` (5), `solver/tests/test_solver.rs` (2), `sync.rs` (1).
+  Falta probarlo en la app. Queda de U1: `nullspace` con `max_niter = 0` [S].
 
 ## U2 — Integridad de datos del sketch (alto)
 

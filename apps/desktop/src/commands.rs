@@ -452,9 +452,15 @@ pub(crate) async fn in_background<T: Send + 'static>(
     app: AppHandle,
     f: impl FnOnce(&AppState) -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {
-    tauri::async_runtime::spawn_blocking(move || f(&app.state::<AppState>()))
-        .await
-        .map_err(|e| format!("La tarea terminó inesperadamente: {e}"))?
+    let state_app = app.clone();
+    match tauri::async_runtime::spawn_blocking(move || f(&app.state::<AppState>())).await {
+        Ok(r) => r,
+        Err(e) => {
+            // Un pánico: lo derivado del diseño pudo quedar a medias
+            state_app.state::<AppState>().after_panic();
+            Err(format!("La tarea terminó inesperadamente: {e}"))
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

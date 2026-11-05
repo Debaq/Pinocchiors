@@ -10,7 +10,7 @@
 //! acá (también la del escaneo, para que el sólido calce encima).
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use crate::sync::Mutex;
 use std::hash::{Hash, Hasher};
 
 use cad_model::{
@@ -935,10 +935,20 @@ pub struct SolvedSketch {
     pub regions: Vec<Region>,
 }
 
+/// Corre `f` fuera del hilo principal (los comandos síncronos de Tauri corren
+/// en él y trabarían la ventana); un pánico vuelve como error
+async fn off_main<T: Send + 'static>(f: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(f).await.map_err(|e| format!("La tarea terminó inesperadamente: {e}"))?
+}
+
 /// Resuelve un sketch suelto mientras se dibuja o se arrastra un punto, sin
 /// recalcular el árbol.
 #[tauri::command]
-pub fn cad_solve_sketch(mut sketch: Sketch, drag: Option<(u32, [f64; 2])>) -> Result<SolvedSketch, String> {
+pub async fn cad_solve_sketch(sketch: Sketch, drag: Option<(u32, [f64; 2])>) -> Result<SolvedSketch, String> {
+    off_main(move || solve_sketch_impl(sketch, drag)).await
+}
+
+pub fn solve_sketch_impl(mut sketch: Sketch, drag: Option<(u32, [f64; 2])>) -> Result<SolvedSketch, String> {
     let report = match drag {
         Some((p, target)) => sketch.solve_drag(p, target),
         None => sketch.solve(),
@@ -1002,15 +1012,15 @@ pub fn cad_gear_block(part: cad_model::GearPart) -> Result<cad_model::sketch::Sk
 
 /// Restricciones que le faltan al sketch (casi cumplidas o cotas de tamaño).
 #[tauri::command]
-pub fn cad_sketch_suggest(sketch: Sketch) -> Result<Vec<cad_model::Suggestion>, String> {
-    sketch.suggest().map_err(|e| e.to_string())
+pub async fn cad_sketch_suggest(sketch: Sketch) -> Result<Vec<cad_model::Suggestion>, String> {
+    off_main(move || sketch.suggest().map_err(|e| e.to_string())).await
 }
 
 /// Lo que hay que agregar para definir el sketch entero (con las relaciones
 /// casi cumplidas si `relations`).
 #[tauri::command]
-pub fn cad_sketch_define(sketch: Sketch, relations: bool) -> Result<Vec<cad_model::SketchConstraint>, String> {
-    sketch.auto_define(relations).map_err(|e| e.to_string())
+pub async fn cad_sketch_define(sketch: Sketch, relations: bool) -> Result<Vec<cad_model::SketchConstraint>, String> {
+    off_main(move || sketch.auto_define(relations).map_err(|e| e.to_string())).await
 }
 
 /// mm por unidad de la escena (1 si no hay escena: el CAD solo se ve en mm).
@@ -3322,8 +3332,8 @@ pub mod bridge {
             }
             "cad_preview" => ok(preview_impl(state, arg(args, "document")?)?),
             "cad_evaluate" => ok(evaluate(state)?),
-            "cad_solve_sketch" => ok(cad_solve_sketch(arg(args, "sketch")?, arg(args, "drag")?)?),
-            "cad_sketch_suggest" => ok(cad_sketch_suggest(arg(args, "sketch")?)?),
+            "cad_solve_sketch" => ok(solve_sketch_impl(arg(args, "sketch")?, arg(args, "drag")?)?),
+            "cad_sketch_suggest" => ok(arg::<Sketch>(args, "sketch")?.suggest().map_err(|e| e.to_string())?),
             "cad_gear_info" => ok(cad_gear_info(arg(args, "part")?)),
             "cad_gear_design" => ok(cad_gear_design(arg(args, "source")?, arg(args, "kind")?, arg(args, "ratio")?, arg(args, "distance")?)?),
             "cad_tooth_forms" => ok(cad_tooth_forms()),
@@ -3332,7 +3342,7 @@ pub mod bridge {
             "cad_gear_materials" => ok(cad_gear_materials()),
             "cad_gear_strength" => ok(cad_gear_strength(arg(args, "first")?, arg(args, "second")?, arg(args, "input")?)?),
             "cad_gear_block" => ok(cad_gear_block(arg(args, "part")?)?),
-            "cad_sketch_define" => ok(cad_sketch_define(arg(args, "sketch")?, arg(args, "relations")?)?),
+            "cad_sketch_define" => ok(arg::<Sketch>(args, "sketch")?.auto_define(arg(args, "relations")?).map_err(|e| e.to_string())?),
             "cad_mesh" => mesh_impl(state).map(Reply::Bytes),
             "cad_tool_mesh" => tool_mesh_impl(state, arg(args, "feature")?).map(Reply::Bytes),
             "cad_flat_pattern" => ok(flat_pattern_impl(state, arg::<Option<cad_model::PartId>>(args, "part").unwrap_or(None))?),

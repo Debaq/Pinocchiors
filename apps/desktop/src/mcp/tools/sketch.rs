@@ -92,6 +92,21 @@ fn need(shape: &Value, key: &str, i: usize) -> Result<f64, Fail> {
 }
 
 /// Dibuja las figuras; deja sus nombres en `names` y devuelve una línea por figura
+/// Tope de lados de un polígono y de puntos de una polilínea (más que eso es
+/// un error del pedido y llenaría la memoria)
+const MAX_SIDES: u64 = 1000;
+const MAX_POINTS: usize = 10_000;
+
+/// Dos puntos en el mismo lugar
+fn same(a: P2, b: P2) -> bool {
+    (a[0] - b[0]).hypot(a[1] - b[1]) < 1e-9
+}
+
+/// Un tamaño finito y mayor que cero
+fn positive(v: f64, i: usize, what: &str) -> Result<(), Fail> {
+    if v.is_finite() && v > 0.0 { Ok(()) } else { Err(Fail::new(format!("shape {i}: \"{what}\" must be greater than zero"))) }
+}
+
 fn draw(sketch: &mut Sketch, shapes: &[Value], names: &mut Names) -> Result<Vec<String>, Fail> {
     let mut lines = Vec::new();
     let base = names.keys().filter(|k| k.starts_with('s') && !k.contains('.')).count();
@@ -104,6 +119,9 @@ fn draw(sketch: &mut Sketch, shapes: &[Value], names: &mut Names) -> Result<Vec<
         match ty {
             "line" => {
                 let (a, b) = (at("from").ok_or_else(|| Fail::new(format!("shape {i}: missing \"from\"")))??, at("to").ok_or_else(|| Fail::new(format!("shape {i}: missing \"to\"")))??);
+                if same(a, b) {
+                    return Err(Fail::new(format!("shape {i}: a line needs two different points")));
+                }
                 let e = sketch.line(a, b);
                 let (s, t) = ends(sketch, e);
                 named.extend([(String::new(), e), ("start".into(), s), ("end".into(), t)]);
@@ -119,6 +137,9 @@ fn draw(sketch: &mut Sketch, shapes: &[Value], names: &mut Names) -> Result<Vec<
                     }
                     _ => return Err(Fail::new(format!("shape {i}: a rectangle needs \"corner\"+\"opposite\" or \"center\"+\"width\"+\"height\""))),
                 };
+                if (b[0] - a[0]).abs() < 1e-9 || (b[1] - a[1]).abs() < 1e-9 {
+                    return Err(Fail::new(format!("shape {i}: a rectangle needs a positive width and height")));
+                }
                 let l = sketch.rectangle(a, b);
                 for (n, e) in ["bottom", "right", "top", "left"].iter().zip(l) {
                     named.push(((*n).into(), e));
@@ -132,6 +153,7 @@ fn draw(sketch: &mut Sketch, shapes: &[Value], names: &mut Names) -> Result<Vec<
             "circle" => {
                 let c = at("center").ok_or_else(|| Fail::new(format!("shape {i}: missing \"center\"")))??;
                 let r = f64_of(shape, "radius").or(f64_of(shape, "diameter").map(|d| d / 2.0)).ok_or_else(|| Fail::new(format!("shape {i}: a circle needs \"radius\" or \"diameter\"")))?;
+                positive(r, i, "radius")?;
                 let e = sketch.circle(c, r);
                 let Geometry::Circle { center, .. } = sketch.entity(e).unwrap().geometry else { unreachable!() };
                 named.extend([(String::new(), e), ("center".into(), center)]);
@@ -143,10 +165,14 @@ fn draw(sketch: &mut Sketch, shapes: &[Value], names: &mut Names) -> Result<Vec<
                     (Some(s), Some(t)) => (s?, t?),
                     _ => {
                         let r = need(shape, "radius", i)?;
+                        positive(r, i, "radius")?;
                         let (a0, a1) = (need(shape, "start_angle", i)?.to_radians(), need(shape, "end_angle", i)?.to_radians());
                         ([c[0] + r * a0.cos(), c[1] + r * a0.sin()], [c[0] + r * a1.cos(), c[1] + r * a1.sin()])
                     }
                 };
+                if same(s, t) || same(c, s) || same(c, t) {
+                    return Err(Fail::new(format!("shape {i}: an arc needs a center, start and end that are all different")));
+                }
                 let e = sketch.arc(c, s, t);
                 let Geometry::Arc { center, start, end } = sketch.entity(e).unwrap().geometry else { unreachable!() };
                 named.extend([(String::new(), e), ("center".into(), center), ("start".into(), start), ("end".into(), end)]);
@@ -156,7 +182,12 @@ fn draw(sketch: &mut Sketch, shapes: &[Value], names: &mut Names) -> Result<Vec<
                 let pts: Vec<P2> = if ty == "polygon" {
                     let c = at("center").ok_or_else(|| Fail::new(format!("shape {i}: missing \"center\"")))??;
                     let r = need(shape, "radius", i)?;
-                    let n = shape.get("sides").and_then(Value::as_u64).filter(|n| *n >= 3).ok_or_else(|| Fail::new(format!("shape {i}: \"sides\" must be 3 or more")))?;
+                    positive(r, i, "radius")?;
+                    let n = shape
+                        .get("sides")
+                        .and_then(Value::as_u64)
+                        .filter(|n| (3..=MAX_SIDES).contains(n))
+                        .ok_or_else(|| Fail::new(format!("shape {i}: \"sides\" must be between 3 and {MAX_SIDES}")))?;
                     let rot = f64_of(shape, "rotation").unwrap_or(90.0).to_radians();
                     (0..n).map(|k| {
                         let a = rot + std::f64::consts::TAU * k as f64 / n as f64;
@@ -168,6 +199,9 @@ fn draw(sketch: &mut Sketch, shapes: &[Value], names: &mut Names) -> Result<Vec<
                 };
                 if pts.len() < 2 {
                     return Err(Fail::new(format!("shape {i}: needs at least 2 points")));
+                }
+                if pts.len() > MAX_POINTS {
+                    return Err(Fail::new(format!("shape {i}: at most {MAX_POINTS} points")));
                 }
                 let closed = ty == "polygon" || shape.get("closed").and_then(Value::as_bool).unwrap_or(false);
                 let ids: Vec<u32> = pts.iter().map(|p| sketch.add_point(p[0], p[1])).collect();
