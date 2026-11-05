@@ -29,6 +29,7 @@ para estas.
 | P3 | **Flashforge AD5X**: API local. Ver abajo. El usuario tiene que activar el modo LAN y dar el número de serie y el código de la pantalla | hecha (2026-11-05): `apps/desktop/src/flashforge.rs` (estado y carretes por `/detail`, subir con `materialMappings` T0→carrete elegido, número de serie por `~M115`, cancelar `~M26` inmediato, pausar `~M25`/reanudar `~M24` sin probar en la real); pruebas con una AD5X falsa (HTTP+TCP) |
 | P4 | **Perfiles AD5X en el laminador**: `tools/flatten_presets.py` hoy solo aplana Creality (`VENDOR = "Creality"`); Orca 2.4.2 trae `Flashforge AD5X 0.25/0.4/0.6/0.8 nozzle` y sus procesos (`@FF AD5X`). Primero un color; multicolor (IFS, 4 carretes) necesita que el motor lamine con varios filamentos (hoy fuerza uno: `filament_map` en `engine/main.cpp`) | hecha (un color): `flatten_presets.py` con varios fabricantes y `tools` por impresora; con `tools > 1` el laminador declara un filamento por carrete (`one_filament_per_tool`) → gcode con `T0`; el carrete se elige al enviar. `SET_PRINT_STATS_INFO` solo en Creality K1. Multicolor pendiente |
 | P5 | **Encontrarlas solas en la red**: Moonraker por mDNS, Creality como `CrealityHostDiscovery.cpp`, Flashforge por UDP 48899 | pendiente |
+| P4b | **Multicolor AD5X**: plan aparte en `PLAN_MULTICOLOR.md` (fases MC0–MC7) | plan escrito (2026-11-05) |
 | P6 | Herramienta MCP para mandar a imprimir y ver el estado; cámara (K1 y AD5X) | pendiente |
 
 ## Protocolo Creality de fábrica (K1, K1C, K1 Max)
