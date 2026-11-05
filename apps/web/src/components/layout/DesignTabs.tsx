@@ -19,12 +19,14 @@ type TabCommand = Parameters<CadStore["changeTabs"]>[0];
 
 /**
  * Corre un comando de pestañas. Si puede cambiar la pestaña activa, antes se
- * termina el sketch abierto (queda guardado en su diseño), se cierra el plano
+ * termina el sketch abierto (queda guardado en su diseño; si no se puede, no
+ * cambia nada), se cierra el plano
  * y se sueltan las selecciones y el modo ensamble.
  */
 export async function changeDesignTabs(store: CadStore, ui: CadUi, cmd: TabCommand, args: Record<string, unknown>) {
   if (cmd !== "cad_tab_rename" && cmd !== "cad_tab_move") {
-    if (ui.session()) await ui.finishSketch();
+    // Si no se pudo guardar (la IA trabaja…), la pestaña no cambia: el sketch sigue abierto
+    if (ui.session() && !(await ui.finishSketch())) return;
     ui.clearPicks();
     ui.setAssemblyMode(false);
     // Los planos son de cada pestaña

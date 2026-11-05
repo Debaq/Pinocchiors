@@ -3983,6 +3983,19 @@ export const CadView: Component<CadViewProps> = (props) => {
         }}
       </Show>
 
+      {/* Descartar un sketch con cambios */}
+      <Show when={ui.discardAsk() && ui.session()}>
+        <ConfirmDialog
+          title={tr("Descartar los cambios del sketch")}
+          message={tr("Lo dibujado desde que se abrió el sketch se pierde.")}
+          confirmLabel={tr("Descartar")}
+          cancelLabel={tr("Seguir dibujando")}
+          danger
+          onConfirm={() => ui.answerDiscard(true)}
+          onCancel={() => ui.answerDiscard(false)}
+        />
+      </Show>
+
       {/* Lo dibujado repite algo que ya estaba: unirlas o dejar las dos */}
       <Show when={dupAsk()} keyed>
         {(pairs) => {
@@ -4754,7 +4767,7 @@ export const CadView: Component<CadViewProps> = (props) => {
                     <Button size="sm" variant="primary" onClick={() => void ui.finishSketch()}>
                       {ui.session()?.sheet ? tr("Volver al plano") : tr("Terminar sketch")}
                     </Button>
-                    <Button size="sm" variant="ghost" onClick={() => ui.cancelSketch()}>
+                    <Button size="sm" variant="ghost" onClick={() => ui.askDiscardSketch()}>
                       {tr("Descartar")}
                     </Button>
                   </>

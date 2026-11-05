@@ -489,6 +489,24 @@ fn capture(state: &AppState) -> ProjectState {
     }
 }
 
+/// `capture` con el diseño de la pestaña activa reemplazado por `design` (el
+/// sketch abierto en la interfaz todavía no llegó al documento: guardar y ver
+/// si hay cambios tienen que contarlo). Igual que `cad_set_document`: en un
+/// ensamble solo cuentan su ensamble y sus planos
+fn capture_with(state: &AppState, design: Option<cad_model::Document>) -> ProjectState {
+    let mut project = capture(state);
+    if let (Some(document), Some(tabs)) = (design, project.cad_tabs.as_mut()) {
+        let active = tabs.active;
+        if let Some(doc) = tabs.active_design_mut() {
+            *doc = document;
+        } else if tabs.active_tab().is_some() {
+            let _ = tabs.set_flat_assembly(active, document.assembly.unwrap_or_default());
+            let _ = tabs.set_assembly_drawing(active, document.drawing);
+        }
+    }
+    project
+}
+
 /// Resumen de lo que hay cargado (lo usa el conector MCP para decir en qué
 /// estado está el trabajo)
 #[derive(Serialize)]
@@ -810,16 +828,26 @@ pub struct ProjectSaved {
 ///
 /// El archivo de recuperación lleva su propia huella: guardar ahí no cuenta
 /// como guardar el proyecto (ver `project_changed`).
+///
+/// `design`: el diseño de la pestaña activa con el sketch abierto en la
+/// interfaz (se guarda ese en vez del documento, que todavía no lo tiene).
 #[tauri::command]
-pub async fn save_project(app: AppHandle, path: String, ui: String, only_if_changed: bool) -> Result<ProjectSaved, String> {
+pub async fn save_project(app: AppHandle, path: String, ui: String, only_if_changed: bool, design: Option<cad_model::Document>) -> Result<ProjectSaved, String> {
     let is_recovery = recovery_path(&app).is_ok_and(|r| r == Path::new(&path));
-    in_background(app, move |state| save_project_impl(state, &path, &ui, only_if_changed, is_recovery)).await
+    in_background(app, move |state| save_project_impl(state, &path, &ui, only_if_changed, is_recovery, design)).await
 }
 
 /// `save_project` sin la ventana (también lo usan el puente y el conector MCP)
-pub fn save_project_impl(state: &AppState, path: &str, ui: &str, only_if_changed: bool, is_recovery: bool) -> Result<ProjectSaved, String> {
+pub fn save_project_impl(
+    state: &AppState,
+    path: &str,
+    ui: &str,
+    only_if_changed: bool,
+    is_recovery: bool,
+    design: Option<cad_model::Document>,
+) -> Result<ProjectSaved, String> {
     let _io = state.project_io();
-    let project = capture(state);
+    let project = capture_with(state, design);
     let source_name = project.original.as_ref().map(|o| o.name.clone());
     let state_bytes = rmp_serde::to_vec_named(&project).map_err(|e| format!("No se pudo serializar: {e}"))?;
     let hash = content_hash(&state_bytes, ui);
@@ -841,13 +869,14 @@ pub fn save_project_impl(state: &AppState, path: &str, ui: &str, only_if_changed
 }
 
 /// Hay cambios desde el último guardado o apertura del proyecto (`ui` es el
-/// estado de la interfaz, como en `save_project`)
+/// estado de la interfaz y `design` el diseño con el sketch abierto, como en
+/// `save_project`)
 #[tauri::command]
-pub async fn project_changed(app: AppHandle, ui: String) -> Result<bool, String> {
+pub async fn project_changed(app: AppHandle, ui: String, design: Option<cad_model::Document>) -> Result<bool, String> {
     in_background(app, move |state| {
         let Some(saved) = *state.last_saved_hash.lock().unwrap() else { return Ok(true) };
         let _io = state.project_io();
-        let state_bytes = rmp_serde::to_vec_named(&capture(state)).map_err(|e| format!("No se pudo serializar: {e}"))?;
+        let state_bytes = rmp_serde::to_vec_named(&capture_with(state, design)).map_err(|e| format!("No se pudo serializar: {e}"))?;
         Ok(content_hash(&state_bytes, &ui) != saved)
     })
     .await
@@ -1797,6 +1826,33 @@ mod tests {
         }
         activate_impl(&state, 3).unwrap();
         assert_eq!(state.mesh.lock().unwrap().as_ref().unwrap().num_vertices(), 8, "el cubo importado");
+    }
+
+    /// El sketch abierto en la interfaz (todavía fuera del documento) entra a
+    /// lo guardado y cuenta como cambio, sin tocar el documento de la app
+    #[test]
+    fn open_sketch_goes_into_save_without_touching_the_document() {
+        let state = AppState::new();
+        state.set_cad_tabs(cad_model::Tabs::from_legacy(Some(legacy_design())));
+        project_mark_saved_impl(&state, "{}").unwrap();
+        let mut with_sketch = legacy_design();
+        with_sketch.parameters[0].expr = "42".into();
+
+        let captured = capture_with(&state, Some(with_sketch.clone()));
+        assert_eq!(captured.cad_tabs.as_ref().unwrap().active_design(), Some(&with_sketch));
+        assert_eq!(state.cad_doc().unwrap(), legacy_design(), "el documento de la app sigue igual");
+        let plain = capture_with(&state, None);
+        assert_eq!(plain.cad_tabs.as_ref().unwrap().active_design(), Some(&legacy_design()));
+
+        let dir = std::env::temp_dir().join(format!("pinocchio-sketch-save-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("p.pinocchio");
+        save_project_impl(&state, path.to_str().unwrap(), "{}", false, false, Some(with_sketch.clone())).unwrap();
+        let (_, bytes, _) = read_project(&path).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+        let other = AppState::new();
+        restore(&other, rmp_serde::from_slice(&bytes).unwrap()).unwrap();
+        assert_eq!(other.cad_doc().unwrap(), with_sketch, "se guardó con el sketch");
     }
 
     /// Guardar en formato 2 y volver a abrir: todas las pestañas iguales, sin el campo viejo

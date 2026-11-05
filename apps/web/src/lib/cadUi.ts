@@ -49,6 +49,7 @@ import {
   type FitRange,
   type FitReport,
   type ScanPick,
+  type CadDocument,
   type Sketch,
   type SketchConstraint,
   type SolveReport,
@@ -338,6 +339,7 @@ export function createCadUi(store: CadStore) {
   /** Corte del escaneo por el plano del sketch en edición (guía, anclajes y «Usar el corte») */
   const [scanOutline, setScanOutline] = createSignal<ScanOutline>();
   const [session, setSession] = createSignal<SketchSession>();
+  const [discardAsk, setDiscardAsk] = createSignal(false);
   /**
    * Restricciones en conflicto que se vieron y se dejaron (se siguió
    * dibujando): ya sin aviso flotante ni Esc que las quite. Por su forma sin
@@ -527,6 +529,50 @@ export function createCadUi(store: CadStore) {
     } catch (e) {
       setMessage(String(e));
     }
+  };
+
+  /** Por qué el documento no se puede cambiar ahora (lo mismo que rechaza `store.commit`) */
+  const commitBlocked = (): string | undefined => {
+    if (store.aiTurn() !== undefined) return tr("La IA está trabajando en el diseño: espera un momento");
+    if (store.viewing() !== undefined) return tr("Estás viendo una versión guardada: vuelve al diseño o restáurala para editar");
+    return undefined;
+  };
+
+  /** Pone el sketch de la sesión `s` en el documento `d` (o en su plano, dibujando sobre la hoja) */
+  const applySketch = (d: CadDocument, s: SketchSession) => {
+    if (s.sheet) {
+      const id = s.sheet.drawing;
+      // Los vínculos de lo que sigue ligado (lo borrado o con el vínculo roto se olvida)
+      const used = new Set((s.sketch.uses ?? []).map((u) => u.entity));
+      const links = s.sheet.links.filter((l) => used.has(l.entity) && s.sketch.entities.some((e) => e.id === l.entity));
+      // Lo que quedó encima de una vista se mueve con ella
+      const owners = sheetOwners(s.sketch, s.sheet.views, s.sheet.height);
+      void updateDrawing(d, id, (x) => {
+        x.sketch = clone(s.sketch);
+        x.links = links;
+        x.owners = owners;
+      });
+      return;
+    }
+    // Las fórmulas de las cotas pasan a ser vínculos del documento (por
+    // índice: se rehacen todos los de este sketch)
+    const sketch = clone(s.sketch);
+    // Sin puntos sueltos (primeros clics de líneas que no se terminaron)
+    removeLoosePoints(sketch);
+    const exprs = sketch.constraints.map((c) => {
+      const e = (c as { expr?: string }).expr;
+      delete (c as { expr?: string }).expr;
+      return e;
+    });
+    const prefix = `${s.feature}.kind.sketch.constraints.`;
+    const f = d.features.find((x) => x.id === s.feature);
+    if (f && editsAsSketch(f.kind)) f.kind.sketch = sketch;
+    const bindings = { ...(d.bindings ?? {}) };
+    for (const k of Object.keys(bindings)) if (k.startsWith(prefix)) delete bindings[k];
+    sketch.constraints.forEach((c, i) => {
+      if (exprs[i]) bindings[constraintPath(s.feature, i, c)] = exprs[i]!;
+    });
+    d.bindings = bindings;
   };
 
   const ui = {
@@ -1174,58 +1220,60 @@ export function createCadUi(store: CadStore) {
     },
 
     /** Guarda el sketch en el documento y sale */
-    async finishSketch() {
+    /**
+     * Guarda el sketch abierto en el documento y lo cierra. Si el documento no
+     * se puede cambiar ahora (la IA trabaja, se ve una versión guardada), el
+     * sketch sigue abierto con su aviso y devuelve false
+     */
+    async finishSketch(): Promise<boolean> {
       // Con un bloque abierto, primero se guarda el bloque
       if (blockEdit()) ui.finishBlock();
       const s = session();
-      if (!s) return;
+      if (!s) return true;
+      const blocked = commitBlocked();
+      if (blocked) {
+        setMessage(blocked);
+        return false;
+      }
       setSession(undefined);
       setSelection([]);
       resetHistory();
-      // Las fórmulas de las cotas pasan a ser vínculos del documento (por
-      // índice: se rehacen todos los de este sketch)
-      const sketch = clone(s.sketch);
-      // Sin puntos sueltos (primeros clics de líneas que no se terminaron)
-      removeLoosePoints(sketch);
-      const exprs = sketch.constraints.map((c) => {
-        const e = (c as { expr?: string }).expr;
-        delete (c as { expr?: string }).expr;
-        return e;
-      });
-      // La hoja: el sketch va al plano del documento (las fórmulas quedan en sus cotas) y el plano se vuelve a abrir
-      if (s.sheet) {
-        const id = s.sheet.drawing;
-        // Los vínculos de lo que sigue ligado (lo borrado o con el vínculo roto se olvida)
-        const used = new Set((s.sketch.uses ?? []).map((u) => u.entity));
-        const links = s.sheet.links.filter((l) => used.has(l.entity) && s.sketch.entities.some((e) => e.id === l.entity));
-        // Lo que quedó encima de una vista se mueve con ella
-        const owners = sheetOwners(s.sketch, s.sheet.views, s.sheet.height);
-        await store.commit(
-          (d) =>
-            void updateDrawing(d, id, (x) => {
-              x.sketch = clone(s.sketch);
-              x.links = links;
-              x.owners = owners;
-            }),
-        );
-        setDrawingOpen(true);
-        return;
-      }
-      const prefix = `${s.feature}.kind.sketch.constraints.`;
-      await store.commit((d) => {
-        const f = d.features.find((x) => x.id === s.feature);
-        if (f && editsAsSketch(f.kind)) f.kind.sketch = sketch;
-        const bindings = { ...(d.bindings ?? {}) };
-        for (const k of Object.keys(bindings)) if (k.startsWith(prefix)) delete bindings[k];
-        sketch.constraints.forEach((c, i) => {
-          if (exprs[i]) bindings[constraintPath(s.feature, i, c)] = exprs[i]!;
-        });
-        d.bindings = bindings;
-      });
+      await store.commit((d) => applySketch(d, s));
+      if (s.sheet) setDrawingOpen(true);
+      return true;
+    },
+
+    /**
+     * El documento con el sketch abierto ya puesto (para guardar el proyecto
+     * sin cerrarlo); sin sketch abierto o sin cambios en él, nada
+     */
+    documentWithSketch(): CadDocument | undefined {
+      const s = session();
+      const base = store.committed();
+      if (!s || !base || past.length === 0) return undefined;
+      const d = clone(base);
+      applySketch(d, s);
+      return d;
+    },
+
+    /** Hay un sketch abierto con cambios sin pasar al documento */
+    sketchDirty: () => !!session() && sketchHistory().undo > 0,
+
+    /** Pregunta antes de descartar el sketch (el visor muestra el diálogo) */
+    discardAsk,
+    /** Descartar desde un botón: con cambios, primero pregunta */
+    askDiscardSketch() {
+      if (ui.sketchDirty()) setDiscardAsk(true);
+      else ui.cancelSketch();
+    },
+    answerDiscard(discard: boolean) {
+      setDiscardAsk(false);
+      if (discard) ui.cancelSketch();
     },
 
     /** Sale sin guardar; dibujando sobre la hoja, vuelve al plano (salvo `toDrawing` false: abrir otro proyecto) */
     cancelSketch(toDrawing = true) {
+      setDiscardAsk(false);
       if (toDrawing && session()?.sheet) setDrawingOpen(true);
       setBlockEdit(undefined);
       setSession(undefined);

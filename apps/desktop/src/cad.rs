@@ -3540,6 +3540,7 @@ pub mod bridge {
                 &arg::<Option<String>>(args, "ui")?.unwrap_or_else(|| "{}".into()),
                 arg::<Option<bool>>(args, "onlyIfChanged")?.unwrap_or(false),
                 false,
+                arg::<Option<cad_model::Document>>(args, "design")?,
             )?),
             "project_mark_saved" => ok(crate::project::project_mark_saved_impl(state, &arg::<String>(args, "ui")?)?),
             _ => Err(UNKNOWN.into()),

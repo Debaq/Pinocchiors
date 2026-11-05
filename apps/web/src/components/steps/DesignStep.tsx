@@ -8916,7 +8916,7 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
         <Button size="sm" variant="primary" onClick={() => void ui.finishSketch()}>
           {tl("Terminar sketch")}
         </Button>
-        <Button size="sm" variant="ghost" onClick={() => ui.cancelSketch()}>
+        <Button size="sm" variant="ghost" onClick={() => ui.askDiscardSketch()}>
           {tl("Descartar cambios")}
         </Button>
       </div>

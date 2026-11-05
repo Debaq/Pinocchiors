@@ -589,6 +589,13 @@ export const App: Component = () => {
       (editing) => editing && inDesign() && pipeline.activeStep() !== "design" && pipeline.setActiveStep("design"),
     )
   );
+  // Salir de Diseñar con un sketch abierto lo termina (queda en su diseño):
+  // abierto e invisible, la IA no podría tocar el diseño
+  createEffect(
+    on(inDesign, (now, before) => {
+      if (before && !now && cadUi.session()) void cadUi.finishSketch();
+    })
+  );
   // Entrar a Diseñar sin diseño crea uno vacío: no hay que "empezar" nada.
   // No mientras se abre un proyecto: su diseño todavía no llegó a la interfaz
   // y `cad_new` reemplazaría todas sus pestañas por una vacía
@@ -8235,7 +8242,7 @@ export const App: Component = () => {
     if (!hasProjectWork()) return false;
     if (!projectPath()) return true;
     try {
-      return await invoke<boolean>("project_changed", { ui: projectUi() });
+      return await invoke<boolean>("project_changed", { ui: projectUi(), design: cadUi.documentWithSketch() ?? null });
     } catch {
       return true;
     }
@@ -8260,7 +8267,7 @@ export const App: Component = () => {
     if (unsavedTimer !== undefined) clearTimeout(unsavedTimer);
     unsavedTimer = window.setTimeout(checkUnsaved, delay);
   };
-  createEffect(on([history.current, history.nodes, projectPath, hasWork, isProcessing], () => scheduleUnsavedCheck()));
+  createEffect(on([history.current, history.nodes, projectPath, hasWork, isProcessing, cadUi.sketchHistory], () => scheduleUnsavedCheck()));
   const unsavedInterval = setInterval(() => unsavedTimer === undefined && checkUnsaved(), 60_000);
   onCleanup(() => {
     clearInterval(unsavedInterval);
@@ -8542,7 +8549,8 @@ export const App: Component = () => {
     }
     try {
       const saved = await busy(t("Guardando proyecto..."), () =>
-        invoke<ProjectSaved>("save_project", { path, ui: projectUi(), onlyIfChanged: false })
+        // El sketch abierto va con lo guardado (sigue abierto)
+        invoke<ProjectSaved>("save_project", { path, ui: projectUi(), onlyIfChanged: false, design: cadUi.documentWithSketch() ?? null })
       );
       setProjectPath(path);
       rememberRecent(path!);
@@ -8945,7 +8953,7 @@ export const App: Component = () => {
     try {
       const toProject = settings.enabled && projectPath();
       const path = toProject ? projectPath()! : await invoke<string>("recovery_project_path");
-      const saved = await invoke<ProjectSaved>("save_project", { path, ui: projectUi(), onlyIfChanged: true });
+      const saved = await invoke<ProjectSaved>("save_project", { path, ui: projectUi(), onlyIfChanged: true, design: cadUi.documentWithSketch() ?? null });
       if (saved.written && settings.enabled) {
         const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
         setStatusMessage(toProject ? t("Guardado automático a las {time}", { time }) : t("Guardado automático (recuperación) a las {time}", { time }));
