@@ -307,6 +307,71 @@ mod tests {
         assert!((bb.min[0] - 90.0).abs() < 1e-6 && (bb.min[1] - 90.0).abs() < 1e-6, "{:?}", bb.min);
     }
 
+    /// Lamina mallas reales (las que diga `PINOCCHIO_SLICER_MESHES`: un
+    /// archivo con una ruta por línea) por el mismo camino que la app, con los
+    /// ajustes por defecto de la K1, y dice cuáles fallan y por qué. Con
+    /// `PINOCCHIO_SLICER_ORIENT=1`, orientadas como «Orientar» de Fabricar.
+    ///   PINOCCHIO_SLICER_MESHES=lista.txt cargo test -p pinocchio-app --lib mallas_reales -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn lamina_mallas_reales() {
+        let Ok(list) = std::env::var("PINOCCHIO_SLICER_MESHES") else { return };
+        let engine = slicer::find_engine().expect("motor");
+        let orient = std::env::var("PINOCCHIO_SLICER_ORIENT").is_ok_and(|v| v == "1");
+        let k1 = slicer::index().printers.iter().find(|p| p.model == "Creality K1").unwrap();
+        let settings = slicer::SliceSettings { printer: k1.name.clone(), process: k1.default_process.clone(), filament: k1.default_filament.clone(), overrides: Default::default() };
+        let mut failed = Vec::new();
+        for path in std::fs::read_to_string(list).unwrap().lines().map(str::trim).filter(|l| !l.is_empty()) {
+            let name = std::path::Path::new(path).file_name().unwrap().to_string_lossy().to_string();
+            let t0 = std::time::Instant::now();
+            let outcome = (|| -> Result<String, String> {
+                let mut mesh = pinocchio_mesh::load_mesh(path).map_err(|e| format!("carga: {e}"))?;
+                // En metros u otra unidad chica: a 100 mm (acá importa lo complejo, no el tamaño)
+                let bb = pinocchio_print3d::compute_bounding_box(&mesh);
+                let size = bb.dimensions().iter().cloned().fold(0.0, f64::max);
+                if size < 5.0 {
+                    for v in &mut mesh.vertices {
+                        v.position *= 100.0 / size;
+                    }
+                }
+                let input = PlateInput {
+                    printer: PrinterProfile::new("Creality K1", [220.0, 220.0, 250.0], 0.4, 0.2),
+                    material: MaterialProfile::default(),
+                    format: "stl".into(),
+                    spacing: 5.0,
+                    orient,
+                    contour: false,
+                    hollow_wall: None,
+                    drain: None,
+                    vent: false,
+                    compensate: false,
+                    path: String::new(),
+                };
+                let config = slicer::build_config(&settings).map_err(|e| e.to_string())?;
+                let plan = slicing_plan(vec![(name.clone(), mesh)], &input, &config)?;
+                let plate = plan.plates.first().ok_or_else(|| format!("no cabe en la cama: {:?} {:?}", plan.unplaced, plan.too_tall))?;
+                let job = slicer::SliceJob { config, parts: plate_parts(plate), work_dir: std::env::temp_dir().join(format!("pinocchio-slicer-real-{}", std::process::id())) };
+                let summary = slicer::run(&job, &engine, |_| {}, &AtomicBool::new(false)).map_err(|e| e.to_string())?;
+                let gcode = std::fs::read_to_string(&summary.gcode).map_err(|e| e.to_string())?;
+                let _ = std::fs::remove_dir_all(&job.work_dir);
+                let (lo, hi) = extruded_bounds(&gcode);
+                if lo[0] < 0.0 || lo[1] < 0.0 || hi[0] > 220.0 || hi[1] > 220.0 {
+                    return Err(format!("se sale de la cama: {lo:?} {hi:?}"));
+                }
+                Ok(format!("{} capas, {:.0} min, {:.0} g, avisos {:?}", summary.layers, summary.time_s / 60.0, summary.filament_g, summary.warnings))
+            })();
+            let secs = t0.elapsed().as_secs_f64();
+            match outcome {
+                Ok(m) => eprintln!("OK    {name} ({secs:.0} s): {m}"),
+                Err(e) => {
+                    eprintln!("FALLA {name} ({secs:.0} s): {e}");
+                    failed.push(name);
+                }
+            }
+        }
+        assert!(failed.is_empty(), "fallaron: {failed:?}");
+    }
+
     /// Caja XY de lo que se extruye (G1 con E positivo)
     fn extruded_bounds(gcode: &str) -> ([f64; 2], [f64; 2]) {
         let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);

@@ -206,7 +206,46 @@ enum Line {
 
 /// Lamina `job` con el motor en `engine`. `cancel` se revisa varias veces por
 /// segundo: al activarse se mata el proceso.
+///
+/// Los soportes no se le dejan al usuario: si están apagados y Orca ve que la
+/// pieza los necesita (zonas en el aire, voladizos, primera capa vacía), se
+/// corta ese laminado y se repite con soportes (los automáticos solo van donde
+/// hacen falta), con un aviso que lo dice.
 pub fn run(job: &SliceJob, engine: &Path, mut on_event: impl FnMut(Event), cancel: &AtomicBool) -> Result<Summary, SlicerError> {
+    let supports_on = matches!(job.config.get("enable_support"), Some(Value::String(v)) if v == "1") || job.config.get("enable_support") == Some(&Value::Bool(true));
+    match run_once(job, engine, &mut on_event, cancel, !supports_on) {
+        Err(SlicerError::NeedsSupport(why)) => {
+            let mut config = job.config.clone();
+            config.insert("enable_support".into(), Value::String("1".into()));
+            let with = SliceJob { config, parts: job.parts.clone(), work_dir: job.work_dir.clone() };
+            let note = format!("Se pusieron soportes: {why}");
+            on_event(Event::Warning { text: note.clone() });
+            let mut summary = run_once(&with, engine, &mut on_event, cancel, false)?;
+            summary.warnings.insert(0, note);
+            Ok(summary)
+        }
+        other => other,
+    }
+}
+
+/// Si el aviso o error de Orca dice que sin soportes no se puede imprimir
+fn needs_support(text: &str) -> bool {
+    text == "Errors"
+        || text.starts_with("One object has an empty first layer")
+        || (text.starts_with("It seems object ") && text.ends_with("Please re-orient the object or enable support generation."))
+}
+
+/// Por qué hicieron falta los soportes, para el aviso
+fn support_reason(text: &str) -> String {
+    let es = orca_text(text);
+    match es.split_once(": reoriéntala") {
+        Some((what, _)) => what.replacen("La pieza", "la pieza", 1),
+        None => "la pieza apenas toca la cama".to_string(),
+    }
+}
+
+/// Un laminado. Con `watch_support`, se corta apenas Orca dice que hacen falta soportes.
+fn run_once(job: &SliceJob, engine: &Path, on_event: &mut impl FnMut(Event), cancel: &AtomicBool, watch_support: bool) -> Result<Summary, SlicerError> {
     if job.parts.iter().all(|p| p.is_empty()) {
         return Err(SlicerError::Empty);
     }
@@ -265,6 +304,11 @@ pub fn run(job: &SliceJob, engine: &Path, mut on_event: impl FnMut(Event), cance
         match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(line) => match serde_json::from_str::<Line>(&line) {
                 Ok(Line::Progress { percent, text }) => on_event(Event::Progress { percent, text }),
+                Ok(Line::Warning { text }) if watch_support && needs_support(&text) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(SlicerError::NeedsSupport(support_reason(&text)));
+                }
                 Ok(Line::Warning { text }) => {
                     let text = orca_text(&text);
                     warnings.push(text.clone());
@@ -272,6 +316,10 @@ pub fn run(job: &SliceJob, engine: &Path, mut on_event: impl FnMut(Event), cance
                 }
                 Ok(Line::Done { gcode, time_s, filament_mm, filament_cm3, filament_g, layers, roles }) => {
                     summary = Some(Summary { gcode, time_s, filament_mm, filament_cm3, filament_g, layers, warnings: Vec::new(), roles });
+                }
+                Ok(Line::Error { text }) if watch_support && text.lines().any(needs_support) => {
+                    let _ = child.wait();
+                    return Err(SlicerError::NeedsSupport(support_reason(text.lines().find(|l| needs_support(l)).unwrap_or(&text))));
                 }
                 Ok(Line::Error { text }) => error = Some(text.lines().map(orca_text).collect::<Vec<_>>().join("\n")),
                 Ok(Line::Other) | Err(_) => {}
@@ -375,6 +423,12 @@ mod tests {
             "La pieza 2 tiene zonas en el aire: reoriéntala o activa los soportes"
         );
         assert_eq!(super::orca_text("algo que no se conoce"), "algo que no se conoce");
+        assert_eq!(super::support_reason("Errors"), "la pieza apenas toca la cama");
+        assert_eq!(
+            super::support_reason("It seems object pieza_1.stl has large overhangs. Please re-orient the object or enable support generation."),
+            "la pieza 1 tiene voladizos grandes"
+        );
+        assert!(!super::needs_support("Detect overhangs for auto-lift"));
     }
     use super::*;
 

@@ -64,3 +64,45 @@ fn cancelar_mata_el_motor() {
     let r = run(&job, &engine, |_| {}, &cancel);
     assert!(matches!(r, Err(pinocchio_slicer::SlicerError::Cancelled)));
 }
+
+/// Octaedro parado sobre una punta en (cx, cy, 0): toca la cama en un punto
+fn standing_octahedron(cx: f32, cy: f32, r: f32) -> Vec<[[f32; 3]; 3]> {
+    let bottom = [cx, cy, 0.0];
+    let top = [cx, cy, 2.0 * r];
+    let ring = [[cx + r, cy, r], [cx, cy + r, r], [cx - r, cy, r], [cx, cy - r, r]];
+    let mut out = Vec::new();
+    for k in 0..4 {
+        let (a, b) = (ring[k], ring[(k + 1) % 4]);
+        out.push([top, a, b]);
+        out.push([bottom, b, a]);
+    }
+    out
+}
+
+fn k1_job(parts: Vec<Vec<[[f32; 3]; 3]>>, tag: &str) -> SliceJob {
+    let k1 = index().printers.iter().find(|p| p.name == "Creality K1 (0.4 nozzle)").unwrap();
+    let settings = SliceSettings { printer: k1.name.clone(), process: k1.default_process.clone(), filament: k1.default_filament.clone(), overrides: Default::default() };
+    SliceJob { config: build_config(&settings).unwrap(), parts, work_dir: std::env::temp_dir().join(format!("pinocchio-slicer-{tag}-{}", std::process::id())) }
+}
+
+/// Una pieza que toca la cama en un punto (la primera capa queda vacía sin
+/// soportes): con los soportes apagados, se ponen solos y se avisa
+#[test]
+fn pone_soportes_solo_si_hacen_falta() {
+    let Some(engine) = find_engine() else { return };
+    let job = k1_job(vec![standing_octahedron(110.0, 110.0, 20.0)], "punta");
+    assert_eq!(job.config.get("enable_support").and_then(|v| v.as_str()), Some("0"), "el perfil viene sin soportes");
+    let summary = run(&job, &engine, |_| {}, &AtomicBool::new(false)).expect("lamina con soportes");
+    assert!(summary.warnings.first().is_some_and(|w| w.starts_with("Se pusieron soportes")), "{:?}", summary.warnings);
+    let p = parse_gcode(&std::fs::read_to_string(&summary.gcode).unwrap());
+    assert!(p.length_by_feature[Feature::Support as usize] > 0.0, "sin soportes en el gcode");
+    let _ = std::fs::remove_dir_all(&job.work_dir);
+
+    // Un cubo no los necesita: no se ponen
+    let job = k1_job(vec![cube(100.0, 100.0, 20.0)], "cubo-sin-soportes");
+    let summary = run(&job, &engine, |_| {}, &AtomicBool::new(false)).unwrap();
+    assert!(!summary.warnings.iter().any(|w| w.starts_with("Se pusieron soportes")), "{:?}", summary.warnings);
+    let p = parse_gcode(&std::fs::read_to_string(&summary.gcode).unwrap());
+    assert_eq!(p.length_by_feature[Feature::Support as usize], 0.0);
+    let _ = std::fs::remove_dir_all(&job.work_dir);
+}
