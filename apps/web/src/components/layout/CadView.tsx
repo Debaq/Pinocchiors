@@ -1397,7 +1397,8 @@ export const CadView: Component<CadViewProps> = (props) => {
       })(),
       spread: candidates().length ? candidates().map((c) => ({ id: c.id, offset: c.offset, color: c.color })) : undefined,
       crossings: ui.sketchShow().crossings !== false ? problems()?.crossings.map((x) => x.p) : undefined,
-      warnEntities: problems()?.overlaps.flat(),
+      // Encimadas y curvas ligadas sin su referencia
+      warnEntities: [...(problems()?.overlaps.flat() ?? []), ...ui.brokenLinks().map((b) => b.entity)],
       conflictEntities: (s.report?.conflicting ?? []).flatMap((i) => {
         const c = s.sketch.constraints[i];
         return c ? constraintIds(c).filter((id) => s.sketch.entities.some((e) => e.id === id)) : [];
@@ -1684,6 +1685,17 @@ export const CadView: Component<CadViewProps> = (props) => {
     if (t === "use" && s.sheet) {
       // Sobre la hoja: la línea de la vista bajo el cursor, ligada a ella
       return ui.setMessage(ui.useViewLine(viewer.planePoint(e.clientX, e.clientY, s.plane) ?? hit.p, viewer.pixelSizeMm() * 8));
+    }
+    if (t === "use" && ui.relinkTarget() !== undefined) {
+      // Reparando una curva ligada rota: la arista bajo el cursor es su referencia nueva
+      const target = ui.relinkTarget()!;
+      const pick = viewer.pick(e.clientX, e.clientY, { edges: true });
+      if (pick?.kind !== "edge") return ui.setMessage(tr("Clic sobre una arista del sólido (una sola: reemplaza a la curva elegida)"));
+      store
+        .projectEdge(pick.edge, s.plane)
+        .then((pe) => ui.setMessage(ui.relink(target, pe)))
+        .catch((err) => ui.setMessage(tBackend(String(err))));
+      return;
     }
     if (t === "use") {
       // La arista o la cara del sólido bajo el cursor, proyectada al plano y ligada a él

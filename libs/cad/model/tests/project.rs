@@ -235,3 +235,41 @@ fn old_edge_uses_still_load() {
     assert_eq!(s.uses[0].entity, 3);
     assert!(s.uses[0].edge.is_some() && s.uses[0].source.is_none());
 }
+
+/// Lo que hay que reparar: la entidad de origen cambió de clase (`uses_shape`)
+/// o ya no está (`uses`), con su posición en `uses`.
+#[test]
+fn broken_uses_point_to_their_link() {
+    if !occt() {
+        return;
+    }
+    let mut doc = Document::new();
+    let mut first = Sketch::new();
+    let circle = first.circle([3.0, 4.0], 5.0);
+    let line = first.line([0.0, 0.0], [10.0, 0.0]);
+    let base = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 0.0, sketch: first });
+    let ev = doc.evaluate();
+    let r = &ev.sketches[&base];
+    let mut s = Sketch::new();
+    for e in [circle, line] {
+        let entity = project::add_to(&mut s, &project::sketch_entity(&r.sketch, &r.plane, e, &Plane::XY).unwrap());
+        s.uses.push(SketchUse { edge: None, source: Some(UseSource::Sketch { feature: base, entity: e }), entity });
+    }
+    let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 10.0, sketch: s });
+    let missing = |doc: &Document| match doc.evaluate().state(sk) {
+        Some(FeatureState::Warning { missing, .. }) => missing.iter().map(|m| (m.field.clone(), m.index)).collect::<Vec<_>>(),
+        other => panic!("{other:?}"),
+    };
+    // El círculo pasa a ser una línea: sigue estando pero ya no encaja
+    if let FeatureKind::Sketch { sketch, .. } = &mut doc.get_mut(base).unwrap().kind {
+        let Geometry::Circle { center, .. } = sketch.entity(circle).unwrap().geometry else { unreachable!() };
+        let end = sketch.add_point(9.0, 9.0);
+        sketch.entities.iter_mut().find(|e| e.id == circle).unwrap().geometry = Geometry::Line { start: center, end };
+    }
+    assert_eq!(missing(&doc), vec![("uses_shape".to_string(), 0)]);
+    // La línea se borra: se perdió
+    if let FeatureKind::Sketch { sketch, .. } = &mut doc.get_mut(base).unwrap().kind {
+        sketch.remove_entity(line).unwrap();
+    }
+    assert_eq!(missing(&doc), vec![("uses_shape".to_string(), 0), ("uses".to_string(), 1)]);
+}

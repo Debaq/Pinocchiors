@@ -26,6 +26,7 @@ import {
   addPoint,
   addProjected,
   breakLinks,
+  relinkProjected,
   addRectangle,
   ensureOrigin,
   emptySketch,
@@ -45,6 +46,7 @@ import {
   type PlaneSpec,
   type Projected,
   type SketchUse,
+  type ProjectedEdge,
   type Region,
   type ScanDeviation,
   type FitRange,
@@ -311,6 +313,13 @@ function onAxis(s: Sketch, id: number, axis: number): boolean {
 }
 
 /** Qué dice la etiqueta de una cota: el valor, su nombre (d1, d2… o el parámetro) o la fórmula con el valor */
+/** Curva ligada que hay que reparar: su referencia no está (`lost`) o cambió de forma (`shape`) */
+export interface BrokenLink {
+  entity: number;
+  why: "lost" | "shape";
+  use: SketchUse;
+}
+
 export type DimLabel = "value" | "name" | "expr";
 
 /** Pasos que se pueden deshacer dentro de un sketch */
@@ -483,6 +492,10 @@ export function createCadUi(store: CadStore) {
   const [sketchHistory, setSketchHistory] = createSignal({ undo: 0, redo: 0 });
   // Sube al reponer un paso (aparte: la herramienta en curso se corta solo entonces)
   const [sketchRestored, setSketchRestored] = createSignal(0);
+  /** Curva ligada rota a la que el próximo clic de Usar le da la referencia nueva */
+  const [relinkTarget, setRelinkTarget] = createSignal<number>();
+  // Dejar Usar (otra herramienta, Esc) es dejar de reparar
+  createEffect(on(tool, (t) => t !== "use" && setRelinkTarget(undefined), { defer: true }));
   const historyChanged = () => setSketchHistory({ undo: past.length, redo: future.length });
   const resetHistory = () => {
     setSelectedConstraints([]);
@@ -748,6 +761,7 @@ export function createCadUi(store: CadStore) {
         if (expr) (c as { expr?: string }).expr = expr;
       });
       setSession({ feature, plane: view.plane, sketch, report: view.report, regions: view.regions });
+      setRelinkTarget(undefined);
       setSymmetryAxis(undefined);
       setActiveLayer(undefined);
       setBlockEdit(undefined);
@@ -1229,6 +1243,56 @@ export function createCadUi(store: CadStore) {
       setSelection(ids);
       const n = ids.length;
       return linkedMessage(n, what);
+    },
+
+    /**
+     * Curvas ligadas cuya referencia el último cálculo no encontró (`lost`) o
+     * encontró con otra forma (`shape`) y que en el sketch abierto siguen con
+     * el vínculo de entonces (las ya reparadas o rotas no salen)
+     */
+    brokenLinks(): BrokenLink[] {
+      const s = session();
+      if (!s || s.sheet) return [];
+      const st = store.stateOf(s.feature);
+      if (st?.state !== "warning" && st?.state !== "error") return [];
+      const f = store.doc()?.features.find((x) => x.id === s.feature);
+      const saved = f?.kind.type === "sketch" ? (f.kind.sketch.uses ?? []) : [];
+      const out: BrokenLink[] = [];
+      for (const m of st.missing ?? []) {
+        if (m.field !== "uses" && m.field !== "uses_shape") continue;
+        const u = saved[m.index];
+        const now = u && s.sketch.uses?.find((x) => x.entity === u.entity);
+        if (!now || JSON.stringify(now) !== JSON.stringify(u) || out.some((o) => o.entity === u.entity)) continue;
+        out.push({ entity: u.entity, why: m.field === "uses" ? "lost" : "shape", use: u });
+      }
+      return out;
+    },
+    relinkTarget,
+    /** Reparar `entity` (o dejar de hacerlo): elige la curva y pasa a Usar */
+    startRelink(entity: number | undefined) {
+      setRelinkTarget(entity);
+      if (entity === undefined) return;
+      setSelection([entity]);
+      setTool("use");
+      setMessage(tr("Clic en la arista que reemplaza a la curva elegida"));
+    },
+    /**
+     * Da a la curva rota la arista `pe` (proyectada): toma su forma y queda
+     * ligada a ella. Sigue con la próxima rota, si hay. Devuelve el aviso
+     */
+    relink(entity: number, pe: ProjectedEdge): string {
+      if (!session()) return tr("El sketch se cerró");
+      let dropped: number | undefined;
+      ui.change((sk) => (dropped = relinkProjected(sk, entity, pe, { edge: pe.ref })));
+      if (dropped === undefined) {
+        setRelinkTarget(undefined);
+        return tr("Esa curva ya no está en el sketch");
+      }
+      const next = ui.brokenLinks().find((b) => b.entity !== entity);
+      setRelinkTarget(next?.entity);
+      setSelection(next ? [next.entity] : [entity]);
+      const done = dropped > 0 ? tr("Curva reparada; {n} relaciones con ella no servían y se quitaron", { n: dropped }) : tr("Curva reparada: sigue a la arista nueva");
+      return next ? `${done}. ${tr("Ahora la siguiente: clic en su arista")}` : done;
     },
 
     /**

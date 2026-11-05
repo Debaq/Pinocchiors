@@ -361,4 +361,10 @@ export const en_lib1: Catalog = {
   "Acero inoxidable": "Stainless steel",
   "Latón": "Brass",
   "Madera de pino": "Pine wood",
+  // U8: reparar curvas ligadas
+  "Clic en la arista que reemplaza a la curva elegida": "Click the edge that replaces the selected curve",
+  "Esa curva ya no está en el sketch": "That curve is no longer in the sketch",
+  "Curva reparada; {n} relaciones con ella no servían y se quitaron": "Curve repaired; {n} relations with it no longer applied and were removed",
+  "Curva reparada: sigue a la arista nueva": "Curve repaired: it follows the new edge",
+  "Ahora la siguiente: clic en su arista": "Now the next one: click its edge",
 };

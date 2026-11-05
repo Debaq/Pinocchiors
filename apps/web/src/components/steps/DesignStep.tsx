@@ -118,7 +118,7 @@ import {
   NUT_HEIGHT,
   isScanReference,
 } from "../../lib/cad";
-import type { CadUi, Hit3d } from "../../lib/cadUi";
+import type { BrokenLink, CadUi, Hit3d } from "../../lib/cadUi";
 import type { DesignActions } from "../../lib/designActions";
 import { regionContains } from "../../lib/CadViewer";
 import { flipSketchY, insertClip, rotateSketch, rotation, scaling, selectionCenter, translation } from "../../lib/sketchTransform";
@@ -8933,6 +8933,15 @@ const SELECT_KINDS: { kind: SelectKind; label: string }[] = [
   { kind: "all", get label() { return tl("Todo"); } },
 ];
 
+/** Nombre de una curva ligada rota para la lista: clase y por qué */
+function brokenLabel(sk: Sketch, b: BrokenLink): string {
+  const g = sk.entities.find((e) => e.id === b.entity)?.geometry.type;
+  const kind =
+    g === "line" ? tl("Línea") : g === "circle" ? tl("Círculo") : g === "arc" ? tl("Arco") : g === "ellipse" ? tl("Elipse") : g === "point" ? tl("Punto") : tl("Curva");
+  const why = b.why === "shape" ? tl("cambió de forma") : b.use.source?.type === "sketch" ? tl("su sketch ya no la tiene") : b.use.edge ? tl("la arista ya no está") : tl("ya no está en el sólido");
+  return `${kind} ${b.entity}: ${why}`;
+}
+
 /** Usar del modelo: silueta, intersección, otro sketch y romper el vínculo */
 const SketchModelRefs: Component<{ ui: CadUi; store: CadStore }> = (props) => {
   const ui = props.ui;
@@ -8979,8 +8988,45 @@ const SketchModelRefs: Component<{ ui: CadUi; store: CadStore }> = (props) => {
           </For>
         </div>
       </Show>
+      <Show when={ui.brokenLinks().length > 0}>
+        <div class="space-y-1 rounded border border-error/40 p-1.5">
+          <p class="text-[11px] text-error leading-relaxed">
+            {tl("Curvas ligadas que perdieron su referencia (en rojo). Reparar: clic en la arista que la reemplaza; la curva toma su forma y lo unido a sus extremos sigue unido.")}
+          </p>
+          <For each={ui.brokenLinks()}>
+            {(b) => (
+              <div class="flex items-center justify-between gap-2" onMouseEnter={() => ui.setHoverIds([b.entity])} onMouseLeave={() => ui.setHoverIds([])}>
+                <span class="text-xs truncate">
+                  {brokenLabel(s().sketch, b)}
+                </span>
+                <div class="flex gap-1 shrink-0">
+                  <Button
+                    size="sm"
+                    variant={ui.relinkTarget() === b.entity ? "primary" : "ghost"}
+                    title={tl("Clic en la arista nueva en el visor")}
+                    onClick={() => ui.startRelink(ui.relinkTarget() === b.entity ? undefined : b.entity)}
+                  >
+                    {ui.relinkTarget() === b.entity ? tl("Eligiendo…") : tl("Reparar")}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    title={tl("Deja de seguir al modelo y queda donde está, editable")}
+                    onClick={() => {
+                      ui.setSelection([b.entity]);
+                      ui.setMessage(ui.breakLinks());
+                    }}
+                  >
+                    {tl("Desligar")}
+                  </Button>
+                </div>
+              </div>
+            )}
+          </For>
+        </div>
+      </Show>
       <div class="flex items-center justify-between gap-2">
-        <span class="text-xs text-text-muted">{linked().length === 1 ? "1 curva ligada" : `${linked().length} curvas ligadas`}</span>
+        <span class="text-xs text-text-muted">{tn(linked().length, "{n} curva ligada", "{n} curvas ligadas")}</span>
         <Button size="sm" variant="ghost" disabled={selectedLinked() === 0} title={tl("Lo elegido deja de seguir al modelo y queda editable")} onClick={() => ui.setMessage(ui.breakLinks())}>
           {tl("Romper vínculo")}
         </Button>

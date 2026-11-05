@@ -1984,4 +1984,16 @@ export const en_ui_steps: Catalog = {
   "Ángulo del chaflán": "Chamfer angle",
   "Ángulo total": "Total angle",
   "Área": "Area",
+  // U8: reparar curvas ligadas
+  "Curvas ligadas que perdieron su referencia (en rojo). Reparar: clic en la arista que la reemplaza; la curva toma su forma y lo unido a sus extremos sigue unido.": "Linked curves that lost their reference (in red). Repair: click the edge that replaces it; the curve takes its shape and whatever is joined to its ends stays joined.",
+  "Clic en la arista nueva en el visor": "Click the new edge in the viewport",
+  "Eligiendo…": "Picking…",
+  "Deja de seguir al modelo y queda donde está, editable": "Stops following the model and stays where it is, editable",
+  "Desligar": "Unlink",
+  "{n} curva ligada": "{n} linked curve",
+  "{n} curvas ligadas": "{n} linked curves",
+  "cambió de forma": "changed shape",
+  "su sketch ya no la tiene": "its sketch no longer has it",
+  "la arista ya no está": "the edge is gone",
+  "ya no está en el sólido": "no longer on the solid",
 };

@@ -1956,7 +1956,11 @@ impl Ctx<'_> {
             };
             match target {
                 Ok(p) if project::fit(sketch, u.entity, &p) => {}
-                Ok(_) => changed += 1,
+                Ok(_) => {
+                    // Sigue estando pero ya no es de la misma clase: se repara eligiendo otra vez
+                    self.miss("uses_shape", k);
+                    changed += 1;
+                }
                 Err(_) => {
                     self.miss("uses", k);
                     lost += 1;
@@ -1990,6 +1994,9 @@ impl Ctx<'_> {
             let pairs = project::assign(sketch, entities, &curves);
             for (e, c) in &pairs {
                 project::fit(sketch, *e, &curves[*c]);
+            }
+            for e in entities.iter().filter(|e| !pairs.iter().any(|(x, _)| x == *e)) {
+                self.miss("uses", sketch.uses.iter().position(|u| u.entity == *e).unwrap_or(0));
             }
             if pairs.len() < entities.len() {
                 self.warn(format!("{name} cambió: {} de sus curvas ya no están", entities.len() - pairs.len()));

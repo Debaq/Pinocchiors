@@ -535,6 +535,113 @@ export function breakLinks(s: Sketch, entities: number[]): number {
   return before - (s.uses?.length ?? 0);
 }
 
+/**
+ * Repara una entidad ligada cuya referencia se perdió o cambió de forma: toma
+ * la forma de `c` (proyectada desde la referencia nueva) y su vínculo pasa a
+ * ser `link`. De la misma clase, se mueven sus puntos; si no, la geometría
+ * cambia en el lugar (mismo id; los extremos siguen siendo los mismos puntos,
+ * así lo unido a ellos sigue unido) y las relaciones que nombran a la entidad
+ * quedan afuera. Devuelve cuántas relaciones se quitaron (undefined si la
+ * entidad no está).
+ */
+export function relinkProjected(s: Sketch, entity: number, c: Projected, link: Omit<SketchUse, "entity">): number | undefined {
+  const e = s.entities.find((x) => x.id === entity);
+  if (!e) return undefined;
+  const pos = new Map(s.points.map((p) => [p.id, p]));
+  const at = (id: number): P2 | undefined => {
+    const p = pos.get(id);
+    return p ? [p.x, p.y] : undefined;
+  };
+  const set = (id: number, q: P2) => {
+    const p = pos.get(id);
+    if (p) [p.x, p.y] = q;
+  };
+  const d2 = (a: P2 | undefined, b: P2) => (a ? (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 : Infinity);
+  const g = e.geometry;
+  let dropped = 0;
+  if (g.type === "point" && c.kind === "point") set(g.point, c.at);
+  else if (g.type === "line" && c.kind === "line") {
+    const [s0, e0] = [at(g.start), at(g.end)];
+    const keep = d2(s0, c.start) + d2(e0, c.end) <= d2(s0, c.end) + d2(e0, c.start);
+    set(g.start, keep ? c.start : c.end);
+    set(g.end, keep ? c.end : c.start);
+  } else if (g.type === "circle" && c.kind === "circle") {
+    set(g.center, c.center);
+    g.radius = c.radius;
+  } else if (g.type === "arc" && c.kind === "arc") {
+    set(g.center, c.center);
+    set(g.start, c.start);
+    set(g.end, c.end);
+  } else if (g.type === "ellipse" && c.kind === "ellipse") {
+    // Del mismo lado que estaban (la elipse es igual con el semieje dado vuelta)
+    const near = (q: number, p: P2): P2 => {
+      const flip: P2 = [2 * c.center[0] - p[0], 2 * c.center[1] - p[1]];
+      return d2(at(q), p) > d2(at(q), flip) ? flip : p;
+    };
+    set(g.center, c.center);
+    set(g.major, near(g.major, c.major));
+    set(g.minor, near(g.minor, c.minor));
+  } else {
+    // Otra clase (o una spline, que puede traer otra cantidad de puntos): se
+    // rehace con los extremos de antes en los extremos nuevos más cercanos
+    const oldEnds: number[] =
+      g.type === "line" || g.type === "arc" || g.type === "ellipse_arc"
+        ? [g.start, g.end]
+        : g.type === "spline" && !g.closed && g.points.length > 1
+          ? [g.points[0], g.points[g.points.length - 1]]
+          : g.type === "bspline" && !g.closed && g.poles.length > 1
+            ? [g.poles[0], g.poles[g.poles.length - 1]]
+            : g.type === "point"
+              ? [g.point]
+              : [];
+    const newEnds: P2[] =
+      c.kind === "line" || c.kind === "arc"
+        ? [c.start, c.end]
+        : c.kind === "spline" && !c.closed && c.points.length > 1
+          ? [c.points[0], c.points[c.points.length - 1]]
+          : c.kind === "point"
+            ? [c.at]
+            : [];
+    // Pares extremo nuevo ↔ punto viejo, del más cercano al más lejano
+    const pairs = newEnds.flatMap((q, k) => oldEnds.map((id) => ({ k, id, d: d2(at(id), q) }))).sort((a, b) => a.d - b.d);
+    const reuse = new Map<number, number>();
+    for (const p of pairs) if (!reuse.has(p.k) && ![...reuse.values()].includes(p.id)) reuse.set(p.k, p.id);
+    const end = (k: number, q: P2) => {
+      const id = reuse.get(k);
+      if (id === undefined) return addPoint(s, q);
+      set(id, q);
+      return id;
+    };
+    const fresh = (q: P2) => addPoint(s, q);
+    const last = (n: number) => n - 1;
+    e.geometry =
+      c.kind === "point"
+        ? { type: "point", point: end(0, c.at) }
+        : c.kind === "line"
+          ? { type: "line", start: end(0, c.start), end: end(1, c.end) }
+          : c.kind === "circle"
+            ? { type: "circle", center: fresh(c.center), radius: c.radius }
+            : c.kind === "arc"
+              ? { type: "arc", center: fresh(c.center), start: end(0, c.start), end: end(1, c.end) }
+              : c.kind === "ellipse"
+                ? { type: "ellipse", center: fresh(c.center), major: fresh(c.major), minor: fresh(c.minor) }
+                : {
+                    type: "spline",
+                    points: c.points.map((q, k) => (c.closed ? fresh(q) : k === 0 ? end(0, q) : k === last(c.points.length) ? end(1, q) : fresh(q))),
+                    closed: c.closed,
+                    ...(c.handles ? { start_handle: fresh(c.handles[0]), end_handle: fresh(c.handles[1]) } : {}),
+                  };
+    // Lo que nombraba a la entidad vieja no tiene por qué servir con la nueva
+    const before = s.constraints.length;
+    s.constraints = s.constraints.filter((x) => !constraintMentions(x, [entity]));
+    dropped = before - s.constraints.length;
+    const now = new Set(geometryPoints(e.geometry));
+    for (const p of geometryPoints(g)) if (!now.has(p)) removeLoosePoint(s, p);
+  }
+  s.uses = [...(s.uses ?? []).filter((u) => u.entity !== entity), { ...link, entity }];
+  return dropped;
+}
+
 /** Texto del sketch: el ancla es el comienzo de la línea base */
 export interface SketchText {
   id: number;
@@ -1451,7 +1558,7 @@ export interface ResolvedValue {
 
 /** Referencia que no se encontró: campo de la operación y posición en su lista */
 export interface MissingRef {
-  field: "edges" | "faces" | "regions" | "plane" | "neutral" | "axis" | "extent" | "targets" | "tools" | "parts" | "scope" | "base" | "a" | "b" | "edge" | "face" | "points" | "def" | "target";
+  field: "edges" | "faces" | "regions" | "plane" | "neutral" | "axis" | "extent" | "targets" | "tools" | "parts" | "scope" | "base" | "a" | "b" | "edge" | "face" | "points" | "def" | "target" | "uses" | "uses_shape";
   index: number;
 }
 

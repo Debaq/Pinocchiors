@@ -258,8 +258,16 @@ El orden de las fases es el de urgencia: primero lo que pierde trabajo del usuar
 ## U8 — Huecos de producto (después de U0–U4)
 
 Imprescindible:
-- [ ] **Reparar referencias rotas** (`SketchUse`): hoy solo avisa (`eval.rs:1922-1970`) y hay que
+- [x] **Reparar referencias rotas** (`SketchUse`): hoy solo avisa (`eval.rs:1922-1970`) y hay que
   romper el vínculo y volver a usar. Elegir la arista nueva en el visor (como «resolver arista colgante»).
+  **Hecho 2026-11-05**: el cálculo marca cada vínculo a reparar en `missing` (`uses`: no está,
+  también la curva de intersección/silueta que desapareció; `uses_shape`: cambió de clase).
+  Con el sketch abierto, «Usar del modelo» lista las rotas (en rojo en el visor) con «Reparar»
+  (el próximo clic de Usar en una arista es su referencia nueva y sigue con la siguiente) y
+  «Desligar». `relinkProjected`: misma clase mueve los puntos; otra clase cambia la geometría en
+  el lugar (mismo id, extremos de antes en los nuevos más cercanos, relaciones con ella afuera,
+  puntos sueltos borrados). Pruebas: `project.rs` `broken_uses_point_to_their_link`,
+  `e2e/sketchRelink.test.mjs` (4). Falta probarlo en la app.
 - [ ] **MCP del sketch para editar**: hoy solo `sketch_create` y `sketch_add`; faltan borrar/mover
   entidades, recortar, usar arista/corte, spline, elipse, texto, offset, espejo, patrones.
 
