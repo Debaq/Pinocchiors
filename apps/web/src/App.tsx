@@ -9323,6 +9323,7 @@ export const App: Component = () => {
                 tab={slicerTab()}
                 onTab={setSlicerTab}
                 onBed={setSlicerBedSize}
+                confirm={confirmAction}
                 onClose={() => setSlicerEditorOpen(false)}
               />
             </div>

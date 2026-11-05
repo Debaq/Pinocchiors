@@ -64,6 +64,15 @@ export const rememberRecent = (path: string) => setRecentRaw([path, ...recentFil
 export const forgetRecent = (path: string) => setRecentRaw(recentFiles().filter((p) => p !== path));
 export const clearRecent = () => setRecentRaw([]);
 
+/** Impresora en la red (Moonraker): dirección y clave de API opcional. Es del equipo, no del proyecto */
+export interface PrinterConnection {
+  address: string;
+  apiKey: string;
+}
+const [printerConn, setPrinterConn] = createPersisted<PrinterConnection>("settings.moonraker", { address: "", apiKey: "" });
+export const printerConnection = (): PrinterConnection => ({ ...{ address: "", apiKey: "" }, ...(printerConn() as Partial<PrinterConnection>) });
+export const setPrinterConnection = setPrinterConn;
+
 /** Impresoras propias (Fabricar): nombre, cama y boquilla; se recuerdan entre sesiones */
 export interface SavedPrinter {
   name: string;

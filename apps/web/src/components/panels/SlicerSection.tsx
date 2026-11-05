@@ -6,6 +6,8 @@ import * as Icons from "../icons";
 import { fmtNumber, t } from "../../lib/i18n";
 import { tBackend } from "../../lib/i18nBackend.ts";
 import { FEATURES, ORCA_ROLE_NAMES, decodePreview, gcodePreview, type GcodeMeta } from "../../lib/gcodePreview";
+import type { ConfirmRequest } from "../layout/ConfirmDialog";
+import { PrinterTab, SendToPrinter } from "./PrinterSection";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TIPOS (espejo de apps/desktop/src/slicer.rs)
@@ -146,7 +148,7 @@ const BRIMS = [
 // PANEL (a la izquierda del visor, ver layout/SlicerEditor.tsx)
 // ═══════════════════════════════════════════════════════════════════════════
 
-export type SlicerTab = "settings" | "preview";
+export type SlicerTab = "settings" | "preview" | "printer";
 
 /** Tamaño de la cama del perfil de Orca (mm: ancho, fondo, alto) */
 export function slicerBed(config: Record<string, unknown> | undefined): [number, number, number] | undefined {
@@ -177,6 +179,8 @@ export const SlicerSection: Component<{
   onTab: (tab: SlicerTab) => void;
   /** Cama de la impresora del laminador (para dibujarla en el visor) */
   onBed?: (bed: [number, number, number] | undefined) => void;
+  /** Confirmar antes de algo que no se deshace (cancelar una impresión) */
+  confirm: (request: ConfirmRequest) => Promise<boolean>;
 }> = (props) => {
   const [info] = createResource(() => invoke<SlicerInfo>("slicer_presets").catch(() => undefined));
   const [busy, setBusy] = createSignal(false);
@@ -456,6 +460,9 @@ export const SlicerSection: Component<{
                 <Show when={saved()}>
                   <p class="text-[10px] text-green truncate">{t("Guardado en {path}", { path: saved()! })}</p>
                 </Show>
+                <div class="pt-1">
+                  <SendToPrinter onSent={() => props.onTab("printer")} onConfigure={() => props.onTab("printer")} />
+                </div>
               </div>
             </Panel>
           </div>
@@ -475,6 +482,10 @@ export const SlicerSection: Component<{
     <div class="flex flex-col h-full min-h-0">
       <div class="flex-1 min-h-0 overflow-y-auto px-3 py-2">
         <Show
+          when={props.tab !== "printer"}
+          fallback={<PrinterTab confirm={props.confirm} />}
+        >
+        <Show
           when={info()?.available}
           fallback={
             <p class="text-[11px] text-warning">
@@ -487,8 +498,9 @@ export const SlicerSection: Component<{
             {props.tab === "preview" ? previewPanels() : settingsPanels()}
           </div>
         </Show>
+        </Show>
       </div>
-      <Show when={info()?.available}>
+      <Show when={info()?.available && props.tab !== "printer"}>
         <footer class="shrink-0 border-t border-border px-3 py-2 space-y-1.5">
           <Show when={(props.plateCount ?? 1) > 1}>
             <Select

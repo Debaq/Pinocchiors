@@ -14,6 +14,7 @@ export interface SlicerEditorProps extends SlicerSectionProps {
 const TABS: { id: SlicerTab; label: string }[] = [
   { id: "settings", label: "Ajustes" },
   { id: "preview", label: "Vista previa" },
+  { id: "printer", label: "Impresora" },
 ];
 
 /** Laminador a la izquierda del visor (como Render y Orizon3D): ajustes y vista previa del gcode */

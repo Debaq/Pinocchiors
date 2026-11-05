@@ -217,6 +217,11 @@ pub fn slicer_preview() -> Result<tauri::ipc::Response, String> {
     Ok(tauri::ipc::Response::new(last.preview.to_bytes()))
 }
 
+/// El gcode del último laminado (para mandarlo a la impresora).
+pub(crate) fn last_gcode() -> Option<PathBuf> {
+    LAST.lock().ok()?.as_ref().map(|l| l.gcode.clone())
+}
+
 /// Guarda el gcode del último laminado donde diga el usuario.
 #[tauri::command]
 pub fn save_gcode(path: String) -> Result<u64, String> {
