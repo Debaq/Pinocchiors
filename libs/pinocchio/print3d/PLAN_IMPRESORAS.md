@@ -102,6 +102,24 @@ del modo LAN de la pantalla; el 8898 está abierto en la .47), (b) solo subir y 
 usuario empiece desde la pantalla eligiendo carrete, (c) ver si `fileSlotId.json`
 (`/usr/data/config`, `"slotId" : "1;2;"` por archivo) es lo que lee `~M23`.
 
+**✅ Receta que funciona para elegir carrete (2026-11-05, AD5X .47, fw 3.1.8):** API 8898,
+`POST /uploadGcode` multipart (`gcodeFile`) con cabeceras `serialNumber`, `checkCode`,
+`fileSize`, `printNow: true`, `useMatlStation: true`, `gcodeToolCnt: 1` y
+`materialMappings` = base64 de
+`[{"toolId":2,"slotId":3,"materialName":"PLA","toolMaterialColor":"#FFFFFF","slotMaterialColor":"#FFFFFF"}]`
+(**`toolId` desde 0 = la T del gcode; `slotId` desde 1 = el carrete**). Responde
+`{"code":0,"message":"Success"}`; en segundos `/detail` da `status: printing` y
+`matlStationInfo.currentSlot/currentLoadSlot = 3`. El gcode: laminado con 4 filamentos
+declarados (listas de 4 al final) y la herramienta usada como `T2`.
+- El **código LAN** (`checkCode`) está en `/usr/prog/config/backup.json` (`"lanCode"`), y el
+  número de serie en `~M115`/`printerSerialNumber`: no hace falta pedírselos al usuario si
+  hay SSH; si no, se ven en la pantalla (modo LAN).
+- El primer intento por la API cargó el carrete 3 y se quedó quieta («se cargó» y nada):
+  venía de una impresión cancelada a mitad con el filamento del 1 adentro y otra cancelada
+  desde la pantalla. Tras apagar y prender funcionó a la primera. En la app: si tras cargar
+  no pasa a `printing` en ~2 min, avisar y sugerir reiniciar la impresora.
+- El firmware genera una clave SSH nueva en cada arranque (conectar sin guardar la clave).
+
 **Detener por la red sí funciona al instante:** `~M26` → «CANCELING» en ~10 s y
 «CANCEL_BUILD» (calefactores a 0) a los ~23 s. Desde la pantalla tarda muchísimo (queja del
 usuario). Pinocchio debe ofrecer «Cancelar» con `~M26`.
