@@ -20,9 +20,10 @@
 # Artefactos:
 #   - App de escritorio     binario Linux + .AppImage, .msi/-setup.exe, .dmg (arm64)
 #   - Motor de laminado     dentro del ejecutable de la app (PINOCCHIO_SLICER_EMBED,
-#                           comprimido; se extrae a ~/.cache la primera vez): el
-#                           binario Linux y el AppImage son un solo archivo. Lo
-#                           compila slicer-engine.yml (con caché). Windows/macOS: todavía no
+#                           comprimido; se extrae a la caché del usuario la primera
+#                           vez): el binario Linux y el AppImage son un solo archivo.
+#                           En Windows va con sus DLL. Lo compila slicer-engine.yml
+#                           (con caché) en las mismas plataformas que la app
 #   - CLI `converter`       Linux x86_64, Windows x86_64, macOS arm64 + x86_64
 #   - Paquete WASM          converter-wasm (wasm-bindgen --target web)
 #   - latest.json           para que la app se actualice sola (tauri-plugin-updater):
@@ -176,12 +177,13 @@ jobs:
       - run: cargo test --workspace --locked --no-fail-fast
 
   # ───────────────────────────────────────────────────────────────────────────
-  # Motor de laminado (Linux): en paralelo con los tests; casi siempre sale de caché
+  # Motor de laminado: en paralelo con los tests; casi siempre sale de caché
   slicer:
     name: Motor de laminado
     needs: [version]
-    if: contains(needs.version.outputs.desktop, '"linux"')
     uses: ./.github/workflows/slicer-engine.yml
+    with:
+      plataformas: ${{ github.event_name == 'workflow_dispatch' && inputs.plataformas || 'todas' }}
 
   # ───────────────────────────────────────────────────────────────────────────
   desktop:
@@ -265,11 +267,10 @@ jobs:
         run: npm ci
 
       # Va dentro del ejecutable (ver PINOCCHIO_SLICER_EMBED en «Build Tauri»)
-      - name: Motor de laminado (Linux)
-        if: matrix.platform == 'linux'
+      - name: Motor de laminado
         uses: actions/download-artifact@v4
         with:
-          name: slicer-engine
+          name: slicer-engine-${{ matrix.platform }}
           path: libs/slicer/bin
 
       - name: Build Tauri
@@ -284,10 +285,13 @@ jobs:
           # La versión y los artefactos de actualización solo acá: un build
           # local no necesita la clave
           config="{\"version\":\"${SEMVER}\",\"bundle\":{\"createUpdaterArtifacts\":true}}"
+          # El motor de laminado (la carpeta: en Windows lleva sus DLL) se embebe
+          # solo acá; un build local lo busca en libs/slicer/bin
+          bin="$GITHUB_WORKSPACE/libs/slicer/bin"
+          if [[ "${{ matrix.platform }}" == windows ]]; then bin=$(cygpath -m "$bin"); fi
+          export PINOCCHIO_SLICER_EMBED="$bin"
           # Linux: sin .deb ni .rpm; el binario suelto se publica aparte.
-          # El motor de laminado se embebe solo acá (un build local lo busca en libs/slicer/bin)
           if [[ "${{ matrix.platform }}" == linux ]]; then
-            export PINOCCHIO_SLICER_EMBED="$GITHUB_WORKSPACE/libs/slicer/bin/pinocchio-slicer"
             node ../web/node_modules/@tauri-apps/cli/tauri.js build --bundles appimage --config "$config"
           else
             node ../web/node_modules/@tauri-apps/cli/tauri.js build --config "$config"

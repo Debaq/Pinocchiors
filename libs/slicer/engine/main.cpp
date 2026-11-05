@@ -32,6 +32,8 @@
 #include "libslic3r/GCode/ThumbnailData.hpp"
 
 #include <boost/filesystem.hpp>
+#include <boost/nowide/args.hpp>
+#include <boost/nowide/fstream.hpp>
 #include <fstream>
 #include <cstdio>
 #include <algorithm>
@@ -131,7 +133,7 @@ ThumbnailsList load_thumbnails(const std::string &dir, const ThumbnailsParams &p
     for (const Vec2d &size : params.sizes) {
         const unsigned w = unsigned(size.x()), h = unsigned(size.y());
         boost::filesystem::path file = boost::filesystem::path(dir) / ("thumb_" + std::to_string(w) + "x" + std::to_string(h) + ".rgba");
-        std::ifstream in(file.string(), std::ios::binary);
+        boost::nowide::ifstream in(file.string(), std::ios::binary);
         if (!in)
             continue;
         ThumbnailData data;
@@ -147,6 +149,9 @@ ThumbnailsList load_thumbnails(const std::string &dir, const ThumbnailsParams &p
 
 int main(int argc, char **argv)
 {
+    // En Windows argv viene en la página de códigos local: rutas con tildes o ñ (la
+    // carpeta del usuario) se perderían. nowide lo reemplaza por UTF-8, como espera libslic3r.
+    boost::nowide::args utf8_args(argc, argv);
     Args        args;
     std::string err;
     if (!parse_args(argc, argv, args, err))

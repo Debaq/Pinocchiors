@@ -1,24 +1,37 @@
 # Motor de laminado (pinocchio-slicer): libslic3r de OrcaSlicer congelado.
 #
-# Lo llama release.yml (Linux) y también se lanza solo, a mano, para dejar la
-# caché lista sin publicar nada:
-#   gh workflow run "Motor de laminado" --ref master
+# Lo llama release.yml (las plataformas de la release) y también se lanza solo, a
+# mano, para dejar la caché lista sin publicar nada:
+#   gh workflow run "Motor de laminado" --ref master -f plataformas=windows
 #
-# Dos cachés:
-#   - el binario, por versión de Orca + fuentes del motor + script: si nada de
-#     eso cambió, el job termina en segundos;
+# Dos cachés por sistema:
+#   - el motor, por versión de Orca + fuentes del motor + script: si nada de eso
+#     cambió, el job termina en segundos;
 #   - las dependencias de Orca ya instaladas (~600 MB), por versión de Orca y
 #     ORCA_DEPS_REV: la primera vez tardan horas (Boost, CGAL, OpenCV, OpenVDB,
 #     OCCT 7.6...), después solo se recompila libslic3r y el motor (~30 min).
 #
-# Corre directo en Ubuntu 24.04 (el mismo sistema que el contenedor de
-# libs/slicer/engine/Containerfile, que es el que se usa en el PC).
+# Linux: Ubuntu 24.04 (el mismo sistema que el contenedor de
+# libs/slicer/engine/Containerfile, que es el que se usa en el PC). Windows: MSVC,
+# el motor va con sus DLL (Orca compila OCCT compartido allá). macOS: arm64.
+# Artefacto: slicer-engine-<plataforma> con el contenido de libs/slicer/bin.
 
 name: Motor de laminado
 
 on:
   workflow_dispatch:
+    inputs:
+      plataformas:
+        description: "Plataformas a compilar"
+        type: choice
+        options: [todas, linux, windows, macos, linux-windows, linux-macos, windows-macos]
+        default: todas
   workflow_call:
+    inputs:
+      plataformas:
+        description: "linux, windows, macos, combinaciones con guiones o todas"
+        type: string
+        default: todas
 
 env:
   ORCA_VERSION: "2.4.2"
@@ -26,27 +39,66 @@ env:
   ORCA_DEPS_REV: "1"
 
 jobs:
+  matrix:
+    name: Plataformas
+    runs-on: ubuntu-latest
+    outputs:
+      include: ${{ steps.m.outputs.include }}
+    steps:
+      - id: m
+        env:
+          PLATAFORMAS: ${{ inputs.plataformas || 'todas' }}
+        run: |
+          [[ "$PLATAFORMAS" == todas ]] && PLATAFORMAS=linux-windows-macos
+          inc=()
+          [[ "$PLATAFORMAS" == *linux* ]] && inc+=('{"platform":"linux","os":"ubuntu-24.04","jobs":"4"}')
+          [[ "$PLATAFORMAS" == *windows* ]] && inc+=('{"platform":"windows","os":"windows-latest","jobs":"4"}')
+          [[ "$PLATAFORMAS" == *macos* ]] && inc+=('{"platform":"macos","os":"macos-latest","jobs":"2"}')
+          IFS=,; echo "include=[${inc[*]}]" >> "$GITHUB_OUTPUT"
+
   engine:
-    name: pinocchio-slicer (Linux)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 340
+    name: pinocchio-slicer (${{ matrix.platform }})
+    needs: [matrix]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.matrix.outputs.include) }}
+    defaults:
+      run:
+        shell: bash
     env:
-      ORCA_WORK_DIR: ${{ github.workspace }}/orca-work
       ORCA_NO_CONTAINER: "1"
-      ORCA_DEPS_JOBS: "4"
+      ORCA_DEPS_JOBS: ${{ matrix.jobs }}
     steps:
       - uses: actions/checkout@v5
+
+      # Linux/macOS: dentro del repo (misma ruta de caché que antes en Linux).
+      # Windows: carpeta corta en la raíz de la unidad (las rutas de las dependencias
+      # pasan el límite de 260 caracteres de MSVC).
+      - name: Carpetas
+        id: dirs
+        run: |
+          if [[ "${{ matrix.platform }}" == windows ]]; then
+            ws=$(cygpath -m "$GITHUB_WORKSPACE")
+            work="${ws%%:*}:/o"
+          else
+            work=orca-work
+          fi
+          echo "ORCA_WORK_DIR=$work" >> "$GITHUB_ENV"
+          echo "deps=$work/OrcaSlicer-${ORCA_VERSION}/deps/build/OrcaSlicer_dep" >> "$GITHUB_OUTPUT"
 
       - name: Motor en caché
         id: bin
         uses: actions/cache/restore@v4
         with:
-          path: libs/slicer/bin/pinocchio-slicer
-          key: slicer-bin-${{ env.ORCA_VERSION }}-ubuntu-24.04-${{ hashFiles('libs/slicer/engine/**', 'scripts/build-orca-engine.sh') }}
+          path: libs/slicer/bin
+          key: slicer-bin-${{ env.ORCA_VERSION }}-${{ matrix.os }}-${{ hashFiles('libs/slicer/engine/**', 'scripts/build-orca-engine.sh') }}
 
       # Mismos paquetes que libs/slicer/engine/Containerfile
-      - name: Dependencias del sistema
-        if: steps.bin.outputs.cache-hit != 'true'
+      - name: Dependencias del sistema (Linux)
+        if: steps.bin.outputs.cache-hit != 'true' && matrix.platform == 'linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -56,13 +108,29 @@ jobs:
             libgl-dev libglu1-mesa-dev libegl-dev libglfw3-dev libglew-dev libdbus-1-dev \
             libgtk-3-dev libudev-dev extra-cmake-modules
 
+      # Como el CI de Orca (build_deps.yml)
+      - name: Dependencias del sistema (macOS)
+        if: steps.bin.outputs.cache-hit != 'true' && matrix.platform == 'macos'
+        run: brew install automake autoconf texinfo libtool ninja
+
+      - name: Entorno de MSVC (Windows)
+        if: steps.bin.outputs.cache-hit != 'true' && matrix.platform == 'windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      # En bash el link.exe de Git (coreutils) tapa al linker de MSVC.
+      - name: Quitar link.exe de Git (Windows)
+        if: steps.bin.outputs.cache-hit != 'true' && matrix.platform == 'windows'
+        run: rm -f /usr/bin/link.exe
+
       - name: Dependencias de Orca en caché
         if: steps.bin.outputs.cache-hit != 'true'
         id: deps
         uses: actions/cache/restore@v4
         with:
-          path: orca-work/OrcaSlicer-${{ env.ORCA_VERSION }}/deps/build/OrcaSlicer_dep
-          key: orca-deps-${{ env.ORCA_VERSION }}-ubuntu-24.04-r${{ env.ORCA_DEPS_REV }}
+          path: ${{ steps.dirs.outputs.deps }}
+          key: orca-deps-${{ env.ORCA_VERSION }}-${{ matrix.os }}-r${{ env.ORCA_DEPS_REV }}
 
       - name: Compilar dependencias de Orca
         if: steps.bin.outputs.cache-hit != 'true' && steps.deps.outputs.cache-hit != 'true'
@@ -73,7 +141,7 @@ jobs:
         if: steps.bin.outputs.cache-hit != 'true' && steps.deps.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: orca-work/OrcaSlicer-${{ env.ORCA_VERSION }}/deps/build/OrcaSlicer_dep
+          path: ${{ steps.dirs.outputs.deps }}
           key: ${{ steps.deps.outputs.cache-primary-key }}
 
       - name: Compilar el motor
@@ -88,11 +156,11 @@ jobs:
         if: steps.bin.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: libs/slicer/bin/pinocchio-slicer
+          path: libs/slicer/bin
           key: ${{ steps.bin.outputs.cache-primary-key }}
 
       - uses: actions/upload-artifact@v4
         with:
-          name: slicer-engine
-          path: libs/slicer/bin/pinocchio-slicer
+          name: slicer-engine-${{ matrix.platform }}
+          path: libs/slicer/bin/
           if-no-files-found: error

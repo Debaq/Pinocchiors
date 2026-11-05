@@ -71,7 +71,8 @@ mod embedded {
     #[cfg(embedded_engine)]
     include!(concat!(env!("OUT_DIR"), "/engine_embed.rs"));
 
-    /// Lo deja en `<caché>/pinocchio/slicer/<id>/` (una vez por versión del motor).
+    /// Lo deja en `<caché>/pinocchio/slicer/<id>/` (una vez por versión del motor), con
+    /// lo que vaya al lado (las DLL en Windows).
     #[cfg(embedded_engine)]
     pub fn extract() -> Option<PathBuf> {
         use std::sync::Mutex;
@@ -80,32 +81,31 @@ mod embedded {
         if let Some(p) = done.as_ref().filter(|p| p.is_file()) {
             return Some(p.clone());
         }
-        let dir = cache_dir()?.join("pinocchio").join("slicer").join(ENGINE_ID);
+        let root = cache_dir()?.join("pinocchio").join("slicer");
+        let dir = root.join(ENGINE_ID);
         let path = dir.join(super::ENGINE_NAME);
         if !path.is_file() {
-            std::fs::create_dir_all(&dir).ok()?;
-            // Se escribe aparte y se renombra: un corte a medias no deja un motor roto
-            let tmp = dir.join(format!(".{}.{}", super::ENGINE_NAME, std::process::id()));
-            let ok = (|| -> std::io::Result<()> {
-                let mut out = std::fs::File::create(&tmp)?;
-                std::io::copy(&mut flate2::read::GzDecoder::new(ENGINE_GZ), &mut out)?;
-                out.sync_all()?;
-                Ok(())
-            })();
-            if ok.is_err() {
-                let _ = std::fs::remove_file(&tmp);
+            std::fs::create_dir_all(&root).ok()?;
+            // Se extrae en otra carpeta y se renombra: un corte a medias no deja un motor roto
+            let tmp = root.join(format!(".{ENGINE_ID}.{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&tmp);
+            if unpack(&tmp).is_err() {
+                let _ = std::fs::remove_dir_all(&tmp);
                 return None;
             }
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755)).ok()?;
+            let _ = std::fs::remove_dir_all(&dir);
+            if std::fs::rename(&tmp, &dir).is_err() {
+                // Otra instancia de la app lo extrajo al mismo tiempo
+                let _ = std::fs::remove_dir_all(&tmp);
+                if !path.is_file() {
+                    return None;
+                }
             }
-            std::fs::rename(&tmp, &path).ok()?;
-            // Las versiones viejas del motor sobran
-            if let Ok(entries) = std::fs::read_dir(dir.parent()?) {
+            // Las versiones viejas del motor sobran (las carpetas con punto son extracciones en curso)
+            if let Ok(entries) = std::fs::read_dir(&root) {
                 for e in entries.flatten() {
-                    if e.file_name() != ENGINE_ID {
+                    let name = e.file_name();
+                    if name != ENGINE_ID && !name.to_string_lossy().starts_with('.') {
                         let _ = std::fs::remove_dir_all(e.path());
                     }
                 }
@@ -113,6 +113,48 @@ mod embedded {
         }
         *done = Some(path.clone());
         Some(path)
+    }
+
+    /// Escribe los archivos de `ENGINE_GZ` en `dir` (formato en build.rs).
+    #[cfg(embedded_engine)]
+    fn unpack(dir: &std::path::Path) -> std::io::Result<()> {
+        use std::io::{Error, Read, Write};
+        std::fs::create_dir_all(dir)?;
+        let mut gz = flate2::read::GzDecoder::new(ENGINE_GZ);
+        let mut found = false;
+        loop {
+            let mut len = [0u8; 2];
+            match gz.read_exact(&mut len) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                Err(e) => return Err(e),
+            }
+            let mut name = vec![0u8; u16::from_le_bytes(len) as usize];
+            gz.read_exact(&mut name)?;
+            let name = String::from_utf8(name).map_err(Error::other)?;
+            if name.is_empty() || name.contains(['/', '\\']) || name.starts_with('.') {
+                return Err(Error::other(format!("nombre inválido en el motor embebido: {name}")));
+            }
+            let mut size = [0u8; 8];
+            gz.read_exact(&mut size)?;
+            let size = u64::from_le_bytes(size);
+            let file = dir.join(&name);
+            let mut out = std::fs::File::create(&file)?;
+            if std::io::copy(&mut (&mut gz).take(size), &mut out)? != size {
+                return Err(Error::other("motor embebido cortado"));
+            }
+            out.flush()?;
+            out.sync_all()?;
+            if name == super::ENGINE_NAME {
+                found = true;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755))?;
+                }
+            }
+        }
+        if found { Ok(()) } else { Err(Error::other("el motor embebido no trae el ejecutable")) }
     }
 
     #[cfg(not(embedded_engine))]
@@ -263,7 +305,15 @@ fn run_once(job: &SliceJob, engine: &Path, on_event: &mut impl FnMut(Event), can
     let thumbs = job.work_dir.join("miniaturas");
     write_thumbnails(&job.config, &job.parts, &thumbs)?;
 
-    let mut child = Command::new(engine)
+    let mut cmd = Command::new(engine);
+    #[cfg(windows)]
+    {
+        // Sin abrir una ventana de consola al laminar
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let mut child = cmd
         .arg("--config")
         .arg(&config_path)
         .arg("--output")
@@ -442,7 +492,9 @@ mod tests {
     #[test]
     fn motor_embebido_se_extrae() {
         let p = embedded::extract().expect("extraer el motor");
-        let original = std::fs::read(std::env::var("PINOCCHIO_SLICER_EMBED").unwrap()).unwrap();
+        let src = PathBuf::from(std::env::var("PINOCCHIO_SLICER_EMBED").unwrap());
+        let src = if src.is_dir() { src.join(ENGINE_NAME) } else { src };
+        let original = std::fs::read(src).unwrap();
         assert_eq!(std::fs::read(&p).unwrap(), original);
         #[cfg(unix)]
         {
