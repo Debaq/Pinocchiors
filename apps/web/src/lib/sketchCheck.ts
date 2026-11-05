@@ -289,6 +289,7 @@ export function problemsText(p: SketchProblems): string | undefined {
 
 /** Nombre de cada tipo de entidad (para los avisos y la lista de entidades) */
 export const ENTITY_NAMES: Record<Geometry["type"], string> = {
+  get unknown() { return tr("De una versión más nueva"); },
   get line() { return tr("Línea"); },
   get circle() { return tr("Círculo"); },
   get arc() { return tr("Arco"); },

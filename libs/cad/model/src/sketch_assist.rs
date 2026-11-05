@@ -680,6 +680,15 @@ impl Sketch {
         Ok(work.taken)
     }
 
+    /// Solo las relaciones casi cumplidas (horizontales, verticales,
+    /// coincidencias, tangencias…) que restringen algo, sin cotas: para un
+    /// dibujo importado, que sigue con sus medidas libres.
+    pub fn detect_relations(&self) -> Result<Vec<SketchConstraint>, SketchError> {
+        let mut work = Work::new(self)?;
+        work.take(self.relation_candidates(), usize::MAX, 1e-6);
+        Ok(work.taken.into_iter().map(|s| s.constraint).collect())
+    }
+
     /// Definir completamente: relaciones casi cumplidas (si `relations`),
     /// tamaños y la posición de los puntos desde el origen, hasta que no quede
     /// nada libre (o no haya más candidatas). Las cotas valen lo que mide la

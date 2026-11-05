@@ -212,6 +212,7 @@ export function entityPolyline(g: Sketch["entities"][number]["geometry"], point:
     return c && a && b ? ellipsePolyline(c, a, b) : undefined;
   }
   if (g.type === "bspline" || g.type === "ellipse_arc") return curvePolyline(g, (id) => point.get(id));
+  if (g.type === "unknown") return undefined;
   return splineOf(g, (id) => point.get(id));
 }
 

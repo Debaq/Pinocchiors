@@ -319,6 +319,7 @@ pub fn of_entity(sketch: &Sketch, id: u32) -> Option<Projected> {
     let p = |q: u32| sketch.point(q).ok();
     Some(match &e.geometry {
         Geometry::Point { point } => Projected::Point { at: p(*point)? },
+        Geometry::Unknown => return None,
         Geometry::Line { start, end } => Projected::Line { start: p(*start)?, end: p(*end)? },
         Geometry::Circle { center, radius } => Projected::Circle { center: p(*center)?, radius: *radius },
         Geometry::Arc { center, start, end } => Projected::Arc { center: p(*center)?, start: p(*start)?, end: p(*end)? },

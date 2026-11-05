@@ -367,4 +367,5 @@ export const en_lib1: Catalog = {
   "Curva reparada; {n} relaciones con ella no servían y se quitaron": "Curve repaired; {n} relations with it no longer applied and were removed",
   "Curva reparada: sigue a la arista nueva": "Curve repaired: it follows the new edge",
   "Ahora la siguiente: clic en su arista": "Now the next one: click its edge",
+  "De una versión más nueva": "From a newer version",
 };

@@ -84,6 +84,9 @@ pub enum Geometry {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         knots: Vec<f64>,
     },
+    /// Entidad de una versión más nueva: no se dibuja ni forma perfiles.
+    #[serde(other)]
+    Unknown,
 }
 
 impl Geometry {
@@ -96,6 +99,7 @@ impl Geometry {
                 points.iter().chain(start_handle).chain(end_handle).copied().chain(handles.iter().map(|h| h[1])).collect()
             }
             Geometry::Point { point } => vec![*point],
+            Geometry::Unknown => vec![],
             Geometry::Ellipse { center, major, minor } => vec![*center, *major, *minor],
             Geometry::EllipseArc { center, major, minor, start, end } => vec![*center, *major, *minor, *start, *end],
             Geometry::BSpline { poles, .. } => poles.clone(),
@@ -223,6 +227,9 @@ pub enum SketchConstraint {
     /// con la misma curvatura. Una de las dos es una B-spline; la otra, una
     /// línea, un arco u otra B-spline.
     Curvature { a: u32, b: u32 },
+    /// Restricción de una versión más nueva: no restringe; se conserva el lugar.
+    #[serde(other)]
+    Unknown,
 }
 
 /// Cómo se muestra y se trata una cota (no cambia lo que restringe).
@@ -343,6 +350,7 @@ impl SketchConstraint {
             SymmetricEntities { a, b, line } => e(a) || e(b) || e(line),
             PointOnCurve { point: q, curve } => p(q) || e(curve),
             Intersection { point: q, a, b } => p(q) || e(a) || e(b),
+            Unknown => false,
         }
     }
 }
@@ -1522,38 +1530,47 @@ impl Sketch {
         // la tangente en la punta va hacia el polo vecino
         let bspline_tangent = |a: u32, b: u32| -> Result<Option<Vec<Constraint>>, SketchError> {
             let (ga, gb) = (&self.entity(a)?.geometry, &self.entity(b)?.geometry);
-            if !matches!(ga, Geometry::BSpline { .. }) && !matches!(gb, Geometry::BSpline { .. }) {
+            let curved = |g: &Geometry| matches!(g, Geometry::BSpline { .. } | Geometry::Spline { closed: false, .. });
+            if !curved(ga) && !curved(gb) {
                 return Ok(None);
             }
             let shared = shared_end(a, b)?;
-            // (punta, polo vecino) de una B-spline abierta en el extremo común
+            // (punta, punto que da la dirección) en el extremo común: el polo
+            // vecino de una B-spline; en una spline interpolada, la manija de
+            // ese extremo o, sin manija, el punto vecino (así sale su tangente)
             let tip = |g: &Geometry| -> Option<(usize, usize)> {
-                let Geometry::BSpline { poles, .. } = g else { return None };
-                let n = poles.len();
-                // Con menos de dos polos no hay dirección en la punta
+                let (pts, handle) = match g {
+                    Geometry::BSpline { poles, .. } => (poles, None),
+                    Geometry::Spline { points, closed: false, start_handle, end_handle, .. } => {
+                        (points, if points.first() == Some(&shared) { *start_handle } else { *end_handle })
+                    }
+                    _ => return None,
+                };
+                let n = pts.len();
+                // Con menos de dos puntos no hay dirección en la punta
                 if n < 2 {
                     return None;
                 }
-                let (p, q) = if poles[0] == shared { (poles[0], poles[1]) } else { (poles[n - 1], poles[n - 2]) };
-                Some((ix(p).ok()?, ix(q).ok()?))
+                let (p, q) = if pts[0] == shared { (pts[0], pts[1]) } else { (pts[n - 1], pts[n - 2]) };
+                Some((ix(p).ok()?, ix(handle.unwrap_or(q)).ok()?))
             };
             let s = ix(shared)?;
             let other = |g: &Geometry, (tp, nb): (usize, usize)| -> Result<Vec<Constraint>, SketchError> {
                 Ok(match g {
                     Geometry::Line { start, end } => vec![Constraint::Parallel { l1_p1: ix(*start)?, l1_p2: ix(*end)?, l2_p1: tp, l2_p2: nb }],
                     Geometry::Arc { center, .. } => vec![Constraint::Perpendicular { l1_p1: ix(*center)?, l1_p2: s, l2_p1: tp, l2_p2: nb }],
-                    Geometry::BSpline { .. } => {
+                    Geometry::BSpline { .. } | Geometry::Spline { closed: false, .. } => {
                         let (_, nb2) = tip(g).ok_or(SketchError::NoEntity(b))?;
                         // Los dos polos vecinos alineados con la punta
                         vec![Constraint::PointOnLine { p_idx: nb2, line_p1: nb, line_p2: tp }]
                     }
-                    _ => return Err(SketchError::Unsupported("tangencia de una B-spline con esa curva".into())),
+                    _ => return Err(SketchError::Unsupported("tangencia de una spline con esa curva".into())),
                 })
             };
             Ok(Some(match (tip(ga), tip(gb)) {
                 (Some(t), _) => other(gb, t)?,
                 (None, Some(t)) => other(ga, t)?,
-                _ => return Err(SketchError::Unsupported("tangencia con una B-spline de menos de dos polos".into())),
+                _ => return Err(SketchError::Unsupported("tangencia con una spline de menos de dos puntos".into())),
             }))
         };
         // Punto (índice del solver) sobre cualquier curva
@@ -1583,10 +1600,12 @@ impl Sketch {
                     vec![Constraint::PointOnEllipse { p_idx: q, center: ix(*center)?, major: ix(*major)?, minor: ix(*minor)? }]
                 }
                 Geometry::BSpline { .. } => vec![Constraint::PointOnBSpline { p_idx: q, curve: bspline_ref(id)? }],
-                Geometry::Point { .. } => return Err(SketchError::WrongKind(id, "una curva")),
+                Geometry::Point { .. } | Geometry::Unknown => return Err(SketchError::WrongKind(id, "una curva")),
             })
         };
         Ok(match *c {
+            // De una versión más nueva: no restringe (queda en su lugar para no correr los índices)
+            S::Unknown => vec![],
             S::Coincident { a, b } => vec![Constraint::Coincident { p1_idx: ix(a)?, p2_idx: ix(b)? }],
             S::Fixed { point, x, y } | S::Pierce { point, at: [x, y], .. } => vec![Constraint::Fixed { p_idx: ix(point)?, position: Point2::new(x, y) }],
             S::Horizontal { line: l } => {
@@ -1641,10 +1660,35 @@ impl Sketch {
                         Geometry::Line { .. } => CurveEnd::Line,
                         Geometry::Arc { center, start, .. } => CurveEnd::Arc { center: ix(*center)?, start: ix(*start)?, at_start: *start == shared },
                         Geometry::BSpline { poles, .. } => CurveEnd::BSpline { curve: bspline_ref(id)?, at_start: poles.first() == Some(&shared) },
-                        _ => return Err(SketchError::WrongKind(id, "una línea, un arco o una B-spline")),
+                        Geometry::Spline { points, closed: false, start_handle, end_handle, handles } if points.len() >= 2 => {
+                            let n = points.len();
+                            let at_start = points[0] == shared;
+                            // Recorrida desde la unión: en el fin, al revés (las manijas apuntan en el avance propio)
+                            let (tip, next, after) = if at_start { (0, 1, 2) } else { (n - 1, n - 2, n.wrapping_sub(3)) };
+                            let sign = if at_start { 1.0 } else { -1.0 };
+                            let handle_at = |i: usize| -> Option<u32> {
+                                if i == 0 {
+                                    *start_handle
+                                } else if i == n - 1 {
+                                    *end_handle
+                                } else {
+                                    handles.iter().find(|h| h[0] as usize == i).map(|h| h[1])
+                                }
+                            };
+                            let dir = |i: usize| -> Result<Option<(usize, f64)>, SketchError> { handle_at(i).map(|h| ix(h).map(|h| (h, sign))).transpose() };
+                            CurveEnd::Spline {
+                                tip: ix(points[tip])?,
+                                next: ix(points[next])?,
+                                after: if n > 2 { Some(ix(points[after])?) } else { None },
+                                tip_dir: dir(tip)?,
+                                next_dir: dir(next)?,
+                                at_start,
+                            }
+                        }
+                        _ => return Err(SketchError::WrongKind(id, "una línea, un arco o una spline abierta")),
                     })
                 };
-                let mut out = bspline_tangent(a, b)?.ok_or_else(|| SketchError::Unsupported("la curvatura igual necesita una B-spline".into()))?;
+                let mut out = bspline_tangent(a, b)?.ok_or_else(|| SketchError::Unsupported("la curvatura igual necesita una spline".into()))?;
                 out.push(Constraint::EqualCurvature { a: end_of(a)?, b: end_of(b)? });
                 out
             }

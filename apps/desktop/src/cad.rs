@@ -1023,6 +1023,12 @@ pub async fn cad_sketch_define(sketch: Sketch, relations: bool) -> Result<Vec<ca
     off_main(move || sketch.auto_define(relations).map_err(|e| e.to_string())).await
 }
 
+/// Relaciones casi cumplidas del sketch, sin cotas (al importar un DXF).
+#[tauri::command]
+pub async fn cad_sketch_relations(sketch: Sketch) -> Result<Vec<cad_model::SketchConstraint>, String> {
+    off_main(move || sketch.detect_relations().map_err(|e| e.to_string())).await
+}
+
 /// mm por unidad de la escena (1 si no hay escena: el CAD solo se ve en mm).
 fn mm_per_unit(state: &AppState) -> f64 {
     state.scene.lock().unwrap().as_ref().map_or(1.0, |s| s.meters_per_unit * 1000.0)
@@ -3343,6 +3349,7 @@ pub mod bridge {
             "cad_gear_strength" => ok(cad_gear_strength(arg(args, "first")?, arg(args, "second")?, arg(args, "input")?)?),
             "cad_gear_block" => ok(cad_gear_block(arg(args, "part")?)?),
             "cad_sketch_define" => ok(arg::<Sketch>(args, "sketch")?.auto_define(arg(args, "relations")?).map_err(|e| e.to_string())?),
+            "cad_sketch_relations" => ok(arg::<Sketch>(args, "sketch")?.detect_relations().map_err(|e| e.to_string())?),
             "cad_mesh" => mesh_impl(state).map(Reply::Bytes),
             "cad_tool_mesh" => tool_mesh_impl(state, arg(args, "feature")?).map(Reply::Bytes),
             "cad_flat_pattern" => ok(flat_pattern_impl(state, arg::<Option<cad_model::PartId>>(args, "part").unwrap_or(None))?),

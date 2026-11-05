@@ -300,6 +300,7 @@ pub fn run() {
             cad::cad_gear_strength,
             cad::cad_gear_block,
             cad::cad_sketch_define,
+            cad::cad_sketch_relations,
             cad::cad_vertex_spec,
             cad::cad_eval_expr,
             cad::cad_variables,

@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { addEntity, addPoint, addRectangle } from "../src/lib/cad.ts";
 import { checkSketch } from "../src/lib/sketchCheck.ts";
-import { addShapes, parseCoordinates, parseDxf, sketchToDxf, sketchToSvg } from "../src/lib/sketchFiles.ts";
+import { addShapes, parseCoordinates, parseDxf, parseSvg, sketchToDxf, sketchToSvg } from "../src/lib/sketchFiles.ts";
 
 function sketch() {
   return { origin: 0, points: [{ id: 0, x: 0, y: 0 }], entities: [], constraints: [] };
@@ -191,4 +191,57 @@ test("coordenadas georreferenciadas: no se unen extremos distintos ni se borran 
   const g = (i) => s.entities.find((e) => e.id === made[i]).geometry;
   assert.notEqual(g(0).end, g(1).start, "a 0,05 mm no se juntan");
   assert.equal(g(1).end, g(2).start, "las que sí coinciden, juntas");
+});
+
+// ─── SVG (U8) ─────────────────────────────────────────────────────────────
+
+const svgDoc = (inner, attrs = 'width="100mm" height="50mm" viewBox="0 0 100 50"') => `<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" ${attrs}>${inner}</svg>`;
+const round6 = (p) => p.map((x) => +x.toFixed(6));
+
+test("SVG: rectángulo en mm con la y hacia arriba, cierra una región", () => {
+  const r = parseSvg(svgDoc('<rect x="10" y="5" width="20" height="10"/>'));
+  assert.equal(typeof r, "object");
+  assert.equal(r.shapes.length, 4);
+  const xs = r.shapes.flatMap((s) => [s.a, s.b]);
+  // y de SVG 5..15 → 45..35 hacia arriba (alto 50)
+  assert.deepEqual([Math.min(...xs.map((p) => p[1])), Math.max(...xs.map((p) => p[1]))], [35, 45]);
+  const s = { origin: 0, points: [{ id: 0, x: 0, y: 0 }], entities: [], constraints: [] };
+  addShapes(s, r.shapes);
+  assert.equal(checkSketch(s).looseEnds.length, 0);
+});
+
+test("SVG: sin unidades son px (96 por pulgada) y los grupos transforman", () => {
+  const r = parseSvg(svgDoc('<g transform="translate(96 0)"><circle cx="0" cy="0" r="48"/></g>', 'width="192" height="96"'));
+  const c = r.shapes[0];
+  assert.equal(c.kind, "circle");
+  assert.ok(Math.abs(c.r - 12.7) < 1e-9);
+  assert.deepEqual(round6(c.c), [25.4, 25.4]);
+});
+
+test("SVG: trazado con Bézier, arco y Z; texto contado como salteado", () => {
+  const r = parseSvg(svgDoc('<path d="M0,0 C10,0 20,10 20,20 A10 10 0 0 1 0 20 z"/><text x="1" y="1">hola</text>'));
+  assert.deepEqual(r.skipped, { text: 1 });
+  const kinds = r.shapes.map((s) => s.kind);
+  assert.deepEqual(kinds, ["bspline", "arc", "line"]);
+  assert.equal(r.shapes[0].degree, 3);
+  // El arco: de (20,20) a (0,20) en SVG con centro (10,20) → y hacia arriba en 30
+  const arc = r.shapes[1];
+  assert.deepEqual(round6(arc.c), [10, 30]);
+  // En el SVG (y hacia abajo) el arco pasa por y = 30, abajo en pantalla: abajo del centro también acá
+  const mid = [arc.c[0], arc.c[1] - 10];
+  const ang = (p) => Math.atan2(p[1] - arc.c[1], p[0] - arc.c[0]);
+  let sweep = ang(arc.b) - ang(arc.a);
+  while (sweep <= 0) sweep += 2 * Math.PI;
+  let toMid = ang(mid) - ang(arc.a);
+  while (toMid <= 0) toMid += 2 * Math.PI;
+  assert.ok(toMid < sweep, "el arco pasa por abajo del centro, como se ve el SVG");
+  const s = { origin: 0, points: [{ id: 0, x: 0, y: 0 }], entities: [], constraints: [] };
+  addShapes(s, r.shapes);
+  assert.equal(checkSketch(s).looseEnds.length, 0);
+});
+
+test("SVG: defs y ocultos no se dibujan; un archivo que no es SVG da mensaje", () => {
+  const r = parseSvg(svgDoc('<defs><rect width="5" height="5"/></defs><g style="display:none"><line x1="0" y1="0" x2="1" y2="1"/></g><line x1="0" y1="0" x2="10" y2="0"/>'));
+  assert.equal(r.shapes.length, 1);
+  assert.equal(typeof parseSvg("hola"), "string");
 });

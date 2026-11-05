@@ -649,3 +649,313 @@ export function sketchToSvg(s: Sketch): string {
 </svg>
 `;
 }
+
+// ─── SVG ──────────────────────────────────────────────────────────────────
+
+/** mm por unidad de largo de SVG (CSS: 96 px por pulgada) */
+const SVG_UNITS: Record<string, number> = { "": 25.4 / 96, px: 25.4 / 96, pt: 25.4 / 72, pc: 25.4 / 6, mm: 1, cm: 10, in: 25.4, q: 0.25 };
+
+/** Atributos de una etiqueta: nombre → valor (sin entidades XML salvo las comunes) */
+function svgAttrs(raw: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const m of raw.matchAll(/([\w:-]+)\s*=\s*("([^"]*)"|'([^']*)')/g)) {
+    out[m[1]] = (m[3] ?? m[4] ?? "").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+  }
+  // Lo que viene en `style` manda sobre el atributo
+  for (const decl of (out.style ?? "").split(";")) {
+    const [k, v] = decl.split(":").map((x) => x?.trim());
+    if (k && v) out[k] = v;
+  }
+  return out;
+}
+
+const svgNumbers = (text: string): number[] => (text.match(/[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?/g) ?? []).map(Number);
+
+/** Largo con unidad → mm; `per` = mm por unidad del usuario (para los números sin unidad) */
+function svgLength(v: string | undefined, per: number): number | undefined {
+  const m = v?.trim().match(/^([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)\s*([a-zA-Z%]*)$/);
+  if (!m || m[2] === "%") return undefined;
+  const unit = m[2].toLowerCase();
+  if (!unit) return Number(m[1]) * per;
+  const mm = SVG_UNITS[unit];
+  return mm === undefined ? undefined : Number(m[1]) * mm;
+}
+
+/** `transform="…"` → matriz (en el orden en que se escriben: la primera es la de afuera) */
+function svgTransform(text: string | undefined): Xf {
+  let m: Xf = [1, 0, 0, 1, 0, 0];
+  for (const t of (text ?? "").matchAll(/(matrix|translate|scale|rotate|skewX|skewY)\s*\(([^)]*)\)/g)) {
+    const n = svgNumbers(t[2]);
+    let k: Xf;
+    switch (t[1]) {
+      case "matrix":
+        k = n.length >= 6 ? (n.slice(0, 6) as Xf) : [1, 0, 0, 1, 0, 0];
+        break;
+      case "translate":
+        k = [1, 0, 0, 1, n[0] ?? 0, n[1] ?? 0];
+        break;
+      case "scale":
+        k = [n[0] ?? 1, 0, 0, n[1] ?? n[0] ?? 1, 0, 0];
+        break;
+      case "rotate": {
+        const a = ((n[0] ?? 0) * Math.PI) / 180;
+        const [c, s] = [Math.cos(a), Math.sin(a)];
+        const [cx, cy] = [n[1] ?? 0, n[2] ?? 0];
+        k = compose(compose([1, 0, 0, 1, cx, cy], [c, s, -s, c, 0, 0]), [1, 0, 0, 1, -cx, -cy]);
+        break;
+      }
+      case "skewX":
+        k = [1, 0, Math.tan(((n[0] ?? 0) * Math.PI) / 180), 1, 0, 0];
+        break;
+      default:
+        k = [1, Math.tan(((n[0] ?? 0) * Math.PI) / 180), 0, 1, 0, 0];
+    }
+    m = compose(m, k);
+  }
+  return m;
+}
+
+/**
+ * Arco elíptico de SVG (de `p0` a `p1`) como forma: arco si es circular,
+ * arco de elipse si no. Coordenadas de SVG (sin dar vuelta la y).
+ */
+function svgArc(p0: P2, rx: number, ry: number, phiDeg: number, large: boolean, sweep: boolean, p1: P2): Shape | undefined {
+  if (len(sub(p1, p0)) === 0) return undefined;
+  rx = Math.abs(rx);
+  ry = Math.abs(ry);
+  if (!(rx > 0) || !(ry > 0)) return { kind: "line", a: p0, b: p1 };
+  const phi = (phiDeg * Math.PI) / 180;
+  const [cp, sp] = [Math.cos(phi), Math.sin(phi)];
+  // Centro (SVG 1.1, apéndice F.6.5)
+  const dx = (p0[0] - p1[0]) / 2;
+  const dy = (p0[1] - p1[1]) / 2;
+  const x1 = cp * dx + sp * dy;
+  const y1 = -sp * dx + cp * dy;
+  const lambda = (x1 * x1) / (rx * rx) + (y1 * y1) / (ry * ry);
+  if (lambda > 1) {
+    rx *= Math.sqrt(lambda);
+    ry *= Math.sqrt(lambda);
+  }
+  const num = rx * rx * ry * ry - rx * rx * y1 * y1 - ry * ry * x1 * x1;
+  const den = rx * rx * y1 * y1 + ry * ry * x1 * x1;
+  const k = (large === sweep ? -1 : 1) * Math.sqrt(Math.max(0, num / den));
+  const cx1 = (k * rx * y1) / ry;
+  const cy1 = (-k * ry * x1) / rx;
+  const c: P2 = [cp * cx1 - sp * cy1 + (p0[0] + p1[0]) / 2, sp * cx1 + cp * cy1 + (p0[1] + p1[1]) / 2];
+  // Con sweep el ángulo crece: de p0 a p1 en sentido positivo
+  const [a, b] = sweep ? [p0, p1] : [p1, p0];
+  if (Math.abs(rx - ry) <= 1e-9 * Math.max(rx, ry)) return { kind: "arc", c, a, b };
+  const [u, v]: [P2, P2] = [[rx * cp, rx * sp], [-ry * sp, ry * cp]];
+  const [major, minor] = rx >= ry ? [u, v] : [v, u];
+  return { kind: "ellipse", c, major: [c[0] + major[0], c[1] + major[1]], minor: [c[0] + minor[0], c[1] + minor[1]], start: a, end: b };
+}
+
+/** Los tramos de un `d` de SVG (coordenadas de SVG) */
+function svgPath(d: string): Shape[] {
+  const out: Shape[] = [];
+  const tokens = d.match(/[a-zA-Z]|[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?/g) ?? [];
+  let i = 0;
+  let cmd = "";
+  let cur: P2 = [0, 0];
+  let start: P2 = [0, 0];
+  let lastCtrl: P2 | undefined;
+  let lastKind = "";
+  const isNum = () => i < tokens.length && !/^[a-zA-Z]$/.test(tokens[i]);
+  const n = () => Number(tokens[i++]);
+  // Las banderas de los arcos pueden venir pegadas ("a1 1 0 01 2 3")
+  const flag = () => {
+    const t = tokens[i];
+    if (t.length > 1 && /^[01]/.test(t)) {
+      tokens[i] = t.slice(1);
+      return t[0] === "1";
+    }
+    i++;
+    return t === "1";
+  };
+  const line = (p: P2) => {
+    if (len(sub(p, cur)) > 0) out.push({ kind: "line", a: cur, b: p });
+    cur = p;
+  };
+  const bezier = (poles: P2[]) => {
+    out.push({ kind: "bspline", poles, degree: poles.length - 1 });
+    cur = poles[poles.length - 1];
+  };
+  while (i < tokens.length) {
+    if (!isNum()) cmd = tokens[i++];
+    const rel = cmd === cmd.toLowerCase();
+    const C = cmd.toUpperCase();
+    const pt = (): P2 => {
+      const p: P2 = [n(), n()];
+      return rel ? [cur[0] + p[0], cur[1] + p[1]] : p;
+    };
+    if (C === "Z") {
+      line(start);
+      lastKind = "Z";
+      if (!isNum()) continue;
+      break;
+    }
+    if (!isNum()) break;
+    switch (C) {
+      case "M":
+        cur = start = pt();
+        // Los pares que siguen a un M son L
+        cmd = rel ? "l" : "L";
+        break;
+      case "L":
+        line(pt());
+        break;
+      case "H":
+        line([rel ? cur[0] + n() : n(), cur[1]]);
+        break;
+      case "V":
+        line([cur[0], rel ? cur[1] + n() : n()]);
+        break;
+      case "C": {
+        const [c1, c2, p] = [pt(), pt(), pt()];
+        const from = cur;
+        bezier([from, c1, c2, p]);
+        lastCtrl = c2;
+        break;
+      }
+      case "S": {
+        const c1: P2 = lastKind === "C" || lastKind === "S" ? [2 * cur[0] - lastCtrl![0], 2 * cur[1] - lastCtrl![1]] : cur;
+        const [c2, p] = [pt(), pt()];
+        bezier([cur, c1, c2, p]);
+        lastCtrl = c2;
+        break;
+      }
+      case "Q": {
+        const [c1, p] = [pt(), pt()];
+        bezier([cur, c1, p]);
+        lastCtrl = c1;
+        break;
+      }
+      case "T": {
+        const c1: P2 = lastKind === "Q" || lastKind === "T" ? [2 * cur[0] - lastCtrl![0], 2 * cur[1] - lastCtrl![1]] : cur;
+        const p = pt();
+        bezier([cur, c1, p]);
+        lastCtrl = c1;
+        break;
+      }
+      case "A": {
+        const [rx, ry, phi] = [n(), n(), n()];
+        const [large, sweep] = [flag(), flag()];
+        const p = pt();
+        const sh = svgArc(cur, rx, ry, phi, large, sweep, p);
+        if (sh) out.push(sh);
+        cur = p;
+        break;
+      }
+      default:
+        return out;
+    }
+    lastKind = C;
+  }
+  return out;
+}
+
+/** Elementos que no se dibujan (y lo que tienen adentro) */
+const SVG_HIDDEN = new Set(["defs", "clipPath", "mask", "symbol", "marker", "pattern", "linearGradient", "radialGradient", "filter", "metadata", "title", "desc", "style", "script"]);
+
+/**
+ * Formas de un SVG, en mm y con la y hacia arriba (el abajo-izquierda del
+ * dibujo queda donde estaba el arriba-izquierda, corrido): trazados con
+ * rectas, curvas de Bézier (B-splines con sus polos) y arcos; rectángulos
+ * (con esquinas redondeadas), círculos, elipses, líneas, polilíneas y
+ * polígonos, con sus transformaciones y las de sus grupos. El tamaño sale de
+ * width/height y viewBox (sin unidades: 96 por pulgada). Texto, imágenes y
+ * `use` se cuentan como salteados.
+ */
+export function parseSvg(text: string): { shapes: Shape[]; skipped: Record<string, number> } | string {
+  if (!/<svg[\s>]/i.test(text)) return tr("No parece un SVG");
+  const body = text.replace(/<!--[\s\S]*?-->/g, "").replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, "");
+  const shapes: Shape[] = [];
+  const skipped: Record<string, number> = {};
+  // Pila de transformaciones de los grupos abiertos (y si están ocultos)
+  const stack: { tag: string; m: Xf; hidden: boolean }[] = [];
+  let root: Xf | undefined;
+  for (const tag of body.matchAll(/<(\/?)([\w:-]+)([^>]*?)(\/?)>/g)) {
+    const [, closing, rawName, rawAttrs, selfClose] = tag;
+    const name = rawName.replace(/^svg:/, "");
+    if (name.startsWith("?") || name.startsWith("!")) continue;
+    if (closing) {
+      const k = stack.map((x) => x.tag).lastIndexOf(name);
+      if (k >= 0) stack.length = k;
+      continue;
+    }
+    const a = svgAttrs(rawAttrs);
+    const parent = stack[stack.length - 1];
+    const hidden = (parent?.hidden ?? false) || SVG_HIDDEN.has(name) || a.display === "none" || a.visibility === "hidden";
+    let m = compose(parent?.m ?? [1, 0, 0, 1, 0, 0], svgTransform(a.transform));
+    if (name === "svg" && !root) {
+      // Unidades de usuario → mm, y la y hacia arriba
+      const vb = svgNumbers(a.viewBox ?? "");
+      const [vw, vh] = vb.length >= 4 ? [vb[2], vb[3]] : [undefined, undefined];
+      const w = svgLength(a.width, SVG_UNITS.px);
+      const h = svgLength(a.height, SVG_UNITS.px);
+      const sx = vw && w ? w / vw : vw && h && vh ? h / vh : SVG_UNITS.px;
+      const sy = vh && h ? h / vh : sx;
+      const [ox, oy] = vb.length >= 4 ? [vb[0], vb[1]] : [0, 0];
+      const height = vh ?? (h !== undefined ? h / SVG_UNITS.px : 0);
+      root = [sx, 0, 0, -sy, -ox * sx, (oy + height) * sy];
+      m = root;
+    }
+    if (!selfClose && !["path", "line", "rect", "circle", "ellipse", "polyline", "polygon", "image", "use"].includes(name)) stack.push({ tag: name, m, hidden });
+    if (hidden) continue;
+    const num = (k: string) => {
+      const v = svgNumbers(a[k] ?? "")[0];
+      return Number.isFinite(v) ? v : 0;
+    };
+    const local: Shape[] = [];
+    switch (name) {
+      case "path":
+        local.push(...svgPath(a.d ?? ""));
+        break;
+      case "line":
+        local.push({ kind: "line", a: [num("x1"), num("y1")], b: [num("x2"), num("y2")] });
+        break;
+      case "polyline":
+      case "polygon": {
+        const v = svgNumbers(a.points ?? "");
+        const pts: P2[] = [];
+        for (let k = 0; k + 1 < v.length; k += 2) pts.push([v[k], v[k + 1]]);
+        if (name === "polygon" && pts.length > 2) pts.push(pts[0]);
+        for (let k = 1; k < pts.length; k++) local.push({ kind: "line", a: pts[k - 1], b: pts[k] });
+        break;
+      }
+      case "rect": {
+        const [x, y, w, h] = [num("x"), num("y"), num("width"), num("height")];
+        if (!(w > 0 && h > 0)) break;
+        let rx = a.rx !== undefined ? num("rx") : a.ry !== undefined ? num("ry") : 0;
+        let ry = a.ry !== undefined ? num("ry") : rx;
+        rx = Math.min(Math.max(0, rx), w / 2);
+        ry = Math.min(Math.max(0, ry), h / 2);
+        if (rx > 0 && ry > 0) {
+          const d = `M${x + rx},${y} H${x + w - rx} A${rx},${ry} 0 0 1 ${x + w},${y + ry} V${y + h - ry} A${rx},${ry} 0 0 1 ${x + w - rx},${y + h} H${x + rx} A${rx},${ry} 0 0 1 ${x},${y + h - ry} V${y + ry} A${rx},${ry} 0 0 1 ${x + rx},${y} Z`;
+          local.push(...svgPath(d));
+        } else local.push(...svgPath(`M${x},${y} H${x + w} V${y + h} H${x} Z`));
+        break;
+      }
+      case "circle":
+        if (num("r") > 0) local.push({ kind: "circle", c: [num("cx"), num("cy")], r: num("r") });
+        break;
+      case "ellipse": {
+        const [cx, cy, rx, ry] = [num("cx"), num("cy"), num("rx"), num("ry")];
+        if (rx > 0 && ry > 0) local.push(rx === ry ? { kind: "circle", c: [cx, cy], r: rx } : { kind: "ellipse", c: [cx, cy], major: rx >= ry ? [cx + rx, cy] : [cx, cy + ry], minor: rx >= ry ? [cx, cy + ry] : [cx + rx, cy] });
+        break;
+      }
+      case "text":
+      case "image":
+      case "use":
+      case "foreignObject":
+        skipped[name] = (skipped[name] ?? 0) + 1;
+        break;
+    }
+    for (const sh of local) {
+      const t = transformShape(sh, m);
+      if (usable(t)) shapes.push(t);
+    }
+  }
+  if (!shapes.length && !Object.keys(skipped).length) return tr("El SVG no tiene trazados, líneas ni formas");
+  return { shapes, skipped };
+}

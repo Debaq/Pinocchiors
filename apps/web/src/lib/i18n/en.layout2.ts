@@ -405,4 +405,7 @@ export const en_layout2: Catalog = {
   "Ensamble «{name}»": "Assembly «{name}»",
   // U8: reparar curvas ligadas
   "Clic sobre una arista del sólido (una sola: reemplaza a la curva elegida)": "Click an edge of the solid (just one: it replaces the selected curve)",
+  // U8: cotas
+  "Pasar a diámetro": "Change to diameter",
+  "Pasar a radio": "Change to radius",
 };

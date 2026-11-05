@@ -128,3 +128,71 @@ fn removing_an_entity_leaves_no_dangling_references() {
     assert!(s.texts[0].points.is_empty(), "sin puntos que ya no existen");
     s.solve().expect("se resuelve igual");
 }
+
+/// Tangencia y curvatura con la spline interpolada (antes solo B-spline):
+/// sin manija la dirección en la punta va hacia el punto vecino; con manija,
+/// hacia la manija.
+#[test]
+fn tangent_and_curvature_with_interpolated_spline() {
+    use cad_model::{Geometry, Sketch, SketchConstraint};
+    let dir = |s: &Sketch, a: u32, b: u32| {
+        let (p, q) = (s.point(a).unwrap(), s.point(b).unwrap());
+        let l = (q[0] - p[0]).hypot(q[1] - p[1]);
+        [(q[0] - p[0]) / l, (q[1] - p[1]) / l]
+    };
+    // Línea que llega al comienzo de la spline, torcida: queda alineada con el primer tramo
+    let mut s = Sketch::new();
+    let a = s.add_point(-10.0, 1.0);
+    let p: Vec<u32> = [[0.0, 0.0], [10.0, 0.0], [20.0, 5.0]].iter().map(|q| s.add_point(q[0], q[1])).collect();
+    let l = s.add_line(a, p[0]);
+    let sp = s.add_entity(Geometry::Spline { points: p.clone(), closed: false, start_handle: None, end_handle: None, handles: vec![] });
+    s.constrain(SketchConstraint::Tangent { a: l, b: sp });
+    s.solve().unwrap();
+    let (u, v) = (dir(&s, a, p[0]), dir(&s, p[0], p[1]));
+    assert!((u[0] * v[1] - u[1] * v[0]).abs() < 1e-6, "{u:?} {v:?}");
+    // Con manija en la punta: la línea sigue a la manija
+    let mut s = Sketch::new();
+    let a = s.add_point(-10.0, 0.0);
+    let p: Vec<u32> = [[0.0, 0.0], [10.0, 0.0], [20.0, 5.0]].iter().map(|q| s.add_point(q[0], q[1])).collect();
+    let h = s.add_point(3.0, 3.0);
+    let l = s.add_line(a, p[0]);
+    let sp = s.add_entity(Geometry::Spline { points: p.clone(), closed: false, start_handle: Some(h), end_handle: None, handles: vec![] });
+    s.constrain(SketchConstraint::Tangent { a: l, b: sp });
+    s.solve().unwrap();
+    let (u, v) = (dir(&s, a, p[0]), dir(&s, p[0], h));
+    assert!((u[0] * v[1] - u[1] * v[0]).abs() < 1e-6, "{u:?} {v:?}");
+    // Curvatura igual con un arco que llega al final de la spline: se resuelve
+    let mut s = Sketch::new();
+    let p: Vec<u32> = [[0.0, 0.0], [10.0, 2.0], [20.0, 0.0]].iter().map(|q| s.add_point(q[0], q[1])).collect();
+    let sp = s.add_entity(Geometry::Spline { points: p.clone(), closed: false, start_handle: None, end_handle: None, handles: vec![] });
+    let c = s.add_point(20.0, -10.0);
+    let e = s.add_point(30.0, -10.0);
+    let arc = s.add_entity(Geometry::Arc { center: c, start: e, end: p[2] });
+    s.constrain(SketchConstraint::Curvature { a: sp, b: arc });
+    let r = s.solve().unwrap();
+    assert!(r.residual < 1e-6, "{r:?}");
+}
+
+/// Un archivo de una versión más nueva: la restricción y la entidad que no se
+/// conocen quedan en su lugar (no corren los índices de las cotas) y no
+/// restringen ni forman perfiles.
+#[test]
+fn unknown_constraint_and_geometry_still_load() {
+    use cad_model::{find_regions, Geometry, Sketch, SketchConstraint};
+    let json = r#"{"points":[{"id":1,"x":0,"y":0},{"id":2,"x":10,"y":0},{"id":3,"x":10,"y":10},{"id":4,"x":0,"y":10}],
+      "entities":[{"id":5,"geometry":{"type":"line","start":1,"end":2}},{"id":6,"geometry":{"type":"line","start":2,"end":3}},
+        {"id":7,"geometry":{"type":"line","start":3,"end":4}},{"id":8,"geometry":{"type":"line","start":4,"end":1}},
+        {"id":9,"geometry":{"type":"clothoid","start":1,"end":3,"k":0.5}}],
+      "constraints":[{"type":"horizontal","line":5},{"type":"g3","a":5,"b":6},{"type":"length","line":5,"value":12}]}"#;
+    let mut s: Sketch = serde_json::from_str(json).unwrap();
+    assert_eq!(s.entities[4].geometry, Geometry::Unknown);
+    assert_eq!(s.constraints[1], SketchConstraint::Unknown);
+    let r = s.solve().unwrap();
+    assert!(r.residual < 1e-9, "{r:?}");
+    let (a, b) = (s.point(1).unwrap(), s.point(2).unwrap());
+    assert!(((b[0] - a[0]).hypot(b[1] - a[1]) - 12.0).abs() < 1e-9 && (b[1] - a[1]).abs() < 1e-9, "{a:?} {b:?}");
+    // Al guardar queda en su lugar
+    let back = serde_json::to_value(&s).unwrap();
+    assert_eq!(back["constraints"][1]["type"], "unknown");
+    assert_eq!(find_regions(&s).unwrap().len(), 1);
+}

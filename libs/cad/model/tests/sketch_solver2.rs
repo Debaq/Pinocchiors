@@ -261,3 +261,22 @@ fn auto_define_with_many_loose_pieces() {
         assert!(s.auto_define(relations).unwrap().is_empty());
     }
 }
+
+/// Un dibujo importado: las relaciones que ya cumple (horizontales,
+/// verticales) y ninguna cota; nada se mueve.
+#[test]
+fn detect_relations_without_dimensions() {
+    let mut s = Sketch::new();
+    let p = [[0.0, 0.0], [40.0, 0.0], [40.0, 20.0], [0.0, 20.0]].map(|q| s.add_point(q[0], q[1]));
+    for k in 0..4 {
+        s.add_line(p[k], p[(k + 1) % 4]);
+    }
+    let found = s.detect_relations().unwrap();
+    assert!(!found.is_empty());
+    assert!(found.iter().all(|c| c.value().is_none()), "{found:?}");
+    let hv = found.iter().filter(|c| matches!(c, SketchConstraint::Horizontal { .. } | SketchConstraint::Vertical { .. })).count();
+    assert!(hv >= 3, "{found:?}");
+    s.constraints.extend(found);
+    s.solve().unwrap();
+    assert_eq!(s.point(p[2]).unwrap(), [40.0, 20.0]);
+}

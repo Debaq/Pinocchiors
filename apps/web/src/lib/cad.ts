@@ -293,7 +293,9 @@ export type Geometry =
    * B-spline por polos: abierta pasa por el primero y el último; cerrada es
    * periódica. Con `weights`, racional (cónicas); `knots` vacío = uniforme
    */
-  | { type: "bspline"; poles: number[]; degree: number; closed?: boolean; weights?: number[]; knots?: number[] };
+  | { type: "bspline"; poles: number[]; degree: number; closed?: boolean; weights?: number[]; knots?: number[] }
+  /** De una versión más nueva: no se dibuja ni forma perfiles */
+  | { type: "unknown" };
 
 export interface SketchEntity {
   id: number;
@@ -368,6 +370,8 @@ export type SketchConstraint =
   | { type: "lock"; entity: number }
   /** Continuidad de curvatura (G2) en el extremo común; una de las dos es una spline por polos */
   | { type: "curvature"; a: number; b: number }
+  /** De una versión más nueva: no restringe (queda en su lugar) */
+  | { type: "unknown" }
   /** Perforación: el punto va donde la curva de la operación `curve` cruza el plano (`at` lo pone el historial) */
   | { type: "pierce"; point: number; curve: number; at: P2 };
 
@@ -2724,6 +2728,8 @@ export function geometryPoints(g: Geometry): number[] {
       return [g.center, g.major, g.minor, g.start, g.end];
     case "bspline":
       return [...g.poles];
+    case "unknown":
+      return [];
   }
 }
 
@@ -2758,6 +2764,8 @@ export function mapGeometry(g: Geometry, map: (p: number) => number, flip = fals
       return { ...structuredClone(g), poles: g.poles.map(map) };
     case "point":
       return { type: "point", point: map(g.point) };
+    case "unknown":
+      return { type: "unknown" };
   }
 }
 
@@ -2845,6 +2853,20 @@ export function mirrorEntities(s: Sketch, ids: number[], axis: number): string |
   };
   copyEntities(s, items, map, true);
   return undefined;
+}
+
+/**
+ * Simetría respecto del punto `center`: copia las entidades giradas media
+ * vuelta a su alrededor, atadas como un patrón circular de dos (el centro
+ * queda en el medio de cada punto y su copia). Devuelve un mensaje si no se puede.
+ */
+export function pointMirror(s: Sketch, ids: number[], center: number): string | undefined {
+  const items = ids.filter((id) => {
+    const g = s.entities.find((e) => e.id === id)?.geometry;
+    return g && !(g.type === "point" && g.point === center);
+  });
+  if (!items.length) return tr("Elegir también lo que se refleja");
+  return circularPattern(s, items, 2, center, 360, true);
 }
 
 /** Marca una entidad como de construcción */
@@ -4145,6 +4167,29 @@ export function isReference(c: SketchConstraint): boolean {
   return "reference" in c && !!c.reference;
 }
 
+/** Pares de cotas que miden lo mismo como radio o como diámetro */
+const HALF_TWIN = { radius: "diameter", diameter: "radius", point_line_distance: "axis_diameter", axis_diameter: "point_line_distance" } as const;
+
+/** Si la cota se puede mostrar como radio o como diámetro (y al revés) */
+export function hasDiameterTwin(c: SketchConstraint): boolean {
+  return c.type in HALF_TWIN;
+}
+
+/**
+ * La misma cota como diámetro si era radio y al revés (también distancia al
+ * eje ↔ diámetro sobre el eje): el dibujo no cambia. Una fórmula sigue
+ * mandando, multiplicada o dividida por 2. Las demás opciones (referencia,
+ * bloqueo, texto movido) se conservan.
+ */
+export function swapDiameter(c: SketchConstraint): SketchConstraint | undefined {
+  if (!(c.type in HALF_TWIN) || !("value" in c)) return undefined;
+  const to = HALF_TWIN[c.type as keyof typeof HALF_TWIN];
+  const doubles = to === "diameter" || to === "axis_diameter";
+  const next = { ...structuredClone(c), type: to, value: +(doubles ? c.value * 2 : c.value / 2).toFixed(9) } as SketchConstraint & { expr?: string };
+  if (next.expr) next.expr = doubles ? `(${next.expr}) * 2` : `(${next.expr}) / 2`;
+  return next;
+}
+
 export function constraintValue(c: SketchConstraint): number | undefined {
   if ("value" in c) return c.value;
   // El sentido del ángulo va aparte (la flecha): se muestra sin signo
@@ -4156,6 +4201,7 @@ export function constraintValue(c: SketchConstraint): number | undefined {
 export type AngleEnd = "start" | "end";
 
 export const CONSTRAINT_LABELS: Record<SketchConstraint["type"], string> = {
+  get unknown() { return tr("De una versión más nueva"); },
   get coincident() { return tr("Coincidente"); },
   get fixed() { return tr("Fijo"); },
   get horizontal() { return tr("Horizontal"); },
@@ -5053,6 +5099,8 @@ export function createCadStore() {
     suggestSketch: (sketch: Sketch) => invoke<SketchSuggestion[]>("cad_sketch_suggest", { sketch }),
     /** Lo que define el sketch entero (cotas con lo que mide; con `relations`, también las relaciones casi cumplidas) */
     defineSketch: (sketch: Sketch, relations: boolean) => invoke<SketchConstraint[]>("cad_sketch_define", { sketch, relations }),
+    /** Relaciones casi cumplidas, sin cotas (horizontales, verticales, tangencias…) */
+    detectRelations: (sketch: Sketch) => invoke<SketchConstraint[]>("cad_sketch_relations", { sketch }),
 
     /** Exporta el diseño (todas las piezas, o solo `part`) */
     /** Con `assembly`, las instancias del ensamble en su lugar */

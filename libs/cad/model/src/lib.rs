@@ -24,6 +24,8 @@ pub mod regions;
 pub mod sheet;
 pub mod sketch;
 pub mod sketch_assist;
+pub mod sketch_edit;
+pub mod sketch_text;
 pub mod sketch3d;
 pub mod standard;
 pub mod tabs;

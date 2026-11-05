@@ -8,7 +8,7 @@ import type { CameraPose } from "../../lib/cameraRig";
 import { parse as parseFont, type Font } from "opentype.js";
 import { layoutText, type Contour } from "../../lib/sketchText";
 import { dragJointOf, dragPlane, mateAxis, measuredAngle, measuredDistance, nextAngle, nextDistance, turned } from "../../lib/assemblyDrag";
-import { fitReport, CONSTRAINT_LABELS, editsAsSketch, geometryPoints, type Report3d, type Sketch3d, type Plane, addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, curvePolyline, constraintValue, isReference, isLoosePoint, isSolidPoint, removeLoosePoint, leavingDirection, placeSnap, tangentArc, type CadStore, designMass, dragByHandle, flipByHandle, handleField, handleValue, partColor, partHidden, samePart, type FeatureHandle, type FeatureKind, type MeasureItem, type Measurement, type P2, type P3, type ScanOutline, type Sketch, type SketchConstraint } from "../../lib/cad";
+import { fitReport, CONSTRAINT_LABELS, editsAsSketch, geometryPoints, type Report3d, type Sketch3d, type Plane, addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, curvePolyline, constraintValue, hasDiameterTwin, swapDiameter, isReference, isLoosePoint, isSolidPoint, removeLoosePoint, leavingDirection, placeSnap, tangentArc, type CadStore, designMass, dragByHandle, flipByHandle, handleField, handleValue, partColor, partHidden, samePart, type FeatureHandle, type FeatureKind, type MeasureItem, type Measurement, type P2, type P3, type ScanOutline, type Sketch, type SketchConstraint } from "../../lib/cad";
 import { infer, solidRefs, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
 import { angleView, applyFrame, clipCenter, invertFrame, measureConstraint, rotation, scaling, selectedEntities, splitEntityAt, transformSelection, translation, type Frame, type Xform } from "../../lib/sketchTransform";
 import { mergeDuplicate, rejoinSplit, sameEntities, trimByStroke, trimRemoved } from "../../lib/sketchEdit";
@@ -2228,7 +2228,9 @@ export const CadView: Component<CadViewProps> = (props) => {
       if (!from) {
         const target = hitTest(s.sketch, raw, viewer.pixelSizeMm() * 8, false).entity;
         if (target === undefined) return ui.setMessage(tr("Clic en la curva (se toma toda su cadena)"));
-        const chainIds = connectedChain(s.sketch, target);
+        // Una spline o elipse va sola (su equidistante es otra curva libre)
+        const kind = s.sketch.entities.find((x) => x.id === target)?.geometry.type;
+        const chainIds = kind === "spline" || kind === "ellipse" || kind === "ellipse_arc" || kind === "bspline" ? [target] : connectedChain(s.sketch, target);
         setOffsetFrom(chainIds);
         ui.setSelection(chainIds);
         ui.setMessage(tr("Llevar el cursor al lado y a la distancia, y clic (o escribir la distancia)"));
@@ -3893,6 +3895,19 @@ export const CadView: Component<CadViewProps> = (props) => {
         { header: tr(CONSTRAINT_LABELS[c.type]) },
         { label: d.locked ? tr("Desbloquear") : tr("Bloquear"), onSelect: () => ui.setDimOpts(d.index, { locked: !d.locked }) },
         ...(d.offset ? [{ label: tr("Devolver el texto a su lugar"), onSelect: () => ui.setDimOpts(d.index, { offset: undefined }) }] : []),
+        ...(hasDiameterTwin(c)
+          ? [
+              {
+                label: c.type === "radius" || c.type === "point_line_distance" ? tr("Pasar a diámetro") : tr("Pasar a radio"),
+                onSelect: () =>
+                  ui.change((sk) => {
+                    const k = sk.constraints[d.index];
+                    const next = k && swapDiameter(k);
+                    if (next) sk.constraints[d.index] = next;
+                  }),
+              },
+            ]
+          : []),
         ...(flippable
           ? [
               { label: tr("Girar al otro lado"), onSelect: () => flipAngle(d.index) },

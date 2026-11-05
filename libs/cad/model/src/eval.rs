@@ -4973,6 +4973,7 @@ fn entity_midpoint(s: &Sketch, id: u32) -> Option<P2> {
         }
         Geometry::Point { point } => p(*point)?,
         Geometry::Ellipse { major, .. } => p(*major)?,
+        Geometry::Unknown => return None,
     })
 }
 
@@ -5210,7 +5211,7 @@ fn loop_curves(s: &Sketch, plane: &Plane, l: &Loop) -> R<Vec<Curve>> {
                 Curve::Spline(pts)
             }
             // Un punto suelto no forma lazos
-            Geometry::Point { .. } => continue,
+            Geometry::Point { .. } | Geometry::Unknown => continue,
             Geometry::Ellipse { center, major, minor } => {
                 let (c, a, b) = (w(*center)?, w(*major)?, w(*minor)?);
                 let (u, v) = (sub(a, c), sub(b, c));

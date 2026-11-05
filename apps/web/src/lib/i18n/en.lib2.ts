@@ -451,4 +451,10 @@ export const en_lib2: Catalog = {
   "Clic: articulación (Shift suma, doble clic: cadena) · R girar · G mover · I insertar key": "Click: joint (Shift adds, double-click: chain) · R rotate · G move · I insert key",
   "Girar articulación": "Rotate joint",
   "Selecciona una articulación y gira el gizmo (R: girar con el mouse)": "Select a joint and rotate the gizmo (R: rotate with the mouse)",
+  // U8: equidistante de curvas libres, SVG
+  "Elegir una spline o una elipse": "Select a spline or an ellipse",
+  "La curva no tiene largo": "The curve has no length",
+  "La distancia es mayor que la curvatura de la curva: la equidistante se daría vuelta": "The distance is larger than the curve's curvature: the offset would turn over",
+  "No parece un SVG": "This doesn't look like an SVG",
+  "El SVG no tiene trazados, líneas ni formas": "The SVG has no paths, lines or shapes",
 };

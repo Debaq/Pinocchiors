@@ -1996,4 +1996,14 @@ export const en_ui_steps: Catalog = {
   "su sketch ya no la tiene": "its sketch no longer has it",
   "la arista ya no está": "the edge is gone",
   "ya no está en el sólido": "no longer on the solid",
+  // U8: simetría en un punto, SVG, relaciones al importar
+  "Simetría en el punto elegido": "Symmetry about the selected point",
+  "Lo elegido se copia girado media vuelta alrededor del punto (el punto queda en el medio de cada par)": "The selection is copied turned half a turn around the point (the point stays midway between each pair)",
+  "Simetría en el origen": "Symmetry about the origin",
+  "Lo elegido se copia girado media vuelta alrededor del origen": "The selection is copied turned half a turn around the origin",
+  "Detectar relaciones": "Detect relations",
+  "{n} relación detectada": "{n} relation detected",
+  "{n} relaciones detectadas": "{n} relations detected",
+  "Importar SVG…": "Import SVG…",
+  "Trazados, rectángulos, círculos, elipses, líneas y polígonos, en mm (sin unidades: 96 por pulgada); las curvas quedan como B-splines": "Paths, rectangles, circles, ellipses, lines and polygons, in mm (unitless: 96 per inch); curves become B-splines",
 };

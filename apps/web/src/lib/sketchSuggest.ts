@@ -2,7 +2,7 @@
 // ofrece el panel del sketch y la barra de restricciones de arriba). Cada una
 // con su texto y cómo se arma; las cotas toman lo que mide la geometría ahora.
 
-import { geometryPoints, type Sketch, type SketchConstraint } from "./cad";
+import { geometryPoints, type Sketch, type SketchConstraint, type SketchEntity } from "./cad";
 import { angleBetweenEntities, hasAngleDirection, measureConstraint } from "./sketchTransform";
 import { t as tr, tx } from "./i18n.ts";
 
@@ -154,8 +154,9 @@ export function constraintSuggestions(sk: Sketch, selection: number[], free?: nu
       if (axis !== undefined && pairE.length === 2 && pairE[0].geometry.type === pairE[1].geometry.type)
         out.push({ label: tr("Simétricas (eje: la última línea)"), make: () => ({ type: "symmetric_entities", a: pairE[0].id, b: pairE[1].id, line: axis }) });
     }
-    // Con una spline por polos: tangencia y curvatura igual (G2) en el extremo común
-    if (E.length === 2 && P.length === 0 && E.some((e) => e.geometry.type === "bspline") && E.every((e) => ["line", "arc", "bspline"].includes(e.geometry.type))) {
+    // Con una spline (por polos o abierta por puntos): tangencia y curvatura igual (G2) en el extremo común
+    const splineEnd = (e: SketchEntity) => e.geometry.type === "bspline" || (e.geometry.type === "spline" && !e.geometry.closed);
+    if (E.length === 2 && P.length === 0 && E.some(splineEnd) && E.every((e) => splineEnd(e) || ["line", "arc"].includes(e.geometry.type))) {
       out.push({ label: tr("Tangentes en la unión"), make: () => ({ type: "tangent", a: E[0].id, b: E[1].id }) });
       out.push({ label: tr("Curvatura igual (G2)"), make: () => ({ type: "curvature", a: E[0].id, b: E[1].id }) });
     }

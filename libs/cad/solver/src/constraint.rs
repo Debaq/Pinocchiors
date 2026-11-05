@@ -253,6 +253,12 @@ pub enum CurveEnd {
     /// Arco antihorario (curvatura 1/r en su sentido)
     Arc { center: usize, start: usize, at_start: bool },
     BSpline { curve: BSplineRef, at_start: bool },
+    /// Spline interpolada (Hermite con tangentes de Catmull-Rom, ver
+    /// `closest_on_spline`): el primer tramo recorrido desde la unión, de
+    /// `tip` a `next`; `after` el punto que sigue (si hay). Las manijas son
+    /// (punto, signo): la dirección es signo·(manija − su punto), en el
+    /// sentido de ese recorrido.
+    Spline { tip: usize, next: usize, after: Option<usize>, tip_dir: Option<(usize, f64)>, next_dir: Option<(usize, f64)>, at_start: bool },
 }
 
 impl CurveEnd {
@@ -261,6 +267,9 @@ impl CurveEnd {
             CurveEnd::Line => vec![],
             CurveEnd::Arc { center, start, .. } => vec![*center, *start],
             CurveEnd::BSpline { curve, .. } => curve.poles.clone(),
+            CurveEnd::Spline { tip, next, after, tip_dir, next_dir, .. } => {
+                [Some(*tip), Some(*next), *after, tip_dir.map(|d| d.0), next_dir.map(|d| d.0)].into_iter().flatten().collect()
+            }
         }
     }
 
@@ -269,6 +278,14 @@ impl CurveEnd {
             CurveEnd::Line => CurveEnd::Line,
             CurveEnd::Arc { center, start, at_start } => CurveEnd::Arc { center: r(center), start: r(start), at_start: *at_start },
             CurveEnd::BSpline { curve, at_start } => CurveEnd::BSpline { curve: curve.remap(r), at_start: *at_start },
+            CurveEnd::Spline { tip, next, after, tip_dir, next_dir, at_start } => CurveEnd::Spline {
+                tip: r(tip),
+                next: r(next),
+                after: after.as_ref().map(r),
+                tip_dir: tip_dir.map(|(h, s)| (r(&h), s)),
+                next_dir: next_dir.map(|(h, s)| (r(&h), s)),
+                at_start: *at_start,
+            },
         }
     }
 
@@ -284,13 +301,35 @@ impl CurveEnd {
                 let (a, b) = c.domain();
                 c.curvature(if *at_start { a } else { b })
             }),
+            CurveEnd::Spline { tip, next, after, tip_dir, next_dir, at_start } => {
+                let (t, n) = (points[*tip].co, points[*next].co);
+                // Tangentes como en `closest_on_spline`: la manija da la dirección, el largo es el de Catmull-Rom
+                let along = |dir: Option<(usize, f64)>, at: nalgebra::Vector2<f64>, base: nalgebra::Vector2<f64>| match dir {
+                    Some((h, sign)) => {
+                        let d = (points[h].co - at) * sign;
+                        if d.norm() < 1e-15 { base } else { d * (base.norm() / d.norm()) }
+                    }
+                    None => base,
+                };
+                let m0 = along(*tip_dir, t, n - t);
+                let m1 = along(*next_dir, n, after.map_or(n - t, |a| (points[a].co - t) / 2.0));
+                // Hermite en t = 0: P' = m0, P'' = 6(n − t) − 4·m0 − 2·m1
+                let dd = (n - t) * 6.0 - m0 * 4.0 - m1 * 2.0;
+                let l = m0.norm();
+                if l < 1e-15 {
+                    return 0.0;
+                }
+                let k = (m0.x * dd.y - m0.y * dd.x) / (l * l * l);
+                // Recorrida desde la unión: en el fin de la curva el avance propio es el contrario
+                if *at_start { k } else { -k }
+            }
         }
     }
 
     fn at_start(&self) -> bool {
         match self {
             CurveEnd::Line => false,
-            CurveEnd::Arc { at_start, .. } | CurveEnd::BSpline { at_start, .. } => *at_start,
+            CurveEnd::Arc { at_start, .. } | CurveEnd::BSpline { at_start, .. } | CurveEnd::Spline { at_start, .. } => *at_start,
         }
     }
 }

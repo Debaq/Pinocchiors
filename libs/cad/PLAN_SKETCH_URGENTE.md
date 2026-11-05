@@ -272,17 +272,17 @@ Imprescindible:
   entidades, recortar, usar arista/corte, spline, elipse, texto, offset, espejo, patrones.
 
 Importante:
-- [ ] Importar SVG a sketch (solo existe exportar).
-- [ ] «Detectar relaciones» al importar DXF (coincidencias, horizontales, verticales) con
-  `sketchSuggest`/`auto_define`.
-- [ ] Tangencia y curvatura con la spline interpolada (`Geometry::Spline`): hoy solo B-spline
-  (`sketch.rs:1552`, `:1604` → `WrongKind`).
-- [ ] Offset de spline y elipse [S] (`sketchEdit.ts:416-520`).
-- [ ] Cambiar una cota de radio a diámetro y al revés [S].
+- [x] Importar SVG a sketch (solo existe exportar). **Hecho**: `parseSvg` (trazados con Bézier → B-splines y arcos, rect con esquinas redondeadas, círculo, elipse, líneas, polígonos; transformaciones de grupos, viewBox y unidades a mm, y hacia arriba; texto/imagen/use contados como salteados). «Importar SVG…» junto a DXF.
+- [x] «Detectar relaciones» al importar DXF (coincidencias, horizontales, verticales) con
+  `sketchSuggest`/`auto_define`. **Hecho**: `Sketch::detect_relations` (relaciones casi cumplidas, sin cotas) por `cad_sketch_relations`; casilla «Detectar relaciones» (DXF y SVG), solo entre lo importado.
+- [x] Tangencia y curvatura con la spline interpolada (`Geometry::Spline`): hoy solo B-spline
+  (`sketch.rs:1552`, `:1604` → `WrongKind`). **Hecho**: en el extremo común la dirección va a la manija o, sin ella, al punto vecino (como su Hermite); curvatura con `CurveEnd::Spline` en el solver. El panel ofrece tangencia y G2 con splines abiertas.
+- [x] Offset de spline y elipse [S] (`sketchEdit.ts:416-520`). **Hecho**: `offsetFreeCurve` (spline, elipse, arco de elipse, B-spline → spline libre por la curva corrida; avisa si se daría vuelta); herramienta y panel la toman sola.
+- [x] Cambiar una cota de radio a diámetro y al revés [S]. **Hecho**: menú de la cota «Pasar a diámetro/radio» (`swapDiameter`, también distancia a eje ↔ diámetro sobre eje; la fórmula sigue ×2 o /2).
 
 Deseable:
-- [ ] Simetría respecto de un punto.
-- [ ] Variante `Unknown` en serde para restricciones/geometrías de versiones nuevas.
+- [x] Simetría respecto de un punto. **Hecho**: `pointMirror` (media vuelta atada como patrón circular de dos); botones «en el punto elegido» y «en el origen».
+- [x] Variante `Unknown` en serde para restricciones/geometrías de versiones nuevas. **Hecho**: `#[serde(other)] Unknown` en las dos (quedan en su lugar, sin ecuaciones ni perfiles; TS las nombra «De una versión más nueva»).
 
 ## U9 — Pruebas que faltan
 

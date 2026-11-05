@@ -98,6 +98,7 @@ fn sample_geometry(g: &Geometry, point: &impl Fn(u32) -> Result<P2, SketchError>
             catmull_rom(&pts)
         }
         Geometry::Point { point: p } => vec![point(*p)?],
+        Geometry::Unknown => vec![],
         Geometry::Ellipse { center, major, minor } => {
             let (c, a, b) = (point(*center)?, point(*major)?, point(*minor)?);
             let (u, v) = ([a[0] - c[0], a[1] - c[1]], [b[0] - c[0], b[1] - c[1]]);
@@ -276,7 +277,7 @@ fn curve_eval(g: &Geometry, point: &impl Fn(u32) -> Result<P2, SketchError>, n: 
                 [q.x, q.y]
             })
         }
-        Geometry::Point { .. } => return None,
+        Geometry::Point { .. } | Geometry::Unknown => return None,
     })
 }
 

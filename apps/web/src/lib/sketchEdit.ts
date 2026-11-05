@@ -9,6 +9,7 @@ import {
   constraintIds,
   constraintMentions,
   geometryPoints,
+  inheritMarks,
   linesAt,
   mapConstraintIds,
   mapGeometry,
@@ -534,6 +535,9 @@ export type OffsetCaps = "open" | "round" | "line";
  * normal) queda atada a la original por una sola cota de equidistante.
  */
 export function offsetChain(s: Sketch, ids: number[], d: number, opts: { both?: boolean; caps?: OffsetCaps; dim?: boolean } = {}): { entities: number[] } | string {
+  // Una spline o una elipse sola: su equidistante es otra curva libre
+  const only = ids.length === 1 ? s.entities.find((e) => e.id === ids[0]) : undefined;
+  if (only && FREE_CURVES.has(only.geometry.type)) return offsetFreeCurve(s, only.id, d, opts.both);
   const order = orderChain(s, ids);
   if (typeof order === "string") return order;
   if (!(Math.abs(d) > 0)) return tr("La distancia no puede ser cero");
@@ -648,6 +652,63 @@ export function offsetChain(s: Sketch, ids: number[], d: number, opts: { both?: 
     }
   }
   if (opts.dim !== false && pairs.length) s.constraints.push({ type: "offset", pairs, value: +Math.abs(d).toFixed(6) });
+  return { entities: made };
+}
+
+/** Curvas cuya equidistante no es de su misma clase: sale una spline */
+const FREE_CURVES = new Set(["spline", "ellipse", "ellipse_arc", "bspline"]);
+
+/**
+ * Equidistante de una spline, elipse o B-spline: la curva muestreada, corrida
+ * `d` a la izquierda del recorrido, pasa a una
+ * spline por puntos repartidos a lo largo. Queda libre (no hay cota que la
+ * ate a la original). `both`: a los dos lados. Si la distancia da vuelta la
+ * curva (mayor que su radio de curvatura de ese lado), no se hace.
+ */
+export function offsetFreeCurve(s: Sketch, id: number, d: number, both = false): { entities: number[] } | string {
+  const e = s.entities.find((x) => x.id === id);
+  if (!e || !FREE_CURVES.has(e.geometry.type)) return tr("Elegir una spline o una elipse");
+  if (!(Math.abs(d) > 0) || !Number.isFinite(d)) return tr("La distancia no puede ser cero");
+  const g = e.geometry;
+  const closed = g.type === "ellipse" || ((g.type === "spline" || g.type === "bspline") && !!g.closed);
+  let pl = polylineOf(s, g);
+  const tol = span(s) * 1e-9;
+  if (closed && pl.length > 2 && dist(pl[0], pl[pl.length - 1]) <= tol) pl = pl.slice(0, -1);
+  if (pl.length < 2) return tr("La curva no tiene largo");
+  const n = pl.length;
+  const at = (i: number) => pl[closed ? (i + n) % n : Math.max(0, Math.min(n - 1, i))];
+  // Normal a la izquierda en cada muestra (tangente por diferencia centrada)
+  const normals = pl.map((_, i) => left(unit(sub(at(i + 1), at(i - 1)))));
+  // Cuántos puntos lleva la copia: los de la original (o más, para que siga bien la forma)
+  const count = g.type === "spline" ? Math.max(g.points.length * 2, 8) : g.type === "bspline" ? Math.max(g.poles.length * 2, 8) : 16;
+  const made: number[] = [];
+  for (const side of both ? [Math.abs(d), -Math.abs(d)] : [d]) {
+    const moved = pl.map((p, i) => add(p, mul(normals[i], side)));
+    // Un tramo que va al revés que el original: la curva se dio vuelta
+    for (let i = 0; i < (closed ? n : n - 1); i++) {
+      const [a, b] = [pl[i], pl[(i + 1) % n]];
+      const [p, q] = [moved[i], moved[(i + 1) % n]];
+      if (dot(sub(b, a), sub(q, p)) < 0) return tr("La distancia es mayor que la curvatura de la curva: la equidistante se daría vuelta");
+    }
+    // Puntos repartidos por el largo de lo corrido
+    const ring = closed ? [...moved, moved[0]] : moved;
+    const acc = [0];
+    for (let i = 1; i < ring.length; i++) acc.push(acc[i - 1] + dist(ring[i - 1], ring[i]));
+    const total = acc[acc.length - 1];
+    const k = closed ? count : count - 1;
+    const pts: P2[] = [];
+    for (let j = 0; j < (closed ? count : count); j++) {
+      const t = (total * j) / k;
+      let i = 1;
+      while (i < ring.length - 1 && acc[i] < t) i++;
+      const f = (t - acc[i - 1]) / (acc[i] - acc[i - 1] || 1);
+      pts.push(add(ring[i - 1], mul(sub(ring[i], ring[i - 1]), Math.max(0, Math.min(1, f)))));
+    }
+    const ids = pts.map((p) => addPoint(s, p));
+    const copy = addEntity(s, { type: "spline", points: ids, closed });
+    inheritMarks(s, e, copy);
+    made.push(copy);
+  }
   return { entities: made };
 }
 

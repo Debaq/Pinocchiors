@@ -33,6 +33,8 @@ import {
   addEntity,
   fillPattern,
   mirrorEntities,
+  pointMirror,
+  geometryPoints,
   toggleSplineHandles,
   linesAt,
   offsetEntities,
@@ -132,7 +134,7 @@ import { copyText } from "../../lib/clipboard";
 import { chamferCorner, closeContour, joinEntities, mergeOverlaps, offsetChain, orderChain, removeDuplicates, repairSketch, splitEqual, type OffsetCaps } from "../../lib/sketchEdit";
 import { GLYPHS, isDimension } from "../../lib/sketchGlyphs";
 import { sampleCurve } from "../../lib/sketchFormula";
-import { addShapes, parseCoordinates, parseDxf, sketchToDxf, sketchToSvg, type Shape } from "../../lib/sketchFiles";
+import { addShapes, parseCoordinates, parseDxf, parseSvg, sketchToDxf, sketchToSvg, type Shape } from "../../lib/sketchFiles";
 import { addLayer, createBlock, explodeBlock, refreshBlock, removeLayer, setLayer } from "../../lib/sketchBlocks";
 import { partKey } from "../../lib/objects";
 import { axisToVertical, faceToFloor, faceToFront, pointToOrigin, type Mat4 } from "../../lib/scanAlign";
@@ -8449,10 +8451,12 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                   const regions = s().regions;
                   // Una sola entidad elegida: toda su cadena conectada (un clic basta para el contorno entero)
                   const picked = selEntities().map((e) => e!.id);
-                  const ids = picked.length === 1 ? connectedChain(sketch(), picked[0]) : picked;
+                  // Una spline o elipse sola: su equidistante es otra curva libre
+                  const free = picked.length === 1 && ["spline", "ellipse", "ellipse_arc", "bspline"].includes(selEntities()[0]!.geometry.type);
+                  const ids = picked.length === 1 && !free ? connectedChain(sketch(), picked[0]) : picked;
                   const chain = orderChain(sketch(), ids);
                   // Lazos de líneas y círculos: como siempre (positivo hacia afuera); cadenas abiertas, con arcos o a los dos lados: por la cadena
-                  const byChain = typeof chain !== "string" && (offsetBoth() || !chain.closed || selEntities().some((e) => e!.geometry.type === "arc"));
+                  const byChain = free || (typeof chain !== "string" && (offsetBoth() || !chain.closed || selEntities().some((e) => e!.geometry.type === "arc")));
                   ui.change((sk) => {
                     // Una copia por vez, cada una más lejos (d, 2d, 3d…)
                     for (let k = 1; k <= offsetCopies(); k++) {
@@ -8546,6 +8550,27 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                   {tl("Simetría (eje: primera línea elegida)")}
                 </Button>
               </Show>
+              {/* Un punto elegido: simetría respecto de él (media vuelta) */}
+              <Show when={lines().length === 0 && selPoints().length === 1}>
+                <Button
+                  data-preview=""
+                  size="sm"
+                  title={tl("Lo elegido se copia girado media vuelta alrededor del punto (el punto queda en el medio de cada par)")}
+                  onClick={() => {
+                    const ids = selEntities().map((e) => e!.id);
+                    const center = selPoints()[0]!;
+                    let msg: string | undefined;
+                    ui.change((sk) => {
+                      msg = pointMirror(sk, ids, center);
+                      if (!msg && mirrorMove()) for (const id of ids) removeEntity(sk, id);
+                    });
+                    ui.setMessage(msg);
+                    if (!msg) ui.setSelection([]);
+                  }}
+                >
+                  {tl("Simetría en el punto elegido")}
+                </Button>
+              </Show>
               {/* Sin una línea elegida: en los ejes del sketch (una línea de construcción por el origen) */}
               <Show when={lines().length === 0}>
                 <div class="flex flex-wrap items-center gap-1.5" aria-label={tl("Simetría en los ejes")}>
@@ -8577,6 +8602,25 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                       </Button>
                     )}
                   </For>
+                  <Show when={selPoints().length === 0}>
+                    <Button
+                      data-preview=""
+                      size="sm"
+                      title={tl("Lo elegido se copia girado media vuelta alrededor del origen")}
+                      onClick={() => {
+                        const ids = selEntities().map((e) => e!.id);
+                        let msg: string | undefined;
+                        ui.change((sk) => {
+                          msg = pointMirror(sk, ids, ensureOrigin(sk));
+                          if (!msg && mirrorMove()) for (const id of ids) removeEntity(sk, id);
+                        });
+                        ui.setMessage(msg);
+                        if (!msg) ui.setSelection([]);
+                      }}
+                    >
+                      {tl("Simetría en el origen")}
+                    </Button>
+                  </Show>
                 </div>
               </Show>
               <Checkbox small label={tl("Quitar el original (mover)")} checked={mirrorMove()} onChange={setMirrorMove} />
@@ -9283,16 +9327,33 @@ const SketchFiles: Component<{ ui: CadUi; store: CadStore }> = (props) => {
     addPoints(pts, asLines());
     ui.setMessage(tl("{length} puntos de {name}", { length: pts.length, name: f.name }));
   };
-  const importDxf = async () => {
-    const f = await pickFile(".dxf", "text");
+  const [detectOnImport, setDetectOnImport] = createSignal(true);
+  const importDxf = async (svg = false) => {
+    const f = await pickFile(svg ? ".svg,image/svg+xml" : ".dxf", "text");
     if (!f) return;
-    const r = parseDxf(f.content);
+    const r = svg ? parseSvg(f.content) : parseDxf(f.content);
     if (typeof r === "string") return ui.setMessage(r);
     let made: number[] = [];
     ui.change((sk) => (made = addShapes(sk, r.shapes)));
     ui.setSelection(made);
     const skipped = Object.entries(r.skipped).map(([k, n]) => `${n} ${k}`);
-    ui.setMessage((skipped.length ? tl("{n} entidades de {name} (salteadas: {skipped})", { n: made.length, name: f.name, skipped: skipped.join(", ") }) : tl("{n} entidades de {name}", { n: made.length, name: f.name })));
+    let msg = skipped.length ? tl("{n} entidades de {name} (salteadas: {skipped})", { n: made.length, name: f.name, skipped: skipped.join(", ") }) : tl("{n} entidades de {name}", { n: made.length, name: f.name });
+    ui.setMessage(msg);
+    if (!detectOnImport() || !made.length) return;
+    // Las relaciones que ya cumple el dibujo (solo entre lo importado): sigue igual, pero se edita como dibujado a mano
+    try {
+      const sk = sketch();
+      const mine = new Set(made);
+      for (const e of sk.entities) if (mine.has(e.id)) for (const p of geometryPoints(e.geometry)) mine.add(p);
+      const found = (await props.store.detectRelations(sk)).filter((c) => constraintIds(c).every((id) => mine.has(id)));
+      if (found.length && ui.session()) {
+        ui.change((s2) => s2.constraints.push(...found));
+        msg += ` · ${tn(found.length, "{n} relación detectada", "{n} relaciones detectadas")}`;
+      }
+    } catch (e) {
+      msg += ` · ${tBackend(String(e))}`;
+    }
+    ui.setMessage(msg);
   };
   const exportAs = async (ext: "dxf" | "svg") => {
     const path = await save({ filters: [{ name: ext.toUpperCase(), extensions: [ext] }], defaultPath: `${name().replace(/[^\p{L}\p{N}_-]+/gu, "_") || "sketch"}.${ext}` });
@@ -9388,6 +9449,10 @@ const SketchFiles: Component<{ ui: CadUi; store: CadStore }> = (props) => {
           <Button size="sm" title={tl("Líneas, arcos, círculos, polilíneas, splines, elipses y puntos (DWG no: guardarlo como DXF)")} onClick={() => void importDxf()}>
             {tl("Importar DXF…")}
           </Button>
+          <Button size="sm" title={tl("Trazados, rectángulos, círculos, elipses, líneas y polígonos, en mm (sin unidades: 96 por pulgada); las curvas quedan como B-splines")} onClick={() => void importDxf(true)}>
+            {tl("Importar SVG…")}
+          </Button>
+          <Checkbox small label={tl("Detectar relaciones")} checked={detectOnImport()} onChange={setDetectOnImport} />
           <Button size="sm" onClick={() => void exportAs("dxf")}>
             {tl("Exportar DXF")}
           </Button>
