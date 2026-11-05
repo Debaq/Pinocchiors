@@ -94,6 +94,8 @@ export const en_app: Catalog = {
   "Rayos X": "X-ray",
   "Vista frontal": "Front view",
   "Vista derecha": "Right view",
+  "Vista de frente": "Front view",
+  "Vista de arriba": "Top view",
   "Vista superior": "Top view",
   "Vista trasera": "Back view",
   "Vista izquierda": "Left view",

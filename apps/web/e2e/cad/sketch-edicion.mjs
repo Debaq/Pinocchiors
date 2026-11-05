@@ -1250,6 +1250,70 @@ export const escenarios = {
     has(after, lead.x + 12, lead.y, "relleno a 12 mm");
     has(after, lead.x, lead.y + 12, "relleno a 12 mm (arriba)");
   },
+  async "sketch que no se traba: teclas 3/B, Esc suelta caja y lazo, soltar fuera del visor"(b) {
+    await begin(b);
+    await sketchOn(b);
+    const at = (p) => b.eval(`window.__cadViewer.screenOf([${p[0]}, ${p[1]}, 0])`);
+    const key = (k) => b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: ${JSON.stringify(k)} }))`);
+    const tool = () => b.eval(`window.__cadUi.tool()`);
+    const sel = () => b.eval(`JSON.stringify(window.__cadUi.selection())`);
+    const sk = () => b.eval(`JSON.parse(JSON.stringify(window.__cadUi.session().sketch))`);
+    // «3» es la vista derecha (no Arco 3 p.); el arco por 3 puntos va con B
+    await key("3");
+    await sleep(200);
+    if ((await tool()) === "arc3") throw new Error("la tecla 3 tomó Arco 3 p. en vez de la vista");
+    await key("b");
+    await sleep(200);
+    if ((await tool()) !== "arc3") throw new Error(`B no eligió Arco 3 p.: ${await tool()}`);
+    await key("Escape");
+    // Una línea elegida
+    await key("l");
+    await b.click(...(await at([11, 31])), { wait: 300 });
+    await b.click(...(await at([31, 31])), { wait: 300 });
+    await key("Escape");
+    await key("Escape");
+    await key("s");
+    await b.click(...(await at([21, 31])), { wait: 400 });
+    const before = await sel();
+    if (before === "[]") throw new Error("no quedó elegida la línea");
+    // Caja en vacío a medias: Esc la suelta y devuelve lo elegido; al soltar no elige nada
+    const c0 = await at([40, 10]);
+    await b.mouse("mouseMoved", c0[0], c0[1], { buttons: 0 });
+    await b.mouse("mousePressed", c0[0], c0[1]);
+    for (let i = 1; i <= 5; i++) await b.mouse("mouseMoved", c0[0] - 20 * i, c0[1] - 12 * i);
+    await key("Escape");
+    await b.mouse("mouseReleased", c0[0] - 100, c0[1] - 60, { buttons: 0 });
+    await sleep(300);
+    if ((await sel()) !== before) throw new Error(`Esc en la caja cambió lo elegido: ${before} → ${await sel()}`);
+    // Lazo (Ctrl) a medias: Esc lo suelta
+    await b.mouse("mouseMoved", c0[0], c0[1], { buttons: 0 });
+    await b.mouse("mousePressed", c0[0], c0[1], { modifiers: 2 });
+    for (let i = 1; i <= 5; i++) await b.mouse("mouseMoved", c0[0] - 20 * i, c0[1] - 5 * i * i, { modifiers: 2 });
+    await key("Escape");
+    await b.mouse("mouseReleased", c0[0] - 100, c0[1] - 100, { buttons: 0, modifiers: 2 });
+    await sleep(300);
+    if ((await sel()) !== before) throw new Error("Esc en el lazo cambió lo elegido");
+    // Arrastrar el extremo de la línea y soltar fuera del visor: el arrastre termina ahí
+    let s = await sk();
+    const end = s.entities.find((e) => e.geometry.type === "line").geometry.end;
+    const from = await at([31, 31]);
+    await b.mouse("mouseMoved", from[0], from[1], { buttons: 0 });
+    await b.mouse("mousePressed", from[0], from[1]);
+    for (let i = 1; i <= 4; i++) await b.mouse("mouseMoved", from[0] + 10 * i, from[1]);
+    const rect = await b.eval(`(() => { const r = document.querySelector("canvas").getBoundingClientRect(); return [r.left, r.top]; })()`);
+    await b.mouse("mouseMoved", rect[0] - 5, rect[1] + 50);
+    await b.mouse("mouseReleased", rect[0] - 5, rect[1] + 50, { buttons: 0 });
+    await sleep(600);
+    s = await sk();
+    const p1 = s.points.find((q) => q.id === end);
+    // Volver al visor sin botón: el punto ya no sigue al mouse
+    const back = await at([5, 5]);
+    for (let i = 1; i <= 4; i++) await b.mouse("mouseMoved", back[0] + i, back[1] + i, { buttons: 0 });
+    await sleep(600);
+    s = await sk();
+    const p2 = s.points.find((q) => q.id === end);
+    if (Math.hypot(p2.x - p1.x, p2.y - p1.y) > 1e-6) throw new Error(`el punto quedó pegado al mouse: ${p1.x},${p1.y} → ${p2.x},${p2.y}`);
+  },
 };
 
 siEsPrincipal(import.meta.url, escenarios);

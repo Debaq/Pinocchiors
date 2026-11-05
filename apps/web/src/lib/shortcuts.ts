@@ -88,6 +88,10 @@ const sketchId = (toolId: string) => `sketch.${toolId}`;
 /** Teclas que el sketch usa por su cuenta y no se pueden asignar a una herramienta */
 const SKETCH_RESERVED: Record<string, () => string> = {
   q: () => t("Construcción"),
+  // Vistas estándar (también dibujando)
+  "1": () => t("Vista de frente"),
+  "3": () => t("Vista derecha"),
+  "7": () => t("Vista de arriba"),
 };
 
 /** Tecla vigente de una herramienta del Sketch (`undefined` = sin tecla), en minúscula */

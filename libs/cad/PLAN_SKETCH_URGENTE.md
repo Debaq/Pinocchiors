@@ -111,20 +111,30 @@ El orden de las fases es el de urgencia: primero lo que pierde trabajo del usuar
 
 ## U3 — Interfaz que se traba (alto)
 
-- [ ] **Arrastres sin `setPointerCapture`** [V] (`CadView.tsx:2680/2740/2745`, `onPointerUp`
+- [x] **Arrastres sin `setPointerCapture`** [V] (`CadView.tsx:2680/2740/2745`, `onPointerUp`
   `:3094`): soltar fuera del visor deja punto/lazo/caja/recorte pegados y funde el siguiente paso
   de deshacer (`dragSaved`). Capturar el puntero y limpiar en `pointercancel`/`lostpointercapture`.
-- [ ] **Esc no cancela lazo, caja, trazo de recorte ni campo escrito** [V] (`resetTool`,
+- [x] **Esc no cancela lazo, caja, trazo de recorte ni campo escrito** [V] (`resetTool`,
   `CadView.tsx:717`).
-- [ ] **Teclas del sketch se comen menús y botones** [S fuerte] (`CadView.tsx:3300`): Esc/Enter/
+- [x] **Teclas del sketch se comen menús y botones** [S fuerte] (`CadView.tsx:3300`): Esc/Enter/
   Supr dentro de la sesión no excluyen select, menús ni diálogos (la rama del borrador sí).
-- [ ] **Tecla «3» (Arco 3 p.) nunca funciona** [V]: `viewForKey` (`CadView.tsx:3273`) la toma para
+- [x] **Tecla «3» (Arco 3 p.) nunca funciona** [V]: `viewForKey` (`CadView.tsx:3273`) la toma para
   la vista antes. Cambiar la tecla por defecto y reservar 1/3/7 en `SKETCH_RESERVED`.
-- [ ] **Teclas sin herramienta pasan a los atajos del modelo** [S] (`CadView.tsx:3275`): «S» sin
+- [x] **Teclas sin herramienta pasan a los atajos del modelo** [S] (`CadView.tsx:3275`): «S» sin
   asignar en el sketch activa Escalar del modelo. `stopPropagation` de toda tecla suelta.
-- [ ] **«A» (línea↔arco) fija y no reservada** [V].
-- [ ] **Vista previa congelada al salir el mouse** [V] (`CadView.tsx:3817`: falta `setCursor(undefined)`).
-- [ ] **`cycle` (Tab entre encimadas) con ids viejos** [V] (`CadView.tsx:3302`, `:1579`).
+- [x] **«A» (línea↔arco) fija y no reservada** [V].
+- [x] **Vista previa congelada al salir el mouse** [V] (`CadView.tsx:3817`: falta `setCursor(undefined)`).
+- [x] **`cycle` (Tab entre encimadas) con ids viejos** [V] (`CadView.tsx:3302`, `:1579`).
+- **Hecho 2026-11-05**: el sketch captura el puntero al apretar (`setPointerCapture`) y
+  `pointercancel`/`lostpointercapture` sueltan sin aplicar (`abortGesture`). Esc suelta caja
+  (devuelve lo elegido), lazo, trazo de recortar y arrastres antes que lo demás; el campo
+  escrito ya cancelaba por su lado. Las teclas del sketch no actúan dentro de select, menús,
+  listas ni diálogos, ni con un ConfirmDialog abierto. Arco 3 p. pasa a «B»; 1/3/7 reservadas
+  (vistas). Una tecla suelta sin herramienta no sigue a los atajos del modelo. El alterno
+  línea↔arco usa la tecla del Arco (si se reasigna, la sigue). Fuera del visor no hay vista
+  previa (salvo con el campo escrito). Tab entre encimadas descarta ids que ya no están.
+  Escenario e2e escrito: «sketch que no se traba» en `e2e/cad/sketch-edicion.mjs` (sin
+  correr: el e2e va cuando lo pida el usuario). Falta probarlo en la app.
 
 ## U4 — Rendimiento con sketches grandes (alto)
 

@@ -159,7 +159,7 @@ export const en_layout2: Catalog = {
   "Isométrica": "Isometric",
   "Mayús+7": "Shift+7",
   "{i} de {n} encimadas (Tab: la siguiente)": "{i} of {n} overlapping (Tab: next)",
-  "Próximo tramo: arco tangente (A vuelve a línea)": "Next segment: tangent arc (A goes back to line)",
+  "Próximo tramo: arco tangente ({key} vuelve a línea)": "Next segment: tangent arc ({key} goes back to line)",
   "distancia (el lado, el del cursor)": "distance (the side, the cursor's)",
   "Desbloquear": "Unlock",
   "Bloquear": "Lock",

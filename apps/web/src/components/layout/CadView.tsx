@@ -91,7 +91,7 @@ const TOOLS: ToolDef[] = [
   { id: "circle3", short: "Círculo 3 p.", label: "Círculo por 3 puntos", icon: SketchIcons.Circle3, group: 1, family: "circle" },
   { id: "circle_tan", short: "Círculo tangente", label: "Círculo tangente a 3 líneas o curvas (clic en cada una, cerca de donde toca)", icon: SketchIcons.CircleTan, group: 1, family: "circle" },
   { id: "arc", short: "Arco", label: "Arco (centro, inicio, fin)", key: "A", icon: SketchIcons.ArcCenter, group: 1, family: "arc" },
-  { id: "arc3", short: "Arco 3 p.", label: "Arco por 3 puntos (inicio, fin, uno por donde pasa)", key: "3", icon: SketchIcons.Arc3, group: 1, family: "arc" },
+  { id: "arc3", short: "Arco 3 p.", label: "Arco por 3 puntos (inicio, fin, uno por donde pasa)", key: "B", icon: SketchIcons.Arc3, group: 1, family: "arc" },
   { id: "tangent", short: "Tangente", label: "Arco tangente (desde el extremo de una línea o arco)", key: "G", icon: SketchIcons.TangentArc, group: 1, family: "arc" },
   { id: "ellipse", short: "Elipse", label: "Elipse (centro, extremo del eje mayor, ancho)", key: "I", icon: SketchIcons.Ellipse, group: 1, family: "ellipse" },
   { id: "ellipse_arc", short: "Arco elíptico", label: "Arco elíptico (centro, eje mayor, ancho, comienzo y fin antihorario)", icon: SketchIcons.EllipseArc, group: 1, family: "ellipse" },
@@ -538,6 +538,21 @@ export const CadView: Component<CadViewProps> = (props) => {
   const [trimGone, setTrimGone] = createSignal<P2[][]>();
   // Lo encimado bajo el último clic de Elegir (Tab pasa a lo siguiente)
   let cycle: { ids: number[]; i: number } | undefined;
+  /** El ciclo de encimadas sin lo que ya no está (deshacer, borrar); false si quedó menos de dos */
+  const liveCycle = () => {
+    const s = ui.session();
+    if (!cycle || !s) return false;
+    const alive = new Set([...s.sketch.entities.map((x) => x.id), ...s.sketch.points.map((x) => x.id)]);
+    const ids = cycle.ids.filter((id) => alive.has(id));
+    if (ids.length < 2) {
+      cycle = undefined;
+      return false;
+    }
+    if (ids.length !== cycle.ids.length) cycle = { ids, i: Math.min(cycle.i, ids.length - 1) };
+    return true;
+  };
+  // Dentro del visor: fuera de él no se muestra la vista previa de la herramienta
+  const [pointerInside, setPointerInside] = createSignal(true);
   createEffect(on(() => ui.session()?.sketch, () => setTrimGone(undefined), { defer: true }));
   // Preselección en 3D: plano, cara, arista, vértice o región bajo el mouse,
   // según lo que se puede elegir en ese momento
@@ -1108,7 +1123,8 @@ export const CadView: Component<CadViewProps> = (props) => {
       viewer.setSketch(null);
       return;
     }
-    const c = cursor();
+    // Fuera del visor no hay vista previa (salvo con el campo escrito, que la usa)
+    const c = pointerInside() || typedField() ? cursor() : undefined;
     // Lo que haría el botón del panel bajo el mouse
     const preview: P2[][] = [...(ui.panelPreview() ?? [])];
     const stroke = trimStroke();
@@ -2724,7 +2740,11 @@ export const CadView: Component<CadViewProps> = (props) => {
     if (e.button === 2) rightDown = { x: e.clientX, y: e.clientY };
     if (e.button !== 0 || e.altKey) return;
     if (viewer?.cubeDown(e.clientX, e.clientY)) return;
-    if (ui.session()) return sketchClick(e);
+    if (ui.session()) {
+      // El arrastre (punto, curva, lazo, caja, trazo de recorte) sigue aunque se salga del visor
+      container.setPointerCapture(e.pointerId);
+      return sketchClick(e);
+    }
     if (ui.assemblyMode() && viewer && startPartDrag(e)) return;
     const handle = handleOf();
     const index = handle && viewer ? viewer.handleHit(e.clientX, e.clientY) : -1;
@@ -2776,6 +2796,7 @@ export const CadView: Component<CadViewProps> = (props) => {
     if (e.buttons === 0) setOverCube(viewer?.cubeHover(e.clientX, e.clientY) ?? false);
     const rect0 = container.getBoundingClientRect();
     setPointerPx([e.clientX - rect0.left, e.clientY - rect0.top]);
+    setPointerInside(true);
     // Equidistante: la vista previa del lado y la distancia del cursor
     const from = offsetFrom();
     const so = ui.session();
@@ -3088,6 +3109,44 @@ export const CadView: Component<CadViewProps> = (props) => {
     ui.setMessage(ui.transformSelected(xf.f, { scale: xf.scale, copy: t === "copy" }));
     setAnchor([]);
   };
+  /**
+   * Suelta sin aplicar lo que el puntero tenía a medias: caja, lazo, trazo de
+   * recortar o arrastre (Esc, o el sistema le quitó el puntero al visor). La
+   * caja del sketch devuelve lo que estaba elegido. True si había algo.
+   */
+  const abortGesture = () => {
+    let had = false;
+    if (boxStart || box()) {
+      if (boxStart && ui.session() && ui.tool() !== "stretch") ui.setSelection(sketchBoxBefore);
+      boxStart = undefined;
+      setBox(undefined);
+      had = true;
+    }
+    if (lasso()) {
+      setLasso(undefined);
+      had = true;
+    }
+    if (trimStroke()) {
+      setTrimStroke(undefined);
+      trimFrom = undefined;
+      had = true;
+    }
+    if (dragging !== undefined || entityDrag) {
+      dragging = undefined;
+      entityDrag = undefined;
+      ui.endDrag();
+      had = true;
+    }
+    if (handleDrag) {
+      handleDrag = undefined;
+      setDragAt(undefined);
+      had = true;
+    }
+    if (partDrag || brush) had = true;
+    partDrag = undefined;
+    brush = undefined;
+    return had;
+  };
   // Clic derecho sin arrastrar (el derecho también desplaza la vista): menú de la cara
   let rightDown: { x: number; y: number } | undefined;
   const [menu, setMenu] = createSignal<{ x: number; y: number; items: MenuEntry[] }>();
@@ -3298,11 +3357,15 @@ export const CadView: Component<CadViewProps> = (props) => {
       return;
     }
     if (ui.session()) {
+      // Una lista, un menú o un diálogo usan sus teclas (Esc, Enter, Supr…)
+      if (target.closest?.("select, a, [aria-haspopup], [role=listbox], [role=option], [role=combobox], [role=dialog], [role=alertdialog], [role=menu], [role=menuitem]")) return;
+      if (document.querySelector("[role=alertdialog]")) return;
       const key = e.key.toLowerCase();
       if (e.key === "Escape") {
-        if (clarify()) closeClarify();
+        if (abortGesture()) ui.setMessage(undefined);
+        else if (clarify()) closeClarify();
         else if (!dropExtraDimension()) cancelStep();
-      } else if (e.key === "Tab" && cycle && ui.tool() === "select") {
+      } else if (e.key === "Tab" && cycle && ui.tool() === "select" && liveCycle()) {
         // Lo siguiente de lo encimado bajo el último clic
         cycle.i = (cycle.i + 1) % cycle.ids.length;
         ui.setSelection([cycle.ids[cycle.i]]);
@@ -3336,17 +3399,23 @@ export const CadView: Component<CadViewProps> = (props) => {
           e.stopPropagation();
           return;
         }
-        // Dibujando líneas encadenadas, A alterna el próximo tramo entre línea y arco tangente
-        if (key === "a" && ui.tool() === "line" && chain()?.lastEntity !== undefined) {
+        // Dibujando líneas encadenadas, la tecla del arco alterna el próximo tramo entre línea y arco tangente
+        const arcKey = sheetTools().find((x) => x.id === "arc")?.key?.toLowerCase();
+        if (arcKey && key === arcKey && ui.tool() === "line" && chain()?.lastEntity !== undefined) {
           const on = !chainArc();
           setChainArc(on);
-          ui.setMessage(on ? tr("Próximo tramo: arco tangente (A vuelve a línea)") : undefined);
+          ui.setMessage(on ? tr("Próximo tramo: arco tangente ({key} vuelve a línea)", { key: arcKey.toUpperCase() }) : undefined);
           e.preventDefault();
           e.stopPropagation();
           return;
         }
         const t = sheetTools().find((x) => x.key?.toLowerCase() === key);
-        if (!t) return;
+        if (!t) {
+          // Una tecla suelta sin herramienta no pasa a los atajos del modelo (S sin
+          // asignar no es «Escalar» del sólido); las demás (F2, flechas…) sí
+          if (e.key.length === 1) e.stopPropagation();
+          return;
+        }
         ui.setTool(t.id);
         resetTool();
       } else return;
@@ -3814,9 +3883,13 @@ export const CadView: Component<CadViewProps> = (props) => {
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
+        onPointerCancel={() => abortGesture()}
+        onLostPointerCapture={() => abortGesture()}
         onPointerLeave={() => {
           setSnapView(undefined);
           clearPreselect();
+          // La vista previa de la herramienta no queda congelada en el borde
+          setPointerInside(false);
         }}
         onContextMenu={(e) => e.preventDefault()}
       />
