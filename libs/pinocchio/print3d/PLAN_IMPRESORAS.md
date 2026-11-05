@@ -91,6 +91,21 @@ Flashforge le adelanta mucho gcode al Klipper interno, o su macro de cancelar es
 Probar si `~M26` por la red para más rápido (con una impresión corta y el usuario al lado) y
 revisar por SSH (puerto 22 abierto; pedir permiso y clave) los logs y la macro de cancelar.
 
+**Primera impresión real (2026-11-05, AD5X .47 tras limpiar zmod y actualizar a v3.1.8):**
+cubo de 20 mm laminado con nuestro motor + perfiles AD5X de Orca (4 filamentos declarados,
+herramienta cambiada a `T2`), subido por 8899 y empezado con `~M23 0:/user/<archivo>`.
+Calentó bien (cama 45, boquilla 215, después 210) y empezó a imprimir, pero **tomó el
+carrete 1 y no el 3**: con `~M23` el firmware no usa el `T2` del gcode para elegir carrete
+(los gcodes que empiezan en T2 funcionan porque al imprimir desde la pantalla se elige el
+carrete). Opciones: (a) API 8898 `uploadGcode` con `materialMappings` (necesita el código
+del modo LAN de la pantalla; el 8898 está abierto en la .47), (b) solo subir y que el
+usuario empiece desde la pantalla eligiendo carrete, (c) ver si `fileSlotId.json`
+(`/usr/data/config`, `"slotId" : "1;2;"` por archivo) es lo que lee `~M23`.
+
+**Detener por la red sí funciona al instante:** `~M26` → «CANCELING» en ~10 s y
+«CANCEL_BUILD» (calefactores a 0) a los ~23 s. Desde la pantalla tarda muchísimo (queja del
+usuario). Pinocchio debe ofrecer «Cancelar» con `~M26`.
+
 ## Dónde mirar
 
 - Código de Orca 2.4.2 ya descargado: `~/.cargo-target/orca/OrcaSlicer-2.4.2/src/slic3r/Utils/`
