@@ -141,8 +141,15 @@ El orden de las fases es el de urgencia: primero lo que pierde trabajo del usuar
 - [x] **Overlay entero rehecho en cada movimiento** [V] (`CadView.tsx:1096` → `CadViewer.ts:1222`):
   separar capa estática (sketch, regiones) de la vista previa; throttle a rAF de `hitTest`,
   `trimRemoved`, `extendAny` en `onPointerMove`.
-- [ ] **El sketch entero por IPC en cada arrastre** [V] (`cadUi.ts:518`). Medido: 1,3 MB de
+- [x] **El sketch entero por IPC en cada arrastre** [V] (`cadUi.ts:518`). Medido: 1,3 MB de
   JSON con 1125 entidades, ~3 ms en Rust; falta medir el lado de WebKit antes de cambiarlo.
+  **Hecho 2026-11-05**: `cad_sketch_drag` guarda el sketch al empezar (token) y cada paso manda
+  solo lo arrastrado (punto y destino, o curva con su corrimiento/radio desde el comienzo) y
+  recibe lo que cambió (puntos, radios, valores de cotas, informe): 1,5 MB → 418 bytes por paso
+  con la placa de 1125. `applyDragDelta` aplica sin clonar (objetos nuevos solo para lo tocado).
+  Regiones en cada paso hasta 300 entidades; con más, ocultas hasta soltar (`endDrag` resuelve
+  entero). Pruebas: `cad.rs` `drag_sends_only_what_changed` (mismo resultado que resolver todo),
+  `e2e/sketchDrag.test.mjs`. No medido en WebKit (se quitó el JSON grande de los dos lados).
 - [x] **`find_regions` cuadrático** [V] (`regions.rs:586`, `:682`, `cut_crossings ~217`;
   `system.rs:219` `decompose_indexed`): hash espacial, `probe` una vez por lazo, rejilla para cruces.
 - [x] **`sketch_assist` O(n²) memoria / O(n³) tiempo** [V] (`sketch_assist.rs:34,61`): por
@@ -173,8 +180,12 @@ El orden de las fases es el de urgencia: primero lo que pierde trabajo del usuar
 
   Pruebas: `sketch_robust.rs` (arrastre rápido con algo libre), `sketch_solver2.rs` (definir
   con piezas sueltas casi iguales). Falta probarlo en la app (colores y grosores del visor).
-  Queda: definir con relaciones en 1125 entidades iguales tarda 24 s (las iguales juntan todo
-  en un bloque de ~2700 variables: costo cúbico; haría falta QR ralo); IPC del arrastre.
+  Definir con relaciones en 1125 entidades iguales tardaba 24–35 s (las iguales juntan todo en
+  un bloque de ~2700 variables). **Hecho 2026-11-05**: la base de cada bloque guarda solo las
+  columnas libres (m×f ortonormal; cada fila nueva saca una con Householder) y `absorb` saca el
+  bloque en vez de copiarlo. Placa 1125 «definir»: 35,7 s → 1,65 s; 320 ent.: 603 → 17 ms;
+  mismos resultados (95/383/1349). Lo que queda es copiar al juntar bloques (con estos números
+  no hace falta QR ralo). U4 completo; falta probarlo en la app.
 
 ## U5 — Geometría y regiones correctas (medio)
 
