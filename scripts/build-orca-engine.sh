@@ -174,7 +174,9 @@ fi
 [[ "$STAGE" == deps ]] && exit 0
 
 PREFIX="$(native "$SRC/$PREFIX_REL/usr/local")"
-cmake -S . -B build "${GEN[@]}" -DCMAKE_BUILD_TYPE=Release -DSLIC3R_GUI=0 -DSLIC3R_STATIC=1 -DSLIC3R_PCH=0 \
+# Con cabecera precompilada, como el CI de Orca: en Windows el código de libslic3r cuenta
+# con que ella trae boost/filesystem y windows.h (sin ella no compila)
+cmake -S . -B build "${GEN[@]}" -DCMAKE_BUILD_TYPE=Release -DSLIC3R_GUI=0 -DSLIC3R_STATIC=1 -DSLIC3R_PCH=1 \
   "-DCMAKE_PREFIX_PATH=$PREFIX"
 if [[ "$OS" == windows ]]; then
   cmake --build build --config Release --target pinocchio-slicer "${BUILD_TOOL_ARGS[@]}"
