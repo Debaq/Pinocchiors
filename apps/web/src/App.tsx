@@ -86,7 +86,7 @@ import {
 } from "./lib/placement";
 import type { SceneStructure, MaterialInfo } from "./components/steps/StructureStep";
 import type { MaterialActions, MaterialPatch, NodePrimitive } from "./components/panels/MaterialPanel";
-import { WORKSPACES, createPipelineStore, type PipelineStepId, type WorkspaceId } from "./lib/pipeline";
+import { WORKSPACES, createPipelineStore, legacyStep, workspaceOf, type PipelineStepId, type WorkspaceId } from "./lib/pipeline";
 import { MaterialEditorPanel, type MaterialEditorTab } from "./components/layout/MaterialEditorPanel";
 
 /** Alt+número de cada espacio (fijo: agregar uno nuevo no cambia los demás) */
@@ -1125,6 +1125,9 @@ export const App: Component = () => {
   const setIsProcessing = (on: boolean) => setProcessingCount((n) => Math.max(0, n + (on ? 1 : -1)));
   /** Abriendo, importando o empezando de cero: el proyecto cambia debajo */
   const [switching, setSwitching] = createSignal(false);
+  // Abriendo un proyecto: el diseño se recalcula y la interfaz se rearma (puede
+  // tardar varios segundos); el Inicio no se muestra encima mientras tanto
+  const [opening, setOpening] = createSignal(false);
   /** Avisa y devuelve `true` si otra tarea larga está en curso */
   const blockedByTask = () => {
     if (!isProcessing() && !progress() && !switching()) return false;
@@ -8482,7 +8485,18 @@ export const App: Component = () => {
     }
 
     pipeline.setCompleted(ui.pipeline?.completed ?? ["import"]);
-    if (!undoing) pipeline.setActiveStep(ui.pipeline?.active ?? "structure");
+    if (!undoing) pipeline.setActiveStep(openingStep(ui.pipeline?.active));
+  };
+
+  /**
+   * Sección con la que se abre un proyecto. Una que pide malla (o Exportar,
+   * que no es de ningún espacio) sin modelo ni esqueleto dejaría el Inicio
+   * encima del proyecto: con un diseño, se abre en Diseñar
+   */
+  const openingStep = (saved: PipelineStepId | undefined): PipelineStepId => {
+    const step = legacyStep(saved ?? "structure");
+    if (hasWork() || workspaceOf(step)?.withoutModel) return step;
+    return saved && cad.doc() ? "design" : step;
   };
 
   /** Guarda en el archivo del proyecto; sin archivo (o con `as`) lo pregunta */
@@ -8532,13 +8546,18 @@ export const App: Component = () => {
     }
     let opened: ProjectOpened | undefined;
     setSwitching(true);
+    setOpening(true);
+    const stepBefore = pipeline.activeStep();
     try {
       opened = await busy(t("Abriendo proyecto..."), () => invoke<ProjectOpened>("open_project", { path }));
       // El diseño primero: la interfaz restaurada puede entrar a Diseñar, y
       // las piezas del recálculo anterior no deben mezclarse con los objetos nuevos
       cadUi.cancelSketch(false);
       await cad.reload();
+      // Si mientras se recalculaba el diseño se eligió otro espacio, se respeta
+      const chosen = pipeline.activeStep() !== stepBefore ? pipeline.activeStep() : undefined;
       await restoreProjectUi(opened.ui);
+      if (chosen) pipeline.setActiveStep(chosen);
       // La lista guardada reemplazó a la sincronizada con el recálculo: las piezas que falten se suman
       untrack(syncDesignObjects);
       // Proyecto de antes de los objetos: su modelo pasa a ser uno
@@ -8565,6 +8584,7 @@ export const App: Component = () => {
       }
     } finally {
       setSwitching(false);
+      setOpening(false);
     }
   };
 
@@ -9414,7 +9434,7 @@ export const App: Component = () => {
             </Show>
 
             {/* Welcome Screen overlay */}
-            <Show when={!hasWork() && pipeline.activeStep() !== "scan" && pipeline.workspace()?.id !== "rig" && !showCad()}>
+            <Show when={!hasWork() && !opening() && pipeline.activeStep() !== "scan" && pipeline.workspace()?.id !== "rig" && !showCad()}>
               <WelcomeScreen
                 onOpen={() => handleLoad({ projects: true })}
                 onScan={IS_ANDROID ? undefined : () => openScanEditor("capture")}
@@ -9440,7 +9460,7 @@ export const App: Component = () => {
             </Show>
 
             {/* Una sola barra, flotante: la del trabajo en curso o, en Diseñar, la del recálculo */}
-            <ProgressOverlay progress={progress() ?? (cadSlow() ? { label: t("Recalculando...") } : undefined)} />
+            <ProgressOverlay progress={progress() ?? (opening() ? { label: t("Abriendo proyecto...") } : cadSlow() ? { label: t("Recalculando...") } : undefined)} />
 
             {/* Con el panel derecho oculto, una pestaña para traerlo de vuelta */}
             <Show when={!showContextPanel()}>
