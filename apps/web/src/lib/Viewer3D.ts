@@ -28,6 +28,7 @@ import { skinAttributes, type AnimationLodData } from "./lod";
 import { isMotionFrame, MOTION_REST_MS, qualityScale } from "./adaptiveQuality";
 import { t as tr } from "./i18n.ts";
 import { GcodeView } from "./gcodeView";
+import { buildPrintBed, disposePrintBed } from "./printBed";
 import type { GcodePreview, GcodeViewOptions } from "./gcodePreview";
 
 installDqSkinning();
@@ -573,7 +574,11 @@ export class Viewer3D {
   /** Vista previa del gcode laminado (oculta el modelo mientras se ve) */
   private gcodeView: GcodeView | null = null;
   private gcodeData: GcodePreview | null = null;
-  private gcodeHid: { mesh: boolean; grid: boolean } | null = null;
+  private gcodeHid: { mesh: boolean } | null = null;
+  /** Cama de la impresora (Fabricar): tamaño en mm y su dibujo bajo el modelo */
+  private printBed: { size: [number, number, number]; group: THREE.Group } | null = null;
+  /** La grilla pedida por el usuario (se esconde sola con la cama o el gcode) */
+  private gridWanted = true;
   private placementPlanes: THREE.Mesh[] = [];
   private hoveredPlane = -1;
 
@@ -2967,17 +2972,16 @@ export class Viewer3D {
         this.gcodeView = new GcodeView(data, size);
         this.scene.add(this.gcodeView.group);
         if (!this.gcodeHid) {
-          this.gcodeHid = { mesh: this.meshGroup.visible, grid: this.grid.visible };
+          this.gcodeHid = { mesh: this.meshGroup.visible };
           this.meshGroup.visible = false;
-          this.grid.visible = false;
         }
         this.cameraRig.frame(this.gcodeView.bounds());
       } else if (this.gcodeHid) {
         this.meshGroup.visible = this.gcodeHid.mesh;
-        this.grid.visible = this.gcodeHid.grid;
         this.gcodeHid = null;
         this.fitCamera();
       }
+      this.placePrintBed();
     }
     this.gcodeView?.update(options);
   }
@@ -3466,7 +3470,55 @@ export class Viewer3D {
   }
 
   setGridVisible(visible: boolean): void {
-    this.grid.visible = visible;
+    this.gridWanted = visible;
+    this.applyGridVisible();
+  }
+
+  /** La grilla general se esconde mientras se ve la cama de la impresora o el gcode */
+  private applyGridVisible(): void {
+    this.grid.visible = this.gridWanted && !this.gcodeData && !this.printBed;
+  }
+
+  /** Cama de la impresora (mm: ancho, fondo, alto) bajo el modelo; `null` la quita */
+  setPrintBed(size: [number, number, number] | null): void {
+    const same = size && this.printBed && size.every((v, i) => v === this.printBed!.size[i]);
+    if (!same) {
+      if (this.printBed) {
+        this.scene.remove(this.printBed.group);
+        disposePrintBed(this.printBed.group);
+        this.printBed = null;
+      }
+      if (size && size[0] > 0 && size[1] > 0) {
+        const group = buildPrintBed(size[0], size[1], size[2], 0.6);
+        this.scene.add(group);
+        this.printBed = { size: [...size], group };
+      }
+    }
+    this.placePrintBed();
+  }
+
+  /** Centra la cama bajo el modelo, apoyada donde él se apoya, en las unidades de la escena */
+  private placePrintBed(): void {
+    this.applyGridVisible();
+    if (!this.printBed) return;
+    const { group, size } = this.printBed;
+    group.visible = !this.gcodeData;
+    // mm → unidades de la escena
+    const s = 1 / (this.gridUnits.metersPerUnit * 1000);
+    group.scale.setScalar(s);
+    let cx = 0;
+    let cz = 0;
+    let floor = 0;
+    if (this.currentMesh) {
+      const box = new THREE.Box3().setFromObject(this.currentMesh);
+      if (!box.isEmpty()) {
+        const c = box.getCenter(new THREE.Vector3());
+        cx = c.x;
+        cz = c.z;
+        floor = box.min.y;
+      }
+    }
+    group.position.set(cx - (size[0] * s) / 2, floor, cz + (size[1] * s) / 2);
   }
 
   /** Unidades de la grilla: en qué está el modelo y en qué se muestra */
@@ -3507,6 +3559,7 @@ export class Viewer3D {
     // Celda en unidades de la escena, para el ajuste a la grilla del gizmo
     this.gridStepScene = step / toUnit;
     this.applyTranslationSnap();
+    this.placePrintBed();
 
     const format = (v: number) => `${Number(v.toPrecision(6)).toLocaleString()} ${unitLabel}`;
     this.callbacks.onGridChanged?.(tr("Grilla: {step} · líneas mayores {major}", { step: format(step), major: format(major) }));

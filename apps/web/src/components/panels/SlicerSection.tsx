@@ -1,7 +1,7 @@
 import { Component, For, Show, createEffect, createResource, createSignal, on, onCleanup } from "solid-js";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
-import { Button, Checkbox, NumberInput, Select } from "../ui";
+import { Button, Checkbox, NumberInput, Panel, Select } from "../ui";
 import * as Icons from "../icons";
 import { fmtNumber, t } from "../../lib/i18n";
 import { tBackend } from "../../lib/i18nBackend.ts";
@@ -143,8 +143,25 @@ const BRIMS = [
 ] as const;
 
 // ═══════════════════════════════════════════════════════════════════════════
-// SECCIÓN
+// PANEL (a la izquierda del visor, ver layout/SlicerEditor.tsx)
 // ═══════════════════════════════════════════════════════════════════════════
+
+export type SlicerTab = "settings" | "preview";
+
+/** Tamaño de la cama del perfil de Orca (mm: ancho, fondo, alto) */
+export function slicerBed(config: Record<string, unknown> | undefined): [number, number, number] | undefined {
+  const area = config?.["printable_area"];
+  const points = (Array.isArray(area) ? area : typeof area === "string" ? area.split(",") : [])
+    .map((p) => String(p).split("x").map(Number))
+    .filter((p) => p.length === 2 && p.every(Number.isFinite));
+  if (points.length < 3) return undefined;
+  const xs = points.map((p) => p[0]);
+  const ys = points.map((p) => p[1]);
+  const w = Math.max(...xs) - Math.min(...xs);
+  const d = Math.max(...ys) - Math.min(...ys);
+  const h = parseFloat(first(config?.["printable_height"]));
+  return w > 0 && d > 0 ? [w, d, Number.isFinite(h) && h > 0 ? h : 0] : undefined;
+}
 
 export const SlicerSection: Component<{
   settings: SlicerSettings;
@@ -156,10 +173,12 @@ export const SlicerSection: Component<{
   /** Cuántas placas salen (de «Ver cómo quedan en la cama»), si se sabe */
   plateCount?: number;
   disabled?: boolean;
+  tab: SlicerTab;
+  onTab: (tab: SlicerTab) => void;
+  /** Cama de la impresora del laminador (para dibujarla en el visor) */
+  onBed?: (bed: [number, number, number] | undefined) => void;
 }> = (props) => {
-  const [open, setOpen] = createSignal(true);
   const [info] = createResource(() => invoke<SlicerInfo>("slicer_presets").catch(() => undefined));
-  const [showAdvanced, setShowAdvanced] = createSignal(false);
   const [busy, setBusy] = createSignal(false);
   const [progress, setProgress] = createSignal<Progress>();
   const [result, setResult] = createSignal<SliceResult>();
@@ -200,17 +219,31 @@ export const SlicerSection: Component<{
   };
   const changed = () => Object.keys(props.settings.overrides).length;
 
-  // Al cambiar de perfil, los cambios hechos sobre el anterior se descartan
-  createEffect(on([() => props.settings.process, () => props.settings.filament, () => props.settings.printer], () => setResult(undefined), { defer: true }));
+  // La cama de esta impresora se dibuja en el visor y es la que se usa para acomodar las piezas
+  const bed = () => slicerBed(base());
+  createEffect(() => props.onBed?.(bed()));
+  onCleanup(() => props.onBed?.(undefined));
+
+  // Al cambiar de perfil, el laminado anterior ya no vale
+  createEffect(
+    on([() => props.settings.process, () => props.settings.filament, () => props.settings.printer], () => {
+      setResult(undefined);
+      gcodePreview.setVisible(false);
+      props.onTab("settings");
+    }, { defer: true }),
+  );
 
   const plate = () => Math.min(props.settings.plate ?? 0, Math.max(0, (props.plateCount ?? 1) - 1));
 
   const slice = async () => {
-    const input = props.plateInput();
+    const plateInput = props.plateInput();
     const p = printer();
     const pr = process();
     const f = filament();
-    if (!input || !p || !pr || !f) return;
+    if (!plateInput || !p || !pr || !f) return;
+    // Las piezas se acomodan en la cama de la impresora del laminador
+    const b = bed();
+    const input = b ? { ...plateInput, printer: { ...(plateInput.printer as Record<string, unknown>), build_volume: b } } : plateInput;
     setBusy(true);
     setError(undefined);
     setSaved(undefined);
@@ -229,6 +262,7 @@ export const SlicerSection: Component<{
       });
       setResult(r);
       await showPreview(r);
+      props.onTab("preview");
     } catch (e) {
       const msg = typeof e === "string" ? tBackend(e) : String(e);
       if (!/cancelad/i.test(String(e))) setError(msg);
@@ -266,12 +300,180 @@ export const SlicerSection: Component<{
     }
   };
 
+  const int = (key: string, label: string, fallback: number, min: number, max: number, step = 1, suffix?: string) => (
+    <NumberInput label={t(label)} value={num(value(key), fallback)} onChange={(v) => setValue(key, String(Math.round(v)))} min={min} max={max} step={step} suffix={suffix} />
+  );
+
+  const settingsPanels = () => (
+    <div>
+      <div>
+        <Panel id="slicer.profile" dense title={t("Impresora y perfil")} icon={<Icons.Stack size={14} />} defaultOpen>
+          <div class="space-y-2 pb-3">
+            <Select
+              label={t("Impresora")}
+              options={printers().map((p) => ({ value: p.name, label: p.name }))}
+              value={printer()?.name}
+              onChange={(v) => set({ printer: v, process: undefined, filament: undefined, overrides: {} })}
+            />
+            <Select
+              label={t("Calidad")}
+              options={(printer()?.processes ?? []).map((p) => ({ value: p, label: shortName(p) }))}
+              value={process()}
+              onChange={(v) => set({ process: v, overrides: {} })}
+            />
+            <Select
+              label={t("Filamento")}
+              options={(printer()?.filaments ?? []).map((f) => ({ value: f, label: shortName(f) }))}
+              value={filament()}
+              onChange={(v) => set({ filament: v })}
+            />
+            <Show when={bed()}>
+              {(b) => (
+                <p class="text-[10px] text-text-dim">
+                  {t("Cama de {x} × {y} mm", { x: fmtNumber(b()[0]), y: fmtNumber(b()[1]) })}
+                  <Show when={b()[2] > 0}> · {t("alto {z} mm", { z: fmtNumber(b()[2]) })}</Show>
+                </p>
+              )}
+            </Show>
+            <Show when={changed() > 0}>
+              <button class="text-[11px] text-text-dim hover:underline" onClick={() => set({ overrides: {} })}>
+                {t("Volver al perfil ({n} cambios)", { n: changed() })}
+              </button>
+            </Show>
+          </div>
+        </Panel>
+      </div>
+      <Show when={base()}>
+        <div>
+          <Panel id="slicer.layers" dense title={t("Capas y paredes")} defaultOpen>
+            <div class="space-y-2 pb-3">
+              <NumberInput label={t("Altura de capa")} value={num(value("layer_height"), 0.2)} onChange={(v) => setValue("layer_height", String(v))} min={0.04} max={0.32} step={0.02} suffix="mm" />
+              {int("wall_loops", "Paredes", 2, 1, 10)}
+              {int("top_shell_layers", "Capas arriba", 5, 0, 20)}
+              {int("bottom_shell_layers", "Capas abajo", 3, 0, 20)}
+            </div>
+          </Panel>
+        </div>
+        <div>
+          <Panel id="slicer.infill" dense title={t("Relleno")} defaultOpen>
+            <div class="space-y-2 pb-3">
+              <NumberInput label={t("Relleno")} value={num(value("sparse_infill_density"), 15)} onChange={(v) => setValue("sparse_infill_density", `${Math.round(v)}%`)} min={0} max={100} step={5} suffix="%" />
+              <Select
+                label={t("Patrón de relleno")}
+                options={INFILL_PATTERNS.map(([value, label]) => ({ value, label: t(label) }))}
+                value={value("sparse_infill_pattern")}
+                onChange={(v) => setValue("sparse_infill_pattern", v)}
+              />
+            </div>
+          </Panel>
+        </div>
+        <div>
+          <Panel id="slicer.support" dense title={t("Soportes")} defaultOpen>
+            <div class="space-y-2 pb-3">
+              <Checkbox small label={t("Soportes")} checked={value("enable_support") === "1"} onChange={(v) => setValue("enable_support", v ? "1" : "0")} hint={t("Pone soportes debajo de los voladizos más inclinados que el ángulo límite.")} />
+              <Show when={value("enable_support") === "1"}>
+                <Select
+                  label={t("Tipo de soporte")}
+                  options={[
+                    { value: "normal(auto)", label: t("Normal") },
+                    { value: "tree(auto)", label: t("Árbol") },
+                  ]}
+                  value={value("support_type").startsWith("tree") ? "tree(auto)" : "normal(auto)"}
+                  onChange={(v) => setValue("support_type", v)}
+                />
+                {int("support_threshold_angle", "Ángulo límite", 30, 0, 90, 5, "°")}
+                <Checkbox small label={t("Solo apoyados en la cama")} checked={value("support_on_build_plate_only") === "1"} onChange={(v) => setValue("support_on_build_plate_only", v ? "1" : "0")} />
+              </Show>
+            </div>
+          </Panel>
+        </div>
+        <div>
+          <Panel id="slicer.adhesion" dense title={t("Adhesión y costura")} defaultOpen>
+            <div class="space-y-2 pb-3">
+              <Select label={t("Borde (brim)")} options={BRIMS.map(([value, label]) => ({ value, label: t(label) }))} value={value("brim_type")} onChange={(v) => setValue("brim_type", v)} />
+              <Select label={t("Costura")} options={SEAMS.map(([value, label]) => ({ value, label: t(label) }))} value={value("seam_position")} onChange={(v) => setValue("seam_position", v)} />
+            </div>
+          </Panel>
+        </div>
+        <div>
+          <Panel id="slicer.temps" dense title={t("Temperaturas")} defaultOpen>
+            <div class="space-y-2 pb-3">
+              {int("nozzle_temperature", "Temperatura boquilla", 220, 150, 320, 5, "°C")}
+              <NumberInput label={t("Temperatura cama")} value={num(props.settings.overrides["bed_temperature"] ?? first(base()?.["hot_plate_temp"]), 60)} onChange={(v) => setValue("bed_temperature", String(Math.round(v)))} min={0} max={120} step={5} suffix="°C" />
+            </div>
+          </Panel>
+        </div>
+        <div>
+          <Panel id="slicer.speed" dense title={t("Velocidad")} defaultOpen>
+            <div class="space-y-2 pb-3">
+              {int("outer_wall_speed", "Velocidad pared externa", 200, 10, 600, 10, "mm/s")}
+              {int("sparse_infill_speed", "Velocidad relleno", 270, 10, 600, 10, "mm/s")}
+            </div>
+          </Panel>
+        </div>
+        <div>
+          <Panel id="slicer.advanced" dense title={t("Avanzado")} defaultOpen={false}>
+            <div class="space-y-2 pb-3">
+              <p class="text-[10px] text-text-dim">{t("Cualquier ajuste de Orca, uno por línea: clave = valor (por ejemplo ironing_type = top).")}</p>
+              <textarea
+                class="w-full h-28 rounded border border-border bg-surface/30 p-1.5 font-mono text-[11px] text-text"
+                spellcheck={false}
+                value={props.settings.advanced ?? ""}
+                onChange={(e) => set({ advanced: e.currentTarget.value })}
+              />
+            </div>
+          </Panel>
+        </div>
+      </Show>
+    </div>
+  );
+
+  const previewPanels = () => (
+    <Show when={result()} fallback={<p class="text-[11px] text-text-dim">{t("Lamina la placa para ver capa por capa cómo se imprime.")}</p>}>
+      {(r) => (
+        <div>
+          <div>
+            <Panel id="slicer.summary" dense title={t("Resumen")} defaultOpen>
+              <div class="space-y-1 pb-3">
+                <ResultRow label={t("Tiempo estimado")} value={fmtTime(r().time_s)} />
+                <ResultRow
+                  label={t("Filamento")}
+                  value={`${fmtNumber(r().filament_mm / 1000, { maximumFractionDigits: 2 })} m · ${fmtNumber(r().filament_g, { maximumFractionDigits: 1 })} g`}
+                />
+                <ResultRow label={t("Capas")} value={String(r().layers)} />
+                <Show when={r().plates > 1}>
+                  <ResultRow label={t("Placa")} value={`${r().plate + 1} / ${r().plates}`} />
+                </Show>
+                <Show when={r().unplaced.length > 0}>
+                  <p class="text-[11px] text-red">{t("No caben en la cama: {names}", { names: r().unplaced.join(", ") })}</p>
+                </Show>
+                <For each={r().warnings}>{(w) => <p class="text-[11px] text-warning">{w}</p>}</For>
+                <div class="pt-1">
+                  <Button onClick={saveGcode} fullWidth size="sm" icon={<Icons.Download size={14} />}>
+                    {t("Guardar gcode")}
+                  </Button>
+                </div>
+                <Show when={saved()}>
+                  <p class="text-[10px] text-green truncate">{t("Guardado en {path}", { path: saved()! })}</p>
+                </Show>
+              </div>
+            </Panel>
+          </div>
+          <div>
+            <Panel id="slicer.layersView" dense title={t("Vista previa")} defaultOpen>
+              <div class="pb-3">
+                <PreviewControls result={r()} />
+              </div>
+            </Panel>
+          </div>
+        </div>
+      )}
+    </Show>
+  );
+
   return (
-    <div class="space-y-2 pt-2 border-t border-border/50">
-      <button class="flex w-full items-center justify-between" onClick={() => setOpen(!open())}>
-        <h4 class="text-xs font-semibold uppercase tracking-wider text-text-muted">{t("Laminar")}</h4>
-      </button>
-      <Show when={open()}>
+    <div class="flex flex-col h-full min-h-0">
+      <div class="flex-1 min-h-0 overflow-y-auto px-3 py-2">
         <Show
           when={info()?.available}
           fallback={
@@ -280,77 +482,14 @@ export const SlicerSection: Component<{
             </p>
           }
         >
-          <Select
-            label={t("Impresora")}
-            options={printers().map((p) => ({ value: p.name, label: p.name }))}
-            value={printer()?.name}
-            onChange={(v) => set({ printer: v, process: undefined, filament: undefined, overrides: {} })}
-          />
-          <Select
-            label={t("Calidad")}
-            options={(printer()?.processes ?? []).map((p) => ({ value: p, label: shortName(p) }))}
-            value={process()}
-            onChange={(v) => set({ process: v, overrides: {} })}
-          />
-          <Select
-            label={t("Filamento")}
-            options={(printer()?.filaments ?? []).map((f) => ({ value: f, label: shortName(f) }))}
-            value={filament()}
-            onChange={(v) => set({ filament: v })}
-          />
-
-          <Show when={base()}>
-            <NumberInput label={t("Altura de capa")} value={num(value("layer_height"), 0.2)} onChange={(v) => setValue("layer_height", String(v))} min={0.04} max={0.32} step={0.02} suffix="mm" />
-            <NumberInput label={t("Paredes")} value={num(value("wall_loops"), 2)} onChange={(v) => setValue("wall_loops", String(Math.round(v)))} min={1} max={10} step={1} />
-            <NumberInput label={t("Capas arriba")} value={num(value("top_shell_layers"), 5)} onChange={(v) => setValue("top_shell_layers", String(Math.round(v)))} min={0} max={20} step={1} />
-            <NumberInput label={t("Capas abajo")} value={num(value("bottom_shell_layers"), 3)} onChange={(v) => setValue("bottom_shell_layers", String(Math.round(v)))} min={0} max={20} step={1} />
-            <NumberInput label={t("Relleno")} value={num(value("sparse_infill_density"), 15)} onChange={(v) => setValue("sparse_infill_density", `${Math.round(v)}%`)} min={0} max={100} step={5} suffix="%" />
-            <Select
-              label={t("Patrón de relleno")}
-              options={INFILL_PATTERNS.map(([value, label]) => ({ value, label: t(label) }))}
-              value={value("sparse_infill_pattern")}
-              onChange={(v) => setValue("sparse_infill_pattern", v)}
-            />
-            <Checkbox small label={t("Soportes")} checked={value("enable_support") === "1"} onChange={(v) => setValue("enable_support", v ? "1" : "0")} hint={t("Pone soportes debajo de los voladizos más inclinados que el ángulo límite.")} />
-            <Show when={value("enable_support") === "1"}>
-              <Select
-                label={t("Tipo de soporte")}
-                options={[
-                  { value: "normal(auto)", label: t("Normal") },
-                  { value: "tree(auto)", label: t("Árbol") },
-                ]}
-                value={value("support_type").startsWith("tree") ? "tree(auto)" : "normal(auto)"}
-                onChange={(v) => setValue("support_type", v)}
-              />
-              <NumberInput label={t("Ángulo límite")} value={num(value("support_threshold_angle"), 30)} onChange={(v) => setValue("support_threshold_angle", String(Math.round(v)))} min={0} max={90} step={5} suffix="°" />
-              <Checkbox small label={t("Solo apoyados en la cama")} checked={value("support_on_build_plate_only") === "1"} onChange={(v) => setValue("support_on_build_plate_only", v ? "1" : "0")} />
-            </Show>
-            <Select label={t("Borde (brim)")} options={BRIMS.map(([value, label]) => ({ value, label: t(label) }))} value={value("brim_type")} onChange={(v) => setValue("brim_type", v)} />
-            <Select label={t("Costura")} options={SEAMS.map(([value, label]) => ({ value, label: t(label) }))} value={value("seam_position")} onChange={(v) => setValue("seam_position", v)} />
-            <NumberInput label={t("Temperatura boquilla")} value={num(value("nozzle_temperature"), 220)} onChange={(v) => setValue("nozzle_temperature", String(Math.round(v)))} min={150} max={320} step={5} suffix="°C" />
-            <NumberInput label={t("Temperatura cama")} value={num(props.settings.overrides["bed_temperature"] ?? first(base()?.["hot_plate_temp"]), 60)} onChange={(v) => setValue("bed_temperature", String(Math.round(v)))} min={0} max={120} step={5} suffix="°C" />
-            <NumberInput label={t("Velocidad pared externa")} value={num(value("outer_wall_speed"), 200)} onChange={(v) => setValue("outer_wall_speed", String(Math.round(v)))} min={10} max={600} step={10} suffix="mm/s" />
-            <NumberInput label={t("Velocidad relleno")} value={num(value("sparse_infill_speed"), 270)} onChange={(v) => setValue("sparse_infill_speed", String(Math.round(v)))} min={10} max={600} step={10} suffix="mm/s" />
-
-            <button class="text-[11px] text-accent hover:underline" onClick={() => setShowAdvanced(!showAdvanced())}>
-              {showAdvanced() ? t("Ocultar avanzado") : t("Avanzado")}
-            </button>
-            <Show when={showAdvanced()}>
-              <p class="text-[10px] text-text-dim">{t("Cualquier ajuste de Orca, uno por línea: clave = valor (por ejemplo ironing_type = top).")}</p>
-              <textarea
-                class="w-full h-24 rounded border border-border bg-surface/30 p-1.5 font-mono text-[11px] text-text"
-                spellcheck={false}
-                value={props.settings.advanced ?? ""}
-                onChange={(e) => set({ advanced: e.currentTarget.value })}
-              />
-            </Show>
-            <Show when={changed() > 0}>
-              <button class="text-[11px] text-text-dim hover:underline" onClick={() => set({ overrides: {} })}>
-                {t("Volver al perfil ({n} cambios)", { n: changed() })}
-              </button>
-            </Show>
-          </Show>
-
+          {/* Las secciones fluyen en columnas de ~280 px sin partirse (como Orizon3D) */}
+          <div class="[column-width:280px] [column-gap:1rem] [&>div>div]:break-inside-avoid [&>div>div]:mb-3">
+            {props.tab === "preview" ? previewPanels() : settingsPanels()}
+          </div>
+        </Show>
+      </div>
+      <Show when={info()?.available}>
+        <footer class="shrink-0 border-t border-border px-3 py-2 space-y-1.5">
           <Show when={(props.plateCount ?? 1) > 1}>
             <Select
               label={t("Placa")}
@@ -359,12 +498,11 @@ export const SlicerSection: Component<{
               onChange={(v) => set({ plate: Number(v) })}
             />
           </Show>
-
           <Show
             when={busy()}
             fallback={
               <Button onClick={slice} disabled={props.disabled || !props.plateInput()} fullWidth size="sm" variant="primary" icon={<Icons.Stack size={14} />}>
-                {t("Laminar")}
+                {result() ? t("Laminar de nuevo") : t("Laminar")}
               </Button>
             }
           >
@@ -378,39 +516,11 @@ export const SlicerSection: Component<{
               </Button>
             </div>
           </Show>
-
           <Show when={error()}>
             <p class="text-[11px] text-red">{error()}</p>
           </Show>
-
-          <Show when={result()}>
-            {(r) => (
-              <div class="space-y-1 p-2 rounded-md bg-surface/30 border border-border">
-                <ResultRow label={t("Tiempo estimado")} value={fmtTime(r().time_s)} />
-                <ResultRow
-                  label={t("Filamento")}
-                  value={`${fmtNumber(r().filament_mm / 1000, { maximumFractionDigits: 2 })} m · ${fmtNumber(r().filament_g, { maximumFractionDigits: 1 })} g`}
-                />
-                <ResultRow label={t("Capas")} value={String(r().layers)} />
-                <Show when={r().plates > 1}>
-                  <ResultRow label={t("Placa")} value={`${r().plate + 1} / ${r().plates}`} />
-                </Show>
-                <Show when={r().unplaced.length > 0}>
-                  <p class="text-[11px] text-red">{t("No caben en la cama: {names}", { names: r().unplaced.join(", ") })}</p>
-                </Show>
-                <PreviewControls result={r()} />
-                <For each={r().warnings}>{(w) => <p class="text-[11px] text-warning">{w}</p>}</For>
-                <Button onClick={saveGcode} fullWidth size="sm" icon={<Icons.Download size={14} />}>
-                  {t("Guardar gcode")}
-                </Button>
-                <Show when={saved()}>
-                  <p class="text-[10px] text-green truncate">{t("Guardado en {path}", { path: saved()! })}</p>
-                </Show>
-              </div>
-            )}
-          </Show>
           <p class="text-[10px] text-text-dim">{t("Motor de OrcaSlicer {v}", { v: info()?.orca_version ?? "" })}</p>
-        </Show>
+        </footer>
       </Show>
     </div>
   );

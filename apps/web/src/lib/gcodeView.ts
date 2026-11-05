@@ -9,6 +9,7 @@ import { LineSegments2 } from "three/addons/lines/LineSegments2.js";
 import { LineSegmentsGeometry } from "three/addons/lines/LineSegmentsGeometry.js";
 import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import { FEATURES, type GcodePreview, type GcodeViewOptions } from "./gcodePreview";
+import { buildPrintBed } from "./printBed";
 
 export class GcodeView {
   readonly group = new THREE.Group();
@@ -129,22 +130,6 @@ export class GcodeView {
 
   private buildBed(): THREE.Group {
     const [bx, by] = this.data.bed;
-    const group = new THREE.Group();
-    const plate = new THREE.Mesh(
-      new THREE.PlaneGeometry(bx, by).rotateX(-Math.PI / 2).translate(bx / 2, -0.01, -by / 2),
-      new THREE.MeshBasicMaterial({ color: 0x3a3d44, transparent: true, opacity: 0.85, side: THREE.DoubleSide, depthWrite: false }),
-    );
-    group.add(plate);
-    const outline = new THREE.LineLoop(
-      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(bx, 0, 0), new THREE.Vector3(bx, 0, -by), new THREE.Vector3(0, 0, -by)]),
-      new THREE.LineBasicMaterial({ color: 0x8a8f99 }),
-    );
-    group.add(outline);
-    // Cuadrícula cada 10 mm
-    const pts: THREE.Vector3[] = [];
-    for (let x = 10; x < bx; x += 10) pts.push(new THREE.Vector3(x, 0, 0), new THREE.Vector3(x, 0, -by));
-    for (let y = 10; y < by; y += 10) pts.push(new THREE.Vector3(0, 0, -y), new THREE.Vector3(bx, 0, -y));
-    group.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0x555a63, transparent: true, opacity: 0.6 })));
-    return group;
+    return buildPrintBed(bx, by);
   }
 }

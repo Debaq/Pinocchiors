@@ -4,7 +4,6 @@ import * as Icons from "../icons";
 import { fmtNumber, t, tx } from "../../lib/i18n";
 import { CalibrationWizard, type CalibrationApply } from "../layout/CalibrationWizard";
 import { SkinPanel, type SkinPanelProps } from "./SkinPanel";
-import { SlicerSection, defaultSlicer } from "./SlicerSection";
 import type { CutPlane } from "../../lib/printCuts.ts";
 import { saveCustomMaterial, saveCustomPrinter } from "../../lib/settings.ts";
 import {
@@ -116,6 +115,9 @@ export interface Print3DPanelProps {
   plateView?: { plate: number | null; busy?: boolean; onView: (plate: number | null) => void };
   onPreviewPlates?: (printer: PrinterProfile, material: MaterialProfile, settings: PlateSettings) => void;
   onExportPlates?: (printer: PrinterProfile, material: MaterialProfile, settings: PlateSettings) => void;
+  /** Abre el laminador (panel a la izquierda del visor) */
+  onOpenSlicer?: () => void;
+  slicerOpen?: boolean;
   /** Todo de una vez: verificar, dividir, uniones, vaciar y exportar */
   prepareReport?: PrepareReport;
   onPrepareAll?: (args: {
@@ -147,6 +149,36 @@ export interface SubdivideConfig {
 // ═══════════════════════════════════════════════════════════════════════════
 // HELPERS
 // ═══════════════════════════════════════════════════════════════════════════
+
+/** La impresora elegida en Fabricar (o la primera de fábrica) */
+export function prepPrinter(prep: PrepSettings, presets?: PrintPresets): PrinterProfile {
+  return prep.printer ?? presets?.printers[0] ?? { name: "Creality Ender 3", build_volume: [220, 220, 250], nozzle: 0.4, layer_height: 0.2 };
+}
+
+/** El material elegido en Fabricar (o el primero de fábrica) */
+export function prepMaterial(prep: PrepSettings, presets?: PrintPresets): MaterialProfile {
+  return prep.material ?? presets?.materials[0] ?? { name: "PLA", density: 1.24, max_overhang_deg: 50 };
+}
+
+/** Lo mismo que «Exportar para imprimir» (con vaciado), sin archivo: lo usa «Laminar» */
+export function prepPlateInput(prep: PrepSettings, presets?: PrintPresets) {
+  const plate = prep.plate;
+  const hollow = prep.hollow;
+  const drain = hollow && prep.drain;
+  return {
+    printer: prepPrinter(prep, presets),
+    material: prepMaterial(prep, presets),
+    format: "stl",
+    spacing: plate.spacing,
+    orient: plate.orient,
+    contour: plate.contour !== false,
+    hollow_wall: hollow ? prep.wall : null,
+    drain: drain ? prep.drainDiameter : null,
+    vent: drain && (prep.vent ?? false),
+    compensate: plate.compensate !== false,
+    path: "",
+  };
+}
 
 function formatMm(value: number): string {
   return value.toFixed(1);
@@ -206,10 +238,8 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
     setLocalPrep(next);
     props.onPrep?.(next);
   };
-  const printer = (): PrinterProfile =>
-    prep().printer ?? props.presets?.printers[0] ?? { name: "Creality Ender 3", build_volume: [220, 220, 250], nozzle: 0.4, layer_height: 0.2 };
-  const material = (): MaterialProfile =>
-    prep().material ?? props.presets?.materials[0] ?? { name: "PLA", density: 1.24, max_overhang_deg: 50 };
+  const printer = (): PrinterProfile => prepPrinter(prep(), props.presets);
+  const material = (): MaterialProfile => prepMaterial(prep(), props.presets);
   const setPrinterChoice = (printer: PrinterProfile) => patch({ printer });
   const setMaterialChoice = (material: MaterialProfile) => patch({ material });
   createEffect(() => props.onFabNeeded?.(printer(), material()));
@@ -229,21 +259,6 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
   const setDrainDiameter = (drainDiameter: number) => patch({ drainDiameter });
   const plate = () => prep().plate;
   const setPlate = (plate: PlateSettings) => patch({ plate });
-  /** Lo mismo que «Exportar para imprimir» (con vaciado), sin archivo: lo usa «Laminar» */
-  const plateInput = () => ({
-    printer: printer(),
-    material: material(),
-    format: "stl",
-    spacing: plate().spacing,
-    orient: plate().orient,
-    contour: plate().contour !== false,
-    hollow_wall: hollow() ? wall() : null,
-    drain: hollow() && drain() ? drainDiameter() : null,
-    vent: hollow() && drain() && vent(),
-    compensate: plate().compensate !== false,
-    path: "",
-  });
-
   // Asistente de calibración: lo que calcula se aplica a la impresora y al material elegidos
   const [calibrating, setCalibrating] = createSignal(false);
   const applyCalibration = (r: CalibrationApply) => {
@@ -617,14 +632,15 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
           hasPieces={!!props.subdivideResult}
           onExport={() => props.onExportPlates?.(printer(), material(), { ...plate(), hollowWall: hollow() ? wall() : null, drain: hollow() && drain() ? drainDiameter() : null, vent: hollow() && drain() && vent() })}
         />
-        <SlicerSection
-          settings={prep().slicer ?? defaultSlicer}
-          onSettings={(slicer) => patch({ slicer })}
-          printerName={printer().name}
-          plateInput={plateInput}
-          plateCount={props.platePreview?.plates.length}
-          disabled={props.isProcessing || !props.canAnalyze}
-        />
+        <Show when={props.onOpenSlicer}>
+          <div class="space-y-2 pt-2 border-t border-border/50">
+            <h4 class="text-xs font-semibold uppercase tracking-wider text-text-muted">{t("Laminar")}</h4>
+            <p class="text-[11px] text-text-dim">{t("Calidad, relleno, soportes y temperaturas en un panel aparte, con la vista previa capa por capa.")}</p>
+            <Button onClick={() => props.onOpenSlicer?.()} fullWidth size="sm" variant={props.slicerOpen ? "primary" : "default"} icon={<Icons.Stack size={14} />}>
+              {props.slicerOpen ? t("Laminador abierto a la izquierda") : t("Abrir el laminador")}
+            </Button>
+          </div>
+        </Show>
         <PrepareAllSection
           withJoints={prep().prepareJoints ?? true}
           onWithJoints={(prepareJoints) => patch({ prepareJoints })}

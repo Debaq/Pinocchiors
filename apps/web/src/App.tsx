@@ -137,6 +137,8 @@ import { composeSheet, type RenderStillOptions, type SheetCell, type StillImage 
 import { formatEta, renderRay, renderRayAnimation, type RayProgress } from "./lib/rayRender";
 import { cameraZoom, defaultRenderSettings, renderLayout, renderPixels, type RenderSettings } from "./components/steps/RenderStep";
 import { RenderEditor } from "./components/layout/RenderEditor";
+import { SlicerEditor } from "./components/layout/SlicerEditor";
+import { defaultSlicer, type SlicerTab } from "./components/panels/SlicerSection";
 
 interface ProjectSaved {
   written: boolean;
@@ -322,6 +324,7 @@ import type {
   PrepSettings,
 } from "./components/panels/Print3DPanel";
 import { defaultPrep, jointShapeConfig } from "./components/panels/PrintPrepPanel";
+import { prepPlateInput, prepPrinter } from "./components/panels/Print3DPanel";
 import { planeQuad, uiBounds } from "./lib/printCuts.ts";
 import { defaultSkinImage, type SkinEstimate, type SkinImageSettings, type SkinPattern, type SkinZone } from "./components/panels/SkinPanel";
 import { DESIGN_FORMATS, IMAGE_FORMATS, SKELETON_FORMATS, defaultExportOptions, formatBytes, type ExportOptions } from "./components/steps/ExportStep";
@@ -5917,6 +5920,27 @@ export const App: Component = () => {
     const width = splitRef?.clientWidth ?? 1;
     startDrag(e, "col-resize", (dx) => setRenderEditorFraction(Math.min(0.6, Math.max(0.2, start + dx / width))));
   };
+  // ── Laminar: panel a la izquierda del visor en Fabricar ──
+  const inPrint = () => pipeline.workspace()?.id === "print";
+  const [slicerEditorOpen, setSlicerEditorOpen] = createPersisted("slicerEditor.open", false);
+  const [slicerEditorFraction, setSlicerEditorFraction] = createPersisted("slicerEditor.fraction", 0.3);
+  const [slicerTab, setSlicerTab] = createSignal<SlicerTab>("settings");
+  const [slicerBedSize, setSlicerBedSize] = createSignal<[number, number, number]>();
+  const slicerEditorVisible = () => inPrint() && slicerEditorOpen() && !textureEditor();
+  const resizeSlicerEditor = (e: PointerEvent) => {
+    const start = slicerEditorFraction();
+    const width = splitRef?.clientWidth ?? 1;
+    startDrag(e, "col-resize", (dx) => setSlicerEditorFraction(Math.min(0.6, Math.max(0.2, start + dx / width))));
+  };
+  // En Fabricar el modelo se ve sobre la cama de la impresora: la del laminador si está
+  // abierto (su perfil de Orca), si no la elegida en Fabricar
+  createEffect(() => {
+    const v = viewer();
+    if (!v) return;
+    const bed = inPrint() ? ((slicerEditorVisible() && slicerBedSize()) || prepPrinter(printPrep(), printPresets()).build_volume) : undefined;
+    v.setPrintBed(bed ? [bed[0], bed[1], bed[2]] : null);
+  });
+
   /** Abre el espacio Render; con `format`, ya con ese formato de imagen elegido */
   const openRender = (format?: RenderSettings["format"]) => {
     if (!viewer() || !hasWork() || inDesign()) return;
@@ -9261,6 +9285,24 @@ export const App: Component = () => {
             </div>
             <div class="shrink-0 w-1 cursor-col-resize bg-border hover:bg-accent/50 transition-colors" onPointerDown={resizeRenderEditor} />
           </Show>
+          {/* Laminador a la izquierda del visor (Fabricar) */}
+          <Show when={slicerEditorVisible()}>
+            <div class="shrink-0 min-w-0 border-r border-border" style={{ width: `${100 * slicerEditorFraction()}%` }}>
+              <SlicerEditor
+                settings={printPrep().slicer ?? defaultSlicer}
+                onSettings={(slicer) => setPrintPrep({ ...printPrep(), slicer })}
+                printerName={prepPrinter(printPrep(), printPresets()).name}
+                plateInput={() => prepPlateInput(printPrep(), printPresets())}
+                plateCount={platePreview()?.plates.length}
+                disabled={isProcessing() || !meshLoaded()}
+                tab={slicerTab()}
+                onTab={setSlicerTab}
+                onBed={setSlicerBedSize}
+                onClose={() => setSlicerEditorOpen(false)}
+              />
+            </div>
+            <div class="shrink-0 w-1 cursor-col-resize bg-border hover:bg-accent/50 transition-colors" onPointerDown={resizeSlicerEditor} />
+          </Show>
           {/* Editor de texturas a la izquierda del visor */}
           <Show when={!inMaterialsWorkspace() ? textureEditor() : undefined}>
             {(selection) => (
@@ -9803,6 +9845,8 @@ export const App: Component = () => {
               plateView: { plate: plateViewIndex(), busy: plateViewBusy(), onView: setPlateViewIndex },
               onPreviewPlates: handlePreviewPlates,
               onExportPlates: handleExportPlates,
+              onOpenSlicer: () => setSlicerEditorOpen(true),
+              slicerOpen: slicerEditorVisible(),
               selection: {
                 objects: selectedObjects().map((o) => ({ id: o.id, name: o.name })),
                 revision: selectedObjects().map((o) => `${o.id}:${o.rev ?? 0}`).join(",") + `|${meshRevision()}`,
