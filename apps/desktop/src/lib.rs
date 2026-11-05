@@ -290,6 +290,7 @@ pub fn run() {
             cad::cad_preview,
             cad::cad_evaluate,
             cad::cad_solve_sketch,
+            cad::cad_sketch_drag,
             cad::cad_sketch_suggest,
             cad::cad_gear_info,
             cad::cad_gear_design,

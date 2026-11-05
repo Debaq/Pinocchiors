@@ -47,6 +47,8 @@ import {
   type Projected,
   type SketchUse,
   type ProjectedEdge,
+  type DragOp,
+  applyDragDelta,
   type Region,
   type ScanDeviation,
   type FitRange,
@@ -480,7 +482,13 @@ export function createCadUi(store: CadStore) {
   // Resolver de a uno: mientras se arrastra no se encolan pedidos
   let solving = false;
   let pendingDrag: [number, P2] | null = null;
-  let pendingMove: Sketch | null = null;
+  let pendingMove: { op: DragOp; from: Sketch } | null = null;
+  // Arrastre que guarda el sketch en el backend (`cad_sketch_drag`): cada paso
+  // manda solo lo arrastrado y recibe lo que cambió. `base` es el sketch de la
+  // sesión que refleja lo que el backend tiene (si la sesión cambió por otro
+  // lado, se vuelve a mandar entero)
+  let dragLive: { token: number; base: Sketch } | undefined;
+  let dragTokens = 0;
   // Deshacer dentro del sketch: el sketch antes de cada cambio (un arrastre
   // entero es un solo paso)
   let past: Sketch[] = [];
@@ -515,6 +523,8 @@ export function createCadUi(store: CadStore) {
     generation++;
     dragSaved = false;
     pendingDrag = null;
+    pendingMove = null;
+    dragLive = undefined;
     const ids = new Set([...sketch.points.map((p) => p.id), ...sketch.entities.map((e) => e.id)]);
     batch(() => {
       setSession({ ...s, sketch });
@@ -524,6 +534,62 @@ export function createCadUi(store: CadStore) {
       setSketchRestored((n) => n + 1);
     });
     void solve(clone(sketch));
+  };
+
+  /** Arrastre rápido (sin diagnóstico): lo libre y las flechas del último completo */
+  const quickReport = (prev: SolveReport | undefined, r: SolveReport): SolveReport =>
+    // (si el anterior había fallado, no hay de dónde copiar: va el del arrastre)
+    r.quick && prev && prev.status !== "failed"
+      ? {
+          ...r,
+          // El estado y los grados del arrastre cuentan el punto arrastrado como fijo
+          status: prev.status,
+          dof: prev.dof,
+          free_points: prev.free_points,
+          free_entities: prev.free_entities,
+          free_dirs: prev.free_dirs,
+          entity_dof: prev.entity_dof,
+          free_radius: prev.free_radius,
+        }
+      : r;
+  /** Una restricción nueva que no se puede usar: por qué (las de antes ya se avisaron) */
+  const warnInvalid = (prev: SolveReport | undefined, report: SolveReport) => {
+    const fresh = (report.invalid ?? []).filter(([i]) => !(prev?.invalid ?? []).some(([j]) => j === i));
+    if (fresh.length) setMessage(tr("Hay restricciones que no se pueden usar (en rojo): {e}", { e: tBackend(fresh[0][1]) }));
+  };
+
+  /**
+   * Un paso de arrastre por `cad_sketch_drag`: al empezar (o si la sesión
+   * cambió por otro lado) manda el sketch entero (`start`, o el de la sesión);
+   * después solo lo arrastrado. Con sketches grandes las regiones no vienen:
+   * se ocultan hasta soltar (`endDrag` resuelve entero)
+   */
+  const dragStep = async (op: DragOp, start?: Sketch) => {
+    const s = session();
+    if (!s) return;
+    const asked = generation;
+    const fresh = !dragLive || dragLive.base !== s.sketch;
+    const token = fresh ? ++dragTokens : dragLive!.token;
+    const base = fresh && start ? start : s.sketch;
+    try {
+      const d = await store.dragSketch(token, fresh ? base : null, op);
+      if (asked !== generation) return;
+      const now = session();
+      // Otro cambio en el medio: lo de este paso ya no vale (el próximo manda todo)
+      if (!now || now.feature !== s.feature || now.sketch !== s.sketch) {
+        dragLive = undefined;
+        return;
+      }
+      const sketch = applyDragDelta(base, d);
+      dragLive = { token, base: sketch };
+      const report = quickReport(now.report, d.report);
+      setSession({ ...now, sketch, report, regions: d.regions ?? [] });
+      warnInvalid(now.report, report);
+    } catch (e) {
+      dragLive = undefined;
+      if (asked !== generation) return;
+      setMessage(tBackend(String(e)));
+    }
   };
 
   const solve = async (sketch: Sketch, drag?: [number, P2]) => {
@@ -540,27 +606,9 @@ export function createCadUi(store: CadStore) {
       });
       const now = session();
       if (now && now.feature === s.feature) {
-        // Arrastre rápido (sin diagnóstico): lo libre y las flechas del último completo
-        const prev = now.report;
-        const report: SolveReport =
-          // (si el anterior había fallado, no hay de dónde copiar: va el del arrastre)
-          r.report.quick && prev && prev.status !== "failed"
-            ? {
-                ...r.report,
-                // El estado y los grados del arrastre cuentan el punto arrastrado como fijo
-                status: prev.status,
-                dof: prev.dof,
-                free_points: prev.free_points,
-                free_entities: prev.free_entities,
-                free_dirs: prev.free_dirs,
-                entity_dof: prev.entity_dof,
-                free_radius: prev.free_radius,
-              }
-            : r.report;
+        const report = quickReport(now.report, r.report);
         setSession({ ...now, sketch: r.sketch, report, regions: r.regions });
-        // Una restricción nueva que no se puede usar: por qué (las de antes ya se avisaron)
-        const fresh = (report.invalid ?? []).filter(([i]) => !(prev?.invalid ?? []).some(([j]) => j === i));
-        if (fresh.length) setMessage(tr("Hay restricciones que no se pueden usar (en rojo): {e}", { e: tBackend(fresh[0][1]) }));
+        warnInvalid(now.report, report);
       }
     } catch (e) {
       // Un error de un pedido viejo (deshecho después) no se muestra
@@ -953,29 +1001,23 @@ export function createCadUi(store: CadStore) {
         dragSaved = true;
         remember(s.sketch);
       }
-      const next = clone(from);
-      const e = next.entities.find((x) => x.id === id);
+      const e = from.entities.find((x) => x.id === id);
       if (!e) return;
+      let radius: number | undefined;
       if (e.geometry.type === "circle") {
-        const c = next.points.find((p) => p.id === (e.geometry as { center: number }).center)!;
-        e.geometry.radius = Math.max(1e-6, Math.hypot(at[0] - c.x, at[1] - c.y));
-      } else
-        for (const pid of geometryPoints(e.geometry)) {
-          const p = next.points.find((q) => q.id === pid);
-          if (p) [p.x, p.y] = [p.x + delta[0], p.y + delta[1]];
-        }
-      pendingMove = next;
+        const c = from.points.find((p) => p.id === (e.geometry as { center: number }).center)!;
+        radius = Math.max(1e-6, Math.hypot(at[0] - c.x, at[1] - c.y));
+      }
+      // Desde donde estaba al empezar (el backend guarda `from` en el primer paso)
+      pendingMove = { op: { kind: "entity", entity: id, delta, radius }, from };
       if (solving) return;
       solving = true;
       try {
         while (pendingMove) {
-          const sk = pendingMove;
+          const m = pendingMove;
           pendingMove = null;
-          const now = session();
-          if (!now) break;
-          generation++;
-          setSession({ ...now, sketch: sk });
-          await solve(sk);
+          if (!session()) break;
+          await dragStep(m.op, m.from);
         }
       } finally {
         solving = false;
@@ -988,7 +1030,10 @@ export function createCadUi(store: CadStore) {
         // Después del último pedido del arrastre
         while (solving) await new Promise((r) => setTimeout(r, 16));
         const s = session();
-        if (s?.report?.quick) await solve(clone(s.sketch));
+        // Arrastre por pasos: faltan las regiones (sketches grandes) y el diagnóstico completo
+        const live = dragLive !== undefined;
+        dragLive = undefined;
+        if (s && (live || s.report?.quick)) await solve(clone(s.sketch));
       })();
     },
 
@@ -1006,9 +1051,8 @@ export function createCadUi(store: CadStore) {
         while (pendingDrag) {
           const d = pendingDrag;
           pendingDrag = null;
-          const s = session();
-          if (!s) break;
-          await solve(s.sketch, d);
+          if (!session()) break;
+          await dragStep({ kind: "point", point: d[0], target: d[1] });
         }
       } finally {
         solving = false;

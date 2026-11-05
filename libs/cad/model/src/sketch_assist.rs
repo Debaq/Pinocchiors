@@ -22,10 +22,11 @@ pub struct Suggestion {
 
 /// Movimientos que el sketch todavía permite, por bloques: cada grupo de
 /// puntos unido por ecuaciones tiene su base (columnas de `basis`, sobre sus
-/// variables), proyectada a medida que se suman ecuaciones (nunca se achica
-/// la matriz: las columnas abarcan el espacio y `basis·basisᵀ` es su
-/// proyector). Una ecuación que une dos grupos los junta. Una base densa de
-/// todo el sketch eran gigas y minutos con mil entidades.
+/// variables, ortonormales: una por movimiento que queda), que pierde una
+/// columna con cada fila nueva (`basis·basisᵀ` es el proyector). Una ecuación
+/// que une dos grupos los junta. Una base densa de todo el sketch eran gigas
+/// y minutos con mil entidades; con las columnas de m×m (sin achicar) juntar
+/// mil círculos iguales tardaba 35 s.
 struct Freedom {
     points: Vec<Point2>,
     /// Bloque de cada variable
@@ -40,6 +41,7 @@ struct Freedom {
 struct Block {
     /// Variables del bloque, en orden
     vars: Vec<usize>,
+    /// Variables × movimientos libres (columnas ortonormales)
     basis: nalgebra::DMatrix<f64>,
     /// Ecuaciones (del solver) que tiene sumadas
     eqs: usize,
@@ -145,24 +147,28 @@ impl Freedom {
         out
     }
 
-    /// Los bloques que tocan unas filas, juntos en uno (sin guardarlo).
-    fn merged(&self, rows: &[Row]) -> (Vec<usize>, Block) {
+    /// Los bloques que tocan unas filas, sacados de su lugar y juntos en uno
+    /// (sin copiar el bloque si es uno solo: con miles de variables, copiarlo
+    /// en cada ecuación era lo que más tardaba).
+    fn take_merged(&mut self, rows: &[Row]) -> (Vec<usize>, Block) {
         let mut ids: Vec<usize> = rows.iter().flatten().map(|&(v, _)| self.of[v]).collect();
         ids.sort_unstable();
         ids.dedup();
-        let parts: Vec<&Block> = ids.iter().filter_map(|&k| self.blocks[k].as_ref()).collect();
-        if let [one] = parts.as_slice() {
-            return (ids, (*one).clone());
+        let mut parts: Vec<Block> = ids.iter().filter_map(|&k| self.blocks[k].take()).collect();
+        if parts.len() == 1 {
+            return (ids, parts.pop().unwrap());
         }
         let m: usize = parts.iter().map(|b| b.vars.len()).sum();
+        let cols: usize = parts.iter().map(|b| b.basis.ncols()).sum();
         let mut vars = Vec::with_capacity(m);
-        let mut basis = nalgebra::DMatrix::zeros(m, m);
-        let mut at = 0;
+        let mut basis = nalgebra::DMatrix::zeros(m, cols);
+        let (mut at, mut col) = (0, 0);
         for b in &parts {
-            let k = b.vars.len();
-            basis.view_mut((at, at), (k, k)).copy_from(&b.basis);
+            let (k, c) = (b.vars.len(), b.basis.ncols());
+            basis.view_mut((at, col), (k, c)).copy_from(&b.basis);
             vars.extend_from_slice(&b.vars);
             at += k;
+            col += c;
         }
         let eqs = parts.iter().map(|b| b.eqs).sum();
         let free = parts.iter().map(|b| b.free).sum();
@@ -202,7 +208,7 @@ impl Freedom {
         let mut total = 0;
         for &k in &ids {
             start.insert(k, total);
-            total += self.blocks[k].as_ref().map_or(0, |b| b.vars.len());
+            total += self.blocks[k].as_ref().map_or(0, |b| b.basis.ncols());
         }
         let mut qs: Vec<nalgebra::DVector<f64>> = Vec::new();
         let mut gained = 0;
@@ -217,8 +223,7 @@ impl Freedom {
                 let k = self.of[v];
                 let Some(b) = self.blocks[k].as_ref() else { continue };
                 let (off, i) = (start[&k], self.local[v]);
-                let n = b.vars.len();
-                for j in 0..n {
+                for j in 0..b.basis.ncols() {
                     m[off + j] += d * b.basis[(i, j)];
                 }
             }
@@ -241,7 +246,7 @@ impl Freedom {
         if rows.iter().all(|r| r.is_empty()) {
             return 0;
         }
-        let (ids, mut block) = self.merged(&rows);
+        let (ids, mut block) = self.take_merged(&rows);
         let gained = Self::project_rows(&mut block, &rows, 1e-6);
         block.eqs += eqs.len();
         block.free = block.free.saturating_sub(gained);
@@ -274,10 +279,21 @@ fn project(basis: &mut nalgebra::DMatrix<f64>, row: &nalgebra::DVector<f64>, min
     if mn / norm < min {
         return false;
     }
-    let q = m / mn;
-    let nq = &*basis * &q;
-    // En el lugar (sin armar la matriz nq·qᵀ)
-    basis.ger(-1.0, &nq, &q, 1.0);
+    // Reflexión de Householder H (H·q = s·e_último): B·H tiene las mismas
+    // columnas ortonormales y la última es la dirección que se quita (s·B·q)
+    let mut u = m / mn;
+    let f = u.len();
+    let s = if u[f - 1] >= 0.0 { -1.0 } else { 1.0 };
+    u[f - 1] -= s;
+    let un = u.norm();
+    if un > 1e-15 {
+        u /= un;
+        let bu = &*basis * &u;
+        basis.ger(-2.0, &bu, &u, 1.0);
+    }
+    let cols = basis.ncols();
+    let taken = std::mem::replace(basis, nalgebra::DMatrix::zeros(0, 0));
+    *basis = taken.remove_column(cols - 1);
     true
 }
 

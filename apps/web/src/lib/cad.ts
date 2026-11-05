@@ -1789,6 +1789,49 @@ export interface SolvedSketch {
   regions: Region[];
 }
 
+/** Qué se arrastra en el sketch (`cad_sketch_drag`) */
+export type DragOp = { kind: "point"; point: number; target: P2 } | { kind: "entity"; entity: number; delta: P2; radius?: number };
+
+/** Lo que cambió en un paso de arrastre: puntos, radios y valores de cotas (más el informe) */
+export interface DragDelta {
+  points: [number, number, number][];
+  radii: [number, number][];
+  values: [number, number][];
+  report: SolveReport;
+  /** Solo con sketches chicos; con grandes, al soltar */
+  regions?: Region[];
+}
+
+/**
+ * El sketch con un paso de arrastre aplicado, sin copiar lo que no cambió
+ * (con miles de entidades, clonar todo en cada movimiento pesa): arreglos
+ * nuevos y objetos nuevos solo para lo tocado. Las fórmulas de las cotas quedan.
+ */
+export function applyDragDelta(sk: Sketch, d: Pick<DragDelta, "points" | "radii" | "values">): Sketch {
+  const next: Sketch = { ...sk };
+  if (d.points.length) {
+    const at = new Map(d.points.map(([id, x, y]) => [id, [x, y] as P2]));
+    next.points = sk.points.map((p) => {
+      const q = at.get(p.id);
+      return q ? { ...p, x: q[0], y: q[1] } : p;
+    });
+  }
+  if (d.radii.length) {
+    const r = new Map(d.radii);
+    next.entities = sk.entities.map((e) => (e.geometry.type === "circle" && r.has(e.id) ? { ...e, geometry: { ...e.geometry, radius: r.get(e.id)! } } : e));
+  }
+  if (d.values.length) {
+    const v = new Map(d.values);
+    next.constraints = sk.constraints.map((c, i) => {
+      if (!v.has(i)) return c;
+      // El ángulo va en grados con su signo (como lo da el solver)
+      if (c.type === "angle") return { ...c, degrees: v.get(i)! };
+      return "value" in c ? ({ ...c, value: v.get(i)! } as SketchConstraint) : c;
+    });
+  }
+  return next;
+}
+
 /** Malla del sólido para el visor (`cad_mesh`) */
 // ─── Desviación escaneo ↔ diseño ──────────────────────────────────────────
 
@@ -5095,6 +5138,8 @@ export function createCadStore() {
     /** Entidades de otro sketch (ya calculado) en este plano */
     projectSketch: (feature: number, plane: Plane) => invoke<(Projected & { entity: number })[]>("cad_project_sketch", { feature, plane }),
     solveSketch: (sketch: Sketch, drag?: [number, P2]) => invoke<SolvedSketch>("cad_solve_sketch", { sketch, drag: drag ?? null }),
+    /** Un paso de arrastre: el sketch va solo al empezar (token nuevo); vuelve lo que cambió */
+    dragSketch: (token: number, sketch: Sketch | null, op: DragOp) => invoke<DragDelta>("cad_sketch_drag", { token, sketch, op }),
     /** Relaciones casi cumplidas y cotas que faltan (solo las que restringen algo) */
     suggestSketch: (sketch: Sketch) => invoke<SketchSuggestion[]>("cad_sketch_suggest", { sketch }),
     /** Lo que define el sketch entero (cotas con lo que mide; con `relations`, también las relaciones casi cumplidas) */

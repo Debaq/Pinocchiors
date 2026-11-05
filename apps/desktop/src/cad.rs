@@ -958,6 +958,107 @@ pub fn solve_sketch_impl(mut sketch: Sketch, drag: Option<(u32, [f64; 2])>) -> R
     Ok(SolvedSketch { sketch, report, regions })
 }
 
+/// Arrastre en curso en el sketch: el sketch del comienzo (una curva entera
+/// se corre desde donde estaba) y el último que tiene la ventana (se manda
+/// solo lo que cambió: con miles de entidades, mandar el sketch entero en
+/// cada movimiento pesa más que resolverlo).
+struct DragCache {
+    token: u64,
+    start: Sketch,
+    last: Sketch,
+}
+
+static DRAG: Mutex<Option<DragCache>> = Mutex::new(None);
+
+/// Qué se arrastra.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DragOp {
+    /// Un punto hacia `target` (sigue desde el último estado).
+    Point { point: u32, target: [f64; 2] },
+    /// Una curva entera: sus puntos corridos `delta` desde el comienzo del
+    /// arrastre, o un círculo con radio `radius`; después se resuelve todo.
+    Entity { entity: u32, delta: [f64; 2], radius: Option<f64> },
+}
+
+/// Lo que cambió respecto de lo que tiene la ventana.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct DragDelta {
+    /// (id, x, y) de los puntos que se movieron.
+    pub points: Vec<(u32, f64, f64)>,
+    /// (entidad, radio) de los círculos que cambiaron de radio.
+    pub radii: Vec<(u32, f64)>,
+    /// (índice, valor) de las cotas cuyo valor cambió (las de referencia miden).
+    pub values: Vec<(usize, f64)>,
+    pub report: Option<SolveReport>,
+    /// Regiones, solo con sketches chicos (con grandes pesan: se piden al soltar).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub regions: Option<Vec<Region>>,
+}
+
+/// Hasta cuántas entidades el arrastre trae las regiones en cada paso
+const DRAG_REGIONS_UP_TO: usize = 300;
+
+fn drag_delta(before: &Sketch, after: &Sketch) -> DragDelta {
+    let old: HashMap<u32, [f64; 2]> = before.points.iter().map(|p| (p.id, [p.x, p.y])).collect();
+    let points = after.points.iter().filter(|p| old.get(&p.id).is_none_or(|q| q[0] != p.x || q[1] != p.y)).map(|p| (p.id, p.x, p.y)).collect();
+    let radius = |g: &cad_model::Geometry| if let cad_model::Geometry::Circle { radius, .. } = g { Some(*radius) } else { None };
+    let old_r: HashMap<u32, f64> = before.entities.iter().filter_map(|e| radius(&e.geometry).map(|r| (e.id, r))).collect();
+    let radii = after.entities.iter().filter_map(|e| radius(&e.geometry).filter(|r| old_r.get(&e.id) != Some(r)).map(|r| (e.id, r))).collect();
+    let values = after
+        .constraints
+        .iter()
+        .enumerate()
+        .filter_map(|(i, c)| c.value().filter(|v| before.constraints.get(i).and_then(|b| b.value()) != Some(*v)).map(|v| (i, v)))
+        .collect();
+    DragDelta { points, radii, values, report: None, regions: None }
+}
+
+/// Un paso de un arrastre. `sketch` va solo al empezar (con un `token`
+/// nuevo); los pasos siguientes mandan el mismo `token` y lo arrastrado.
+/// Devuelve lo que cambió; las regiones se piden al soltar (`cad_solve_sketch`).
+#[tauri::command]
+pub async fn cad_sketch_drag(token: u64, sketch: Option<Sketch>, op: DragOp) -> Result<DragDelta, String> {
+    off_main(move || sketch_drag_impl(token, sketch, op)).await
+}
+
+pub fn sketch_drag_impl(token: u64, sketch: Option<Sketch>, op: DragOp) -> Result<DragDelta, String> {
+    let mut guard = DRAG.lock().unwrap();
+    if let Some(s) = sketch {
+        *guard = Some(DragCache { token, start: s.clone(), last: s });
+    }
+    let cache = guard.as_mut().filter(|c| c.token == token).ok_or("El arrastre ya no está: volver a empezarlo")?;
+    let mut next = match &op {
+        DragOp::Point { .. } => cache.last.clone(),
+        DragOp::Entity { .. } => cache.start.clone(),
+    };
+    let report = match op {
+        DragOp::Point { point, target } => next.solve_drag(point, target),
+        DragOp::Entity { entity, delta, radius } => {
+            let g = next.entity(entity).map_err(|e| e.to_string())?.geometry.clone();
+            if let (cad_model::Geometry::Circle { .. }, Some(r)) = (&g, radius) {
+                if let Some(cad_model::Geometry::Circle { radius, .. }) = next.entities.iter_mut().find(|e| e.id == entity).map(|e| &mut e.geometry) {
+                    *radius = r.max(1e-6);
+                }
+            } else {
+                for id in g.point_ids() {
+                    let p = next.point(id).map_err(|e| e.to_string())?;
+                    next.set_point(id, [p[0] + delta[0], p[1] + delta[1]]).map_err(|e| e.to_string())?;
+                }
+            }
+            next.solve()
+        }
+    }
+    .map_err(|e| e.to_string())?;
+    let mut delta = drag_delta(&cache.last, &next);
+    delta.report = Some(report);
+    if next.entities.len() <= DRAG_REGIONS_UP_TO {
+        delta.regions = Some(cad_model::find_regions(&next).map_err(|e| e.to_string())?);
+    }
+    cache.last = next;
+    Ok(delta)
+}
+
 /// Círculos, avisos y error de medidas de un engrane (para el diálogo).
 #[tauri::command]
 pub fn cad_gear_info(part: cad_model::GearPart) -> cad_model::gear_part::GearInfo {
@@ -3339,6 +3440,7 @@ pub mod bridge {
             "cad_preview" => ok(preview_impl(state, arg(args, "document")?)?),
             "cad_evaluate" => ok(evaluate(state)?),
             "cad_solve_sketch" => ok(solve_sketch_impl(arg(args, "sketch")?, arg(args, "drag")?)?),
+            "cad_sketch_drag" => ok(sketch_drag_impl(arg(args, "token")?, arg(args, "sketch")?, arg(args, "op")?)?),
             "cad_sketch_suggest" => ok(arg::<Sketch>(args, "sketch")?.suggest().map_err(|e| e.to_string())?),
             "cad_gear_info" => ok(cad_gear_info(arg(args, "part")?)),
             "cad_gear_design" => ok(cad_gear_design(arg(args, "source")?, arg(args, "kind")?, arg(args, "ratio")?, arg(args, "distance")?)?),
@@ -3568,6 +3670,64 @@ pub mod bridge {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Placa de 15×15 celdas (1125 entidades, como el banco de U4)
+    fn plate() -> Sketch {
+        let mut s = Sketch::new();
+        for i in 0..15 {
+            for j in 0..15 {
+                let (x, y) = (i as f64 * 12.0, j as f64 * 12.0);
+                s.rectangle([x, y], [x + 10.0, y + 10.0]);
+                s.circle([x + 5.0, y + 5.0], 3.0);
+            }
+        }
+        s
+    }
+
+    /// El arrastre manda solo lo que cambió y da lo mismo que resolver el
+    /// sketch entero en cada paso
+    #[test]
+    fn drag_sends_only_what_changed() {
+        let s = plate();
+        let corner = match s.entities[0].geometry {
+            cad_model::Geometry::Line { start, .. } => start,
+            _ => unreachable!(),
+        };
+        let first = sketch_drag_impl(7, Some(s.clone()), DragOp::Point { point: corner, target: [-1.0, -1.0] }).unwrap();
+        // El rectángulo de esa esquina se acomoda; el resto no se toca
+        assert!(!first.points.is_empty() && first.points.len() <= 4, "{:?}", first.points);
+        assert!(first.report.as_ref().unwrap().quick);
+        let second = sketch_drag_impl(7, None, DragOp::Point { point: corner, target: [-2.0, -1.5] }).unwrap();
+        let full = solve_sketch_impl(s.clone(), Some((corner, [-1.0, -1.0]))).unwrap();
+        let full = solve_sketch_impl(full.sketch, Some((corner, [-2.0, -1.5]))).unwrap();
+        for (id, x, y) in &second.points {
+            let p = full.sketch.point(*id).unwrap();
+            assert!((p[0] - x).abs() < 1e-9 && (p[1] - y).abs() < 1e-9, "{id}: {p:?} vs ({x}, {y})");
+        }
+        // Lo que viaja por pedido: antes el sketch dos veces (ida y vuelta) y las regiones
+        let before = serde_json::to_string(&s).unwrap().len() + serde_json::to_string(&full).unwrap().len();
+        let now = serde_json::to_string(&second).unwrap().len() + 64;
+        eprintln!("arrastre de un punto, bytes por paso: antes {before}, ahora {now}");
+        assert!(now * 100 < before, "{now} vs {before}");
+        assert!(second.regions.is_none(), "con 1125 entidades las regiones van al soltar");
+        // Un sketch chico trae sus regiones en cada paso (el relleno sigue al arrastre)
+        let mut small = Sketch::new();
+        small.rectangle([0.0, 0.0], [10.0, 10.0]);
+        let p = small.points[0].id;
+        let d = sketch_drag_impl(9, Some(small), DragOp::Point { point: p, target: [-1.0, -1.0] }).unwrap();
+        assert_eq!(d.regions.map(|r| r.len()), Some(1));
+        // Una curva entera: corrida desde donde estaba al empezar; un círculo cambia el radio
+        let line = s.entities[0].id;
+        let moved = sketch_drag_impl(8, Some(s.clone()), DragOp::Entity { entity: line, delta: [0.0, -0.5], radius: None }).unwrap();
+        assert!(moved.points.len() >= 2, "{:?}", moved.points);
+        let circle = s.entities[4].id;
+        let grown = sketch_drag_impl(8, None, DragOp::Entity { entity: circle, delta: [0.0, 0.0], radius: Some(4.0) }).unwrap();
+        assert_eq!(grown.radii, vec![(circle, 4.0)]);
+        // Lo del paso anterior (la línea corrida) vuelve a su lugar: el corrimiento es desde el comienzo
+        assert!(grown.points.len() >= 2, "{:?}", grown.points);
+        // Un token viejo no sirve
+        assert!(sketch_drag_impl(7, None, DragOp::Point { point: corner, target: [0.0, 0.0] }).is_err());
+    }
 
     fn box_doc() -> Document {
         let mut doc = Document::new();
