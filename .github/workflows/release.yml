@@ -443,9 +443,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Solo lo que se publica: el motor (slicer-engine) ya va dentro del AppImage y
+      # suelto con el nombre de la release
       - uses: actions/download-artifact@v4
         with:
           path: dist
+          pattern: "{desktop,cli,wasm}*"
           merge-multiple: true
 
       - name: latest.json (actualizaciones de la app)
