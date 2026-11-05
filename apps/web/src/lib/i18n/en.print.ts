@@ -194,7 +194,7 @@ export const en_print: Catalog = {
   "Elegir zona en el modelo": "Pick a zone on the model",
   "Terminar de elegir": "Finish picking",
   "Preparar todo": "Prepare everything",
-  "Verifica el modelo, lo divide si no cabe en la cama, pone las uniones, lo vacía si lo pediste y exporta las placas, con lo que elegiste arriba.": "Checks the model, splits it if it does not fit on the bed, adds the joints, hollows it if you asked, and exports the plates, using what you chose above.",
+  "Verifica el modelo, lo divide si no cabe en la cama, pone las uniones, lo vacía si lo pediste y exporta las placas, con lo que elegiste en las pestañas de Fabricar.": "Checks the model, splits it if it does not fit on the bed, adds the joints, hollows it if you asked, and exports the plates, with what you chose in the Fabricate tabs.",
   "Con uniones entre las piezas": "With joints between the parts",
   "Preparar todo para imprimir": "Prepare everything for printing",
   "Listo para imprimir": "Ready to print",
@@ -487,4 +487,14 @@ export const en_print: Catalog = {
   "Tipo de impresora desconocido: {kind}": "Unknown printer type: {kind}",
   "Cancelando…": "Cancelling…",
   "Pausando…": "Pausing…",
+  // Panel izquierdo de Fabricar (FabricarEditor)
+  "Revisar": "Check",
+  "Uniones": "Joints",
+  "Pieles": "Skins",
+  "Primero analiza el modelo para imprimir.": "Analyze the model for printing first.",
+  "Carga un modelo para ponerle una piel.": "Load a model to give it a skin.",
+  "Las uniones van entre piezas: primero corta el modelo en piezas.": "Joints go between parts: cut the model into parts first.",
+  "Ir a Piezas": "Go to Parts",
+  "Analizar de nuevo": "Analyze again",
+  "Abrir {name} en el panel de la izquierda": "Open {name} in the left panel",
 };

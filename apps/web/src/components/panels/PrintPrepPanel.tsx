@@ -165,6 +165,8 @@ export interface PlateResult {
 export interface PrepSettings {
   printer?: PrinterProfile;
   material?: MaterialProfile;
+  /** Margen al cortar en piezas (mm) */
+  cutMargin?: number;
   joint: JointSettings;
   infill: number;
   hollow: boolean;
@@ -857,7 +859,7 @@ export const PrepareAllSection: Component<{
   <div class="space-y-2 pt-2 border-t border-border/50">
     <Title>{t("Preparar todo")}</Title>
     <p class="text-[10px] text-text-dim leading-snug">
-      {t("Verifica el modelo, lo divide si no cabe en la cama, pone las uniones, lo vacía si lo pediste y exporta las placas, con lo que elegiste arriba.")}
+      {t("Verifica el modelo, lo divide si no cabe en la cama, pone las uniones, lo vacía si lo pediste y exporta las placas, con lo que elegiste en las pestañas de Fabricar.")}
     </p>
     <Checkbox small label={t("Con uniones entre las piezas")} checked={props.withJoints} onChange={props.onWithJoints} />
     <Button onClick={props.onPrepare} disabled={props.disabled || props.busy} loading={props.busy} fullWidth size="sm" variant="primary">

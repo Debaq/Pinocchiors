@@ -138,6 +138,9 @@ import { formatEta, renderRay, renderRayAnimation, type RayProgress } from "./li
 import { cameraZoom, defaultRenderSettings, renderLayout, renderPixels, type RenderSettings } from "./components/steps/RenderStep";
 import { RenderEditor } from "./components/layout/RenderEditor";
 import { SlicerEditor } from "./components/layout/SlicerEditor";
+import { FabricarEditor } from "./components/layout/FabricarEditor";
+import type { FabTab } from "./components/panels/Print3DPanel";
+import type { Print3DStepProps } from "./components/steps";
 import { defaultSlicer, type SlicerTab } from "./components/panels/SlicerSection";
 
 interface ProjectSaved {
@@ -5936,6 +5939,100 @@ export const App: Component = () => {
   const [slicerTab, setSlicerTab] = createSignal<SlicerTab>("settings");
   const [slicerBedSize, setSlicerBedSize] = createSignal<[number, number, number]>();
   const slicerEditorVisible = () => inPrint() && slicerEditorOpen() && !textureEditor();
+  // ── Fabricar: sus herramientas en pestañas, también a la izquierda (una sola columna a la vez) ──
+  const [printEditorOpen, setPrintEditorOpen] = createPersisted("printEditor.open", false);
+  const [printEditorTab, setPrintEditorTab] = createPersisted<FabTab>("printEditor.tab", "review");
+  const [printEditorFraction, setPrintEditorFraction] = createPersisted("printEditor.fraction", 0.3);
+  const printEditorVisible = () => inPrint() && printEditorOpen() && !textureEditor();
+  const openPrintEditor = (tab: FabTab) => {
+    setPrintEditorTab(tab);
+    setPrintEditorOpen(true);
+    setSlicerEditorOpen(false);
+  };
+  const openSlicerEditor = () => {
+    setSlicerEditorOpen(true);
+    setPrintEditorOpen(false);
+  };
+  const resizePrintEditor = (e: PointerEvent) => {
+    const start = printEditorFraction();
+    const width = splitRef?.clientWidth ?? 1;
+    startDrag(e, "col-resize", (dx) => setPrintEditorFraction(Math.min(0.6, Math.max(0.2, start + dx / width))));
+  };
+  /** Lo que reciben el panel derecho de Fabricar y su panel izquierdo */
+  const fabProps = (): Print3DStepProps => ({
+    onAnalyze: handleAnalyzePrint3d,
+    onScale: handleScaleForPrint,
+    onUndoScale: handleUndoPrintScale,
+    canUndoScale: canUndoPrintScale(),
+    onSubdivide: handleSubdivide,
+    onExportPiece: handleExportPiece,
+    presets: printPresets(),
+    piecesView: {
+      on: piecesViewOn(),
+      explode: piecesExplode(),
+      busy: piecesViewBusy(),
+      onToggle: () => setPiecesViewOn(!piecesViewOn()),
+      onExplode: setPiecesExplode,
+    },
+    skin: {
+      zone: skinZone(),
+      picking: skinPicking(),
+      onTogglePicking: () => setSkinPicking(!skinPicking()),
+      previewing: skinPreviewOn(),
+      previewBusy: skinPreviewBusy(),
+      onTogglePreview: () => {
+        if (!skinPreviewOn()) setSkinPicking(false);
+        setSkinPreviewOn(!skinPreviewOn());
+      },
+      onGrow: growSkinZone,
+      onInvert: invertSkinZone,
+      onClear: clearSkinZone,
+      pickTarget: skinPickTarget(),
+      onPickTarget: setSkinPickTarget,
+      onProtectHoles: protectSkinHoles,
+      onClearProtected: clearSkinProtected,
+      library: skinLibrary(),
+      settings: skinImage(),
+      onSettings: setSkinImage,
+      onImport: importSkinImage,
+      onRemove: removeSkinImage,
+      estimate: skinEstimate(),
+      onApply: applySkin,
+    },
+    fab: fabInfo(),
+    onFabNeeded: handleFabNeeded,
+    prep: printPrep(),
+    onPrep: setPrintPrep,
+    readiness: printReadiness(),
+    onCheck: handleCheckPrint,
+    orientations: printOrientations(),
+    onSuggestOrientation: handleSuggestOrientation,
+    onApplyOrientation: handleApplyOrientation,
+    jointsReport: jointsReport(),
+    onAddJoints: handleAddJoints,
+    materialEstimate: materialEstimate(),
+    onEstimate: handleEstimateMaterial,
+    plateResult: plateResult(),
+    prepareReport: prepareReport(),
+    onPrepareAll: handlePrepareAll,
+    platePreview: platePreview(),
+    plateView: { plate: plateViewIndex(), busy: plateViewBusy(), onView: setPlateViewIndex },
+    onPreviewPlates: handlePreviewPlates,
+    onExportPlates: handleExportPlates,
+    onOpenSlicer: openSlicerEditor,
+    slicerOpen: slicerEditorVisible(),
+    onOpenEditor: openPrintEditor,
+    editorTab: printEditorVisible() ? printEditorTab() : undefined,
+    selection: {
+      objects: selectedObjects().map((o) => ({ id: o.id, name: o.name })),
+      revision: selectedObjects().map((o) => `${o.id}:${o.rev ?? 0}`).join(",") + `|${meshRevision()}`,
+      onExport: (format, spacing) => void handleExportObjects(format, spacing),
+    },
+    analysis: meshAnalysis(),
+    subdivideResult: subdivideResult(),
+    canAnalyze: meshLoaded(),
+    isProcessing: isProcessing(),
+    });
   const resizeSlicerEditor = (e: PointerEvent) => {
     const start = slicerEditorFraction();
     const width = splitRef?.clientWidth ?? 1;
@@ -9310,6 +9407,13 @@ export const App: Component = () => {
             </div>
             <div class="shrink-0 w-1 cursor-col-resize bg-border hover:bg-accent/50 transition-colors" onPointerDown={resizeRenderEditor} />
           </Show>
+          {/* Herramientas de Fabricar a la izquierda del visor */}
+          <Show when={printEditorVisible()}>
+            <div class="shrink-0 min-w-0 border-r border-border" style={{ width: `${100 * printEditorFraction()}%` }}>
+              <FabricarEditor {...fabProps()} tab={printEditorTab()} onTab={openPrintEditor} onClose={() => setPrintEditorOpen(false)} />
+            </div>
+            <div class="shrink-0 w-1 cursor-col-resize bg-border hover:bg-orange/50 transition-colors" onPointerDown={resizePrintEditor} />
+          </Show>
           {/* Laminador a la izquierda del visor (Fabricar) */}
           <Show when={slicerEditorVisible()}>
             <div class="shrink-0 min-w-0 border-r border-border" style={{ width: `${100 * slicerEditorFraction()}%` }}>
@@ -9811,78 +9915,7 @@ export const App: Component = () => {
               },
               cloud: scanCloud.info(),
             }}
-            print3dProps={{
-              onAnalyze: handleAnalyzePrint3d,
-              onScale: handleScaleForPrint,
-              onUndoScale: handleUndoPrintScale,
-              canUndoScale: canUndoPrintScale(),
-              onSubdivide: handleSubdivide,
-              onExportPiece: handleExportPiece,
-              presets: printPresets(),
-              piecesView: {
-                on: piecesViewOn(),
-                explode: piecesExplode(),
-                busy: piecesViewBusy(),
-                onToggle: () => setPiecesViewOn(!piecesViewOn()),
-                onExplode: setPiecesExplode,
-              },
-              skin: {
-                zone: skinZone(),
-                picking: skinPicking(),
-                onTogglePicking: () => setSkinPicking(!skinPicking()),
-                previewing: skinPreviewOn(),
-                previewBusy: skinPreviewBusy(),
-                onTogglePreview: () => {
-                  if (!skinPreviewOn()) setSkinPicking(false);
-                  setSkinPreviewOn(!skinPreviewOn());
-                },
-                onGrow: growSkinZone,
-                onInvert: invertSkinZone,
-                onClear: clearSkinZone,
-                pickTarget: skinPickTarget(),
-                onPickTarget: setSkinPickTarget,
-                onProtectHoles: protectSkinHoles,
-                onClearProtected: clearSkinProtected,
-                library: skinLibrary(),
-                settings: skinImage(),
-                onSettings: setSkinImage,
-                onImport: importSkinImage,
-                onRemove: removeSkinImage,
-                estimate: skinEstimate(),
-                onApply: applySkin,
-              },
-              fab: fabInfo(),
-              onFabNeeded: handleFabNeeded,
-              prep: printPrep(),
-              onPrep: setPrintPrep,
-              readiness: printReadiness(),
-              onCheck: handleCheckPrint,
-              orientations: printOrientations(),
-              onSuggestOrientation: handleSuggestOrientation,
-              onApplyOrientation: handleApplyOrientation,
-              jointsReport: jointsReport(),
-              onAddJoints: handleAddJoints,
-              materialEstimate: materialEstimate(),
-              onEstimate: handleEstimateMaterial,
-              plateResult: plateResult(),
-              prepareReport: prepareReport(),
-              onPrepareAll: handlePrepareAll,
-              platePreview: platePreview(),
-              plateView: { plate: plateViewIndex(), busy: plateViewBusy(), onView: setPlateViewIndex },
-              onPreviewPlates: handlePreviewPlates,
-              onExportPlates: handleExportPlates,
-              onOpenSlicer: () => setSlicerEditorOpen(true),
-              slicerOpen: slicerEditorVisible(),
-              selection: {
-                objects: selectedObjects().map((o) => ({ id: o.id, name: o.name })),
-                revision: selectedObjects().map((o) => `${o.id}:${o.rev ?? 0}`).join(",") + `|${meshRevision()}`,
-                onExport: (format, spacing) => void handleExportObjects(format, spacing),
-              },
-              analysis: meshAnalysis(),
-              subdivideResult: subdivideResult(),
-              canAnalyze: meshLoaded(),
-              isProcessing: isProcessing(),
-            }}
+            print3dProps={fabProps()}
             animateProps={{
               ready: animationReady(),
               blocker: animationBlocker(),

@@ -1,4 +1,4 @@
-import { Component, Show, For, createEffect, createSignal } from "solid-js";
+import { Component, Show, For, Match, Switch, createEffect, createSignal } from "solid-js";
 import { Button, Checkbox, Select, NumberInput } from "../ui";
 import * as Icons from "../icons";
 import { fmtNumber, t, tx } from "../../lib/i18n";
@@ -77,7 +77,29 @@ export interface PieceInfo {
   dimensions: [number, number, number];
 }
 
+/** Pestañas del panel izquierdo de Fabricar */
+export type FabTab = "printer" | "review" | "size" | "pieces" | "joints" | "infill" | "plates" | "skin";
+
+export const FAB_TABS: { id: FabTab; label: string; icon: Component<{ size?: number }> }[] = [
+  { id: "printer", label: "Impresora", icon: Icons.Printer },
+  { id: "review", label: "Revisar", icon: Icons.MagnifyingGlass },
+  { id: "size", label: "Tamaño", icon: Icons.ArrowsOut },
+  { id: "pieces", label: "Piezas", icon: Icons.Scissors },
+  { id: "joints", label: "Uniones", icon: Icons.Paperclip },
+  { id: "infill", label: "Relleno", icon: Icons.Cube },
+  { id: "plates", label: "Placas", icon: Icons.GridFour },
+  { id: "skin", label: "Pieles", icon: Icons.PaintBrush },
+];
+
 export interface Print3DPanelProps {
+  /** «summary»: panel derecho (datos, impresora, accesos y acciones básicas); «editor»: una pestaña del panel izquierdo */
+  mode?: "summary" | "editor";
+  /** Con `mode="editor"`: qué pestaña mostrar */
+  tab?: FabTab;
+  /** Abre el panel izquierdo de Fabricar en esa pestaña */
+  onOpenEditor?: (tab: FabTab) => void;
+  /** Pestaña abierta en el panel izquierdo (para marcarla en el derecho) */
+  editorTab?: FabTab;
   onAnalyze?: () => void;
   onScale?: (params: ScaleParams) => void;
   onUndoScale?: () => void;
@@ -189,10 +211,6 @@ function formatCm3(value: number): string {
   return (value / 1000).toFixed(2);
 }
 
-function formatCm2(value: number): string {
-  // mm² -> cm²
-  return (value / 100).toFixed(2);
-}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // COMPONENT
@@ -273,63 +291,32 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
   const cuts = () => prep().cuts ?? [];
   const setCuts = (next: CutPlane[]) => patch({ cuts: next });
   const modelSize = () => props.analysis?.dimensions ?? [100, 100, 100];
-  const [margin, setMargin] = createSignal(2.0);
+  const margin = () => prep().cutMargin ?? 2.0;
+  const setMargin = (cutMargin: number) => patch({ cutMargin });
 
-  return (
-    <div class="space-y-4">
-      <Show when={calibrating()}>
-        <CalibrationWizard printer={printer()} material={material()} onApply={applyCalibration} onClose={() => setCalibrating(false)} />
-      </Show>
-      {/* Análisis */}
-      <div class="space-y-3">
-        <h4 class="text-xs font-semibold uppercase tracking-wider text-text-muted">{t("Análisis")}</h4>
+  // Necesita el análisis antes (medidas y volumen): si falta, se ofrece hacerlo
+  const needsAnalysis = () => (
+    <div class="space-y-2">
+      <p class="text-[11px] text-text-dim">{t("Primero analiza el modelo para imprimir.")}</p>
+      <Button onClick={props.onAnalyze} disabled={!props.canAnalyze || props.isProcessing} loading={props.isProcessing} size="sm" fullWidth icon={<Icons.Ruler size={14} />}>
+        {t("Analizar para impresión")}
+      </Button>
+    </div>
+  );
 
-        <Button
-          onClick={props.onAnalyze}
-          disabled={!props.canAnalyze || props.isProcessing}
-          loading={props.isProcessing}
-          variant="default"
-          fullWidth
-          size="sm"
-          icon={<Icons.Ruler size={14} />}
-        >
-          {t("Analizar para impresión")}
-        </Button>
-      </div>
+  const plates = () => props.platePreview?.plates.length ?? props.plateResult?.plates;
+  const exportPlate = (): PlateSettings => ({ ...plate(), hollowWall: hollow() ? wall() : null, drain: hollow() && drain() ? drainDiameter() : null, vent: hollow() && drain() && vent() });
 
-      {/* Resultados del análisis */}
-      <Show when={props.analysis}>
-        <div class="space-y-2 p-3 rounded-md bg-surface/30 border border-border">
-          <div class="space-y-1.5">
-            <div class="flex justify-between text-xs">
-              <span class="text-text-muted">{t("Dimensiones")}</span>
-              <span class="text-text font-mono">
-                {formatMm(props.analysis!.dimensions[0])} x {formatMm(props.analysis!.dimensions[1])} x {formatMm(props.analysis!.dimensions[2])} mm
-              </span>
-            </div>
-            <div class="flex justify-between text-xs">
-              <span class="text-text-muted">{t("Volumen")}</span>
-              <span class="text-text font-mono">{formatCm3(props.analysis!.volume)} cm³</span>
-            </div>
-            <div class="flex justify-between text-xs">
-              <span class="text-text-muted">{t("Área")}</span>
-              <span class="text-text font-mono">{formatCm2(props.analysis!.surface_area)} cm²</span>
-            </div>
-            <div class="flex justify-between text-xs">
-              <span class="text-text-muted">{t("Cerrada")}</span>
-              <span class={props.analysis!.is_closed ? "text-green" : "text-red"}>
-                {props.analysis!.is_closed ? t("Sí") : t("No")}
-              </span>
-            </div>
-            <div class="flex justify-between text-xs">
-              <span class="text-text-muted">{t("Triángulos")}</span>
-              <span class="text-text font-mono">{fmtNumber(props.analysis!.triangle_count)}</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Impresora, verificación y orientación */}
-        <div class="space-y-3 pt-2 border-t border-border/50">
+  // ── Una pestaña del panel izquierdo ──
+  const editor = () => (
+    <Switch>
+      <Match when={props.tab === "skin"}>
+        <Show when={props.skin} fallback={<p class="text-[11px] text-text-dim">{t("Carga un modelo para ponerle una piel.")}</p>}>
+          {(skin) => <SkinPanel {...skin()} busy={props.isProcessing} />}
+        </Show>
+      </Match>
+      <Match when={props.tab === "printer"}>
+        <div class="space-y-4">
           <PrinterMaterial presets={props.presets} printer={printer()} material={material()} onPrinter={setPrinterChoice} onMaterial={setMaterialChoice} onCalibrate={() => setCalibrating(true)} />
           <Checkbox
             small
@@ -338,12 +325,12 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
             onChange={(compensateAll) => patch({ compensateAll })}
             hint={t("En Diseñar, los agujeros, las roscas interiores, las tuercas, las arandelas y los ejes y chaveteros de los engranes salen ya más anchos lo que esta impresora los achica. Cambia la medida de lo que ves.")}
           />
-          <ReadinessSection
-            readiness={props.readiness}
-            busy={props.isProcessing}
-            disabled={!props.canAnalyze}
-            onCheck={() => props.onCheck?.(printer(), material())}
-          />
+        </div>
+      </Match>
+      <Match when={!props.analysis}>{needsAnalysis()}</Match>
+      <Match when={props.tab === "review"}>
+        <div class="space-y-4">
+          <ReadinessSection readiness={props.readiness} busy={props.isProcessing} disabled={!props.canAnalyze} onCheck={() => props.onCheck?.(printer(), material())} />
           <OrientationSection
             options={props.orientations}
             busy={props.isProcessing}
@@ -352,9 +339,10 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
             onApply={props.onApplyOrientation}
           />
         </div>
-
+      </Match>
+      <Match when={props.tab === "size"}>
         {/* Escalar */}
-        <div class="space-y-3 pt-2 border-t border-border/50">
+        <div class="space-y-3">
           <h4 class="text-xs font-semibold uppercase tracking-wider text-text-muted">{t("Escalar")}</h4>
 
           <div class="space-y-2">
@@ -440,155 +428,166 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
             </Button>
           </div>
         </div>
+      </Match>
+      <Match when={props.tab === "pieces"}>
+        <div class="space-y-4">
+          {/* Subdividir */}
+          <div class="space-y-3">
+            <h4 class="text-xs font-semibold uppercase tracking-wider text-text-muted">{t("Subdividir")}</h4>
 
-        {/* Subdividir */}
-        <div class="space-y-3 pt-2 border-t border-border/50">
-          <h4 class="text-xs font-semibold uppercase tracking-wider text-text-muted">{t("Subdividir")}</h4>
+            <Select
+              label={t("Estrategia")}
+              options={[
+                { value: "grid", label: t("Grid (regular)") },
+                { value: "optimal", label: t("Optimal (menos cortes)") },
+                { value: "zlayers", label: t("Capas Z") },
+                { value: "manual", label: t("A mano (tus planos)") },
+              ]}
+              value={strategy()}
+              onChange={setStrategy}
+            />
+            <Show when={strategy() === "optimal"}>
+              <p class="text-[10px] text-text-dim leading-snug">{t("Reparte el modelo con el menor número de piezas (pueden girarse para caber) y corta por donde es más angosto.")}</p>
+            </Show>
+            <Show when={strategy() === "manual"}>
+              <div class="space-y-2">
+                <p class="text-[10px] text-text-dim leading-snug">{t("Cada plano corta perpendicular a un eje, a la distancia que pongas desde el borde del modelo. Se ven en el visor.")}</p>
+                <For each={cuts()}>
+                  {(plane, i) => (
+                    <div class="grid grid-cols-[3.2rem_1fr_1fr_auto] gap-1 items-end p-1.5 rounded bg-surface/20 border border-border">
+                      <Select
+                        options={[{ value: "0", label: "X" }, { value: "1", label: "Y" }, { value: "2", label: "Z" }]}
+                        value={String(plane.axis)}
+                        onChange={(v) => {
+                          const axis = Number(v) as 0 | 1 | 2;
+                          setCuts(cuts().map((c, k) => (k === i() ? { ...c, axis, position: Math.min(c.position, modelSize()[axis] * 0.95) } : c)));
+                        }}
+                      />
+                      <NumberInput
+                        label={tx("corte", "A")}
+                        value={Number(plane.position.toFixed(2))}
+                        onChange={(v) => setCuts(cuts().map((c, k) => (k === i() ? { ...c, position: Math.max(0.1, Math.min(modelSize()[c.axis] - 0.1, v)) } : c)))}
+                        min={0.1}
+                        max={modelSize()[plane.axis]}
+                        step={1}
+                        suffix="mm"
+                      />
+                      <NumberInput
+                        label={t("Giro")}
+                        value={plane.tilt_deg}
+                        onChange={(v) => setCuts(cuts().map((c, k) => (k === i() ? { ...c, tilt_deg: Math.max(-80, Math.min(80, v)) } : c)))}
+                        min={-80}
+                        max={80}
+                        step={5}
+                        suffix="°"
+                      />
+                      <button
+                        class="h-7 w-7 flex items-center justify-center rounded text-text-muted hover:text-red hover:bg-surface/40"
+                        aria-label={t("Quitar plano")}
+                        onClick={() => setCuts(cuts().filter((_, k) => k !== i()))}
+                      >
+                        <Icons.X size={12} />
+                      </button>
+                    </div>
+                  )}
+                </For>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  fullWidth
+                  onClick={() => setCuts([...cuts(), { axis: 2, position: Number((modelSize()[2] / 2).toFixed(1)), tilt_deg: 0 }])}
+                >
+                  {t("Agregar plano")}
+                </Button>
+              </div>
+            </Show>
 
-          <Select
-            label={t("Estrategia")}
-            options={[
-              { value: "grid", label: t("Grid (regular)") },
-              { value: "optimal", label: t("Optimal (menos cortes)") },
-              { value: "zlayers", label: t("Capas Z") },
-              { value: "manual", label: t("A mano (tus planos)") },
-            ]}
-            value={strategy()}
-            onChange={setStrategy}
-          />
-          <Show when={strategy() === "optimal"}>
-            <p class="text-[10px] text-text-dim leading-snug">{t("Reparte el modelo con el menor número de piezas (pueden girarse para caber) y corta por donde es más angosto.")}</p>
-          </Show>
-          <Show when={strategy() === "manual"}>
-            <div class="space-y-2">
-              <p class="text-[10px] text-text-dim leading-snug">{t("Cada plano corta perpendicular a un eje, a la distancia que pongas desde el borde del modelo. Se ven en el visor.")}</p>
-              <For each={cuts()}>
-                {(plane, i) => (
-                  <div class="grid grid-cols-[3.2rem_1fr_1fr_auto] gap-1 items-end p-1.5 rounded bg-surface/20 border border-border">
-                    <Select
-                      options={[{ value: "0", label: "X" }, { value: "1", label: "Y" }, { value: "2", label: "Z" }]}
-                      value={String(plane.axis)}
-                      onChange={(v) => {
-                        const axis = Number(v) as 0 | 1 | 2;
-                        setCuts(cuts().map((c, k) => (k === i() ? { ...c, axis, position: Math.min(c.position, modelSize()[axis] * 0.95) } : c)));
-                      }}
-                    />
-                    <NumberInput
-                      label={tx("corte", "A")}
-                      value={Number(plane.position.toFixed(2))}
-                      onChange={(v) => setCuts(cuts().map((c, k) => (k === i() ? { ...c, position: Math.max(0.1, Math.min(modelSize()[c.axis] - 0.1, v)) } : c)))}
-                      min={0.1}
-                      max={modelSize()[plane.axis]}
-                      step={1}
-                      suffix="mm"
-                    />
-                    <NumberInput
-                      label={t("Giro")}
-                      value={plane.tilt_deg}
-                      onChange={(v) => setCuts(cuts().map((c, k) => (k === i() ? { ...c, tilt_deg: Math.max(-80, Math.min(80, v)) } : c)))}
-                      min={-80}
-                      max={80}
-                      step={5}
-                      suffix="°"
-                    />
-                    <button
-                      class="h-7 w-7 flex items-center justify-center rounded text-text-muted hover:text-red hover:bg-surface/40"
-                      aria-label={t("Quitar plano")}
-                      onClick={() => setCuts(cuts().filter((_, k) => k !== i()))}
-                    >
-                      <Icons.X size={12} />
-                    </button>
+            <NumberInput
+              label={t("Margen")}
+              value={margin()}
+              onChange={setMargin}
+              min={0}
+              max={20}
+              step={0.5}
+              suffix="mm"
+            />
+
+            <Button
+              onClick={() =>
+                props.onSubdivide?.({
+                  build_volume: printer().build_volume,
+                  strategy: strategy(),
+                  margin: margin(),
+                  planes: strategy() === "manual" ? cuts() : undefined,
+                })
+              }
+              disabled={!props.canAnalyze || props.isProcessing || (strategy() === "manual" && cuts().length === 0)}
+              loading={props.isProcessing}
+              variant="primary"
+              fullWidth
+              size="sm"
+              icon={<Icons.Scissors size={14} />}
+            >
+              {t("Subdividir")}
+            </Button>
+          </div>
+          {/* Resultado de subdivisión */}
+          <Show when={props.subdivideResult}>
+            <div class="space-y-2 pt-3 border-t border-border/50">
+              <h4 class="text-xs font-semibold uppercase tracking-wider text-text-muted">
+                {t("Piezas")} ({props.subdivideResult!.piece_count})
+              </h4>
+
+              <Show when={props.piecesView}>
+                {(view) => (
+                  <div class="space-y-1.5">
+                    <Button size="sm" fullWidth variant={view().on ? "primary" : "default"} loading={view().busy} onClick={view().onToggle} icon={<Icons.Cube size={14} />}>
+                      {view().on ? t("Volver al modelo entero") : t("Ver las piezas separadas")}
+                    </Button>
+                    <Show when={view().on}>
+                      <NumberInput label={t("Separación")} value={view().explode} onChange={(v) => view().onExplode(Math.max(0, Math.min(2, v)))} min={0} max={2} step={0.1} suffix="×" />
+                    </Show>
                   </div>
                 )}
-              </For>
-              <Button
-                size="sm"
-                variant="ghost"
-                fullWidth
-                onClick={() => setCuts([...cuts(), { axis: 2, position: Number((modelSize()[2] / 2).toFixed(1)), tilt_deg: 0 }])}
-              >
-                {t("Agregar plano")}
-              </Button>
+              </Show>
+              <div class="space-y-1.5 max-h-48 overflow-y-auto">
+                <For each={props.subdivideResult!.pieces}>
+                  {(piece) => (
+                    <div class="flex items-center justify-between px-2 py-1.5 rounded bg-surface/20 border border-border">
+                      <div>
+                        <span class="text-xs font-mono font-semibold text-text">{piece.label}</span>
+                        <span class="text-[10px] text-text-dim ml-2">
+                          {piece.vertex_count}v / {piece.face_count}f
+                        </span>
+                      </div>
+                      <Button
+                        onClick={() => props.onExportPiece?.(piece.index)}
+                        variant="ghost"
+                        size="sm"
+                        icon={<Icons.Download size={12} />}
+                      >
+                        STL
+                      </Button>
+                    </div>
+                  )}
+                </For>
+              </div>
             </div>
           </Show>
-
-          <NumberInput
-            label={t("Margen")}
-            value={margin()}
-            onChange={setMargin}
-            min={0}
-            max={20}
-            step={0.5}
-            suffix="mm"
-          />
-
-          <Button
-            onClick={() =>
-              props.onSubdivide?.({
-                build_volume: printer().build_volume,
-                strategy: strategy(),
-                margin: margin(),
-                planes: strategy() === "manual" ? cuts() : undefined,
-              })
-            }
-            disabled={!props.canAnalyze || props.isProcessing || (strategy() === "manual" && cuts().length === 0)}
-            loading={props.isProcessing}
-            variant="primary"
-            fullWidth
-            size="sm"
-            icon={<Icons.Scissors size={14} />}
-          >
-            {t("Subdividir")}
-          </Button>
         </div>
-      </Show>
-
-      {/* Resultado de subdivisión */}
-      <Show when={props.subdivideResult}>
-        <div class="space-y-2 pt-2 border-t border-border/50">
-          <h4 class="text-xs font-semibold uppercase tracking-wider text-text-muted">
-            {t("Piezas")} ({props.subdivideResult!.piece_count})
-          </h4>
-
-          <Show when={props.piecesView}>
-            {(view) => (
-              <div class="space-y-1.5">
-                <Button size="sm" fullWidth variant={view().on ? "primary" : "default"} loading={view().busy} onClick={view().onToggle} icon={<Icons.Cube size={14} />}>
-                  {view().on ? t("Volver al modelo entero") : t("Ver las piezas separadas")}
-                </Button>
-                <Show when={view().on}>
-                  <NumberInput label={t("Separación")} value={view().explode} onChange={(v) => view().onExplode(Math.max(0, Math.min(2, v)))} min={0} max={2} step={0.1} suffix="×" />
-                </Show>
-              </div>
-            )}
-          </Show>
-          <div class="space-y-1.5 max-h-48 overflow-y-auto">
-            <For each={props.subdivideResult!.pieces}>
-              {(piece) => (
-                <div class="flex items-center justify-between px-2 py-1.5 rounded bg-surface/20 border border-border">
-                  <div>
-                    <span class="text-xs font-mono font-semibold text-text">{piece.label}</span>
-                    <span class="text-[10px] text-text-dim ml-2">
-                      {piece.vertex_count}v / {piece.face_count}f
-                    </span>
-                  </div>
-                  <Button
-                    onClick={() => props.onExportPiece?.(piece.index)}
-                    variant="ghost"
-                    size="sm"
-                    icon={<Icons.Download size={12} />}
-                  >
-                    STL
-                  </Button>
-                </div>
-              )}
-            </For>
-          </div>
-        </div>
-      </Show>
-
-      <Show when={props.analysis}>
-        <Show when={props.subdivideResult}>
+      </Match>
+      <Match when={props.tab === "joints"}>
+        <Show
+          when={props.subdivideResult}
+          fallback={
+            <div class="space-y-2">
+              <p class="text-[11px] text-text-dim">{t("Las uniones van entre piezas: primero corta el modelo en piezas.")}</p>
+              <Button size="sm" fullWidth icon={<Icons.Scissors size={14} />} onClick={() => props.onOpenEditor?.("pieces")}>
+                {t("Ir a Piezas")}
+              </Button>
+            </div>
+          }
+        >
           <JointsSection
             fab={props.fab}
             settings={joint()}
@@ -599,7 +598,8 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
             onAdd={() => props.onAddJoints?.(joint(), printer(), material())}
           />
         </Show>
-        <Show when={props.skin}>{(skin) => <SkinPanel {...skin()} busy={props.isProcessing} />}</Show>
+      </Match>
+      <Match when={props.tab === "infill"}>
         <MaterialSection
           infill={infill()}
           onInfill={setInfill}
@@ -618,6 +618,8 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
           disabled={!props.canAnalyze}
           onEstimate={() => props.onEstimate?.(material(), infill(), hollow() ? wall() : null)}
         />
+      </Match>
+      <Match when={props.tab === "plates"}>
         <PlatesSection
           settings={plate()}
           onSettings={setPlate}
@@ -630,34 +632,131 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
           busy={props.isProcessing}
           disabled={!props.canAnalyze}
           hasPieces={!!props.subdivideResult}
-          onExport={() => props.onExportPlates?.(printer(), material(), { ...plate(), hollowWall: hollow() ? wall() : null, drain: hollow() && drain() ? drainDiameter() : null, vent: hollow() && drain() && vent() })}
+          onExport={() => props.onExportPlates?.(printer(), material(), exportPlate())}
         />
-        <Show when={props.onOpenSlicer}>
-          <div class="space-y-2 pt-2 border-t border-border/50">
-            <h4 class="text-xs font-semibold uppercase tracking-wider text-text-muted">{t("Laminar")}</h4>
-            <p class="text-[11px] text-text-dim">{t("Calidad, relleno, soportes y temperaturas en un panel aparte, con la vista previa capa por capa.")}</p>
+      </Match>
+    </Switch>
+  );
+
+  // ── Panel derecho: datos, impresora, accesos a las pestañas y acciones básicas ──
+  const summary = () => (
+    <div class="space-y-4">
+      <Button
+        onClick={props.onAnalyze}
+        disabled={!props.canAnalyze || props.isProcessing}
+        loading={props.isProcessing}
+        variant={props.analysis ? "ghost" : "default"}
+        fullWidth
+        size="sm"
+        icon={<Icons.Ruler size={14} />}
+      >
+        {props.analysis ? t("Analizar de nuevo") : t("Analizar para impresión")}
+      </Button>
+
+      <Show when={props.analysis}>
+        {(a) => (
+          <div class="space-y-1 p-2.5 rounded-md bg-surface/30 border border-border">
+            <InfoRow label={t("Dimensiones")} value={`${formatMm(a().dimensions[0])} × ${formatMm(a().dimensions[1])} × ${formatMm(a().dimensions[2])} mm`} />
+            <InfoRow label={t("Volumen")} value={`${formatCm3(a().volume)} cm³`} />
+            <div class="flex justify-between text-xs">
+              <span class="text-text-muted">{t("Cerrada")}</span>
+              <span class={a().is_closed ? "text-green" : "text-red"}>{a().is_closed ? t("Sí") : t("No")}</span>
+            </div>
+            <Show when={props.readiness}>
+              {(r) => (
+                <div class="flex justify-between text-xs">
+                  <span class="text-text-muted">{t("¿Se puede imprimir?")}</span>
+                  <span class={r().printable ? "text-green" : "text-warning"}>{r().printable ? t("Sí") : t("Hay que arreglarla")}</span>
+                </div>
+              )}
+            </Show>
+            <Show when={props.subdivideResult}>{(r) => <InfoRow label={t("Piezas")} value={String(r().piece_count)} />}</Show>
+            <Show when={props.jointsReport}>{(j) => <InfoRow label={t("Uniones")} value={String(j().joints_placed)} />}</Show>
+            <Show when={plates()}>{(n) => <InfoRow label={t("Placas")} value={String(n())} />}</Show>
+          </div>
+        )}
+      </Show>
+
+      <Show
+        when={props.onOpenEditor}
+        fallback={<PrinterMaterial presets={props.presets} printer={printer()} material={material()} onPrinter={setPrinterChoice} onMaterial={setMaterialChoice} onCalibrate={() => setCalibrating(true)} />}
+      >
+        <button
+          type="button"
+          onClick={() => props.onOpenEditor?.("printer")}
+          class={`w-full space-y-1 rounded-md border p-2.5 text-left transition-colors ${props.editorTab === "printer" ? "border-orange bg-orange/10" : "border-border hover:border-orange/60"}`}
+          title={t("Abrir {name} en el panel de la izquierda", { name: t("Impresora") })}
+        >
+          <InfoRow label={t("Impresora")} value={printer().name} />
+          <InfoRow label={t("Cama")} value={`${printer().build_volume.map((v) => fmtNumber(v)).join(" × ")} mm`} />
+          <InfoRow label={t("Material")} value={material().name} />
+        </button>
+      </Show>
+
+      <Show when={props.onOpenEditor}>
+        <div class="space-y-1.5 pt-2 border-t border-border/50">
+          <h4 class="text-xs font-semibold uppercase tracking-wider text-text-muted">{t("Preparar")}</h4>
+          <div class="grid grid-cols-4 gap-1">
+            <For each={FAB_TABS}>
+              {(tab) => (
+                <button
+                  type="button"
+                  onClick={() => props.onOpenEditor?.(tab.id)}
+                  class={`flex flex-col items-center gap-1 rounded border px-1 py-1.5 text-[10px] transition-colors ${
+                    props.editorTab === tab.id ? "border-orange bg-orange/15 text-orange" : "border-border text-text-muted hover:border-orange/60 hover:text-text"
+                  }`}
+                  title={t("Abrir {name} en el panel de la izquierda", { name: t(tab.label) })}
+                >
+                  <tab.icon size={16} />
+                  <span class="truncate max-w-full">{t(tab.label)}</span>
+                </button>
+              )}
+            </For>
+          </div>
+        </div>
+      </Show>
+
+      <Show when={props.analysis}>
+        <div class="space-y-2 pt-2 border-t border-border/50">
+          <PrepareAllSection
+            withJoints={prep().prepareJoints ?? true}
+            onWithJoints={(prepareJoints) => patch({ prepareJoints })}
+            report={props.prepareReport}
+            busy={props.isProcessing}
+            disabled={!props.canAnalyze}
+            onPrepare={() =>
+              props.onPrepareAll?.({
+                printer: printer(),
+                material: material(),
+                subdivide: { build_volume: printer().build_volume, strategy: strategy(), margin: margin(), planes: strategy() === "manual" ? cuts() : undefined },
+                joint: (prep().prepareJoints ?? true) ? joint() : null,
+                plate: exportPlate(),
+              })
+            }
+          />
+          <Show when={props.onOpenSlicer}>
             <Button onClick={() => props.onOpenSlicer?.()} fullWidth size="sm" variant={props.slicerOpen ? "primary" : "default"} icon={<Icons.Stack size={14} />}>
               {props.slicerOpen ? t("Laminador abierto a la izquierda") : t("Abrir el laminador")}
             </Button>
-          </div>
-        </Show>
-        <PrepareAllSection
-          withJoints={prep().prepareJoints ?? true}
-          onWithJoints={(prepareJoints) => patch({ prepareJoints })}
-          report={props.prepareReport}
-          busy={props.isProcessing}
-          disabled={!props.canAnalyze}
-          onPrepare={() =>
-            props.onPrepareAll?.({
-              printer: printer(),
-              material: material(),
-              subdivide: { build_volume: printer().build_volume, strategy: strategy(), margin: margin(), planes: strategy() === "manual" ? cuts() : undefined },
-              joint: (prep().prepareJoints ?? true) ? joint() : null,
-              plate: { ...plate(), hollowWall: hollow() ? wall() : null, drain: hollow() && drain() ? drainDiameter() : null, vent: hollow() && drain() && vent() },
-            })
-          }
-        />
+          </Show>
+        </div>
       </Show>
     </div>
   );
+
+  return (
+    <>
+      <Show when={calibrating()}>
+        <CalibrationWizard printer={printer()} material={material()} onApply={applyCalibration} onClose={() => setCalibrating(false)} />
+      </Show>
+      {props.mode === "editor" ? editor() : summary()}
+    </>
+  );
 };
+
+const InfoRow: Component<{ label: string; value: string }> = (props) => (
+  <div class="flex justify-between text-xs gap-2">
+    <span class="text-text-muted shrink-0">{props.label}</span>
+    <span class="text-text font-mono truncate">{props.value}</span>
+  </div>
+);
