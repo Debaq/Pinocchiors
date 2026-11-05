@@ -203,6 +203,10 @@ int main(int argc, char **argv)
 
         Print print;
         print.is_BBL_printer() = false;
+        // Origen de la placa: Print no lo inicializa (Vec3d de Eigen) y la GUI de Orca
+        // siempre lo fija. Con basura, el brim se desplaza a coordenadas absurdas y
+        // Clipper falla al azar con «Coordinate outside allowed range».
+        print.set_plate_origin(Vec3d::Zero());
         print.set_status_callback([](const PrintBase::SlicingStatus &s) {
             if (s.percent >= 0)
                 emit("{\"event\":\"progress\",\"percent\":" + std::to_string(s.percent) + ",\"text\":\"" + json_escape(s.text) + "\"}");
