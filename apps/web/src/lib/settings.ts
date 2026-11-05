@@ -64,14 +64,47 @@ export const rememberRecent = (path: string) => setRecentRaw([path, ...recentFil
 export const forgetRecent = (path: string) => setRecentRaw(recentFiles().filter((p) => p !== path));
 export const clearRecent = () => setRecentRaw([]);
 
-/** Impresora en la red (Moonraker): dirección y clave de API opcional. Es del equipo, no del proyecto */
-export interface PrinterConnection {
+/** Impresoras en la red para mandar a imprimir (Klipper/Moonraker o Flashforge de fábrica).
+ *  Son del equipo, no del proyecto */
+export type NetPrinterKind = "moonraker" | "flashforge";
+export interface NetPrinter {
+  id: string;
+  name: string;
+  kind: NetPrinterKind;
+  /** Modelo del laminador (`printer_model` de Orca: «Creality K1», «Flashforge AD5X») */
+  model: string;
   address: string;
+  /** Moonraker: clave de API, si la pide */
   apiKey: string;
+  /** Flashforge: código del modo LAN */
+  checkCode: string;
+  /** Flashforge: número de serie (lo da la impresora al probar la conexión) */
+  serial: string;
 }
-const [printerConn, setPrinterConn] = createPersisted<PrinterConnection>("settings.moonraker", { address: "", apiKey: "" });
-export const printerConnection = (): PrinterConnection => ({ ...{ address: "", apiKey: "" }, ...(printerConn() as Partial<PrinterConnection>) });
-export const setPrinterConnection = setPrinterConn;
+
+/** La K1 que estaba configurada antes de que hubiera varias impresoras */
+function migratedPrinters(): NetPrinter[] {
+  try {
+    const raw = localStorage.getItem("pinocchio.ui.settings.moonraker");
+    const old = raw ? (JSON.parse(raw) as { address?: string; apiKey?: string }) : undefined;
+    if (old?.address?.trim()) {
+      return [{ id: "k1", name: "K1", kind: "moonraker", model: "Creality K1", address: old.address.trim(), apiKey: old.apiKey ?? "", checkCode: "", serial: "" }];
+    }
+  } catch {
+    // Sin almacenamiento: empieza vacío
+  }
+  return [];
+}
+const [netPrintersRaw, setNetPrintersRaw] = createPersisted<NetPrinter[]>("settings.netPrinters", migratedPrinters());
+export const netPrinters = (): NetPrinter[] => (Array.isArray(netPrintersRaw()) ? netPrintersRaw() : []);
+/** Guarda (o reemplaza, por id) una impresora */
+export const saveNetPrinter = (p: NetPrinter) =>
+  setNetPrintersRaw(netPrinters().some((x) => x.id === p.id) ? netPrinters().map((x) => (x.id === p.id ? p : x)) : [...netPrinters(), p]);
+export const removeNetPrinter = (id: string) => setNetPrintersRaw(netPrinters().filter((p) => p.id !== id));
+const [netPrinterSelected, setNetPrinterSelected] = createPersisted<string>("settings.netPrinter", "");
+/** La impresora elegida (o la primera) */
+export const selectedNetPrinter = (): NetPrinter | undefined => netPrinters().find((p) => p.id === netPrinterSelected()) ?? netPrinters()[0];
+export const selectNetPrinter = setNetPrinterSelected;
 
 /** Impresoras propias (Fabricar): nombre, cama y boquilla; se recuerdan entre sesiones */
 export interface SavedPrinter {

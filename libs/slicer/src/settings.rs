@@ -1,7 +1,7 @@
 //! Configuración final para el motor: máquina + proceso + filamento + cambios del usuario.
 
 use crate::error::SlicerError;
-use crate::presets::{preset, PresetKind};
+use crate::presets::{preset, printer_entry, PresetKind};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
@@ -62,19 +62,42 @@ pub fn build_config(s: &SliceSettings) -> Result<Map<String, Value>, SlicerError
             }
         }
     }
+    let tools = printer_entry(&s.printer).map_or(1, |p| p.tools.max(1)) as usize;
+    if tools > 1 {
+        one_filament_per_tool(&mut out, filament, tools);
+    }
     klipper_layer_info(&mut out);
     out.insert("name".into(), Value::String("pinocchio".into()));
     out.insert("from".into(), Value::String("User".into()));
     out.insert("printer_settings_id".into(), Value::String(s.printer.clone()));
     out.insert("print_settings_id".into(), Value::String(s.process.clone()));
-    out.insert("filament_settings_id".into(), Value::Array(vec![Value::String(s.filament.clone())]));
+    out.insert("filament_settings_id".into(), Value::Array(vec![Value::String(s.filament.clone()); tools]));
     Ok(out)
 }
 
+/// Impresoras con varios carretes (AD5X): un filamento por carrete, todos iguales, como
+/// Orca. Así el gcode lleva `T0` y las listas del final con un valor por carrete, que es lo
+/// que espera el firmware para asignar carretes al imprimir.
+fn one_filament_per_tool(out: &mut Map<String, Value>, filament: &Map<String, Value>, tools: usize) {
+    for key in filament.keys() {
+        if let Some(Value::Array(list)) = out.get_mut(key)
+            && list.len() == 1
+        {
+            let v = list[0].clone();
+            list.resize(tools, v);
+        }
+    }
+    out.insert("filament_colour".into(), Value::Array(vec![Value::String("#FFFFFF".into()); tools]));
+}
+
 /// Klipper: que la impresora sepa en qué capa va (Moonraker y la pantalla lo muestran),
-/// como los perfiles Klipper de Orca. Los de Creality K1 no lo traen.
+/// como los perfiles Klipper de Orca. Los de Creality K1 no lo traen. Solo en las K1, donde
+/// se verificó que el firmware tiene el comando (en otras podría cortar la impresión).
 fn klipper_layer_info(out: &mut Map<String, Value>) {
     if out.get("gcode_flavor").and_then(Value::as_str) != Some("klipper") {
+        return;
+    }
+    if !out.get("printer_model").and_then(Value::as_str).is_some_and(|m| m.starts_with("Creality K1")) {
         return;
     }
     let mut add = |key: &str, line: &str| {
@@ -147,6 +170,24 @@ mod tests {
         let mut s = k1();
         s.overrides.insert("layer_change_gcode".into(), Value::String("SET_PRINT_STATS_INFO CURRENT_LAYER={layer_num}".into()));
         assert_eq!(build_config(&s).unwrap()["layer_change_gcode"], "SET_PRINT_STATS_INFO CURRENT_LAYER={layer_num}");
+    }
+
+    fn ad5x() -> SliceSettings {
+        let p = index().printers.iter().find(|p| p.name.contains("AD5X")).unwrap();
+        SliceSettings { printer: p.name.clone(), process: p.default_process.clone(), filament: p.default_filament.clone(), overrides: BTreeMap::new() }
+    }
+
+    #[test]
+    fn ad5x_declara_un_filamento_por_carrete() {
+        let c = build_config(&ad5x()).unwrap();
+        assert_eq!(c["filament_type"], serde_json::json!(["PLA", "PLA", "PLA", "PLA"]));
+        assert_eq!(c["filament_settings_id"].as_array().unwrap().len(), 4);
+        assert_eq!(c["filament_colour"].as_array().unwrap().len(), 4);
+        assert_eq!(c["nozzle_temperature"].as_array().unwrap().len(), 4);
+        // Sin el comando de capas de las K1 (no está verificado en Flashforge)
+        assert!(!c["machine_start_gcode"].as_str().unwrap().contains("SET_PRINT_STATS_INFO"));
+        // La K1 sigue con un filamento
+        assert_eq!(build_config(&k1()).unwrap()["filament_type"].as_array().unwrap().len(), 1);
     }
 
     #[test]

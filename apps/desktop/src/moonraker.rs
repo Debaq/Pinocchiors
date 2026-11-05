@@ -1,4 +1,4 @@
-//! Enviar a la impresora por Moonraker (la API de Klipper): probar la conexión,
+//! Impresoras con Moonraker (la API de Klipper): probar la conexión,
 //! subir el gcode del último laminado (e imprimirlo), ver el estado y pausar,
 //! reanudar o cancelar. Primera impresora: Creality K1 rooteada (puerto 7125).
 //!
@@ -55,14 +55,14 @@ pub fn safe_filename(name: &str) -> String {
     format!("{out}.gcode")
 }
 
-struct Printer {
+pub(crate) struct Printer {
     base: String,
     api_key: Option<String>,
     client: reqwest::blocking::Client,
 }
 
 impl Printer {
-    fn new(address: &str, api_key: Option<String>, timeout: Duration) -> Result<Self, String> {
+    pub(crate) fn new(address: &str, api_key: Option<String>, timeout: Duration) -> Result<Self, String> {
         let base = normalize_address(address)?;
         // rustls con `ring` (como el chat del conector): hace falta aunque casi siempre sea http
         let _ = rustls::crypto::ring::default_provider().install_default();
@@ -114,10 +114,6 @@ impl Printer {
     }
 }
 
-/// Corre el trabajo de red fuera del hilo de la interfaz.
-async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
-    tauri::async_runtime::spawn_blocking(f).await.map_err(|e| format!("Error interno: {e}"))?
-}
 
 // ── Conexión ────────────────────────────────────────────────────────────────
 
@@ -134,7 +130,7 @@ pub struct PrinterInfo {
     pub klipper_version: String,
 }
 
-fn info(p: &Printer) -> Result<PrinterInfo, String> {
+pub(crate) fn info(p: &Printer) -> Result<PrinterInfo, String> {
     let server = p.get("/server/info")?;
     let s = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
     let klippy_state = s(&server, "klippy_state");
@@ -154,11 +150,6 @@ fn info(p: &Printer) -> Result<PrinterInfo, String> {
     })
 }
 
-/// Prueba la conexión con la impresora.
-#[tauri::command]
-pub async fn moonraker_info(address: String, api_key: Option<String>) -> Result<PrinterInfo, String> {
-    blocking(move || info(&Printer::new(&address, api_key, Duration::from_secs(8))?)).await
-}
 
 // ── Enviar ──────────────────────────────────────────────────────────────────
 
@@ -188,7 +179,7 @@ fn multipart(boundary: &str, filename: &str, gcode: &[u8], start: bool) -> Vec<u
     body
 }
 
-fn send_gcode(p: &Printer, filename: &str, gcode: &[u8], start: bool) -> Result<SendResult, String> {
+pub(crate) fn send_gcode(p: &Printer, filename: &str, gcode: &[u8], start: bool) -> Result<SendResult, String> {
     let boundary = format!("pinocchio{:016x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64));
     let req = p
         .request(reqwest::Method::POST, "/server/files/upload")
@@ -211,16 +202,16 @@ fn send_gcode(p: &Printer, filename: &str, gcode: &[u8], start: bool) -> Result<
     Ok(SendResult { filename, started })
 }
 
-/// Sube el gcode del último laminado a la impresora y, con `start`, lo empieza a imprimir.
-#[tauri::command]
-pub async fn moonraker_send(address: String, api_key: Option<String>, filename: String, start: bool) -> Result<SendResult, String> {
-    let gcode = crate::slicer::last_gcode().ok_or("Todavía no hay nada laminado")?;
-    blocking(move || {
-        let bytes = std::fs::read(&gcode).map_err(|e| format!("No se pudo leer el gcode: {e}"))?;
-        let p = Printer::new(&address, api_key, Duration::from_secs(300))?;
-        send_gcode(&p, &safe_filename(&filename), &bytes, start)
-    })
-    .await
+
+/// Pausar, reanudar o cancelar la impresión en curso.
+pub(crate) fn action(p: &Printer, action: &str) -> Result<(), String> {
+    let path = match action {
+        "pause" => "/printer/print/pause",
+        "resume" => "/printer/print/resume",
+        "cancel" => "/printer/print/cancel",
+        other => return Err(format!("Acción desconocida: {other}")),
+    };
+    p.post(path).map(|_| ())
 }
 
 // ── Estado ──────────────────────────────────────────────────────────────────
@@ -245,6 +236,9 @@ pub struct PrinterStatus {
     pub filament_mm: f64,
     pub extruder: [f64; 2],
     pub bed: [f64; 2],
+    /// Carretes del cambiador (AD5X); vacío en las que tienen uno
+    pub slots: Vec<crate::flashforge::Slot>,
+    pub current_slot: Option<u32>,
 }
 
 /// Tiempo estimado por el laminador para cada archivo (no cambia mientras imprime).
@@ -297,10 +291,12 @@ fn parse_status(klippy_state: String, status: &Value) -> PrinterStatus {
         filament_mm: f("/print_stats/filament_used"),
         extruder: [f("/extruder/temperature"), f("/extruder/target")],
         bed: [f("/heater_bed/temperature"), f("/heater_bed/target")],
+        slots: Vec::new(),
+        current_slot: None,
     }
 }
 
-fn status(p: &Printer) -> Result<PrinterStatus, String> {
+pub(crate) fn status(p: &Printer) -> Result<PrinterStatus, String> {
     let server = p.get("/server/info")?;
     let klippy_state = server.get("klippy_state").and_then(Value::as_str).unwrap_or("").to_string();
     if klippy_state != "ready" {
@@ -315,23 +311,7 @@ fn status(p: &Printer) -> Result<PrinterStatus, String> {
     Ok(st)
 }
 
-/// Estado de la impresora y de la impresión en curso.
-#[tauri::command]
-pub async fn moonraker_status(address: String, api_key: Option<String>) -> Result<PrinterStatus, String> {
-    blocking(move || status(&Printer::new(&address, api_key, Duration::from_secs(8))?)).await
-}
 
-/// Pausar, reanudar o cancelar la impresión en curso.
-#[tauri::command]
-pub async fn moonraker_action(address: String, api_key: Option<String>, action: String) -> Result<(), String> {
-    let path = match action.as_str() {
-        "pause" => "/printer/print/pause",
-        "resume" => "/printer/print/resume",
-        "cancel" => "/printer/print/cancel",
-        other => return Err(format!("Acción desconocida: {other}")),
-    };
-    blocking(move || Printer::new(&address, api_key, Duration::from_secs(15))?.post(path).map(|_| ())).await
-}
 
 #[cfg(test)]
 mod tests {

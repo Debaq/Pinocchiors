@@ -32,6 +32,12 @@ impl PresetKind {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PrinterEntry {
     pub name: String,
+    #[serde(default)]
+    pub vendor: String,
+    /// Carretes que puede usar (la AD5X con su IFS: 4). Con más de uno se declara un
+    /// filamento por carrete y la pieza usa el primero (`T0`): el carrete real se elige al enviar.
+    #[serde(default = "one")]
+    pub tools: u32,
     pub model: String,
     pub nozzle: f64,
     pub default_process: String,
@@ -46,6 +52,15 @@ pub struct PresetIndex {
 }
 
 /// Impresoras disponibles con sus procesos y filamentos.
+fn one() -> u32 {
+    1
+}
+
+/// La impresora del índice con ese nombre de perfil.
+pub fn printer_entry(name: &str) -> Option<&'static PrinterEntry> {
+    index().printers.iter().find(|p| p.name == name)
+}
+
 pub fn index() -> &'static PresetIndex {
     static INDEX: OnceLock<PresetIndex> = OnceLock::new();
     INDEX.get_or_init(|| serde_json::from_str(PRESET_INDEX).expect("presets/index.json inválido"))

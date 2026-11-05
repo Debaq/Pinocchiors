@@ -2,6 +2,8 @@
  "printers": [
   {
    "name": "Creality K1 (0.4 nozzle)",
+   "vendor": "Creality",
+   "tools": 1,
    "model": "Creality K1",
    "nozzle": 0.4,
    "default_process": "0.20mm Standard @Creality K1 (0.4 nozzle)",
@@ -31,9 +33,11 @@
   },
   {
    "name": "Creality K1C 0.4 nozzle",
+   "vendor": "Creality",
+   "tools": 1,
    "model": "Creality K1C",
    "nozzle": 0.4,
-   "default_process": "0.20mm Standard @Creality K1C (0.4 nozzle)",
+   "default_process": "0.20mm Standard @Creality K1C",
    "default_filament": "Creality Generic PLA @K1-all",
    "processes": [
     "0.08mm SuperDetail @Creality K1C 0.4 nozzle",
@@ -107,6 +111,8 @@
   },
   {
    "name": "Creality K1 Max (0.4 nozzle)",
+   "vendor": "Creality",
+   "tools": 1,
    "model": "Creality K1 Max",
    "nozzle": 0.4,
    "default_process": "0.20mm Standard @Creality K1Max (0.4 nozzle)",
@@ -132,6 +138,67 @@
     "Creality Generic TPU",
     "Creality HF Generic PLA",
     "Creality HF Generic Speed PLA"
+   ]
+  },
+  {
+   "name": "Flashforge AD5X 0.4 nozzle",
+   "vendor": "Flashforge",
+   "tools": 4,
+   "model": "Flashforge AD5X",
+   "nozzle": 0.4,
+   "default_process": "0.20mm Standard @FF AD5X",
+   "default_filament": "Flashforge Generic PLA",
+   "processes": [
+    "0.16mm Standard @FF AD5X",
+    "0.20mm Standard @FF AD5X",
+    "0.24mm Draft @FF AD5X"
+   ],
+   "filaments": [
+    "Flashforge ABS Basic @FF AD5X",
+    "Flashforge ASA Basic @FF AD5X",
+    "Flashforge ASA-CF",
+    "Flashforge Generic ABS",
+    "Flashforge Generic ASA",
+    "Flashforge Generic HS PLA",
+    "Flashforge Generic PETG",
+    "Flashforge Generic PLA",
+    "Flashforge Generic PLA-Silk",
+    "Flashforge HS PETG @FF AD5X",
+    "Flashforge HS PLA",
+    "Flashforge HS PLA @FF AD5X",
+    "Flashforge PA12-CF",
+    "Flashforge PA6-CF",
+    "Flashforge PA66-CF",
+    "Flashforge PET-CF",
+    "Flashforge PETG Basic",
+    "Flashforge PETG Pro @FF AD5X",
+    "Flashforge PETG Transparent @FF AD5X",
+    "Flashforge PETG-CF",
+    "Flashforge PETG-CF @FF AD5X",
+    "Flashforge PLA Basic @FF AD5X",
+    "Flashforge PLA Color Change @FF AD5X",
+    "Flashforge PLA Galaxy @FF AD5X",
+    "Flashforge PLA Luminous @FF AD5X",
+    "Flashforge PLA Matte @FF AD5X",
+    "Flashforge PLA Metal @FF AD5X",
+    "Flashforge PLA Pro @FF AD5X",
+    "Flashforge PLA Silk @FF AD5X",
+    "Flashforge PLA Sparkle @FF AD5X",
+    "Flashforge PLA-CF",
+    "Flashforge PLA-CF @FF AD5X",
+    "Flashforge PPA-CF",
+    "Flashforge PPA-GF",
+    "Flashforge PPS-CF",
+    "Flashforge TPU 95A",
+    "Flashforge TPU 95A @FF AD5X",
+    "Generic TPU 85A @FF AD5X",
+    "SUNLU PETG @FF AD5M",
+    "SUNLU PLA Marble @FF AD5M",
+    "SUNLU PLA Matte @FF AD5M",
+    "SUNLU PLA+ 2.0 @FF AD5M",
+    "SUNLU PLA+ @FF AD5M",
+    "SUNLU Silk PLA+ @FF AD5M",
+    "SUNLU Wood PLA @FF AD5M"
    ]
   }
  ]

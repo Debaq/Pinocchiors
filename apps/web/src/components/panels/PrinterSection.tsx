@@ -1,23 +1,34 @@
-import { Component, Show, createSignal, onCleanup, onMount } from "solid-js";
+import { Component, For, Show, createEffect, createSignal, on, onCleanup } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
-import { Button, Panel, ProgressBar } from "../ui";
+import { clsx } from "clsx";
+import { Button, Panel, ProgressBar, Select } from "../ui";
 import * as Icons from "../icons";
 import { fmtNumber, t } from "../../lib/i18n";
 import { tBackend } from "../../lib/i18nBackend.ts";
-import { printerConnection, setPrinterConnection } from "../../lib/settings";
+import { netPrinters, removeNetPrinter, saveNetPrinter, selectNetPrinter, selectedNetPrinter, type NetPrinter, type NetPrinterKind } from "../../lib/settings";
+import { PRINTER_MODELS, printerImage } from "../../lib/printerModels";
 import type { ConfirmRequest } from "../layout/ConfirmDialog";
 
 // ═══════════════════════════════════════════════════════════════════════════
-// TIPOS (espejo de apps/desktop/src/moonraker.rs)
+// TIPOS (espejo de apps/desktop/src/printers.rs, moonraker.rs y flashforge.rs)
 // ═══════════════════════════════════════════════════════════════════════════
 
-interface PrinterInfo {
-  url: string;
-  hostname: string;
-  klippy_state: string;
+interface Slot {
+  id: number;
+  has_filament: boolean;
+  material: string;
+  color: string;
+}
+
+interface NetPrinterInfo {
+  kind: NetPrinterKind;
+  name: string;
+  ready: boolean;
+  state: string;
   message: string;
-  moonraker_version: string;
-  klipper_version: string;
+  firmware: string;
+  serial: string | null;
+  slots: Slot[];
 }
 
 interface PrinterStatus {
@@ -34,6 +45,8 @@ interface PrinterStatus {
   filament_mm: number;
   extruder: [number, number];
   bed: [number, number];
+  slots: Slot[];
+  current_slot: number | null;
 }
 
 interface SendResult {
@@ -60,11 +73,14 @@ const STATES: Record<string, string> = {
 
 const errText = (e: unknown) => (typeof e === "string" ? tBackend(e) : String(e));
 
-/** Argumentos de conexión para los comandos de Moonraker */
-const conn = () => {
-  const c = printerConnection();
-  return { address: c.address, apiKey: c.apiKey.trim() || null };
-};
+/** Cómo llegar a la impresora (argumento `conn` de los comandos) */
+const conn = (p: NetPrinter) => ({
+  kind: p.kind,
+  address: p.address,
+  apiKey: p.apiKey.trim() || null,
+  checkCode: p.checkCode.trim() || null,
+  serial: p.serial.trim() || null,
+});
 
 function fmtDuration(seconds: number): string {
   const s = Math.max(0, Math.round(seconds));
@@ -80,30 +96,120 @@ function defaultName(): string {
   return `pinocchio-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
 }
 
+const inputClass = "w-full px-2 py-1 rounded bg-surface/40 border border-border text-xs text-text outline-none focus:border-accent";
+
 // Lo último que se mandó (lo muestran las dos pestañas)
 const [lastSent, setLastSent] = createSignal<string>();
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PIEZAS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Foto del modelo (o un ícono si no hay) */
+export const PrinterPicture: Component<{ model?: string; size?: number; class?: string }> = (props) => {
+  const size = () => props.size ?? 40;
+  return (
+    <Show
+      when={printerImage(props.model)}
+      fallback={
+        <div class={clsx("flex items-center justify-center rounded bg-surface/40 text-text-dim shrink-0", props.class)} style={{ width: `${size()}px`, height: `${size()}px` }}>
+          <Icons.Printer size={Math.round(size() / 2)} />
+        </div>
+      }
+    >
+      {(src) => <img src={src()} alt={props.model ?? ""} class={clsx("object-contain shrink-0", props.class)} style={{ width: `${size()}px`, height: `${size()}px` }} draggable={false} />}
+    </Show>
+  );
+};
+
+/** Carretes del cambiador (AD5X): con filamento, material y el que está en uso */
+const SlotChips: Component<{ slots: Slot[]; current?: number | null; selected?: number; onSelect?: (id: number) => void }> = (props) => (
+  <div class="grid grid-cols-4 gap-1">
+    <For each={props.slots}>
+      {(s) => (
+        <button
+          type="button"
+          disabled={!props.onSelect || !s.has_filament}
+          onClick={() => props.onSelect?.(s.id)}
+          class={clsx(
+            "flex flex-col items-center gap-0.5 rounded border px-1 py-1 text-[10px] transition-colors",
+            props.selected === s.id ? "border-accent bg-accent/15 text-accent" : "border-border text-text-muted",
+            !s.has_filament && "opacity-40",
+            props.onSelect && s.has_filament && "hover:border-accent/60"
+          )}
+          title={s.has_filament ? t("Carrete {n}", { n: s.id }) : t("Carrete {n} vacío", { n: s.id })}
+        >
+          <span class="inline-block w-3 h-3 rounded-full border border-border" style={{ background: s.has_filament && s.color ? s.color : "transparent" }} />
+          <span class="font-mono">{s.id}</span>
+          <span class="truncate max-w-full">{s.has_filament ? s.material || "?" : t("vacío")}</span>
+          <Show when={props.current === s.id}>
+            <span class="text-[9px] text-green">{t("en uso")}</span>
+          </Show>
+        </button>
+      )}
+    </For>
+  </div>
+);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ENVIAR (en el resumen del laminado)
 // ═══════════════════════════════════════════════════════════════════════════
 
 /** «Enviar e imprimir» y «Solo enviar» del último laminado */
-export const SendToPrinter: Component<{ onSent?: () => void; onConfigure?: () => void }> = (props) => {
+export const SendToPrinter: Component<{
+  /** Modelo para el que se laminó (`printer_model`): si no es el de la impresora, no se manda */
+  slicedModel?: string;
+  onSent?: () => void;
+  onConfigure?: () => void;
+}> = (props) => {
   const [name, setName] = createSignal(defaultName());
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string>();
+  const [slots, setSlots] = createSignal<Slot[]>([]);
+  const [slot, setSlot] = createSignal<number>();
+
+  const target = () => selectedNetPrinter();
+  const mismatch = () => {
+    const p = target();
+    return !!p && !!props.slicedModel && p.model !== props.slicedModel;
+  };
+
+  // Carretes de la AD5X: se preguntan al elegirla; se propone el que está en uso o el primero con filamento
+  createEffect(
+    on(
+      () => target()?.id,
+      () => {
+        setSlots([]);
+        setSlot(undefined);
+        setError(undefined);
+        const p = target();
+        if (p?.kind !== "flashforge") return;
+        invoke<PrinterStatus>("printer_status", { conn: conn(p) })
+          .then((st) => {
+            setSlots(st.slots);
+            const loaded = st.slots.filter((s) => s.has_filament);
+            setSlot(loaded.find((s) => s.id === st.current_slot)?.id ?? loaded[0]?.id);
+          })
+          .catch((e) => setError(errText(e)));
+      }
+    )
+  );
+
+  const needsSlot = () => target()?.kind === "flashforge" && slots().length > 0;
 
   const send = async (start: boolean) => {
+    const p = target();
+    if (!p) return;
     setBusy(true);
     setError(undefined);
     try {
-      const r = await invoke<SendResult>("moonraker_send", { ...conn(), filename: name(), start });
+      const r = await invoke<SendResult>("printer_send", { conn: conn(p), filename: name(), start, slot: needsSlot() ? (slot() ?? null) : null });
       setLastSent(
         !start
-          ? t("Enviado a la impresora: {file}", { file: r.filename })
+          ? t("Enviado a {printer}: {file}", { printer: p.name, file: r.filename })
           : r.started
-            ? t("Imprimiendo {file}", { file: r.filename })
-            : t("Se subió {file}, pero no empezó: la impresora está ocupada", { file: r.filename }),
+            ? t("Imprimiendo en {printer}: {file}", { printer: p.name, file: r.filename })
+            : t("Se subió {file}, pero no empezó: la impresora está ocupada", { file: r.filename })
       );
       props.onSent?.();
     } catch (e) {
@@ -115,58 +221,128 @@ export const SendToPrinter: Component<{ onSent?: () => void; onConfigure?: () =>
 
   return (
     <Show
-      when={printerConnection().address.trim()}
+      when={target()}
       fallback={
         <button class="text-[11px] text-text-dim hover:underline text-left" onClick={() => props.onConfigure?.()}>
-          {t("Para mandarlo a la impresora, configúrala en la pestaña Impresora")}
+          {t("Para mandarlo a una impresora, agrégala en la pestaña Impresora")}
         </button>
       }
     >
-      <div class="space-y-1.5">
-        <input
-          class="w-full px-2 py-1 rounded bg-surface/40 border border-border text-xs text-text outline-none focus:border-accent"
-          title={t("Nombre del archivo en la impresora")}
-          value={name()}
-          onInput={(e) => setName(e.currentTarget.value)}
-        />
-        <div class="flex gap-1.5">
-          <Button onClick={() => send(true)} disabled={busy() || !name().trim()} size="sm" variant="primary" icon={<Icons.Printer size={14} />} class="flex-1">
-            {busy() ? t("Enviando...") : t("Enviar e imprimir")}
-          </Button>
-          <Button onClick={() => send(false)} disabled={busy() || !name().trim()} size="sm" variant="ghost" title={t("Subir el gcode sin empezar a imprimir")}>
-            {t("Solo enviar")}
-          </Button>
+      {(p) => (
+        <div class="space-y-1.5">
+          <div class="flex items-center gap-2 rounded border border-border p-1.5">
+            <PrinterPicture model={p().model} size={48} />
+            <div class="min-w-0 flex-1">
+              <Show when={netPrinters().length > 1} fallback={<p class="text-xs font-semibold text-text truncate">{p().name}</p>}>
+                <Select options={netPrinters().map((x) => ({ value: x.id, label: x.name }))} value={p().id} onChange={(v) => selectNetPrinter(v)} />
+              </Show>
+              <p class="text-[10px] text-text-dim truncate">
+                {p().model} · {p().address}
+              </p>
+            </div>
+          </div>
+          <Show when={mismatch()}>
+            <p class="text-[11px] text-red">
+              {t("Este gcode se laminó para {sliced} y la impresora es {model}: elige esa impresora al laminar.", { sliced: props.slicedModel!, model: p().model })}
+            </p>
+          </Show>
+          <Show when={needsSlot()}>
+            <p class="text-[10px] text-text-dim">{t("Carrete")}</p>
+            <SlotChips slots={slots()} selected={slot()} onSelect={setSlot} />
+          </Show>
+          <input class={inputClass} title={t("Nombre del archivo en la impresora")} value={name()} onInput={(e) => setName(e.currentTarget.value)} onKeyDown={(e) => e.stopPropagation()} />
+          <div class="flex gap-1.5">
+            <Button
+              onClick={() => send(true)}
+              disabled={busy() || !name().trim() || mismatch() || (needsSlot() && !slot())}
+              size="sm"
+              variant="primary"
+              icon={<Icons.Printer size={14} />}
+              class="flex-1"
+            >
+              {busy() ? t("Enviando...") : t("Enviar e imprimir")}
+            </Button>
+            <Button onClick={() => send(false)} disabled={busy() || !name().trim() || mismatch()} size="sm" variant="ghost" title={t("Subir el gcode sin empezar a imprimir")}>
+              {t("Solo enviar")}
+            </Button>
+          </div>
+          <Show when={error()}>
+            <p class="text-[11px] text-red">{error()}</p>
+          </Show>
         </div>
-        <Show when={error()}>
-          <p class="text-[11px] text-red">{error()}</p>
-        </Show>
-      </div>
+      )}
     </Show>
   );
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// PESTAÑA «IMPRESORA»: conexión, estado y controles
+// PESTAÑA «IMPRESORA»: impresoras guardadas, estado y controles
 // ═══════════════════════════════════════════════════════════════════════════
 
+const KIND_DEFAULT_MODEL: Record<NetPrinterKind, string> = { moonraker: "Creality K1", flashforge: "Flashforge AD5X" };
+
+function newPrinter(kind: NetPrinterKind): NetPrinter {
+  const n = netPrinters().filter((p) => p.kind === kind).length + 1;
+  return {
+    id: `${kind}-${Date.now().toString(36)}`,
+    name: kind === "flashforge" ? `AD5X ${n}` : `K1 ${n}`,
+    kind,
+    model: KIND_DEFAULT_MODEL[kind],
+    address: "",
+    apiKey: "",
+    checkCode: "",
+    serial: "",
+  };
+}
+
 export const PrinterTab: Component<{ confirm: (request: ConfirmRequest) => Promise<boolean> }> = (props) => {
-  const [address, setAddress] = createSignal(printerConnection().address);
-  const [apiKey, setApiKey] = createSignal(printerConnection().apiKey);
   const [testing, setTesting] = createSignal(false);
-  const [info, setInfo] = createSignal<PrinterInfo>();
+  const [info, setInfo] = createSignal<NetPrinterInfo>();
   const [status, setStatus] = createSignal<PrinterStatus>();
   const [error, setError] = createSignal<string>();
   const [acting, setActing] = createSignal(false);
 
-  const save = () => setPrinterConnection({ address: address().trim(), apiKey: apiKey().trim() });
+  const current = () => selectedNetPrinter();
+  const update = (patch: Partial<NetPrinter>) => {
+    const p = current();
+    if (p) saveNetPrinter({ ...p, ...patch });
+  };
+
+  const add = (kind: NetPrinterKind) => {
+    const p = newPrinter(kind);
+    saveNetPrinter(p);
+    selectNetPrinter(p.id);
+  };
+
+  const remove = async () => {
+    const p = current();
+    if (!p) return;
+    const ok = await props.confirm({
+      title: t("Quitar impresora"),
+      message: t("Se olvida {name} ({address}) en este equipo. La impresora no cambia.", { name: p.name, address: p.address || "—" }),
+      confirmLabel: t("Quitar"),
+      danger: true,
+    });
+    if (ok) {
+      removeNetPrinter(p.id);
+      selectNetPrinter(netPrinters()[0]?.id ?? "");
+    }
+  };
 
   const test = async () => {
-    save();
-    if (!address().trim()) return;
+    const p = current();
+    if (!p?.address.trim()) return;
     setTesting(true);
     setError(undefined);
     try {
-      setInfo(await invoke<PrinterInfo>("moonraker_info", conn()));
+      const i = await invoke<NetPrinterInfo>("printer_info", { conn: conn(p) });
+      setInfo(i);
+      // Se guarda el número de serie y, en Flashforge, el modelo que dice la impresora
+      const patch: Partial<NetPrinter> = {};
+      if (i.serial && i.serial !== p.serial) patch.serial = i.serial;
+      const known = PRINTER_MODELS.find((m) => m.kind === p.kind && i.name.toLowerCase().includes(m.model.split(" ").pop()!.toLowerCase()));
+      if (p.kind === "flashforge" && known && known.model !== p.model) patch.model = known.model;
+      if (Object.keys(patch).length) update(patch);
       await poll();
     } catch (e) {
       setInfo(undefined);
@@ -181,9 +357,10 @@ export const PrinterTab: Component<{ confirm: (request: ConfirmRequest) => Promi
   let timer: ReturnType<typeof setTimeout> | undefined;
   let alive = true;
   const poll = async () => {
-    if (!printerConnection().address) return;
+    const p = current();
+    if (!p?.address.trim()) return;
     try {
-      setStatus(await invoke<PrinterStatus>("moonraker_status", conn()));
+      setStatus(await invoke<PrinterStatus>("printer_status", { conn: conn(p) }));
       setError(undefined);
     } catch (e) {
       setStatus(undefined);
@@ -191,22 +368,34 @@ export const PrinterTab: Component<{ confirm: (request: ConfirmRequest) => Promi
     }
   };
   const loop = async () => {
+    clearTimeout(timer);
     await poll();
     if (alive) timer = setTimeout(loop, error() ? 10000 : 3000);
   };
-  onMount(() => {
-    if (printerConnection().address) void loop();
-  });
+  // Al cambiar de impresora se empieza de cero
+  createEffect(
+    on(
+      () => current()?.id,
+      () => {
+        setInfo(undefined);
+        setStatus(undefined);
+        setError(undefined);
+        void loop();
+      }
+    )
+  );
   onCleanup(() => {
     alive = false;
     clearTimeout(timer);
   });
 
   const act = async (action: "pause" | "resume" | "cancel") => {
+    const p = current();
+    if (!p) return;
     if (action === "cancel") {
       const ok = await props.confirm({
         title: t("Cancelar la impresión"),
-        message: t("La impresora deja de imprimir {file} y no se puede retomar.", { file: status()?.filename ?? "" }),
+        message: t("{printer} deja de imprimir {file} y no se puede retomar.", { printer: p.name, file: status()?.filename ?? "" }),
         confirmLabel: t("Cancelar la impresión"),
         cancelLabel: t("Seguir imprimiendo"),
         danger: true,
@@ -215,7 +404,7 @@ export const PrinterTab: Component<{ confirm: (request: ConfirmRequest) => Promi
     }
     setActing(true);
     try {
-      await invoke("moonraker_action", { ...conn(), action });
+      await invoke("printer_action", { conn: conn(p), action });
       await poll();
     } catch (e) {
       setError(errText(e));
@@ -231,53 +420,116 @@ export const PrinterTab: Component<{ confirm: (request: ConfirmRequest) => Promi
   return (
     <div class="[column-width:280px] [column-gap:1rem] [&>div>div]:break-inside-avoid [&>div>div]:mb-3">
       <div>
-        <Panel id="printer.connection" dense title={t("Conexión")} icon={<Icons.Printer size={14} />} defaultOpen>
-          <div class="space-y-2 pb-3">
-            <p class="text-[10px] text-text-dim">{t("Impresoras con Klipper y Moonraker (por ejemplo una K1 rooteada), en la misma red.")}</p>
-            <label class="block space-y-0.5">
-              <span class="text-[11px] text-text-muted">{t("Dirección de la impresora")}</span>
-              <input
-                class="w-full px-2 py-1 rounded bg-surface/40 border border-border text-xs text-text outline-none focus:border-accent"
-                placeholder={t("192.168.1.50 o k1.local")}
-                value={address()}
-                onInput={(e) => setAddress(e.currentTarget.value)}
-                onChange={save}
-                onKeyDown={(e) => {
-                  e.stopPropagation();
-                  if (e.key === "Enter") void test();
-                }}
-              />
-            </label>
-            <label class="block space-y-0.5">
-              <span class="text-[11px] text-text-muted">{t("Clave de API (si la pide)")}</span>
-              <input
-                type="password"
-                class="w-full px-2 py-1 rounded bg-surface/40 border border-border text-xs text-text outline-none focus:border-accent"
-                value={apiKey()}
-                onInput={(e) => setApiKey(e.currentTarget.value)}
-                onChange={save}
-                onKeyDown={(e) => e.stopPropagation()}
-              />
-            </label>
-            <Button onClick={test} disabled={testing() || !address().trim()} fullWidth size="sm" icon={<Icons.ArrowsClockwise size={14} />}>
-              {testing() ? t("Conectando...") : t("Probar conexión")}
-            </Button>
-            <Show when={info()}>
-              {(i) => (
-                <p class={`text-[11px] ${i().klippy_state === "ready" ? "text-green" : "text-warning"}`}>
-                  {t("Conectada: {name}", { name: i().hostname || i().url })} · {t(KLIPPY[i().klippy_state] ?? i().klippy_state)}
-                  <Show when={i().klippy_state !== "ready" && i().message}>
-                    <span class="block text-text-dim">{i().message}</span>
-                  </Show>
-                </p>
+        <Panel id="printer.list" dense title={t("Impresoras")} icon={<Icons.Printer size={14} />} defaultOpen>
+          <div class="space-y-1.5 pb-3">
+            <For each={netPrinters()} fallback={<p class="text-[11px] text-text-dim">{t("Todavía no hay impresoras. Agrega una:")}</p>}>
+              {(p) => (
+                <button
+                  type="button"
+                  onClick={() => selectNetPrinter(p.id)}
+                  class={clsx(
+                    "flex w-full items-center gap-2 rounded border p-1.5 text-left transition-colors",
+                    current()?.id === p.id ? "border-accent bg-accent/10" : "border-border hover:border-accent/50"
+                  )}
+                >
+                  <PrinterPicture model={p.model} size={44} />
+                  <span class="min-w-0 flex-1">
+                    <span class="block text-xs font-semibold text-text truncate">{p.name}</span>
+                    <span class="block text-[10px] text-text-dim truncate">{p.model}</span>
+                    <span class="block text-[10px] text-text-dim font-mono truncate">{p.address || t("sin dirección")}</span>
+                  </span>
+                </button>
               )}
-            </Show>
-            <Show when={error()}>
-              <p class="text-[11px] text-red">{error()}</p>
-            </Show>
+            </For>
+            <div class="flex gap-1.5">
+              <Button size="sm" variant="ghost" icon={<Icons.Plus size={12} />} onClick={() => add("moonraker")} class="flex-1" title={t("Impresoras con Klipper y Moonraker, como una K1 rooteada")}>
+                {t("Klipper (K1)")}
+              </Button>
+              <Button size="sm" variant="ghost" icon={<Icons.Plus size={12} />} onClick={() => add("flashforge")} class="flex-1" title={t("Flashforge con su firmware de fábrica, como la AD5X")}>
+                {t("Flashforge (AD5X)")}
+              </Button>
+            </div>
           </div>
         </Panel>
       </div>
+      <Show when={current()}>
+        {(p) => (
+          <div>
+            <Panel id="printer.connection" dense title={t("Conexión")} defaultOpen>
+              <div class="space-y-2 pb-3">
+                <div class="flex items-center gap-2">
+                  <PrinterPicture model={p().model} size={72} />
+                  <div class="min-w-0 flex-1 space-y-1">
+                    <input class={inputClass} title={t("Nombre")} value={p().name} onChange={(e) => update({ name: e.currentTarget.value.trim() || p().name })} onKeyDown={(e) => e.stopPropagation()} />
+                    <Select
+                      options={PRINTER_MODELS.filter((m) => m.kind === p().kind).map((m) => ({ value: m.model, label: m.model }))}
+                      value={p().model}
+                      onChange={(v) => update({ model: v })}
+                    />
+                  </div>
+                </div>
+                <label class="block space-y-0.5">
+                  <span class="text-[11px] text-text-muted">{t("Dirección de la impresora")}</span>
+                  <input
+                    class={inputClass}
+                    placeholder={p().kind === "flashforge" ? "192.168.1.60" : t("192.168.1.50 o k1.local")}
+                    value={p().address}
+                    onChange={(e) => update({ address: e.currentTarget.value.trim() })}
+                    onKeyDown={(e) => {
+                      e.stopPropagation();
+                      if (e.key === "Enter") {
+                        update({ address: e.currentTarget.value.trim() });
+                        void test();
+                      }
+                    }}
+                  />
+                </label>
+                <Show
+                  when={p().kind === "flashforge"}
+                  fallback={
+                    <label class="block space-y-0.5">
+                      <span class="text-[11px] text-text-muted">{t("Clave de API (si la pide)")}</span>
+                      <input type="password" class={inputClass} value={p().apiKey} onChange={(e) => update({ apiKey: e.currentTarget.value.trim() })} onKeyDown={(e) => e.stopPropagation()} />
+                    </label>
+                  }
+                >
+                  <label class="block space-y-0.5">
+                    <span class="text-[11px] text-text-muted">{t("Código LAN")}</span>
+                    <input class={inputClass} value={p().checkCode} onChange={(e) => update({ checkCode: e.currentTarget.value.trim() })} onKeyDown={(e) => e.stopPropagation()} />
+                    <span class="block text-[10px] text-text-dim">{t("Lo muestra la pantalla de la impresora en la configuración de red (modo LAN).")}</span>
+                  </label>
+                  <Show when={p().serial}>
+                    <p class="text-[10px] text-text-dim font-mono">{t("N.º de serie: {sn}", { sn: p().serial })}</p>
+                  </Show>
+                </Show>
+                <div class="flex gap-1.5">
+                  <Button onClick={test} disabled={testing() || !p().address.trim()} size="sm" icon={<Icons.ArrowsClockwise size={14} />} class="flex-1">
+                    {testing() ? t("Conectando...") : t("Probar conexión")}
+                  </Button>
+                  <Button onClick={remove} size="sm" variant="ghost" icon={<Icons.Trash size={14} />} title={t("Quitar impresora")} />
+                </div>
+                <Show when={info()}>
+                  {(i) => (
+                    <p class={`text-[11px] ${i().ready ? "text-green" : "text-warning"}`}>
+                      {t("Conectada: {name}", { name: i().name })}
+                      <Show when={i().kind === "moonraker"}> · {t(KLIPPY[i().state] ?? i().state)}</Show>
+                      <Show when={i().firmware}>
+                        <span class="block text-text-dim">{t("Firmware {v}", { v: i().firmware })}</span>
+                      </Show>
+                      <Show when={!i().ready && i().message}>
+                        <span class="block text-text-dim">{i().message}</span>
+                      </Show>
+                    </p>
+                  )}
+                </Show>
+                <Show when={error()}>
+                  <p class="text-[11px] text-red">{error()}</p>
+                </Show>
+              </div>
+            </Panel>
+          </div>
+        )}
+      </Show>
       <Show when={status()}>
         {(s) => (
           <div>
@@ -311,6 +563,10 @@ export const PrinterTab: Component<{ confirm: (request: ConfirmRequest) => Promi
                   </Show>
                   <Row label={t("Boquilla")} value={temp(s().extruder)} />
                   <Row label={t("Cama")} value={temp(s().bed)} />
+                  <Show when={s().slots.length > 0}>
+                    <p class="text-[10px] text-text-dim pt-1">{t("Carretes")}</p>
+                    <SlotChips slots={s().slots} current={s().current_slot} />
+                  </Show>
                   <Show when={s().message}>
                     <p class="text-[11px] text-warning">{s().message}</p>
                   </Show>

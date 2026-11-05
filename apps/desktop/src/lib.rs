@@ -17,7 +17,9 @@ pub mod placement;
 pub mod print_all;
 pub mod print_prep;
 pub mod print_skin;
+pub mod flashforge;
 pub mod moonraker;
+pub mod printers;
 pub mod slicer;
 pub mod project;
 pub mod crease;
@@ -244,10 +246,10 @@ pub fn run() {
             slicer::slicer_cancel,
             slicer::slicer_preview,
             slicer::save_gcode,
-            moonraker::moonraker_info,
-            moonraker::moonraker_send,
-            moonraker::moonraker_status,
-            moonraker::moonraker_action,
+            printers::printer_info,
+            printers::printer_send,
+            printers::printer_status,
+            printers::printer_action,
             // Escáneres 3D (Orizon3D)
             scanner::scanner_connect,
             scanner::scanner_disconnect,

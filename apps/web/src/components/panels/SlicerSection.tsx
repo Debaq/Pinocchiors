@@ -7,7 +7,7 @@ import { fmtNumber, t } from "../../lib/i18n";
 import { tBackend } from "../../lib/i18nBackend.ts";
 import { FEATURES, ORCA_ROLE_NAMES, decodePreview, gcodePreview, type GcodeMeta } from "../../lib/gcodePreview";
 import type { ConfirmRequest } from "../layout/ConfirmDialog";
-import { PrinterTab, SendToPrinter } from "./PrinterSection";
+import { PrinterPicture, PrinterTab, SendToPrinter } from "./PrinterSection";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TIPOS (espejo de apps/desktop/src/slicer.rs)
@@ -15,6 +15,9 @@ import { PrinterTab, SendToPrinter } from "./PrinterSection";
 
 export interface SlicerPrinter {
   name: string;
+  vendor: string;
+  /** Carretes (AD5X: 4); el carrete real se elige al enviar */
+  tools: number;
   model: string;
   nozzle: number;
   default_process: string;
@@ -188,6 +191,8 @@ export const SlicerSection: Component<{
   const [result, setResult] = createSignal<SliceResult>();
   const [error, setError] = createSignal<string>();
   const [saved, setSaved] = createSignal<string>();
+  /** Modelo de la impresora con la que se laminó el último gcode */
+  const [slicedModel, setSlicedModel] = createSignal<string>();
 
   const set = (patch: Partial<SlicerSettings>) => props.onSettings({ ...props.settings, ...patch });
   const printers = () => info()?.printers ?? [];
@@ -265,6 +270,7 @@ export const SlicerSection: Component<{
         onProgress: channel,
       });
       setResult(r);
+      setSlicedModel(p.model);
       await showPreview(r);
       props.onTab("preview");
     } catch (e) {
@@ -313,12 +319,20 @@ export const SlicerSection: Component<{
       <div>
         <Panel id="slicer.profile" dense title={t("Impresora y perfil")} icon={<Icons.Stack size={14} />} defaultOpen>
           <div class="space-y-2 pb-3">
-            <Select
-              label={t("Impresora")}
-              options={printers().map((p) => ({ value: p.name, label: p.name }))}
-              value={printer()?.name}
-              onChange={(v) => set({ printer: v, process: undefined, filament: undefined, overrides: {} })}
-            />
+            <div class="flex items-end gap-2">
+              <PrinterPicture model={printer()?.model} size={56} />
+              <div class="min-w-0 flex-1">
+                <Select
+                  label={t("Impresora")}
+                  options={printers().map((p) => ({ value: p.name, label: p.name }))}
+                  value={printer()?.name}
+                  onChange={(v) => set({ printer: v, process: undefined, filament: undefined, overrides: {} })}
+                />
+              </div>
+            </div>
+            <Show when={(printer()?.tools ?? 1) > 1}>
+              <p class="text-[10px] text-text-dim">{t("Tiene {n} carretes: el carrete se elige al enviar a la impresora.", { n: printer()!.tools })}</p>
+            </Show>
             <Select
               label={t("Calidad")}
               options={(printer()?.processes ?? []).map((p) => ({ value: p, label: shortName(p) }))}
@@ -461,7 +475,7 @@ export const SlicerSection: Component<{
                   <p class="text-[10px] text-green truncate">{t("Guardado en {path}", { path: saved()! })}</p>
                 </Show>
                 <div class="pt-1">
-                  <SendToPrinter onSent={() => props.onTab("printer")} onConfigure={() => props.onTab("printer")} />
+                  <SendToPrinter slicedModel={slicedModel()} onSent={() => props.onTab("printer")} onConfigure={() => props.onTab("printer")} />
                 </div>
               </div>
             </Panel>

@@ -109,3 +109,27 @@ fn pone_soportes_solo_si_hacen_falta() {
     assert_eq!(p.length_by_feature[Feature::Support as usize], 0.0);
     let _ = std::fs::remove_dir_all(&job.work_dir);
 }
+
+/// AD5X: un filamento por carrete (como Orca) → el gcode usa `T0` y lista los 4 carretes;
+/// al enviar se asigna `T0` al carrete elegido.
+#[test]
+fn lamina_un_cubo_para_la_ad5x() {
+    let Some(engine) = find_engine() else {
+        eprintln!("sin motor: prueba saltada");
+        return;
+    };
+    let p = index().printers.iter().find(|p| p.name.contains("AD5X")).unwrap();
+    assert_eq!(p.tools, 4);
+    let settings = SliceSettings { printer: p.name.clone(), process: p.default_process.clone(), filament: p.default_filament.clone(), overrides: Default::default() };
+    let config = build_config(&settings).unwrap();
+    let work_dir = std::env::temp_dir().join(format!("pinocchio-slicer-ad5x-{}", std::process::id()));
+    let job = SliceJob { config, parts: vec![cube(100.0, 100.0, 20.0)], work_dir: work_dir.clone() };
+    let summary = run(&job, &engine, |_| {}, &AtomicBool::new(false)).unwrap();
+    let gcode = std::fs::read_to_string(&summary.gcode).unwrap();
+    let _ = std::fs::remove_dir_all(&work_dir);
+    let tools: Vec<&str> = gcode.lines().filter(|l| l.len() == 2 && l.starts_with('T')).collect();
+    assert_eq!(tools, ["T0"], "una sola herramienta, la T0");
+    assert!(gcode.contains("; filament_type = PLA;PLA;PLA;PLA"), "faltan los 4 carretes al final");
+    assert!(!gcode.contains("SET_PRINT_STATS_INFO"));
+    assert!((95..=105).contains(&summary.layers), "capas {}", summary.layers);
+}

@@ -13,7 +13,7 @@ rootearlas**, y ver el estado de todas en un solo lugar.
 |---|---|---|---|
 | Creality K1 (`192.168.50.250`, K1-436A) | Creality 1.3.3.46 rooteada (Helper Script) | Moonraker, puerto 7125 | ✅ hecho (S7, probado el envío real) |
 | Creality K1 × 2 | Creality de fábrica | Protocolo propio de Creality (como Creality Print) | pendiente: fase P2 |
-| Flashforge AD5X (`192.168.50.190`, SN SNMTIE9A00089) | Flashforge v3.1.7 de fábrica | Protocolo clásico TCP 8899 (responde sin clave); API local 8898 cerrada (modo LAN apagado) | pendiente: fases P3–P4 |
+| Flashforge AD5X × 2 (`.190` fw 3.1.7; `.47` fw 3.1.8, ex-zmod limpiada) | Flashforge de fábrica | API local 8898 (estado, subir+imprimir con carrete) + TCP 8899 (serie, cancelar/pausar) | ✅ en la app (P1, P3, P4); impresión real probada a mano, falta probar desde la app 🧪 |
 
 Por qué no rootear las otras: con el root la K1 se colgaba (era GuppyScreen, ya quitada) y
 no les gusta cómo quedan. Orca normal nunca pudo imprimir en las K1 de fábrica: solo el
@@ -24,10 +24,10 @@ para estas.
 
 | Fase | Contenido | Estado |
 |---|---|---|
-| P1 | **Varias impresoras**: lista con nombre, tipo (Moonraker / Creality de fábrica / Flashforge), dirección y credenciales; estado de todas a la vista; al enviar se elige a cuál. Reemplaza `settings.moonraker` (una sola dirección) migrándola. Un `trait`/enum en Rust por tipo de conexión con las mismas operaciones: info, enviar(+imprimir), estado, pausar/reanudar/cancelar | pendiente |
+| P1 | **Varias impresoras**: lista con nombre, tipo (Moonraker / Creality de fábrica / Flashforge), dirección y credenciales; estado de todas a la vista; al enviar se elige a cuál. Reemplaza `settings.moonraker` (una sola dirección) migrándola. Un `trait`/enum en Rust por tipo de conexión con las mismas operaciones: info, enviar(+imprimir), estado, pausar/reanudar/cancelar | hecha (2026-11-05): lista en la pestaña «Impresora» con foto de cada modelo (`lib/printerModels.ts`, fotos de los perfiles de Orca en `src/assets/printer-*.png`), `settings.netPrinters` (migra la K1 de `settings.moonraker`). Comandos comunes `printer_info/send/status/action` (`printers.rs`). Al enviar se elige impresora y no deja mandar un gcode laminado para otro modelo |
 | P2 | **K1 de fábrica (protocolo Creality)**: ver abajo. Primero solo leer el estado de una K1 libre; después subir sin imprimir; al final imprimir con el usuario al lado | pendiente (necesita una K1 de fábrica libre) |
-| P3 | **Flashforge AD5X**: API local. Ver abajo. El usuario tiene que activar el modo LAN y dar el número de serie y el código de la pantalla | pendiente |
-| P4 | **Perfiles AD5X en el laminador**: `tools/flatten_presets.py` hoy solo aplana Creality (`VENDOR = "Creality"`); Orca 2.4.2 trae `Flashforge AD5X 0.25/0.4/0.6/0.8 nozzle` y sus procesos (`@FF AD5X`). Primero un color; multicolor (IFS, 4 carretes) necesita que el motor lamine con varios filamentos (hoy fuerza uno: `filament_map` en `engine/main.cpp`) | pendiente |
+| P3 | **Flashforge AD5X**: API local. Ver abajo. El usuario tiene que activar el modo LAN y dar el número de serie y el código de la pantalla | hecha (2026-11-05): `apps/desktop/src/flashforge.rs` (estado y carretes por `/detail`, subir con `materialMappings` T0→carrete elegido, número de serie por `~M115`, cancelar `~M26` inmediato, pausar `~M25`/reanudar `~M24` sin probar en la real); pruebas con una AD5X falsa (HTTP+TCP) |
+| P4 | **Perfiles AD5X en el laminador**: `tools/flatten_presets.py` hoy solo aplana Creality (`VENDOR = "Creality"`); Orca 2.4.2 trae `Flashforge AD5X 0.25/0.4/0.6/0.8 nozzle` y sus procesos (`@FF AD5X`). Primero un color; multicolor (IFS, 4 carretes) necesita que el motor lamine con varios filamentos (hoy fuerza uno: `filament_map` en `engine/main.cpp`) | hecha (un color): `flatten_presets.py` con varios fabricantes y `tools` por impresora; con `tools > 1` el laminador declara un filamento por carrete (`one_filament_per_tool`) → gcode con `T0`; el carrete se elige al enviar. `SET_PRINT_STATS_INFO` solo en Creality K1. Multicolor pendiente |
 | P5 | **Encontrarlas solas en la red**: Moonraker por mDNS, Creality como `CrealityHostDiscovery.cpp`, Flashforge por UDP 48899 | pendiente |
 | P6 | Herramienta MCP para mandar a imprimir y ver el estado; cámara (K1 y AD5X) | pendiente |
 
