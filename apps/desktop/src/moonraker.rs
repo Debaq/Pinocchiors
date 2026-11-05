@@ -502,6 +502,19 @@ mod tests {
         assert!(err.starts_with("No se pudo conectar con la impresora en http://127.0.0.1:"), "{err}");
     }
 
+    /// Contra una impresora de verdad, solo consultas (no sube ni imprime nada):
+    /// `PINOCCHIO_MOONRAKER=192.168.50.250 cargo test -p pinocchio-app --lib impresora_real -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn impresora_real() {
+        let addr = std::env::var("PINOCCHIO_MOONRAKER").expect("PINOCCHIO_MOONRAKER=<ip>");
+        let p = Printer::new(&addr, std::env::var("PINOCCHIO_MOONRAKER_KEY").ok(), Duration::from_secs(8)).unwrap();
+        let i = info(&p).unwrap();
+        println!("{i:?}");
+        assert!(!i.klippy_state.is_empty());
+        println!("{:?}", status(&p).unwrap());
+    }
+
     #[test]
     fn estado_imprimiendo_con_estimacion() {
         let (addr, _) = fake(|_, path| {

@@ -27,6 +27,9 @@ fn lamina_un_cubo_para_la_k1() {
     assert!(last > 0, "sin progreso");
     let gcode = std::fs::read_to_string(&summary.gcode).unwrap();
     assert!(gcode.contains("START_PRINT"), "falta el inicio de Klipper");
+    // La impresora sabe en qué capa va (Moonraker / pantalla)
+    assert!(gcode.contains("SET_PRINT_STATS_INFO TOTAL_LAYER=10"), "falta el total de capas");
+    assert!(gcode.contains("SET_PRINT_STATS_INFO CURRENT_LAYER=1\n") && gcode.contains("SET_PRINT_STATS_INFO CURRENT_LAYER=2\n"), "falta la capa actual");
     // Miniaturas de la K1 (96×96 y 300×300) en PNG dentro del gcode
     assert!(gcode.contains("; thumbnail begin 96x96"), "falta la miniatura chica");
     assert!(gcode.contains("; thumbnail begin 300x300"), "falta la miniatura grande");

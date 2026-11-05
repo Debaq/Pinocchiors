@@ -62,12 +62,30 @@ pub fn build_config(s: &SliceSettings) -> Result<Map<String, Value>, SlicerError
             }
         }
     }
+    klipper_layer_info(&mut out);
     out.insert("name".into(), Value::String("pinocchio".into()));
     out.insert("from".into(), Value::String("User".into()));
     out.insert("printer_settings_id".into(), Value::String(s.printer.clone()));
     out.insert("print_settings_id".into(), Value::String(s.process.clone()));
     out.insert("filament_settings_id".into(), Value::Array(vec![Value::String(s.filament.clone())]));
     Ok(out)
+}
+
+/// Klipper: que la impresora sepa en qué capa va (Moonraker y la pantalla lo muestran),
+/// como los perfiles Klipper de Orca. Los de Creality K1 no lo traen.
+fn klipper_layer_info(out: &mut Map<String, Value>) {
+    if out.get("gcode_flavor").and_then(Value::as_str) != Some("klipper") {
+        return;
+    }
+    let mut add = |key: &str, line: &str| {
+        let current = out.get(key).and_then(Value::as_str).unwrap_or("").to_string();
+        if !current.contains("SET_PRINT_STATS_INFO") {
+            let joined = if current.trim().is_empty() { line.to_string() } else { format!("{}\n{line}", current.trim_end()) };
+            out.insert(key.to_string(), Value::String(joined));
+        }
+    };
+    add("machine_start_gcode", "SET_PRINT_STATS_INFO TOTAL_LAYER=[total_layer_count]");
+    add("layer_change_gcode", "SET_PRINT_STATS_INFO CURRENT_LAYER={layer_num + 1}");
 }
 
 fn as_list(v: &Value) -> Value {
@@ -117,6 +135,18 @@ mod tests {
         assert_eq!(c["layer_height"], "0.16");
         assert_eq!(c["textured_plate_temp"], serde_json::json!(["55"]));
         assert_eq!(c["hot_plate_temp"], serde_json::json!(["55"]));
+    }
+
+    #[test]
+    fn klipper_sabe_en_que_capa_va() {
+        let c = build_config(&k1()).unwrap();
+        let start = c["machine_start_gcode"].as_str().unwrap();
+        assert!(start.starts_with("START_PRINT") && start.ends_with("\nSET_PRINT_STATS_INFO TOTAL_LAYER=[total_layer_count]"));
+        assert!(c["layer_change_gcode"].as_str().unwrap().ends_with("\nSET_PRINT_STATS_INFO CURRENT_LAYER={layer_num + 1}"));
+        // Si el usuario ya lo puso, no se repite
+        let mut s = k1();
+        s.overrides.insert("layer_change_gcode".into(), Value::String("SET_PRINT_STATS_INFO CURRENT_LAYER={layer_num}".into()));
+        assert_eq!(build_config(&s).unwrap()["layer_change_gcode"], "SET_PRINT_STATS_INFO CURRENT_LAYER={layer_num}");
     }
 
     #[test]
