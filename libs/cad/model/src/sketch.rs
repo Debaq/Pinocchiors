@@ -727,12 +727,25 @@ impl Sketch {
         let pos = self.entities.iter().position(|e| e.id == id).ok_or(SketchError::NoEntity(id))?;
         let removed = self.entities.remove(pos);
         self.constraints.retain(|c| !c.mentions(None, Some(id)));
+        // Las anclas de los textos se quedan aunque no las use otra entidad
+        let anchors: std::collections::HashSet<u32> = self.texts.iter().map(|t| t.anchor).collect();
+        let mut loose = Vec::new();
         for p in removed.geometry.point_ids() {
-            if Some(p) != self.origin && !self.entities.iter().any(|e| e.geometry.point_ids().contains(&p)) {
+            if Some(p) != self.origin && !anchors.contains(&p) && !self.entities.iter().any(|e| e.geometry.point_ids().contains(&p)) {
                 self.points.retain(|q| q.id != p);
                 self.constraints.retain(|c| !c.mentions(Some(p), None));
+                loose.push(p);
             }
         }
+        // Nada queda nombrando lo borrado: textos, aristas usadas
+        for t in &mut self.texts {
+            t.entities.retain(|&e| e != id);
+            t.points.retain(|p| !loose.contains(p));
+            if t.style.path == Some(id) {
+                t.style.path = None;
+            }
+        }
+        self.uses.retain(|u| u.entity != id);
         Ok(())
     }
 
@@ -901,14 +914,18 @@ impl Sketch {
             Some(&(_, a, d)) => (a, [t[0] - d[0], t[1] - d[1]]),
             None => (p, t),
         });
-        let result = self.solve_system(drag);
+        // Un pánico en medio no puede dejar el sketch sin esos puntos
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.solve_system(drag)));
         // Todos vuelven aunque algo fallara (el ancla siempre queda en el sketch)
         for &(id, a, d) in &held {
             let at = self.point(a).unwrap_or([0.0, 0.0]);
             self.points.push(SketchPoint { id, x: at[0] + d[0], y: at[1] + d[1] });
         }
         self.points.sort_by_key(|p| order.get(&p.id).copied().unwrap_or(usize::MAX));
-        let mut report = result?;
+        let mut report = match result {
+            Ok(r) => r?,
+            Err(panic) => std::panic::resume_unwind(panic),
+        };
         // Si el ancla está libre, el texto entero lo está
         for t in &self.texts {
             if report.free_points.contains(&t.anchor) {

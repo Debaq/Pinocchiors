@@ -13,6 +13,7 @@ import {
   splineTangents,
   dropLoosePoints,
   extendAt,
+  inheritMarks,
   removeEntity,
   stickOrFix,
   trimAt,
@@ -137,8 +138,7 @@ export function trimFreeCurve(s: Sketch, id: number, p: P2, limits: TrimLimits =
   // El primer tramo se queda con la entidad (y lo que la nombra); los otros, nuevas
   e.geometry = ids[0];
   for (const ng of ids.slice(1)) {
-    const nid = addEntity(s, ng);
-    if (e.construction) s.entities.find((x) => x.id === nid)!.construction = true;
+    inheritMarks(s, e, addEntity(s, ng));
   }
   // Cada corte, pegado a lo que lo cortó
   for (const [a, b] of pieces)

@@ -73,26 +73,41 @@ El orden de las fases es el de urgencia: primero lo que pierde trabajo del usuar
 
 ## U2 — Integridad de datos del sketch (alto)
 
-- [ ] **`dropDegenerate` borra las restricciones de los patrones** [V] (`sketchEdit.ts:80`):
+- [x] **`dropDegenerate` borra las restricciones de los patrones** [V] (`sketchEdit.ts:80`):
   `equal_offset`/`equal_rotation` repiten id a propósito (patrones de ≥3 copias); cualquier
   `mergePoint`, unir, reparar o quitar duplicados las borra y el patrón se suelta sin aviso.
   Filtrar solo los tipos donde repetir es degenerado.
-- [ ] **Bloque con una curva que toca el origen** [V] (`sketchBlocks.ts:46,69`): el origen sale de
+- [x] **Bloque con una curva que toca el origen** [V] (`sketchBlocks.ts:46,69`): el origen sale de
   `pts` y de `map`, la definición queda con `start: undefined`. Mapear el origen o rechazarlo.
-- [ ] **Desarmar un bloque escalado** [V] (`sketchBlocks.ts:168`): copia las cotas a escala 1
+- [x] **Desarmar un bloque escalado** [V] (`sketchBlocks.ts:168`): copia las cotas a escala 1
   (largo 4 sobre línea de 8). Escalar por `t.size` u omitirlas. Además empareja por índice [S].
-- [ ] **Centro de patrón colgando** [V] (`sketchPatterns.ts:67`, `cad.ts:3101`): borrar la
+- [x] **Centro de patrón colgando** [V] (`sketchPatterns.ts:67`, `cad.ts:3101`): borrar la
   entidad del centro o fusionarlo deja `spec.center` inválido → `TypeError` sin capturar.
-- [ ] **Recortar/partir pierden marcas** [V] (`cad.ts` `trimLine`/`trimCurve`,
+- [x] **Recortar/partir pierden marcas** [V] (`cad.ts` `trimLine`/`trimCurve`,
   `sketchTransform.ts:737`, `sketchTrim.ts:140`, `insertClip`): el tramo nuevo pierde
   `construction`, `layer`, `axis`, `infinite` → aparece geometría sólida donde había construcción.
-- [ ] **Partir un arco deja `arc_length` del arco entero** [V] (`sketchTransform.ts:740`) y el
+- [x] **Partir un arco deja `arc_length` del arco entero** [V] (`sketchTransform.ts:740`) y el
   tramo nuevo sin `radius`/`equal`.
-- [ ] **Escalar ignora lo bloqueado** [V] (`sketchTransform.ts:591`): el radio de un círculo con
+- [x] **Escalar ignora lo bloqueado** [V] (`sketchTransform.ts:591`): el radio de un círculo con
   `lock` cambia igual.
-- [ ] **`remove_entity` deja referencias** [V] (`sketch.rs:701`, `cad.ts:3101`): `texts`, `uses`,
+- [x] **`remove_entity` deja referencias** [V] (`sketch.rs:701`, `cad.ts:3101`): `texts`, `uses`,
   `layers`, `patterns`, `style.path`.
-- [ ] **`hold_text_points` pierde puntos con un error en medio** [V] (`sketch.rs:881`).
+- [x] **`hold_text_points` pierde puntos con un error en medio** [V] (`sketch.rs:881`).
+- **Hecho 2026-11-05**: `dropDegenerate` deja las cadenas de patrones (solo quita pares sin
+  largo, pares iguales o centro dentro de un par). `createBlock` con el origen adentro: el
+  origen del bloque es el del sketch (elegir otro da mensaje). `explodeBlock` multiplica las
+  cotas por la escala, invierte ángulos con reflejo, salta horizontales/verticales si la copia
+  está girada y empareja por tipo y distancia al ancla si a la copia le borraron algo.
+  Centro de patrón circular: `removeEntity` no lo borra, `mergePoint` lo sigue y
+  `circularPattern` da mensaje si falta (también el camino de un patrón en curva y
+  `style.path` siguen al fusionar duplicados). `inheritMarks` (construcción, capa, eje,
+  infinita) en recortar línea/arco/curva, partir y pegar. Partir un arco pasa `arc_length` a
+  `curve_length` de los dos tramos (se implica el mismo radio por el punto común). Escalar no
+  toca el radio de lo bloqueado. `removeEntity` (TS) limpia `style.path` y olvida patrones
+  sin nada; `remove_entity` (Rust) limpia textos, `uses` y `style.path` y no borra anclas.
+  `hold_text_points`: el solve va en `catch_unwind` y los puntos vuelven antes de seguir el
+  pánico. Pruebas: `e2e/sketchIntegrity.test.mjs` (10, fallan sin el arreglo) y
+  `sketch_robust.rs` (1). Falta probarlo en la app.
 
 ## U3 — Interfaz que se traba (alto)
 

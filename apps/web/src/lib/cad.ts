@@ -2380,6 +2380,19 @@ export function addEntity(s: Sketch, geometry: Geometry): number {
   return id;
 }
 
+/**
+ * Pasa a la entidad `to` las marcas de `from` (construcción, capa, eje,
+ * infinita): el tramo nuevo de un recorte o un corte es como el original
+ */
+export function inheritMarks(s: Sketch, from: SketchEntity, to: number): void {
+  const e = s.entities.find((x) => x.id === to);
+  if (!e || e === from) return;
+  if (from.construction) e.construction = true;
+  if (from.axis) e.axis = true;
+  if (from.infinite) e.infinite = true;
+  if (from.layer != null) e.layer = from.layer;
+}
+
 /** Rectángulo con esquinas compartidas y restricciones horizontal/vertical */
 export function addRectangle(s: Sketch, a: P2, b: P2): number[] {
   const [x0, x1] = [Math.min(a[0], b[0]), Math.max(a[0], b[0])];
@@ -2799,6 +2812,7 @@ export function circularPattern(s: Sketch, ids: number[], count: number, center:
   const pts = pointsOfEntities(s, ids);
   const lead = pts.find((p) => p !== center);
   if (lead === undefined || count < 2) return tr("Elegir qué repetir y al menos 2 en total");
+  if (!s.points.some((p) => p.id === center)) return tr("El centro del patrón ya no está");
   if (span === 0) return tr("El ángulo no puede ser 0");
   const full = Math.abs(span) >= 360 - 1e-9;
   const step = ((full ? Math.sign(span) * 360 : span) / (full ? count : count - 1)) * (Math.PI / 180);
@@ -3109,7 +3123,9 @@ export function removeEntity(s: Sketch, id: number): void {
   const pointsOf = geometryPoints;
   const mentions = constraintMentions;
   s.constraints = s.constraints.filter((c) => !mentions(c, new Set([id])));
+  // Las anclas de textos y los centros de patrones circulares se quedan
   const anchors = new Set((s.texts ?? []).map((t) => t.anchor));
+  for (const p of s.patterns ?? []) if (p.spec.kind === "circular") anchors.add(p.spec.center);
   const loose = pointsOf(e.geometry).filter((p) => p !== s.origin && !anchors.has(p) && !s.entities.some((x) => pointsOf(x.geometry).includes(p)));
   s.points = s.points.filter((p) => !loose.includes(p.id));
   s.constraints = s.constraints.filter((c) => !mentions(c, new Set(loose)));
@@ -3119,6 +3135,13 @@ export function removeEntity(s: Sketch, id: number): void {
   for (const t of s.texts ?? []) {
     t.entities = t.entities.filter((x) => x !== id);
     t.points = t.points.filter((p) => !loose.includes(p));
+    if (t.style?.path === id) delete t.style.path;
+  }
+  // Un patrón sin nada de lo suyo (ni original ni copias) se olvida
+  if (s.patterns) {
+    const alive = new Set(s.entities.map((x) => x.id));
+    s.patterns = s.patterns.filter((p) => [...p.source, ...p.owned].some((x) => alive.has(x)));
+    if (!s.patterns.length) delete s.patterns;
   }
 }
 
@@ -3258,7 +3281,7 @@ export function splitLineAt(s: Sketch, lineId: number, point: number): number | 
   const [start, oldEnd] = [g.start, g.end];
   g.end = point;
   const rest = addEntity(s, { type: "line", start: point, end: oldEnd });
-  if (line.construction) s.entities.find((e) => e.id === rest)!.construction = true;
+  inheritMarks(s, line, rest);
   if (!splitRests.has(s)) splitRests.set(s, new Set());
   splitRests.get(s)!.add(rest);
   let axis = false;
@@ -3359,6 +3382,7 @@ export function trimLine(s: Sketch, lineId: number, p: P2, limits: TrimLimits = 
     const oldEnd = g.end;
     g.end = p1;
     const rest = addEntity(s, { type: "line", start: p2, end: oldEnd });
+    inheritMarks(s, line, rest);
     stick(p1, before);
     stick(p2, after);
     // Horizontal/vertical valen para las dos partes
@@ -3755,7 +3779,7 @@ export function trimCurve(s: Sketch, id: number, p: P2, limits: TrimLimits = [])
     const pa = addPoint(s, after.p);
     const oldEnd = arc.end;
     arc.end = pb;
-    addEntity(s, { type: "arc", center: arc.center, start: pa, end: oldEnd });
+    inheritMarks(s, e, addEntity(s, { type: "arc", center: arc.center, start: pa, end: oldEnd }));
     stickOrFix(s, pb, before.hit);
     stickOrFix(s, pa, after.hit);
   } else if (after) {

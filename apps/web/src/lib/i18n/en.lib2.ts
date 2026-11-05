@@ -287,6 +287,8 @@ export const en_lib2: Catalog = {
   "Corrimiento: dx; dy (por ejemplo 10; -5)": "Offset: dx; dy (for example 10; -5)",
   "Ese patrón ya no está": "That pattern is gone",
   "El original del patrón ya no está": "The pattern's original is gone",
+  "El centro del patrón ya no está": "The pattern's center is gone",
+  "Lo elegido toca el origen del sketch: el origen del bloque tiene que ser ese": "What you chose touches the sketch origin: that must be the block's origin",
   "Esa copia no es del patrón": "That copy doesn't belong to the pattern",
   "Patrón lineal · {n} de {total}": "Linear pattern · {n} of {total}",
   "Patrón circular · {n} de {total}": "Circular pattern · {n} of {total}",

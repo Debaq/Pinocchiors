@@ -1,5 +1,5 @@
 //! Sketches con datos malos o grandes: nada se cae y lo sano se resuelve
-//! igual (plan urgente del sketch, U1).
+//! igual (plan urgente del sketch, U1 y U2).
 use cad_model::*;
 
 fn ends(s: &Sketch, line: u32) -> (u32, u32) {
@@ -90,4 +90,26 @@ fn a_drag_with_a_conflict_still_reports_it() {
     let r = s.solve_drag(b, [12.0, 3.0]).unwrap();
     assert!(!r.quick);
     assert!(!r.conflicting.is_empty());
+}
+
+/// Borrar una entidad no deja textos nombrándola ni se lleva el ancla de un
+/// texto (aunque ninguna otra entidad la use)
+#[test]
+fn removing_an_entity_leaves_no_dangling_references() {
+    let mut s = Sketch::new();
+    let path = s.line([0.0, 0.0], [10.0, 0.0]);
+    let (anchor, end) = ends(&s, path);
+    let glyph = s.line([0.0, 5.0], [1.0, 6.0]);
+    let (g0, g1) = ends(&s, glyph);
+    let mut style = TextStyle::default();
+    style.path = Some(path);
+    s.texts.push(SketchText { id: 99, text: "A".into(), size: 1.0, font: String::new(), anchor, entities: vec![glyph], points: vec![g0, g1], style, block: None });
+    s.remove_entity(path).unwrap();
+    assert!(s.point(anchor).is_ok(), "el ancla del texto se queda");
+    assert!(s.point(end).is_err());
+    assert_eq!(s.texts[0].style.path, None);
+    s.remove_entity(glyph).unwrap();
+    assert!(s.texts[0].entities.is_empty());
+    assert!(s.texts[0].points.is_empty(), "sin puntos que ya no existen");
+    s.solve().expect("se resuelve igual");
 }

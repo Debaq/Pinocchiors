@@ -16,6 +16,7 @@ import {
   type P2,
   type Sketch,
   type SketchBlock,
+  type SketchConstraint,
   type SketchEntity,
   type SketchText,
 } from "./cad.ts";
@@ -43,12 +44,17 @@ export function createBlock(s: Sketch, ids: number[], name: string): SketchText 
   if (!ents.length) return tr("Elegir lo que forma el bloque");
   if (inGroup(s, ids)) return tr("Un texto o una copia de bloque no puede ir dentro de otro bloque");
   const entIds = new Set(ents.map((e) => e.id));
-  const pts = [...new Set(ents.flatMap((e) => geometryPoints(e.geometry)))].filter((p) => p !== s.origin);
+  const all = [...new Set(ents.flatMap((e) => geometryPoints(e.geometry)))];
+  const pts = all.filter((p) => p !== s.origin);
   if (!pts.length) return tr("Lo elegido no tiene puntos propios");
-  // Origen: un punto elegido suelto, o el centro de la caja
+  // Origen: un punto elegido suelto, o el centro de la caja. Si lo elegido
+  // toca el origen del sketch, ese es el origen del bloque (no se mueve)
   const chosen = ids.filter((id) => pts.includes(id) && !entIds.has(id));
+  const onOrigin = s.origin !== undefined && all.includes(s.origin);
+  if (onOrigin && chosen.length === 1) return tr("Lo elegido toca el origen del sketch: el origen del bloque tiene que ser ese");
   let anchor: number;
-  if (chosen.length === 1) anchor = chosen[0];
+  if (onOrigin) anchor = s.origin!;
+  else if (chosen.length === 1) anchor = chosen[0];
   else {
     const xs = pts.map((p) => pos(s, p)[0]);
     const ys = pts.map((p) => pos(s, p)[1]);
@@ -151,22 +157,65 @@ export function saveBlock(s: Sketch, blockId: number, edited: Sketch): string | 
 
 /**
  * Desarma una copia: sus entidades quedan sueltas (con las restricciones del
- * bloque, para que no se deformen solas) y deja de seguir al bloque.
+ * bloque, para que no se deformen solas) y deja de seguir al bloque. Las cotas
+ * se llevan a la escala de la copia; un reflejo invierte los ángulos.
  */
 export function explodeBlock(s: Sketch, textId: number): void {
   const t = (s.texts ?? []).find((x) => x.id === textId);
   const b = t && (s.blocks ?? []).find((x) => x.id === t.block);
   if (!t || !b) return;
-  // Las entidades de la copia están en el mismo orden que las del bloque
+  const scale = Math.abs(t.size || 1);
+  const f = t.style?.frame;
+  const flip = !!f && f[0] * f[3] - f[1] * f[2] < 0;
   const map = new Map<number, number>([[0, t.anchor]]);
-  b.entities.forEach((e, i) => {
-    map.set(e.id, t.entities[i]);
-    const g = s.entities.find((x) => x.id === t.entities[i])?.geometry;
-    if (g) geometryPoints(e.geometry).forEach((p, k) => map.set(p, geometryPoints(g)[k]));
-  });
-  // Solo las de forma: las cotas siguen valiendo con la escala 1
-  for (const c of b.constraints) if (constraintIds(c).every((id) => map.has(id))) s.constraints.push(mapConstraintIds(c, (id) => map.get(id)!));
+  for (const [e, id] of pairCopy(s, t, b, scale, flip)) {
+    map.set(e.id, id);
+    const g = s.entities.find((x) => x.id === id)!.geometry;
+    // Con reflejo, los arcos de la copia tienen inicio y fin cambiados
+    const own = geometryPoints(mapGeometry(e.geometry, (p) => p, flip));
+    own.forEach((p, k) => map.set(p, geometryPoints(g)[k]));
+  }
+  // Girada o reflejada: las de dirección (horizontal, cota en x) ya no valen
+  const turned = !!f && (Math.abs(f[1]) > 1e-9 || Math.abs(f[2]) > 1e-9 || f[0] < 0 || f[3] < 0);
+  const axial = new Set(["horizontal", "vertical", "horizontal_points", "vertical_points", "horizontal_distance", "vertical_distance"]);
+  for (const c of b.constraints) {
+    if (!constraintIds(c).every((id) => map.has(id))) continue;
+    if (turned && axial.has(c.type)) continue;
+    const k = mapConstraintIds(c, (id) => map.get(id)!) as SketchConstraint & { value?: number; degrees?: number };
+    if (typeof k.value === "number") k.value *= scale;
+    if (flip && k.type === "angle") k.degrees = -k.degrees || 0;
+    s.constraints.push(k);
+  }
   s.texts = (s.texts ?? []).filter((x) => x.id !== textId);
+}
+
+/**
+ * Cada entidad de la copia con la suya del bloque. Van en el mismo orden,
+ * pero si se borró alguna de la copia, el índice ya no sirve: se avanza por
+ * el bloque saltando las que no están (mismo tipo y misma distancia de sus
+ * puntos al ancla, que no cambia con el giro).
+ */
+function pairCopy(s: Sketch, t: SketchText, b: SketchBlock, scale: number, flip: boolean): [SketchEntity, number][] {
+  const ents = t.entities.map((id) => s.entities.find((x) => x.id === id)).filter((e): e is SketchEntity => !!e);
+  if (ents.length === b.entities.length && ents.every((e, i) => e.geometry.type === b.entities[i].geometry.type)) return b.entities.map((e, i) => [e, ents[i].id]);
+  const a = pos(s, t.anchor);
+  const local = new Map(b.points.map((p) => [p.id, Math.hypot(p.x, p.y) * scale]));
+  const reach = (e: SketchEntity, map: (p: number) => number) => geometryPoints(e.geometry).map(map);
+  const tol = 1e-6 * Math.max(1, ...local.values());
+  const out: [SketchEntity, number][] = [];
+  let i = 0;
+  for (const c of ents) {
+    const got = reach(c, (p) => Math.hypot(pos(s, p)[0] - a[0], pos(s, p)[1] - a[1]));
+    while (i < b.entities.length) {
+      const e = b.entities[i++];
+      const want = geometryPoints(mapGeometry(e.geometry, (p) => p, flip)).map((p) => local.get(p) ?? NaN);
+      if (e.geometry.type === c.geometry.type && want.length === got.length && want.every((d, k) => Math.abs(d - got[k]) <= tol)) {
+        out.push([e, c.id]);
+        break;
+      }
+    }
+  }
+  return out;
 }
 
 // ─── Capas ────────────────────────────────────────────────────────────────

@@ -2,7 +2,7 @@
 // portapapeles para copiar y pegar (dentro de un sketch o entre sketches).
 // Funciones puras sobre `Sketch`: se prueban con node (e2e/sketchTransform.test.mjs).
 
-import { addEntity, addPoint, type AngleEnd, constraintIds, geometryPoints, mapConstraintIds, mapGeometry, splitLineAt, type Geometry, type P2, type Sketch, type SketchConstraint, type SketchEntity, type SketchText } from "./cad.ts";
+import { addEntity, addPoint, type AngleEnd, constraintIds, geometryPoints, inheritMarks, mapConstraintIds, mapGeometry, splitLineAt, type Geometry, type P2, type Sketch, type SketchConstraint, type SketchEntity, type SketchText } from "./cad.ts";
 import { t as tr } from "./i18n.ts";
 
 /** Lleva un punto del plano del sketch a otro lugar */
@@ -588,7 +588,9 @@ export function transformSelection(s: Sketch, ids: number[], f: Xform, scale = 1
     }
   if (scale !== 1) {
     const k = Math.abs(scale);
-    for (const e of selectedEntities(s, ids)) if (e.geometry.type === "circle") e.geometry.radius *= k;
+    // Lo bloqueado o ligado al sólido no cambia de tamaño (sus puntos tampoco se mueven)
+    const held = all ? new Set<number>() : heldEntities(s);
+    for (const e of selectedEntities(s, ids)) if (e.geometry.type === "circle" && !held.has(e.id)) e.geometry.radius *= k;
     for (const t of textsOf(s, new Set(ids))) t.size *= k;
   }
   // Los textos recuerdan el giro o reflejo para rehacerse igual
@@ -680,9 +682,7 @@ export function insertClip(s: Sketch, clip: SketchClip, f: Xform): number[] {
   const out: number[] = [];
   for (const e of clip.entities) {
     const n = addEntity(s, mapGeometry(e.geometry, id));
-    const added = s.entities.find((x) => x.id === n)!;
-    if (e.construction) added.construction = true;
-    if (e.infinite) added.infinite = true;
+    inheritMarks(s, e, n);
     map.set(e.id, n);
     out.push(n);
   }
@@ -735,7 +735,13 @@ export function splitEntityAt(s: Sketch, entity: number, p: P2): number | string
       const end = g.end;
       g.end = q;
       const rest = addEntity(s, { type: "arc", center: g.center, start: q, end });
-      if (e.construction) s.entities.find((x) => x.id === rest)!.construction = true;
+      inheritMarks(s, e, rest);
+      // El largo de arco era del arco entero: pasa a ser el de los dos tramos
+      s.constraints = s.constraints.map((k) => {
+        if (k.type !== "arc_length" || k.arc !== entity) return k;
+        const { type: _, arc: __, ...rest2 } = k;
+        return { ...rest2, type: "curve_length", entities: [entity, rest] } as SketchConstraint;
+      });
       // Lo tangente en el extremo que pasó al tramo nuevo sigue tangente a ese tramo
       for (const k of s.constraints) {
         if (k.type !== "tangent" || (k.a !== entity && k.b !== entity)) continue;
@@ -752,7 +758,7 @@ export function splitEntityAt(s: Sketch, entity: number, p: P2): number | string
     const q2 = addPoint(s, at(ang + Math.PI));
     (e as { geometry: Geometry }).geometry = { type: "arc", center: g.center, start: q1, end: q2 };
     const rest = addEntity(s, { type: "arc", center: g.center, start: q2, end: q1 });
-    if (e.construction) s.entities.find((x) => x.id === rest)!.construction = true;
+    inheritMarks(s, e, rest);
     return q1;
   }
   return tr("Solo se parten líneas, arcos y círculos");

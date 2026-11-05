@@ -70,18 +70,32 @@ export function mergePoint(s: Sketch, from: number, into: number): void {
     t.anchor = f(t.anchor);
     t.points = [...new Set(t.points.map(f))];
   }
+  for (const p of s.patterns ?? []) if (p.spec.kind === "circular" && p.spec.center === from) p.spec.center = into;
   s.points = s.points.filter((p) => p.id !== from);
   const degenerate = s.entities.filter((e) => e.geometry.type === "line" && e.geometry.start === e.geometry.end).map((e) => e.id);
   for (const id of degenerate) removeEntity(s, id);
   dropDegenerate(s);
 }
 
-/** Restricciones que nombran dos veces el mismo punto o entidad (una distancia de un punto a sí mismo) */
-function dropDegenerate(s: Sketch): void {
-  s.constraints = s.constraints.filter((c) => {
-    const ids = constraintIds(c);
-    return new Set(ids).size === ids.length;
-  });
+/**
+ * Restricciones que nombran dos veces el mismo punto o entidad (una distancia
+ * de un punto a sí mismo). Los patrones repiten ids a propósito (la copia k es
+ * el final de un par y el comienzo del siguiente): solo se van si un par queda
+ * sin largo, si los dos pares son el mismo o si el centro es parte de un par.
+ */
+export function dropDegenerate(s: Sketch): void {
+  s.constraints = s.constraints.filter((c) => !isDegenerate(c));
+}
+
+function isDegenerate(c: SketchConstraint): boolean {
+  if (c.type === "equal_offset" || c.type === "equal_rotation") {
+    const { a1, a2, b1, b2 } = c;
+    if (a1 === a2 || b1 === b2) return true;
+    if ((a1 === b1 && a2 === b2) || (a1 === b2 && a2 === b1)) return true;
+    return c.type === "equal_rotation" && [a1, a2, b1, b2].includes(c.center);
+  }
+  const ids = constraintIds(c);
+  return new Set(ids).size !== ids.length;
 }
 
 /** Saca la entidad `from` y lo que la nombraba pasa a `into` */
@@ -91,6 +105,8 @@ function replaceEntity(s: Sketch, from: number, into: number): void {
   dropDegenerate(s);
   for (const t of s.texts ?? []) t.entities = [...new Set(t.entities.map(f))];
   if (s.uses) s.uses = s.uses.filter((u) => u.entity !== from);
+  for (const p of s.patterns ?? []) if (p.spec.kind === "curve" && p.spec.path === from) p.spec.path = into;
+  for (const t of s.texts ?? []) if (t.style?.path === from) t.style.path = into;
   s.entities = s.entities.filter((e) => e.id !== from);
 }
 
