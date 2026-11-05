@@ -37,6 +37,8 @@ export interface SceneNode {
   count?: number;
   /** Botón «+» del grupo (crea uno nuevo): su texto al pasar el mouse */
   addHint?: string;
+  /** Botón de imprimir: lleva la pieza a Fabricar */
+  fabricable?: boolean;
 }
 
 /** Elemento del CAD ya armado por App (ids `plane-xy`, `cad-<id>`, `part-<op>-<n>`…) */

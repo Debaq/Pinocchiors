@@ -17,6 +17,8 @@ export interface SceneOutlinerProps {
   onHoverNode?: (nodeId: string | null) => void;
   /** «+» de un grupo (`addHint`) */
   onAddNode?: (groupId: string) => void;
+  /** Botón de imprimir de una pieza (`fabricable`): la lleva a Fabricar */
+  onFabricateNode?: (nodeId: string) => void;
 }
 
 const nodeIcon = (type: SceneNode["type"]) => {
@@ -58,6 +60,7 @@ const OutlinerNode: Component<{
   onDeleteNode?: (nodeId: string) => void;
   onHoverNode?: (nodeId: string | null) => void;
   onAddNode?: (groupId: string) => void;
+  onFabricateNode?: (nodeId: string) => void;
   isExpanded: (node: SceneNode) => boolean;
   onToggleExpanded: (node: SceneNode) => void;
 }> = (props) => {
@@ -152,6 +155,22 @@ const OutlinerNode: Component<{
           <span class="text-[10px] text-text-dim pr-1">{props.node.count ?? props.node.children.length}</span>
         </Show>
 
+        {/* Imprimir: la pieza pasa a Fabricar */}
+        <Show when={props.node.fabricable && props.onFabricateNode}>
+          <button
+            class="w-4 h-4 flex items-center justify-center rounded-sm opacity-0 group-hover:opacity-100 transition-opacity text-text-muted hover:text-accent"
+            title={t("Fabricar {name}", { name: props.node.label })}
+            aria-label={t("Fabricar {name}", { name: props.node.label })}
+            data-fabricate={props.node.id}
+            onClick={(e) => {
+              e.stopPropagation();
+              props.onFabricateNode?.(props.node.id);
+            }}
+          >
+            <Icons.Printer size={12} />
+          </button>
+        </Show>
+
         {/* Borrar */}
         <Show when={props.node.deletable && props.onDeleteNode}>
           <button
@@ -204,6 +223,7 @@ const OutlinerNode: Component<{
               onDeleteNode={props.onDeleteNode}
               onHoverNode={props.onHoverNode}
               onAddNode={props.onAddNode}
+              onFabricateNode={props.onFabricateNode}
               isExpanded={props.isExpanded}
               onToggleExpanded={props.onToggleExpanded}
             />
@@ -282,6 +302,7 @@ export const SceneOutliner: Component<SceneOutlinerProps> = (props) => {
             onDeleteNode={props.onDeleteNode}
             onHoverNode={props.onHoverNode}
             onAddNode={props.onAddNode}
+            onFabricateNode={props.onFabricateNode}
             isExpanded={expandedNow}
             onToggleExpanded={onToggleExpanded}
           />

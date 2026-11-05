@@ -49,6 +49,7 @@ export const en_app: Catalog = {
   "Partida en {list}: clic elige esas": "Split into {list}: click picks those",
   "Malla generada": "Generated mesh",
   "Pieza del diseño · {vol} cm³": "Design part · {vol} cm³",
+  "Fabricar {name}": "Fabricate {name}",
   "Ya no está en el diseño: queda la última malla": "No longer in the design: the last mesh is kept",
   "Clic para trabajar con este objeto": "Click to work with this object",
   "Espera a que termine la operación para cambiar de objeto": "Wait for the operation to finish before switching objects",

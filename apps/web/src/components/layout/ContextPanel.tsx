@@ -83,6 +83,7 @@ export interface ContextPanelProps {
   onDeleteNode?: (nodeId: string) => void;
   onHoverNode?: (nodeId: string | null) => void;
   onAddNode?: (groupId: string) => void;
+  onFabricateNode?: (nodeId: string) => void;
 
   // Pestaña de información
   stats?: SceneStats;
@@ -262,6 +263,7 @@ export const ContextPanel: Component<ContextPanelProps> = (props) => {
                 onDeleteNode={props.onDeleteNode}
                 onHoverNode={props.onHoverNode}
                 onAddNode={props.onAddNode}
+                onFabricateNode={props.onFabricateNode}
               />
             </Show>
           </div>

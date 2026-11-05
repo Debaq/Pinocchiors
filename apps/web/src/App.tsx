@@ -1977,6 +1977,8 @@ export const App: Component = () => {
           visible: inDesign() ? !view || !partHidden(doc, view) : isActive ? viewSettings().showMesh : !hiddenGhosts().includes(o.id),
           readonly: inDesign() ? !view : !isActive && !o.ui,
           deletable: true,
+          // En Diseñar: botón de imprimir que la lleva a Fabricar
+          fabricable: inDesign() && !!view,
           color: view ? partColor(doc, view, i) : undefined,
           muted: !view,
           hint: view
@@ -9058,6 +9060,21 @@ export const App: Component = () => {
     void Promise.resolve(cad.commit((d) => void (id = addDrawing(d)))).then(() => id !== undefined && cadUi.openDrawing(id, { kind: "sheet" }));
   };
 
+  /**
+   * Botón de imprimir de una pieza en el Outliner: pasa a ser la activa y se
+   * abre Fabricar (que le arma la malla). Si ya estaba entre las elegidas con
+   * Ctrl o Mayús, las demás siguen elegidas.
+   */
+  const handleFabricateNode = async (nodeId: string) => {
+    const object = objectOfNode(nodeId);
+    if (!object) return;
+    const chosen = [activeObjectId(), ...extraObjects()].filter((id): id is number => id !== undefined);
+    setExtraObjects(chosen.includes(object.id) ? chosen.filter((id) => id !== object.id) : []);
+    await activateObject(object.id, false);
+    if (activeObjectId() !== object.id) return;
+    pipeline.openWorkspace("print");
+  };
+
   const handleSelectNode = (nodeId: string, add = false) => {
     const dn = drawingNode(nodeId);
     if (dn) {
@@ -9960,6 +9977,7 @@ export const App: Component = () => {
               viewer()?.setHoveredNodes(hovered);
             }}
             onAddNode={handleAddNode}
+            onFabricateNode={(id) => void handleFabricateNode(id)}
             history={history}
             stats={{
               fileName: fileName(),
