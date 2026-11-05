@@ -226,6 +226,7 @@ export const en_lib2: Catalog = {
   "Elipse": "Ellipse",
   "Arco elíptico": "Elliptical arc",
   "No se pudo resolver el sketch": "The sketch couldn't be solved",
+  "No se pudo resolver el sketch: {error}": "The sketch couldn't be solved: {error}",
   "Restricciones en conflicto": "Conflicting constraints",
   "Faltan {n} restricción (en azul: lo que todavía se mueve)": "{n} constraint missing (in blue: what can still move)",
   "Faltan {n} restricciones (en azul: lo que todavía se mueve)": "{n} constraints missing (in blue: what can still move)",

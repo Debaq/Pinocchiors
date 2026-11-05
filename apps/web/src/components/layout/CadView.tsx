@@ -1,4 +1,5 @@
 import { Component, For, type JSX, Index, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
+import { tBackend } from "../../lib/i18nBackend";
 import { invoke } from "@tauri-apps/api/core";
 import { clsx } from "clsx";
 import { CadViewer, type ViewHandle, arc3Polyline, entityPolyline, planeToWorld } from "../../lib/CadViewer";
@@ -882,7 +883,7 @@ export const CadView: Component<CadViewProps> = (props) => {
           }),
         );
       } catch (e) {
-        ui.setMessage(String(e));
+        ui.setMessage(tBackend(String(e)));
       }
     }),
   );
@@ -1697,7 +1698,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       if (!linked) return ui.setMessage(tr("Clic sobre una arista o una cara del sólido"));
       linked
         .then((pes) => ui.setMessage(ui.addLinked(pes, (i) => ({ edge: pes[i].ref }), pes.length === 1 ? "de la arista" : "del contorno de la cara")))
-        .catch((err) => ui.setMessage(String(err)));
+        .catch((err) => ui.setMessage(tBackend(String(err))));
       return;
     }
     // Cotas de la forma recién dibujada (se piden enseguida)
@@ -2681,7 +2682,7 @@ export const CadView: Component<CadViewProps> = (props) => {
         ui.setMessage(undefined);
       }
     } catch (err) {
-      ui.setMessage(String(err));
+      ui.setMessage(tBackend(String(err)));
     }
   };
 
@@ -3769,6 +3770,34 @@ export const CadView: Component<CadViewProps> = (props) => {
     const id = store.selected();
     return store.doc()?.features.some((f) => f.id === id) ? id : undefined;
   };
+  /**
+   * Arrastre con los eventos en `window` (el diálogo, el texto de una cota):
+   * uno a la vez; si el visor se cierra o el puntero se pierde a mitad, se
+   * sueltan los listeners (antes quedaban colgados) y no se aplica nada.
+   */
+  let dropWindowDrag: (() => void) | undefined;
+  onCleanup(() => dropWindowDrag?.());
+  const windowDrag = (move: (ev: PointerEvent) => void, up: () => void, cancel?: () => void) => {
+    dropWindowDrag?.();
+    const stop = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
+      dropWindowDrag = undefined;
+    };
+    const onUp = () => {
+      stop();
+      up();
+    };
+    const onCancel = () => {
+      stop();
+      cancel?.();
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
+    dropWindowDrag = onCancel;
+  };
   // El diálogo se arrastra desde su borde de arriba
   const [dialogPos, setDialogPos] = createSignal<[number, number]>([0, 0]);
   const startDialogDrag = (e: PointerEvent) => {
@@ -3776,13 +3805,10 @@ export const CadView: Component<CadViewProps> = (props) => {
     const [x0, y0] = dialogPos();
     const sx = e.clientX;
     const sy = e.clientY;
-    const move = (ev: PointerEvent) => setDialogPos([x0 + ev.clientX - sx, Math.max(0, y0 + ev.clientY - sy)]);
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
+    windowDrag(
+      (ev) => setDialogPos([x0 + ev.clientX - sx, Math.max(0, y0 + ev.clientY - sy)]),
+      () => {},
+    );
   };
 
   /**
@@ -3815,14 +3841,11 @@ export const CadView: Component<CadViewProps> = (props) => {
       setDimDrag({ index: d.index, offset: [+(start[0] + m[0]).toFixed(4), +(start[1] + m[1]).toFixed(4)] });
     };
     const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
       const moved = dimDrag();
       setDimDrag(undefined);
       if (dimDragged && moved) ui.setDimOpts(moved.index, { offset: moved.offset });
     };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
+    windowDrag(move, up, () => setDimDrag(undefined));
   };
 
   /** Ángulo al otro lado de la referencia, con la misma medida */

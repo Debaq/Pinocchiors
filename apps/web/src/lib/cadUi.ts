@@ -530,7 +530,8 @@ export function createCadUi(store: CadStore) {
         // Arrastre rápido (sin diagnóstico): lo libre y las flechas del último completo
         const prev = now.report;
         const report: SolveReport =
-          r.report.quick && prev
+          // (si el anterior había fallado, no hay de dónde copiar: va el del arrastre)
+          r.report.quick && prev && prev.status !== "failed"
             ? {
                 ...r.report,
                 // El estado y los grados del arrastre cuentan el punto arrastrado como fijo
@@ -550,7 +551,15 @@ export function createCadUi(store: CadStore) {
       }
     } catch (e) {
       // Un error de un pedido viejo (deshecho después) no se muestra
-      if (asked === generation) setMessage(String(e));
+      if (asked !== generation) return;
+      const error = tBackend(String(e));
+      setMessage(error);
+      // Y queda en los avisos (el mensaje se va solo): «sin resolver» hasta que un pedido salga bien
+      const now = session();
+      if (now && now.feature === s.feature) {
+        const base: SolveReport = now.report ?? { status: "failed", dof: 0, residual: 0, conflicting: [], free_points: [] };
+        setSession({ ...now, report: { ...base, status: "failed", error } });
+      }
     }
   };
 
@@ -1060,7 +1069,7 @@ export function createCadUi(store: CadStore) {
         ui.setConstraintValue(index, await store.evalExpr(text), text.trim());
         return undefined;
       } catch (e) {
-        return String(e);
+        return tBackend(String(e));
       }
     },
 
@@ -1195,7 +1204,7 @@ export function createCadUi(store: CadStore) {
         const curves = await store.projectModel(d, index, s.plane, what);
         return ui.addLinked(curves, () => ({ source: { type: what } }), what === "section" ? "de la intersección" : "de la silueta");
       } catch (e) {
-        return String(e);
+        return tBackend(String(e));
       }
     },
 
@@ -1208,7 +1217,7 @@ export function createCadUi(store: CadStore) {
         if (curves.length === 0) return tr("Ese sketch está vacío");
         return ui.addLinked(curves, (i) => ({ source: { type: "sketch", feature, entity: curves[i].entity } }), "del otro sketch");
       } catch (e) {
-        return String(e);
+        return tBackend(String(e));
       }
     },
 

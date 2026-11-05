@@ -1596,6 +1596,8 @@ export interface SolveReport {
   quick?: boolean;
   /** Restricciones que no se pudieron usar (índice y por qué); también van en `conflicting` */
   invalid?: [number, string][];
+  /** Solo en la interfaz: el último pedido al solver dio error (queda en los avisos hasta que uno salga bien) */
+  error?: string;
 }
 
 /** Restricción que le falta al sketch y por qué */

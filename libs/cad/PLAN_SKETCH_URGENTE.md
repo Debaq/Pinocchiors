@@ -234,15 +234,26 @@ El orden de las fases es el de urgencia: primero lo que pierde trabajo del usuar
 
 ## U7 — Pulido de interfaz e i18n (bajo)
 
-- [ ] Textos sin `t()`: `PointFields` «Inicio/Fin/Centro» (`DesignStep.tsx:9100-9119`),
+- [x] Textos sin `t()`: `PointFields` «Inicio/Fin/Centro» (`DesignStep.tsx:9100-9119`),
   `Entidades (n)` (`:9038`), `Elegido (n)` (`:8267`), `Piezas (n)` (`:7309`), `Exportado (… KB)`
   (`:9249`), `Calco escalado ×` (`:9287`).
-- [ ] Errores del backend sin `tBackend` (`cadUi.ts:528/1123/1136`, `CadView.tsx:870/1670/2654`).
-- [ ] Error de un solve viejo se muestra tras deshacer (`cadUi.ts:528`, falta chequear `generation`).
-- [ ] Fallos del sketch solo como mensaje efímero: estado «sin resolver» persistente en avisos.
-- [ ] `CadViewer.dispose()`: el último lote `retired` y las texturas de calcos no se liberan; falta
+- [x] Errores del backend sin `tBackend` (`cadUi.ts:528/1123/1136`, `CadView.tsx:870/1670/2654`).
+- [x] Error de un solve viejo se muestra tras deshacer (`cadUi.ts:528`, falta chequear `generation`).
+- [x] Fallos del sketch solo como mensaje efímero: estado «sin resolver» persistente en avisos.
+- [x] `CadViewer.dispose()`: el último lote `retired` y las texturas de calcos no se liberan; falta
   `forceContextLoss()`.
-- [ ] Listeners de `window` del diálogo y del texto de cota sin `onCleanup` (`CadView.tsx:3684/3721`).
+- [x] Listeners de `window` del diálogo y del texto de cota sin `onCleanup` (`CadView.tsx:3684/3721`).
+- **Hecho 2026-11-05**: panel de entidades con `t()` (X/Y de inicio, fin y centro con claves
+  propias: «Inicio» ya era «Home» en otro catálogo), títulos con cantidad, «Exportado» y
+  «Calco escalado». Errores del backend por `tBackend` (solve, fórmulas de cotas, proyectar,
+  usar sketch, vincular aristas, elegir). El de un solve viejo ya no se mostraba (U1/U3).
+  Un solve que da error deja el informe en «failed» con el porqué (`SolveReport.error`, solo
+  en la interfaz): queda en los avisos hasta que un pedido salga bien (el arrastre rápido no
+  copia un estado fallido). `CadViewer.dispose()` libera lo retirado y todo lo de la escena,
+  las texturas de calcos y suelta el contexto (`forceContextLoss`); además las texturas de
+  calcos que ya no se ven se liberan al redibujar. Arrastres del diálogo y del texto de cota
+  con `windowDrag`: uno a la vez, sueltos al desmontar y con `pointercancel` (la cota no se
+  aplica). Prueba: `sketchCheck.test.mjs` (aviso persistente). Falta probarlo en la app.
 
 ## U8 — Huecos de producto (después de U0–U4)
 

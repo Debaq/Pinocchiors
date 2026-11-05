@@ -321,7 +321,7 @@ export interface SketchIssue {
  */
 export function sketchIssues(
   s: Sketch,
-  report?: { status: string; dof: number; conflicting: number[]; free_entities?: number[] },
+  report?: { status: string; dof: number; conflicting: number[]; free_entities?: number[]; error?: string },
   p: SketchProblems = checkSketch(s),
 ): SketchIssue[] {
   const name = (id: number) => {
@@ -340,7 +340,8 @@ export function sketchIssues(
     return pts.length ? [pts.reduce((a, q) => a + q[0], 0) / pts.length, pts.reduce((a, q) => a + q[1], 0) / pts.length] : [0, 0];
   };
   const out: SketchIssue[] = [];
-  if (report?.status === "failed") out.push({ kind: "error", text: tr("No se pudo resolver el sketch"), ids: [], at: center(s.entities.map((e) => e.id)) });
+  if (report?.status === "failed")
+    out.push({ kind: "error", text: report.error ? tr("No se pudo resolver el sketch: {error}", { error: report.error }) : tr("No se pudo resolver el sketch"), ids: [], at: center(s.entities.map((e) => e.id)) });
   if (report?.status === "over_constrained" && !report.conflicting.length) out.push({ kind: "error", text: tr("Restricciones en conflicto"), ids: [], at: center(s.entities.map((e) => e.id)) });
   if (report?.status === "under_constrained" && report.dof > 0) {
     const ids = (report.free_entities ?? []).filter((id) => s.entities.some((e) => e.id === id));

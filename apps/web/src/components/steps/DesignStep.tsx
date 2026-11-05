@@ -7306,7 +7306,7 @@ const PartsSection: Component<{ store: CadStore; ui: CadUi }> = (props) => {
   );
   return (
     <Show when={parts().length > 0}>
-      <Section title={`Piezas (${parts().length})`}>
+      <Section title={tl("Piezas ({n})", { n: parts().length })}>
         <div class="space-y-0.5">
           <For each={parts()}>
             {(p, i) => {
@@ -8264,7 +8264,7 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
         </Show>
       </Section>
 
-      <Section title={`Elegido (${sel().length})`}>
+      <Section title={tl("Elegido ({n})", { n: sel().length })}>
         <Show when={sel().length > 0} fallback={<p class="text-xs text-text-dim">{tl("Nada elegido")}</p>}>
           <Show when={selEntities().length >= 1}>
             <Button
@@ -9028,14 +9028,18 @@ const SketchEntities: Component<{ ui: CadUi }> = (props) => {
     if (e) return e.geometry.type === "point" ? ({ kind: "point", point: e.geometry.point } as const) : ({ kind: "entity", e } as const);
     return sketch().points.some((p) => p.id === ids[0]) ? ({ kind: "point", point: ids[0] } as const) : undefined;
   };
-  const PointFields = (p: { point: number; label?: string }) => (
-    <div class="flex gap-1.5">
-      <Num label={`${p.label ?? ""}X`} suffix="mm" step={1} value={pos(p.point)[0]} onCommit={(v) => ui.movePoint(p.point, [v, pos(p.point)[1]])} />
-      <Num label={`${p.label ?? ""}Y`} suffix="mm" step={1} value={pos(p.point)[1]} onCommit={(v) => ui.movePoint(p.point, [pos(p.point)[0], v])} />
-    </div>
-  );
+  /** X e Y de un punto; `of`: de qué punto de la entidad es (en la etiqueta) */
+  const PointFields = (p: { point: number; of?: "start" | "end" | "center" }) => {
+    const label = (eje: string) => (p.of === "start" ? tl("Inicio {eje}", { eje }) : p.of === "end" ? tl("Fin {eje}", { eje }) : p.of === "center" ? tl("Centro {eje}", { eje }) : eje);
+    return (
+      <div class="flex gap-1.5">
+        <Num label={label("X")} suffix="mm" step={1} value={pos(p.point)[0]} onCommit={(v) => ui.movePoint(p.point, [v, pos(p.point)[1]])} />
+        <Num label={label("Y")} suffix="mm" step={1} value={pos(p.point)[1]} onCommit={(v) => ui.movePoint(p.point, [pos(p.point)[0], v])} />
+      </div>
+    );
+  };
   return (
-    <Section title={`Entidades (${rows().length})`}>
+    <Section title={tl("Entidades ({n})", { n: rows().length })}>
       <div class="flex flex-wrap gap-1" aria-label={tl("Elegir por tipo")}>
         <For each={SELECT_KINDS}>
           {(k) => (
@@ -9097,8 +9101,8 @@ const SketchEntities: Component<{ ui: CadUi }> = (props) => {
                                   if (v > 0) ui.movePoint(l().end, [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k]);
                                 }}
                               />
-                              <PointFields point={l().start} label="Inicio " />
-                              <PointFields point={l().end} label="Fin " />
+                              <PointFields point={l().start} of="start" />
+                              <PointFields point={l().end} of="end" />
                             </>
                           );
                         }}
@@ -9106,7 +9110,7 @@ const SketchEntities: Component<{ ui: CadUi }> = (props) => {
                       <Match when={g().type === "circle" && (g() as Extract<Geometry, { type: "circle" }>)}>
                         {(c) => (
                           <>
-                            <PointFields point={c().center} label="Centro " />
+                            <PointFields point={c().center} of="center" />
                             <Num label={tl("Diámetro")} suffix="mm" step={1} value={2 * c().radius} onCommit={(v) => ui.setCircleRadius(e().id, v / 2)} />
                           </>
                         )}
@@ -9116,7 +9120,7 @@ const SketchEntities: Component<{ ui: CadUi }> = (props) => {
                           const r = () => Math.hypot(pos(a().start)[0] - pos(a().center)[0], pos(a().start)[1] - pos(a().center)[1]);
                           return (
                             <>
-                              <PointFields point={a().center} label="Centro " />
+                              <PointFields point={a().center} of="center" />
                               <Num
                                 label={tl("Radio")}
                                 suffix="mm"
@@ -9249,7 +9253,7 @@ const SketchFiles: Component<{ ui: CadUi; store: CadStore }> = (props) => {
     if (!path) return;
     try {
       const bytes = await invoke<number>("cad_write_text", { path, content: ext === "dxf" ? sketchToDxf(sketch()) : sketchToSvg(sketch()) });
-      ui.setMessage(`Exportado (${Math.max(1, Math.round(bytes / 1024))} KB)`);
+      ui.setMessage(tl("Exportado ({kb} KB)", { kb: Math.max(1, Math.round(bytes / 1024)) }));
     } catch (e) {
       ui.setMessage(String(e));
     }
@@ -9287,7 +9291,7 @@ const SketchFiles: Component<{ ui: CadUi; store: CadStore }> = (props) => {
       );
     });
     ui.setCalibration(undefined);
-    ui.setMessage(`Calco escalado ×${+k.toFixed(4)}`);
+    ui.setMessage(tl("Calco escalado ×{k}", { k: +k.toFixed(4) }));
   };
 
   return (

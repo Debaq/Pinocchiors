@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { addEntity, addPoint, addRectangle } from "../src/lib/cad.ts";
-import { checkSketch, connectedChain, problemsText, selectByKind, whyNoRegions } from "../src/lib/sketchCheck.ts";
+import { checkSketch, connectedChain, problemsText, selectByKind, sketchIssues, whyNoRegions } from "../src/lib/sketchCheck.ts";
 import { addSlot } from "../src/lib/sketchShapes.ts";
 
 function sketch() {
@@ -140,4 +140,12 @@ test("una construcción lejísimos no agranda la tolerancia", () => {
   s.entities.find((e) => e.id === far).construction = true;
   // Dos extremos sueltos de verdad, no unidos por una tolerancia de 0,1
   assert.equal(checkSketch(s).looseEnds.length, 2);
+});
+
+test("un solve que falló queda en los avisos con el porqué", () => {
+  const s = sketch();
+  addRectangle(s, [0, 0], [10, 5]);
+  const items = sketchIssues(s, { status: "failed", dof: 0, conflicting: [], error: "no existe el punto 99" });
+  assert.equal(items[0].kind, "error");
+  assert.match(items[0].text, /No se pudo resolver el sketch: no existe el punto 99/);
 });

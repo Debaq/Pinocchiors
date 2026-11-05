@@ -1337,6 +1337,13 @@ export class CadViewer {
       mesh.userData.sketchImage = im.id;
       this.sketchGroup.add(mesh);
     }
+    // Texturas de calcos que ya no están (cada imagen nueva quedaba cargada hasta cerrar)
+    const shown = new Set((overlay.images ?? []).map((im) => im.data));
+    for (const [data, tex] of this.imageTextures)
+      if (!shown.has(data)) {
+        tex.dispose();
+        this.imageTextures.delete(data);
+      }
     // Rejilla del sketch: debajo de todo, apenas visible
     if (overlay.grid?.length) {
       for (const major of [false, true]) {
@@ -2373,7 +2380,6 @@ export class CadViewer {
   }
 
   dispose() {
-    cancelAnimationFrame(this.frame);
     window.removeEventListener(THEME_EVENT, this.onTheme);
     this.resizeObserver.disconnect();
     this.controls.dispose();
@@ -2383,8 +2389,25 @@ export class CadViewer {
     this.setComparison(null, null);
     this.setScan(null);
     this.setSketch(null);
+    this.setSketchPreview(null);
+    // Lo de arriba pide un cuadro más (que liberaba lo retirado): ya no va a haber
+    cancelAnimationFrame(this.frame);
+    cancelAnimationFrame(this.pulseFrame);
+    const free = (o: THREE.Object3D) => {
+      if (o instanceof THREE.ArrowHelper) o.dispose();
+      (o as THREE.Mesh).geometry?.dispose();
+      const m = (o as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
+      for (const x of [m ?? []].flat()) x.dispose();
+    };
+    for (const o of this.retired.splice(0)) free(o);
+    // Lo que sigue en la escena (sketches visibles, planos, marcas…)
+    this.scene.traverse(free);
+    for (const t of this.imageTextures.values()) t.dispose();
+    this.imageTextures.clear();
     this.rig.viewCube.dispose();
     this.renderer.dispose();
+    // Suelta el contexto de WebGL ya (el navegador tiene un tope de contextos vivos)
+    this.renderer.forceContextLoss();
     this.renderer.domElement.remove();
   }
 }
