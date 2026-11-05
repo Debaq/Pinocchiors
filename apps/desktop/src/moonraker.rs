@@ -515,6 +515,55 @@ mod tests {
         println!("{:?}", status(&p).unwrap());
     }
 
+    /// Envío de verdad SIN imprimir: lamina un cubo, lo sube, revisa lo que Moonraker
+    /// entiende del gcode (tiempo, capas, miniaturas) y lo borra.
+    /// `PINOCCHIO_MOONRAKER=192.168.50.250 cargo test -p pinocchio-app --lib envio_real -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn envio_real_sin_imprimir() {
+        use pinocchio_slicer as slicer;
+        use std::sync::atomic::AtomicBool;
+        let addr = std::env::var("PINOCCHIO_MOONRAKER").expect("PINOCCHIO_MOONRAKER=<ip>");
+        let engine = slicer::find_engine().expect("falta el motor de laminado");
+        let k1 = slicer::index().printers.iter().find(|p| p.name == "Creality K1 (0.4 nozzle)").unwrap();
+        let settings = slicer::SliceSettings { printer: k1.name.clone(), process: k1.default_process.clone(), filament: k1.default_filament.clone(), overrides: Default::default() };
+        let (x, y, s) = (100.0f32, 100.0f32, 20.0f32);
+        let p = |a: f32, b: f32, c: f32| [x + a * s, y + b * s, c * s];
+        let v = [p(0., 0., 0.), p(1., 0., 0.), p(1., 1., 0.), p(0., 1., 0.), p(0., 0., 1.), p(1., 0., 1.), p(1., 1., 1.), p(0., 1., 1.)];
+        let f = [[0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7], [0, 1, 5], [0, 5, 4], [1, 2, 6], [1, 6, 5], [2, 3, 7], [2, 7, 6], [3, 0, 4], [3, 4, 7]];
+        let cube: Vec<[[f32; 3]; 3]> = f.iter().map(|t| [v[t[0]], v[t[1]], v[t[2]]]).collect();
+        let work_dir = std::env::temp_dir().join(format!("pinocchio-envio-real-{}", std::process::id()));
+        let job = slicer::SliceJob { config: slicer::build_config(&settings).unwrap(), parts: vec![cube], work_dir: work_dir.clone() };
+        let summary = slicer::run(&job, &engine, |_| {}, &AtomicBool::new(false)).unwrap();
+        let gcode = std::fs::read(&summary.gcode).unwrap();
+        println!("laminado: {} capas, {:.0} s, {} bytes", summary.layers, summary.time_s, gcode.len());
+
+        let p = Printer::new(&addr, std::env::var("PINOCCHIO_MOONRAKER_KEY").ok(), Duration::from_secs(60)).unwrap();
+        let name = safe_filename("pinocchio-prueba-envio");
+        let sent = send_gcode(&p, &name, &gcode, false).unwrap();
+        println!("subido: {sent:?}");
+        assert!(!sent.started, "no debía empezar a imprimir");
+        let st = status(&p).unwrap();
+        assert_ne!((st.state.as_str(), st.filename.as_str()), ("printing", name.as_str()), "¡está imprimiendo la prueba!");
+        let meta = p.get(&format!("/server/files/metadata?filename={}", urlencode(&sent.filename)));
+        // Borrar siempre, aunque falle lo de abajo
+        let deleted = p.send(p.request(reqwest::Method::DELETE, &format!("/server/files/gcodes/{}", urlencode(&sent.filename))));
+        let _ = std::fs::remove_dir_all(&work_dir);
+        let meta = meta.unwrap();
+        println!(
+            "Moonraker entiende: slicer={:?} tiempo={:?} capas={:?} alto_capa={:?} filamento_g={:?} miniaturas={:?}",
+            meta.get("slicer"),
+            meta.get("estimated_time"),
+            meta.get("layer_count"),
+            meta.get("layer_height"),
+            meta.get("filament_weight_total"),
+            meta.get("thumbnails").and_then(Value::as_array).map(|t| t.iter().map(|x| format!("{}x{}", x["width"], x["height"])).collect::<Vec<_>>())
+        );
+        deleted.unwrap();
+        assert!(meta.get("estimated_time").and_then(Value::as_f64).unwrap_or(0.0) > 0.0, "Moonraker no leyó el tiempo estimado");
+        assert!(meta.get("thumbnails").and_then(Value::as_array).is_some_and(|t| !t.is_empty()), "Moonraker no leyó las miniaturas");
+    }
+
     #[test]
     fn estado_imprimiendo_con_estimacion() {
         let (addr, _) = fake(|_, path| {
