@@ -43,9 +43,9 @@ FFMPEG, WebView2, CURL, OpenSSL ni Assimp (son de la GUI).
 | S2 | Perfiles K1 / K1C / K1 Max copiados de `resources/profiles/Creality` (resolver `inherits`); procesos 0.12/0.16/0.20/0.24; filamentos genéricos PLA/PETG/ABS/TPU + Hyper PLA. Enlazar con `PrinterProfile`/`MaterialProfile` y `FabTolerances` | hecha: boquilla 0.4, 5 calidades (0.08–0.24), 13 filamentos (K1C: 60). La impresora del laminador se propone por el nombre de la de Fabricar; el material de Fabricar no elige filamento todavía |
 | S3 | Crate Rust + comando Tauri `slice_plate`: toma las placas de Preparar (mm, Z arriba, ya orientadas y distribuidas), lanza el proceso, progreso y cancelar. «Preparar todo» puede terminar laminando | hecha (con vaciado y compensación como al exportar); falta que «Preparar todo» termine laminando |
 | S4 | UI «Laminar» en `Print3DPanel`: calidad (preset), paredes, relleno % y patrón, soportes (no / normal / árbol; solo donde hay voladizo), brim, temperaturas, velocidades; «Avanzado» para el resto. Se guarda en el proyecto. Catálogo `en.print.ts` | hecha; falta probarla en la app abierta 🧪 |
-| S5 | Vista previa en el visor: líneas por tipo (pared, relleno, soporte, puente, viaje), deslizador de capas, color por tipo/velocidad/ancho, tiempo y filamento por tipo | pendiente |
-| S6 | Miniaturas renderizadas por nosotros e insertadas en el gcode; guardar `.gcode` | pendiente |
-| S7 | Enviar a la K1: Moonraker (subir + imprimir, estado y progreso). Sin root: protocolo propio de Creality | pendiente (¿K1 rooteada?) |
+| S5 | Vista previa en el visor: líneas por tipo (pared, relleno, soporte, puente, viaje), deslizador de capas, color por tipo/velocidad/ancho, tiempo y filamento por tipo | hecha (2026-11-04): `lib/gcodeView.ts` (cintas del ancho de línea, color por tipo, cama con cuadrícula), capa con deslizador, viajes, tipos ocultables, % y gramos por tipo. Sin color por velocidad/ancho todavía; probado en Chromium headless, falta en la app 🧪 |
+| S6 | Miniaturas renderizadas por nosotros e insertadas en el gcode; guardar `.gcode` | hecha: `thumbnail.rs` (rasterizador propio, color del filamento) → el motor las escribe en PNG (96×96 y 300×300 de la K1). Falta ver que la pantalla de la K1 las muestre 🧪 |
+| S7 | Enviar a la K1: Moonraker (subir + imprimir, estado y progreso). Sin root: protocolo propio de Creality | pendiente: la K1 del usuario está rooteada → Moonraker (firmware a reparar antes de probar) |
 | S8 | CI/release: deps de Orca en caché (como OCCT), binario como sidecar de Tauri en Linux; Windows después | pendiente |
 
 ## Trampas encontradas al compilar
@@ -83,4 +83,4 @@ FFMPEG, WebView2, CURL, OpenSSL ni Assimp (son de la GUI).
 
 ## Abierto
 
-- ¿La K1 está rooteada (Moonraker) o hay que hablar el protocolo de Creality? (S7)
+- Respondido: la K1 está rooteada → S7 por Moonraker.

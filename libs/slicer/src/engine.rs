@@ -2,6 +2,7 @@
 
 use crate::error::SlicerError;
 use crate::stl::write_binary_stl;
+use crate::thumbnail::{parse_color, render_thumbnail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::io::{BufRead, BufReader, Read};
@@ -64,6 +65,18 @@ pub struct Summary {
     pub layers: u32,
     #[serde(default)]
     pub warnings: Vec<String>,
+    /// Filamento por tipo de extrusión (nombres de Orca: «Outer wall», «Sparse infill»…)
+    #[serde(default)]
+    pub roles: Vec<RoleUse>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RoleUse {
+    pub role: String,
+    /// Metros de filamento
+    pub m: f64,
+    /// Gramos
+    pub g: f64,
 }
 
 #[derive(Deserialize)]
@@ -71,7 +84,16 @@ pub struct Summary {
 enum Line {
     Progress { percent: i32, text: String },
     Warning { text: String },
-    Done { gcode: PathBuf, time_s: f64, filament_mm: f64, filament_cm3: f64, filament_g: f64, layers: u32 },
+    Done {
+        gcode: PathBuf,
+        time_s: f64,
+        filament_mm: f64,
+        filament_cm3: f64,
+        filament_g: f64,
+        layers: u32,
+        #[serde(default)]
+        roles: Vec<RoleUse>,
+    },
     Error { text: String },
     #[serde(other)]
     Other,
@@ -94,12 +116,16 @@ pub fn run(job: &SliceJob, engine: &Path, mut on_event: impl FnMut(Event), cance
     }
     let output = job.work_dir.join("placa.gcode");
     let _ = std::fs::remove_file(&output);
+    let thumbs = job.work_dir.join("miniaturas");
+    write_thumbnails(&job.config, &job.parts, &thumbs)?;
 
     let mut child = Command::new(engine)
         .arg("--config")
         .arg(&config_path)
         .arg("--output")
         .arg(&output)
+        .arg("--thumbnails")
+        .arg(&thumbs)
         .args(&models)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -138,8 +164,8 @@ pub fn run(job: &SliceJob, engine: &Path, mut on_event: impl FnMut(Event), cance
                     warnings.push(text.clone());
                     on_event(Event::Warning { text });
                 }
-                Ok(Line::Done { gcode, time_s, filament_mm, filament_cm3, filament_g, layers }) => {
-                    summary = Some(Summary { gcode, time_s, filament_mm, filament_cm3, filament_g, layers, warnings: Vec::new() });
+                Ok(Line::Done { gcode, time_s, filament_mm, filament_cm3, filament_g, layers, roles }) => {
+                    summary = Some(Summary { gcode, time_s, filament_mm, filament_cm3, filament_g, layers, warnings: Vec::new(), roles });
                 }
                 Ok(Line::Error { text }) => error = Some(text),
                 Ok(Line::Other) | Err(_) => {}
@@ -164,5 +190,56 @@ pub fn run(job: &SliceJob, engine: &Path, mut on_event: impl FnMut(Event), cance
             let tail: String = stderr_text.lines().rev().take(5).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n");
             Err(SlicerError::Engine(if tail.is_empty() { format!("terminó con {status}") } else { tail }))
         }
+    }
+}
+
+/// Tamaños de miniatura que pide el perfil (`thumbnails`: «96x96, 300x300» o una lista; a veces «300x300/PNG»).
+pub(crate) fn thumbnail_sizes(config: &Map<String, Value>) -> Vec<(u32, u32)> {
+    let items: Vec<String> = match config.get("thumbnails") {
+        Some(Value::Array(a)) => a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect(),
+        Some(Value::String(s)) => s.split(',').map(str::to_string).collect(),
+        _ => Vec::new(),
+    };
+    items
+        .iter()
+        .filter_map(|it| {
+            let size = it.trim().split('/').next()?;
+            let (w, h) = size.split_once('x')?;
+            Some((w.trim().parse().ok()?, h.trim().parse().ok()?))
+        })
+        .filter(|&(w, h): &(u32, u32)| w > 0 && h > 0 && w <= 1024 && h <= 1024)
+        .collect()
+}
+
+/// Dibuja las miniaturas que pide el perfil en `dir/thumb_WxH.rgba`.
+fn write_thumbnails(config: &Map<String, Value>, parts: &[Vec<[[f32; 3]; 3]>], dir: &Path) -> std::io::Result<()> {
+    let _ = std::fs::remove_dir_all(dir);
+    std::fs::create_dir_all(dir)?;
+    let color = match config.get("filament_colour") {
+        Some(Value::Array(a)) => a.first().and_then(Value::as_str).map(parse_color),
+        Some(Value::String(s)) => Some(parse_color(s)),
+        _ => None,
+    }
+    .unwrap_or([0xF2, 0x8C, 0x28]);
+    for (w, h) in thumbnail_sizes(config) {
+        let img = render_thumbnail(parts, w, h, color);
+        std::fs::write(dir.join(format!("thumb_{w}x{h}.rgba")), img)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tamanos_de_miniatura() {
+        let mut c = Map::new();
+        c.insert("thumbnails".into(), serde_json::json!(["96x96", "300x300"]));
+        assert_eq!(thumbnail_sizes(&c), vec![(96, 96), (300, 300)]);
+        c.insert("thumbnails".into(), serde_json::json!("32x32/PNG, 400x300/PNG"));
+        assert_eq!(thumbnail_sizes(&c), vec![(32, 32), (400, 300)]);
+        c.remove("thumbnails");
+        assert!(thumbnail_sizes(&c).is_empty());
     }
 }

@@ -62,6 +62,10 @@ pub struct SliceResult {
     pub filament_g: f64,
     pub layers: u32,
     pub warnings: Vec<String>,
+    /// Filamento por tipo de extrusión
+    pub roles: Vec<slicer::RoleUse>,
+    /// Tamaño de la cama (mm) para dibujarla en la vista previa
+    pub bed: [f64; 2],
     pub gcode_bytes: u64,
     /// Piezas que no entraron en ninguna placa
     pub unplaced: Vec<String>,
@@ -119,6 +123,8 @@ pub async fn slice_plate(
             filament_g: summary.filament_g,
             layers: summary.layers.max(preview.layer_z.len() as u32),
             warnings: summary.warnings,
+            roles: summary.roles,
+            bed: [input.printer.build_volume[0], input.printer.build_volume[1]],
             gcode_bytes,
             unplaced: plan.unplaced,
             preview: preview.clone(),

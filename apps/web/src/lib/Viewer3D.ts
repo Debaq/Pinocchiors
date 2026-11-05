@@ -27,6 +27,8 @@ import { disposeBvh, ensureBvh, markBvhStale, pickMesh } from "./meshBvh";
 import { skinAttributes, type AnimationLodData } from "./lod";
 import { isMotionFrame, MOTION_REST_MS, qualityScale } from "./adaptiveQuality";
 import { t as tr } from "./i18n.ts";
+import { GcodeView } from "./gcodeView";
+import type { GcodePreview, GcodeViewOptions } from "./gcodePreview";
 
 installDqSkinning();
 installAutoSmooth();
@@ -568,6 +570,10 @@ export class Viewer3D {
   private printMarkers: THREE.Object3D | null = null;
   /** Recuadros de los planos de corte de Fabricar; siguen a la malla */
   private cutPlanes: THREE.Group | null = null;
+  /** Vista previa del gcode laminado (oculta el modelo mientras se ve) */
+  private gcodeView: GcodeView | null = null;
+  private gcodeData: GcodePreview | null = null;
+  private gcodeHid: { mesh: boolean; grid: boolean } | null = null;
   private placementPlanes: THREE.Mesh[] = [];
   private hoveredPlane = -1;
 
@@ -1859,6 +1865,7 @@ export class Viewer3D {
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);
     this.glowHalo?.setSize(w, h);
+    this.gcodeView?.setResolution(w, h);
     this.updateRenderFrame();
   }
 
@@ -2944,6 +2951,35 @@ export class Viewer3D {
     }
     this.cutPlanes = group;
     this.meshGroup.add(group);
+  }
+
+  /** Muestra el gcode laminado sobre su cama (en lugar del modelo); `null` vuelve al modelo */
+  setGcodePreview(data: GcodePreview | null, options: GcodeViewOptions): void {
+    if (data !== this.gcodeData) {
+      if (this.gcodeView) {
+        this.scene.remove(this.gcodeView.group);
+        this.gcodeView.dispose();
+        this.gcodeView = null;
+      }
+      this.gcodeData = data;
+      if (data) {
+        const size = this.renderer.getSize(new THREE.Vector2());
+        this.gcodeView = new GcodeView(data, size);
+        this.scene.add(this.gcodeView.group);
+        if (!this.gcodeHid) {
+          this.gcodeHid = { mesh: this.meshGroup.visible, grid: this.grid.visible };
+          this.meshGroup.visible = false;
+          this.grid.visible = false;
+        }
+        this.cameraRig.frame(this.gcodeView.bounds());
+      } else if (this.gcodeHid) {
+        this.meshGroup.visible = this.gcodeHid.mesh;
+        this.grid.visible = this.gcodeHid.grid;
+        this.gcodeHid = null;
+        this.fitCamera();
+      }
+    }
+    this.gcodeView?.update(options);
   }
 
   /** Marca puntos de la malla (coordenadas de la malla) con esferas rojas visibles a través de ella; `null` las quita */

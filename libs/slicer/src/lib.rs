@@ -13,13 +13,15 @@ pub mod gcode;
 pub mod presets;
 mod settings;
 mod stl;
+pub mod thumbnail;
 
-pub use engine::{find_engine, run, Event, SliceJob, Summary};
+pub use engine::{find_engine, run, Event, RoleUse, SliceJob, Summary};
 pub use error::SlicerError;
 pub use gcode::{parse_gcode, Feature, Preview};
 pub use presets::{index, preset, PresetIndex, PresetKind, PrinterEntry};
 pub use settings::{build_config, SliceSettings};
 pub use stl::write_binary_stl;
+pub use thumbnail::{parse_color, render_thumbnail};
 
 /// Versión de Orca de la que sale el motor y los perfiles.
 pub const ORCA_VERSION: &str = "2.4.2";

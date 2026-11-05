@@ -19,6 +19,7 @@ import type { FloorCandidate } from "../../lib/placement";
 import { ContextMenu, type MenuEntry } from "../ui/ContextMenu";
 import { fmtNumber, t } from "../../lib/i18n";
 import { adaptiveQuality } from "../../lib/settings";
+import { gcodePreview } from "../../lib/gcodePreview";
 
 export interface ViewportProps {
   /** Malla que se muestra al lado de la actual para compararlas (retopología) */
@@ -259,6 +260,12 @@ export const Viewport: Component<ViewportProps> = (props) => {
   // Verificación de impresión: paredes finas
   createEffect(() => {
     viewer?.setPrintMarkers(props.printMarkers ?? null);
+  });
+
+  // Laminado: el gcode en lugar del modelo mientras se lo mira
+  createEffect(() => {
+    const data = gcodePreview.visible() ? gcodePreview.preview() : undefined;
+    viewer?.setGcodePreview(data ?? null, { layer: gcodePreview.layer(), travels: gcodePreview.travels(), hidden: gcodePreview.hidden() });
   });
 
   // React to bone edit mode

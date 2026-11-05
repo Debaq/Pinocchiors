@@ -27,6 +27,12 @@ fn lamina_un_cubo_para_la_k1() {
     assert!(last > 0, "sin progreso");
     let gcode = std::fs::read_to_string(&summary.gcode).unwrap();
     assert!(gcode.contains("START_PRINT"), "falta el inicio de Klipper");
+    // Miniaturas de la K1 (96×96 y 300×300) en PNG dentro del gcode
+    assert!(gcode.contains("; thumbnail begin 96x96"), "falta la miniatura chica");
+    assert!(gcode.contains("; thumbnail begin 300x300"), "falta la miniatura grande");
+    assert!(summary.roles.iter().any(|r| r.role == "Outer wall" && r.g > 0.0), "{:?}", summary.roles);
+    let total: f64 = summary.roles.iter().map(|r| r.g).sum();
+    assert!((total - summary.filament_g).abs() < 0.05 * summary.filament_g, "{total} vs {}", summary.filament_g);
     assert!(summary.time_s > 60.0, "tiempo {}", summary.time_s);
     assert!(summary.filament_mm > 100.0, "filamento {}", summary.filament_mm);
     // 20 mm a 0,2 mm por capa ≈ 100 capas

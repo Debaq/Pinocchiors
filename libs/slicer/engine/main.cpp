@@ -1,16 +1,21 @@
 // pinocchio-slicer: lamina mallas con el motor de OrcaSlicer (libslic3r v2.4.2).
 //
-//   pinocchio-slicer --config perfil.json --output salida.gcode [--resources dir] pieza1.stl [pieza2.stl ...]
+//   pinocchio-slicer --config perfil.json --output salida.gcode [--thumbnails dir] [--resources dir] pieza1.stl [pieza2.stl ...]
 //
 // - `perfil.json`: configuración ya resuelta (máquina + proceso + filamento, sin
 //   `inherits` pendientes), en el formato de perfiles de Orca (valores en texto).
 // - Cada STL viene en coordenadas de la cama (mm, Z arriba) y apoyado en Z = 0:
 //   se lamina donde está, sin centrar ni redistribuir.
 //
+// - `--thumbnails dir`: miniaturas ya dibujadas, `dir/thumb_<W>x<H>.rgba` (RGBA crudo,
+//   la fila de abajo primero, como OpenGL). Orca pide los tamaños del perfil
+//   (`thumbnails`) y las escribe en el gcode; las que falten se omiten.
+//
 // Salida por stdout, una línea JSON por evento:
 //   {"event":"progress","percent":N,"text":"..."}
 //   {"event":"warning","text":"..."}
-//   {"event":"done","gcode":"...","time_s":T,"filament_mm":L,"filament_cm3":V,"filament_g":G,"layers":N}
+//   {"event":"done","gcode":"...","time_s":T,"filament_mm":L,"filament_cm3":V,"filament_g":G,"layers":N,
+//    "roles":[{"role":"Outer wall","m":M,"g":G},...]}
 //   {"event":"error","text":"..."}   (y código de salida distinto de 0)
 // Cancelar = matar el proceso.
 
@@ -22,7 +27,11 @@
 #include "libslic3r/Utils.hpp"
 #include "libslic3r/GCode/GCodeProcessor.hpp"
 
+#include "libslic3r/ExtrusionEntity.hpp"
+#include "libslic3r/GCode/ThumbnailData.hpp"
+
 #include <boost/filesystem.hpp>
+#include <fstream>
 #include <cstdio>
 #include <algorithm>
 #include <exception>
@@ -75,6 +84,7 @@ struct Args
     std::string              config;
     std::string              output;
     std::string              resources;
+    std::string              thumbnails;
     std::vector<std::string> models;
 };
 
@@ -94,6 +104,8 @@ bool parse_args(int argc, char **argv, Args &args, std::string &err)
             if (!value(args.config)) return false;
         } else if (a == "--output") {
             if (!value(args.output)) return false;
+        } else if (a == "--thumbnails") {
+            if (!value(args.thumbnails)) return false;
         } else if (a == "--resources") {
             if (!value(args.resources)) return false;
         } else if (a == "--version") {
@@ -109,6 +121,25 @@ bool parse_args(int argc, char **argv, Args &args, std::string &err)
     else if (args.output.empty()) err = "falta --output";
     else if (args.models.empty()) err = "no hay piezas que laminar";
     return err.empty();
+}
+
+// Lee las miniaturas pedidas de `dir` (ver arriba).
+ThumbnailsList load_thumbnails(const std::string &dir, const ThumbnailsParams &params)
+{
+    ThumbnailsList out;
+    for (const Vec2d &size : params.sizes) {
+        const unsigned w = unsigned(size.x()), h = unsigned(size.y());
+        boost::filesystem::path file = boost::filesystem::path(dir) / ("thumb_" + std::to_string(w) + "x" + std::to_string(h) + ".rgba");
+        std::ifstream in(file.string(), std::ios::binary);
+        if (!in)
+            continue;
+        ThumbnailData data;
+        data.set(w, h);
+        in.read(reinterpret_cast<char *>(data.pixels.data()), std::streamsize(data.pixels.size()));
+        if (in.gcount() == std::streamsize(data.pixels.size()))
+            out.push_back(std::move(data));
+    }
+    return out;
 }
 
 } // namespace
@@ -198,7 +229,12 @@ int main(int argc, char **argv)
             emit("{\"event\":\"warning\",\"text\":\"" + json_escape(conflict) + "\"}");
 
         GCodeProcessorResult result;
-        std::string          out = print.export_gcode(args.output, &result, nullptr);
+        ThumbnailsGeneratorCallback thumbs = nullptr;
+        if (!args.thumbnails.empty()) {
+            const std::string dir = args.thumbnails;
+            thumbs = [dir](const ThumbnailsParams &params) { return load_thumbnails(dir, params); };
+        }
+        std::string          out = print.export_gcode(args.output, &result, thumbs);
         if (result.gcode_check_result.error_code != 0)
             emit("{\"event\":\"warning\",\"text\":\"" + json_escape(std::string("trayectorias fuera del área imprimible")) + "\"}");
 
@@ -211,7 +247,14 @@ int main(int argc, char **argv)
         std::snprintf(buf, sizeof(buf),
                       "\"time_s\":%.1f,\"filament_mm\":%.1f,\"filament_cm3\":%.3f,\"filament_g\":%.2f,\"layers\":%zu",
                       double(time_s), stats.total_used_filament, stats.total_extruded_volume / 1000.0, stats.total_weight, layers);
-        emit("{\"event\":\"done\",\"gcode\":\"" + json_escape(out) + "\"," + buf + "}");
+        std::string roles;
+        for (const auto &[role, use] : result.print_statistics.used_filaments_per_role) {
+            char r[256];
+            std::snprintf(r, sizeof(r), "{\"role\":\"%s\",\"m\":%.4f,\"g\":%.3f}", json_escape(ExtrusionEntity::role_to_string(role)).c_str(), use.first, use.second);
+            if (!roles.empty()) roles += ",";
+            roles += r;
+        }
+        emit("{\"event\":\"done\",\"gcode\":\"" + json_escape(out) + "\"," + buf + ",\"roles\":[" + roles + "]}");
         return 0;
     } catch (const std::exception &e) {
         return fail(e.what());

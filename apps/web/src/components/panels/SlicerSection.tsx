@@ -5,6 +5,7 @@ import { Button, Checkbox, NumberInput, Select } from "../ui";
 import * as Icons from "../icons";
 import { fmtNumber, t } from "../../lib/i18n";
 import { tBackend } from "../../lib/i18nBackend.ts";
+import { FEATURES, ORCA_ROLE_NAMES, decodePreview, gcodePreview, type GcodeMeta } from "../../lib/gcodePreview";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TIPOS (espejo de apps/desktop/src/slicer.rs)
@@ -50,9 +51,11 @@ export interface SliceResult {
   filament_g: number;
   layers: number;
   warnings: string[];
+  roles: { role: string; m: number; g: number }[];
+  bed: [number, number];
   gcode_bytes: number;
   unplaced: string[];
-  preview: { layer_z: number[]; segments: number; length_by_feature: number[] };
+  preview: GcodeMeta;
 }
 
 interface Progress {
@@ -225,6 +228,7 @@ export const SlicerSection: Component<{
         onProgress: channel,
       });
       setResult(r);
+      await showPreview(r);
     } catch (e) {
       const msg = typeof e === "string" ? tBackend(e) : String(e);
       if (!/cancelad/i.test(String(e))) setError(msg);
@@ -235,7 +239,21 @@ export const SlicerSection: Component<{
   };
   onCleanup(() => {
     if (busy()) void invoke("slicer_cancel");
+    gcodePreview.setVisible(false);
   });
+
+  // Vista previa en el visor: se trae el binario de segmentos y se muestra la placa completa
+  const showPreview = async (r: SliceResult) => {
+    try {
+      const buffer = await invoke<ArrayBuffer>("slicer_preview");
+      gcodePreview.setPreview(decodePreview(buffer, r.preview, r.bed));
+      gcodePreview.setHidden([]);
+      gcodePreview.setLayer(Math.max(0, r.preview.layer_z.length - 1));
+      gcodePreview.setVisible(true);
+    } catch (e) {
+      setError(typeof e === "string" ? tBackend(e) : String(e));
+    }
+  };
 
   const saveGcode = async () => {
     const path = await save({ title: t("Guardar gcode"), filters: [{ name: "G-code", extensions: ["gcode"] }] });
@@ -380,6 +398,7 @@ export const SlicerSection: Component<{
                 <Show when={r().unplaced.length > 0}>
                   <p class="text-[11px] text-red">{t("No caben en la cama: {names}", { names: r().unplaced.join(", ") })}</p>
                 </Show>
+                <PreviewControls result={r()} />
                 <For each={r().warnings}>{(w) => <p class="text-[11px] text-warning">{w}</p>}</For>
                 <Button onClick={saveGcode} fullWidth size="sm" icon={<Icons.Download size={14} />}>
                   {t("Guardar gcode")}
@@ -403,3 +422,78 @@ const ResultRow: Component<{ label: string; value: string }> = (props) => (
     <span class="text-text font-mono">{props.value}</span>
   </div>
 );
+
+/** Capa, viajes y tipos de línea de la vista previa del gcode */
+const PreviewControls: Component<{ result: SliceResult }> = (props) => {
+  const layers = () => props.result.preview.layer_z.length;
+  const layer = () => Math.min(gcodePreview.layer(), Math.max(0, layers() - 1));
+  const setLayer = (v: number) => gcodePreview.setLayer(Math.max(0, Math.min(layers() - 1, Math.round(v))));
+  const totalLength = () => props.result.preview.length_by_feature.reduce((a, b) => a + b, 0) || 1;
+  const grams = (i: number) => props.result.roles.find((r) => r.role === ORCA_ROLE_NAMES[i])?.g;
+  const used = () =>
+    props.result.preview.length_by_feature
+      .map((len, i) => ({ i, len }))
+      .filter((f) => f.len > 0)
+      .sort((a, b) => b.len - a.len);
+  const toggle = (i: number) => {
+    const h = gcodePreview.hidden();
+    gcodePreview.setHidden(h.includes(i) ? h.filter((x) => x !== i) : [...h, i]);
+  };
+  return (
+    <div class="space-y-1.5 pt-1">
+      <Button
+        onClick={() => gcodePreview.setVisible(!gcodePreview.visible())}
+        fullWidth
+        size="sm"
+        variant={gcodePreview.visible() ? "primary" : "ghost"}
+        icon={<Icons.Cube size={14} />}
+      >
+        {gcodePreview.visible() ? t("Salir de la vista previa") : t("Ver en el visor")}
+      </Button>
+      <Show when={gcodePreview.visible() && layers() > 0}>
+        <div class="flex items-center gap-1">
+          <button class="px-1 text-text-dim hover:text-text" onClick={() => setLayer(layer() - 1)} aria-label={t("Capa anterior")}>
+            ‹
+          </button>
+          <input
+            type="range"
+            class="flex-1 accent-[var(--accent)]"
+            min={0}
+            max={layers() - 1}
+            step={1}
+            value={layer()}
+            onInput={(e) => setLayer(Number(e.currentTarget.value))}
+          />
+          <button class="px-1 text-text-dim hover:text-text" onClick={() => setLayer(layer() + 1)} aria-label={t("Capa siguiente")}>
+            ›
+          </button>
+        </div>
+        <p class="text-[10px] text-text-dim">
+          {t("Capa {n} de {total} · {z} mm", { n: layer() + 1, total: layers(), z: fmtNumber(props.result.preview.layer_z[layer()] ?? 0, { maximumFractionDigits: 2 }) })}
+        </p>
+        <Checkbox small label={t("Mostrar viajes")} checked={gcodePreview.travels()} onChange={(v) => gcodePreview.setTravels(v)} />
+        <div class="space-y-0.5">
+          <For each={used()}>
+            {(f) => {
+              const g = grams(f.i);
+              return (
+                <button
+                  class={`flex w-full items-center gap-1.5 text-[11px] ${gcodePreview.hidden().includes(f.i) ? "opacity-40" : ""}`}
+                  onClick={() => toggle(f.i)}
+                  title={t("Mostrar u ocultar")}
+                >
+                  <span class="inline-block w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: `#${FEATURES[f.i].color.toString(16).padStart(6, "0")}` }} />
+                  <span class="flex-1 text-left text-text-muted truncate">{t(FEATURES[f.i].name)}</span>
+                  <span class="font-mono text-text-dim">
+                    {fmtNumber((100 * f.len) / totalLength(), { maximumFractionDigits: 0 })} %
+                    <Show when={g !== undefined && g > 0}> · {fmtNumber(g!, { maximumFractionDigits: 1 })} g</Show>
+                  </span>
+                </button>
+              );
+            }}
+          </For>
+        </div>
+      </Show>
+    </div>
+  );
+};
