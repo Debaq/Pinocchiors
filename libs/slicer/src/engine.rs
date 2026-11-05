@@ -266,13 +266,14 @@ pub fn run(job: &SliceJob, engine: &Path, mut on_event: impl FnMut(Event), cance
             Ok(line) => match serde_json::from_str::<Line>(&line) {
                 Ok(Line::Progress { percent, text }) => on_event(Event::Progress { percent, text }),
                 Ok(Line::Warning { text }) => {
+                    let text = orca_text(&text);
                     warnings.push(text.clone());
                     on_event(Event::Warning { text });
                 }
                 Ok(Line::Done { gcode, time_s, filament_mm, filament_cm3, filament_g, layers, roles }) => {
                     summary = Some(Summary { gcode, time_s, filament_mm, filament_cm3, filament_g, layers, warnings: Vec::new(), roles });
                 }
-                Ok(Line::Error { text }) => error = Some(text),
+                Ok(Line::Error { text }) => error = Some(text.lines().map(orca_text).collect::<Vec<_>>().join("\n")),
                 Ok(Line::Other) | Err(_) => {}
             },
             Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -296,6 +297,34 @@ pub fn run(job: &SliceJob, engine: &Path, mut on_event: impl FnMut(Event), cance
             Err(SlicerError::Engine(if tail.is_empty() { format!("terminó con {status}") } else { tail }))
         }
     }
+}
+
+/// Los mensajes de Orca que más se ven, en español (la interfaz los lleva al
+/// idioma activo con `tBackend`); los demás quedan como vienen.
+pub(crate) fn orca_text(text: &str) -> String {
+    const EMPTY_FIRST: &str = "La primera capa de la pieza queda vacía (apenas toca la cama): apóyala sobre una cara plana, córtale la base o activa los soportes";
+    // Motores sin el arreglo: `SlicingErrors` sin su contenido. En Orca 2.4.2
+    // solo la lanza la primera capa vacía
+    if text == "Errors" || text.starts_with("One object has an empty first layer") {
+        return EMPTY_FIRST.to_string();
+    }
+    if text.starts_with("No object can be printed. Maybe too small") {
+        return "No hay nada que imprimir: la pieza es demasiado chica".to_string();
+    }
+    if let Some(rest) = text.strip_prefix("It seems object ")
+        && let Some((name, what)) = rest.split_once(" has ")
+        && let Some(what) = what.strip_suffix(". Please re-orient the object or enable support generation.")
+    {
+        let what = match what {
+            "floating regions" => "zonas en el aire",
+            "floating cantilever" => "un voladizo en el aire",
+            "large overhangs" => "voladizos grandes",
+            other => other,
+        };
+        let name = name.strip_prefix("pieza_").and_then(|n| n.strip_suffix(".stl")).unwrap_or(name);
+        return format!("La pieza {name} tiene {what}: reoriéntala o activa los soportes");
+    }
+    text.to_string()
 }
 
 /// Tamaños de miniatura que pide el perfil (`thumbnails`: «96x96, 300x300» o una lista; a veces «300x300/PNG»).
@@ -335,6 +364,18 @@ fn write_thumbnails(config: &Map<String, Value>, parts: &[Vec<[[f32; 3]; 3]>], d
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn orca_messages_come_out_in_spanish() {
+        let empty = super::orca_text("Errors");
+        assert!(empty.starts_with("La primera capa"), "{empty}");
+        assert_eq!(super::orca_text("One object has an empty first layer and can't be printed. Please Cut the bottom or enable supports."), empty);
+        assert_eq!(
+            super::orca_text("It seems object pieza_2.stl has floating regions. Please re-orient the object or enable support generation."),
+            "La pieza 2 tiene zonas en el aire: reoriéntala o activa los soportes"
+        );
+        assert_eq!(super::orca_text("algo que no se conoce"), "algo que no se conoce");
+    }
     use super::*;
 
     #[test]

@@ -20,6 +20,7 @@
 // Cancelar = matar el proceso.
 
 #include "libslic3r/libslic3r.h"
+#include "libslic3r/Exception.hpp"
 #include "libslic3r/Config.hpp"
 #include "libslic3r/Model.hpp"
 #include "libslic3r/Print.hpp"
@@ -260,6 +261,13 @@ int main(int argc, char **argv)
         }
         emit("{\"event\":\"done\",\"gcode\":\"" + json_escape(out) + "\"," + buf + ",\"roles\":[" + roles + "]}");
         return 0;
+    } catch (const SlicingErrors &e) {
+        // what() es solo «Errors»: el motivo de cada pieza va adentro
+        std::string text;
+        for (const SlicingError &one : e.errors_)
+            if (text.find(one.what()) == std::string::npos)
+                text += (text.empty() ? "" : "\n") + std::string(one.what());
+        return fail(text.empty() ? std::string(e.what()) : text);
     } catch (const std::exception &e) {
         return fail(e.what());
     } catch (...) {
