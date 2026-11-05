@@ -13,7 +13,7 @@ rootearlas**, y ver el estado de todas en un solo lugar.
 |---|---|---|---|
 | Creality K1 (`192.168.50.250`, K1-436A) | Creality 1.3.3.46 rooteada (Helper Script) | Moonraker, puerto 7125 | ✅ hecho (S7, probado el envío real) |
 | Creality K1 × 2 | Creality de fábrica | Protocolo propio de Creality (como Creality Print) | pendiente: fase P2 |
-| Flashforge AD5X | Flashforge de fábrica | API local de Flashforge (puerto 8898) | pendiente: fases P3–P4 |
+| Flashforge AD5X (`192.168.50.190`, SN SNMTIE9A00089) | Flashforge v3.1.7 de fábrica | Protocolo clásico TCP 8899 (responde sin clave); API local 8898 cerrada (modo LAN apagado) | pendiente: fases P3–P4 |
 
 Por qué no rootear las otras: con el root la K1 se colgaba (era GuppyScreen, ya quitada) y
 no les gusta cómo quedan. Orca normal nunca pudo imprimir en las K1 de fábrica: solo el
@@ -68,6 +68,16 @@ Referencia: `src/slic3r/Utils/Flashforge.cpp` de Orca 2.4.2.
 - Protocolo viejo por TCP 8899 con comandos `~M…` (`~M28` subir, `~M23 0:/user/<archivo>`
   imprimir); Orca lo usa como respaldo. Descubrimiento por UDP 48899.
 - Falta averiguar pausar/cancelar por la API local (probablemente `/control`).
+
+**Lo que se vio en la AD5X del laboratorio (2026-11-05, solo lectura):** puertos 8899 y 22
+abiertos; 8898, 80 y 7125 cerrados. Por el 8899, sin credenciales, responde a
+`~M601 S1` (tomar control: «Control Success V2.1»), `~M115` (modelo, firmware v3.1.7, SN,
+volumen 220×220×220, MAC), `~M119` (`MachineStatus: READY`, `CurrentFile:`), `~M105`
+(`T0:20.9/0.0 T1:0.0/0.0 B:22.0/0.0`), `~M27` (`SD printing byte 0/100`, `Layer: 0/0`) y
+`~M602` (soltar control). Cada comando termina en `ok`; los mensajes van con `\r\n`.
+Camino más simple para P3: **todo por el 8899** (estado + `~M28`/`~M29` subir + `~M23`
+imprimir), sin pedirle al usuario el código del modo LAN. Pausar/reanudar/cancelar en el
+protocolo clásico: `~M25` / `~M24` / `~M26` (por confirmar en esta impresora).
 
 ## Dónde mirar
 
