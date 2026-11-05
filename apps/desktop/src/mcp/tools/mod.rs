@@ -17,6 +17,7 @@ mod print;
 mod render_scan;
 mod project;
 mod sketch;
+mod sketch_edit;
 mod view;
 
 /// Una herramienta
@@ -77,6 +78,7 @@ pub fn all() -> Vec<&'static Tool> {
     list.extend(view::TOOLS);
     list.extend(cad::TOOLS[..5].iter());
     list.extend(sketch::TOOLS);
+    list.extend(sketch_edit::TOOLS);
     list.extend(features::TOOLS);
     list.extend(assembly::TOOLS);
     list.extend(drawing::TOOLS);

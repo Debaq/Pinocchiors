@@ -268,8 +268,16 @@ Imprescindible:
   el lugar (mismo id, extremos de antes en los nuevos más cercanos, relaciones con ella afuera,
   puntos sueltos borrados). Pruebas: `project.rs` `broken_uses_point_to_their_link`,
   `e2e/sketchRelink.test.mjs` (4). Falta probarlo en la app.
-- [ ] **MCP del sketch para editar**: hoy solo `sketch_create` y `sketch_add`; faltan borrar/mover
+- [x] **MCP del sketch para editar**: hoy solo `sketch_create` y `sketch_add`; faltan borrar/mover
   entidades, recortar, usar arista/corte, spline, elipse, texto, offset, espejo, patrones.
+  **Hecho 2026-11-05**: `sketch_add` dibuja spline, elipse y texto (Liberation Sans incluida;
+  `cad_model::sketch_text` con ttf-parser, mismo registro `texts` que la app). `sketch_edit` con
+  `ops` en orden y todo o nada: delete, move/rotate/scale (con `copy`), set_point, mirror,
+  linear/circular_pattern (anotados en `patterns`, editables en la app), offset, trim,
+  construction (`cad_model::sketch_edit`, portado del TS, 19 pruebas). `sketch_use`: aristas,
+  caras, intersección, silueta y otro sketch, ligados (extremos compartidos). Trabaja sobre el
+  sketch resuelto. Prueba: `apps/mcp/tests/cad.rs` `edit_a_sketch_and_use_the_model`. Queda: recortar
+  splines/elipses (TS `trimFreeCurve`) y patrones por curva/tabla en Rust.
 
 Importante:
 - [x] Importar SVG a sketch (solo existe exportar). **Hecho**: `parseSvg` (trazados con Bézier → B-splines y arcos, rect con esquinas redondeadas, círculo, elipse, líneas, polígonos; transformaciones de grupos, viewBox y unidades a mm, y hacia arriba; texto/imagen/use contados como salteados). «Importar SVG…» junto a DXF.

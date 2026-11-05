@@ -20,6 +20,10 @@ fn call(s: &Server, name: &str, args: Value) -> (String, Value, bool) {
     s.handle(protocol::parse(&line).unwrap().unwrap(), &|m| out.lock().unwrap().push(m));
     let r = out.into_inner().unwrap().pop().unwrap();
     let result = &r["result"];
+    // Un error del protocolo (no de la herramienta) viene aparte
+    if result.is_null() {
+        return (r["error"].to_string(), Value::Null, true);
+    }
     (result["content"][0]["text"].as_str().unwrap_or_default().to_string(), result["structuredContent"].clone(), result["isError"] == true)
 }
 
@@ -357,4 +361,70 @@ fn asm_check_on_a_design_checks_its_parts() {
     assert_eq!(close.len(), 1, "{text}");
     assert!((close[0][2].as_f64().unwrap() - 0.1).abs() < 1e-6, "{text}");
     assert!(text.contains("COLLISIONS") && text.contains("\"Pieza 2\"") && text.contains("asm_insert"), "{text}");
+}
+
+/// Editar un sketch por el conector (U8): figuras nuevas, borrar, mover,
+/// espejo, patrón, equidistante, recortar, y usar la cara de un sólido.
+#[test]
+fn edit_a_sketch_and_use_the_model() {
+    if !cad_model::occt::available() {
+        return;
+    }
+    let s = server();
+    let (_, data) = ok(
+        &s,
+        "sketch_create",
+        json!({ "plane": "xy", "name": "Base", "shapes": [
+            { "type": "rectangle", "corner": [0, 0], "opposite": [40, 20] },
+            { "type": "circle", "center": [10, 10], "radius": 3 },
+            { "type": "line", "from": [-5, 5], "to": [45, 5], "construction": false }
+        ] }),
+    );
+    let n = |k: &str| data["names"][k].as_u64().unwrap_or_else(|| panic!("falta {k}: {data}"));
+    let rect: Vec<u64> = ["s0.bottom", "s0.right", "s0.top", "s0.left"].iter().map(|k| n(k)).collect();
+    let (circle, cut, origin) = (n("s1"), n("s2"), n("origin"));
+
+    // Spline, elipse y texto
+    let (text, _) = ok(&s, "sketch_add", json!({ "sketch": "Base", "shapes": [
+        { "type": "spline", "points": [[60, 0], [70, 5], [80, 0]] },
+        { "type": "ellipse", "center": [70, 30], "major_radius": 6, "minor_radius": 3, "rotation": 30 },
+        { "type": "text", "text": "Hi", "at": [50, 40], "size": 10 }
+    ] }));
+    assert!(text.contains("s0 spline") && text.contains("s1 ellipse") && text.contains("s2 text") && text.contains("s2.anchor="), "{text}");
+
+    // La línea que cruza: recortar lo que sobresale a la izquierda; mover el círculo; espejo; patrón; equidistante
+    let (text, data) = ok(&s, "sketch_edit", json!({ "sketch": "Base", "ops": [
+        { "op": "offset", "ids": rect, "distance": -2 },
+        { "op": "trim", "entity": cut, "at": [-3, 5] },
+        { "op": "trim", "entity": cut, "at": [43, 5] },
+        { "op": "move", "ids": [circle], "by": [0, 2] },
+        { "op": "circular_pattern", "ids": [circle], "count": 2, "center": origin, "span": 360 },
+        { "op": "construction", "ids": [cut] }
+    ] }));
+    assert!(text.contains("op 0 offset: new entities [") && text.contains("op 4 circular_pattern: 1 copies"), "{text}");
+    assert!(!data["sketch"]["regions"].as_array().unwrap().is_empty(), "{text}");
+
+    // Una operación que falla no deja nada a medias
+    let (text, _, err) = call(&s, "sketch_edit", json!({ "sketch": "Base", "ops": [
+        { "op": "delete", "ids": [circle] },
+        { "op": "mirror", "ids": [circle], "axis": 999999 }
+    ] }));
+    assert!(err && text.contains("op 1"), "{text}");
+    let (text, _, err) = call(&s, "sketch_edit", json!({ "sketch": "Base", "ops": [{ "op": "explode" }] }));
+    assert!(err && text.contains("unknown op"), "{text}");
+
+    // Extruir el rectángulo y usar su cara de arriba en un sketch encima
+    ok(&s, "sketch_edit", json!({ "sketch": "Base", "ops": [{ "op": "delete", "ids": [circle] }] }));
+    let (_, data) = ok(&s, "cad_extrude", json!({ "sketch": "Base", "distance": 5 }));
+    assert!(volume(&data) > 0.0);
+    let (_, geo) = ok(&s, "cad_geometry", json!({ "kind": "faces", "facing": "+Z" }));
+    let tops: Vec<u64> = geo["faces"].as_array().unwrap().iter().map(|f| f["index"].as_u64().unwrap()).collect();
+    ok(&s, "sketch_create", json!({ "plane": "xy", "offset": 5, "name": "Arriba" }));
+    let (text, data) = ok(&s, "sketch_use", json!({ "sketch": "Arriba", "faces": tops }));
+    assert!(text.contains("Linked") && !data["sketch"]["regions"].as_array().unwrap().is_empty(), "{text}");
+    // Otro sketch y la intersección
+    let (text, _) = ok(&s, "sketch_use", json!({ "sketch": "Arriba", "from_sketch": "Base" }));
+    assert!(text.contains("sketch \"Base\": entities ["), "{text}");
+    let (text, _, err) = call(&s, "sketch_use", json!({ "sketch": "Arriba" }));
+    assert!(err && text.contains("nothing to use"), "{text}");
 }

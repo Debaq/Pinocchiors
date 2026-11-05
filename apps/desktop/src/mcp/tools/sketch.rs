@@ -19,7 +19,12 @@ const SHAPES_DOC: &str = "Shapes (sketch coordinates in mm): \
 {\"type\":\"arc\",\"center\":[x,y],\"radius\":r,\"start_angle\":deg,\"end_angle\":deg} (counter-clockwise; or \"start\"/\"end\" points); \
 {\"type\":\"polygon\",\"center\":[x,y],\"radius\":r,\"sides\":n} (regular, radius to the corners); \
 {\"type\":\"slot\",\"from\":[x,y],\"to\":[x,y],\"width\":w}; \
-{\"type\":\"point\",\"at\":[x,y]}. Any shape takes \"construction\": true (helper geometry, not part of the profile).";
+{\"type\":\"point\",\"at\":[x,y]}; \
+{\"type\":\"spline\",\"points\":[[x,y],...],\"closed\":false} (smooth curve through the points); \
+{\"type\":\"ellipse\",\"center\":[x,y],\"major_radius\":a,\"minor_radius\":b,\"rotation\":deg}; \
+{\"type\":\"text\",\"text\":\"ABC\",\"at\":[x,y],\"size\":10,\"bold\":false,\"italic\":false,\"align\":\"left|center|right\"} \
+(letter outlines, one line; `at` is the start of the baseline; size = em height in mm, capitals ≈ 0.73·size). \
+Any shape takes \"construction\": true (helper geometry, not part of the profile).";
 
 const CONSTRAINTS_DOC: &str = "Constraints are objects with a `type` and ids of sketch points/entities; instead of ids you can use \
 names of shapes from this call: \"s0\" (the entity of shape 0 when it is a single line/circle/arc), \"s0.top\", \"s0.center\", \
@@ -76,7 +81,7 @@ update. Example: {\"sketch\": 0, \"constraints\": [{\"type\":\"length\",\"line\"
 /// Nombres → ids de lo dibujado en esta llamada
 type Names = HashMap<String, u32>;
 
-fn p2(v: &Value, what: &str) -> Result<P2, Fail> {
+pub(super) fn p2(v: &Value, what: &str) -> Result<P2, Fail> {
     match v.as_array().map(|a| a.iter().filter_map(Value::as_f64).collect::<Vec<_>>()) {
         Some(c) if c.len() == 2 => Ok([c[0], c[1]]),
         _ => Err(Fail::new(format!("{what}: expected [x, y], got {v}"))),
@@ -235,6 +240,68 @@ fn draw(sketch: &mut Sketch, shapes: &[Value], names: &mut Names) -> Result<Vec<
                 named.extend([("side1".into(), side1), ("side2".into(), side2), ("cap_from".into(), cap_a), ("cap_to".into(), cap_b), ("from".into(), ca), ("to".into(), cb)]);
                 entities.extend([side1, cap_b, side2, cap_a]);
             }
+            "spline" => {
+                let list = shape.get("points").and_then(Value::as_array).ok_or_else(|| Fail::new(format!("shape {i}: missing \"points\"")))?;
+                let pts: Vec<P2> = list.iter().enumerate().map(|(k, v)| p2(v, &format!("shape {i}.points[{k}]"))).collect::<Result<_, _>>()?;
+                let closed = shape.get("closed").and_then(Value::as_bool).unwrap_or(false);
+                if pts.len() < if closed { 3 } else { 2 } {
+                    return Err(Fail::new(format!("shape {i}: a spline needs at least {} points", if closed { 3 } else { 2 })));
+                }
+                if pts.len() > MAX_POINTS {
+                    return Err(Fail::new(format!("shape {i}: at most {MAX_POINTS} points")));
+                }
+                if pts.windows(2).any(|w| same(w[0], w[1])) {
+                    return Err(Fail::new(format!("shape {i}: two consecutive spline points are the same")));
+                }
+                let ids: Vec<u32> = pts.iter().map(|p| sketch.add_point(p[0], p[1])).collect();
+                let e = sketch.add_entity(Geometry::Spline { points: ids.clone(), closed, start_handle: None, end_handle: None, handles: vec![] });
+                named.push((String::new(), e));
+                for (k, p) in ids.iter().enumerate() {
+                    named.push((format!("p{k}"), *p));
+                }
+                entities.push(e);
+            }
+            "ellipse" => {
+                let c = at("center").ok_or_else(|| Fail::new(format!("shape {i}: missing \"center\"")))??;
+                let (a, b) = (need(shape, "major_radius", i)?, need(shape, "minor_radius", i)?);
+                positive(a, i, "major_radius")?;
+                positive(b, i, "minor_radius")?;
+                let t = f64_of(shape, "rotation").unwrap_or(0.0).to_radians();
+                let (cs, sn) = (t.cos(), t.sin());
+                let center = sketch.add_point(c[0], c[1]);
+                let major = sketch.add_point(c[0] + a * cs, c[1] + a * sn);
+                let minor = sketch.add_point(c[0] - b * sn, c[1] + b * cs);
+                let e = sketch.add_entity(Geometry::Ellipse { center, major, minor });
+                named.extend([(String::new(), e), ("center".into(), center), ("major".into(), major), ("minor".into(), minor)]);
+                entities.push(e);
+            }
+            "text" => {
+                use cad_model::sketch_text::{add_text, TextAlign};
+                let text = shape.get("text").and_then(Value::as_str).ok_or_else(|| Fail::new(format!("shape {i}: missing \"text\"")))?;
+                let p = match at("at") {
+                    Some(p) => p?,
+                    None => [0.0, 0.0],
+                };
+                let size = f64_of(shape, "size").unwrap_or(10.0);
+                positive(size, i, "size")?;
+                let flag = |k: &str| shape.get(k).and_then(Value::as_bool).unwrap_or(false);
+                let (bold, italic) = (flag("bold"), flag("italic"));
+                let align = match shape.get("align").and_then(Value::as_str).unwrap_or("left") {
+                    "center" => TextAlign::Center,
+                    "right" => TextAlign::Right,
+                    _ => TextAlign::Left,
+                };
+                let font: &[u8] = match (bold, italic) {
+                    (false, false) => include_bytes!("../../../../web/public/fonts/LiberationSans-Regular.ttf"),
+                    (true, false) => include_bytes!("../../../../web/public/fonts/LiberationSans-Bold.ttf"),
+                    (false, true) => include_bytes!("../../../../web/public/fonts/LiberationSans-Italic.ttf"),
+                    (true, true) => include_bytes!("../../../../web/public/fonts/LiberationSans-BoldItalic.ttf"),
+                };
+                let added = add_text(sketch, font, "Liberation Sans", text, size, p, bold, italic, align).map_err(|e| Fail::new(format!("shape {i}: {e}")))?;
+                named.extend([("anchor".into(), added.anchor)]);
+                entities.extend(added.entities.iter().copied());
+                // Los textos no se marcan de construcción (sus curvas forman perfiles)
+            }
             "point" => {
                 let p = at("at").ok_or_else(|| Fail::new(format!("shape {i}: missing \"at\"")))??;
                 let id = sketch.add_point(p[0], p[1]);
@@ -243,7 +310,7 @@ fn draw(sketch: &mut Sketch, shapes: &[Value], names: &mut Names) -> Result<Vec<
                 entities.push(e);
             }
             other => {
-                return Err(Fail::new(format!("shape {i}: unknown type \"{other}\"")).hint("use rectangle, circle, line, polyline, arc, polygon, slot or point"));
+                return Err(Fail::new(format!("shape {i}: unknown type \"{other}\"")).hint("use rectangle, circle, line, polyline, arc, polygon, slot, spline, ellipse, text or point"));
             }
         }
         if shape.get("construction").and_then(Value::as_bool) == Some(true) {
@@ -303,7 +370,7 @@ fn constraint(raw: &Value, names: &Names, k: usize) -> Result<SketchConstraint, 
 
 /// Cotas del sketch (las restricciones con valor) con su índice y la ruta para
 /// atarlas a un parámetro con `cad_parameters`
-fn dimension_lines(sketch: &Sketch, feature: u64) -> Vec<String> {
+pub(super) fn dimension_lines(sketch: &Sketch, feature: u64) -> Vec<String> {
     sketch
         .constraints
         .iter()
@@ -325,7 +392,7 @@ fn base_names(sketch: &mut Sketch) -> Names {
 }
 
 /// Resumen de un sketch tras recalcular: estado y regiones
-fn sketch_report(result: &Value, id: u32) -> (String, Value) {
+pub(super) fn sketch_report(result: &Value, id: u32) -> (String, Value) {
     let sv = result["sketches"].as_array().and_then(|l| l.iter().find(|s| s["id"] == id)).cloned().unwrap_or_default();
     let regions: Vec<Value> = sv["regions"]
         .as_array()

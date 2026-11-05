@@ -62,6 +62,8 @@ A design tab is a list of operations computed in order. Typical part:
 1. `sketch_create` on a plane with shapes (rectangle, circle, slot…), optionally constrained.
 2. `cad_extrude` (or `cad_revolve`) the sketch: op `join` adds material, `cut` removes it.
 3. More sketches on faces (`sketch_create` with `on_face`) for holes and bosses; or `cad_primitive` with op `cut`.
+   Change a sketch later with `sketch_add` (shapes incl. spline, ellipse, text; constraints) and `sketch_edit`
+   (delete, move, mirror, patterns, offset, trim); `sketch_use` links edges, faces, the section or another sketch.
 4. `cad_fillet` / `cad_chamfer` / `cad_shell` using face and edge numbers from `view` or `cad_geometry`.
 5. Check with `view` (an image) and `cad_design` (operations, errors, size, volume); `cad_export` to STEP/STL.
 
