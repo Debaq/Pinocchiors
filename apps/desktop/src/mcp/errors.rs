@@ -97,14 +97,17 @@ pub fn record(path: &Path, tool: &str, message: &str, hint: Option<&str>, args: 
     });
     let args = cut(&args.to_string());
     let t = now();
-    match list.iter_mut().find(|e| e.tool == tool && e.message == message_key) {
-        Some(e) => {
+    // El recién anotado va primero: al recortar gana los empates de `last` (segundos)
+    match list.iter().position(|e| e.tool == tool && e.message == message_key) {
+        Some(i) => {
+            let mut e = list.remove(i);
             e.count += 1;
             e.last = t;
             e.example = example;
             e.args = args;
+            list.insert(0, e);
         }
-        None => list.push(Entry { tool: tool.into(), message: message_key, count: 1, first: t, last: t, example, args }),
+        None => list.insert(0, Entry { tool: tool.into(), message: message_key, count: 1, first: t, last: t, example, args }),
     }
     if list.len() > MAX {
         list.sort_by(|a, b| b.last.cmp(&a.last));
