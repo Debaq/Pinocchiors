@@ -132,7 +132,7 @@ import { copyText } from "../../lib/clipboard";
 import { chamferCorner, closeContour, joinEntities, mergeOverlaps, offsetChain, orderChain, removeDuplicates, repairSketch, splitEqual, type OffsetCaps } from "../../lib/sketchEdit";
 import { GLYPHS, isDimension } from "../../lib/sketchGlyphs";
 import { sampleCurve } from "../../lib/sketchFormula";
-import { addShapes, parseCoordinates, parseDxf, sketchToDxf, sketchToSvg } from "../../lib/sketchFiles";
+import { addShapes, parseCoordinates, parseDxf, sketchToDxf, sketchToSvg, type Shape } from "../../lib/sketchFiles";
 import { addLayer, createBlock, explodeBlock, refreshBlock, removeLayer, setLayer } from "../../lib/sketchBlocks";
 import { partKey } from "../../lib/objects";
 import { axisToVertical, faceToFloor, faceToFront, pointToOrigin, type Mat4 } from "../../lib/scanAlign";
@@ -9206,21 +9206,24 @@ const SketchFiles: Component<{ ui: CadUi; store: CadStore }> = (props) => {
   const name = () => (ui.session()?.sheet ? tl("hoja") : (props.store.doc()?.features.find((f) => f.id === ui.session()?.feature)?.name ?? "sketch"));
 
   /** Puntos → una spline por ellos (cerrada si vuelve al comienzo) o una polilínea */
-  const addPoints = (pts: P2[], lines: boolean) => {
-    const closed = pts.length > 2 && Math.hypot(pts[0][0] - pts[pts.length - 1][0], pts[0][1] - pts[pts.length - 1][1]) < 1e-9;
+  /** Puntos como líneas o una spline (varios tramos: una spline cada uno) */
+  const addPoints = (pieces: P2[] | P2[][], lines: boolean) => {
+    const list = (typeof pieces[0]?.[0] === "number" ? [pieces] : pieces) as P2[][];
+    const shapes = list.flatMap((pts): Shape[] => {
+      const closed = pts.length > 2 && Math.hypot(pts[0][0] - pts[pts.length - 1][0], pts[0][1] - pts[pts.length - 1][1]) < 1e-9;
+      return lines ? pts.slice(1).map((p, i) => ({ kind: "line" as const, a: pts[i], b: p })) : [{ kind: "spline" as const, points: pts, closed }];
+    });
     let made: number[] = [];
     ui.change((sk) => {
-      made = lines
-        ? addShapes(sk, pts.slice(1).map((p, i) => ({ kind: "line" as const, a: pts[i], b: p })))
-        : addShapes(sk, [{ kind: "spline", points: pts, closed }]);
+      made = addShapes(sk, shapes);
     });
     ui.setSelection(made);
   };
   const addCurve = () => {
-    const pts = sampleCurve({ kind: kind(), fx: fx(), fy: fy(), from: from(), to: to(), samples: samples() }, params());
-    if (typeof pts === "string") return ui.setMessage(pts);
-    ui.setMessage(undefined);
-    addPoints(pts, false);
+    const r = sampleCurve({ kind: kind(), fx: fx(), fy: fy(), from: from(), to: to(), samples: samples() }, params());
+    if (typeof r === "string") return ui.setMessage(r);
+    ui.setMessage(r.skipped ? tl("La fórmula no da un número en {n} de los puntos: la curva quedó en {k} tramos", { n: r.skipped, k: r.pieces.length }) : undefined);
+    addPoints(r.pieces, false);
   };
   const fromCoordinates = async () => {
     const f = await pickFile(".csv,.txt,.xyz,.dat,text/plain", "text");

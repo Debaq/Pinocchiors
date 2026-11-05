@@ -82,3 +82,113 @@ test("exportar: DXF que se vuelve a leer igual y SVG con la construcción puntea
   assert.equal((svg.match(/<polyline/g) ?? []).length, 6);
   assert.equal((svg.match(/stroke-dasharray/g) ?? []).length, 1);
 });
+
+test("coordenadas: coma decimal separada por espacios", () => {
+  assert.deepEqual(parseCoordinates("1,5 2,5\n3,25 4\n"), [[1.5, 2.5], [3.25, 4]]);
+  // Coma entre x e y con espacio: sigue siendo separador
+  assert.deepEqual(parseCoordinates("10, 5\n20, 0\n"), [[10, 5], [20, 0]]);
+});
+
+/** DXF con una sección de bloques */
+const withBlocks = (blocks, body, units = 4) =>
+  ["0", "SECTION", "2", "HEADER", "9", "$INSUNITS", "70", String(units), "0", "ENDSEC", "0", "SECTION", "2", "BLOCKS", ...blocks, "0", "ENDSEC", "0", "SECTION", "2", "ENTITIES", ...body, "0", "ENDSEC", "0", "EOF"].join("\n");
+
+test("DXF: bloques insertados (girados, escalados, anidados y en columnas)", () => {
+  const blocks = [
+    "0", "BLOCK", "2", "B", "10", "1", "20", "1",
+    "0", "LINE", "10", "1", "20", "1", "11", "3", "21", "1",
+    "0", "CIRCLE", "10", "2", "20", "2", "40", "1",
+    "0", "ENDBLK",
+    "0", "BLOCK", "2", "N", "10", "0", "20", "0",
+    "0", "INSERT", "2", "B", "10", "1", "20", "1",
+    "0", "ENDBLK",
+  ];
+  // B en (10, 0), girado 90° y al doble
+  let r = parseDxf(withBlocks(blocks, ["0", "INSERT", "2", "B", "10", "10", "20", "0", "41", "2", "42", "2", "50", "90"]));
+  assert.deepEqual(r.skipped, {});
+  const [line, circle] = r.shapes;
+  near(line.a[0], 10); near(line.a[1], 0); near(line.b[0], 10); near(line.b[1], 4);
+  assert.equal(circle.kind, "circle");
+  near(circle.c[0], 8); near(circle.c[1], 2); near(circle.r, 2);
+  // Escala despareja: el círculo pasa a elipse
+  r = parseDxf(withBlocks(blocks, ["0", "INSERT", "2", "B", "10", "0", "20", "0", "41", "3", "42", "1"]));
+  const e = r.shapes[1];
+  assert.equal(e.kind, "ellipse");
+  near(Math.hypot(e.major[0] - e.c[0], e.major[1] - e.c[1]), 3);
+  near(Math.hypot(e.minor[0] - e.c[0], e.minor[1] - e.c[1]), 1);
+  // Anidado (N inserta B en (1,1)) y en dos columnas a 20
+  r = parseDxf(withBlocks(blocks, ["0", "INSERT", "2", "N", "10", "0", "20", "0", "70", "2", "44", "20"]));
+  assert.equal(r.shapes.length, 4);
+  near(r.shapes[0].a[0], 1); near(r.shapes[2].a[0], 21);
+});
+
+test("DXF: arco con extrusión −Z (espejado en x) y unidades poco comunes", () => {
+  const r = parseDxf(dxf(["0", "ARC", "10", "5", "20", "0", "40", "1", "50", "0", "51", "90", "230", "-1"]));
+  const a = r.shapes[0];
+  near(a.c[0], -5); near(a.c[1], 0);
+  // Antihorario en el mundo: de (−5, 1) a (−6, 0)
+  near(a.a[0], -5); near(a.a[1], 1); near(a.b[0], -6); near(a.b[1], 0);
+  // Millas (3) y kilómetros (7)
+  const mi = parseDxf(dxf(["0", "LINE", "10", "0", "20", "0", "11", "1", "21", "0"], 3));
+  near(mi.shapes[0].b[0], 1609344);
+  const km = parseDxf(dxf(["0", "LINE", "10", "0", "20", "0", "11", "1", "21", "0"], 7));
+  near(km.shapes[0].b[0], 1e6);
+});
+
+test("DXF: radio cero y números rotos se saltan (y se cuentan)", () => {
+  const r = parseDxf(dxf(["0", "CIRCLE", "10", "0", "20", "0", "40", "0", "0", "LINE", "10", "nan", "20", "0", "11", "1", "21", "0", "0", "LINE", "10", "0", "20", "0", "11", "1", "21", "1"]));
+  assert.equal(r.shapes.length, 1);
+  assert.deepEqual(r.skipped, { CIRCLE: 1, LINE: 1 });
+});
+
+test("DXF: SPLINE sin sujetar empieza sobre la curva; la periódica cerrada se cierra", () => {
+  // Grado 2, nudos uniformes sin sujetar: la curva va de (2,5; 5) a (12,5; 5), no de polo a polo
+  const open = parseDxf(dxf(["0", "SPLINE", "70", "8", "71", "2", ...[0, 1, 2, 3, 4, 5, 6].flatMap((k) => ["40", String(k)]), ...[[0, 0], [5, 10], [10, 0], [15, 10]].flatMap(([x, y]) => ["10", String(x), "20", String(y)])]));
+  const b = open.shapes[0];
+  assert.equal(b.kind, "bspline");
+  near(b.poles[0][0], 2.5); near(b.poles[0][1], 5);
+  near(b.poles[b.poles.length - 1][0], 12.5); near(b.poles[b.poles.length - 1][1], 5);
+  assert.deepEqual(b.knots.slice(0, 3), [2, 2, 2]);
+  // Periódica (70 = 11) con un período de nudos: cerrada, sus puntas en el mismo lugar
+  const sq = [[0, 0], [10, 0], [10, 10], [0, 10]];
+  const per = parseDxf(dxf(["0", "SPLINE", "70", "11", "71", "3", ...[0, 1, 2, 3, 4].flatMap((k) => ["40", String(k)]), ...sq.flatMap(([x, y]) => ["10", String(x), "20", String(y)])]));
+  const c = per.shapes[0];
+  const [p0, p1] = [c.poles[0], c.poles[c.poles.length - 1]];
+  near(p0[0], p1[0]); near(p0[1], p1[1]);
+  const s = sketch();
+  addShapes(s, per.shapes);
+  const g = s.entities[0].geometry;
+  assert.equal(g.poles[0], g.poles[g.poles.length - 1], "un solo punto en la unión: lazo cerrado");
+});
+
+test("exportar DXF: vuelta entera como círculo; capas en ASCII y las ocultas apagadas", () => {
+  const s = sketch();
+  const c = addPoint(s, [0, 0]);
+  addEntity(s, { type: "arc", center: c, start: addPoint(s, [5, 0]), end: addPoint(s, [5, 0]) });
+  s.layers = [{ id: 1, name: "Pieza ñandú" }, { id: 2, name: "oculta", hidden: true }];
+  const l = addEntity(s, { type: "line", start: addPoint(s, [0, 0]), end: addPoint(s, [1, 0]) });
+  s.entities.find((e) => e.id === l).layer = 1;
+  const text = sketchToDxf(s);
+  assert.doesNotMatch(text, /\nARC\n/);
+  const back = parseDxf(text);
+  assert.equal(back.shapes[0].kind, "circle");
+  near(back.shapes[0].r, 5);
+  assert.match(text, /\nPIEZA_NANDU\n/);
+  assert.doesNotMatch(text, /[^\x00-\x7f]/);
+  // La oculta con color negativo
+  assert.match(text, /OCULTA\n70\n0\n62\n-7\n/);
+});
+
+test("coordenadas georreferenciadas: no se unen extremos distintos ni se borran líneas cortas", () => {
+  const X = 5e6;
+  const s = sketch();
+  const made = addShapes(s, [
+    { kind: "line", a: [X, X], b: [X + 0.1, X] },
+    { kind: "line", a: [X + 0.15, X], b: [X + 10, X] },
+    { kind: "line", a: [X + 10, X], b: [X + 10, X + 10] },
+  ]);
+  assert.equal(made.length, 3, "la de 0,1 mm sigue");
+  const g = (i) => s.entities.find((e) => e.id === made[i]).geometry;
+  assert.notEqual(g(0).end, g(1).start, "a 0,05 mm no se juntan");
+  assert.equal(g(1).end, g(2).start, "las que sí coinciden, juntas");
+});

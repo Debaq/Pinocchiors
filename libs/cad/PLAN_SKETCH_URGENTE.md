@@ -205,17 +205,32 @@ El orden de las fases es el de urgencia: primero lo que pierde trabajo del usuar
 
 ## U6 — Importar/exportar y fórmulas (medio)
 
-- [ ] DXF: tolerancia `size*1e-7` con coordenadas georreferenciadas fusiona/borra líneas
+- [x] DXF: tolerancia `size*1e-7` con coordenadas georreferenciadas fusiona/borra líneas
   (`sketchFiles.ts:55`); extrusión −Z ignorada (arcos espejados, `:181`); SPLINE cerrado sale
   abierto y extremos en los polos (`:214`); INSERT/bloques, TEXT y HATCH se ignoran en silencio
   (`:143`: mostrar `skipped` y expandir INSERT); unidades 3/7/… caen a 1 (`:133`); NaN y radio 0
   sin descartar (`:165`).
-- [ ] DXF exportado: arco de vuelta entera como `ARC 0..0` (`:329`); capas ocultas y nombres no ASCII en R12.
-- [ ] Fórmulas: `sqrt(2,5)` da `sqrt(2)` sin error (aridad sin validar, `sketchFormula.ts:114`);
+- [x] DXF exportado: arco de vuelta entera como `ARC 0..0` (`:329`); capas ocultas y nombres no ASCII en R12.
+- [x] Fórmulas: `sqrt(2,5)` da `sqrt(2)` sin error (aridad sin validar, `sketchFormula.ts:114`);
   parámetros con acento o ñ no se entienden (`:41`, usar `\p{L}`); `1/0` aborta toda la curva
   (`:182`); `constructor` como variable (usar `Object.hasOwn`).
-- [ ] CSV/coordenadas: «1,5 2,5» se lee como (1, 5) (`sketchFiles.ts:21`); detectar separador.
-- [ ] `expr.rs:270`: `e`/`pi` pisan parámetros del usuario; sin tope de profundidad del parser.
+- [x] CSV/coordenadas: «1,5 2,5» se lee como (1, 5) (`sketchFiles.ts:21`); detectar separador.
+- [x] `expr.rs:270`: `e`/`pi` pisan parámetros del usuario; sin tope de profundidad del parser.
+- **Hecho 2026-11-05**: DXF leído con transformaciones: bloques (INSERT girado, escalado,
+  anidado hasta 16 niveles y en filas/columnas; con escala despareja el círculo pasa a elipse
+  con sus ejes principales), extrusión −Z en CIRCLE/ARC/polilíneas/INSERT (espejo en x) y en
+  ELLIPSE (semieje menor y sentido), las 25 unidades de $INSUNITS, formas con NaN o sin tamaño
+  saltadas y contadas. SPLINE sujeta a su dominio por inserción de nudos (`between` de
+  `sketchTrim`): sin sujetar empieza sobre la curva; periódica con un período de nudos o con
+  polos repetidos queda cerrada (o B-spline periódica si no cierra). Tolerancia de `addShapes`
+  por el tamaño del dibujo (piso 1e-12 × lejanía). INSERT/TEXT/HATCH ya salían en el mensaje
+  de salteadas; los ATTRIB del INSERT también. Exportar: vuelta entera como CIRCLE, capas en
+  ASCII (sin acentos, mayúsculas, sin repetir) y las ocultas con color negativo (apagadas).
+  Fórmulas TS: aridad validada, nombres con `\p{L}`, solo propiedades propias, lo que no da
+  número corta la curva en tramos (una spline por tramo, con aviso). CSV: coma decimal con
+  espacios. `expr.rs`: el parámetro manda sobre `e`/`pi` y anidamiento máximo 200. Pruebas:
+  `sketchFiles.test.mjs` (+7), `sketchFormula.test.mjs` (+3), `expr.rs` (+2). Falta probarlo en
+  la app con DXF reales (AutoCAD, LibreCAD, QCAD, Inkscape).
 
 ## U7 — Pulido de interfaz e i18n (bajo)
 

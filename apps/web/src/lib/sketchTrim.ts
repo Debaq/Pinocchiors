@@ -230,7 +230,7 @@ function saturate(d: Curve, u: number): { d: Curve; at: number } {
 }
 
 /** El tramo de `d` entre los parámetros u0 < u1, sujeto en las dos puntas */
-function between(d: Curve, u0: number, u1: number): Curve {
+export function between(d: Curve, u0: number, u1: number): Curve {
   const p = d.degree;
   const ks = d.knots;
   let cur = d;

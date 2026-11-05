@@ -1944,6 +1944,7 @@ export const en_ui_steps: Catalog = {
   "{dof} grados de libertad": "{dof} degrees of freedom",
   "{empty}: clic para elegir": "{empty}: click to pick",
   "{length} puntos de {name}": "{length} points of {name}",
+  "La fórmula no da un número en {n} de los puntos: la curva quedó en {k} tramos": "The formula gives no number at {n} of the points: the curve is in {k} pieces",
   "{length} puntos del sketch": "{length} sketch points",
   "{n} arista": "{n} edge",
   "{n} aristas": "{n} edges",

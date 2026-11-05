@@ -36,9 +36,16 @@ const FUNCS: Record<string, (...a: number[]) => number> = {
 
 const CONSTS: Record<string, number> = { pi: Math.PI, e: Math.E };
 
+/** Cuántos argumentos lleva cada función: [mínimo, máximo] (sqrt(2,5) daba sqrt(2) sin avisar) */
+const arity = (f: string): [number, number] => (f === "min" || f === "max" ? [1, Infinity] : f === "atan2" || f === "pow" ? [2, 2] : [1, 1]);
+
+/** Propia del objeto (no heredada: «constructor» o «toString» no son variables ni funciones) */
+const own = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k);
+
 function tokens(text: string): string[] {
   const out: string[] = [];
-  const re = /\s*(\d+(?:\.\d*)?(?:e[-+]?\d+)?|\.\d+|[A-Za-z_][A-Za-z_0-9]*|\*\*|[-+*/^(),])/y;
+  // Nombres con cualquier letra (ancho_ñ, diámetro), como los parámetros del documento
+  const re = /\s*(\d+(?:\.\d*)?(?:e[-+]?\d+)?|\.\d+|[\p{L}_][\p{L}\p{N}_]*|\*\*|[-+*/^(),])/uy;
   let i = 0;
   const t = text.trim();
   while (i < t.length) {
@@ -75,7 +82,7 @@ export function parseFormula(text: string): Node {
     for (;;) {
       if (peek() === "*" || peek() === "/") a = { k: "bin", op: take(), a, b: unary() };
       // Multiplicación implícita: 2x, 3(x+1), 2pi
-      else if (peek() !== undefined && /^[A-Za-z_(]/.test(peek()!) && a.k === "num") a = { k: "bin", op: "*", a, b: unary() };
+      else if (peek() !== undefined && /^[\p{L}_(]/u.test(peek()!) && a.k === "num") a = { k: "bin", op: "*", a, b: unary() };
       else return a;
     }
   };
@@ -107,9 +114,9 @@ export function parseFormula(text: string): Node {
       return a;
     }
     if (/^[\d.]/.test(t)) return { k: "num", v: Number(t) };
-    if (/^[A-Za-z_]/.test(t)) {
+    if (/^[\p{L}_]/u.test(t)) {
       if (peek() === "(") {
-        if (!FUNCS[t]) throw new Error(tr("no conozco la función «{nombre}»", { nombre: t }));
+        if (!own(FUNCS, t)) throw new Error(tr("no conozco la función «{nombre}»", { nombre: t }));
         take("(");
         const args = [sum()];
         while (peek() === ",") {
@@ -117,6 +124,9 @@ export function parseFormula(text: string): Node {
           args.push(sum());
         }
         take(")");
+        const [lo, hi] = arity(t);
+        if (args.length < lo || args.length > hi)
+          throw new Error(lo !== hi ? tr("«{nombre}» lleva al menos un argumento", { nombre: t }) : lo === 1 ? tr("«{nombre}» lleva un argumento", { nombre: t }) : tr("«{nombre}» lleva {n} argumentos", { nombre: t, n: lo }));
         return { k: "call", f: t, args };
       }
       return { k: "var", name: t };
@@ -134,8 +144,8 @@ export function evalFormula(n: Node, vars: Record<string, number>): number {
     case "num":
       return n.v;
     case "var": {
-      if (n.name in vars) return vars[n.name];
-      if (n.name in CONSTS) return CONSTS[n.name];
+      if (own(vars, n.name)) return vars[n.name];
+      if (own(CONSTS, n.name)) return CONSTS[n.name];
       throw new Error(tr("no conozco «{nombre}»", { nombre: n.name }));
     }
     case "neg":
@@ -163,10 +173,12 @@ export interface CurveSpec {
 
 /**
  * Puntos de una curva por ecuación, con los parámetros del documento como
- * variables. Devuelve los puntos o un mensaje. Las muestras que no dan un
- * número (raíz de negativo, división por cero) cortan la curva: se avisa.
+ * variables: tramos (una muestra que no da un número —raíz de negativo,
+ * división por cero— corta la curva ahí, en vez de perderla entera) y
+ * cuántas muestras se saltaron. Un mensaje si la fórmula no se entiende o
+ * no da ningún tramo.
  */
-export function sampleCurve(spec: CurveSpec, params: Record<string, number> = {}): P2[] | string {
+export function sampleCurve(spec: CurveSpec, params: Record<string, number> = {}): { pieces: P2[][]; skipped: number } | string {
   const n = Math.max(2, Math.min(500, Math.round(spec.samples)));
   if (!(Number.isFinite(spec.from) && Number.isFinite(spec.to)) || spec.from === spec.to) return tr("El intervalo tiene que tener largo");
   let fx: Node, fy: Node | undefined;
@@ -176,18 +188,28 @@ export function sampleCurve(spec: CurveSpec, params: Record<string, number> = {}
   } catch (e) {
     return tr("Fórmula: {error}", { error: (e as Error).message });
   }
-  const out: P2[] = [];
+  const pieces: P2[][] = [[]];
+  let skipped = 0;
+  let firstBad: number | undefined;
   const v = spec.kind === "explicit" ? "x" : "t";
   try {
     for (let i = 0; i < n; i++) {
       const u = spec.from + ((spec.to - spec.from) * i) / (n - 1);
       const vars = { ...params, [v]: u };
       const p: P2 = spec.kind === "explicit" ? [u, evalFormula(fx, vars)] : [evalFormula(fx, vars), evalFormula(fy!, vars)];
-      if (!Number.isFinite(p[0]) || !Number.isFinite(p[1])) return tr("La fórmula no da un número en {v} = {u}", { v, u: +u.toFixed(6) });
-      out.push(p);
+      if (!Number.isFinite(p[0]) || !Number.isFinite(p[1])) {
+        skipped++;
+        firstBad ??= u;
+        if (pieces[pieces.length - 1].length) pieces.push([]);
+        continue;
+      }
+      pieces[pieces.length - 1].push(p);
     }
   } catch (e) {
     return tr("Fórmula: {error}", { error: (e as Error).message });
   }
-  return out;
+  // Un punto solo no es curva
+  const out = pieces.filter((q) => q.length >= 2);
+  if (!out.length) return tr("La fórmula no da un número en {v} = {u}", { v, u: +(firstBad ?? spec.from).toFixed(6) });
+  return { pieces: out, skipped };
 }

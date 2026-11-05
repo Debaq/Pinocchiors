@@ -116,7 +116,11 @@ enum Node {
 struct Parser {
     toks: Vec<Tok>,
     pos: usize,
+    /// Anidamiento actual: un «((((…» de miles desbordaba la pila (y tumbaba la app)
+    depth: usize,
 }
+
+const MAX_DEPTH: usize = 200;
 
 impl Parser {
     fn peek(&self) -> Option<&Tok> {
@@ -149,6 +153,16 @@ impl Parser {
 
     /// El signo liga menos que la potencia: -2^2 = -(2^2)
     fn unary(&mut self) -> Result<Node, String> {
+        self.depth += 1;
+        if self.depth > MAX_DEPTH {
+            return Err("la expresión está demasiado anidada".into());
+        }
+        let r = self.unary_inner();
+        self.depth -= 1;
+        r
+    }
+
+    fn unary_inner(&mut self) -> Result<Node, String> {
         match self.peek() {
             Some(Tok::Op('-')) => {
                 self.pos += 1;
@@ -230,7 +244,7 @@ impl Expr {
         if toks.is_empty() {
             return Err("la expresión está vacía".into());
         }
-        let mut p = Parser { toks, pos: 0 };
+        let mut p = Parser { toks, pos: 0, depth: 0 };
         let node = p.expr()?;
         if p.pos < p.toks.len() {
             return Err(format!("sobra {}", describe(&p.toks[p.pos])));
@@ -274,10 +288,12 @@ fn is_constant(name: &str) -> bool {
 fn eval(n: &Node, vars: &HashMap<String, f64>) -> Result<f64, String> {
     Ok(match n {
         Node::Num(v) => *v,
-        Node::Var(name) => match name.as_str() {
-            "pi" | "PI" | "π" => std::f64::consts::PI,
-            "e" => std::f64::consts::E,
-            _ => *vars.get(name).ok_or_else(|| format!("no hay un parámetro «{name}»"))?,
+        // Un parámetro con ese nombre manda (uno «e» de un documento viejo no queda tapado por la constante)
+        Node::Var(name) => match (vars.get(name), name.as_str()) {
+            (Some(v), _) => *v,
+            (None, "pi" | "PI" | "π") => std::f64::consts::PI,
+            (None, "e") => std::f64::consts::E,
+            (None, _) => return Err(format!("no hay un parámetro «{name}»")),
         },
         Node::Neg(a) => -eval(a, vars)?,
         Node::Bin(op, a, b) => {
@@ -385,6 +401,22 @@ mod tests {
         assert!((ev("ancho / 2 in") - 40.0 / 50.8).abs() < 1e-12);
         // Una palabra que empieza como unidad no es unidad
         assert!(Expr::parse("2 mmx").is_err());
+    }
+
+    #[test]
+    fn deep_nesting_is_an_error_not_a_crash() {
+        let deep = format!("{}1{}", "(".repeat(100_000), ")".repeat(100_000));
+        assert!(Expr::parse(&deep).unwrap_err().contains("anidada"));
+        let minus = format!("{}1", "-".repeat(100_000));
+        assert!(Expr::parse(&minus).is_err());
+        assert_eq!(Expr::parse(&format!("{}1{}", "(".repeat(50), ")".repeat(50))).unwrap().eval(&HashMap::new()).unwrap(), 1.0);
+    }
+
+    #[test]
+    fn a_parameter_named_like_a_constant_wins() {
+        let vars: HashMap<String, f64> = [("e".to_string(), 7.0)].into();
+        assert_eq!(Expr::parse("e * 2").unwrap().eval(&vars).unwrap(), 14.0);
+        assert!((Expr::parse("e").unwrap().eval(&HashMap::new()).unwrap() - std::f64::consts::E).abs() < 1e-12);
     }
 
     #[test]
