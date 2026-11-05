@@ -79,6 +79,18 @@ Camino más simple para P3: **todo por el 8899** (estado + `~M28`/`~M29` subir +
 imprimir), sin pedirle al usuario el código del modo LAN. Pausar/reanudar/cancelar en el
 protocolo clásico: `~M25` / `~M24` / `~M26` (por confirmar en esta impresora).
 
+**Envío probado (2026-11-05):** `~M601 S1` → `~M28 <bytes> 0:/user/<archivo>` (responde
+«Writing to file: /usr/data/gcodes/<archivo>») → datos crudos en bloques de 4 KB sin esperar
+respuesta → `~M29` («Done saving file») → `~M602`. Quedó `pinocchio-prueba.gcode` (solo
+comentarios, sin imprimir). `~M661` lista los archivos en binario (separador `::` y rutas
+`/usr/data/gcodes/…`).
+
+**Problema de la AD5X a resolver:** al darle «detener» en la pantalla no para: sigue
+imprimiendo un buen rato (y si se detiene es porque algo falló). Sospechas: el firmware de
+Flashforge le adelanta mucho gcode al Klipper interno, o su macro de cancelar es lenta.
+Probar si `~M26` por la red para más rápido (con una impresión corta y el usuario al lado) y
+revisar por SSH (puerto 22 abierto; pedir permiso y clave) los logs y la macro de cancelar.
+
 ## Dónde mirar
 
 - Código de Orca 2.4.2 ya descargado: `~/.cargo-target/orca/OrcaSlicer-2.4.2/src/slic3r/Utils/`
