@@ -336,10 +336,13 @@ subida dinámica (CTB v3), soportes avanzados (punta según la normal, refuerzos
 ramas, balsa biselada, grosor por punto, pincel de zonas, laterales en partes
 delgadas), orientación automática, vaciado con relleno y drenajes con tapón,
 operaciones sobre capas (islas y huecos chicos, alivio de la balsa, atenuar el
-interior, doble exposición) y nombre en relieve en la balsa.
+interior, doble exposición) y nombre en relieve en la balsa. Además (SLA17) el
+escritor `.cxdlp` de la Halot-Sky, igual byte a byte al de Lychee, y las fotos de
+las dos impresoras (las de Lychee).
 - 🧪 En la LD-002H, sin imprimir: que liste y muestre un `.ctb` de Pinocchio
   (miniatura, tiempos), uno con grises y uno v3; cómo toma la doble exposición
-  (capas repetidas a la misma z). Fijar el espejo con una pieza asimétrica.
+  (capas repetidas a la misma z). Fijar el espejo con una pieza asimétrica (Lychee
+  no espeja la LD-002H; el perfil de PrusaSlicer de UVtools dice espejo en X).
   Imprimiendo: la pieza de calibración (exposición y compensaciones reales) y una
   pieza con y sin bordes en grises.
 - 🧪 En la app real (el arnés no dibuja 3D): editar puntos, pincel de zonas,
