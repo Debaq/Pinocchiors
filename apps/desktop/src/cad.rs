@@ -3370,7 +3370,7 @@ pub mod bridge {
     }
 
     /// Comandos que avisan su avance por un `Channel`
-    const REPORTS_PROGRESS: &[&str] = &["import_model", "cad_part_to_model", "remesh_preview", "remesh_apply", "repair_mesh", "unwrap_original_mesh", "ray_render_view", "scan_mesh_file"];
+    const REPORTS_PROGRESS: &[&str] = &["slice_plate", "resin_slice", "import_model", "cad_part_to_model", "remesh_preview", "remesh_apply", "repair_mesh", "unwrap_original_mesh", "ray_render_view", "scan_mesh_file"];
 
     /// Hacia dónde va el avance de un comando (`None`: no se usa)
     struct Ticks(Option<std::sync::mpsc::Sender<(f64, String)>>);
@@ -3649,6 +3649,26 @@ pub mod bridge {
             "preview_print_plates" => ok(crate::print_prep::preview_print_plates_impl(state, arg(args, "input")?)?),
             "export_print_plates" => ok(crate::print_prep::export_print_plates_impl(state, arg(args, "input")?)?),
             "prepare_for_printing" => ok(crate::print_all::prepare_for_printing_impl(state, arg(args, "input")?)?),
+            "slicer_presets" => ok(crate::slicer::slicer_presets_impl()),
+            "slicer_config" => ok(crate::slicer::slicer_config(arg(args, "printer")?, arg(args, "process")?, arg(args, "filament")?)?),
+            "slice_plate" => ok(crate::slicer::slice_plate_impl(state, arg(args, "input")?, arg(args, "plate")?, arg(args, "settings")?, &ticks.channel())?),
+            "save_gcode" => ok(crate::slicer::save_gcode(arg(args, "path")?)?),
+            "resin_presets" => ok(crate::resin::resin_presets()),
+            "resin_slice" => ok(crate::resin::resin_slice_impl(
+                state,
+                arg(args, "input")?,
+                arg(args, "plate")?,
+                &arg::<String>(args, "printer")?,
+                &arg(args, "settings")?,
+                &arg(args, "prepare")?,
+                arg::<Option<Vec<pinocchio_slicer::sla_supports::SupportPoint>>>(args, "points")?.as_deref(),
+                arg(args, "tilt")?,
+                &ticks.channel(),
+            )?),
+            "resin_tilts" => ok(crate::resin::resin_tilts_impl(state, &arg(args, "input")?, arg(args, "plate")?, &arg::<String>(args, "printer")?, arg(args, "layerHeight")?)?),
+            "save_resin" => ok(crate::resin::save_resin(arg(args, "path")?)?),
+            "resin_calibration" => ok(crate::resin::calibration(&arg::<String>(args, "printer")?, &arg(args, "settings")?)?),
+            "save_resin_calibration" => ok(crate::resin::save_resin_calibration(arg(args, "dir")?, arg(args, "exposures")?)?),
             "remesh_voxel_grid" => ok(crate::remesh::voxel_grid_impl(state, arg(args, "voxelMm")?)?),
             "new_project" => ok(crate::project::new_project_impl(state)?),
             "workspace_summary" => ok(crate::project::workspace_summary(state)),

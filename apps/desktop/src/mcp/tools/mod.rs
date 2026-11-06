@@ -18,6 +18,7 @@ mod render_scan;
 mod project;
 mod sketch;
 mod sketch_edit;
+mod slice;
 mod view;
 
 /// Una herramienta
@@ -84,6 +85,7 @@ pub fn all() -> Vec<&'static Tool> {
     list.extend(drawing::TOOLS);
     list.extend(mesh::TOOLS);
     list.extend(print::TOOLS);
+    list.extend(slice::TOOLS);
     list.extend(render_scan::TOOLS);
     list.extend(cad::TOOLS[5..].iter());
     list

@@ -4,6 +4,7 @@
 
 use crate::commands::{in_background, report, Progress};
 use crate::print_prep::{plan_plates, sources, Plate, PlateInput, PlatePlan};
+use crate::state::AppState;
 use pinocchio_mesh::Mesh;
 use pinocchio_slicer as slicer;
 use serde::Serialize;
@@ -38,6 +39,10 @@ pub struct SlicerInfo {
 /// Impresoras, procesos y filamentos del laminador, y si el motor está.
 #[tauri::command]
 pub async fn slicer_presets() -> SlicerInfo {
+    slicer_presets_impl()
+}
+
+pub(crate) fn slicer_presets_impl() -> SlicerInfo {
     let engine = slicer::find_engine();
     SlicerInfo {
         available: engine.is_some(),
@@ -83,14 +88,25 @@ pub async fn slice_plate(
     settings: slicer::SliceSettings,
     on_progress: Channel<Progress>,
 ) -> Result<SliceResult, String> {
+    in_background(app, move |state| slice_plate_impl(state, input, plate, settings, &on_progress)).await
+}
+
+/// El laminado de una placa sin Tauri (también lo usa el conector MCP). Uno a la vez.
+pub(crate) fn slice_plate_impl(
+    state: &AppState,
+    input: PlateInput,
+    plate: usize,
+    settings: slicer::SliceSettings,
+    on_progress: &Channel<Progress>,
+) -> Result<SliceResult, String> {
     if RUNNING.swap(true, Ordering::SeqCst) {
         return Err("Ya hay un laminado en curso".into());
     }
     CANCEL.store(false, Ordering::SeqCst);
-    let result = in_background(app, move |state| {
+    let result = (|| {
         let engine = slicer::find_engine().ok_or_else(|| slicer::SlicerError::EngineMissing.to_string())?;
         let config = slicer::build_config(&settings).map_err(|e| e.to_string())?;
-        report(&on_progress, "plates", 2, "Acomodando las piezas...");
+        report(on_progress, "plates", 2, "Acomodando las piezas...");
         let plan = slicing_plan(sources(state)?, &input, &config)?;
         let plates = plan.plates.len();
         let chosen = plan.plates.get(plate).ok_or("Esa placa no existe")?;
@@ -104,14 +120,14 @@ pub async fn slice_plate(
                 slicer::Event::Progress { percent, text } => {
                     // 5–95 % del total: antes va el acomodo y después la lectura del gcode
                     let p = 5 + (percent.clamp(0, 100) as u32 * 90) / 100;
-                    report(&on_progress, "slicing", p, text);
+                    report(on_progress, "slicing", p, text);
                 }
-                slicer::Event::Warning { text } => report(&on_progress, "warning", 0, text),
+                slicer::Event::Warning { text } => report(on_progress, "warning", 0, text),
             },
             &CANCEL,
         )
         .map_err(|e| e.to_string())?;
-        report(&on_progress, "preview", 96, "Leyendo el gcode...");
+        report(on_progress, "preview", 96, "Leyendo el gcode...");
         let text = std::fs::read_to_string(&summary.gcode).map_err(|e| format!("No se pudo leer el gcode: {e}"))?;
         let preview = slicer::parse_gcode(&text);
         let gcode_bytes = text.len() as u64;
@@ -131,10 +147,9 @@ pub async fn slice_plate(
             preview: preview.clone(),
         };
         *LAST.lock().unwrap() = Some(LastSlice { gcode: summary.gcode, preview });
-        report(&on_progress, "done", 100, "Laminado listo");
+        report(on_progress, "done", 100, "Laminado listo");
         Ok(result)
-    })
-    .await;
+    })();
     RUNNING.store(false, Ordering::SeqCst);
     result
 }

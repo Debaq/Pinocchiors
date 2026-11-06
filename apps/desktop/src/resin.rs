@@ -5,6 +5,7 @@
 
 use crate::commands::{in_background, report, Progress};
 use crate::print_prep::{plan_plates, sources, PlateInput};
+use crate::state::AppState;
 use pinocchio_slicer::sla::{self, Layer, ResinPrinter, ResinSettings};
 use pinocchio_slicer::sla_calibration::{self, CalibrationRow};
 use pinocchio_slicer::sla_check::{Cavity, Island};
@@ -81,7 +82,10 @@ pub fn resin_presets() -> ResinInfo {
             let (format, can_write) = format_of(p);
             ResinPrinterInfo {
                 id: p.id,
-                name: p.name,
+                name: match p.id {
+                    "halot-sky" => "Creality Halot-Sky (CL-89)",
+                    _ => p.name,
+                },
                 resolution: [p.res_x, p.res_y],
                 bed: [p.bed_x, p.bed_y, p.bed_z],
                 pixel_um: [pw * 1000.0, ph * 1000.0],
@@ -156,14 +160,26 @@ pub async fn resin_slice(
     tilt: Option<(Axis, f32)>,
     on_progress: Channel<Progress>,
 ) -> Result<ResinResult, String> {
+    in_background(app, move |state| resin_slice_impl(state, input, plate, &printer, &settings, &prepare, points.as_deref(), tilt, &on_progress)).await
+}
+
+/// El laminado de resina sin Tauri (también lo usa el conector MCP). Uno a la vez.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn resin_slice_impl(
+    state: &AppState,
+    input: PlateInput,
+    plate: usize,
+    printer: &str,
+    settings: &ResinSettings,
+    prepare: &PrepareSettings,
+    points: Option<&[SupportPoint]>,
+    tilt: Option<(Axis, f32)>,
+    on_progress: &Channel<Progress>,
+) -> Result<ResinResult, String> {
     if RUNNING.swap(true, Ordering::SeqCst) {
         return Err("Ya hay un laminado en curso".into());
     }
-    let result = in_background(app, move |state| {
-        let list = sources(state)?;
-        slice_plate(list, &input, plate, &printer, &settings, &prepare, points.as_deref(), tilt, |stage, p, msg| report(&on_progress, stage, p, msg))
-    })
-    .await;
+    let result = sources(state).and_then(|list| slice_plate(list, &input, plate, printer, settings, prepare, points, tilt, |stage, p, msg| report(on_progress, stage, p, msg)));
     RUNNING.store(false, Ordering::SeqCst);
     result
 }
@@ -256,7 +272,7 @@ pub async fn resin_calibration(app: AppHandle, printer: String, settings: ResinS
     in_background(app, move |_| calibration(&printer, &settings)).await
 }
 
-fn calibration(printer: &str, settings: &ResinSettings) -> Result<ResinResult, String> {
+pub(crate) fn calibration(printer: &str, settings: &ResinSettings) -> Result<ResinResult, String> {
     let pr = sla::printer(printer).ok_or_else(|| format!("No existe la impresora de resina «{printer}»"))?;
     let [w, d, _] = sla_calibration::SIZE;
     let (dx, dy) = ((pr.bed_x - w) / 2.0, (pr.bed_y - d) / 2.0);
@@ -293,12 +309,13 @@ pub fn save_resin_calibration(dir: String, exposures: Vec<f32>) -> Result<Vec<St
 /// Compara inclinaciones de la placa (área por capa, succión, altura).
 #[tauri::command]
 pub async fn resin_tilts(app: AppHandle, input: PlateInput, plate: usize, printer: String, layer_height: f32) -> Result<Vec<TiltOption>, String> {
-    in_background(app, move |state| {
-        let pr = sla::printer(&printer).ok_or_else(|| format!("No existe la impresora de resina «{printer}»"))?;
-        let (tris, _, _) = plate_triangles(sources(state)?, &input, pr, &PrepareSettings::default(), plate)?;
-        Ok(sla_prepare::tilt_options(&tris, pr, layer_height, &[15.0, 30.0, 45.0]))
-    })
-    .await
+    in_background(app, move |state| resin_tilts_impl(state, &input, plate, &printer, layer_height)).await
+}
+
+pub(crate) fn resin_tilts_impl(state: &AppState, input: &PlateInput, plate: usize, printer: &str, layer_height: f32) -> Result<Vec<TiltOption>, String> {
+    let pr = sla::printer(printer).ok_or_else(|| format!("No existe la impresora de resina «{printer}»"))?;
+    let (tris, _, _) = plate_triangles(sources(state)?, input, pr, &PrepareSettings::default(), plate)?;
+    Ok(sla_prepare::tilt_options(&tris, pr, layer_height, &[15.0, 30.0, 45.0]))
 }
 
 /// Piezas de la placa elegida como triángulos (mm, Z arriba), centradas en la pantalla.

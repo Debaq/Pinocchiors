@@ -251,3 +251,59 @@ fn a_cad_part_becomes_a_mesh_object() {
     let (text, _) = ok(&s, "print_check", json!({}));
     assert!(text.contains("printable"), "{text}");
 }
+
+#[test]
+fn slice_for_resin_and_calibrate() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = server();
+    let (text, data) = ok(&s, "print_machines", json!({}));
+    assert!(text.contains("LD-002H") && text.contains("Halot-Sky"), "{text}");
+    assert!(data["resin"]["profiles"].as_array().unwrap().len() >= 5);
+
+    ok(&s, "mesh_import", json!({ "path": cube_stl(dir.path(), "cube.stl", 12.0, false) }));
+    let (text, data) = ok(&s, "resin_tilts", json!({}));
+    assert!(text.starts_with("Best first") && data["options"].as_array().unwrap().len() == 7, "{text}");
+
+    // Con soportes y giro: sin islas, archivo escrito
+    let ctb = dir.path().join("cube.ctb");
+    let (text, data) = ok(&s, "resin_slice", json!({ "path": ctb, "supports": "light", "tilt": { "axis": "x", "degrees": 30 }, "settings": { "exposure": 2.8 } }));
+    assert!(text.contains("No islands left") && ctb.is_file(), "{text}");
+    let points = data["points"].as_array().unwrap().len();
+    assert!(points > 0, "{text}");
+    let (text, _, err) = call(&s, "resin_slice", json!({ "path": ctb }));
+    assert!(err && text.contains("overwrite"), "{text}");
+    let (text, _, err) = call(&s, "resin_slice", json!({ "settings": { "exposicion": 3 } }));
+    assert!(err && text.contains("exposure"), "ajuste desconocido dice cuáles hay: {text}");
+
+    // Puntos propios: uno solo bajo un cubo de 12 mm deja la base sin apoyo suficiente pero se pone
+    let (text, data) = ok(&s, "resin_slice", json!({ "points": [[41.31, 65.28, 6.0]] }));
+    assert_eq!(data["points"].as_array().unwrap().len(), 1, "{text}");
+
+    // Halot-Sky: se revisa pero no se guarda todavía
+    let (text, _, err) = call(&s, "resin_slice", json!({ "printer": "halot", "path": dir.path().join("x.cxdlp") }));
+    assert!(err && text.contains("cannot be written"), "{text}");
+    ok(&s, "resin_slice", json!({ "printer": "halot-sky", "supports": "none" }));
+
+    let (text, data) = ok(&s, "resin_calibration", json!({ "dir": dir.path(), "exposures": [2.5, 3.5] }));
+    assert_eq!(data["files"].as_array().unwrap().len(), 2, "{text}");
+    assert!(dir.path().join("calibracion-ld-002h-3.5s.ctb").is_file());
+}
+
+/// Laminar en filamento con el motor de Orca (se salta si el motor no está compilado)
+#[test]
+fn slice_for_filament() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = server();
+    let (text, _) = ok(&s, "print_machines", json!({}));
+    if text.contains("ENGINE MISSING") {
+        eprintln!("sin motor de laminado: se salta");
+        return;
+    }
+    ok(&s, "mesh_import", json!({ "path": cube_stl(dir.path(), "cube.stl", 20.0, false) }));
+    let gcode = dir.path().join("cube.gcode");
+    let (text, data) = ok(&s, "print_slice", json!({ "path": gcode, "machine": "K1", "quality": "0.24mm Draft", "filament": "PETG", "settings": { "sparse_infill_density": "10%", "wall_loops": 2 } }));
+    assert!(gcode.is_file() && text.contains("0.24mm Draft") && text.contains("PETG"), "{text}");
+    assert!(data["layers"].as_u64().unwrap() > 50 && data.get("preview").is_none(), "{text}");
+    let (text, _, err) = call(&s, "print_slice", json!({ "path": dir.path().join("x.gcode"), "machine": "Prusa XL" }));
+    assert!(err && text.contains("K1"), "máquina desconocida dice cuáles hay: {text}");
+}

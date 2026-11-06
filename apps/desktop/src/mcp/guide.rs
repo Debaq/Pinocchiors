@@ -126,7 +126,7 @@ Mesh tools work on the active scene object (a triangle mesh, in mm with Z up).
     ),
     (
         "print",
-        "Preparing a model for 3D printing (FDM)",
+        "Preparing a model for 3D printing and slicing it (filament and resin)",
         "\
 Works on the active mesh model (import one, or `mesh_from_part` for a CAD part).
 1. `print_check` {\"printer\": ..., \"material\": ...} — watertight? thin walls? overhangs and support? fits the bed?
@@ -138,7 +138,12 @@ Works on the active mesh model (import one, or `mesh_from_part` for a CAD part).
    clearance for the printer and material). Look at them with `view` {\"show\": \"pieces\"}.
 5. `print_plates` {\"path\": \"/abs/plate.3mf\"} — arranges the pieces on beds and writes one file per plate (optional
    hollowing with `hollow_wall` and a drain hole).
-Or all at once: `print_prepare` (check → cut if needed → joints → hollow → plates), which reports each step.",
+Or all at once: `print_prepare` (check → cut if needed → joints → hollow → plates), which reports each step.
+6. Slice: `print_machines` lists the lab printers. Filament: `print_slice` {\"path\": \"/abs/part.gcode\", \"machine\":
+   \"K1\", \"quality\": \"0.20mm Standard\"} (OrcaSlicer engine; `settings` changes any Orca key). Resin:
+   `resin_tilts` to pick a tilt, then `resin_slice` {\"path\": \"/abs/part.ctb\", \"supports\": \"medium\"} (raft,
+   supports, vents under cavities; reports islands left — add `points` there). `resin_calibration` writes exposure
+   test files. Nothing is ever sent to a printer: these only write files.",
     ),
     (
         "projects",
