@@ -191,6 +191,49 @@ pub struct SliceJob {
     pub parts: Vec<Vec<[[f32; 3]; 3]>>,
     /// Carpeta donde quedan los STL, el perfil y el gcode.
     pub work_dir: PathBuf,
+    /// Prueba de calibración (modo de Orca y configuración por pieza)
+    pub calib: Option<Calib>,
+}
+
+/// Prueba de calibración para el motor: un modo de Orca (`Calib_Params`) que cambia algo capa por capa al
+/// escribir el gcode, y la configuración propia de cada pieza (claves de Orca, valores en texto)
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Calib {
+    /// `none`, `temp_tower`, `pa_tower`, `pa_line`, `pa_pattern`, `flow_rate`, `vol_speed_tower`, `vfa_tower`,
+    /// `retraction_tower`, `input_shaping_freq`, `input_shaping_damp`, `cornering`
+    pub mode: String,
+    #[serde(default)]
+    pub start: f64,
+    #[serde(default)]
+    pub end: f64,
+    #[serde(default)]
+    pub step: f64,
+    #[serde(default = "yes")]
+    pub print_numbers: bool,
+    #[serde(default)]
+    pub freq_start_x: f64,
+    #[serde(default)]
+    pub freq_end_x: f64,
+    #[serde(default)]
+    pub freq_start_y: f64,
+    #[serde(default)]
+    pub freq_end_y: f64,
+    #[serde(default)]
+    pub shaper_type: String,
+    #[serde(default)]
+    pub accelerations: Vec<f64>,
+    #[serde(default)]
+    pub speeds: Vec<f64>,
+    /// Configuración de cada pieza, en el orden de `parts`
+    #[serde(default)]
+    pub objects: Vec<std::collections::BTreeMap<String, String>>,
+    /// Las piezas como quedan después de los cortes, para dibujar la miniatura (si no, se dibujan `parts`)
+    #[serde(skip)]
+    pub thumbnail_parts: Option<Vec<Vec<[[f32; 3]; 3]>>>,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// Lo que va contando el motor.
@@ -259,7 +302,7 @@ pub fn run(job: &SliceJob, engine: &Path, mut on_event: impl FnMut(Event), cance
         Err(SlicerError::NeedsSupport(why)) => {
             let mut config = job.config.clone();
             config.insert("enable_support".into(), Value::String("1".into()));
-            let with = SliceJob { config, parts: job.parts.clone(), work_dir: job.work_dir.clone() };
+            let with = SliceJob { config, parts: job.parts.clone(), work_dir: job.work_dir.clone(), calib: job.calib.clone() };
             let note = format!("Se agregaron soportes automáticamente porque {why}. Ya están en el gcode: se ven como «Soporte» en la vista previa");
             on_event(Event::Warning { text: note.clone() });
             let mut summary = run_once(&with, engine, &mut on_event, cancel, false)?;
@@ -295,15 +338,27 @@ fn run_once(job: &SliceJob, engine: &Path, on_event: &mut impl FnMut(Event), can
     let config_path = job.work_dir.join("perfil.json");
     std::fs::write(&config_path, serde_json::to_vec_pretty(&Value::Object(job.config.clone()))?)?;
     let mut models = Vec::new();
+    let mut object_configs = Vec::new();
     for (i, part) in job.parts.iter().enumerate().filter(|(_, p)| !p.is_empty()) {
         let path = job.work_dir.join(format!("pieza_{}.stl", i + 1));
         write_binary_stl(&path, part)?;
         models.push(path);
+        object_configs.push(job.calib.as_ref().and_then(|c| c.objects.get(i).cloned()).unwrap_or_default());
     }
+    let calib_path = match &job.calib {
+        Some(calib) => {
+            let path = job.work_dir.join("calibracion.json");
+            // Las piezas vacías no llegan al motor: la configuración de cada una va alineada con las que sí
+            std::fs::write(&path, serde_json::to_vec_pretty(&Calib { objects: object_configs, ..calib.clone() })?)?;
+            Some(path)
+        }
+        None => None,
+    };
     let output = job.work_dir.join("placa.gcode");
     let _ = std::fs::remove_file(&output);
     let thumbs = job.work_dir.join("miniaturas");
-    write_thumbnails(&job.config, &job.parts, &thumbs)?;
+    let thumb_parts = job.calib.as_ref().and_then(|c| c.thumbnail_parts.as_ref()).unwrap_or(&job.parts);
+    write_thumbnails(&job.config, thumb_parts, &thumbs)?;
 
     let mut cmd = Command::new(engine);
     #[cfg(windows)]
@@ -320,6 +375,7 @@ fn run_once(job: &SliceJob, engine: &Path, on_event: &mut impl FnMut(Event), can
         .arg(&output)
         .arg("--thumbnails")
         .arg(&thumbs)
+        .args(calib_path.iter().flat_map(|p| [std::ffi::OsStr::new("--calib"), p.as_os_str()]))
         .args(&models)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

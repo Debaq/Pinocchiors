@@ -21,7 +21,7 @@ fn lamina_un_cubo_para_la_k1() {
     let settings = SliceSettings { printer: k1.name.clone(), process: k1.default_process.clone(), filament: k1.default_filament.clone(), overrides: Default::default() };
     let config = build_config(&settings).unwrap();
     let work_dir = std::env::temp_dir().join(format!("pinocchio-slicer-test-{}", std::process::id()));
-    let job = SliceJob { config, parts: vec![cube(100.0, 100.0, 20.0)], work_dir: work_dir.clone() };
+    let job = SliceJob { config, parts: vec![cube(100.0, 100.0, 20.0)], work_dir: work_dir.clone(), calib: None };
     let mut last = -1;
     let summary = run(&job, &engine, |e| if let pinocchio_slicer::Event::Progress { percent, .. } = e { last = percent }, &AtomicBool::new(false)).unwrap();
     assert!(last > 0, "sin progreso");
@@ -62,6 +62,7 @@ fn cancelar_mata_el_motor() {
         config: build_config(&settings).unwrap(),
         parts: vec![cube(10.0, 10.0, 60.0)],
         work_dir: std::env::temp_dir().join(format!("pinocchio-slicer-cancel-{}", std::process::id())),
+        calib: None,
     };
     let cancel = AtomicBool::new(true);
     let r = run(&job, &engine, |_| {}, &cancel);
@@ -85,7 +86,7 @@ fn standing_octahedron(cx: f32, cy: f32, r: f32) -> Vec<[[f32; 3]; 3]> {
 fn k1_job(parts: Vec<Vec<[[f32; 3]; 3]>>, tag: &str) -> SliceJob {
     let k1 = index().printers.iter().find(|p| p.name == "Creality K1 (0.4 nozzle)").unwrap();
     let settings = SliceSettings { printer: k1.name.clone(), process: k1.default_process.clone(), filament: k1.default_filament.clone(), overrides: Default::default() };
-    SliceJob { config: build_config(&settings).unwrap(), parts, work_dir: std::env::temp_dir().join(format!("pinocchio-slicer-{tag}-{}", std::process::id())) }
+    SliceJob { config: build_config(&settings).unwrap(), parts, work_dir: std::env::temp_dir().join(format!("pinocchio-slicer-{tag}-{}", std::process::id())), calib: None }
 }
 
 /// Una pieza que toca la cama en un punto (la primera capa queda vacía sin
@@ -123,7 +124,7 @@ fn lamina_un_cubo_para_la_ad5x() {
     let settings = SliceSettings { printer: p.name.clone(), process: p.default_process.clone(), filament: p.default_filament.clone(), overrides: Default::default() };
     let config = build_config(&settings).unwrap();
     let work_dir = std::env::temp_dir().join(format!("pinocchio-slicer-ad5x-{}", std::process::id()));
-    let job = SliceJob { config, parts: vec![cube(100.0, 100.0, 20.0)], work_dir: work_dir.clone() };
+    let job = SliceJob { config, parts: vec![cube(100.0, 100.0, 20.0)], work_dir: work_dir.clone(), calib: None };
     let summary = run(&job, &engine, |_| {}, &AtomicBool::new(false)).unwrap();
     let gcode = std::fs::read_to_string(&summary.gcode).unwrap();
     let _ = std::fs::remove_dir_all(&work_dir);
@@ -149,7 +150,7 @@ fn lamina_en_todas_las_impresoras() {
         let config = build_config(&settings).unwrap_or_else(|e| panic!("{}: {e}", p.name));
         let work_dir = std::env::temp_dir().join(format!("pinocchio-slicer-todas-{}-{}", std::process::id(), p.name.replace([' ', '(', ')'], "_")));
         let (x, y) = ((bed[0] / 2.0 - 10.0) as f32, (bed[1] / 2.0 - 10.0) as f32);
-        let job = SliceJob { config, parts: vec![cube(x, y, 20.0)], work_dir: work_dir.clone() };
+        let job = SliceJob { config, parts: vec![cube(x, y, 20.0)], work_dir: work_dir.clone(), calib: None };
         let summary = run(&job, &engine, |_| {}, &AtomicBool::new(false)).unwrap_or_else(|e| panic!("{}: {e}", p.name));
         let _ = std::fs::remove_dir_all(&work_dir);
         assert!(summary.layers > 50 && summary.filament_g > 1.0, "{}: {} capas, {} g", p.name, summary.layers, summary.filament_g);

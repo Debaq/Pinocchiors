@@ -22,6 +22,8 @@ export const MachinePanel: Component<{
   printer: PrinterProfile;
   material: MaterialProfile;
   onCalibrate: () => void;
+  /** Asistente «Poner a punto» (con la impresora conectada) */
+  onTune?: () => void;
 }> = (props) => {
   const [info] = createResource(loadSlicerInfo);
   const machines = () => machinesFrom(info()?.printers);
@@ -146,8 +148,13 @@ export const MachinePanel: Component<{
             step={0.05}
             suffix="×"
           />
+          <Show when={props.onTune}>
+            <Button onClick={() => props.onTune?.()} size="sm" fullWidth icon={<Icons.Ruler size={14} />}>
+              {t("Poner a punto: calibrar impresora y filamento")}
+            </Button>
+          </Show>
           <Button onClick={props.onCalibrate} size="sm" fullWidth variant="ghost" icon={<Icons.Ruler size={14} />}>
-            {t("Calibrar con piezas de prueba")}
+            {t("Solo holguras y medidas (sin impresora conectada)")}
           </Button>
           <Checkbox
             small

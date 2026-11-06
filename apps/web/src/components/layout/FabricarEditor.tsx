@@ -129,6 +129,7 @@ export const FabricarEditor: Component<FabricarEditorProps> = (props) => {
             onEditPrinter={() => props.onTab("printer")}
             orientAuto={props.slicer.orientAuto}
             onOrientAuto={props.slicer.onOrientAuto}
+            onTune={props.onTune}
           />
         </div>
       </div>

@@ -79,16 +79,170 @@ pub struct SliceResult {
     pub preview: slicer::Preview,
 }
 
-/// Lamina una placa (las piezas acomodadas como en «Exportar para imprimir»).
+/// Lamina una placa (las piezas acomodadas como en «Exportar para imprimir»). Con `calibration`, la impresora física
+/// y el filamento: sus valores calibrados van como base del perfil (los cambios a mano de `settings` encima)
 #[tauri::command]
 pub async fn slice_plate(
     app: AppHandle,
     input: PlateInput,
     plate: usize,
     settings: slicer::SliceSettings,
+    calibration: Option<crate::calibrations::CalTarget>,
     on_progress: Channel<Progress>,
 ) -> Result<SliceResult, String> {
-    in_background(app, move |state| slice_plate_impl(state, input, plate, settings, &on_progress)).await
+    in_background(app, move |state| {
+        let settings = with_calibration(settings, calibration.as_ref())?;
+        slice_plate_impl(state, input, plate, settings, &on_progress)
+    })
+    .await
+}
+
+/// `settings` con los valores calibrados de la impresora y el filamento debajo de los cambios a mano
+pub(crate) fn with_calibration(mut settings: slicer::SliceSettings, target: Option<&crate::calibrations::CalTarget>) -> Result<slicer::SliceSettings, String> {
+    let Some(target) = target.filter(|t| !t.printer_id.is_empty()) else { return Ok(settings) };
+    let target = crate::calibrations::CalTarget { filament: settings.filament.clone(), ..target.clone() };
+    let view = crate::calibrations::view(&target)?;
+    if view.values.is_empty() {
+        return Ok(settings);
+    }
+    let base = slicer::build_config(&settings).map_err(|e| e.to_string())?;
+    for (k, v) in crate::calibrations::overrides(&view.values, &base) {
+        settings.overrides.entry(k).or_insert(v);
+    }
+    Ok(settings)
+}
+
+/// Lo que se lamina en una prueba de calibración, además del resultado: cómo se lee
+#[derive(Serialize)]
+pub struct CalibrationSlice {
+    pub result: SliceResult,
+    pub reading: slicer::calib::Reading,
+    pub unit: String,
+    pub start: f64,
+    pub end: f64,
+    pub step: f64,
+}
+
+/// Lamina una prueba de calibración (`test`: las de `slicer::calib` en snake_case, o `clearance` / `block`, las piezas
+/// de medidas) para la impresora física y el filamento, sobre lo ya calibrado. Queda como último laminado: se ve en la
+/// vista previa y se manda o se guarda como cualquier otro
+#[tauri::command]
+pub async fn slice_calibration(
+    app: AppHandle,
+    settings: slicer::SliceSettings,
+    calibration: Option<crate::calibrations::CalTarget>,
+    test: String,
+    range: Option<slicer::calib::CalibRange>,
+    on_progress: Channel<Progress>,
+) -> Result<CalibrationSlice, String> {
+    in_background(app, move |_| slice_calibration_impl(settings, calibration.as_ref(), &test, &range.unwrap_or_default(), &on_progress)).await
+}
+
+pub(crate) fn slice_calibration_impl(
+    settings: slicer::SliceSettings,
+    calibration: Option<&crate::calibrations::CalTarget>,
+    test: &str,
+    range: &slicer::calib::CalibRange,
+    on_progress: &Channel<Progress>,
+) -> Result<CalibrationSlice, String> {
+    let settings = with_calibration(settings, calibration)?;
+    let base = slicer::build_config(&settings).map_err(|e| e.to_string())?;
+    let bed = slicer_bed(&base);
+    let (config, parts, calib, reading, unit, (start, end, step)) = match test {
+        "clearance" | "block" => {
+            use pinocchio_print3d as p3d;
+            let meshes: Vec<Mesh> = if test == "clearance" {
+                p3d::clearance_test(&p3d::ClearanceTest::default()).map_err(|e| e.to_string())?.into_iter().map(|(_, m)| m).collect()
+            } else {
+                vec![p3d::calibration_block(&p3d::CalibrationBlock::default()).map_err(|e| e.to_string())?]
+            };
+            let mut parts: Vec<Vec<[[f32; 3]; 3]>> = meshes.iter().map(|m| (0..m.num_faces()).map(|f| m.get_face_positions(f).map(|p| [p.0.x as f32, p.0.y as f32, p.0.z as f32])).collect()).collect();
+            // Juntas, centradas en la cama y apoyadas
+            let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+            for p in parts.iter().flatten().flatten() {
+                for k in 0..3 {
+                    lo[k] = lo[k].min(p[k]);
+                    hi[k] = hi[k].max(p[k]);
+                }
+            }
+            let (dx, dy) = ((bed[0] as f32 - lo[0] - hi[0]) * 0.5, (bed[1] as f32 - lo[1] - hi[1]) * 0.5);
+            for p in parts.iter_mut().flatten().flatten() {
+                p[0] += dx;
+                p[1] += dy;
+                p[2] -= lo[2];
+            }
+            (base, parts, None, slicer::calib::Reading::Live, "mm".to_string(), (0.0, 0.0, 0.0))
+        }
+        name => {
+            let test: slicer::calib::CalibTest = serde_json::from_value(Value::String(name.to_string())).map_err(|_| format!("No hay una prueba «{name}»"))?;
+            let (ds, de, dt) = slicer::calib::default_range(test, &base);
+            let t = slicer::calib::prepare(test, range, &base).map_err(|e| e.to_string())?;
+            let r = (range.start.unwrap_or(ds), range.end.unwrap_or(de), range.step.unwrap_or(dt));
+            (t.config, t.parts, Some(t.calib), t.reading, t.unit.to_string(), r)
+        }
+    };
+    let result = run_job(config, parts, calib, bed, 1, Vec::new(), on_progress)?;
+    Ok(CalibrationSlice { result, reading, unit, start, end, step })
+}
+
+/// El rango por defecto de una prueba para ese filamento (sobre lo ya calibrado) y cómo se va a leer, sin laminar
+#[derive(Serialize)]
+pub struct CalibrationDefaults {
+    pub start: f64,
+    pub end: f64,
+    pub step: f64,
+    pub unit: String,
+    pub reading: slicer::calib::Reading,
+    /// Tipo de filamento (PLA, PETG…)
+    pub filament_type: String,
+}
+
+#[tauri::command]
+pub async fn calibration_defaults(
+    app: AppHandle,
+    settings: slicer::SliceSettings,
+    calibration: Option<crate::calibrations::CalTarget>,
+    test: String,
+    range: Option<slicer::calib::CalibRange>,
+) -> Result<CalibrationDefaults, String> {
+    in_background(app, move |_| calibration_defaults_impl(settings, calibration.as_ref(), &test, &range.unwrap_or_default())).await
+}
+
+pub(crate) fn calibration_defaults_impl(
+    settings: slicer::SliceSettings,
+    calibration: Option<&crate::calibrations::CalTarget>,
+    test: &str,
+    range: &slicer::calib::CalibRange,
+) -> Result<CalibrationDefaults, String> {
+    let settings = with_calibration(settings, calibration)?;
+    let base = slicer::build_config(&settings).map_err(|e| e.to_string())?;
+    let filament_type = slicer::calib::filament_type(&base);
+    if test == "clearance" || test == "block" {
+        return Ok(CalibrationDefaults { start: 0.0, end: 0.0, step: 0.0, unit: "mm".into(), reading: slicer::calib::Reading::Live, filament_type });
+    }
+    let t: slicer::calib::CalibTest = serde_json::from_value(Value::String(test.to_string())).map_err(|_| format!("No hay una prueba «{test}»"))?;
+    let (s, e, st) = slicer::calib::default_range(t, &base);
+    let prepared = slicer::calib::prepare(t, range, &base).map_err(|e| e.to_string())?;
+    Ok(CalibrationDefaults {
+        start: range.start.unwrap_or(s),
+        end: range.end.unwrap_or(e),
+        step: range.step.unwrap_or(st),
+        unit: prepared.unit.to_string(),
+        reading: prepared.reading,
+        filament_type,
+    })
+}
+
+/// La cama del perfil (ancho y fondo, mm)
+fn slicer_bed(config: &Map<String, Value>) -> [f64; 2] {
+    let pts: Vec<(f64, f64)> = match config.get("printable_area") {
+        Some(Value::Array(list)) => list.iter().filter_map(Value::as_str).filter_map(|p| p.split_once('x')).filter_map(|(x, y)| Some((x.trim().parse().ok()?, y.trim().parse().ok()?))).collect(),
+        _ => Vec::new(),
+    };
+    if pts.is_empty() {
+        return [220.0, 220.0];
+    }
+    [pts.iter().map(|p| p.0).fold(f64::MIN, f64::max), pts.iter().map(|p| p.1).fold(f64::MIN, f64::max)]
 }
 
 /// El laminado de una placa sin Tauri (también lo usa el conector MCP). Uno a la vez.
@@ -104,15 +258,53 @@ pub(crate) fn slice_plate_impl(
     }
     CANCEL.store(false, Ordering::SeqCst);
     let result = (|| {
-        let engine = slicer::find_engine().ok_or_else(|| slicer::SlicerError::EngineMissing.to_string())?;
         let config = slicer::build_config(&settings).map_err(|e| e.to_string())?;
         report(on_progress, "plates", 2, "Acomodando las piezas...");
         let plan = slicing_plan(sources(state)?, &input, &config)?;
         let plates = plan.plates.len();
         let chosen = plan.plates.get(plate).ok_or("Esa placa no existe")?;
         let parts = plate_parts(chosen);
+        let mut result = run_job_locked(config, parts, None, [input.printer.build_volume[0], input.printer.build_volume[1]], plates, plan.unplaced, on_progress)?;
+        result.plate = plate;
+        Ok(result)
+    })();
+    RUNNING.store(false, Ordering::SeqCst);
+    result
+}
+
+/// Lamina `parts` con `config` (uno a la vez) y deja el resultado como último laminado
+fn run_job(
+    config: Map<String, Value>,
+    parts: Vec<Vec<[[f32; 3]; 3]>>,
+    calib: Option<slicer::Calib>,
+    bed: [f64; 2],
+    plates: usize,
+    unplaced: Vec<String>,
+    on_progress: &Channel<Progress>,
+) -> Result<SliceResult, String> {
+    if RUNNING.swap(true, Ordering::SeqCst) {
+        return Err("Ya hay un laminado en curso".into());
+    }
+    CANCEL.store(false, Ordering::SeqCst);
+    let result = run_job_locked(config, parts, calib, bed, plates, unplaced, on_progress);
+    RUNNING.store(false, Ordering::SeqCst);
+    result
+}
+
+/// Lo de [`run_job`], con el turno ya tomado
+fn run_job_locked(
+    config: Map<String, Value>,
+    parts: Vec<Vec<[[f32; 3]; 3]>>,
+    calib: Option<slicer::Calib>,
+    bed: [f64; 2],
+    plates: usize,
+    unplaced: Vec<String>,
+    on_progress: &Channel<Progress>,
+) -> Result<SliceResult, String> {
+    {
+        let engine = slicer::find_engine().ok_or_else(|| slicer::SlicerError::EngineMissing.to_string())?;
         let work_dir = std::env::temp_dir().join("pinocchio-slicer").join(std::process::id().to_string());
-        let job = slicer::SliceJob { config, parts, work_dir };
+        let job = slicer::SliceJob { config, parts, work_dir, calib };
         let summary = slicer::run(
             &job,
             &engine,
@@ -132,7 +324,7 @@ pub(crate) fn slice_plate_impl(
         let preview = slicer::parse_gcode(&text);
         let gcode_bytes = text.len() as u64;
         let result = SliceResult {
-            plate,
+            plate: 0,
             plates,
             time_s: summary.time_s,
             filament_mm: summary.filament_mm,
@@ -141,17 +333,15 @@ pub(crate) fn slice_plate_impl(
             layers: summary.layers.max(preview.layer_z.len() as u32),
             warnings: summary.warnings,
             roles: summary.roles,
-            bed: [input.printer.build_volume[0], input.printer.build_volume[1]],
+            bed,
             gcode_bytes,
-            unplaced: plan.unplaced,
+            unplaced,
             preview: preview.clone(),
         };
         *LAST.lock().unwrap() = Some(LastSlice { gcode: summary.gcode, preview });
         report(on_progress, "done", 100, "Laminado listo");
         Ok(result)
-    })();
-    RUNNING.store(false, Ordering::SeqCst);
-    result
+    }
 }
 
 /// Piezas de una placa como triángulos (mm, Z arriba, ya en su lugar de la cama).
@@ -287,6 +477,7 @@ mod tests {
             config,
             parts,
             work_dir: std::env::temp_dir().join(format!("pinocchio-slicer-app-{}", std::process::id())),
+            calib: None,
         };
         let summary = slicer::run(&job, &engine, |_| {}, &AtomicBool::new(false)).unwrap();
         // El cubo más alto (15 mm a 0,2 mm) manda: ~75 capas
@@ -370,7 +561,7 @@ mod tests {
                 let config = slicer::build_config(&settings).map_err(|e| e.to_string())?;
                 let plan = slicing_plan(vec![(name.clone(), mesh)], &input, &config)?;
                 let plate = plan.plates.first().ok_or_else(|| format!("no cabe en la cama: {:?} {:?}", plan.unplaced, plan.too_tall))?;
-                let job = slicer::SliceJob { config, parts: plate_parts(plate), work_dir: std::env::temp_dir().join(format!("pinocchio-slicer-real-{}", std::process::id())) };
+                let job = slicer::SliceJob { config, parts: plate_parts(plate), work_dir: std::env::temp_dir().join(format!("pinocchio-slicer-real-{}", std::process::id())), calib: None };
                 let summary = slicer::run(&job, &engine, |_| {}, &AtomicBool::new(false)).map_err(|e| e.to_string())?;
                 let gcode = std::fs::read_to_string(&summary.gcode).map_err(|e| e.to_string())?;
                 let _ = std::fs::remove_dir_all(&job.work_dir);

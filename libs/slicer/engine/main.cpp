@@ -1,6 +1,6 @@
 // pinocchio-slicer: lamina mallas con el motor de OrcaSlicer (libslic3r v2.4.2).
 //
-//   pinocchio-slicer --config perfil.json --output salida.gcode [--thumbnails dir] [--resources dir] pieza1.stl [pieza2.stl ...]
+//   pinocchio-slicer --config perfil.json --output salida.gcode [--thumbnails dir] [--resources dir] [--calib calib.json] pieza1.stl [pieza2.stl ...]
 //
 // - `perfil.json`: configuración ya resuelta (máquina + proceso + filamento, sin
 //   `inherits` pendientes), en el formato de perfiles de Orca (valores en texto).
@@ -18,6 +18,16 @@
 //    "roles":[{"role":"Outer wall","m":M,"g":G},...]}
 //   {"event":"error","text":"..."}   (y código de salida distinto de 0)
 // Cancelar = matar el proceso.
+//
+// - `--calib calib.json`: prueba de calibración (los modos de Orca, `Calib_Params`):
+//   {"mode":"temp_tower","start":230,"end":190,"step":5,"print_numbers":true,
+//    "freq_start_x":..,"freq_end_x":..,"freq_start_y":..,"freq_end_y":..,"shaper_type":"..",
+//    "accelerations":[..],"speeds":[..],
+//    "objects":[{"clave":"valor",...},...]}
+//   `objects[i]` es la configuración propia de la pieza i (en el orden de los archivos):
+//   claves de Orca con valores en texto (p. ej. {"print_flow_ratio":"1.05"}). Dos claves
+//   propias cortan la pieza con tapa, como el corte de Orca: "@keep_below":"z" deja lo de
+//   abajo de z y "@keep_above":"z" lo de arriba (después se apoya en la cama).
 
 #include "libslic3r/libslic3r.h"
 #include "libslic3r/Exception.hpp"
@@ -27,6 +37,9 @@
 #include "libslic3r/PrintConfig.hpp"
 #include "libslic3r/Utils.hpp"
 #include "libslic3r/GCode/GCodeProcessor.hpp"
+#include "libslic3r/calib.hpp"
+#include "libslic3r/TriangleMeshSlicer.hpp"
+#include "nlohmann/json.hpp"
 
 #include "libslic3r/ExtrusionEntity.hpp"
 #include "libslic3r/GCode/ThumbnailData.hpp"
@@ -42,6 +55,12 @@
 #include <map>
 #include <string>
 #include <vector>
+#ifdef _WIN32
+#include <process.h>
+#define getpid _getpid
+#else
+#include <unistd.h>
+#endif
 
 using namespace Slic3r;
 
@@ -88,6 +107,7 @@ struct Args
     std::string              output;
     std::string              resources;
     std::string              thumbnails;
+    std::string              calib;
     std::vector<std::string> models;
 };
 
@@ -111,6 +131,8 @@ bool parse_args(int argc, char **argv, Args &args, std::string &err)
             if (!value(args.thumbnails)) return false;
         } else if (a == "--resources") {
             if (!value(args.resources)) return false;
+        } else if (a == "--calib") {
+            if (!value(args.calib)) return false;
         } else if (a == "--version") {
             emit("{\"event\":\"version\",\"engine\":\"OrcaSlicer libslic3r\",\"version\":\"" SLIC3R_VERSION "\"}");
             std::exit(0);
@@ -145,6 +167,73 @@ ThumbnailsList load_thumbnails(const std::string &dir, const ThumbnailsParams &p
     return out;
 }
 
+// Modo de calibración por nombre
+bool calib_mode(const std::string &name, CalibMode &mode)
+{
+    static const std::map<std::string, CalibMode> modes = {
+        {"none", CalibMode::Calib_None},
+        {"pa_line", CalibMode::Calib_PA_Line},
+        {"pa_pattern", CalibMode::Calib_PA_Pattern},
+        {"pa_tower", CalibMode::Calib_PA_Tower},
+        {"flow_rate", CalibMode::Calib_Flow_Rate},
+        {"temp_tower", CalibMode::Calib_Temp_Tower},
+        {"vol_speed_tower", CalibMode::Calib_Vol_speed_Tower},
+        {"vfa_tower", CalibMode::Calib_VFA_Tower},
+        {"retraction_tower", CalibMode::Calib_Retraction_tower},
+        {"input_shaping_freq", CalibMode::Calib_Input_shaping_freq},
+        {"input_shaping_damp", CalibMode::Calib_Input_shaping_damp},
+        {"cornering", CalibMode::Calib_Cornering},
+    };
+    auto it = modes.find(name);
+    if (it == modes.end())
+        return false;
+    mode = it->second;
+    return true;
+}
+
+// Lee `--calib`: los parámetros de la prueba y la configuración de cada pieza
+bool load_calib(const std::string &file, Calib_Params &params, std::vector<std::map<std::string, std::string>> &objects, std::string &err)
+{
+    boost::nowide::ifstream in(file);
+    if (!in) {
+        err = "no se pudo abrir " + file;
+        return false;
+    }
+    nlohmann::json j;
+    try {
+        in >> j;
+    } catch (const std::exception &e) {
+        err = std::string("calibración mal escrita: ") + e.what();
+        return false;
+    }
+    if (!calib_mode(j.value("mode", std::string("none")), params.mode)) {
+        err = "modo de calibración desconocido: " + j.value("mode", std::string());
+        return false;
+    }
+    params.start         = j.value("start", 0.0);
+    params.end           = j.value("end", 0.0);
+    params.step          = j.value("step", 0.0);
+    params.print_numbers = j.value("print_numbers", true);
+    params.freqStartX    = j.value("freq_start_x", 0.0);
+    params.freqEndX      = j.value("freq_end_x", 0.0);
+    params.freqStartY    = j.value("freq_start_y", 0.0);
+    params.freqEndY      = j.value("freq_end_y", 0.0);
+    params.test_model    = j.value("test_model", 0);
+    params.shaper_type   = j.value("shaper_type", std::string());
+    if (j.contains("accelerations"))
+        params.accelerations = j["accelerations"].get<std::vector<double>>();
+    if (j.contains("speeds"))
+        params.speeds = j["speeds"].get<std::vector<double>>();
+    if (j.contains("objects"))
+        for (const auto &obj : j["objects"]) {
+            std::map<std::string, std::string> kv;
+            for (auto it = obj.begin(); it != obj.end(); ++it)
+                kv[it.key()] = it.value().is_string() ? it.value().get<std::string>() : it.value().dump();
+            objects.push_back(std::move(kv));
+        }
+    return true;
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -162,7 +251,8 @@ int main(int argc, char **argv)
         set_logging_level(1);
         if (!args.resources.empty())
             set_resources_dir(args.resources);
-        boost::filesystem::path tmp = boost::filesystem::temp_directory_path() / "pinocchio-slicer";
+        // Una carpeta por proceso: dos laminados a la vez (pruebas, conector MCP) no se pisan los temporales
+        boost::filesystem::path tmp = boost::filesystem::temp_directory_path() / ("pinocchio-slicer-" + std::to_string(::getpid()));
         boost::filesystem::create_directories(tmp);
         set_temporary_dir(tmp.string());
         set_data_dir(tmp.string());
@@ -193,14 +283,45 @@ int main(int argc, char **argv)
             }
         }
 
+        // Prueba de calibración: parámetros y configuración propia de cada pieza
+        Calib_Params                                    calib;
+        std::vector<std::map<std::string, std::string>> per_object;
+        if (!args.calib.empty() && !load_calib(args.calib, calib, per_object, err))
+            return fail(err);
+
         // Piezas en coordenadas de la cama.
         Model model;
-        for (const std::string &file : args.models) {
-            Model part = Model::read_from_file(file, nullptr, nullptr, LoadStrategy::LoadModel);
+        // Las claves de cada pieza las escribe Pinocchio: un valor mal escrito es un error, no se reemplaza callado
+        ConfigSubstitutionContext ctx(ForwardCompatibilitySubstitutionRule::Disable);
+        for (size_t f = 0; f < args.models.size(); ++f) {
+            Model part = Model::read_from_file(args.models[f], nullptr, nullptr, LoadStrategy::LoadModel);
+            std::map<std::string, std::string> own = f < per_object.size() ? per_object[f] : std::map<std::string, std::string>{};
             for (ModelObject *src : part.objects) {
                 ModelObject *obj = model.add_object(*src);
                 obj->clear_instances();
                 obj->add_instance();
+                for (const auto &[key, value] : own) {
+                    if (key == "@keep_below" || key == "@keep_above") {
+                        // Corte horizontal con tapa (en las coordenadas del archivo)
+                        const float z = std::stof(value);
+                        for (ModelVolume *vol : obj->volumes) {
+                            indexed_triangle_set its = vol->mesh().its;
+                            its_transform(its, vol->get_matrix());
+                            indexed_triangle_set upper, lower;
+                            cut_mesh(its, z, &upper, &lower, true);
+                            vol->set_mesh(key == "@keep_below" ? std::move(lower) : std::move(upper));
+                            vol->set_transformation(Geometry::Transformation());
+                            vol->calculate_convex_hull();
+                        }
+                        obj->invalidate_bounding_box();
+                        continue;
+                    }
+                    try {
+                        obj->config.set_deserialize(key, value, ctx);
+                    } catch (const std::exception &e) {
+                        return fail("clave de pieza «" + key + "»: " + e.what());
+                    }
+                }
                 obj->ensure_on_bed();
             }
         }
@@ -219,6 +340,8 @@ int main(int argc, char **argv)
             else if (!s.text.empty())
                 emit("{\"event\":\"warning\",\"text\":\"" + json_escape(s.text) + "\"}");
         });
+        if (calib.mode != CalibMode::Calib_None)
+            print.set_calib_params(calib);
         print.apply(model, config);
 
         StringObjectException warning;

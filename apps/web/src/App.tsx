@@ -9,6 +9,7 @@ import { startMcpLive } from "./lib/mcpLive";
 import { IS_ANDROID } from "./lib/platform";
 import { LiveAiBadge } from "./components/layout/LiveAiBadge";
 import { AiChatPanel } from "./components/layout/AiChatPanel";
+import { TuneWizard, type ChatPicture } from "./components/layout/TuneWizard";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open, save } from "@tauri-apps/plugin-dialog";
@@ -591,6 +592,10 @@ export const App: Component = () => {
   );
   /** Chat con la IA (Claude Code instalado, en modo en vivo) */
   const [chatOpen, setChatOpen] = createSignal(false);
+  /** Mensaje que otra parte de la app deja listo en el chat de IA */
+  const [chatPrefill, setChatPrefill] = createSignal<{ id: number; text: string; images: ChatPicture[] }>();
+  /** Asistente «Poner a punto» abierto */
+  const [tuneOpen, setTuneOpen] = createSignal(false);
   // Dibujando un sketch, el panel muestra lo elegido y sus restricciones
   createEffect(
     on(
@@ -5970,6 +5975,7 @@ export const App: Component = () => {
   };
   /** Lo que reciben el panel derecho de Fabricar y su panel izquierdo */
   const fabProps = (): Print3DStepProps => ({
+    onTune: () => setTuneOpen(true),
     onAnalyze: handleAnalyzePrint3d,
     onScale: handleScaleForPrint,
     onUndoScale: handleUndoPrintScale,
@@ -9350,7 +9356,7 @@ export const App: Component = () => {
         <div class="flex flex-1 min-h-0 overflow-hidden">
           {/* Chat con la IA, acoplado a la izquierda */}
           <Show when={chatOpen()}>
-            <AiChatPanel onClose={() => setChatOpen(false)} />
+            <AiChatPanel onClose={() => setChatOpen(false)} prefill={chatPrefill()} />
           </Show>
 
           {/* Toolbar */}
@@ -10152,6 +10158,40 @@ export const App: Component = () => {
         <UpdateDialog />
       </Show>
 
+      <Show when={tuneOpen()}>
+        <TuneWizard
+          machine={printPrep().slicer?.printer}
+          filament={printPrep().slicer?.filament}
+          confirm={confirmAction}
+          onAskAi={
+            IS_ANDROID
+              ? undefined
+              : (text, images) => {
+                  setChatPrefill({ id: Date.now(), text, images });
+                  setChatOpen(true);
+                  setTuneOpen(false);
+                }
+          }
+          onApplyProfiles={(r) => {
+            // Lo medido también va a los perfiles de Fabricar (holguras de uniones y compensación al exportar)
+            const prep = printPrep();
+            const printer = prep.printer ?? printPresets()?.printers[0];
+            const material = prep.material ?? printPresets()?.materials[0];
+            if (!printer || !material) return;
+            const factor = material.clearance_factor ?? 1;
+            setPrintPrep({
+              ...prep,
+              printer: {
+                ...printer,
+                ...(r.fit_clearance !== undefined ? { fit_clearance: Math.round((r.fit_clearance / factor) * 1000) / 1000 } : {}),
+                ...(r.hole_comp !== undefined ? { hole_comp: r.hole_comp } : {}),
+              },
+              material: { ...material, ...(r.shrink ? { shrink: r.shrink } : {}) },
+            });
+          }}
+          onClose={() => setTuneOpen(false)}
+        />
+      </Show>
       {/* Con clave: cada pregunta nueva arma el diálogo de cero (sus casillas) */}
       <Show when={confirmation()} keyed>
         {(request) => (

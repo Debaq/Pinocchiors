@@ -9,6 +9,8 @@ import { FEATURES, ORCA_ROLE_NAMES, decodePreview, gcodePreview, type GcodeMeta 
 import type { ConfirmRequest } from "../layout/ConfirmDialog";
 import { PrinterPicture, PrinterTab, SendToPrinter } from "./PrinterSection";
 import { loadSlicerInfo } from "../../lib/machines";
+import { netPrinters, selectNetPrinter, selectedNetPrinter } from "../../lib/settings";
+import { calSummary, calTarget, getCalibration, setUseCalibration, useCalibration } from "../../lib/calibration";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TIPOS (espejo de apps/desktop/src/slicer.rs)
@@ -192,6 +194,8 @@ export const SlicerSection: Component<{
   /** Orientación de las piezas: la mejor automática (true) o como están en el visor */
   orientAuto?: boolean;
   onOrientAuto?: (auto: boolean) => void;
+  /** Abre el asistente «Poner a punto» (calibrar la impresora y el filamento) */
+  onTune?: () => void;
 }> = (props) => {
   const [info] = createResource(loadSlicerInfo);
   const [busy, setBusy] = createSignal(false);
@@ -237,6 +241,26 @@ export const SlicerSection: Component<{
   };
   const changed = () => Object.keys(props.settings.overrides).length;
 
+  // La impresora física para la que se lamina (las de red de este modelo): de ella sale la calibración
+  const physical = () => netPrinters().filter((n) => n.model === printer()?.model);
+  const target = () => physical().find((n) => n.id === selectedNetPrinter()?.id) ?? physical()[0];
+  const [calibration] = createResource(
+    () => {
+      const p = target();
+      const m = printer();
+      const f = filament();
+      return p && m && f ? calTarget(p, m.name, f) : undefined;
+    },
+    (tgt) => getCalibration(tgt).catch(() => undefined),
+  );
+  const calibrated = () => Object.keys(calibration()?.values ?? {}).length > 0;
+  /** Lo que se le pasa al laminado: la impresora física, si se usa su calibración */
+  const calibrationArg = () => {
+    const p = target();
+    const m = printer();
+    return p && m && useCalibration() ? calTarget(p, m.name, filament() ?? "") : null;
+  };
+
   // La cama de esta impresora se dibuja en el visor y es la que se usa para acomodar las piezas
   const bed = () => slicerBed(base());
   createEffect(() => props.onBed?.(bed()));
@@ -277,6 +301,7 @@ export const SlicerSection: Component<{
         input,
         plate: plate(),
         settings: { printer: p.name, process: pr, filament: f, overrides },
+        calibration: calibrationArg(),
         onProgress: channel,
       });
       setResult(r);
@@ -343,6 +368,28 @@ export const SlicerSection: Component<{
             </div>
             <Show when={(printer()?.tools ?? 1) > 1}>
               <p class="text-[10px] text-text-dim">{t("Tiene {n} carretes: el carrete se elige al enviar a la impresora.", { n: printer()!.tools })}</p>
+            </Show>
+            <Show when={physical().length > 0}>
+              <Select
+                label={t("Para")}
+                options={physical().map((n) => ({ value: n.id, label: n.name }))}
+                value={target()?.id}
+                onChange={(id) => selectNetPrinter(id)}
+              />
+              <div class="space-y-1 p-2 rounded-md bg-surface/30 border border-border">
+                <Show
+                  when={calibrated()}
+                  fallback={<p class="text-[10px] text-text-dim">{t("{printer} todavía no está calibrada con este filamento.", { printer: target()?.name ?? "" })}</p>}
+                >
+                  <Checkbox small label={t("Usar la calibración de {printer}", { printer: target()?.name ?? "" })} checked={useCalibration()} onChange={setUseCalibration} />
+                  <p class="text-[10px] text-text-dim leading-snug">{calSummary(calibration()?.values ?? {})}</p>
+                </Show>
+                <Show when={props.onTune}>
+                  <button class="text-[10px] text-accent hover:underline" onClick={() => props.onTune?.()}>
+                    {calibrated() ? t("Poner a punto (repetir o seguir calibrando)") : t("Poner a punto: calibrar impresora y filamento")}
+                  </button>
+                </Show>
+              </div>
             </Show>
             <Select
               label={t("Calidad")}

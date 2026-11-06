@@ -195,7 +195,8 @@ escaneos y comparación con referencia, atajos reasignables por área
 ## 6. Impresión 3D (`libs/pinocchio/print3d`)
 
 Detalle en `PLAN_PRINT3D.md`, «Pendientes y límites».
-- ⬜ Contracción distinta por eje en la interfaz (los presets las traen iguales).
+- ✅ Contracción distinta por eje en la interfaz (Fabricar → Impresora → Holguras y calibración).
+- ⬜ Asistente «Poner a punto» (calibrar impresora y filamento, con la IA): plan en `print3d/PLAN_CALIBRACION.md` (C0–C7).
 - ✅ Pieles terminadas (Fase 16, 2026-11-06): escala por isla de UV, intensidad pintada, detectar pernos y
   roscas, rehacer la piel si cambia el diseño. 🧪 Falta probar el pincel de intensidad y el rehacer en la app abierta.
 - 🧪 Nada probado con la app abierta ni con impresora; sin e2e de la sincronía

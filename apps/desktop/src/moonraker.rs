@@ -522,7 +522,7 @@ mod tests {
         let f = [[0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7], [0, 1, 5], [0, 5, 4], [1, 2, 6], [1, 6, 5], [2, 3, 7], [2, 7, 6], [3, 0, 4], [3, 4, 7]];
         let cube: Vec<[[f32; 3]; 3]> = f.iter().map(|t| [v[t[0]], v[t[1]], v[t[2]]]).collect();
         let work_dir = std::env::temp_dir().join(format!("pinocchio-envio-real-{}", std::process::id()));
-        let job = slicer::SliceJob { config: slicer::build_config(&settings).unwrap(), parts: vec![cube], work_dir: work_dir.clone() };
+        let job = slicer::SliceJob { config: slicer::build_config(&settings).unwrap(), parts: vec![cube], work_dir: work_dir.clone(), calib: None };
         let summary = slicer::run(&job, &engine, |_| {}, &AtomicBool::new(false)).unwrap();
         let gcode = std::fs::read(&summary.gcode).unwrap();
         println!("laminado: {} capas, {:.0} s, {} bytes", summary.layers, summary.time_s, gcode.len());

@@ -4185,11 +4185,13 @@ dependencies = [
 name = "pinocchio-slicer"
 version = "0.1.0"
 dependencies = [
+ "draco-core",
  "flate2",
  "rayon",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "zip",
 ]
 
 [[package]]

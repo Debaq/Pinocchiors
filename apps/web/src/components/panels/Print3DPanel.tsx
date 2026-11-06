@@ -102,6 +102,8 @@ export const FAB_TABS: { id: FabTab; label: string; icon: Component<{ size?: num
 ];
 
 export interface Print3DPanelProps {
+  /** Abre el asistente «Poner a punto» (calibrar impresora y filamento) */
+  onTune?: () => void;
   /** «summary»: panel derecho (datos, impresora, accesos y acciones básicas); «editor»: una pestaña del panel izquierdo */
   mode?: "summary" | "editor";
   /** Con `mode="editor"`: qué pestaña mostrar */
@@ -328,7 +330,7 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
         </Show>
       </Match>
       <Match when={props.tab === "printer"}>
-        <MachinePanel prep={prep()} onPatch={patch} presets={props.presets} printer={printer()} material={material()} onCalibrate={() => setCalibrating(true)} />
+        <MachinePanel prep={prep()} onPatch={patch} presets={props.presets} printer={printer()} material={material()} onCalibrate={() => setCalibrating(true)} onTune={props.onTune} />
       </Match>
       <Match when={!props.analysis}>{needsAnalysis()}</Match>
       <Match when={props.tab === "review"}>

@@ -16,3 +16,7 @@ rayon = { workspace = true }
 
 [build-dependencies]
 flate2 = { workspace = true }
+
+[dev-dependencies]
+draco-core = { workspace = true }
+zip = { workspace = true, features = ["deflate"] }

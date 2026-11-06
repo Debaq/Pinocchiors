@@ -1,4 +1,4 @@
-import { Component, For, Match, Show, Switch, createSignal, onCleanup, onMount } from "solid-js";
+import { Component, For, Match, Show, Switch, createEffect, createSignal, on, onCleanup, onMount } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
@@ -220,7 +220,11 @@ function onEvent(m: { kind: string; [k: string]: unknown }) {
  * tapa nada; el visor se angosta). Lo que escribes va al Claude Code
  * instalado, que trabaja en esta ventana con el conector (modo en vivo).
  */
-export const AiChatPanel: Component<{ onClose: () => void }> = (props) => {
+export const AiChatPanel: Component<{
+  onClose: () => void;
+  /** Mensaje (y fotos) que otra parte de la app deja listo para mandar; cambia `id` para ponerlo de nuevo */
+  prefill?: { id: number; text: string; images: Picture[] };
+}> = (props) => {
   const [status, setStatus] = createSignal<ChatStatus>();
   const [draft, setDraft] = createSignal("");
   const [options, setOptions] = createSignal(false);
@@ -232,6 +236,19 @@ export const AiChatPanel: Component<{ onClose: () => void }> = (props) => {
   let input: HTMLTextAreaElement | undefined;
 
   const scroll = () => queueMicrotask(() => list?.scrollTo({ top: list.scrollHeight }));
+
+  createEffect(
+    on(
+      () => props.prefill?.id,
+      () => {
+        const p = props.prefill;
+        if (!p) return;
+        setDraft(p.text);
+        setAttached(p.images);
+        queueMicrotask(() => input?.focus());
+      }
+    )
+  );
 
   onMount(() => {
     void invoke<ChatStatus>("ai_chat_status").then((s) => {

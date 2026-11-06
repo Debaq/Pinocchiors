@@ -8,6 +8,7 @@
 //!
 //! Coordenadas: milímetros, Z arriba, origen en la esquina de la cama (como Orca).
 
+pub mod calib;
 pub mod ctb;
 pub mod cxdlp;
 mod engine;
@@ -30,7 +31,7 @@ pub mod sla_supports;
 mod stl;
 pub mod thumbnail;
 
-pub use engine::{find_engine, run, Event, RoleUse, SliceJob, Summary};
+pub use engine::{find_engine, run, Calib, Event, RoleUse, SliceJob, Summary};
 pub use error::SlicerError;
 pub use gcode::{parse_gcode, Feature, Preview};
 pub use presets::{index, preset, PresetIndex, PresetKind, PrinterEntry};

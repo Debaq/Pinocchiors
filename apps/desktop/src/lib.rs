@@ -3,6 +3,7 @@
 pub mod animation;
 pub mod body_parts;
 pub mod cad;
+pub mod calibrations;
 pub mod bvh;
 pub mod hdri;
 pub mod imported_rig;
@@ -250,6 +251,12 @@ pub fn run() {
             slicer::slicer_presets,
             slicer::slicer_config,
             slicer::slice_plate,
+            slicer::slice_calibration,
+            slicer::calibration_defaults,
+            calibrations::calibration_get,
+            calibrations::calibration_save,
+            calibrations::calibration_clear,
+            calibrations::calibration_list,
             slicer::slicer_cancel,
             slicer::slicer_preview,
             slicer::save_gcode,
