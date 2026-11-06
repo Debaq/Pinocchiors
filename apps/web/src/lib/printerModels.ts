@@ -1,12 +1,15 @@
 /**
- * Modelos de impresora que conoce Pinocchio, con su foto (de los perfiles de OrcaSlicer),
- * para que se vea a qué impresora se lamina y se manda.
+ * Modelos de impresora que conoce Pinocchio, con su foto (las de filamento, de los perfiles
+ * de OrcaSlicer; las de resina, de las que muestra Lychee Slicer), para que se vea a qué
+ * impresora se lamina y se manda.
  */
 import k1 from "../assets/printer-k1.png";
 import k1c from "../assets/printer-k1c.png";
 import k1max from "../assets/printer-k1max.png";
 import ad5x from "../assets/printer-ad5x.png";
 import cr10max from "../assets/printer-cr10max.png";
+import ld002h from "../assets/printer-ld002h.png";
+import halotsky from "../assets/printer-halotsky.png";
 import type { NetPrinterKind } from "./settings";
 
 export interface PrinterModel {
@@ -33,6 +36,9 @@ export function printerImage(model: string | undefined): string | undefined {
   const exact = PRINTER_MODELS.find((p) => p.model.toLowerCase().replace(/\s+/g, "") === m);
   if (exact) return exact.image;
   if (m.includes("ad5x")) return ad5x;
+  // Resina: no van en PRINTER_MODELS (no se manejan por red todavía)
+  if (m.includes("ld-002h") || m.includes("ld002h")) return ld002h;
+  if (m.includes("halot")) return halotsky;
   if (m.includes("cr-10max") || m.includes("cr10max")) return cr10max;
   if (m.includes("k1max")) return k1max;
   if (m.includes("k1c")) return k1c;

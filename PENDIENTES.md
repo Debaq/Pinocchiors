@@ -343,7 +343,7 @@ interior, doble exposición) y nombre en relieve en la balsa.
   Imprimiendo: la pieza de calibración (exposición y compensaciones reales) y una
   pieza con y sin bordes en grises.
 - 🧪 En la app real (el arnés no dibuja 3D): editar puntos, pincel de zonas,
-  drenajes y el giro elegido en el visor. Fotos de las dos impresoras.
+  drenajes y el giro elegido en el visor.
 - ⬜ CXDLP para la Halot-Sky (espera la unidad de exposición) y envío por WiFi
   (investigar sin tocarla hasta que el usuario diga).
 - ⬜ Alto de capa por tramos: todo el laminador de resina asume alto fijo; antes,
