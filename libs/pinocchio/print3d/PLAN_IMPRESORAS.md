@@ -85,9 +85,10 @@ Referencia: `src/slic3r/Utils/CrealityPrint.cpp` de Orca 2.4.2.
   ventiladores con `gcodeCmd: "M106 P0|P1|P2 S0-255"`, `fan`/`fanCase`/`fanAuxiliary: 0/1`,
   `lightSw: 0/1`, `setFeedratePct: n`, `excludeObjects: [nombre]`, `deleteHistory`,
   `rmProbedMatrix`, `restartKlipper: 1`, `restartFirmware: 1`, `cleanErr: 1`.
-- **Versión**: la red no da la versión del sistema (en `modelVersion` llega vacío
-  «printer sw ver:»; `/info` da la de la API, 1.0.0); solo la de la pantalla (DWIN). La del
-  sistema se ve en la pantalla de la impresora. La K1 rooteada: 1.3.3.46 (`/etc/ota_info`).
+- **Versión del firmware**: es la que llega como «DWIN sw ver» en `modelVersion` (la K1-34E2
+  dice 1.3.5.22 y su pantalla muestra lo mismo como versión); «printer sw ver» llega vacío y
+  `/info` da la de la API (1.0.0). `creality.rs` ya la toma de ahí. La K1 rooteada está en
+  1.3.3.46 (`/etc/ota_info`), más vieja.
 - Hay latido (heartbeat) y la lista de archivos llega en varios mensajes que hay que juntar
   (lo cuenta el issue de 3d-cli). Sin documentación oficial: puede cambiar con el firmware.
 - En Rust hace falta un cliente WebSocket (p. ej. `tungstenite`, síncrono y sin TLS).
