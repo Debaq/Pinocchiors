@@ -41,7 +41,7 @@ resolución del archivo no es la de la pantalla, la impresora no lo imprime.
 
 | Fase | Contenido | Estado |
 |---|---|---|
-| SLA0 | **Archivos reales**: que el usuario pase un `.cxdlp` de la Halot-Sky y un `.ctb` de la LD-002H hechos con su programa de siempre (Halot Box / Chitubox). Leer cabecera: versión, resolución, tamaño de píxel, espejo, codificación de capas (RLE), miniaturas, parámetros de exposición. Abrirlos en UVtools para comparar | pendiente |
+| SLA0 | **Archivos reales** del usuario (cubo de 20 mm + escalón de 10 mm, 0,05 mm) | ✅ hecha (2026-11-05): ambos formatos decodificados por completo y verificados contra la pieza (`scripts/analizar-resina.py`); detalle abajo |
 | SLA1 | **Núcleo `libs/sla`** (Rust): cortar la malla en capas (intersección con planos; reusar lo de cortes de print3d), rellenar polígonos con agujeros a la resolución de la pantalla, **antialias** (sobremuestreo, niveles de gris), espejo/rotación por impresora, en paralelo. Volumen de resina (ml y g) y tiempo | pendiente |
 | SLA2 | **Formatos**: escribir **CTB** (LD-002H, partiendo de mslicer) y **CXDLP** (Halot-Sky, partiendo de UVtools), con miniaturas y parámetros. Prueba: el archivo se abre igual en UVtools que uno de Chitubox/Halot Box con la misma pieza | pendiente |
 | SLA3 | **Preparar para resina** (Fabricar): inclinar 30–45° para que despegue mejor, elevar sobre la placa, vaciar con drenaje y respiradero (ya existe), detectar **islas** por capa (zonas que nacen en el aire) y **ventosas** (huecos cerrados que hacen succión) | pendiente |
@@ -50,6 +50,27 @@ resolución del archivo no es la de la pantalla, la impresora no lo imprime.
 | SLA6 | **Interfaz**: las dos SLA en la lista de máquinas de Fabricar con su foto; pestaña de laminar para resina; **vista previa capa por capa** mostrando la máscara; estimación de resina y tiempo | pendiente |
 | SLA7 | **Enviar**: LD-002H por USB (guardar el archivo); Halot-Sky: investigar su protocolo de red (WiFi / Halot Box) sin tocarla hasta que el usuario diga | pendiente |
 | SLA8 | **Pruebas reales con el usuario**: pieza de calibración en cada una, comparando con lo que sale de Chitubox/Halot Box | pendiente |
+
+## Formatos verificados (SLA0)
+
+**LD-002H — `.ctb` Chitubox v2** (little-endian): firma `0x12FD0086`, versión 2. Cama
+82,62 × 130,56 × 160 mm, **1620 × 2560 px (51 µm)**, proyección espejada (`1`), antialias 1,
+PWM 255. Del archivo de ejemplo: capa 0,05 mm, exposición 3,5 s, base 20 s × 8 capas.
+Tabla de capas de 36 bytes (z, exposición, luz apagada, offset, tamaño, …). Cada capa:
+**cifrada** con la clave de la cabecera (`0x6F676E6D`, «mngo»: XOR con un flujo que sale
+de `seed*0x2d83cdac+0xd8a83423` y `(capa*0x1e1530cd+0xec3d47cd)*init`, como UVtools
+`LayerRleCryptBuffer`) y después **RLE de 7 bits** (bit alto = racha, largo en 1–4 bytes;
+gris de 7 bits extendido a 8). Decodificada da exactamente 1620 × 2560 px; el cubo mide
+19,99 mm y el escalón 10,00 mm, centrados.
+
+**Halot-Sky — `.cxdlp` Creality v2** (big-endian): `CXSW3DV2`, versión 2, modelo `CL-89`,
+**3840 × 2400 px (50 µm)**, 64 bytes en cero, 3 miniaturas RGB565 (116², 290², 290²,
+cada una seguida de `\r\n`), plataforma y capa como texto UTF-16 («192.00», «120.00»,
+«0.050»), 11 parámetros u16 (exposición 3, espera 1, base 30, 6 capas de base, subida 7,
+velocidades 1, PWM 255: **unidades a confirmar con lo que puso el usuario en Halot Box**),
+tabla de áreas por capa, y cada capa: área, cantidad de líneas y **líneas verticales de 6
+bytes** (inicio Y 13 bits, fin Y 13 bits **inclusivo**, X 14 bits, gris). Pie `CXSW3DV2` y
+un **checksum XOR** de todo el archivo (verificado: coincide). El cubo da 20,00 × 20,00 mm.
 
 ## Riesgos
 
