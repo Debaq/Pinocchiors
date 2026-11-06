@@ -89,6 +89,10 @@ Referencia: `src/slic3r/Utils/CrealityPrint.cpp` de Orca 2.4.2.
   dice 1.3.5.22 y su pantalla muestra lo mismo como versión); «printer sw ver» llega vacío y
   `/info` da la de la API (1.0.0). `creality.rs` ya la toma de ahí. La K1 rooteada está en
   1.3.3.46 (`/etc/ota_info`), más vieja.
+- **Firmware de referencia: 1.3.5.22** (2026-11-06). Con esa versión funciona todo lo de
+  Pinocchio con las K1 de fábrica (estado, subir, imprimir, `gcodeCmd`, lecturas): el cubito
+  salió bien en la K1-34E2. El usuario va a llevar la otra K1 a esa versión. Con otra versión,
+  volver a revisar la lista de órdenes antes de confiar en ella.
 - Hay latido (heartbeat) y la lista de archivos llega en varios mensajes que hay que juntar
   (lo cuenta el issue de 3d-cli). Sin documentación oficial: puede cambiar con el firmware.
 - En Rust hace falta un cliente WebSocket (p. ej. `tungstenite`, síncrono y sin TLS).
