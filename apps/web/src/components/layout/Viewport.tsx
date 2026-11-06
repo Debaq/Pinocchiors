@@ -268,6 +268,9 @@ export const Viewport: Component<ViewportProps> = (props) => {
     const data = resinPreview.visible() ? resinPreview.data() : undefined;
     viewer?.setResinPreview(data ?? null, { layer: resinPreview.layer(), supports: resinPreview.showSupports() });
   });
+  createEffect(() => {
+    viewer?.setResinPoints(resinPreview.points(), resinPreview.skipped(), resinPreview.editor() ?? null);
+  });
 
   // Laminado: el gcode en lugar del modelo mientras se lo mira
   createEffect(() => {

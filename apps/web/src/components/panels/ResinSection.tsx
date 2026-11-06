@@ -1,6 +1,6 @@
 import { Component, For, Show, createEffect, createResource, createSignal, on, onCleanup } from "solid-js";
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { save } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { Button, Checkbox, NumberInput, Panel, Select } from "../ui";
 import * as Icons from "../icons";
 import { fmtNumber, t } from "../../lib/i18n";
@@ -16,6 +16,7 @@ import {
   type ResinSettings,
   type SkipReason,
   type SupportDensity,
+  type SupportPoint,
   type SupportSettings,
   type TiltOption,
 } from "../../lib/resinPreview";
@@ -83,6 +84,20 @@ export const ResinSection: Component<{
   const [saved, setSaved] = createSignal<string>();
   const [tilts, setTilts] = createSignal<TiltOption[]>();
   const [tiltBusy, setTiltBusy] = createSignal(false);
+  /** Puntos editados a mano (sirven mientras no cambie la geometría: placa, giro, altura) */
+  const [edited, setEdited] = createSignal<SupportPoint[]>();
+  const [editing, setEditing] = createSignal(false);
+  /** Lo que define dónde quedó la pieza al laminar; si cambia, los puntos ya no calzan */
+  const [slicedKey, setSlicedKey] = createSignal<string>();
+  /** Lo que se ve en la vista previa es la pieza de calibración */
+  const [calibrating, setCalibrating] = createSignal(false);
+  const [calStep, setCalStep] = createSignal(0.5);
+  const [calSaved, setCalSaved] = createSignal<{ dir: string; files: string[] }>();
+  /** Exposiciones a probar: 5 alrededor de la actual */
+  const calExposures = () => {
+    const e = settings()?.exposure ?? 3;
+    return [-2, -1, 0, 1, 2].map((k) => Math.round((e + k * calStep()) * 100) / 100).filter((x) => x > 0.2);
+  };
 
   const set = (patch: Partial<ResinPrep>) => props.onPrep({ ...props.prep, ...patch });
   const printer = () => info()?.printers.find((p) => p.id === props.printerId);
@@ -108,6 +123,10 @@ export const ResinSection: Component<{
     if (supportBase()?.[key] === v) delete next[key];
     set({ supportOverrides: next });
   };
+  const geometryKey = () =>
+    JSON.stringify({ printer: props.printerId, input: input(), plate: plate(), tilt: props.prep.tilt ?? null, supports: props.prep.supports, lift: supports()?.lift, raft: supports()?.raft_thickness });
+  /** Los puntos editados todavía calzan con la pieza */
+  const pointsValid = () => props.prep.supports && slicedKey() !== undefined && slicedKey() === geometryKey();
   const prepare = (): PrepareSettings => ({ supports: props.prep.supports ? (supports() ?? null) : null, vents: props.prep.vents, vent_diameter: props.prep.ventDiameter });
 
   const [warnings] = createResource(
@@ -128,7 +147,48 @@ export const ResinSection: Component<{
       { defer: true },
     ),
   );
-  onCleanup(() => resinPreview.setVisible(false));
+  onCleanup(() => {
+    resinPreview.setVisible(false);
+    resinPreview.setEditor(undefined);
+  });
+
+  // Editar puntos: los clics del visor llegan acá
+  const applyEdit = (e: { add: [number, number, number] } | { remove: number }) => {
+    const current = resinPreview.points();
+    if ("add" in e) {
+      const next = [...current, { pos: e.add, kind: "manual" as const }];
+      resinPreview.setPoints(next);
+      setEdited(next);
+    } else {
+      const i = e.remove;
+      resinPreview.setPoints(current.filter((_, k) => k !== i));
+      resinPreview.setSkipped(resinPreview.skipped().filter((k) => k !== i).map((k) => (k > i ? k - 1 : k)));
+      setEdited(resinPreview.points());
+    }
+  };
+  createEffect(() => {
+    const on = editing() && props.tab === "preview" && !!result() && pointsValid();
+    // Una función se guarda en la señal envuelta en otra (si no, Solid la toma como actualizador)
+    if (on) resinPreview.setEditor(() => applyEdit);
+    else resinPreview.setEditor(undefined);
+    if (on) resinPreview.setVisible(true);
+  });
+  // La pieza cambió de lugar: los puntos editados ya no sirven
+  createEffect(
+    on(geometryKey, () => {
+      if (edited() && !pointsValid()) {
+        setEdited(undefined);
+        setEditing(false);
+      }
+    }, { defer: true }),
+  );
+  const addIslandPoints = () => {
+    const r = result();
+    if (!r) return;
+    const next = [...resinPreview.points(), ...r.islands.map((i) => ({ pos: i.pos, kind: "manual" as const }))];
+    resinPreview.setPoints(next);
+    setEdited(next);
+  };
 
   const plate = () => Math.min(props.prep.plate ?? 0, Math.max(0, (props.plateCount ?? 1) - 1));
   /** La entrada de placas con la cama de esta impresora */
@@ -139,10 +199,13 @@ export const ResinSection: Component<{
     return { ...base, printer: { ...(base.printer as Record<string, unknown>), build_volume: p.bed } };
   };
 
-  const slice = async () => {
+  /** Lamina; con puntos editados válidos, los soportes salen de esos puntos */
+  const slice = async (auto = false) => {
     const i = input();
     const s = settings();
     if (!i || !s) return;
+    const points = !auto && pointsValid() ? (edited() ?? null) : null;
+    const key = geometryKey();
     setBusy(true);
     setError(undefined);
     setSaved(undefined);
@@ -157,11 +220,16 @@ export const ResinSection: Component<{
         printer: props.printerId,
         settings: s,
         prepare: prepare(),
-        points: null,
+        points,
         tilt,
         onProgress: channel,
       });
       setResult(r);
+      setCalibrating(false);
+      setSlicedKey(key);
+      if (!points) setEdited(undefined);
+      resinPreview.setPoints(r.points);
+      resinPreview.setSkipped(r.skipped.map(([k]) => k));
       const view = decodeResinView(await invoke<ArrayBuffer>("resin_view"));
       resinPreview.setData({ ...view, bed: r.bed, layerZ: r.layer_z, layerHeight: s.layer_height, vents: r.vents, islands: r.islands });
       resinPreview.setLayer(Math.max(0, r.layers - 1));
@@ -172,6 +240,45 @@ export const ResinSection: Component<{
     } finally {
       setBusy(false);
       setProgress(undefined);
+    }
+  };
+
+  /** Lamina la pieza de calibración y la muestra en la vista previa */
+  const sliceCalibration = async (): Promise<boolean> => {
+    const s = settings();
+    if (!s) return false;
+    setBusy(true);
+    setError(undefined);
+    try {
+      const r = await invoke<ResinResult>("resin_calibration", { printer: props.printerId, settings: s });
+      setResult(r);
+      setCalibrating(true);
+      setSlicedKey(undefined);
+      setEdited(undefined);
+      resinPreview.setPoints([]);
+      resinPreview.setSkipped([]);
+      const view = decodeResinView(await invoke<ArrayBuffer>("resin_view"));
+      resinPreview.setData({ ...view, bed: r.bed, layerZ: r.layer_z, layerHeight: s.layer_height, vents: [], islands: r.islands });
+      resinPreview.setLayer(Math.max(0, r.layers - 1));
+      resinPreview.setVisible(true);
+      return true;
+    } catch (e) {
+      setError(errText(e));
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveCalibration = async () => {
+    const dir = await open({ directory: true, title: t("Carpeta para las pruebas de exposición") });
+    if (typeof dir !== "string") return;
+    if (!(await sliceCalibration())) return;
+    try {
+      const files = await invoke<string[]>("save_resin_calibration", { dir, exposures: calExposures() });
+      setCalSaved({ dir, files });
+    } catch (e) {
+      setError(errText(e));
     }
   };
 
@@ -251,6 +358,51 @@ export const ResinSection: Component<{
                 {num("Capas de base", s().bottom_layers, (v) => setSetting("bottom_layers", Math.round(v)), 0, 30, 1)}
                 {num("Espera con luz apagada", s().light_off, (v) => setSetting("light_off", v), 0, 30, 0.5, "s")}
                 <For each={warnings() ?? []}>{(w) => <p class="text-[11px] text-warning">{tBackend(w)}</p>}</For>
+              </div>
+            </Panel>
+          </div>
+          <div>
+            <Panel id="resin.calibration" dense title={t("Calibrar la exposición")} defaultOpen={false}>
+              <div class="space-y-2 pb-3">
+                <p class="text-[10px] text-text-dim">
+                  {t("Una pieza de prueba de {w} × {d} mm, directo sobre la placa, que se guarda una vez por cada exposición. Hileras de adelante hacia atrás, de lo más fino a lo más grueso:", { w: 46, d: 24 })}
+                </p>
+                <For each={info()?.calibration ?? []}>
+                  {(row) => (
+                    <p class="text-[10px] text-text-muted">
+                      <span class="font-semibold">{t(row.name)}</span>: {row.sizes.map((x) => fmtNumber(x)).join(" · ")} mm
+                    </p>
+                  )}
+                </For>
+                {num("Paso entre pruebas", calStep(), (v) => setCalStep(Math.max(0.05, v)), 0.05, 5, 0.05, "s")}
+                <p class="text-[11px] text-text-muted">{t("Exposiciones: {list} s", { list: calExposures().map((x) => fmtNumber(x)).join(" · ") })}</p>
+                <div class="grid grid-cols-2 gap-1.5">
+                  <Button size="sm" variant="ghost" onClick={() => void sliceCalibration().then((ok) => ok && props.onTab("preview"))} disabled={busy()} icon={<Icons.Eye size={14} />}>
+                    {t("Ver la pieza")}
+                  </Button>
+                  <Button size="sm" onClick={() => void saveCalibration()} disabled={busy() || printer()?.can_write === false} icon={<Icons.Download size={14} />}>
+                    {t("Guardar las pruebas")}
+                  </Button>
+                </div>
+                <Show when={calSaved()}>
+                  {(c) => <p class="text-[10px] text-green">{t("{n} archivos en {dir}", { n: c().files.length, dir: c().dir })}</p>}
+                </Show>
+                <p class="text-[10px] text-text-dim">
+                  {t("Imprime cada una y elige la exposición más baja con la que salen de pie los pines y las paredes finas sin que se cierren los agujeros ni las ranuras.")}
+                </p>
+                <div class="flex flex-wrap gap-1">
+                  <For each={calExposures()}>
+                    {(e) => (
+                      <button
+                        class={`rounded border px-1.5 py-0.5 text-[10px] ${e === s().exposure ? "border-accent text-accent" : "border-border text-text-muted hover:border-accent/60"}`}
+                        onClick={() => setSetting("exposure", e)}
+                        title={t("Usar esta exposición")}
+                      >
+                        {t("Usar {e} s", { e: fmtNumber(e) })}
+                      </button>
+                    )}
+                  </For>
+                </div>
               </div>
             </Panel>
           </div>
@@ -366,6 +518,9 @@ export const ResinSection: Component<{
           <div>
             <Panel id="resin.summary" dense title={t("Resumen")} defaultOpen>
               <div class="space-y-1 pb-3">
+                <Show when={calibrating()}>
+                  <p class="text-[11px] text-accent">{t("Pieza de calibración (no es tu modelo)")}</p>
+                </Show>
                 <Row label={t("Tiempo estimado")} value={fmtTime(r().time_s)} />
                 <Row label={t("Resina")} value={`${fmtNumber(r().volume_ml, { maximumFractionDigits: 1 })} ml · ${fmtNumber(r().grams, { maximumFractionDigits: 1 })} g`} />
                 <Show when={r().cost > 0}>
@@ -408,6 +563,36 @@ export const ResinSection: Component<{
               </div>
             </Panel>
           </div>
+          <Show when={props.prep.supports && !calibrating()}>
+            <div>
+              <Panel id="resin.points" dense title={t("Puntos de soporte")} defaultOpen>
+                <div class="space-y-1.5 pb-3">
+                  <Show when={pointsValid()} fallback={<p class="text-[11px] text-text-dim">{t("Cambiaste la placa, el giro o la altura: lamina de nuevo para editar los puntos.")}</p>}>
+                    <Checkbox small label={t("Editar puntos en el visor")} checked={editing()} onChange={setEditing} />
+                    <Show when={editing()}>
+                      <p class="text-[10px] text-text-dim">{t("Clic en la pieza: agrega un punto ahí. Clic en un punto: lo quita. Azul = automático, verde = a mano, rojo = no se pudo poner.")}</p>
+                    </Show>
+                    <p class="text-[11px] text-text-muted">
+                      {t("{n} puntos ({m} a mano)", { n: resinPreview.points().length, m: resinPreview.points().filter((p) => p.kind === "manual").length })}
+                    </p>
+                    <Show when={r().islands.length > 0}>
+                      <Button size="sm" variant="ghost" fullWidth onClick={addIslandPoints} icon={<Icons.Plus size={14} />}>
+                        {t("Un punto en cada isla")}
+                      </Button>
+                    </Show>
+                    <Show when={edited()}>
+                      <Button size="sm" variant="primary" fullWidth onClick={() => void slice()} disabled={busy()} icon={<Icons.ArrowsClockwise size={14} />}>
+                        {t("Rehacer soportes con estos puntos")}
+                      </Button>
+                      <button class="text-[11px] text-text-dim hover:underline" onClick={() => void slice(true)} disabled={busy()}>
+                        {t("Volver a los automáticos")}
+                      </button>
+                    </Show>
+                  </Show>
+                </div>
+              </Panel>
+            </div>
+          </Show>
           <div>
             <Panel id="resin.layers" dense title={t("Capas")} defaultOpen>
               <div class="pb-3">
@@ -464,7 +649,7 @@ export const ResinSection: Component<{
           <Show
             when={busy()}
             fallback={
-              <Button onClick={slice} disabled={props.disabled || !input() || !settings()} fullWidth size="sm" variant="primary" icon={<Icons.Stack size={14} />}>
+              <Button onClick={() => void slice()} disabled={props.disabled || !input() || !settings()} fullWidth size="sm" variant="primary" icon={<Icons.Stack size={14} />}>
                 {result() ? t("Laminar de nuevo") : t("Laminar")}
               </Button>
             }

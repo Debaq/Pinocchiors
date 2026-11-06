@@ -57,6 +57,33 @@ export const en_resin: Catalog = {
   "{n} huecos con succión o resina atrapada": "{n} cavities with suction or trapped resin",
   "{n} islas sin soporte (en rojo en el visor)": "{n} unsupported islands (red in the viewport)",
 
+  "Puntos de soporte": "Support points",
+  "Cambiaste la placa, el giro o la altura: lamina de nuevo para editar los puntos.": "You changed the plate, the tilt or the height: slice again to edit the points.",
+  "Editar puntos en el visor": "Edit points in the viewport",
+  "Clic en la pieza: agrega un punto ahí. Clic en un punto: lo quita. Azul = automático, verde = a mano, rojo = no se pudo poner.":
+    "Click on the part: adds a point there. Click on a point: removes it. Blue = automatic, green = manual, red = couldn't be placed.",
+  "{n} puntos ({m} a mano)": "{n} points ({m} manual)",
+  "Un punto en cada isla": "One point on each island",
+  "Rehacer soportes con estos puntos": "Rebuild supports with these points",
+  "Volver a los automáticos": "Back to automatic",
+
+  "Calibrar la exposición": "Calibrate exposure",
+  "Una pieza de prueba de {w} × {d} mm, directo sobre la placa, que se guarda una vez por cada exposición. Hileras de adelante hacia atrás, de lo más fino a lo más grueso:":
+    "A {w} × {d} mm test piece, straight on the plate, saved once per exposure. Rows from front to back, thinnest to thickest:",
+  "Pines": "Pins",
+  "Ranuras": "Slots",
+  "Paso entre pruebas": "Step between tests",
+  "Exposiciones: {list} s": "Exposures: {list} s",
+  "Ver la pieza": "View the piece",
+  "Guardar las pruebas": "Save the tests",
+  "{n} archivos en {dir}": "{n} files in {dir}",
+  "Imprime cada una y elige la exposición más baja con la que salen de pie los pines y las paredes finas sin que se cierren los agujeros ni las ranuras.":
+    "Print each one and pick the lowest exposure where the thin pins and walls stand without the holes and slots closing.",
+  "Usar esta exposición": "Use this exposure",
+  "Usar {e} s": "Use {e} s",
+  "Carpeta para las pruebas de exposición": "Folder for the exposure tests",
+  "Pieza de calibración (no es tu modelo)": "Calibration piece (not your model)",
+
   // Perfiles de resina (libs/slicer/src/sla_profiles.rs)
   "Estándar 0,05 mm": "Standard 0.05 mm",
   "Estándar 0,03 mm (detalle)": "Standard 0.03 mm (detail)",

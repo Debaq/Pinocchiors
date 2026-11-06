@@ -5,8 +5,14 @@
  * escena Y arriba, así que (x, y, z) → (x, z, −y).
  */
 import * as THREE from "three";
-import type { ResinViewData, ResinViewOptions } from "./resinPreview";
+import type { PointEdit, ResinViewData, ResinViewOptions, SupportPoint } from "./resinPreview";
 import { buildPrintBed } from "./printBed";
+import { ensureBvh } from "./meshBvh";
+
+/** Colores de los puntos: automáticos, puestos a mano y los que no se pudieron poner */
+const POINT_AUTO = new THREE.Color(0x4fc3ff);
+const POINT_MANUAL = new THREE.Color(0x5be37d);
+const POINT_SKIPPED = new THREE.Color(0xff5a5a);
 
 export class ResinView {
   readonly group = new THREE.Group();
@@ -14,12 +20,57 @@ export class ResinView {
   /** Corta lo que está por encima de la capa: normal hacia abajo (−Y en la escena) */
   private clip = new THREE.Plane(new THREE.Vector3(0, -1, 0), 0);
   private supports: THREE.Mesh;
+  private model: THREE.Mesh;
+  private points: THREE.InstancedMesh | null = null;
+  private pointsVisible = false;
 
   constructor(data: ResinViewData) {
     this.data = data;
-    const model = this.mesh(data.model, 0xb8c4d0);
+    this.model = this.mesh(data.model, 0xb8c4d0);
     this.supports = this.mesh(data.supports, 0x7fb8e6);
-    this.group.add(buildPrintBed(data.bed[0], data.bed[1]), model, this.supports, this.markers());
+    this.group.add(buildPrintBed(data.bed[0], data.bed[1]), this.model, this.supports, this.markers());
+  }
+
+  /** Puntos de soporte como esferas (siempre a la vista al editar) */
+  setPoints(points: SupportPoint[], skipped: number[], visible: boolean): void {
+    if (this.points) {
+      this.group.remove(this.points);
+      this.points.geometry.dispose();
+      (this.points.material as THREE.Material).dispose();
+      this.points = null;
+    }
+    this.pointsVisible = visible;
+    if (!visible || points.length === 0) return;
+    const mesh = new THREE.InstancedMesh(
+      new THREE.SphereGeometry(0.35, 10, 6),
+      new THREE.MeshBasicMaterial({ depthTest: false, transparent: true, opacity: 0.95 }),
+      points.length,
+    );
+    const skip = new Set(skipped);
+    const m = new THREE.Matrix4();
+    points.forEach((p, i) => {
+      mesh.setMatrixAt(i, m.makeTranslation(p.pos[0], p.pos[2], -p.pos[1]));
+      mesh.setColorAt(i, skip.has(i) ? POINT_SKIPPED : p.kind === "manual" ? POINT_MANUAL : POINT_AUTO);
+    });
+    mesh.renderOrder = 12;
+    mesh.frustumCulled = false;
+    this.points = mesh;
+    this.group.add(mesh);
+  }
+
+  /**
+   * Qué cambia un clic al editar: sobre un punto lo quita; sobre la pieza (por debajo de la
+   * capa que se ve) agrega uno ahí. Coordenadas de la impresora (mm, Z arriba).
+   */
+  pick(raycaster: THREE.Raycaster): PointEdit | null {
+    if (this.points && this.pointsVisible) {
+      const hit = raycaster.intersectObject(this.points, false)[0];
+      if (hit?.instanceId !== undefined) return { remove: hit.instanceId };
+    }
+    ensureBvh(this.model);
+    const hit = raycaster.intersectObject(this.model, false)[0];
+    if (!hit || hit.point.y > this.clip.constant + 1e-3) return null;
+    return { add: [hit.point.x, -hit.point.z, hit.point.y] };
   }
 
   /** Esfera que encuadra la pantalla y lo preparado */

@@ -29,7 +29,7 @@ import { isMotionFrame, MOTION_REST_MS, qualityScale } from "./adaptiveQuality";
 import { t as tr } from "./i18n.ts";
 import { GcodeView } from "./gcodeView";
 import { ResinView } from "./resinView";
-import type { ResinViewData, ResinViewOptions } from "./resinPreview";
+import type { PointEdit, ResinViewData, ResinViewOptions, SupportPoint } from "./resinPreview";
 import { buildPrintBed, disposePrintBed } from "./printBed";
 import type { GcodePreview, GcodeViewOptions } from "./gcodePreview";
 
@@ -581,6 +581,11 @@ export class Viewer3D {
   private resinView: ResinView | null = null;
   private resinData: ResinViewData | null = null;
   private resinHid: { mesh: boolean } | null = null;
+  /** Puntos de soporte a dibujar y quién recibe los clics al editarlos */
+  private resinPoints: { points: SupportPoint[]; skipped: number[] } = { points: [], skipped: [] };
+  private resinEditor: ((e: PointEdit) => void) | null = null;
+  /** Dónde se apretó el botón (para no tomar un arrastre como clic) */
+  private resinDown = { x: 0, y: 0 };
   /** Cama de la impresora (Fabricar): tamaño en mm y su dibujo bajo el modelo */
   private printBed: { size: [number, number, number]; group: THREE.Group } | null = null;
   /** La grilla pedida por el usuario (se esconde sola con la cama o el gcode) */
@@ -881,7 +886,12 @@ export class Viewer3D {
     const signal = this.listeners.signal;
 
     // Mouse events for ground selection
-    this.canvas.addEventListener("click", (e) => this.onCanvasClick(e), { signal });
+    this.canvas.addEventListener("pointerdown", (e) => {
+      this.resinDown = { x: e.clientX, y: e.clientY };
+    }, { signal });
+    this.canvas.addEventListener("click", (e) => {
+      if (!this.onResinClick(e)) this.onCanvasClick(e);
+    }, { signal });
     this.canvas.addEventListener("mousemove", (e) => this.onCanvasMouseMove(e), { signal });
     this.canvas.addEventListener("dblclick", (e) => this.onCanvasDoubleClick(e), { signal });
 
@@ -3004,6 +3014,7 @@ export class Viewer3D {
       if (data) {
         this.renderer.localClippingEnabled = true;
         this.resinView = new ResinView(data);
+        this.resinView.setPoints(this.resinPoints.points, this.resinPoints.skipped, !!this.resinEditor);
         this.scene.add(this.resinView.group);
         if (!this.resinHid) {
           this.resinHid = { mesh: this.meshGroup.visible };
@@ -3018,6 +3029,24 @@ export class Viewer3D {
       this.placePrintBed();
     }
     this.resinView?.update(options);
+  }
+
+  /** Puntos de soporte de resina y, con `editor`, editarlos con clics (se ven solo al editar) */
+  setResinPoints(points: SupportPoint[], skipped: number[], editor: ((e: PointEdit) => void) | null): void {
+    this.resinPoints = { points, skipped };
+    this.resinEditor = editor;
+    this.resinView?.setPoints(points, skipped, !!editor);
+  }
+
+  /** Clic al editar puntos de resina (sin arrastrar: arrastrar gira la vista) */
+  private onResinClick(event: MouseEvent): boolean {
+    if (!this.resinEditor || !this.resinView || event.button !== 0 || event.altKey) return false;
+    const down = this.resinDown;
+    if (Math.hypot(event.clientX - down.x, event.clientY - down.y) > 4) return true;
+    this.raycaster.setFromCamera(this.getMousePosition(event), this.camera);
+    const edit = this.resinView.pick(this.raycaster);
+    if (edit) this.resinEditor(edit);
+    return true;
   }
 
   /** Marca puntos de la malla (coordenadas de la malla) con esferas rojas visibles a través de ella; `null` las quita */

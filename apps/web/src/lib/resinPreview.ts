@@ -68,6 +68,8 @@ export interface ResinInfo {
   profiles: ResinProfile[];
   supports: [SupportDensity, SupportSettings][];
   prepare: PrepareSettings;
+  /** Hileras de la pieza de calibración (de adelante hacia atrás), tamaños en mm */
+  calibration: { name: string; sizes: number[] }[];
 }
 
 export type TiltAxis = "x" | "y";
@@ -204,13 +206,36 @@ export function decodeLayerMask(buffer: ArrayBuffer): LayerMask {
   };
 }
 
+/** Un cambio de puntos pedido desde el visor: agregar uno (mm, Z arriba) o quitar el de ese índice */
+export type PointEdit = { add: [number, number, number] } | { remove: number };
+
 const [data, setData] = createSignal<ResinViewData>();
+/** Puntos de soporte que se dibujan (y se editan) y los que no se pudieron poner */
+const [points, setPoints] = createSignal<SupportPoint[]>([]);
+const [skipped, setSkipped] = createSignal<number[]>([]);
+/** Quién recibe los clics del visor al editar puntos; undefined = no se edita */
+const [editor, setEditor] = createSignal<((e: PointEdit) => void) | undefined>();
 const [visible, setVisible] = createSignal(false);
 /** Capa hasta la que se dibuja (índice) */
 const [layer, setLayer] = createSignal(0);
 const [showSupports, setShowSupports] = createSignal(true);
 
-export const resinPreview = { data, setData, visible, setVisible, layer, setLayer, showSupports, setShowSupports };
+export const resinPreview = {
+  data,
+  setData,
+  visible,
+  setVisible,
+  layer,
+  setLayer,
+  showSupports,
+  setShowSupports,
+  points,
+  setPoints,
+  skipped,
+  setSkipped,
+  editor,
+  setEditor,
+};
 
 export interface ResinViewOptions {
   layer: number;

@@ -6,6 +6,7 @@
 use crate::commands::{in_background, report, Progress};
 use crate::print_prep::{plan_plates, sources, PlateInput};
 use pinocchio_slicer::sla::{self, Layer, ResinPrinter, ResinSettings};
+use pinocchio_slicer::sla_calibration::{self, CalibrationRow};
 use pinocchio_slicer::sla_check::{Cavity, Island};
 use pinocchio_slicer::sla_prepare::{self, Axis, PrepareSettings, TiltOption, VentHole};
 use pinocchio_slicer::sla_profiles::{self, ResinProfile};
@@ -26,6 +27,7 @@ static LAST: Mutex<Option<LastResin>> = Mutex::new(None);
 
 struct LastResin {
     printer: &'static ResinPrinter,
+    settings: ResinSettings,
     layers: Vec<Layer>,
     model: Vec<Tri>,
     supports: Vec<Tri>,
@@ -57,6 +59,8 @@ pub struct ResinInfo {
     /// Soportes de fábrica: liviano, medio, pesado
     pub supports: Vec<(SupportDensity, SupportSettings)>,
     pub prepare: PrepareSettings,
+    /// Hileras de la pieza de calibración (de adelante hacia atrás)
+    pub calibration: Vec<CalibrationRow>,
 }
 
 fn format_of(p: &ResinPrinter) -> (&'static str, bool) {
@@ -91,6 +95,7 @@ pub fn resin_presets() -> ResinInfo {
         profiles: sla_profiles::profiles(),
         supports: [SupportDensity::Light, SupportDensity::Medium, SupportDensity::Heavy].into_iter().map(|d| (d, SupportSettings::preset(d))).collect(),
         prepare: PrepareSettings::default(),
+        calibration: sla_calibration::rows(),
     }
 }
 
@@ -182,6 +187,19 @@ fn slice_plate(
     if let Some((axis, deg)) = tilt.filter(|t| t.1 != 0.0) {
         tris = sla_prepare::rotate(&tris, axis, deg);
     }
+    finish(tris, pr, settings, prepare, points, (plate, plates, unplaced), progress)
+}
+
+/// Prepara, lamina y escribe el archivo de estos triángulos; deja el resultado en `LAST`.
+fn finish(
+    tris: Vec<Tri>,
+    pr: &'static ResinPrinter,
+    settings: &ResinSettings,
+    prepare: &PrepareSettings,
+    points: Option<&[SupportPoint]>,
+    (plate, plates, unplaced): (usize, usize, Vec<String>),
+    progress: impl Fn(&str, u32, &str),
+) -> Result<ResinResult, String> {
     progress("prepare", 15, "Venteos, soportes y capas...");
     let p = sla_prepare::prepare(&tris, pr, settings, prepare, points).map_err(|e| e.to_string())?;
     progress("file", 85, "Escribiendo el archivo...");
@@ -226,9 +244,50 @@ fn slice_plate(
         layer_z: p.layers.iter().map(|l| l.z).collect(),
     };
     let bbox = layers_bbox(&p.layers, pr);
-    *LAST.lock().unwrap() = Some(LastResin { printer: pr, layers: p.layers, model: p.model, supports: p.supports, bbox, file });
+    *LAST.lock().unwrap() = Some(LastResin { printer: pr, settings: settings.clone(), layers: p.layers, model: p.model, supports: p.supports, bbox, file });
     progress("done", 100, "Laminado listo");
     Ok(result)
+}
+
+/// Lamina la pieza de calibración (centrada, directo sobre la placa, sin soportes) para
+/// verla y guardarla con varias exposiciones.
+#[tauri::command]
+pub async fn resin_calibration(app: AppHandle, printer: String, settings: ResinSettings) -> Result<ResinResult, String> {
+    in_background(app, move |_| calibration(&printer, &settings)).await
+}
+
+fn calibration(printer: &str, settings: &ResinSettings) -> Result<ResinResult, String> {
+    let pr = sla::printer(printer).ok_or_else(|| format!("No existe la impresora de resina «{printer}»"))?;
+    let [w, d, _] = sla_calibration::SIZE;
+    let (dx, dy) = ((pr.bed_x - w) / 2.0, (pr.bed_y - d) / 2.0);
+    let tris = sla_calibration::calibration_piece().into_iter().map(|t| t.map(|v| [v[0] + dx, v[1] + dy, v[2]])).collect();
+    let prepare = PrepareSettings { supports: None, vents: false, ..Default::default() };
+    finish(tris, pr, settings, &prepare, None, (0, 1, Vec::new()), |_, _, _| {})
+}
+
+/// Guarda la pieza de calibración laminada una vez por exposición en `dir`
+/// (`calibracion-<impresora>-<exposición>s.<ext>`); devuelve las rutas.
+#[tauri::command]
+pub fn save_resin_calibration(dir: String, exposures: Vec<f32>) -> Result<Vec<String>, String> {
+    let last = LAST.lock().unwrap();
+    let last = last.as_ref().ok_or("Todavía no hay nada laminado")?;
+    let (format, can_write) = format_of(last.printer);
+    if !can_write {
+        return Err("Todavía no se puede guardar el archivo de esta impresora".into());
+    }
+    let parts = vec![last.model.clone()];
+    let preview = |(w, h): (u32, u32)| ctb::preview_image(&parts, (w, h), [180, 190, 200]);
+    let (large, small) = (preview(ctb::LARGE_PREVIEW), preview(ctb::SMALL_PREVIEW));
+    let mut out = Vec::new();
+    for e in exposures {
+        let settings = ResinSettings { exposure: e, ..last.settings.clone() };
+        let bytes = ctb::write_ctb(&last.layers, last.printer, &settings, &large, &small).map_err(|e| e.to_string())?;
+        let name = format!("calibracion-{}-{}s.{format}", last.printer.id, format!("{e:.2}").trim_end_matches('0').trim_end_matches('.'));
+        let path = std::path::Path::new(&dir).join(name);
+        std::fs::write(&path, bytes).map_err(|e| format!("No se pudo guardar el archivo: {e}"))?;
+        out.push(path.display().to_string());
+    }
+    Ok(out)
 }
 
 /// Compara inclinaciones de la placa (área por capa, succión, altura).
@@ -371,6 +430,9 @@ mod tests {
         Mesh::from_triangles(&v, &f)
     }
 
+    /// Los tests que pasan por `LAST` van de a uno
+    static LAST_LOCK: Mutex<()> = Mutex::new(());
+
     fn input() -> PlateInput {
         PlateInput {
             printer: PrinterProfile::new("Creality LD-002H", [82.62, 130.56, 160.0], 0.15, 0.05),
@@ -389,6 +451,7 @@ mod tests {
 
     #[test]
     fn laminado_completo_con_mascara() {
+        let _lock = LAST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let list = vec![("a".to_string(), cube(10.0))];
         let r = slice_plate(list, &input(), 0, "ld-002h", &ResinSettings::default(), &PrepareSettings::default(), None, Some((Axis::X, 30.0)), |_, _, _| {}).unwrap();
         assert!(r.islands.is_empty() && r.cavities.is_empty(), "{:?} {:?}", r.islands, r.cavities);
@@ -397,7 +460,7 @@ mod tests {
         let img = layer_image(r.layers / 2, 100).unwrap();
         let (w, h) = (u32::from_le_bytes(img[0..4].try_into().unwrap()), u32::from_le_bytes(img[4..8].try_into().unwrap()));
         assert!(w <= 100 && h <= 100 && img.len() == 24 + (w * h) as usize);
-        assert!(img[24..].iter().any(|&g| g == 255));
+        assert!(img[24..].contains(&255));
         assert!(slice_plate(vec![], &input(), 0, "otra", &ResinSettings::default(), &PrepareSettings::default(), None, None, |_, _, _| {}).is_err());
     }
 
@@ -406,6 +469,7 @@ mod tests {
     #[test]
     #[ignore]
     fn datos_para_la_interfaz() {
+        let _lock = LAST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let (Ok(stl), Ok(out)) = (std::env::var("PINOCCHIO_RESIN_STL"), std::env::var("PINOCCHIO_RESIN_OUT")) else { return };
         let b = std::fs::read(stl).unwrap();
         let n = u32::from_le_bytes(b[80..84].try_into().unwrap()) as usize;
@@ -418,6 +482,23 @@ mod tests {
         std::fs::write(dir.join("presets.json"), serde_json::to_string(&resin_presets()).unwrap()).unwrap();
         std::fs::write(dir.join("result.json"), serde_json::to_string(&r).unwrap()).unwrap();
         std::fs::write(dir.join("layer.bin"), layer_image(r.layers / 3, 360).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn calibracion_con_varias_exposiciones() {
+        let _lock = LAST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let r = calibration("ld-002h", &ResinSettings::default()).unwrap();
+        assert_eq!(r.layers, 130);
+        assert!(r.islands.is_empty(), "{:?}", r.islands);
+        let dir = std::env::temp_dir().join(format!("pinocchio-calibracion-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let files = save_resin_calibration(dir.display().to_string(), vec![2.5, 3.0, 3.75]).unwrap();
+        assert!(files[2].ends_with("calibracion-ld-002h-3.75s.ctb"), "{files:?}");
+        let b = std::fs::read(&files[0]).unwrap();
+        let f = ctb::CtbFile::parse(&b).unwrap();
+        assert_eq!(f.exposure, 2.5);
+        assert_eq!(f.layers[20].1, 2.5);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

@@ -15,6 +15,7 @@ pub mod gcode;
 pub mod presets;
 mod settings;
 pub mod sla;
+pub mod sla_calibration;
 pub mod sla_check;
 pub mod sla_prepare;
 pub mod sla_profiles;
