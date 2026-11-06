@@ -133,6 +133,8 @@ pub struct ResinSettings {
     /// Densidad (g/ml) y precio por ml, para el resumen.
     pub density: f32,
     pub cost_per_ml: f32,
+    /// Antialiasing: subfilas por fila para los bordes en grises (1 = apagado; 2, 4 u 8).
+    pub antialias: u8,
 }
 
 impl Default for ResinSettings {
@@ -154,6 +156,7 @@ impl Default for ResinSettings {
             bottom_pwm: 255,
             density: 1.1,
             cost_per_ml: 0.0,
+            antialias: 1,
         }
     }
 }
@@ -166,11 +169,25 @@ pub struct Span {
     pub x1: u32,
 }
 
+/// Tramo en gris de una fila: píxeles `x0..x1` de la fila `y` con valor `v` (255 = luz).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct GraySpan {
+    pub y: u32,
+    pub x0: u32,
+    pub x1: u32,
+    pub v: u8,
+}
+
 /// Una capa: altura de su cara de arriba y sus tramos, ordenados por fila y luego por x.
+///
+/// `spans` es la máscara en blanco y negro (centro de cada píxel): con ella se revisan islas
+/// y huecos. Con antialiasing, `gray` trae la imagen que va al archivo (bordes en grises);
+/// vacía = se usa `spans`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Layer {
     pub z: f32,
     pub spans: Vec<Span>,
+    pub gray: Vec<GraySpan>,
 }
 
 impl Layer {
@@ -179,12 +196,29 @@ impl Layer {
         self.spans.iter().map(|s| (s.x1 - s.x0) as u64).sum()
     }
 
+    /// Los tramos de la imagen que va al archivo: los grises, o los blancos si no hay.
+    pub fn image_spans(&self) -> Box<dyn Iterator<Item = GraySpan> + '_> {
+        if self.gray.is_empty() {
+            Box::new(self.spans.iter().map(|s| GraySpan { y: s.y, x0: s.x0, x1: s.x1, v: 255 }))
+        } else {
+            Box::new(self.gray.iter().copied())
+        }
+    }
+
+    /// Luz total de la imagen, en píxeles enteros (un gris cuenta su fracción).
+    pub fn light(&self) -> f64 {
+        if self.gray.is_empty() {
+            return self.area() as f64;
+        }
+        self.gray.iter().map(|s| (s.x1 - s.x0) as f64 * s.v as f64 / 255.0).sum()
+    }
+
     /// La máscara completa (`res_x × res_y`, fila 0 primero; 255 = luz).
     pub fn to_mask(&self, res_x: u32, res_y: u32) -> Vec<u8> {
         let mut m = vec![0u8; res_x as usize * res_y as usize];
-        for s in &self.spans {
+        for s in self.image_spans() {
             let row = s.y as usize * res_x as usize;
-            m[row + s.x0 as usize..row + s.x1 as usize].fill(255);
+            m[row + s.x0 as usize..row + s.x1 as usize].fill(s.v);
         }
         m
     }
@@ -192,6 +226,12 @@ impl Layer {
 
 /// Lamina los triángulos en capas de `layer_height` para la pantalla de `printer`.
 pub fn slice(triangles: &[[[f32; 3]; 3]], printer: &ResinPrinter, layer_height: f32) -> Result<Vec<Layer>, SlicerError> {
+    slice_aa(triangles, printer, layer_height, 1)
+}
+
+/// Como [`slice`], con bordes en grises si `antialias` > 1 (subfilas por fila, hasta 16).
+pub fn slice_aa(triangles: &[[[f32; 3]; 3]], printer: &ResinPrinter, layer_height: f32, antialias: u8) -> Result<Vec<Layer>, SlicerError> {
+    let aa = antialias.clamp(1, 16) as u32;
     if triangles.is_empty() {
         return Err(SlicerError::Empty);
     }
@@ -245,16 +285,23 @@ pub fn slice(triangles: &[[[f32; 3]; 3]], printer: &ResinPrinter, layer_height: 
         .enumerate()
         .map(|(i, tris)| {
             let zc = (i as f32 + 0.5) * layer_height;
-            Layer { z: ((i + 1) as f64 * h) as f32, spans: slice_layer(triangles, &tris, zc, pw, ph, printer, sign) }
+            let segs = cut_layer(triangles, &tris, zc, sign);
+            let mut spans = binary_spans(&segs, pw, ph, printer);
+            let mut gray = if aa > 1 { gray_spans(&segs, pw, ph, aa, printer) } else { Vec::new() };
+            if printer.flip_x {
+                mirror(&mut spans, printer.res_x);
+                mirror_gray(&mut gray, printer.res_x);
+            }
+            Layer { z: ((i + 1) as f64 * h) as f32, spans, gray }
         })
         .collect();
     Ok(layers)
 }
 
-/// Corta los triángulos `tris` a la altura `zc` y rellena por filas.
-fn slice_layer(triangles: &[[[f32; 3]; 3]], tris: &[u32], zc: f32, pw: f32, ph: f32, printer: &ResinPrinter, sign: i32) -> Vec<Span> {
-    // Cruces de cada segmento con las filas: (fila, x en píxeles, giro).
-    let mut crossings: Vec<(u32, f32, i32)> = Vec::new();
+/// Segmentos del corte de los triángulos `tris` a la altura `zc`, con su giro (+1 = al
+/// cruzarlo hacia +x se entra a la pieza).
+fn cut_layer(triangles: &[[[f32; 3]; 3]], tris: &[u32], zc: f32, sign: i32) -> Vec<([f32; 2], [f32; 2], i32)> {
+    let mut segs = Vec::with_capacity(tris.len());
     for &t in tris {
         let tri = &triangles[t as usize];
         let Some((a, b)) = cut(tri, zc) else { continue };
@@ -263,21 +310,33 @@ fn slice_layer(triangles: &[[[f32; 3]; 3]], tris: &[u32], zc: f32, pw: f32, ph: 
             continue;
         }
         // Normal hacia +x: al cruzar de izquierda a derecha se sale de la pieza.
-        let wind = if nx > 0.0 { -sign } else { sign };
-        let (ay, by) = (a[1] / ph - 0.5, b[1] / ph - 0.5);
-        let (ax, bx) = (a[0] / pw - 0.5, b[0] / pw - 0.5);
+        segs.push((a, b, if nx > 0.0 { -sign } else { sign }));
+    }
+    segs
+}
+
+/// Cruces de los segmentos con las filas de alto `rh` (mm) que hay entre 0 y `rows`:
+/// `(fila, x, giro)` con x en píxeles de ancho `pw` corrida en `-xoff`, ordenados.
+fn crossings(segs: &[([f32; 2], [f32; 2], i32)], pw: f32, rh: f32, xoff: f32, rows: u32) -> Vec<(u32, f32, i32)> {
+    let mut out: Vec<(u32, f32, i32)> = Vec::new();
+    for &(a, b, wind) in segs {
+        let (ay, by) = (a[1] / rh - 0.5, b[1] / rh - 0.5);
+        let (ax, bx) = (a[0] / pw - xoff, b[0] / pw - xoff);
         let (lo, hi) = if ay < by { (ay, by) } else { (by, ay) };
         // Filas r con lo <= r < hi (centro de la fila r en r + 0.5 → coordenada r).
         let r0 = lo.ceil().max(0.0) as i64;
-        let r1 = (hi.ceil() as i64).min(printer.res_y as i64);
+        let r1 = (hi.ceil() as i64).min(rows as i64);
         for r in r0..r1 {
             let s = (r as f32 - ay) / (by - ay);
-            crossings.push((r as u32, ax + s * (bx - ax), wind));
+            out.push((r as u32, ax + s * (bx - ax), wind));
         }
     }
-    crossings.sort_unstable_by(|p, q| p.0.cmp(&q.0).then(p.1.total_cmp(&q.1)));
+    out.sort_unstable_by(|p, q| p.0.cmp(&q.0).then(p.1.total_cmp(&q.1)));
+    out
+}
 
-    let mut spans = Vec::new();
+/// Recorre los cruces de cada fila y llama a `f(fila, desde, hasta)` en cada tramo con giro positivo.
+fn inside_runs(crossings: &[(u32, f32, i32)], mut f: impl FnMut(u32, f32, f32)) {
     let mut i = 0;
     while i < crossings.len() {
         let row = crossings[i].0;
@@ -290,20 +349,115 @@ fn slice_layer(triangles: &[[[f32; 3]; 3]], tris: &[u32], zc: f32, pw: f32, ph: 
             if before <= 0 && wind > 0 {
                 start = x;
             } else if before > 0 && wind <= 0 {
-                // Centros x + 0.5 de los píxeles x con start <= x < end (coordenada ya corrida).
-                let x0 = start.ceil().max(0.0) as i64;
-                let x1 = (x.ceil() as i64).min(printer.res_x as i64);
-                if x1 > x0 {
-                    push_span(&mut spans, row, x0 as u32, x1 as u32);
-                }
+                f(row, start, x);
             }
             i += 1;
         }
     }
-    if printer.flip_x {
-        mirror(&mut spans, printer.res_x);
-    }
+}
+
+/// Máscara en blanco y negro: se pinta el píxel cuyo centro cae dentro.
+fn binary_spans(segs: &[([f32; 2], [f32; 2], i32)], pw: f32, ph: f32, printer: &ResinPrinter) -> Vec<Span> {
+    let mut spans = Vec::new();
+    inside_runs(&crossings(segs, pw, ph, 0.5, printer.res_y), |row, start, end| {
+        // Centros x + 0.5 de los píxeles x con start <= x < end (coordenada ya corrida).
+        let x0 = start.ceil().max(0.0) as i64;
+        let x1 = (end.ceil() as i64).min(printer.res_x as i64);
+        if x1 > x0 {
+            push_span(&mut spans, row, x0 as u32, x1 as u32);
+        }
+    });
     spans
+}
+
+/// Imagen en grises: cada fila se muestrea en `aa` subfilas y en x se mide la parte exacta
+/// de cada píxel que queda dentro; el gris es la cobertura promedio.
+fn gray_spans(segs: &[([f32; 2], [f32; 2], i32)], pw: f32, ph: f32, aa: u32, printer: &ResinPrinter) -> Vec<GraySpan> {
+    let res_x = printer.res_x;
+    let cr = crossings(segs, pw, ph / aa as f32, 0.0, printer.res_y * aa);
+    let mut out = Vec::new();
+    // Por fila: cambios del número de subfilas que cubren el píxel entero y fracciones sueltas.
+    let mut full: Vec<(u32, i32)> = Vec::new();
+    let mut part: Vec<(u32, f32)> = Vec::new();
+    let mut row = u32::MAX;
+    let flush = |row: u32, full: &mut Vec<(u32, i32)>, part: &mut Vec<(u32, f32)>, out: &mut Vec<GraySpan>| {
+        if row != u32::MAX {
+            gray_row(row, full, part, aa, res_x, out);
+        }
+        full.clear();
+        part.clear();
+    };
+    inside_runs(&cr, |sub, xs, xe| {
+        let r = sub / aa;
+        if r != row {
+            flush(row, &mut full, &mut part, &mut out);
+            row = r;
+        }
+        let (xs, xe) = (xs.max(0.0), xe.min(res_x as f32));
+        if xe <= xs {
+            return;
+        }
+        let (a, b) = (xs.floor() as u32, xe.floor() as u32);
+        if a == b {
+            part.push((a, xe - xs));
+            return;
+        }
+        part.push((a, (a + 1) as f32 - xs));
+        if b > a + 1 {
+            full.push((a + 1, 1));
+            full.push((b, -1));
+        }
+        if b < res_x && xe > b as f32 {
+            part.push((b, xe - b as f32));
+        }
+    });
+    flush(row, &mut full, &mut part, &mut out);
+    out
+}
+
+/// Junta las coberturas de una fila en tramos de gris constante.
+fn gray_row(y: u32, full: &mut [(u32, i32)], part: &mut [(u32, f32)], aa: u32, res_x: u32, out: &mut Vec<GraySpan>) {
+    full.sort_unstable_by_key(|e| e.0);
+    part.sort_unstable_by_key(|p| p.0);
+    let mut emit = |x0: u32, x1: u32, cover: f32| {
+        let v = (cover / aa as f32 * 255.0).round().clamp(0.0, 255.0) as u8;
+        if v == 0 || x1 <= x0 {
+            return;
+        }
+        if let Some(last) = out.last_mut()
+            && last.y == y
+            && last.x1 == x0
+            && last.v == v
+        {
+            last.x1 = x1;
+            return;
+        }
+        out.push(GraySpan { y, x0, x1, v });
+    };
+    let (mut ei, mut pi) = (0, 0);
+    let mut count = 0i32;
+    let mut x = full.first().map_or(u32::MAX, |e| e.0).min(part.first().map_or(u32::MAX, |p| p.0));
+    while x < res_x && (ei < full.len() || pi < part.len()) {
+        while ei < full.len() && full[ei].0 <= x {
+            count += full[ei].1;
+            ei += 1;
+        }
+        if pi < part.len() && part[pi].0 == x {
+            let mut f = 0.0;
+            while pi < part.len() && part[pi].0 == x {
+                f += part[pi].1;
+                pi += 1;
+            }
+            emit(x, x + 1, count as f32 + f);
+            x += 1;
+            continue;
+        }
+        let next = full.get(ei).map_or(res_x, |e| e.0).min(part.get(pi).map_or(res_x, |p| p.0)).min(res_x);
+        if count > 0 {
+            emit(x, next, count as f32);
+        }
+        x = next;
+    }
 }
 
 /// Junta tramos que se tocan en la misma fila.
@@ -319,6 +473,13 @@ fn push_span(spans: &mut Vec<Span>, y: u32, x0: u32, x1: u32) {
 }
 
 fn mirror(spans: &mut [Span], res_x: u32) {
+    for s in spans.iter_mut() {
+        (s.x0, s.x1) = (res_x - s.x1, res_x - s.x0);
+    }
+    spans.sort_unstable();
+}
+
+fn mirror_gray(spans: &mut [GraySpan], res_x: u32) {
     for s in spans.iter_mut() {
         (s.x0, s.x1) = (res_x - s.x1, res_x - s.x0);
     }
@@ -360,8 +521,8 @@ fn normal_x(t: &[[f32; 3]; 3]) -> f32 {
 /// Volumen de resina (ml) de las capas.
 pub fn volume_ml(layers: &[Layer], printer: &ResinPrinter, layer_height: f32) -> f32 {
     let (pw, ph) = printer.pixel_size();
-    let px: u64 = layers.iter().map(Layer::area).sum();
-    (px as f64 * pw as f64 * ph as f64 * layer_height as f64 / 1000.0) as f32
+    let px: f64 = layers.iter().map(Layer::light).sum();
+    (px * pw as f64 * ph as f64 * layer_height as f64 / 1000.0) as f32
 }
 
 /// Tiempo de impresión estimado (s): exposición, espera, subida y bajada de cada capa.
@@ -441,6 +602,35 @@ pub(crate) mod tests {
         let hole = (10.0 / pw) * (10.0 / ph);
         assert!(((mid.area() as f32) - (full - hole)).abs() / full < 0.02);
         assert!(((layers[2].area() as f32) - full).abs() / full < 0.02);
+    }
+
+    #[test]
+    fn grises_en_los_bordes() {
+        let pr = LD_002H;
+        let (pw, ph) = pr.pixel_size();
+        // Borde izquierdo a 1/4 de píxel del inicio de una columna; arriba a mitad de fila.
+        let (x, y) = (30.0 * pw + 0.25 * pw, 50.0 * ph + 0.5 * ph);
+        let tris = cube([x, y, 0.0], [10.0, 10.0, 1.0]);
+        let layers = slice_aa(&tris, &pr, 0.05, 4).unwrap();
+        let l = &layers[5];
+        // Los blancos no cambian con antialiasing.
+        assert_eq!(l.spans, slice(&tris, &pr, 0.05).unwrap()[5].spans);
+        let m = l.to_mask(pr.res_x, pr.res_y);
+        let at = |px: u32, py: u32| m[(py * pr.res_x + px) as usize];
+        // Columna 30: 3/4 cubierta. Fila 50: media fila (2 de 4 subfilas).
+        assert_eq!(at(30, 60), 191);
+        assert_eq!(at(31, 60), 255);
+        assert_eq!(at(29, 60), 0);
+        assert_eq!(at(40, 50), 128);
+        assert_eq!(at(30, 50), 96);
+        // La luz total es el área real, salvo el muestreo en y (media subfila por borde).
+        let want = 10.0 * 10.0 / (pw * ph);
+        let tol = 10.0 / pw / 4.0;
+        assert!((l.light() as f32 - want).abs() < tol, "{} vs {want}", l.light());
+        // Tramos ordenados y sin pisarse.
+        for w in l.gray.windows(2) {
+            assert!((w[0].y, w[0].x1) <= (w[1].y, w[1].x0), "{:?}", w);
+        }
     }
 
     #[test]

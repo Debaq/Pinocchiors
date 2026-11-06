@@ -112,7 +112,7 @@ pub fn write_ctb(
     w.u32(printer.mirror as u32);
     w.u32(params_at as u32);
     w.u32(PARAMS as u32);
-    w.u32(1); // antialias: sin grises
+    w.u32(aa_level(layers, settings)); // antialias (1 = sin grises)
     w.u16(s.pwm as u16);
     w.u16(s.bottom_pwm as u16);
     w.u32(KEY);
@@ -153,7 +153,7 @@ pub fn write_ctb(
     w.u32(name.len() as u32);
     w.u32(PER_LAYER_SETTINGS);
     w.u32(MYSTERIOUS_ID);
-    w.u32(1); // antialias
+    w.u32(aa_level(layers, settings)); // antialias
     w.u32(SOFTWARE_VERSION);
     w.zeros(24);
     w.0.extend_from_slice(name);
@@ -176,6 +176,11 @@ pub fn write_ctb(
     }
     debug_assert_eq!(w.0.len(), total);
     Ok(w.0)
+}
+
+/// Nivel de antialiasing que dice el archivo: el pedido si las capas traen grises.
+fn aa_level(layers: &[Layer], settings: &ResinSettings) -> u32 {
+    if layers.iter().any(|l| !l.gray.is_empty()) { settings.antialias.max(1) as u32 } else { 1 }
 }
 
 struct Writer(Vec<u8>);
@@ -213,12 +218,29 @@ pub fn encode_layer(layer: &Layer, res_x: u32, res_y: u32) -> Vec<u8> {
     let mut out = Vec::new();
     let total = res_x as u64 * res_y as u64;
     let mut pos = 0u64;
-    for s in &layer.spans {
+    // Gris de 8 bits → 7 bits; tramos seguidos con el mismo código van en una racha.
+    let mut pending: Option<(u8, u64)> = None;
+    for s in layer.image_spans() {
+        let code = s.v >> 1;
         let start = s.y as u64 * res_x as u64 + s.x0 as u64;
         let end = s.y as u64 * res_x as u64 + s.x1 as u64;
-        run(&mut out, 0, start - pos);
-        run(&mut out, 0x7F, end - start);
+        if code == 0 {
+            continue;
+        }
+        match pending {
+            Some((c, _)) if c == code && pos == start => {}
+            _ => {
+                if let Some((c, from)) = pending {
+                    run(&mut out, c, pos - from);
+                }
+                run(&mut out, 0, start - pos);
+                pending = Some((code, start));
+            }
+        }
         pos = end;
+    }
+    if let Some((c, from)) = pending {
+        run(&mut out, c, pos - from);
     }
     run(&mut out, 0, total - pos);
     out
@@ -375,6 +397,7 @@ mod tests {
     #[test]
     fn rle_ida_y_vuelta() {
         let l = Layer {
+            gray: vec![],
             z: 0.05,
             spans: vec![
                 Span { y: 0, x0: 0, x1: 1 },
@@ -419,6 +442,22 @@ mod tests {
         assert!((f.volume_ml - 10.0).abs() < 0.1, "{}", f.volume_ml);
         for i in [0, 250, 499] {
             assert_eq!(f.mask(&b, i).unwrap(), layers[i].to_mask(1620, 2560));
+        }
+    }
+
+    #[test]
+    fn archivo_con_grises() {
+        let tris = crate::sla::tests::cube([31.31, 55.28, 0.0], [20.0, 20.0, 2.0]);
+        let s = ResinSettings { antialias: 4, ..Default::default() };
+        let layers = crate::sla::slice_aa(&tris, &LD_002H, s.layer_height, s.antialias).unwrap();
+        assert!(!layers[10].gray.is_empty());
+        let b = write_ctb(&layers, &LD_002H, &s, &blank(210, 210), &blank(200, 200)).unwrap();
+        let f = CtbFile::parse(&b).unwrap();
+        assert_eq!(u32::from_le_bytes(b[92..96].try_into().unwrap()), 4);
+        for i in [0, 10, 39] {
+            // El archivo guarda 7 bits: el gris leído es (v >> 1) << 1 | 1, salvo el negro.
+            let want: Vec<u8> = layers[i].to_mask(1620, 2560).iter().map(|&v| if v >> 1 == 0 { 0 } else { (v >> 1) << 1 | 1 }).collect();
+            assert_eq!(f.mask(&b, i).unwrap(), want);
         }
     }
 }

@@ -132,4 +132,7 @@ export const en_resin: Catalog = {
   "las velocidades tienen que ser mayores que cero": "speeds must be greater than zero",
   "velocidades muy altas: riesgo de que la pieza se suelte": "very high speeds: the part may come loose",
   "capa mucho más fina que el píxel: más tiempo sin ganar detalle": "layer much thinner than the pixel: more time without more detail",
+  "Suavizar bordes": "Anti-aliasing",
+  "Nivel {n}": "Level {n}",
+  "Pinta los bordes en grises: curvas y paredes inclinadas sin escalones. Más nivel, archivo más grande.": "Paints edges in grey: curves and slanted walls without steps. Higher level, bigger file.",
 };

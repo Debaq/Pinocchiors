@@ -20,6 +20,8 @@ export interface ResinSettings {
   bottom_pwm: number;
   density: number;
   cost_per_ml: number;
+  /** Subfilas por fila para los bordes en grises (1 = apagado). */
+  antialias: number;
 }
 
 export type SupportDensity = "light" | "medium" | "heavy";

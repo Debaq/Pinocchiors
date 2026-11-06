@@ -51,6 +51,23 @@ resolución del archivo no es la de la pantalla, la impresora no lo imprime.
 | SLA7 | **Enviar**: LD-002H por USB (guardar el `.ctb` desde la pestaña Enviar: hecho); Halot-Sky: investigar su protocolo de red (WiFi / Halot Box) sin tocarla hasta que el usuario diga | pendiente |
 | SLA8 | **Pruebas reales con el usuario**: pieza de calibración en cada una, comparando con lo que sale de Chitubox/Halot Box | pendiente |
 
+### Lo que tienen los programas de pago (Chitubox Pro, Lychee Pro/Premium, UVtools, PreForm)
+
+Pedido del usuario (2026-11-06): ponerse a la altura de los laminadores de pago. En orden
+de impacto en la pieza:
+
+| Fase | Contenido | Estado |
+|---|---|---|
+| SLA9 | **Antialiasing**: bordes en grises (CTB v2 y CXDLP los admiten). Cada fila se muestrea en `n` subfilas y en x se mide la cobertura exacta de cada píxel (`sla::slice_aa`, `Layer::gray`); los tramos en blanco y negro (centro del píxel) se quedan para la revisión y los soportes. Niveles 1 (apagado), 2, 4, 8 («Suavizar bordes» en Exposición; `antialias` en el MCP). Benchy con nivel 8: 0,24 s, archivo 6,3 MB (3,7 sin grises); el `.ctb` con grises se decodifica bien en `scripts/analizar-resina.py` | ✅ (2026-11-06). **Falta**: ver en la LD-002H que lista el archivo con grises (sin imprimir) y comparar una pieza con y sin suavizado |
+| SLA10 | **Compensaciones**: pata de elefante (achicar en XY las capas de base), compensación de medidas en XY y de agujeros, atenuar el interior de áreas grandes | pendiente |
+| SLA11 | **Gráfico de área por capa** (picos de fuerza al despegar) y **subida dinámica** (más lenta en capas con mucha área); exposición o alto de capa por tramos de altura | pendiente |
+| SLA12 | **Soportes avanzados**: refuerzos cruzados, ramas (árbol), punta según la normal, soportes laterales, balsa con borde biselado, grosor por punto, pincel de zonas y «todo bajo X°» | pendiente |
+| SLA13 | **Orientación automática**: buscar el giro (no solo 15/30/45° en X o Y) puntuando islas, succión, área por capa y altura | pendiente |
+| SLA14 | **Vaciado para resina**: relleno interior (panal/rejilla), agujeros de drenaje a mano con tapón imprimible | pendiente |
+| SLA15 | **Operaciones sobre capas** (estilo UVtools): quitar islas de menos de N píxeles, cerrar huecos chicos, doble exposición, alivio bajo la balsa | pendiente |
+| SLA16 | **Nombre grabado en la balsa** (placa, resina, fecha) | pendiente |
+| SLA17 | **CXDLP** (Halot-Sky) y envío por WiFi (= SLA2/SLA7 pendientes) | espera al usuario |
+
 ## Formatos verificados (SLA0)
 
 **LD-002H — `.ctb` Chitubox v2** (little-endian): firma `0x12FD0086`, versión 2. Cama

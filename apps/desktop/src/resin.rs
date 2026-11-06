@@ -359,7 +359,7 @@ fn plate_triangles(
 
 fn layers_bbox(layers: &[Layer], pr: &ResinPrinter) -> [u32; 4] {
     let mut b = [u32::MAX, u32::MAX, 0, 0];
-    for s in layers.iter().flat_map(|l| &l.spans) {
+    for s in layers.iter().flat_map(Layer::image_spans) {
         b[0] = b[0].min(s.x0);
         b[1] = b[1].min(s.y);
         b[2] = b[2].max(s.x1);
@@ -385,16 +385,16 @@ fn layer_image(index: usize, max_size: u32) -> Result<Vec<u8>, String> {
     let scale = bw.max(bh).div_ceil(max_size.max(16)).max(1);
     let (w, h) = (bw.div_ceil(scale), bh.div_ceil(scale));
     let mut acc = vec![0u32; (w * h) as usize];
-    for s in &layer.spans {
+    for s in layer.image_spans() {
         if s.y < y0 || s.y >= y1 {
             continue;
         }
         let row = ((s.y - y0) / scale) as usize * w as usize;
         for x in s.x0.max(x0)..s.x1.min(x1) {
-            acc[row + ((x - x0) / scale) as usize] += 1;
+            acc[row + ((x - x0) / scale) as usize] += s.v as u32;
         }
     }
-    let full = scale * scale;
+    let full = scale * scale * 255;
     let (pw, ph) = last.printer.pixel_size();
     let (ox, oy) = last.printer.pixel_to_mm(x0, y0);
     let mut out = Vec::with_capacity(24 + acc.len());
@@ -404,7 +404,7 @@ fn layer_image(index: usize, max_size: u32) -> Result<Vec<u8>, String> {
     for v in [ox - pw / 2.0, oy - ph / 2.0, pw * scale as f32, ph * scale as f32] {
         out.extend_from_slice(&v.to_le_bytes());
     }
-    out.extend(acc.iter().map(|&a| (a * 255 / full) as u8));
+    out.extend(acc.iter().map(|&a| (a as u64 * 255 / full as u64) as u8));
     Ok(out)
 }
 

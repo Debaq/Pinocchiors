@@ -357,6 +357,13 @@ export const ResinSection: Component<{
                 {num("Exposición de base", s().bottom_exposure, (v) => setSetting("bottom_exposure", v), 5, 120, 1, "s")}
                 {num("Capas de base", s().bottom_layers, (v) => setSetting("bottom_layers", Math.round(v)), 0, 30, 1)}
                 {num("Espera con luz apagada", s().light_off, (v) => setSetting("light_off", v), 0, 30, 0.5, "s")}
+                <Select
+                  label={t("Suavizar bordes")}
+                  options={[1, 2, 4, 8].map((n) => ({ value: String(n), label: n === 1 ? t("No") : t("Nivel {n}", { n }) }))}
+                  value={String(s().antialias ?? 1)}
+                  onChange={(v) => setSetting("antialias", Number(v))}
+                />
+                <p class="text-[10px] text-text-dim">{t("Pinta los bordes en grises: curvas y paredes inclinadas sin escalones. Más nivel, archivo más grande.")}</p>
                 <For each={warnings() ?? []}>{(w) => <p class="text-[11px] text-warning">{tBackend(w)}</p>}</For>
               </div>
             </Panel>

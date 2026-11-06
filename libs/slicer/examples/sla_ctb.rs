@@ -1,7 +1,7 @@
 //! Lamina un STL binario para la LD-002H y escribe el `.ctb`, con la pieza centrada en la
 //! pantalla. Para comparar con un archivo de Chitubox/Lychee (PLAN_SLA.md, SLA2).
 //! Con `--preparar`: venteos, soportes automáticos, revisión e inclinaciones (SLA3–SLA4).
-//!   cargo run --release -p pinocchio-slicer --example sla_ctb -- pieza.stl salida.ctb [--preparar]
+//!   [AA=4] cargo run --release -p pinocchio-slicer --example sla_ctb -- pieza.stl salida.ctb [--preparar]
 use pinocchio_slicer::{ctb, sla, sla_check, sla_prepare};
 
 fn main() {
@@ -25,7 +25,8 @@ fn main() {
             v[c] += shift[c];
         }
     }
-    let s = sla::ResinSettings::default();
+    // Con AA=4 (2, 4 u 8) lamina con bordes en grises.
+    let s = sla::ResinSettings { antialias: std::env::var("AA").ok().and_then(|v| v.parse().ok()).unwrap_or(1), ..Default::default() };
     let t = std::time::Instant::now();
     let (layers, parts) = if args.iter().any(|a| a == "--preparar") {
         let before = sla_check::check(&sla::slice(&tris, &pr, s.layer_height).expect("laminado"), &pr, s.layer_height);
@@ -72,7 +73,7 @@ fn main() {
         }
         (p.layers, vec![p.model, p.supports])
     } else {
-        (sla::slice(&tris, &pr, s.layer_height).expect("laminado"), vec![tris])
+        (sla::slice_aa(&tris, &pr, s.layer_height, s.antialias).expect("laminado"), vec![tris])
     };
     let sliced = t.elapsed();
     // Con VISTA=archivo.ppm guarda una vista grande de lo preparado (para revisar a ojo).
