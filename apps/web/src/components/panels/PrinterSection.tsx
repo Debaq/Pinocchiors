@@ -279,13 +279,16 @@ export const SendToPrinter: Component<{
 // PESTAÑA «IMPRESORA»: impresoras guardadas, estado y controles
 // ═══════════════════════════════════════════════════════════════════════════
 
-const KIND_DEFAULT_MODEL: Record<NetPrinterKind, string> = { moonraker: "Creality K1", flashforge: "Flashforge AD5X" };
+const KIND_DEFAULT_MODEL: Record<NetPrinterKind, string> = { moonraker: "Creality K1", creality: "Creality K1", flashforge: "Flashforge AD5X" };
+
+/** Modelos que se pueden elegir para un tipo de conexión (las K1 van por Klipper o de fábrica) */
+const modelsFor = (kind: NetPrinterKind) => PRINTER_MODELS.filter((m) => m.kind === kind || (kind === "creality" && m.model.startsWith("Creality K1")));
 
 function newPrinter(kind: NetPrinterKind): NetPrinter {
   const n = netPrinters().filter((p) => p.kind === kind).length + 1;
   return {
     id: `${kind}-${Date.now().toString(36)}`,
-    name: kind === "flashforge" ? `AD5X ${n}` : `K1 ${n}`,
+    name: kind === "flashforge" ? `AD5X ${n}` : kind === "creality" ? `K1 fábrica ${n}` : `K1 ${n}`,
     kind,
     model: KIND_DEFAULT_MODEL[kind],
     address: "",
@@ -301,6 +304,7 @@ export const PrinterTab: Component<{ confirm: (request: ConfirmRequest) => Promi
   const [status, setStatus] = createSignal<PrinterStatus>();
   const [error, setError] = createSignal<string>();
   const [acting, setActing] = createSignal(false);
+  const [notice, setNotice] = createSignal<string>();
 
   const current = () => selectedNetPrinter();
   const update = (patch: Partial<NetPrinter>) => {
@@ -334,13 +338,24 @@ export const PrinterTab: Component<{ confirm: (request: ConfirmRequest) => Promi
     if (!p?.address.trim()) return;
     setTesting(true);
     setError(undefined);
+    setNotice(undefined);
     try {
-      const i = await invoke<NetPrinterInfo>("printer_info", { conn: conn(p) });
+      let i: NetPrinterInfo;
+      try {
+        i = await invoke<NetPrinterInfo>("printer_info", { conn: conn(p) });
+      } catch (e) {
+        // Una K1 agregada como Klipper que en realidad tiene el firmware de fábrica: se reconoce y se cambia sola
+        if (p.kind !== "moonraker") throw e;
+        const asCreality = { ...p, kind: "creality" as const };
+        i = await invoke<NetPrinterInfo>("printer_info", { conn: conn(asCreality) }).catch(() => Promise.reject(e));
+        update({ kind: "creality", model: p.model.startsWith("Creality K1") ? p.model : "Creality K1" });
+        setNotice(t("Esta K1 tiene el firmware de fábrica (sin Klipper): se cambió a «Creality de fábrica»."));
+      }
       setInfo(i);
       // Se guarda el número de serie y, en Flashforge, el modelo que dice la impresora
       const patch: Partial<NetPrinter> = {};
       if (i.serial && i.serial !== p.serial) patch.serial = i.serial;
-      const known = PRINTER_MODELS.find((m) => m.kind === p.kind && i.name.toLowerCase().includes(m.model.split(" ").pop()!.toLowerCase()));
+      const known = modelsFor(p.kind).find((m) => i.name.toLowerCase().includes(m.model.split(" ").pop()!.toLowerCase()));
       if (p.kind === "flashforge" && known && known.model !== p.model) patch.model = known.model;
       if (Object.keys(patch).length) update(patch);
       await poll();
@@ -445,6 +460,9 @@ export const PrinterTab: Component<{ confirm: (request: ConfirmRequest) => Promi
               <Button size="sm" variant="ghost" icon={<Icons.Plus size={12} />} onClick={() => add("moonraker")} class="flex-1" title={t("Impresoras con Klipper y Moonraker, como una K1 rooteada")}>
                 {t("Klipper (K1)")}
               </Button>
+              <Button size="sm" variant="ghost" icon={<Icons.Plus size={12} />} onClick={() => add("creality")} class="flex-1" title={t("Creality K1, K1C o K1 Max con su firmware de fábrica (sin root)")}>
+                {t("K1 de fábrica")}
+              </Button>
               <Button size="sm" variant="ghost" icon={<Icons.Plus size={12} />} onClick={() => add("flashforge")} class="flex-1" title={t("Flashforge con su firmware de fábrica, como la AD5X")}>
                 {t("Flashforge (AD5X)")}
               </Button>
@@ -462,7 +480,7 @@ export const PrinterTab: Component<{ confirm: (request: ConfirmRequest) => Promi
                   <div class="min-w-0 flex-1 space-y-1">
                     <input class={inputClass} title={t("Nombre")} value={p().name} onChange={(e) => update({ name: e.currentTarget.value.trim() || p().name })} onKeyDown={(e) => e.stopPropagation()} />
                     <Select
-                      options={PRINTER_MODELS.filter((m) => m.kind === p().kind).map((m) => ({ value: m.model, label: m.model }))}
+                      options={modelsFor(p().kind).map((m) => ({ value: m.model, label: m.model }))}
                       value={p().model}
                       onChange={(v) => update({ model: v })}
                     />
@@ -484,13 +502,18 @@ export const PrinterTab: Component<{ confirm: (request: ConfirmRequest) => Promi
                     }}
                   />
                 </label>
+                <Show when={p().kind === "creality"}>
+                  <p class="text-[10px] text-text-dim">{t("Firmware de Creality sin root: se conecta como Creality Print (puertos 80 y 9999). La dirección la muestra la pantalla de la impresora.")}</p>
+                </Show>
                 <Show
                   when={p().kind === "flashforge"}
                   fallback={
-                    <label class="block space-y-0.5">
-                      <span class="text-[11px] text-text-muted">{t("Clave de API (si la pide)")}</span>
-                      <input type="password" class={inputClass} value={p().apiKey} onChange={(e) => update({ apiKey: e.currentTarget.value.trim() })} onKeyDown={(e) => e.stopPropagation()} />
-                    </label>
+                    <Show when={p().kind === "moonraker"}>
+                      <label class="block space-y-0.5">
+                        <span class="text-[11px] text-text-muted">{t("Clave de API (si la pide)")}</span>
+                        <input type="password" class={inputClass} value={p().apiKey} onChange={(e) => update({ apiKey: e.currentTarget.value.trim() })} onKeyDown={(e) => e.stopPropagation()} />
+                      </label>
+                    </Show>
                   }
                 >
                   <label class="block space-y-0.5">
@@ -521,6 +544,9 @@ export const PrinterTab: Component<{ confirm: (request: ConfirmRequest) => Promi
                       </Show>
                     </p>
                   )}
+                </Show>
+                <Show when={notice()}>
+                  <p class="text-[11px] text-accent">{notice()}</p>
                 </Show>
                 <Show when={error()}>
                   <p class="text-[11px] text-red">{error()}</p>

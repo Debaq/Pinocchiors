@@ -1,8 +1,10 @@
-//! Impresoras en la red, sea cual sea la marca: Klipper con Moonraker (la K1 rooteada) o
-//! Flashforge de fábrica (AD5X). La interfaz habla solo con estos comandos.
+//! Impresoras en la red, sea cual sea la marca: Klipper con Moonraker (la K1 rooteada),
+//! Creality de fábrica (K1 sin root) o Flashforge de fábrica (AD5X). La interfaz habla solo
+//! con estos comandos.
 //!
 //! Ver `libs/pinocchio/print3d/PLAN_IMPRESORAS.md`.
 
+use crate::creality::{self, Creality};
 use crate::flashforge::{self, Flashforge, Slot};
 use crate::moonraker::{self, PrinterStatus, SendResult};
 use serde::{Deserialize, Serialize};
@@ -12,7 +14,7 @@ use std::time::Duration;
 #[derive(Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct PrinterConn {
-    /// "moonraker" o "flashforge"
+    /// "moonraker", "creality" o "flashforge"
     pub kind: String,
     pub address: String,
     #[serde(default)]
@@ -27,12 +29,14 @@ pub struct PrinterConn {
 
 enum Conn {
     Moonraker(moonraker::Printer),
+    Creality(Creality),
     Flashforge(Flashforge),
 }
 
 fn open(c: &PrinterConn, timeout: Duration) -> Result<Conn, String> {
     match c.kind.as_str() {
         "moonraker" => Ok(Conn::Moonraker(moonraker::Printer::new(&c.address, c.api_key.clone(), timeout)?)),
+        "creality" => Ok(Conn::Creality(Creality::new(&c.address, timeout)?)),
         "flashforge" => Ok(Conn::Flashforge(Flashforge::new(&c.address, c.serial.clone(), c.check_code.clone(), timeout)?)),
         other => Err(format!("Tipo de impresora desconocido: {other}")),
     }
@@ -74,6 +78,19 @@ fn info(c: &PrinterConn) -> Result<NetPrinterInfo, String> {
                 slots: Vec::new(),
             })
         }
+        Conn::Creality(p) => {
+            let i = creality::info(&p)?;
+            Ok(NetPrinterInfo {
+                kind: c.kind.clone(),
+                name: i.name,
+                ready: true,
+                state: i.status,
+                message: String::new(),
+                firmware: i.firmware,
+                serial: None,
+                slots: Vec::new(),
+            })
+        }
         Conn::Flashforge(p) => {
             let i = flashforge::info(&p)?;
             Ok(NetPrinterInfo {
@@ -101,6 +118,7 @@ pub async fn printer_info(conn: PrinterConn) -> Result<NetPrinterInfo, String> {
 pub async fn printer_status(conn: PrinterConn) -> Result<PrinterStatus, String> {
     blocking(move || match open(&conn, Duration::from_secs(10))? {
         Conn::Moonraker(p) => moonraker::status(&p),
+        Conn::Creality(p) => creality::status(&p),
         Conn::Flashforge(p) => flashforge::status(&p),
     })
     .await
@@ -116,6 +134,7 @@ pub async fn printer_send(conn: PrinterConn, filename: String, start: bool, slot
         let name = moonraker::safe_filename(&filename);
         match open(&conn, Duration::from_secs(300))? {
             Conn::Moonraker(p) => moonraker::send_gcode(&p, &name, &bytes, start),
+            Conn::Creality(p) => creality::send(&p, &name, &bytes, start),
             Conn::Flashforge(p) => flashforge::send(&p, &name, &bytes, start, slot),
         }
     })
@@ -127,6 +146,7 @@ pub async fn printer_send(conn: PrinterConn, filename: String, start: bool, slot
 pub async fn printer_action(conn: PrinterConn, action: String) -> Result<(), String> {
     blocking(move || match open(&conn, Duration::from_secs(15))? {
         Conn::Moonraker(p) => moonraker::action(&p, &action),
+        Conn::Creality(p) => creality::action(&p, &action),
         Conn::Flashforge(p) => flashforge::action(&p, &action),
     })
     .await

@@ -66,7 +66,8 @@ export const clearRecent = () => setRecentRaw([]);
 
 /** Impresoras en la red para mandar a imprimir (Klipper/Moonraker o Flashforge de fábrica).
  *  Son del equipo, no del proyecto */
-export type NetPrinterKind = "moonraker" | "flashforge";
+/** Klipper con Moonraker (K1 rooteada), Creality de fábrica (K1 sin root) o Flashforge de fábrica */
+export type NetPrinterKind = "moonraker" | "creality" | "flashforge";
 export interface NetPrinter {
   id: string;
   name: string;

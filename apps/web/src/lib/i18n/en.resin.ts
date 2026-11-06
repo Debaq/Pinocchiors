@@ -90,6 +90,16 @@ export const en_resin: Catalog = {
   "Mandar por la red": "Send over the network",
   "Guardar .{ext}": "Save .{ext}",
 
+  // K1 de fábrica (PrinterSection, creality.rs)
+  "K1 de fábrica": "Stock K1",
+  "Creality K1, K1C o K1 Max con su firmware de fábrica (sin root)": "Creality K1, K1C or K1 Max with stock firmware (not rooted)",
+  "Firmware de Creality sin root: se conecta como Creality Print (puertos 80 y 9999). La dirección la muestra la pantalla de la impresora.":
+    "Stock Creality firmware: connects like Creality Print (ports 80 and 9999). The printer's screen shows its address.",
+  "Esta K1 tiene el firmware de fábrica (sin Klipper): se cambió a «Creality de fábrica».": "This K1 has the stock firmware (no Klipper): switched to «stock Creality».",
+  "{} no respondió como una impresora Creality de fábrica": "{} didn't answer like a stock Creality printer",
+  "{} no mandó su estado por el puerto 9999": "{} didn't send its status on port 9999",
+  "La impresora rechazó el archivo (HTTP {})": "The printer rejected the file (HTTP {})",
+
   // Perfiles de resina (libs/slicer/src/sla_profiles.rs)
   "Estándar 0,05 mm": "Standard 0.05 mm",
   "Estándar 0,03 mm (detalle)": "Standard 0.03 mm (detail)",

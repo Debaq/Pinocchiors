@@ -17,6 +17,7 @@ pub mod placement;
 pub mod print_all;
 pub mod print_prep;
 pub mod print_skin;
+pub mod creality;
 pub mod flashforge;
 pub mod moonraker;
 pub mod printers;
