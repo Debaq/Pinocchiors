@@ -24,12 +24,16 @@
 #                           vez): el binario Linux y el AppImage son un solo archivo.
 #                           En Windows va con sus DLL. Lo compila slicer-engine.yml
 #                           (con caché) en las mismas plataformas que la app
-#   - CLI `converter`       Linux x86_64, Windows x86_64, macOS arm64 + x86_64
-#   - Paquete WASM          converter-wasm (wasm-bindgen --target web)
 #   - latest.json           para que la app se actualice sola (tauri-plugin-updater):
 #                           AppImage, -setup.exe/.msi y .app.tar.gz firmados con
 #                           los secretos TAURI_SIGNING_PRIVATE_KEY y _PASSWORD (pública en
-#                           apps/desktop/tauri.conf.json)
+#                           apps/desktop/tauri.conf.json). Las firmas van dentro de
+#                           latest.json: los .sig no se publican
+#   - CLI `converter` y paquete WASM: solo si se piden a mano (input `cli`), y quedan
+#     como artefactos del workflow, no en la release
+#
+# La release lleva solo: binario Linux, AppImage, -setup.exe, .msi (y .dmg si se
+# compila macOS) más latest.json, que la app necesita para actualizarse.
 #
 # Versión de la app: la fecha y hora del commit en UTC como semver
 # AA.M.<minuto del mes> (p. ej. 26.10.35849 = 25 de octubre de 2026, 21:29):
@@ -50,9 +54,9 @@ on:
         options: [linux, windows, macos, linux-windows, linux-macos, windows-macos, todas]
         default: linux
       cli:
-        description: "También la CLI y el paquete WASM (sin ellos, más rápido)"
+        description: "También la CLI y el paquete WASM (quedan como artefactos del workflow, no en la release)"
         type: boolean
-        default: true
+        default: false
       tests:
         description: "Correr los tests del workspace antes (~30 min)"
         type: boolean
@@ -340,8 +344,8 @@ jobs:
   cli:
     name: CLI (${{ matrix.target }})
     needs: [version, test]
-    # A mano se pueden saltar (input `cli`); con tag van siempre
-    if: ${{ !cancelled() && !failure() && (github.event_name != 'workflow_dispatch' || inputs.cli) }}
+    # Solo a mano y si se piden (input `cli`); no van a la release
+    if: ${{ !cancelled() && !failure() && github.event_name == 'workflow_dispatch' && inputs.cli }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -387,8 +391,8 @@ jobs:
   wasm:
     name: WASM
     needs: [version, test]
-    # A mano se pueden saltar (input `cli`); con tag van siempre
-    if: ${{ !cancelled() && !failure() && (github.event_name != 'workflow_dispatch' || inputs.cli) }}
+    # Solo a mano y si se piden (input `cli`); no van a la release
+    if: ${{ !cancelled() && !failure() && github.event_name == 'workflow_dispatch' && inputs.cli }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -439,11 +443,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Solo lo que se publica: el motor (slicer-engine) ya va dentro de la app
+      # Solo la app: el motor (slicer-engine) ya va dentro; CLI y WASM no se publican
       - uses: actions/download-artifact@v4
         with:
           path: dist
-          pattern: "{desktop,cli,wasm}*"
+          pattern: "desktop-*"
           merge-multiple: true
 
       - name: latest.json (actualizaciones de la app)
@@ -476,9 +480,10 @@ jobs:
             '{version: $v, notes: $n, pub_date: $d, platforms: $p}' > latest.json
           cat latest.json
 
-      - name: Checksums
+      # Las firmas ya quedaron dentro de latest.json
+      - name: Quitar las firmas sueltas
         working-directory: dist
-        run: sha256sum * > SHA256SUMS.txt
+        run: rm -f ./*.sig && ls -la
 
       - name: Crear release
         env:
