@@ -167,12 +167,15 @@ pub fn check_printability_with(mesh: &Mesh, printer: &PrinterProfile, config: &P
         let (rb, rc) = (find(&mut parent, w[1]), find(&mut parent, w[2]));
         parent[rb] = rc;
     }
-    let (mut open_edges, mut non_manifold_edges, mut inconsistent_edges) = (0, 0, 0);
+    let (mut open_edges, mut non_manifold_edges, mut inconsistent_edges, mut touching_edges) = (0, 0, 0, 0);
     for &(f, b) in edges.values() {
         match f + b {
             1 => open_edges += 1,
             2 if f == 2 || b == 2 => inconsistent_edges += 1,
             2 => {}
+            // Tantas caras de ida como de vuelta: piezas cerradas que se tocan justo en esa
+            // arista (por ejemplo, después de que la reparación las separó). Se imprimen juntas
+            _ if f == b => touching_edges += 1,
             _ => non_manifold_edges += 1,
         }
     }
@@ -244,6 +247,9 @@ pub fn check_printability_with(mesh: &Mesh, printer: &PrinterProfile, config: &P
     }
     if non_manifold_edges > 0 {
         add(Severity::Error, "non_manifold", format!("{non_manifold_edges} aristas compartidas por más de dos caras (non-manifold)"));
+    }
+    if touching_edges > 0 {
+        add(Severity::Warning, "touching", format!("{touching_edges} aristas donde dos piezas se tocan: se imprimen juntas"));
     }
     if inconsistent_edges > 0 {
         add(Severity::Error, "inconsistent_normals", format!("{inconsistent_edges} aristas con normales inconsistentes"));
@@ -382,6 +388,27 @@ pub(crate) mod tests {
 
     fn report(mesh: &Mesh) -> PrintabilityReport {
         check_printability(mesh, &PrinterProfile::default(), &MaterialProfile::default()).unwrap()
+    }
+
+    /// Dos cajas que se tocan en una arista vertical (como un modelo de dos piezas en diagonal)
+    #[test]
+    fn piezas_que_se_tocan_en_una_arista_se_imprimen() {
+        let a = make_box(20.0, 20.0, 20.0);
+        let (pa, ta) = triangles(&a);
+        let mut verts: Vec<Vector3> = pa.clone();
+        verts.extend(pa.iter().map(|p| Vector3::new(p.x() + 20.0, p.y() + 20.0, p.z())));
+        let mut faces: Vec<[usize; 3]> = ta.clone();
+        faces.extend(ta.iter().map(|t| [t[0] + pa.len(), t[1] + pa.len(), t[2] + pa.len()]));
+        let r = report(&Mesh::from_triangles(&verts, &faces));
+        assert!(r.printable && r.is_watertight, "{:?}", r.issues);
+        assert_eq!(r.non_manifold_edges, 0);
+        assert!(r.issues.iter().any(|i| i.code == "touching"), "{:?}", r.issues);
+        // Tres caras en una arista sigue siendo un error
+        let mut bad = faces.clone();
+        bad.push([0, 1, verts.len()]);
+        verts.push(Vector3::new(10.0, -5.0, 10.0));
+        let r = report(&Mesh::from_triangles(&verts, &bad));
+        assert!(!r.printable && r.non_manifold_edges > 0, "{:?}", r.issues);
     }
 
     #[test]

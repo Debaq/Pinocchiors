@@ -519,6 +519,33 @@ mod tests {
         assert_eq!(base64(b"hola"), "aG9sYQ==");
     }
 
+    /// Manda un gcode a la K1 de fábrica real (con `PINOCCHIO_START=1` también lo imprime) y
+    /// pide la lista de archivos. Solo con el usuario al lado: `PINOCCHIO_CREALITY=ip
+    /// PINOCCHIO_GCODE=archivo cargo test -p pinocchio-app --lib creality_enviar_real -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn creality_enviar_real() {
+        let (Ok(addr), Ok(path)) = (std::env::var("PINOCCHIO_CREALITY"), std::env::var("PINOCCHIO_GCODE")) else { return };
+        let start = std::env::var("PINOCCHIO_START").is_ok_and(|v| v == "1");
+        let p = Creality::new(&addr, Duration::from_secs(60)).unwrap();
+        println!("antes: {:?}", status(&p).unwrap().state);
+        let name = std::path::Path::new(&path).file_name().unwrap().to_string_lossy().into_owned();
+        let r = send(&p, &name, &std::fs::read(&path).unwrap(), start).unwrap();
+        println!("enviado: {r:?}");
+        let mut ws = Ws::connect(&p.host, WS_PORT, Duration::from_secs(5)).unwrap();
+        ws.send_text(&json!({ "method": "get", "params": { "reqGcodeFile": 1 } }).to_string()).unwrap();
+        let end = Instant::now() + Duration::from_secs(4);
+        let mut found = false;
+        while let Ok(Some(text)) = ws.read_text(end) {
+            if text.contains(&name) {
+                found = true;
+            }
+        }
+        println!("en la lista de archivos: {found}");
+        std::thread::sleep(Duration::from_secs(3));
+        println!("después: {:?}", status(&p).unwrap());
+    }
+
     /// Solo lee la K1 de fábrica real: `PINOCCHIO_CREALITY=192.168.50.49 cargo test -p pinocchio-app
     /// --lib creality_real -- --ignored --nocapture`
     #[test]
