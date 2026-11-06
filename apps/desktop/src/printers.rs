@@ -7,6 +7,7 @@
 use crate::creality::{self, Creality};
 use crate::flashforge::{self, Flashforge, Slot};
 use crate::moonraker::{self, PrinterStatus, SendResult};
+use crate::printer_control::{self, Control, PrinterDetails};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -139,6 +140,35 @@ pub async fn printer_send(conn: PrinterConn, filename: String, start: bool, slot
         }
     })
     .await
+}
+
+/// Todo lo que se puede leer de la impresora: z offset, ventiladores, historial, archivos,
+/// malla de la cama y objetos de la impresión.
+#[tauri::command]
+pub async fn printer_details(conn: PrinterConn) -> Result<PrinterDetails, String> {
+    blocking(move || details(&conn)).await
+}
+
+pub(crate) fn details(conn: &PrinterConn) -> Result<PrinterDetails, String> {
+    match open(conn, Duration::from_secs(10))? {
+        Conn::Moonraker(p) => printer_control::moonraker_details(&p),
+        Conn::Creality(p) => creality::details(&p),
+        Conn::Flashforge(_) => Ok(PrinterDetails::default()),
+    }
+}
+
+/// Una orden: ajuste en vivo, mando manual, calibración, gcode, archivos…
+#[tauri::command]
+pub async fn printer_control(conn: PrinterConn, control: Control) -> Result<(), String> {
+    blocking(move || control_impl(&conn, &control)).await
+}
+
+pub(crate) fn control_impl(conn: &PrinterConn, control: &Control) -> Result<(), String> {
+    match open(conn, Duration::from_secs(15))? {
+        Conn::Moonraker(p) => printer_control::moonraker_control(&p, control),
+        Conn::Creality(p) => creality::control(&p, control),
+        Conn::Flashforge(_) => Err("Esta impresora no tiene esos controles".into()),
+    }
 }
 
 /// Pausar, reanudar o cancelar la impresión en curso.

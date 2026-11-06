@@ -8,6 +8,7 @@ import { tBackend } from "../../lib/i18nBackend.ts";
 import { netPrinters, removeNetPrinter, saveNetPrinter, selectNetPrinter, selectedNetPrinter, type NetPrinter, type NetPrinterKind } from "../../lib/settings";
 import { PRINTER_MODELS, printerImage } from "../../lib/printerModels";
 import type { ConfirmRequest } from "../layout/ConfirmDialog";
+import { PrinterControls } from "./PrinterControls";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TIPOS (espejo de apps/desktop/src/printers.rs, moonraker.rs y flashforge.rs)
@@ -623,6 +624,10 @@ export const PrinterTab: Component<{ confirm: (request: ConfirmRequest) => Promi
             </Panel>
           </div>
         )}
+      </Show>
+      {/* Ajustes en vivo, mando manual, calibraciones, consola, historial y archivos (Klipper y K1 de fábrica) */}
+      <Show when={current()?.kind !== "flashforge" && status() && current()}>
+        {(p) => <PrinterControls conn={() => conn(p())} name={p().name} state={status()?.state ?? ""} confirm={props.confirm} />}
       </Show>
     </div>
   );

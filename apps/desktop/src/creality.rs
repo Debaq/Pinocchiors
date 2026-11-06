@@ -24,6 +24,8 @@ const WS_PORT: u16 = 9999;
 
 pub struct Creality {
     host: String,
+    /// Puerto del WebSocket (9999; otro solo en las pruebas)
+    ws_port: u16,
     timeout: Duration,
 }
 
@@ -34,7 +36,7 @@ impl Creality {
         if host.is_empty() {
             return Err("Falta la dirección de la impresora".into());
         }
-        Ok(Self { host, timeout })
+        Ok(Self { host, ws_port: WS_PORT, timeout })
     }
 
     fn http(&self) -> Result<reqwest::blocking::Client, String> {
@@ -80,7 +82,7 @@ pub fn info(p: &Creality) -> Result<CrealityInfo, String> {
 
 /// Junta lo que empuja la impresora por el WebSocket durante `wait` (o hasta tener lo básico)
 fn read_state(p: &Creality, wait: Duration) -> Result<Map<String, Value>, String> {
-    let mut ws = Ws::connect(&p.host, WS_PORT, p.timeout).map_err(|e| p.unreachable(e))?;
+    let mut ws = Ws::connect(&p.host, p.ws_port, p.timeout).map_err(|e| p.unreachable(e))?;
     let end = Instant::now() + wait;
     let mut state = Map::new();
     while Instant::now() < end {
@@ -197,7 +199,7 @@ pub fn send(p: &Creality, filename: &str, gcode: &[u8], start: bool) -> Result<S
 
 /// Manda una orden `set` por el WebSocket (la impresora puede cerrar enseguida: no es error)
 fn command(p: &Creality, params: Value) -> Result<(), String> {
-    let mut ws = Ws::connect(&p.host, WS_PORT, p.timeout).map_err(|e| p.unreachable(e))?;
+    let mut ws = Ws::connect(&p.host, p.ws_port, p.timeout).map_err(|e| p.unreachable(e))?;
     ws.send_text(&json!({ "method": "set", "params": params }).to_string()).map_err(|e| p.unreachable(e))?;
     let _ = ws.read_text(Instant::now() + Duration::from_millis(500));
     Ok(())
@@ -212,6 +214,158 @@ pub fn action(p: &Creality, action: &str) -> Result<(), String> {
         other => return Err(format!("Acción desconocida: {other}")),
     };
     command(p, params)
+}
+
+// ─── Controles y detalles ───────────────────────────────────────────────────
+
+use crate::printer_control::{BedMesh, Control, FanKind, FileEntry, HistoryEntry, PrinterDetails, ALL_CONTROLS};
+
+/// Manda un control con las órdenes de Creality (las mismas que usa la web de la impresora).
+pub fn control(p: &Creality, c: &Control) -> Result<(), String> {
+    c.check()?;
+    let params = match c {
+        Control::ZOffset { delta } => json!({ "setZOffset": format!("{}{:.3}", if *delta >= 0.0 { "+" } else { "-" }, delta.abs()) }),
+        Control::NozzleTemp { celsius } => json!({ "nozzleTempControl": celsius.round() as i64 }),
+        Control::BedTemp { celsius } => json!({ "bedTempControl": { "num": 0, "val": celsius.round() as i64 } }),
+        Control::Light { on } => json!({ "lightSw": u8::from(*on) }),
+        Control::Home { axes } => json!({ "autohome": axes.split_whitespace().collect::<Vec<_>>().join(" ") }),
+        Control::Jog { axis, mm } => json!({ "setPosition": format!("{axis}{mm:.2} F{}", if axis == "Z" { 600 } else { 3000 }) }),
+        Control::AutoLevel => json!({ "autoLevel": 1 }),
+        Control::FeedRate { percent } => json!({ "setFeedratePct": percent.round() as i64 }),
+        Control::FlowRate { percent } => json!({ "setFlowratePct": percent.round() as i64 }),
+        Control::ExcludeObject { name } => json!({ "excludeObjects": [name] }),
+        Control::Reprint { name } => {
+            let s = status(p)?;
+            if s.state == "printing" || s.state == "paused" {
+                return Err("La impresora está ocupada".into());
+            }
+            json!({ "opGcodeFile": format!("printprt:{GCODES}{name}") })
+        }
+        Control::DeleteFile { name } => json!({ "opGcodeFile": format!("deleteprt:{GCODES}{name}") }),
+        Control::Timelapse { on } => json!({ "videoElapse": u8::from(*on) }),
+        Control::RestartKlipper => json!({ "restartKlipper": 1 }),
+        Control::RestartFirmware => json!({ "restartFirmware": 1 }),
+        Control::ClearError => json!({ "cleanErr": 1 }),
+        // El resto como gcode (ventiladores con M106 P0/P1/P2, como la web de Creality)
+        other => json!({ "gcodeCmd": other.gcode().ok_or("La impresora no entiende esa orden")? }),
+    };
+    command(p, params)
+}
+
+/// Todo lo que se puede leer: estado, historial, archivos, malla, z offset y objetos.
+pub fn details(p: &Creality) -> Result<PrinterDetails, String> {
+    let mut ws = Ws::connect(&p.host, p.ws_port, p.timeout).map_err(|e| p.unreachable(e))?;
+    for what in ["reqHistory", "reqGcodeFile", "reqProbedMatrix", "ReqPrinterPara", "reqPrintObjects"] {
+        ws.send_text(&json!({ "method": "get", "params": { what: 1 } }).to_string()).map_err(|e| p.unreachable(e))?;
+    }
+    let end = Instant::now() + Duration::from_secs(4);
+    let mut state = Map::new();
+    let mut files: Vec<Value> = Vec::new();
+    while let Ok(Some(text)) = ws.read_text(end) {
+        let Ok(Value::Object(o)) = serde_json::from_str::<Value>(&text) else { continue };
+        for (k, v) in o {
+            if k == "retGcodeFileInfo2" || k == "retGcodeFileInfo" {
+                files.extend(v.as_array().cloned().unwrap_or_default());
+            } else {
+                state.insert(k, v);
+            }
+        }
+        if ["historyList", "probedMatrix", "curZOffset", "objects"].iter().all(|k| state.contains_key(*k)) && !files.is_empty() {
+            break;
+        }
+    }
+    Ok(parse_details(&state, &files))
+}
+
+pub fn parse_details(s: &Map<String, Value>, files: &[Value]) -> PrinterDetails {
+    let num = |v: Option<&Value>| v.and_then(|v| v.as_f64().or_else(|| v.as_str()?.trim().parse().ok()));
+    let names = |k: &str| -> Vec<String> {
+        match s.get(k) {
+            Some(Value::Array(a)) => a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect(),
+            // Creality las manda como texto: "[ \"a\", \"b\" ]"
+            Some(Value::String(t)) => serde_json::from_str::<Vec<String>>(t).unwrap_or_default(),
+            _ => Vec::new(),
+        }
+    };
+    let mut seen = std::collections::HashSet::new();
+    let files: Vec<FileEntry> = files
+        .iter()
+        .filter(|f| seen.insert(f["name"].as_str().unwrap_or("").to_string()))
+        .map(|f| FileEntry {
+            name: f["name"].as_str().unwrap_or("").to_string(),
+            size: f["file_size"].as_u64().unwrap_or(0),
+            modified: num(f.get("create_time")).unwrap_or(0.0),
+            print_time_s: num(f.get("timeCost")).filter(|t| *t > 0.0),
+            filament_g: num(f.get("filamentWeight")).filter(|g| *g > 0.0),
+        })
+        .collect();
+    let mut files = files;
+    files.sort_by(|a, b| b.modified.total_cmp(&a.modified));
+    PrinterDetails {
+        z_offset: num(s.get("curZOffset")),
+        fans: [(FanKind::Model, "modelFanPct"), (FanKind::Aux, "auxiliaryFanPct"), (FanKind::Case, "caseFanPct")]
+            .into_iter()
+            .filter_map(|(f, k)| num(s.get(k)).map(|v| (f, v)))
+            .collect(),
+        light: num(s.get("lightSw")).map(|v| v != 0.0),
+        feed_rate: num(s.get("curFeedratePct")),
+        flow_rate: num(s.get("curFlowratePct")),
+        timelapse: num(s.get("videoElapse")).map(|v| v != 0.0),
+        total_jobs: num(s.get("totalJob")).map(|v| v as u64),
+        total_time_s: num(s.get("totalUsageTime")),
+        history: s
+            .get("historyList")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(|h| HistoryEntry {
+                name: h["filename"].as_str().unwrap_or("").rsplit('/').next().unwrap_or("").to_string(),
+                started: num(h.get("starttime")).unwrap_or(0.0),
+                duration_s: num(h.get("usagetime")).unwrap_or(0.0),
+                filament_mm: num(h.get("usagematerial")).unwrap_or(0.0),
+                finished: num(h.get("printfinish")) == Some(1.0),
+            })
+            .collect(),
+        files,
+        mesh: s.get("probedMatrix").and_then(parse_mesh),
+        objects: names("objects"),
+        excluded: names("excluded_objects"),
+        current_object: s.get("current_object").and_then(Value::as_str).filter(|o| !o.is_empty()).map(str::to_string),
+        supports: ALL_CONTROLS.to_vec(),
+    }
+}
+
+/// La malla que manda Creality viene mal armada (corta el texto de printer.cfg por comas y
+/// mezcla filas): se juntan todos los números de las z, en orden, y se toman `num`.
+fn parse_mesh(m: &Value) -> Option<BedMesh> {
+    let val = m["val"].as_array()?;
+    let count = m["num"].as_u64()? as usize;
+    let side = (count as f64).sqrt().round() as usize;
+    if side < 2 || side * side != count {
+        return None;
+    }
+    let mut z = Vec::new();
+    for p in val {
+        let text = p["z"].as_str().unwrap_or("");
+        let mut cur = String::new();
+        for ch in text.chars().chain(std::iter::once(' ')) {
+            if ch.is_ascii_digit() || ch == '.' || (ch == '-' && cur.is_empty()) {
+                cur.push(ch);
+            } else {
+                if cur.contains('.') && cur.chars().any(|c| c.is_ascii_digit()) && !cur.starts_with('.') {
+                    z.push(cur.parse::<f64>().ok()?);
+                }
+                cur.clear();
+            }
+        }
+    }
+    if z.len() < count {
+        return None;
+    }
+    let xs: Vec<f64> = val.iter().filter_map(|p| p["x"].as_str()?.parse().ok()).collect();
+    let ys: Vec<f64> = val.iter().filter_map(|p| p["y"].as_str()?.parse().ok()).collect();
+    let (min, max) = (|v: &[f64]| v.iter().copied().fold(f64::MAX, f64::min), |v: &[f64]| v.iter().copied().fold(f64::MIN, f64::max));
+    Some(BedMesh { rows: z[..count].chunks(side).map(<[f64]>::to_vec).collect(), min: [min(&xs), min(&ys)], max: [max(&xs), max(&ys)] })
 }
 
 // ─── WebSocket mínimo ───────────────────────────────────────────────────────
@@ -492,7 +646,7 @@ mod tests {
         let (f, ws_port) = fake(idle());
         let t = printer(&f, ws_port);
         // La subida va al puerto HTTP de prueba; el WebSocket al de prueba
-        let p = Creality { host: t.http.clone(), timeout: Duration::from_secs(3) };
+        let p = Creality { host: t.http.clone(), ws_port: WS_PORT, timeout: Duration::from_secs(3) };
         let r = p.http().unwrap().get(format!("http://{}/info", p.host)).send().unwrap();
         assert_eq!(r.json::<Value>().unwrap()["model"], "K1");
         let boundary = "b0undary";
@@ -509,6 +663,55 @@ mod tests {
         let got = f.received.lock().unwrap().clone();
         assert!(got.iter().any(|l| l.starts_with("POST /upload/cubo%201.gcode")), "{got:?}");
         assert!(got.iter().any(|l| l.contains("printprt:/usr/data/printer_data/gcodes/cubo 1.gcode")), "{got:?}");
+    }
+
+    /// La malla tal como la manda la K1-34E2 (mal armada por Creality)
+    #[test]
+    fn malla_de_la_k1_de_fabrica() {
+        let zs = ["*# \t0.685105", "0.388844", "0.141594", "-0.091813", "-0.271313\n#*# \t0.506125", "0.282562", "0.108375", "-0.116281",
+            "-0.238438\n#*# \t0.523063", "0.299969", "0.050000", "-0.097625", "-0.290094\n#*# \t0.544906", "0.281187", "0.114031", "-0.033031",
+            "-0.169615\n#*# \t0.622375", "0.390156", "0.228781", "0.094062", "-0.009813", "0.009813", ".009813", "009813", "09813"];
+        let val: Vec<Value> = zs.iter().enumerate().map(|(i, z)| json!({ "x": format!("{:.6}", 5.0 + 52.5 * (i % 5) as f64), "y": format!("{:.6}", 5.0 + 52.5 * (i / 5) as f64), "z": z })).collect();
+        let m = parse_mesh(&json!({ "num": 25, "val": val })).unwrap();
+        assert_eq!(m.rows.len(), 5);
+        assert_eq!(m.rows[0], vec![0.685105, 0.388844, 0.141594, -0.091813, -0.271313]);
+        assert_eq!(m.rows[1][0], 0.506125);
+        assert_eq!(m.rows[4][4], -0.009813);
+        assert_eq!((m.min, m.max), ([5.0, 5.0], [215.0, 215.0]));
+    }
+
+    #[test]
+    fn detalles_de_la_k1_de_fabrica() {
+        let s = json!({ "curZOffset": "0.000", "modelFanPct": 100, "auxiliaryFanPct": 0, "caseFanPct": 0, "lightSw": 1, "curFeedratePct": 100,
+            "totalJob": 50, "totalUsageTime": 236172, "objects": "[ \"PIEZA_1\", \"PIEZA_2\" ]", "excluded_objects": "[ ]", "current_object": "PIEZA_1",
+            "historyList": [{ "filename": "/usr/data/printer_data/gcodes/cubito.gcode", "starttime": 1793966486, "usagetime": 905, "usagematerial": 1233.07, "printfinish": 1 }] });
+        let files = vec![json!({ "name": "a.gcode", "file_size": 10, "create_time": 1, "timeCost": 998, "filamentWeight": "2.51" }), json!({ "name": "a.gcode" })];
+        let d = parse_details(s.as_object().unwrap(), &files);
+        assert_eq!(d.z_offset, Some(0.0));
+        assert_eq!(d.fans.len(), 3);
+        assert_eq!(d.objects, vec!["PIEZA_1", "PIEZA_2"]);
+        assert_eq!(d.history[0].name, "cubito.gcode");
+        assert!(d.history[0].finished);
+        assert_eq!(d.files.len(), 1);
+        assert_eq!(d.files[0].filament_g, Some(2.51));
+        assert_eq!(d.total_jobs, Some(50));
+    }
+
+    /// Las órdenes llegan por el WebSocket con el formato de la web de Creality
+    #[test]
+    fn ordenes_de_creality() {
+        let (f, ws_port) = fake(idle());
+        let p = Creality { host: "127.0.0.1".into(), ws_port, timeout: Duration::from_secs(2) };
+        control(&p, &Control::ZOffset { delta: -0.05 }).unwrap();
+        control(&p, &Control::BedTemp { celsius: 60.0 }).unwrap();
+        control(&p, &Control::Fan { fan: FanKind::Aux, percent: 100.0 }).unwrap();
+        control(&p, &Control::Home { axes: "X Y".into() }).unwrap();
+        assert!(control(&p, &Control::NozzleTemp { celsius: 500.0 }).is_err());
+        std::thread::sleep(Duration::from_millis(500));
+        let got = f.received.lock().unwrap().clone();
+        for want in [r#""setZOffset":"-0.050""#, r#""bedTempControl":{"num":0,"val":60}"#, r#""gcodeCmd":"M106 P1 S255""#, r#""autohome":"X Y""#] {
+            assert!(got.iter().any(|g| g.contains(want)), "falta {want} en {got:?}");
+        }
     }
 
     #[test]
@@ -532,7 +735,7 @@ mod tests {
         let name = std::path::Path::new(&path).file_name().unwrap().to_string_lossy().into_owned();
         let r = send(&p, &name, &std::fs::read(&path).unwrap(), start).unwrap();
         println!("enviado: {r:?}");
-        let mut ws = Ws::connect(&p.host, WS_PORT, Duration::from_secs(5)).unwrap();
+        let mut ws = Ws::connect(&p.host, p.ws_port, Duration::from_secs(5)).unwrap();
         ws.send_text(&json!({ "method": "get", "params": { "reqGcodeFile": 1 } }).to_string()).unwrap();
         let end = Instant::now() + Duration::from_secs(4);
         let mut found = false;
@@ -555,5 +758,26 @@ mod tests {
         let p = Creality::new(&addr, Duration::from_secs(10)).unwrap();
         println!("{:?}", info(&p).unwrap());
         println!("{:?}", status(&p).unwrap());
+        let d = details(&p).unwrap();
+        println!(
+            "z_offset {:?} · ventiladores {:?} · luz {:?} · velocidad {:?} · trabajos {:?} · historial {} · archivos {} · malla {:?} · objetos {:?}",
+            d.z_offset, d.fans, d.light, d.feed_rate, d.total_jobs, d.history.len(), d.files.len(), d.mesh.as_ref().map(|m| m.rows.len()), d.objects
+        );
+        println!("último: {:?}", d.history.first());
+        println!("malla: {:?}", d.mesh.map(|m| m.rows));
+    }
+
+    /// Solo lee una Klipper con Moonraker: `PINOCCHIO_MOONRAKER=ip cargo test -p pinocchio-app --lib
+    /// moonraker_detalles_real -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn moonraker_detalles_real() {
+        let Ok(addr) = std::env::var("PINOCCHIO_MOONRAKER") else { return };
+        let p = crate::moonraker::Printer::new(&addr, None, Duration::from_secs(10)).unwrap();
+        let d = crate::printer_control::moonraker_details(&p).unwrap();
+        println!(
+            "z_offset {:?} · ventiladores {:?} · velocidad {:?}/{:?} · trabajos {:?} · historial {} · archivos {} · malla {:?} · objetos {:?}",
+            d.z_offset, d.fans, d.feed_rate, d.flow_rate, d.total_jobs, d.history.len(), d.files.len(), d.mesh.as_ref().map(|m| (m.rows.len(), m.rows[0].len())), d.objects
+        );
     }
 }

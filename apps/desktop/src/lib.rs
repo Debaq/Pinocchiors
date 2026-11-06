@@ -18,6 +18,7 @@ pub mod print_all;
 pub mod print_prep;
 pub mod print_skin;
 pub mod creality;
+pub mod printer_control;
 pub mod flashforge;
 pub mod moonraker;
 pub mod printers;
@@ -261,6 +262,8 @@ pub fn run() {
             printers::printer_send,
             printers::printer_status,
             printers::printer_action,
+            printers::printer_details,
+            printers::printer_control,
             // Escáneres 3D (Orizon3D)
             scanner::scanner_connect,
             scanner::scanner_disconnect,

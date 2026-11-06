@@ -97,12 +97,16 @@ impl Printer {
         Ok(body.get("result").cloned().unwrap_or(Value::Null))
     }
 
-    fn get(&self, path: &str) -> Result<Value, String> {
+    pub(crate) fn get(&self, path: &str) -> Result<Value, String> {
         self.send(self.request(reqwest::Method::GET, path))
     }
 
-    fn post(&self, path: &str) -> Result<Value, String> {
+    pub(crate) fn post(&self, path: &str) -> Result<Value, String> {
         self.send(self.request(reqwest::Method::POST, path))
+    }
+
+    pub(crate) fn delete(&self, path: &str) -> Result<Value, String> {
+        self.send(self.request(reqwest::Method::DELETE, path))
     }
 
     fn connection_error(&self, e: &reqwest::Error) -> String {
