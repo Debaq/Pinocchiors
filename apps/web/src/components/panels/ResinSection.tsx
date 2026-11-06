@@ -8,6 +8,7 @@ import { tBackend } from "../../lib/i18nBackend.ts";
 import {
   decodeLayerMask,
   decodeResinView,
+  prepTurn,
   resinPreview,
   type PrepareSettings,
   type ResinInfo,
@@ -19,8 +20,16 @@ import {
   type SupportDensity,
   type SupportPoint,
   type SupportSettings,
+  type ResinTurn,
   type TiltOption,
 } from "../../lib/resinPreview";
+
+/** «X 30° · Y −15°» (solo los ejes girados) */
+const turnLabel = (turn: ResinTurn) =>
+  (["x", "y", "z"] as const)
+    .filter((k) => Math.abs(turn[k]) >= 0.05)
+    .map((k) => `${k.toUpperCase()} ${fmtNumber(turn[k], { maximumFractionDigits: 1 })}°`)
+    .join(" · ");
 import { PrinterPicture } from "./PrinterSection";
 import type { PlateInputArgs, SlicerTab } from "./SlicerSection";
 
@@ -125,7 +134,7 @@ export const ResinSection: Component<{
     set({ supportOverrides: next });
   };
   const geometryKey = () =>
-    JSON.stringify({ printer: props.printerId, input: input(), plate: plate(), tilt: props.prep.tilt ?? null, supports: props.prep.supports, lift: supports()?.lift, raft: supports()?.raft_thickness });
+    JSON.stringify({ printer: props.printerId, input: input(), plate: plate(), tilt: prepTurn(props.prep) ?? null, supports: props.prep.supports, lift: supports()?.lift, raft: supports()?.raft_thickness });
   /** Los puntos editados todavía calzan con la pieza */
   const pointsValid = () => props.prep.supports && slicedKey() !== undefined && slicedKey() === geometryKey();
   const prepare = (): PrepareSettings => ({ supports: props.prep.supports ? (supports() ?? null) : null, vents: props.prep.vents, vent_diameter: props.prep.ventDiameter });
@@ -217,7 +226,7 @@ export const ResinSection: Component<{
     const channel = new Channel<Progress>();
     channel.onmessage = (m) => setProgress(m);
     try {
-      const tilt = props.prep.tilt && props.prep.tilt.degrees !== 0 ? [props.prep.tilt.axis, props.prep.tilt.degrees] : null;
+      const tilt = prepTurn(props.prep) ?? null;
       const r = await invoke<ResinResult>("resin_slice", {
         input: i,
         plate: plate(),
@@ -293,7 +302,9 @@ export const ResinSection: Component<{
     setTiltBusy(true);
     setError(undefined);
     try {
-      setTilts(await invoke<TiltOption[]>("resin_tilts", { input: i, plate: plate(), printer: props.printerId, layerHeight: s.layer_height }));
+      setTilts(
+        await invoke<TiltOption[]>("resin_tilts", { input: i, plate: plate(), printer: props.printerId, layerHeight: s.layer_height, overhangAngle: supports()?.overhang_angle ?? null }),
+      );
     } catch (e) {
       setError(errText(e));
     } finally {
@@ -514,10 +525,8 @@ export const ResinSection: Component<{
                 <p class="text-[10px] text-text-dim">{t("Para vaciar la pieza (menos resina) usa la pestaña Relleno de Fabricar.")}</p>
                 <div class="pt-1 space-y-1.5">
                   <p class="text-xs text-text-muted">
-                    {props.prep.tilt && props.prep.tilt.degrees !== 0
-                      ? t("Inclinada {deg}° en {axis}", { deg: props.prep.tilt.degrees, axis: props.prep.tilt.axis.toUpperCase() })
-                      : t("Sin inclinar")}
-                    <Show when={props.prep.tilt && props.prep.tilt.degrees !== 0}>
+                    {prepTurn(props.prep) ? t("Girada {turn}", { turn: turnLabel(prepTurn(props.prep)!) }) : t("Sin girar")}
+                    <Show when={prepTurn(props.prep)}>
                       {" · "}
                       <button class="text-accent hover:underline" onClick={() => set({ tilt: undefined })}>
                         {t("Quitar")}
@@ -525,29 +534,36 @@ export const ResinSection: Component<{
                     </Show>
                   </p>
                   <Button size="sm" variant="ghost" fullWidth onClick={compareTilts} disabled={tiltBusy() || busy() || props.disabled || !input()} icon={<Icons.ArrowsClockwise size={14} />}>
-                    {tiltBusy() ? t("Comparando...") : t("Comparar inclinaciones")}
+                    {tiltBusy() ? t("Buscando...") : t("Buscar la mejor orientación")}
                   </Button>
                   <Show when={tilts()}>
                     {(list) => (
                       <div class="space-y-0.5">
-                        <p class="text-[10px] text-text-dim">{t("Menos área por capa = menos fuerza al despegar. La primera es la recomendada.")}</p>
-                        <For each={list().slice(0, 5)}>
-                          {(o, i) => (
-                            <div class="flex items-center gap-1.5 text-[11px]">
-                              <span class={i() === 0 ? "text-green" : "text-text-muted"}>{o.degrees === 0 ? t("Sin girar") : `${o.degrees}° ${o.axis.toUpperCase()}`}</span>
-                              <span class="flex-1 text-right font-mono text-text-dim">
-                                {fmtNumber(o.max_area_mm2, { maximumFractionDigits: 0 })} mm² · {fmtNumber(o.height_mm, { maximumFractionDigits: 0 })} mm
-                                <Show when={!o.fits}> · {t("no cabe")}</Show>
-                              </span>
-                              <button
-                                class="text-accent hover:underline disabled:opacity-40"
-                                disabled={!o.fits}
-                                onClick={() => set({ tilt: o.degrees === 0 ? undefined : { axis: o.axis, degrees: o.degrees } })}
-                              >
-                                {t("Usar")}
-                              </button>
-                            </div>
-                          )}
+                        <p class="text-[10px] text-text-dim">
+                          {t("Busca en todas las direcciones: menos área por capa (fuerza al despegar), menos succión, menos voladizo con soportes y menos altura. La primera es la recomendada.")}
+                        </p>
+                        <For each={list()}>
+                          {(o, i) => {
+                            const flat = () => o.turn.x === 0 && o.turn.y === 0 && o.turn.z === 0;
+                            return (
+                              <div class="text-[11px]">
+                                <div class="flex items-center gap-1.5">
+                                  <span class={`flex-1 min-w-0 truncate ${i() === 0 ? "text-green" : "text-text-muted"}`}>{flat() ? t("Sin girar") : turnLabel(o.turn)}</span>
+                                  <Show when={!o.fits}>
+                                    <span class="text-text-dim">{t("no cabe")}</span>
+                                  </Show>
+                                  <button class="text-accent hover:underline disabled:opacity-40" disabled={!o.fits} onClick={() => set({ tilt: flat() ? undefined : o.turn })}>
+                                    {t("Usar")}
+                                  </button>
+                                </div>
+                                <div class="font-mono text-[10px] text-text-dim" title={t("Capa más grande · voladizo con soportes · altura")}>
+                                  {fmtNumber(o.max_area_mm2, { maximumFractionDigits: 0 })} mm² · {fmtNumber(o.overhang_mm2, { maximumFractionDigits: 0 })} mm² ·{" "}
+                                  {fmtNumber(o.height_mm, { maximumFractionDigits: 0 })} mm
+                                  <Show when={o.suction_mm2 >= 1}> · {t("succión {n} mm²", { n: fmtNumber(o.suction_mm2, { maximumFractionDigits: 0 }) })}</Show>
+                                </div>
+                              </div>
+                            );
+                          }}
                         </For>
                       </div>
                     )}

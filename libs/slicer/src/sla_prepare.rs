@@ -6,10 +6,9 @@
 //!   (una cáscara dada vuelta que resta al laminar). Es lo que hace un laminador de resina
 //!   con los «agujeros de drenaje»; si la pieza ya se vació con `print3d::hollow` con
 //!   drenaje, no queda nada que ventear.
-//! - **Inclinar**: [`tilt_options`] compara giros y dice cuál deja menos área por capa
+//! - **Inclinar**: [`crate::sla_orient::auto_orient`] busca el giro que deja menos área por capa
 //!   (menos fuerza al despegar) y menos succión.
 
-use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::sla::{slice, slice_with, Layer, ResinPrinter, ResinSettings};
@@ -187,126 +186,6 @@ fn lit(l: &Layer, px: u32, py: u32) -> bool {
     l.spans.get(i).is_some_and(|s| s.y == py && s.x0 <= px)
 }
 
-/// Eje de giro para inclinar.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Axis {
-    X,
-    Y,
-}
-
-/// Cómo queda la pieza con un giro.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct TiltOption {
-    pub axis: Axis,
-    pub degrees: f32,
-    pub fits: bool,
-    pub height_mm: f32,
-    /// Área de la capa más grande (fuerza al despegar), mm².
-    pub max_area_mm2: f32,
-    /// Suma de la succión más fuerte de cada ventosa que no toca la placa, mm².
-    pub suction_mm2: f32,
-    pub islands: usize,
-    /// Menor es mejor: área máxima y succión relativas al giro 0, más un poco de altura.
-    pub score: f32,
-}
-
-/// Gira los triángulos `degrees` alrededor de `axis` por el centro de su caja.
-pub fn rotate(tris: &[Tri], axis: Axis, degrees: f32) -> Vec<Tri> {
-    let (mut min, mut max) = ([f32::MAX; 3], [f32::MIN; 3]);
-    for v in tris.iter().flatten() {
-        for c in 0..3 {
-            min[c] = min[c].min(v[c]);
-            max[c] = max[c].max(v[c]);
-        }
-    }
-    let ctr: [f32; 3] = std::array::from_fn(|c| (min[c] + max[c]) / 2.0);
-    let (s, co) = degrees.to_radians().sin_cos();
-    let (a, b) = match axis {
-        Axis::X => (1, 2),
-        Axis::Y => (2, 0),
-    };
-    tris.iter()
-        .map(|t| {
-            t.map(|v| {
-                let mut w = v;
-                let (p, q) = (v[a] - ctr[a], v[b] - ctr[b]);
-                w[a] = ctr[a] + p * co - q * s;
-                w[b] = ctr[b] + p * s + q * co;
-                w
-            })
-        })
-        .collect()
-}
-
-/// Compara inclinaciones de la pieza alrededor de X y de Y (en una pantalla gruesa de
-/// 0,2 mm, rápido). Sale ordenado de mejor a peor.
-pub fn tilt_options(model: &[Tri], printer: &ResinPrinter, layer_height: f32, angles: &[f32]) -> Vec<TiltOption> {
-    let coarse = printer.coarse(0.2);
-    let h = layer_height.max(0.1);
-    let mut cases: Vec<(Axis, f32)> = vec![(Axis::X, 0.0)];
-    for &a in angles.iter().filter(|a| **a != 0.0) {
-        cases.push((Axis::X, a));
-        cases.push((Axis::Y, a));
-    }
-    let mut opts: Vec<TiltOption> = cases
-        .par_iter()
-        .map(|&(axis, deg)| {
-            let t = place(&rotate(model, axis, deg), printer, 5.0);
-            let height = t.iter().flatten().map(|v| v[2]).fold(0f32, f32::max) - 5.0;
-            let fits = fits(&t, printer);
-            let (max_area, suction, islands) = match slice(&t, &coarse, h) {
-                Ok(layers) => {
-                    let r = check(&layers, &coarse, h);
-                    let suction = r.cavities.iter().filter(|c| !c.on_plate).map(|c| c.max_suction_mm2).sum();
-                    (r.max_area_mm2, suction, r.islands.len())
-                }
-                Err(_) => (f32::MAX, f32::MAX, 0),
-            };
-            TiltOption { axis, degrees: deg, fits, height_mm: height, max_area_mm2: max_area, suction_mm2: suction, islands, score: 0.0 }
-        })
-        .collect();
-    // La altura (tiempo) pesa poco y se mide contra la diagonal de la pieza, que no cambia al girar.
-    let base_area = opts[0].max_area_mm2.max(1.0);
-    let diag = diagonal(model).max(1.0);
-    for o in &mut opts {
-        o.score = o.max_area_mm2 / base_area + 2.0 * o.suction_mm2 / base_area + 0.25 * o.height_mm / diag;
-        if !o.fits {
-            o.score += 1000.0;
-        }
-    }
-    opts.sort_by(|a, b| a.score.total_cmp(&b.score));
-    opts
-}
-
-fn diagonal(tris: &[Tri]) -> f32 {
-    let (mut min, mut max) = ([f32::MAX; 3], [f32::MIN; 3]);
-    for v in tris.iter().flatten() {
-        for c in 0..3 {
-            min[c] = min[c].min(v[c]);
-            max[c] = max[c].max(v[c]);
-        }
-    }
-    (0..3).map(|c| (max[c] - min[c]).powi(2)).sum::<f32>().sqrt()
-}
-
-/// Centra en la cama y apoya a `z` mm de la placa.
-fn place(tris: &[Tri], printer: &ResinPrinter, z: f32) -> Vec<Tri> {
-    let (mut min, mut max) = ([f32::MAX; 3], [f32::MIN; 3]);
-    for v in tris.iter().flatten() {
-        for c in 0..3 {
-            min[c] = min[c].min(v[c]);
-            max[c] = max[c].max(v[c]);
-        }
-    }
-    let d = [printer.bed_x / 2.0 - (min[0] + max[0]) / 2.0, printer.bed_y / 2.0 - (min[1] + max[1]) / 2.0, z - min[2]];
-    tris.iter().map(|t| t.map(|v| [v[0] + d[0], v[1] + d[1], v[2] + d[2]])).collect()
-}
-
-fn fits(tris: &[Tri], p: &ResinPrinter) -> bool {
-    tris.iter().flatten().all(|v| v[0] >= 0.0 && v[1] >= 0.0 && v[0] <= p.bed_x && v[1] <= p.bed_y && v[2] <= p.bed_z)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -348,14 +227,5 @@ mod tests {
         assert!(r.vents.is_empty());
         assert_eq!(r.unvented.len(), 1);
         assert!(!r.notes.is_empty());
-    }
-
-    #[test]
-    fn inclinar_una_placa_plana_baja_el_area() {
-        let plate = cube([10.0, 10.0, 0.0], [30.0, 30.0, 2.0]);
-        let opts = tilt_options(&plate, &LD_002H, 0.05, &[30.0, 45.0]);
-        let flat = opts.iter().find(|o| o.degrees == 0.0).unwrap();
-        assert!(opts[0].degrees != 0.0, "{opts:#?}");
-        assert!(opts[0].max_area_mm2 < flat.max_area_mm2 / 2.0);
     }
 }

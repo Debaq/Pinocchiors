@@ -262,11 +262,14 @@ fn slice_for_resin_and_calibrate() {
 
     ok(&s, "mesh_import", json!({ "path": cube_stl(dir.path(), "cube.stl", 12.0, false) }));
     let (text, data) = ok(&s, "resin_tilts", json!({}));
-    assert!(text.starts_with("Best first") && data["options"].as_array().unwrap().len() == 7, "{text}");
+    let options = data["options"].as_array().unwrap();
+    assert!(text.starts_with("Best first") && options.len() >= 2 && options[0]["turn"]["x"].is_number(), "{text}");
+    // Un cubo queda de punta: sin caras en voladizo
+    assert!(options[0]["overhang_mm2"].as_f64().unwrap() < 1.0, "{text}");
 
     // Con soportes y giro: sin islas, archivo escrito
     let ctb = dir.path().join("cube.ctb");
-    let (text, data) = ok(&s, "resin_slice", json!({ "path": ctb, "supports": "light", "tilt": { "axis": "x", "degrees": 30 }, "settings": { "exposure": 2.8 } }));
+    let (text, data) = ok(&s, "resin_slice", json!({ "path": ctb, "supports": "light", "tilt": { "x": 30 }, "settings": { "exposure": 2.8 } }));
     assert!(text.contains("No islands left") && ctb.is_file(), "{text}");
     let points = data["points"].as_array().unwrap().len();
     assert!(points > 0, "{text}");

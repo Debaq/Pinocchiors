@@ -3676,7 +3676,7 @@ pub mod bridge {
                 arg(args, "tilt")?,
                 &ticks.channel(),
             )?),
-            "resin_tilts" => ok(crate::resin::resin_tilts_impl(state, &arg(args, "input")?, arg(args, "plate")?, &arg::<String>(args, "printer")?, arg(args, "layerHeight")?)?),
+            "resin_tilts" => ok(crate::resin::resin_tilts_impl(state, &arg(args, "input")?, arg(args, "plate")?, &arg::<String>(args, "printer")?, arg(args, "layerHeight")?, arg(args, "overhangAngle")?)?),
             "save_resin" => ok(crate::resin::save_resin(arg(args, "path")?)?),
             "resin_calibration" => ok(crate::resin::calibration(&arg::<String>(args, "printer")?, &arg(args, "settings")?)?),
             "save_resin_calibration" => ok(crate::resin::save_resin_calibration(arg(args, "dir")?, arg(args, "exposures")?)?),

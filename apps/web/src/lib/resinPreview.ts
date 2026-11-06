@@ -120,17 +120,33 @@ export interface ResinInfo {
   calibration: { name: string; sizes: number[] }[];
 }
 
-export type TiltAxis = "x" | "y";
+/** Giro de la placa en grados: X, después Y, después Z (este solo para que entre), por el centro */
+export interface ResinTurn {
+  x: number;
+  y: number;
+  z: number;
+}
 
+/** Cómo queda la pieza con un giro (`resin_tilts`, orientación automática) */
 export interface TiltOption {
-  axis: TiltAxis;
-  degrees: number;
+  turn: ResinTurn;
   fits: boolean;
   height_mm: number;
+  /** Capa más grande: fuerza al despegar */
   max_area_mm2: number;
   suction_mm2: number;
   islands: number;
+  /** Área en voladizo que pide soportes, proyectada en la placa */
+  overhang_mm2: number;
   score: number;
+}
+
+/** Giro guardado en la preparación; los proyectos viejos guardaban `{ axis, degrees }`. `undefined` = sin girar */
+export function prepTurn(prep: ResinPrep): ResinTurn | undefined {
+  const t = prep.tilt as ResinTurn | { axis: "x" | "y"; degrees: number } | undefined;
+  if (!t) return undefined;
+  const turn = "axis" in t ? { x: t.axis === "x" ? t.degrees : 0, y: t.axis === "y" ? t.degrees : 0, z: 0 } : { x: t.x ?? 0, y: t.y ?? 0, z: t.z ?? 0 };
+  return turn.x || turn.y || turn.z ? turn : undefined;
 }
 
 export interface Island {
@@ -212,8 +228,8 @@ export interface ResinPrep {
   supportOverrides?: Partial<SupportSettings>;
   vents: boolean;
   ventDiameter: number;
-  /** Giro de la placa antes de preparar */
-  tilt?: { axis: TiltAxis; degrees: number };
+  /** Giro de la placa antes de preparar (ver `prepTurn`) */
+  tilt?: ResinTurn;
   plate?: number;
 }
 

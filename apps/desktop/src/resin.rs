@@ -10,7 +10,8 @@ use pinocchio_slicer::sla::{self, Layer, ResinPrinter, ResinSettings};
 use pinocchio_slicer::sla_calibration::{self, CalibrationRow};
 use pinocchio_slicer::sla_check::{Cavity, Island};
 use pinocchio_slicer::sla_layers::{self, LayerParams};
-use pinocchio_slicer::sla_prepare::{self, Axis, PrepareSettings, TiltOption, VentHole};
+use pinocchio_slicer::sla_orient::{self, Orientation, Turn};
+use pinocchio_slicer::sla_prepare::{self, PrepareSettings, VentHole};
 use pinocchio_slicer::sla_profiles::{self, ResinProfile};
 use pinocchio_slicer::sla_supports::{SkipReason, SupportDensity, SupportPoint, SupportSettings};
 use pinocchio_slicer::ctb;
@@ -155,7 +156,7 @@ pub struct ResinResult {
 
 /// Prepara (venteos, soportes), lamina y revisa una placa para la impresora de resina.
 /// Con `points` se usan esos puntos de soporte en vez de los automáticos; `tilt` gira la
-/// placa por el centro antes de preparar.
+/// placa por el centro antes de preparar (X, después Y, después Z).
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn resin_slice(
@@ -166,7 +167,7 @@ pub async fn resin_slice(
     settings: ResinSettings,
     prepare: PrepareSettings,
     points: Option<Vec<SupportPoint>>,
-    tilt: Option<(Axis, f32)>,
+    tilt: Option<Turn>,
     on_progress: Channel<Progress>,
 ) -> Result<ResinResult, String> {
     in_background(app, move |state| resin_slice_impl(state, input, plate, &printer, &settings, &prepare, points.as_deref(), tilt, &on_progress)).await
@@ -182,7 +183,7 @@ pub(crate) fn resin_slice_impl(
     settings: &ResinSettings,
     prepare: &PrepareSettings,
     points: Option<&[SupportPoint]>,
-    tilt: Option<(Axis, f32)>,
+    tilt: Option<Turn>,
     on_progress: &Channel<Progress>,
 ) -> Result<ResinResult, String> {
     if RUNNING.swap(true, Ordering::SeqCst) {
@@ -203,14 +204,14 @@ fn slice_plate(
     settings: &ResinSettings,
     prepare: &PrepareSettings,
     points: Option<&[SupportPoint]>,
-    tilt: Option<(Axis, f32)>,
+    tilt: Option<Turn>,
     progress: impl Fn(&str, u32, &str),
 ) -> Result<ResinResult, String> {
     let pr = sla::printer(printer).ok_or_else(|| format!("No existe la impresora de resina «{printer}»"))?;
     progress("plates", 2, "Acomodando las piezas...");
     let (mut tris, plates, unplaced) = plate_triangles(list, input, pr, prepare, plate)?;
-    if let Some((axis, deg)) = tilt.filter(|t| t.1 != 0.0) {
-        tris = sla_prepare::rotate(&tris, axis, deg);
+    if let Some(t) = tilt.filter(|t| !t.is_zero()) {
+        tris = sla_orient::turn(&tris, t);
     }
     finish(tris, pr, settings, prepare, points, (plate, plates, unplaced), progress)
 }
@@ -323,16 +324,31 @@ pub fn save_resin_calibration(dir: String, exposures: Vec<f32>) -> Result<Vec<St
     Ok(out)
 }
 
-/// Compara inclinaciones de la placa (área por capa, succión, altura).
+/// Busca los mejores giros de la placa (área por capa, succión, voladizos, altura).
+/// `overhang_angle`: el «Ángulo límite» de los soportes (45° si falta).
 #[tauri::command]
-pub async fn resin_tilts(app: AppHandle, input: PlateInput, plate: usize, printer: String, layer_height: f32) -> Result<Vec<TiltOption>, String> {
-    in_background(app, move |state| resin_tilts_impl(state, &input, plate, &printer, layer_height)).await
+pub async fn resin_tilts(
+    app: AppHandle,
+    input: PlateInput,
+    plate: usize,
+    printer: String,
+    layer_height: f32,
+    overhang_angle: Option<f32>,
+) -> Result<Vec<Orientation>, String> {
+    in_background(app, move |state| resin_tilts_impl(state, &input, plate, &printer, layer_height, overhang_angle)).await
 }
 
-pub(crate) fn resin_tilts_impl(state: &AppState, input: &PlateInput, plate: usize, printer: &str, layer_height: f32) -> Result<Vec<TiltOption>, String> {
+pub(crate) fn resin_tilts_impl(
+    state: &AppState,
+    input: &PlateInput,
+    plate: usize,
+    printer: &str,
+    layer_height: f32,
+    overhang_angle: Option<f32>,
+) -> Result<Vec<Orientation>, String> {
     let pr = sla::printer(printer).ok_or_else(|| format!("No existe la impresora de resina «{printer}»"))?;
     let (tris, _, _) = plate_triangles(sources(state)?, input, pr, &PrepareSettings::default(), plate)?;
-    Ok(sla_prepare::tilt_options(&tris, pr, layer_height, &[15.0, 30.0, 45.0]))
+    Ok(sla_orient::auto_orient(&tris, pr, layer_height, overhang_angle.unwrap_or(45.0), 5))
 }
 
 /// Piezas de la placa elegida como triángulos (mm, Z arriba), centradas en la pantalla.
@@ -487,7 +503,7 @@ mod tests {
     fn laminado_completo_con_mascara() {
         let _lock = LAST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let list = vec![("a".to_string(), cube(10.0))];
-        let r = slice_plate(list, &input(), 0, "ld-002h", &ResinSettings::default(), &PrepareSettings::default(), None, Some((Axis::X, 30.0)), |_, _, _| {}).unwrap();
+        let r = slice_plate(list, &input(), 0, "ld-002h", &ResinSettings::default(), &PrepareSettings::default(), None, Some(Turn { x: 30.0, y: 0.0, z: 0.0 }), |_, _, _| {}).unwrap();
         assert!(r.islands.is_empty() && r.cavities.is_empty(), "{:?} {:?}", r.islands, r.cavities);
         assert!(r.file_bytes.unwrap() > 1000);
         assert!((r.volume_ml - 1.0).abs() < 0.6, "{}", r.volume_ml);

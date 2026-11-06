@@ -292,7 +292,7 @@ under every enclosed cavity (suction cup / trapped resin), optionally tilts it, 
 the result (islands left without support, cavities). With `path` it writes the printer file (.ctb for the LD-002H). \
 `points` replaces the automatic support points with your own (printer coordinates as returned in `points` of a \
 previous call: mm, bed corner at the origin, Z up). Does NOT send anything to the printer. Example: {\"path\": \
-\"/home/me/print/mini.ctb\", \"supports\": \"medium\", \"tilt\": {\"axis\": \"x\", \"degrees\": 30}}.",
+\"/home/me/print/mini.ctb\", \"supports\": \"medium\", \"tilt\": {\"x\": 30, \"y\": -15}}.",
     input: || {
         let mut props = vec![
             ("path", string("Absolute path of the printer file (.ctb for the LD-002H); omit to only check"), false),
@@ -307,7 +307,15 @@ previous call: mm, bed corner at the origin, Z up). Does NOT send anything to th
         ));
         props.push(("vents", boolean("Vent enclosed cavities with a hole (default true)"), false));
         props.push(("vent_diameter", number_in("Vent hole diameter in mm (default 2.5)", 0.5, 10.0), false));
-        props.push(("tilt", object(&[("axis", one_of("Axis", &["x", "y"]), true), ("degrees", number_in("Angle", -90.0, 90.0), true)]), false));
+        props.push((
+            "tilt",
+            object(&[
+                ("x", number_in("Degrees around X (applied first)", -180.0, 180.0), false),
+                ("y", number_in("Degrees around Y (applied second)", -90.0, 90.0), false),
+                ("z", number_in("Degrees around Z (applied last, only to fit the screen)", -180.0, 180.0), false),
+            ]),
+            false,
+        ));
         props.push(("points", array("Your own support points [x, y, z] in printer mm (replace the automatic ones)", point("Point", 3)), false));
         props.extend(placement_props());
         object(&props)
@@ -366,7 +374,14 @@ fn resin_slice(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
     };
     let prepare = prepare_settings(ctx, args)?;
     let input = resin_input(ctx, args, &p, &settings)?;
-    let tilt = args.get("tilt").map(|t| json!([t["axis"].as_str().unwrap_or("x"), t["degrees"].as_f64().unwrap_or(0.0)]));
+    let tilt = args.get("tilt").map(|t| {
+        let n = |k: &str| t[k].as_f64().unwrap_or(0.0);
+        // También la forma vieja {"axis": "x", "degrees": 30}
+        match t["axis"].as_str() {
+            Some(axis) => json!({ "x": if axis == "y" { 0.0 } else { n("degrees") }, "y": if axis == "y" { n("degrees") } else { 0.0 }, "z": 0.0 }),
+            None => json!({ "x": n("x"), "y": n("y"), "z": n("z") }),
+        }
+    });
     let points = args["points"].as_array().map(|list| list.iter().map(|q| json!({ "pos": q, "kind": "manual" })).collect::<Vec<_>>());
     let r = ctx.call(
         "resin_slice",
@@ -427,11 +442,16 @@ fn resin_slice(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
 
 const RESIN_TILTS: Tool = Tool {
     name: "resin_tilts",
-    title: "Compare resin tilts",
-    description: "Compares tilting the active model 0/15/30/45° around X and Y for a resin printer: the largest layer \
-area (peel force), the suction of enclosed cavities and the height. Best first; use it with `tilt` in `resin_slice`.",
+    title: "Find the best resin orientation",
+    description: "Searches every direction for the best way to orient the active model on a resin printer: the largest \
+layer area (peel force), the suction of enclosed cavities, the overhang area that needs supports (marks), islands and \
+the height. Returns up to 5 different orientations, best first, plus the current one to compare; pass the chosen \
+`turn` as `tilt` to `resin_slice`. Takes 1–3 s.",
     input: || {
-        let mut props = vec![("printer", string("Resin printer id or name (default ld-002h)"), false)];
+        let mut props = vec![
+            ("printer", string("Resin printer id or name (default ld-002h)"), false),
+            ("overhang_angle", number_in("Faces flatter than this (°) need supports (default 45)", 1.0, 89.0), false),
+        ];
         props.extend(placement_props());
         object(&props)
     },
@@ -445,15 +465,25 @@ fn resin_tilts(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
     let input = resin_input(ctx, args, &p, &settings)?;
     let r = ctx.call(
         "resin_tilts",
-        json!({ "input": input, "plate": args["plate"].as_u64().unwrap_or(0), "printer": p["id"], "layerHeight": settings["layer_height"] }),
+        json!({ "input": input, "plate": args["plate"].as_u64().unwrap_or(0), "printer": p["id"], "layerHeight": settings["layer_height"], "overhangAngle": args.get("overhang_angle") }),
     )?;
     let mut lines = vec!["Best first:".to_string()];
     for o in r.as_array().into_iter().flatten() {
         lines.push(format!(
-            "- {}: largest layer {} mm², suction {} mm², height {} mm{}",
-            if o["degrees"].as_f64() == Some(0.0) { "not tilted".into() } else { format!("{}° around {}", num(o["degrees"].as_f64().unwrap_or(0.0)), o["axis"].as_str().unwrap_or("").to_uppercase()) },
+            "- {}: largest layer {} mm², suction {} mm², overhang {} mm², {} islands, height {} mm{}",
+            {
+                let t = &o["turn"];
+                let (x, y, z) = (t["x"].as_f64().unwrap_or(0.0), t["y"].as_f64().unwrap_or(0.0), t["z"].as_f64().unwrap_or(0.0));
+                if x == 0.0 && y == 0.0 && z == 0.0 {
+                    "as it is".to_string()
+                } else {
+                    format!("tilt {{\"x\": {}, \"y\": {}, \"z\": {}}}", num(x), num(y), num(z))
+                }
+            },
             num(o["max_area_mm2"].as_f64().unwrap_or(0.0)),
             num(o["suction_mm2"].as_f64().unwrap_or(0.0)),
+            num(o["overhang_mm2"].as_f64().unwrap_or(0.0)),
+            o["islands"],
             num(o["height_mm"].as_f64().unwrap_or(0.0)),
             if o["fits"] == true { "" } else { " — does not fit" }
         ));

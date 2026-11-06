@@ -2,7 +2,7 @@
 //! pantalla. Para comparar con un archivo de Chitubox/Lychee (PLAN_SLA.md, SLA2).
 //! Con `--preparar`: venteos, soportes automáticos, revisión e inclinaciones (SLA3–SLA4).
 //!   [AA=4] [XY=0.05] [PATA=0.2] [AGUJEROS=0.1] cargo run --release -p pinocchio-slicer --example sla_ctb -- pieza.stl salida.ctb [--preparar]
-use pinocchio_slicer::{ctb, sla, sla_check, sla_prepare};
+use pinocchio_slicer::{ctb, sla, sla_check, sla_orient, sla_prepare};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -87,10 +87,13 @@ fn main() {
             println!("  hueco {c:?}");
         }
         let t2 = std::time::Instant::now();
-        let opts = sla_prepare::tilt_options(&tris, &pr, s.layer_height, &[15.0, 30.0, 45.0]);
-        println!("inclinaciones ({:?}):", t2.elapsed());
-        for o in opts.iter().take(4) {
-            println!("  {:?} {:>4}°: área máx {:>6.0} mm², succión {:>5.0} mm², alto {:>5.1} mm, puntaje {:.2}", o.axis, o.degrees, o.max_area_mm2, o.suction_mm2, o.height_mm, o.score);
+        let opts = sla_orient::auto_orient(&tris, &pr, s.layer_height, 45.0, 5);
+        println!("orientaciones ({:?}):", t2.elapsed());
+        for o in &opts {
+            println!(
+                "  X {:>6.1}° Y {:>6.1}° Z {:>4.0}°: área máx {:>6.0} mm², succión {:>5.0} mm², voladizo {:>6.0} mm², islas {:>3}, alto {:>5.1} mm, puntaje {:.2}",
+                o.turn.x, o.turn.y, o.turn.z, o.max_area_mm2, o.suction_mm2, o.overhang_mm2, o.islands, o.height_mm, o.score
+            );
         }
         (p.layers, vec![p.model, p.supports])
     } else {
