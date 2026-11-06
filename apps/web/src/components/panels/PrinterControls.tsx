@@ -43,6 +43,7 @@ interface HistoryEntry {
   duration_s: number;
   filament_mm: number;
   finished: boolean;
+  running: boolean;
 }
 
 interface FileEntry {
@@ -428,8 +429,15 @@ export const PrinterControls: Component<{
               <For each={details()!.history.slice(0, 15)}>
                 {(h) => (
                   <div class="flex items-center gap-1.5 text-[11px]">
-                    <Show when={h.finished} fallback={<Icons.X size={11} class="shrink-0 text-red" />}>
-                      <Icons.Check size={11} class="shrink-0 text-green" />
+                    <Show
+                      when={h.running}
+                      fallback={
+                        <Show when={h.finished} fallback={<Icons.X size={11} class="shrink-0 text-red" />}>
+                          <Icons.Check size={11} class="shrink-0 text-green" />
+                        </Show>
+                      }
+                    >
+                      <Icons.Play size={11} class="shrink-0 text-accent" />
                     </Show>
                     <span class="flex-1 truncate text-text" title={h.name}>
                       {h.name}

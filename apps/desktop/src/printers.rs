@@ -64,7 +64,7 @@ pub struct NetPrinterInfo {
     pub slots: Vec<Slot>,
 }
 
-fn info(c: &PrinterConn) -> Result<NetPrinterInfo, String> {
+pub(crate) fn info(c: &PrinterConn) -> Result<NetPrinterInfo, String> {
     match open(c, Duration::from_secs(10))? {
         Conn::Moonraker(p) => {
             let i = moonraker::info(&p)?;
@@ -108,6 +108,26 @@ fn info(c: &PrinterConn) -> Result<NetPrinterInfo, String> {
     }
 }
 
+/// Estado sin Tauri (lo usa también el conector MCP).
+pub(crate) fn status_impl(c: &PrinterConn) -> Result<PrinterStatus, String> {
+    match open(c, Duration::from_secs(10))? {
+        Conn::Moonraker(p) => moonraker::status(&p),
+        Conn::Creality(p) => creality::status(&p),
+        Conn::Flashforge(p) => flashforge::status(&p),
+    }
+}
+
+/// Sube un gcode de un archivo y, con `start`, lo imprime (lo usa el conector MCP).
+pub(crate) fn send_file(c: &PrinterConn, path: &str, start: bool, slot: Option<u32>) -> Result<SendResult, String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("No se pudo leer el gcode: {e}"))?;
+    let name = moonraker::safe_filename(std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).as_deref().unwrap_or("pinocchio.gcode"));
+    match open(c, Duration::from_secs(300))? {
+        Conn::Moonraker(p) => moonraker::send_gcode(&p, &name, &bytes, start),
+        Conn::Creality(p) => creality::send(&p, &name, &bytes, start),
+        Conn::Flashforge(p) => flashforge::send(&p, &name, &bytes, start, slot),
+    }
+}
+
 /// Prueba la conexión y dice qué impresora es (y sus carretes).
 #[tauri::command]
 pub async fn printer_info(conn: PrinterConn) -> Result<NetPrinterInfo, String> {
@@ -117,12 +137,7 @@ pub async fn printer_info(conn: PrinterConn) -> Result<NetPrinterInfo, String> {
 /// Estado de la impresora y de la impresión en curso.
 #[tauri::command]
 pub async fn printer_status(conn: PrinterConn) -> Result<PrinterStatus, String> {
-    blocking(move || match open(&conn, Duration::from_secs(10))? {
-        Conn::Moonraker(p) => moonraker::status(&p),
-        Conn::Creality(p) => creality::status(&p),
-        Conn::Flashforge(p) => flashforge::status(&p),
-    })
-    .await
+    blocking(move || status_impl(&conn)).await
 }
 
 /// Sube el gcode del último laminado y, con `start`, lo empieza. `slot` (desde 1) elige el

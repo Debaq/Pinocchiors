@@ -324,6 +324,7 @@ pub fn parse_details(s: &Map<String, Value>, files: &[Value]) -> PrinterDetails 
                 duration_s: num(h.get("usagetime")).unwrap_or(0.0),
                 filament_mm: num(h.get("usagematerial")).unwrap_or(0.0),
                 finished: num(h.get("printfinish")) == Some(1.0),
+                running: false,
             })
             .collect(),
         files,
@@ -382,7 +383,9 @@ impl Ws {
         stream.set_write_timeout(Some(timeout))?;
         stream.set_read_timeout(Some(timeout.min(Duration::from_secs(5))))?;
         let key = base64(&std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(7).to_le_bytes());
-        write!(stream, "GET / HTTP/1.1\r\nHost: {host}:{port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n")?;
+        // De una sola vez: hay servidores chicos que leen el saludo en un solo `read`
+        let hello = format!("GET / HTTP/1.1\r\nHost: {host}:{port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n");
+        stream.write_all(hello.as_bytes())?;
         let mut buf = Vec::new();
         let mut chunk = [0u8; 4096];
         let end = loop {
@@ -529,9 +532,15 @@ mod tests {
                 let state = state.clone();
                 std::thread::spawn(move || {
                     let mut s = stream;
+                    let mut hello = Vec::new();
                     let mut buf = [0u8; 2048];
-                    let n = s.read(&mut buf).unwrap_or(0);
-                    if !String::from_utf8_lossy(&buf[..n]).contains("Upgrade: websocket") {
+                    while !hello.windows(4).any(|w| w == b"\r\n\r\n") {
+                        match s.read(&mut buf) {
+                            Ok(n) if n > 0 => hello.extend_from_slice(&buf[..n]),
+                            _ => return,
+                        }
+                    }
+                    if !String::from_utf8_lossy(&hello).contains("Upgrade: websocket") {
                         return;
                     }
                     s.write_all(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n").unwrap();

@@ -14,6 +14,7 @@ mod drawing;
 mod features;
 mod mesh;
 mod print;
+mod printers;
 mod render_scan;
 mod project;
 mod sketch;
@@ -86,6 +87,7 @@ pub fn all() -> Vec<&'static Tool> {
     list.extend(mesh::TOOLS);
     list.extend(print::TOOLS);
     list.extend(slice::TOOLS);
+    list.extend(printers::TOOLS);
     list.extend(render_scan::TOOLS);
     list.extend(cad::TOOLS[5..].iter());
     list

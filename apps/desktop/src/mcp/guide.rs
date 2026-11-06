@@ -145,7 +145,10 @@ Texture: `print_skin` {\"pattern\": \"diamonds\", \"zone\": {\"directions\": [\"
    \"K1\", \"quality\": \"0.20mm Standard\"} (OrcaSlicer engine; `settings` changes any Orca key). Resin:
    `resin_tilts` to pick a tilt, then `resin_slice` {\"path\": \"/abs/part.ctb\", \"supports\": \"medium\"} (raft,
    supports, vents under cavities; reports islands left — add `points` there). `resin_calibration` writes exposure
-   test files. Nothing is ever sent to a printer: these only write files.",
+   test files. These only write files.
+7. Printers on the network: `printer_list`, `printer_status` (reads everything: progress, temperatures, Z offset,
+   bed mesh, history, files). Acting on a printer (`printer_control`: Z offset, temperatures, moving, calibrations,
+   G-code, reprint…; `printer_send`: upload/print a G-code) ONLY when the user asks; the user approves each one.",
     ),
     (
         "projects",

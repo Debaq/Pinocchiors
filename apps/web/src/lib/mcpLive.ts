@@ -14,6 +14,7 @@ import { createSignal } from "solid-js";
 import type { CadDocument, CadStore, PartId } from "./cad";
 import type { CadUi } from "./cadUi";
 import { t } from "./i18n";
+import { netPrinters } from "./settings";
 import { createPersisted } from "./ui-state";
 
 export interface LiveStatus {
@@ -120,6 +121,8 @@ export interface LiveModelHooks {
   scan: (path: string, settings: unknown) => Promise<unknown>;
   /** Dejar activo el objeto de una pieza del diseño, con su malla */
   usePart: (studio: number, part: PartId) => Promise<void>;
+  /** Pedir al usuario que apruebe algo (acciones de la IA sobre una impresora) */
+  confirm: (request: { title: string; message: string; confirmLabel?: string }) => Promise<boolean>;
 }
 
 /** Sin pasos durante este rato, un cliente de afuera (no el chat) terminó */
@@ -189,6 +192,16 @@ export function startMcpLive(cad: CadStore, ui: CadUi, notify: (message: string)
         } catch (err) {
           return answer(id, { error: String(err) });
         }
+      }
+      // Las impresoras guardadas en la app (para que la IA las nombre)
+      if (what === "printers") {
+        return answer(id, { value: netPrinters() });
+      }
+      // Una acción de la IA sobre una impresora: la aprueba el usuario
+      if (what === "confirm") {
+        const a = (args ?? {}) as { title?: string; message?: string };
+        const ok = await model.confirm({ title: a.title ?? t("La IA pide permiso"), message: a.message ?? "", confirmLabel: t("Permitir") });
+        return answer(id, { value: ok });
       }
       if (what === "selection") {
         const tab = cad.activeTab();

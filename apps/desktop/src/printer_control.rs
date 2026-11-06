@@ -131,6 +131,9 @@ pub struct HistoryEntry {
     pub duration_s: f64,
     pub filament_mm: f64,
     pub finished: bool,
+    /// Todavía se está imprimiendo
+    #[serde(default)]
+    pub running: bool,
 }
 
 #[derive(Serialize, Debug, Clone, Default, PartialEq)]
@@ -242,6 +245,7 @@ pub(crate) fn moonraker_details(p: &Printer) -> Result<PrinterDetails, String> {
                 duration_s: num(&j["total_duration"]).unwrap_or(0.0),
                 filament_mm: num(&j["filament_used"]).unwrap_or(0.0),
                 finished: j["status"] == "completed",
+                running: j["status"] == "in_progress",
             })
             .collect();
     }

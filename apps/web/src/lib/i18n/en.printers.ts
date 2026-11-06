@@ -74,6 +74,9 @@ export const en_printers: Catalog = {
   "{printer} va a {detail} Puede tardar varios minutos; no la toques mientras tanto.": "{printer} is going to {detail} It can take several minutes; don't touch it meanwhile.",
   "{what}: empezó en la impresora": "{what}: started on the printer",
 
+  "La IA pide permiso": "The AI asks for permission",
+  "Permitir": "Allow",
+
   // Mensajes del backend
   "Temperatura de {what} fuera de 0–{max} °C": "{what} temperature outside 0–{max} °C",
   "El ajuste de altura va de a poco: entre −1 y 1 mm": "The height adjustment goes little by little: between −1 and 1 mm",

@@ -581,6 +581,7 @@ export const App: Component = () => {
         import: (path, textures) => importModel(path, textures),
         scan: importScanFile,
         usePart: showAiPart,
+        confirm: (request) => confirmAction(request),
       })
     )
   );
