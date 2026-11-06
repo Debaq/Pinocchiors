@@ -31,6 +31,7 @@ para estas.
 | P5 | **Encontrarlas solas en la red**: Moonraker por mDNS, Creality como `CrealityHostDiscovery.cpp`, Flashforge por UDP 48899 | pendiente |
 | P4b | **Multicolor AD5X**: plan aparte en `PLAN_MULTICOLOR.md` (fases MC0–MC7) | plan escrito (2026-11-05) |
 | P6 | Herramienta MCP para mandar a imprimir y ver el estado; cámara (K1 y AD5X) | pendiente |
+| P7 | **Klipper autónomo** (pedido del usuario 2026-11-06: «mucha autonomía» con las Moonraker; las cerradas, lo que den): configuración desde Pinocchio (subir/editar `printer.cfg`, reiniciar, leer y explicar errores de Klipper); asistente de puesta en marcha (STEPPER_BUZZ, QUERY_ENDSTOPS, PID, PROBE_CALIBRATE, malla, pasos del extrusor, después pressure advance e input shaping); consola y macros; cola y archivos de la impresora; cámara; todo también como herramientas del chat/MCP. Leer = solo; mover, calentar, imprimir o cambiar la configuración = la IA lo pide y el usuario confirma en la app. Primera: la CR-10 Max | plan |
 
 ## Protocolo Creality de fábrica (K1, K1C, K1 Max)
 
@@ -53,6 +54,30 @@ Referencia: `src/slic3r/Utils/CrealityPrint.cpp` de Orca 2.4.2.
   mensajes con todo el estado (`hostname`, `state`, `printProgress`, `nozzleTemp`, `bedTemp0`,
   `printFileName`, `modelVersion`…). `state`: 0 sin trabajo, 1 imprimiendo, 2 terminada,
   3 falló, 4 cancelada, 5 en pausa (4 visto en la real tras cancelar; el resto, de la comunidad).
+- **Todo lo que acepta** (2026-11-06, de los textos de `/usr/bin/web-server.disabled` de la K1
+  rooteada, compilado nov 2024, mismo programa que corre en las de fábrica). Órdenes
+  `{"method":"set","params":{…}}`: `gcodeCmd` (texto: **cualquier gcode**, se lo pasa a Klipper
+  por `/tmp/klippy_uds`; probado con `M220 S99`/`S100` en la K1-34E2: funciona, pero no
+  devuelve la respuesta de Klipper), `nozzleTempControl` (n), `bedTempControl` ({num, val}),
+  `fan`/`fanCase`/`fanAuxiliary` (n), `lightSw`, `setPosition` (texto), `autohome` (texto, «X Y Z»),
+  `motorLock`, `heatersOff`, `zOffset` (texto), `autoLevel`, `manualLevel` (texto),
+  `startAutoPid`, `nozzleTempAutoPid`, `bedTempAutoPid`, `resonanceTest` (texto),
+  `setFeedratePct`, `setFlowratePct`, `pressureAdvance`, `smoothTime`, `velocityLimits`,
+  `accelerationLimits`, `accelToDecelLimits`, `cornerVelocityLimits`, `excludeObjectsProc`
+  (texto), `pause`, `stop`, `opGcodeFile` (`printprt:` imprime, `deleteprt:` borra), `cleanErr`,
+  `powerLossSw`, `repoPlrStatus`, `aiSw`/`aiDetection`/`aiFirstFloor`/`aiPausePrint`,
+  `materialDetect`, `enableSelfTest`, `videoElapse`/`videoElapseFrame`/`videoElapseInterval`
+  (timelapse), `savePara`, `restartKlipper`, `restartFirmware`, `hostname`, `exportLog`,
+  `setPrinterCfg`, y peligrosas que NO se usan: `resetSystem`, `linuxUpgrade`, `mcuUpgrade`.
+- **Lecturas** `{"method":"get","params":{X:1}}` (probadas en la K1-34E2): `reqGcodeFile` →
+  `retGcodeFileInfo2` (archivos con tiempo, material, peso, color, miniatura); `reqHistory` →
+  `totalJob`, `totalUsageTime`, `historyList` (fecha, archivo, duración, terminado o no);
+  `reqProbedMatrix` → `probedMatrix` (malla, pero mal armada por Creality: mezcla texto de
+  printer.cfg); `reqPrinterCfg` → `printerCfgInfo` (subconjunto de printer.cfg: ejes, TMC,
+  PID, malla, límites); `ReqPrinterPara` → `curZOffset`; `reqOtaInfo`; `reqElapseVideoList`;
+  `reqPrintObjects`.
+- **HTTP**: `/info`, `/upload/{archivo}`, `/downloads/gcode/{archivo}`, `/downloads/video/{archivo}`.
+- `state` confirmado: 2 = terminada (el cubito), 4 = cancelada.
 - Hay latido (heartbeat) y la lista de archivos llega en varios mensajes que hay que juntar
   (lo cuenta el issue de 3d-cli). Sin documentación oficial: puede cambiar con el firmware.
 - En Rust hace falta un cliente WebSocket (p. ej. `tungstenite`, síncrono y sin TLS).
