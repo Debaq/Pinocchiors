@@ -22,6 +22,7 @@ pub mod sla_layers;
 pub mod sla_prepare;
 pub mod sla_profiles;
 pub mod sla_morph;
+pub mod sla_ops;
 pub mod sla_orient;
 pub mod sla_supports;
 mod stl;

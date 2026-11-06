@@ -239,6 +239,116 @@ pub fn check(layers: &[Layer], printer: &ResinPrinter, layer_height: f32) -> Res
     report
 }
 
+/// Quita las islas de hasta `max_px` píxeles (SLA15), de abajo hacia arriba: quitar una
+/// puede dejar sin apoyo la de arriba, que se mira con la capa ya limpia. La capa 0 está
+/// sobre la placa. Devuelve cuántas quitó.
+pub fn remove_islands(layers: &mut [Layer], printer: &ResinPrinter, max_px: u64) -> usize {
+    if max_px == 0 || layers.len() < 2 {
+        return 0;
+    }
+    let mut removed = 0;
+    let mut prev = LayerInfo::new(&layers[0], printer.res_x, printer.res_y);
+    for l in layers.iter_mut().skip(1) {
+        let Some(cur) = LayerInfo::new(l, printer.res_x, printer.res_y) else {
+            prev = None;
+            continue;
+        };
+        let mut supported = vec![false; cur.solid.ncomp];
+        if let Some(p) = &prev {
+            for y in row_range(Some(p), Some(&cur)) {
+                let start = cur.solid.row_range(y).start;
+                overlaps(p.solid.row(y), cur.solid.row(y), |_, j| supported[cur.solid.comp[start + j] as usize] = true);
+            }
+        }
+        let gone: Vec<bool> = (0..cur.solid.ncomp).map(|c| !supported[c] && cur.solid.area[c] <= max_px).collect();
+        if !gone.iter().any(|g| *g) {
+            prev = Some(cur);
+            continue;
+        }
+        removed += gone.iter().filter(|g| **g).count();
+        let mut cut: Vec<(u32, u32, u32)> = Vec::new();
+        for r in 0..cur.solid.rows.len().saturating_sub(1) {
+            for j in cur.solid.rows[r] as usize..cur.solid.rows[r + 1] as usize {
+                if gone[cur.solid.comp[j] as usize] {
+                    let (a, b) = cur.solid.runs[j];
+                    cut.push((cur.solid.y0 + r as u32, a, b));
+                }
+            }
+        }
+        l.spans = crate::sla_hollow::subtract(&l.spans, &cut, |s| (s.y, s.x0, s.x1), |s: crate::sla::Span, a, b| crate::sla::Span { x0: a, x1: b, ..s });
+        if !l.gray.is_empty() {
+            // Los grises del borde de la isla también (un píxel alrededor).
+            let wide: Vec<(u32, u32, u32)> = cut.iter().flat_map(|&(y, a, b)| (y.saturating_sub(1)..=y + 1).map(move |yy| (yy, a.saturating_sub(1), b + 1))).collect();
+            let mut wide = wide;
+            wide.sort_unstable();
+            let mut merged: Vec<(u32, u32, u32)> = Vec::new();
+            for w in wide {
+                match merged.last_mut() {
+                    Some(m) if m.0 == w.0 && w.1 <= m.2 => m.2 = m.2.max(w.2),
+                    _ => merged.push(w),
+                }
+            }
+            // Sin borrar grises de lo que queda: solo donde no hay tramo encendido.
+            let keep_gray = |g: &crate::sla::GraySpan| l.spans.iter().any(|s| s.y == g.y && s.x0 < g.x1 && g.x0 < s.x1);
+            let gray = std::mem::take(&mut l.gray);
+            let (inside, rest): (Vec<_>, Vec<_>) = gray.into_iter().partition(|g| merged.iter().any(|m| m.0 == g.y && m.1 < g.x1 && g.x0 < m.2));
+            l.gray = rest;
+            l.gray.extend(inside.into_iter().filter(keep_gray));
+            l.gray.sort_unstable_by_key(|g| (g.y, g.x0));
+        }
+        prev = LayerInfo::new(l, printer.res_x, printer.res_y);
+    }
+    removed
+}
+
+/// Cierra en cada capa los huecos encerrados (aire que no toca el borde de la capa) de
+/// hasta `max_px` píxeles (SLA15). Devuelve cuántos cerró.
+pub fn fill_holes(layers: &mut [Layer], printer: &ResinPrinter, max_px: u64) -> usize {
+    if max_px == 0 {
+        return 0;
+    }
+    layers
+        .par_iter_mut()
+        .map(|l| {
+            let Some(info) = LayerInfo::new(l, printer.res_x, printer.res_y) else { return 0 };
+            let fill: Vec<bool> = (0..info.air.ncomp).map(|c| !info.air_outer[c] && info.air.area[c] <= max_px).collect();
+            let n = fill.iter().filter(|f| **f).count();
+            if n == 0 {
+                return 0;
+            }
+            let mut add: Vec<(u32, u32, u32)> = Vec::new();
+            for r in 0..info.air.rows.len().saturating_sub(1) {
+                for j in info.air.rows[r] as usize..info.air.rows[r + 1] as usize {
+                    if fill[info.air.comp[j] as usize] {
+                        let (a, b) = info.air.runs[j];
+                        add.push((info.air.y0 + r as u32, a, b));
+                    }
+                }
+            }
+            let merge = |spans: &mut Vec<crate::sla::Span>| {
+                spans.extend(add.iter().map(|&(y, x0, x1)| crate::sla::Span { y, x0, x1 }));
+                spans.sort_unstable_by_key(|s| (s.y, s.x0));
+                let mut out: Vec<crate::sla::Span> = Vec::with_capacity(spans.len());
+                for s in spans.drain(..) {
+                    match out.last_mut() {
+                        Some(o) if o.y == s.y && s.x0 <= o.x1 => o.x1 = o.x1.max(s.x1),
+                        _ => out.push(s),
+                    }
+                }
+                *spans = out;
+            };
+            merge(&mut l.spans);
+            if !l.gray.is_empty() {
+                let mut g = crate::sla_hollow::subtract(&l.gray, &add, |s| (s.y, s.x0, s.x1), |s: crate::sla::GraySpan, a, b| crate::sla::GraySpan { x0: a, x1: b, ..s });
+                g.extend(add.iter().map(|&(y, x0, x1)| crate::sla::GraySpan { y, x0, x1, v: 255 }));
+                g.sort_unstable_by_key(|s| (s.y, s.x0));
+                l.gray = g;
+            }
+            n
+        })
+        .sum()
+}
+
 /// Partes delgadas que suben sin anclaje (para los soportes laterales, SLA12b). Capa por
 /// capa, cada componente hereda de las de abajo que pisa la menor altura desde el último
 /// anclaje; anclan una sección de más de `max_area_mm2`, un punto de `anchors` adentro y
@@ -616,6 +726,31 @@ mod tests {
         assert_eq!(i.layer, 60);
         assert!((i.pos[0] - 52.0).abs() < 0.1 && (i.pos[1] - 52.0).abs() < 0.1 && (i.pos[2] - 3.0).abs() < 0.01, "{i:?}");
         assert!((i.area_mm2 - 16.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn quitar_islas_chicas_y_cerrar_huecos_chicos() {
+        // Base, una isla chica (0,2 × 0,2 mm, unos 16 px) y una grande (4 × 4) más arriba.
+        let mut t = cube([20.0, 20.0, 0.0], [10.0, 10.0, 2.0]);
+        t.extend(cube([40.0, 40.0, 3.0], [0.2, 0.2, 0.2]));
+        t.extend(cube([50.0, 50.0, 3.0], [4.0, 4.0, 2.0]));
+        let mut layers = slice(&t, &LD_002H, 0.05).unwrap();
+        assert_eq!(check(&layers, &LD_002H, 0.05).islands.len(), 2);
+        // La chica mide 4 capas: sin la primera, la de arriba también queda suelta.
+        assert_eq!(remove_islands(&mut layers, &LD_002H, 30), 4);
+        let r = check(&layers, &LD_002H, 0.05);
+        assert_eq!(r.islands.len(), 1, "queda la grande");
+        assert!(layers[60..64].iter().all(|l| l.spans.iter().all(|s| s.x0 > 900)), "la chica ya no está");
+
+        // Placa con un agujero pasante de 0,2 mm y otro de 2 mm: se cierra solo el chico.
+        let mut t = cube([20.0, 20.0, 1.0], [10.0, 10.0, 1.0]);
+        t.extend(inverted(cube([22.0, 22.0, 0.5], [0.2, 0.2, 2.0])));
+        t.extend(inverted(cube([25.0, 25.0, 0.5], [2.0, 2.0, 2.0])));
+        let mut layers = slice(&t, &LD_002H, 0.05).unwrap();
+        let before = layers[30].area();
+        assert_eq!(fill_holes(&mut layers, &LD_002H, 50), 20);
+        let gained = layers[30].area() - before;
+        assert!((10..=30).contains(&gained), "{gained}");
     }
 
     #[test]

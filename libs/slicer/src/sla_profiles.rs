@@ -99,6 +99,12 @@ pub fn validate(s: &ResinSettings, printer: &ResinPrinter) -> Vec<String> {
     if s.lift_speed > 300.0 || s.retract_speed > 400.0 {
         w.push("velocidades muy altas: riesgo de que la pieza se suelte".into());
     }
+    if s.ops.double_exposure && !s.per_layer() {
+        w.push("la doble exposición necesita el archivo con valores por capa (.ctb v3): con v2 no se hace".into());
+    }
+    if s.ops.dim && s.ops.dim_percent < 60 {
+        w.push(format!("atenuar el interior al {} % puede dejarlo sin curar", s.ops.dim_percent));
+    }
     if s.layer_height < pw / 3.0 {
         w.push("capa mucho más fina que el píxel: más tiempo sin ganar detalle".into());
     }

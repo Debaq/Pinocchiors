@@ -21,6 +21,7 @@ import {
   type SupportPoint,
   type SupportSettings,
   type HollowSettings,
+  type LayerOps,
   type PointEdit,
   type ResinTool,
   type SupportZone,
@@ -511,6 +512,9 @@ export const ResinSection: Component<{
             <div>
               <PerLayerPanel settings={s()} setSetting={setSetting} />
             </div>
+            <div>
+              <LayerOpsPanel settings={s()} setSetting={setSetting} />
+            </div>
           </Show>
           <div>
             <Panel id="resin.supports" dense title={t("Soportes")} defaultOpen>
@@ -998,6 +1002,75 @@ const LayerControls: Component<{ result: ResinResult }> = (props) => {
       <p class="text-[10px] text-text-dim">{t("Lo que muestra la pantalla en esta capa: blanco = luz.")}</p>
       <Checkbox small label={t("Mostrar soportes")} checked={resinPreview.showSupports()} onChange={(v) => resinPreview.setShowSupports(v)} />
     </div>
+  );
+};
+
+/** Operaciones sobre las capas ya laminadas (islas y huecos chicos, alivio de la balsa, atenuar, doble exposición) */
+const LayerOpsPanel: Component<{ settings: ResinSettings; setSetting: <K extends keyof ResinSettings>(key: K, v: ResinSettings[K]) => void }> = (props) => {
+  const ops = () => props.settings.ops;
+  const setOps = (patch: Partial<LayerOps>) => props.setSetting("ops", { ...ops(), ...patch });
+  const v3 = () => (props.settings.ctb_version ?? 2) >= 3;
+  return (
+    <Panel id="resin.ops" dense title={t("Operaciones sobre capas")} defaultOpen={false}>
+      <div class="space-y-2 pb-3">
+        <NumberInput
+          label={t("Quitar islas de hasta")}
+          value={ops().remove_islands_px}
+          onChange={(v) => setOps({ remove_islands_px: Math.round(v) })}
+          min={0}
+          max={1000}
+          step={5}
+          suffix="px"
+        />
+        <NumberInput label={t("Cerrar huecos de hasta")} value={ops().fill_holes_px} onChange={(v) => setOps({ fill_holes_px: Math.round(v) })} min={0} max={1000} step={5} suffix="px" />
+        <p class="text-[10px] text-text-dim">{t("0 = no se hace. Son puntos sueltos o agujeritos de pocos píxeles que deja el laminado: no imprimen nada útil.")}</p>
+        <Checkbox
+          small
+          label={t("Alivio de la balsa")}
+          checked={ops().raft_relief}
+          onChange={(v) => setOps({ raft_relief: v })}
+          hint={t("La balsa queda como cruces sueltas más lo que está bajo los soportes: menos resina, menos fuerza al despegar y sale más fácil de la placa.")}
+        />
+        <Show when={ops().raft_relief}>
+          <NumberInput label={t("Distancia entre cruces")} value={ops().relief_spacing} onChange={(v) => setOps({ relief_spacing: v })} min={1} max={20} step={0.5} suffix="mm" />
+          <NumberInput label={t("Grosor de las cruces")} value={ops().relief_width} onChange={(v) => setOps({ relief_width: v })} min={0.2} max={5} step={0.1} suffix="mm" />
+        </Show>
+        <Checkbox
+          small
+          label={t("Atenuar el interior")}
+          checked={ops().dim}
+          onChange={(v) => setOps({ dim: v })}
+          hint={t("Menos luz lejos del borde: las áreas grandes se encogen menos y tiran menos al despegar. El borde, que da la medida, sigue con toda la luz. No toca las capas de base.")}
+        />
+        <Show when={ops().dim}>
+          <NumberInput label={t("Desde el borde")} value={ops().dim_wall} onChange={(v) => setOps({ dim_wall: v })} min={0.2} max={10} step={0.1} suffix="mm" />
+          <NumberInput label={t("Luz del interior")} value={ops().dim_percent} onChange={(v) => setOps({ dim_percent: Math.round(v) })} min={30} max={100} step={5} suffix="%" />
+        </Show>
+        <Checkbox
+          small
+          label={t("Doble exposición")}
+          checked={ops().double_exposure}
+          onChange={(v) => setOps({ double_exposure: v })}
+          hint={t("Cada capa se expone dos veces sin subir la placa: primero achicada y después entera. Bordes más nítidos con resinas que se corren. Solo con el archivo v3 (Valores por capa).")}
+        />
+        <Show when={ops().double_exposure}>
+          <Show when={!v3()}>
+            <p class="text-[10px] text-warning">{t("Con CTB v2 no se hace: elige v3 en Valores por capa.")}</p>
+          </Show>
+          <NumberInput label={t("Achicar la primera")} value={ops().double_erode} onChange={(v) => setOps({ double_erode: Math.round(v) })} min={1} max={20} step={1} suffix="px" />
+          <NumberInput
+            label={t("Exposición de la primera")}
+            value={Math.round(ops().double_first * 100)}
+            onChange={(v) => setOps({ double_first: v / 100 })}
+            min={5}
+            max={95}
+            step={5}
+            suffix="%"
+          />
+        </Show>
+        <p class="text-[10px] text-text-dim">{t("Todo esto todavía no se probó en la impresora.")}</p>
+      </div>
+    </Panel>
   );
 };
 

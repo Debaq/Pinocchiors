@@ -256,7 +256,7 @@ fn periodic(a: u32, b: u32, pw: f32, period: f32, off: f32, width: f32) -> Vec<(
 }
 
 /// Resta de tramos ordenados por (fila, x) los tramos `remove` (también ordenados).
-fn subtract<T: Copy>(spans: &[T], remove: &[(u32, u32, u32)], key: impl Fn(&T) -> (u32, u32, u32), make: impl Fn(T, u32, u32) -> T) -> Vec<T> {
+pub(crate) fn subtract<T: Copy>(spans: &[T], remove: &[(u32, u32, u32)], key: impl Fn(&T) -> (u32, u32, u32), make: impl Fn(T, u32, u32) -> T) -> Vec<T> {
     let mut out = Vec::with_capacity(spans.len());
     let mut j = 0;
     for s in spans {
@@ -282,7 +282,7 @@ fn subtract<T: Copy>(spans: &[T], remove: &[(u32, u32, u32)], key: impl Fn(&T) -
 
 /// Transformada de distancia 1D al cuadrado (Felzenszwalb y Huttenlocher) con muestras
 /// cada `step` mm; `INFINITY` = lejos de todo.
-fn edt_line(f: &mut [f32], step: f32) {
+pub(crate) fn edt_line(f: &mut [f32], step: f32) {
     let n = f.len();
     let src: Vec<(f32, f32)> = (0..n).filter(|&q| f[q].is_finite()).map(|q| (q as f32 * step, f[q])).collect();
     if src.is_empty() {

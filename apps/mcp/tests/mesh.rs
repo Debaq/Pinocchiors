@@ -291,6 +291,10 @@ fn slice_for_resin_and_calibrate() {
     assert!(text.contains("Hollowed") && data["plugs"] == 1 && data["hollowed_ml"].as_f64().unwrap() > 0.1, "{text}");
     assert!(text.contains("No islands left"), "{text}");
 
+    // Operaciones sobre capas: alivio de la balsa y atenuar el interior
+    let (text, _) = ok(&s, "resin_slice", json!({ "settings": { "ops": { "raft_relief": true, "dim": true } } }));
+    assert!(text.contains("No islands left"), "{text}");
+
     // Halot-Sky: se revisa pero no se guarda todavía
     let (text, _, err) = call(&s, "resin_slice", json!({ "printer": "halot", "path": dir.path().join("x.cxdlp") }));
     assert!(err && text.contains("cannot be written"), "{text}");

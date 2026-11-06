@@ -33,6 +33,28 @@ export interface ResinSettings {
   exposure_ranges: ExposureRange[];
   /** 2 = mismos valores en todas las capas; 3 = valores por capa */
   ctb_version: number;
+  /** Operaciones sobre las capas ya laminadas */
+  ops: LayerOps;
+}
+
+/** Operaciones sobre las capas (0 o false = apagada) */
+export interface LayerOps {
+  /** Quitar islas de hasta tantos píxeles */
+  remove_islands_px: number;
+  /** Cerrar huecos encerrados de hasta tantos píxeles */
+  fill_holes_px: number;
+  /** Alivio de la balsa: cruces cada `relief_spacing` mm con brazos de `relief_width` mm */
+  raft_relief: boolean;
+  relief_spacing: number;
+  relief_width: number;
+  /** Atenuar el interior: a más de `dim_wall` mm del borde, `dim_percent` % de luz */
+  dim: boolean;
+  dim_wall: number;
+  dim_percent: number;
+  /** Doble exposición (.ctb v3): primero achicada `double_erode` px con `double_first` de la exposición */
+  double_exposure: boolean;
+  double_erode: number;
+  double_first: number;
 }
 
 export interface DynamicLift {

@@ -12,7 +12,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::sla::{slice, slice_with, Layer, ResinPrinter, ResinSettings};
-use crate::sla_check::{check, slender, Cavity, ResinReport};
+use crate::sla_check::{check, fill_holes, remove_islands, slender, Cavity, ResinReport};
+use crate::sla_ops::{dim_interior, raft_relief};
 use crate::sla_hollow::{drain_holes, plugs, Hollow, HollowSettings};
 use crate::sla_supports::{auto_points, build, frustum, side_points, zone_points, SkipReason, SupportPoint, SupportSettings, Tri};
 use crate::SlicerError;
@@ -115,10 +116,14 @@ pub fn prepare(
     let wall = prep.hollow.as_ref().map_or(2.0, |hs| hs.wall);
     let mut part = model.clone();
     part.extend(drain_holes(&model, &prep.drains, prep.drain_diameter, wall + 1.0));
+    // Cerrar huecos chicos (SLA15) va en cada laminado: si se hiciera solo al final podría
+    // tapar la punta de un hueco justo donde llega su venteo.
+    let small_holes = settings.ops.fill_holes_px as u64;
     let cut = |mut layers: Vec<Layer>| {
         if let Some(hw) = &hollow {
             hw.apply(&mut layers);
         }
+        fill_holes(&mut layers, printer, small_holes);
         layers
     };
     let sliced = |tris: &[Tri]| -> Result<Vec<Layer>, SlicerError> { Ok(cut(slice(tris, printer, h)?)) };
@@ -248,6 +253,24 @@ pub fn prepare(
     if let Some(hw) = &hollow {
         let (pw, ph) = printer.pixel_size();
         out.hollowed_ml = hw.apply(&mut out.layers) as f32 * pw * ph * h / 1000.0;
+    }
+    // Operaciones sobre las capas (SLA15).
+    let ops = &settings.ops;
+    if ops.raft_relief
+        && let Some(s) = &prep.supports
+    {
+        let n = ((s.raft_thickness / h).floor() as usize).min(out.layers.len());
+        raft_relief(&mut out.layers, printer, n, ops);
+        // Donde los pies cierran el paso entre cruces queda aire encerrado: se vuelve a encender.
+        fill_holes(&mut out.layers[..n], printer, u64::MAX);
+    }
+    let filled = fill_holes(&mut out.layers, printer, small_holes);
+    let removed = remove_islands(&mut out.layers, printer, ops.remove_islands_px as u64);
+    if filled + removed > 0 {
+        out.notes.push(format!("se cerraron {filled} hueco(s) chicos y se quitaron {removed} isla(s) chicas"));
+    }
+    if ops.dim {
+        dim_interior(&mut out.layers, printer, settings.bottom_layers as usize, ops);
     }
     out.report = check(&out.layers, printer, h);
     if !out.report.islands.is_empty() {

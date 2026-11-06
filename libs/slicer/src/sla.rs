@@ -150,6 +150,8 @@ pub struct ResinSettings {
     /// Versión del `.ctb`: 2 (la del archivo de referencia; mismos valores en todas las capas)
     /// o 3 (parámetros por capa: subida dinámica y exposición por tramos).
     pub ctb_version: u8,
+    /// Operaciones sobre las capas ya laminadas (islas, huecos, balsa, atenuar, doble exposición).
+    pub ops: crate::sla_ops::LayerOps,
 }
 
 impl ResinSettings {
@@ -192,6 +194,7 @@ impl Default for ResinSettings {
             dynamic_lift: DynamicLift::default(),
             exposure_ranges: Vec::new(),
             ctb_version: 2,
+            ops: crate::sla_ops::LayerOps::default(),
         }
     }
 }
@@ -577,7 +580,9 @@ fn normal_x(t: &[[f32; 3]; 3]) -> f32 {
 /// Volumen de resina (ml) de las capas.
 pub fn volume_ml(layers: &[Layer], printer: &ResinPrinter, layer_height: f32) -> f32 {
     let (pw, ph) = printer.pixel_size();
-    let px: f64 = layers.iter().map(Layer::light).sum();
+    // La luz cuenta la fracción de cada gris del borde (antialiasing); con el interior
+    // atenuado la resina igual se cura entera: manda lo encendido.
+    let px: f64 = layers.iter().map(|l| l.light().max(l.area() as f64)).sum();
     (px * pw as f64 * ph as f64 * layer_height as f64 / 1000.0) as f32
 }
 

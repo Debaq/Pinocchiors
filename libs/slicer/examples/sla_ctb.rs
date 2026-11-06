@@ -38,6 +38,17 @@ fn main() {
         ..Default::default()
     };
     s.dynamic_lift.enabled = v3;
+    // OPS=1: todas las operaciones sobre capas (SLA15); la doble exposición solo con V3=1.
+    if std::env::var("OPS").is_ok() {
+        s.ops = pinocchio_slicer::sla_ops::LayerOps {
+            remove_islands_px: 20,
+            fill_holes_px: 20,
+            raft_relief: true,
+            dim: true,
+            double_exposure: v3,
+            ..Default::default()
+        };
+    }
     let t = std::time::Instant::now();
     let (layers, parts) = if args.iter().any(|a| a == "--preparar") {
         let before = sla_check::check(&sla::slice(&tris, &pr, s.layer_height).expect("laminado"), &pr, s.layer_height);
@@ -47,9 +58,9 @@ fn main() {
         // VACIAR=2 (pared en mm) vacía; RELLENO=columnas|rejilla|nada.
         if let Some(wall) = env("VACIAR") {
             let infill = match std::env::var("RELLENO").as_deref() {
-                Ok("columnas") => pinocchio_slicer::sla_hollow::Infill::Pillars,
+                Ok("rejilla") => pinocchio_slicer::sla_hollow::Infill::Grid,
                 Ok("nada") => pinocchio_slicer::sla_hollow::Infill::None,
-                _ => pinocchio_slicer::sla_hollow::Infill::Grid,
+                _ => pinocchio_slicer::sla_hollow::Infill::Pillars,
             };
             prep.hollow = Some(pinocchio_slicer::sla_hollow::HollowSettings { wall, infill, ..Default::default() });
         }

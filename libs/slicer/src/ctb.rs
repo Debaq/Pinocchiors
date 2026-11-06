@@ -73,6 +73,14 @@ pub fn write_ctb(
     let ex = if version >= 3 { LAYER_EX } else { 0 };
     let z: Vec<f32> = layers.iter().map(|l| l.z).collect();
     let params = layer_params(&layer_areas(layers, printer), &z, settings);
+    // Volumen y altura de las capas de verdad (la doble exposición repite capas).
+    let (volume, height) = (volume_ml(layers, printer, settings.layer_height), layers.last().map(|l| l.z).unwrap_or(0.0));
+    let doubled = (settings.ops.double_exposure && version >= 3).then(|| crate::sla_ops::double_exposure(layers, &params, printer, settings.bottom_layers as usize, &settings.ops));
+    let (layers, params): (&[Layer], Vec<_>) = match &doubled {
+        Some((l, p)) => (l, p.clone()),
+        None => (layers, params),
+    };
+    let z: Vec<f32> = layers.iter().map(|l| l.z).collect();
     let encoded: Vec<Vec<u8>> = layers
         .par_iter()
         .enumerate()
@@ -100,8 +108,7 @@ pub fn write_ctb(
     }
 
     let s = settings;
-    let height = layers.last().map(|l| l.z).unwrap_or(0.0);
-    let volume = volume_ml(layers, printer, s.layer_height);
+
     let mut w = Writer(Vec::with_capacity(total));
 
     // Cabecera.
@@ -214,7 +221,8 @@ fn layer_entry(p: &LayerParams, z: f32, at: u32, len: u32, version: u32) -> [u8;
 
 /// Nivel de antialiasing que dice el archivo: el pedido si las capas traen grises.
 fn aa_level(layers: &[Layer], settings: &ResinSettings) -> u32 {
-    if layers.iter().any(|l| !l.gray.is_empty()) { settings.antialias.max(1) as u32 } else { 1 }
+    // Con grises (bordes suavizados o interior atenuado) el archivo tiene que decir que los lleva.
+    if layers.iter().any(|l| !l.gray.is_empty()) { settings.antialias.max(2) as u32 } else { 1 }
 }
 
 struct Writer(Vec<u8>);
@@ -518,6 +526,30 @@ mod tests {
             }
         }
         assert_eq!(f.layers[50].1, 6.0);
+    }
+
+    #[test]
+    fn doble_exposicion_y_atenuado() {
+        use crate::sla_ops::{dim_interior, LayerOps};
+        let tris = crate::sla::tests::cube([31.31, 55.28, 0.0], [20.0, 20.0, 1.0]);
+        let ops = LayerOps { double_exposure: true, dim: true, ..Default::default() };
+        let s = ResinSettings { ctb_version: 3, ops, ..Default::default() };
+        let mut layers = slice(&tris, &LD_002H, s.layer_height).unwrap();
+        assert_eq!(dim_interior(&mut layers, &LD_002H, 8, &s.ops), 12);
+        let b = write_ctb(&layers, &LD_002H, &s, &blank(210, 210), &blank(200, 200)).unwrap();
+        let f = CtbFile::parse(&b).unwrap();
+        // 8 de base + 12 normales dos veces; volumen de las capas de verdad.
+        assert_eq!(f.layers.len(), 32);
+        assert!((f.volume_ml - 0.4).abs() < 0.02, "{}", f.volume_ml);
+        assert_eq!((f.layers[8].0, f.layers[8].1, f.layers[9].1), (f.layers[9].0, 1.75, 1.75));
+        let info = u32::from_le_bytes(b[104..108].try_into().unwrap()) as usize;
+        assert_eq!(u32::from_le_bytes(b[info + 36..info + 40].try_into().unwrap()) & 0xff, 15, "bandera de grises");
+        // La segunda copia es la capa atenuada entera; la primera, achicada y sin grises.
+        let full = f.mask(&b, 9).unwrap();
+        // 85 % de fábrica: 217, que en 7 bits vuelve como 217.
+        assert!(full.contains(&217) && full.contains(&255));
+        let first = f.mask(&b, 8).unwrap();
+        assert!(first.iter().filter(|v| **v > 0).count() < full.iter().filter(|v| **v > 0).count());
     }
 
     #[test]
