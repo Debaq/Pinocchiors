@@ -21,6 +21,7 @@ pub mod flashforge;
 pub mod moonraker;
 pub mod printers;
 pub mod slicer;
+pub mod resin;
 pub mod project;
 pub mod crease;
 pub mod ray_render;
@@ -246,6 +247,13 @@ pub fn run() {
             slicer::slicer_cancel,
             slicer::slicer_preview,
             slicer::save_gcode,
+            resin::resin_presets,
+            resin::resin_validate,
+            resin::resin_slice,
+            resin::resin_tilts,
+            resin::resin_layer,
+            resin::resin_view,
+            resin::save_resin,
             printers::printer_info,
             printers::printer_send,
             printers::printer_status,

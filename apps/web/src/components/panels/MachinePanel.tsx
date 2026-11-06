@@ -72,6 +72,10 @@ export const MachinePanel: Component<{
         </For>
       </div>
 
+      <Show when={current()?.kind === "resin"}>
+        <p class="text-[10px] text-text-dim">{t("Impresora de resina: se lamina con el laminador propio de Pinocchio (soportes, venteos y capas) en Imprimir → Laminar.")}</p>
+      </Show>
+
       <Show when={current()?.id === CREATOR_1.id}>
         <p class="text-[10px] text-text-dim">
           {t("La Creator original lee archivos .x3g: se puede preparar y exportar, pero para laminarla hay que cambiarle el firmware.")}

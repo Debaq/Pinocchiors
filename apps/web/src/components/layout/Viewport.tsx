@@ -20,6 +20,7 @@ import { ContextMenu, type MenuEntry } from "../ui/ContextMenu";
 import { fmtNumber, t } from "../../lib/i18n";
 import { adaptiveQuality } from "../../lib/settings";
 import { gcodePreview } from "../../lib/gcodePreview";
+import { resinPreview } from "../../lib/resinPreview";
 
 export interface ViewportProps {
   /** Malla que se muestra al lado de la actual para compararlas (retopología) */
@@ -260,6 +261,12 @@ export const Viewport: Component<ViewportProps> = (props) => {
   // Verificación de impresión: paredes finas
   createEffect(() => {
     viewer?.setPrintMarkers(props.printMarkers ?? null);
+  });
+
+  // Resina: la pieza con soportes en lugar del modelo mientras se la mira
+  createEffect(() => {
+    const data = resinPreview.visible() ? resinPreview.data() : undefined;
+    viewer?.setResinPreview(data ?? null, { layer: resinPreview.layer(), supports: resinPreview.showSupports() });
   });
 
   // Laminado: el gcode en lugar del modelo mientras se lo mira

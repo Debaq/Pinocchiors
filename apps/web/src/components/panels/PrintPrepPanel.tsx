@@ -5,6 +5,7 @@ import { fmtNumber, t, tx } from "../../lib/i18n";
 import { tBackend } from "../../lib/i18nBackend.ts";
 import type { CutPlane } from "../../lib/printCuts.ts";
 import type { SlicerSettings } from "./SlicerSection";
+import type { ResinPrep } from "../../lib/resinPreview";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TIPOS (lo que devuelve el backend, en milímetros con Z arriba)
@@ -186,6 +187,8 @@ export interface PrepSettings {
   plate: PlateSettings;
   /** Laminar: perfiles de Orca y cambios */
   slicer?: SlicerSettings;
+  /** Laminar para resina: perfil, soportes, venteos, inclinación */
+  resin?: ResinPrep;
 }
 
 export const defaultPrep: PrepSettings = {

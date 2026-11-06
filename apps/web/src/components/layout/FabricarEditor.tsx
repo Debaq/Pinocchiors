@@ -6,6 +6,8 @@ import { FAB_TABS, PRINT_TABS, Print3DPanel, isPrintTab, type FabTab, type Print
 import { SlicerSection, type PlateInputArgs, type SlicerSettings, type SlicerTab } from "../panels/SlicerSection";
 import type { ConfirmRequest } from "./ConfirmDialog";
 import { gcodePreview } from "../../lib/gcodePreview";
+import { resinPreview, type ResinPrep } from "../../lib/resinPreview";
+import { ResinSection } from "../panels/ResinSection";
 import { t } from "../../lib/i18n";
 
 /** Lo que necesita el laminador dentro de Fabricar */
@@ -20,11 +22,20 @@ export interface FabricarSlicerProps {
   onOrientAuto: (auto: boolean) => void;
 }
 
+/** Laminar para resina: si la impresora elegida es de resina, en lugar del de filamento */
+export interface FabricarResinProps {
+  /** id de la impresora de resina elegida; undefined si es de filamento */
+  printerId?: string;
+  prep: ResinPrep;
+  onPrep: (p: ResinPrep) => void;
+}
+
 export interface FabricarEditorProps extends Print3DPanelProps {
   tab: FabTab;
   onTab: (tab: FabTab) => void;
   onClose: () => void;
   slicer: FabricarSlicerProps;
+  resin: FabricarResinProps;
 }
 
 const toSlicerTab = (tab: FabTab): SlicerTab => (tab === "preview" ? "preview" : tab === "send" ? "printer" : "settings");
@@ -38,7 +49,10 @@ const fromSlicerTab = (tab: SlicerTab): FabTab => (tab === "preview" ? "preview"
 export const FabricarEditor: Component<FabricarEditorProps> = (props) => {
   // La vista previa del gcode solo se ve en las pestañas del laminador
   createEffect(() => {
-    if (!isPrintTab(props.tab)) gcodePreview.setVisible(false);
+    if (!isPrintTab(props.tab)) {
+      gcodePreview.setVisible(false);
+      resinPreview.setVisible(false);
+    }
   });
 
   const TabButton = (p: { id: FabTab; label: string; icon: Component<{ size?: number }> }) => (
@@ -85,7 +99,24 @@ export const FabricarEditor: Component<FabricarEditorProps> = (props) => {
           </div>
         </Show>
         {/* El laminador queda montado: cambiar de pestaña no pierde lo laminado ni lo corta a medias */}
-        <div class={clsx("absolute inset-0", !isPrintTab(props.tab) && "hidden")}>
+        <div class={clsx("absolute inset-0", (!isPrintTab(props.tab) || !props.resin.printerId) && "hidden")}>
+          <Show when={props.resin.printerId}>
+            {(id) => (
+              <ResinSection
+                printerId={id()}
+                prep={props.resin.prep}
+                onPrep={props.resin.onPrep}
+                plateInput={props.slicer.plateInput}
+                plateCount={props.slicer.plateCount}
+                disabled={props.slicer.disabled}
+                tab={toSlicerTab(props.tab)}
+                onTab={(t) => props.onTab(fromSlicerTab(t))}
+                onEditPrinter={() => props.onTab("printer")}
+              />
+            )}
+          </Show>
+        </div>
+        <div class={clsx("absolute inset-0", (!isPrintTab(props.tab) || props.resin.printerId) && "hidden")}>
           <SlicerSection
             settings={props.slicer.settings}
             onSettings={props.slicer.onSettings}

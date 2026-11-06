@@ -137,9 +137,6 @@ pub fn prepare(
             }
         };
         let sup = build(&model, &pts, s, |x, y, z| near_vent(&[x, y, z]));
-        if !sup.skipped.is_empty() {
-            out.notes.push(format!("{} punto(s) de soporte sin lugar: {:?}", sup.skipped.len(), sup.skipped));
-        }
         out.skipped = sup.skipped;
         out.points = pts;
         out.supports = sup.triangles;

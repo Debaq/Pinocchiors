@@ -1,8 +1,9 @@
 /**
  * Las impresoras del laboratorio, una sola lista para todo Fabricar (preparar, cortar,
- * uniones, placas y laminar). Las que tienen perfil de OrcaSlicer se laminan; la Creator
- * original todavía no (lee .x3g: se le cambiará el firmware, ver PLAN_IMPRESORAS.md) y
- * sirve para preparar y exportar.
+ * uniones, placas y laminar). Las de filamento con perfil de OrcaSlicer se laminan con su
+ * motor; las de resina con el núcleo SLA propio (PLAN_SLA.md); la Creator original todavía
+ * no (lee .x3g: se le cambiará el firmware, ver PLAN_IMPRESORAS.md) y sirve para preparar
+ * y exportar.
  */
 import { invoke } from "@tauri-apps/api/core";
 import type { SlicerInfo, SlicerPrinter } from "../components/panels/SlicerSection";
@@ -21,7 +22,18 @@ export interface Machine {
   tools: number;
   /** Tiene perfil de laminado */
   sliceable: boolean;
+  /** Filamento (OrcaSlicer) o resina (núcleo SLA) */
+  kind: "fdm" | "resin";
 }
+
+/** Impresoras de resina (ids de `libs/slicer/src/sla.rs`); la «boquilla» es la holgura base */
+export const RESIN_MACHINES: Machine[] = [
+  { id: "ld-002h", name: "LD-002H", model: "Creality LD-002H", bed: [82.62, 130.56, 160], nozzle: 0.15, tools: 1, sliceable: true, kind: "resin" },
+  { id: "halot-sky", name: "Halot-Sky", model: "Creality Halot-Sky", bed: [192, 120, 200], nozzle: 0.15, tools: 1, sliceable: true, kind: "resin" },
+];
+
+/** Si el id del laminador es de una impresora de resina */
+export const isResinId = (id: string | undefined) => RESIN_MACHINES.some((m) => m.id === id);
 
 /** Perfiles del laminador que se usan en el laboratorio, en este orden */
 const SLICER_MACHINES: Record<string, string> = {
@@ -39,6 +51,7 @@ export const CREATOR_1: Machine = {
   nozzle: 0.4,
   tools: 1,
   sliceable: false,
+  kind: "fdm",
 };
 
 let cached: Promise<SlicerInfo | undefined> | undefined;
@@ -53,9 +66,9 @@ export function machinesFrom(printers: SlicerPrinter[] | undefined): Machine[] {
   for (const [id, name] of Object.entries(SLICER_MACHINES)) {
     const p = printers?.find((x) => x.name === id);
     if (!p?.bed) continue;
-    out.push({ id, name, model: p.model, bed: p.bed, nozzle: p.nozzle, tools: p.tools ?? 1, sliceable: true });
+    out.push({ id, name, model: p.model, bed: p.bed, nozzle: p.nozzle, tools: p.tools ?? 1, sliceable: true, kind: "fdm" });
   }
-  out.push(CREATOR_1);
+  out.push(...RESIN_MACHINES, CREATOR_1);
   return out;
 }
 
@@ -100,7 +113,7 @@ export function withMachine(prep: PrepSettings, m: Machine): PrepSettings {
     name: m.model,
     build_volume: m.bed,
     nozzle: m.nozzle,
-    layer_height: prep.printer?.layer_height || 0.2,
+    layer_height: same ? prep.printer?.layer_height || 0.2 : m.kind === "resin" ? 0.05 : 0.2,
     fit_clearance: same ? prep.printer?.fit_clearance : undefined,
     hole_comp: same ? prep.printer?.hole_comp : undefined,
   };
@@ -121,6 +134,12 @@ export function syncedPrep(prep: PrepSettings, info: SlicerInfo | undefined, mat
   let next = prep;
   const p = prep.printer;
   if (!p || p.name !== m.model || p.build_volume.some((v, i) => Math.abs(v - m.bed[i]) > 1e-6) || prep.slicer?.printer !== m.id) next = withMachine(next, m);
+  // Resina: el material de Fabricar es «Resina» (densidad, voladizos, holguras)
+  if (m.kind === "resin") {
+    const resin = materials.find((x) => x.name === "Resina");
+    if (resin && next.material?.name !== "Resina") next = { ...next, material: resin };
+    return next === prep ? undefined : next;
+  }
   const f = filamentOf(next, info?.printers.find((x) => x.name === m.id));
   if (f && next.material?.name !== materialTypeOf(f) && materials.some((x) => x.name === materialTypeOf(f))) next = withFilament(next, f, materials);
   return next === prep ? undefined : next;

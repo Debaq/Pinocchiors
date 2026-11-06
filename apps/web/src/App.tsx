@@ -140,7 +140,8 @@ import { RenderEditor } from "./components/layout/RenderEditor";
 import { FabricarEditor } from "./components/layout/FabricarEditor";
 import type { FabTab } from "./components/panels/Print3DPanel";
 import type { Print3DStepProps } from "./components/steps";
-import { loadSlicerInfo, syncedPrep } from "./lib/machines";
+import { isResinId, loadSlicerInfo, syncedPrep } from "./lib/machines";
+import { defaultResinPrep } from "./lib/resinPreview";
 import { defaultSlicer } from "./components/panels/SlicerSection";
 
 interface ProjectSaved {
@@ -9414,6 +9415,11 @@ export const App: Component = () => {
                   confirm: confirmAction,
                   orientAuto: printPrep().plate.orient,
                   onOrientAuto: (orient) => setPrintPrep({ ...printPrep(), plate: { ...printPrep().plate, orient } }),
+                }}
+                resin={{
+                  printerId: isResinId(printPrep().slicer?.printer) ? printPrep().slicer?.printer : undefined,
+                  prep: printPrep().resin ?? defaultResinPrep,
+                  onPrep: (resin) => setPrintPrep({ ...printPrep(), resin }),
                 }}
               />
             </div>

@@ -28,6 +28,8 @@ import { skinAttributes, type AnimationLodData } from "./lod";
 import { isMotionFrame, MOTION_REST_MS, qualityScale } from "./adaptiveQuality";
 import { t as tr } from "./i18n.ts";
 import { GcodeView } from "./gcodeView";
+import { ResinView } from "./resinView";
+import type { ResinViewData, ResinViewOptions } from "./resinPreview";
 import { buildPrintBed, disposePrintBed } from "./printBed";
 import type { GcodePreview, GcodeViewOptions } from "./gcodePreview";
 
@@ -575,6 +577,10 @@ export class Viewer3D {
   private gcodeView: GcodeView | null = null;
   private gcodeData: GcodePreview | null = null;
   private gcodeHid: { mesh: boolean } | null = null;
+  /** Vista previa de resina (pieza elevada con soportes); oculta el modelo mientras se ve */
+  private resinView: ResinView | null = null;
+  private resinData: ResinViewData | null = null;
+  private resinHid: { mesh: boolean } | null = null;
   /** Cama de la impresora (Fabricar): tamaño en mm y su dibujo bajo el modelo */
   private printBed: { size: [number, number, number]; group: THREE.Group } | null = null;
   /** La grilla pedida por el usuario (se esconde sola con la cama o el gcode) */
@@ -2986,6 +2992,34 @@ export class Viewer3D {
     this.gcodeView?.update(options);
   }
 
+  /** Muestra la pieza preparada para resina sobre la pantalla (en lugar del modelo); `null` vuelve al modelo */
+  setResinPreview(data: ResinViewData | null, options: ResinViewOptions): void {
+    if (data !== this.resinData) {
+      if (this.resinView) {
+        this.scene.remove(this.resinView.group);
+        this.resinView.dispose();
+        this.resinView = null;
+      }
+      this.resinData = data;
+      if (data) {
+        this.renderer.localClippingEnabled = true;
+        this.resinView = new ResinView(data);
+        this.scene.add(this.resinView.group);
+        if (!this.resinHid) {
+          this.resinHid = { mesh: this.meshGroup.visible };
+          this.meshGroup.visible = false;
+        }
+        this.cameraRig.frame(this.resinView.bounds());
+      } else if (this.resinHid) {
+        this.meshGroup.visible = this.resinHid.mesh;
+        this.resinHid = null;
+        this.fitCamera();
+      }
+      this.placePrintBed();
+    }
+    this.resinView?.update(options);
+  }
+
   /** Marca puntos de la malla (coordenadas de la malla) con esferas rojas visibles a través de ella; `null` las quita */
   setPrintMarkers(points: [number, number, number][] | null): void {
     if (this.printMarkers) {
@@ -3476,7 +3510,7 @@ export class Viewer3D {
 
   /** La grilla general se esconde mientras se ve la cama de la impresora o el gcode */
   private applyGridVisible(): void {
-    this.grid.visible = this.gridWanted && !this.gcodeData && !this.printBed;
+    this.grid.visible = this.gridWanted && !this.gcodeData && !this.resinData && !this.printBed;
   }
 
   /** Cama de la impresora (mm: ancho, fondo, alto) bajo el modelo; `null` la quita */
@@ -3502,7 +3536,7 @@ export class Viewer3D {
     this.applyGridVisible();
     if (!this.printBed) return;
     const { group, size } = this.printBed;
-    group.visible = !this.gcodeData;
+    group.visible = !this.gcodeData && !this.resinData;
     // mm → unidades de la escena
     const s = 1 / (this.gridUnits.metersPerUnit * 1000);
     group.scale.setScalar(s);

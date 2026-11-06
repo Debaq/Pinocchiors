@@ -103,6 +103,8 @@ impl MaterialProfile {
             Self::new("ABS", 1.04, 45.0).with_fit(0.008, 1.1),
             Self::new("ASA", 1.07, 45.0).with_fit(0.006, 1.1),
             Self::new("TPU", 1.21, 35.0).with_fit(0.010, 1.5),
+            // Impresoras de resina: lleva soportes casi siempre; la contracción se calibra
+            Self::new("Resina", 1.1, 30.0).with_fit(0.0, 1.0),
         ]
     }
 }
