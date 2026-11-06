@@ -12,8 +12,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::sla::{slice, slice_with, Layer, ResinPrinter, ResinSettings};
-use crate::sla_check::{check, Cavity, ResinReport};
-use crate::sla_supports::{auto_points, build, frustum, SkipReason, SupportPoint, SupportSettings, Tri};
+use crate::sla_check::{check, slender, Cavity, ResinReport};
+use crate::sla_supports::{auto_points, build, frustum, side_points, zone_points, SkipReason, SupportPoint, SupportSettings, Tri};
 use crate::SlicerError;
 
 /// Qué hacer al preparar.
@@ -121,22 +121,34 @@ pub fn prepare(
             })
         };
         let near_vent = |p: &[f32; 3]| vent_at(p).is_some();
+        // Un punto sobre un venteo se corre al borde del agujero.
+        let adjust = |p: &[f32; 3]| match vent_at(p) {
+            None => Some(*p),
+            Some(v) => {
+                let (dx, dy) = (p[0] - v.pos[0], p[1] - v.pos[1]);
+                let d = (dx * dx + dy * dy).sqrt().max(1e-3);
+                let r = v.radius + tip + 0.05;
+                let q = [v.pos[0] + dx / d * r, v.pos[1] + dy / d * r, p[2]];
+                (!near_vent(&q)).then_some(q)
+            }
+        };
         let pts = match points {
-            Some(p) => p.to_vec(),
+            // Los editados ya traen sus laterales; las zonas se aplican igual.
+            Some(p) => zone_points(&model, p, s, adjust),
             None => {
                 let layers = slice(&part, printer, h)?;
                 let report = check(&layers, printer, h);
-                // Un punto sobre un venteo se corre al borde del agujero.
-                auto_points(&model, &report.islands, s, |p| match vent_at(p) {
-                    None => Some(*p),
-                    Some(v) => {
-                        let (dx, dy) = (p[0] - v.pos[0], p[1] - v.pos[1]);
-                        let d = (dx * dx + dy * dy).sqrt().max(1e-3);
-                        let r = v.radius + tip + 0.05;
-                        let q = [v.pos[0] + dx / d * r, v.pos[1] + dy / d * r, p[2]];
-                        (!near_vent(&q)).then_some(q)
+                let mut pts = auto_points(&model, &report.islands, s, adjust);
+                if s.side_supports {
+                    let anchors: Vec<[f32; 3]> = pts.iter().map(|p| p.pos).collect();
+                    let inside = slender(&layers, printer, h, &anchors, s.side_max_area, s.side_every);
+                    let side = side_points(&model, &inside, s);
+                    if side.len() < inside.len() {
+                        out.notes.push(format!("{} parte(s) delgada(s) sin lugar para un soporte lateral", inside.len() - side.len()));
                     }
-                })
+                    pts.extend(side.into_iter().filter(|p| !near_vent(&p.pos)));
+                }
+                pts
             }
         };
         let sup = build(&model, &pts, s, |x, y, z| near_vent(&[x, y, z]));
@@ -189,6 +201,7 @@ fn lit(l: &Layer, px: u32, py: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sla_supports::{self, PointKind, SupportZone, ZoneKind};
     use crate::sla::tests::cube;
     use crate::sla::LD_002H;
 
@@ -227,5 +240,58 @@ mod tests {
         assert!(r.vents.is_empty());
         assert_eq!(r.unvented.len(), 1);
         assert!(!r.notes.is_empty());
+    }
+
+    fn count(r: &Prepared, kind: PointKind) -> usize {
+        r.points.iter().filter(|p| p.kind == kind).count()
+    }
+
+    #[test]
+    fn zonas_sin_soportes_y_con_mas() {
+        let plate = cube([20.0, 20.0, 0.0], [20.0, 20.0, 3.0]);
+        let base = prepare(&plate, &LD_002H, &ResinSettings::default(), &PrepareSettings::default(), None).unwrap();
+        let bottom = base.points[0].pos[2];
+        let in_zone = |r: &Prepared, c: [f32; 3], rad: f32| r.points.iter().filter(|p| sla_supports::zone_at(&[SupportZone { center: c, radius: rad, kind: ZoneKind::Block }], &p.pos).is_some()).count();
+        let c = [25.0, 25.0, bottom];
+        let before = in_zone(&base, c, 4.0);
+        assert!(before > 0);
+
+        let with = |kind| {
+            let mut prep = PrepareSettings::default();
+            prep.supports.as_mut().unwrap().zones = vec![SupportZone { center: c, radius: 4.0, kind }];
+            prep
+        };
+        let blocked = prepare(&plate, &LD_002H, &ResinSettings::default(), &with(ZoneKind::Block), None).unwrap();
+        assert_eq!(in_zone(&blocked, c, 4.0), 0);
+        let dense = prepare(&plate, &LD_002H, &ResinSettings::default(), &with(ZoneKind::Reinforce), None).unwrap();
+        assert!(in_zone(&dense, c, 4.0) > before * 2, "{} vs {before}", in_zone(&dense, c, 4.0));
+
+        // Sobre puntos editados: saca y agrega igual.
+        let edited = prepare(&plate, &LD_002H, &ResinSettings::default(), &with(ZoneKind::Block), Some(&base.points)).unwrap();
+        assert_eq!(in_zone(&edited, c, 4.0), 0);
+        assert!(edited.points.len() < base.points.len());
+        let edited = prepare(&plate, &LD_002H, &ResinSettings::default(), &with(ZoneKind::Reinforce), Some(&base.points)).unwrap();
+        assert!(edited.points.len() > base.points.len());
+    }
+
+    #[test]
+    fn un_pin_alto_y_delgado_lleva_laterales() {
+        let pin = cube([30.0, 30.0, 0.0], [1.2, 1.2, 26.0]);
+        let mut prep = PrepareSettings::default();
+        let r = prepare(&pin, &LD_002H, &ResinSettings::default(), &prep, None).unwrap();
+        assert_eq!(count(&r, PointKind::Side), 0);
+        prep.supports.as_mut().unwrap().side_supports = true;
+        let r = prepare(&pin, &LD_002H, &ResinSettings::default(), &prep, None).unwrap();
+        let side: Vec<&SupportPoint> = r.points.iter().filter(|p| p.kind == PointKind::Side).collect();
+        assert_eq!(side.len(), 2, "{:?} {:?}", r.points, r.notes);
+        assert!(r.skipped.is_empty(), "{:?}", r.skipped);
+        assert!(r.report.islands.is_empty());
+        // En la pared del pin, uno cada 10 mm.
+        for p in &side {
+            let wall = [p.pos[0] - 30.0, p.pos[0] - 31.2, p.pos[1] - 30.0, p.pos[1] - 31.2].iter().any(|d| d.abs() < 0.01);
+            assert!(wall, "{p:?}");
+        }
+        assert!((side[1].pos[2] - side[0].pos[2] - 10.0).abs() < 0.2, "{side:?}");
+        assert!(r.tilted >= 2);
     }
 }

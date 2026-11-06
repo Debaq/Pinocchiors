@@ -86,7 +86,23 @@ export interface SupportSettings {
   tree_radius: number;
   tree_branches: number;
   raft_bevel: number;
+  /** Zonas pintadas con el pincel (mm de la impresora, como los puntos) */
+  zones?: SupportZone[];
+  /** Soportes laterales en partes delgadas (sección de menos de `side_max_area` mm² que suben más de `side_every` mm sin anclaje) */
+  side_supports: boolean;
+  side_max_area: number;
+  side_every: number;
 }
+
+/** Pincelada: «block» = sin soportes adentro, «reinforce» = más soportes */
+export interface SupportZone {
+  center: [number, number, number];
+  radius: number;
+  kind: "block" | "reinforce";
+}
+
+/** Qué hace un clic en la pieza al editar */
+export type ResinTool = "points" | "block" | "reinforce" | "erase";
 
 export interface PrepareSettings {
   supports: SupportSettings | null;
@@ -175,12 +191,12 @@ export interface VentHole {
 
 export interface SupportPoint {
   pos: [number, number, number];
-  kind: "overhang" | "island" | "manual";
+  kind: "overhang" | "island" | "manual" | "side";
   /** Diámetro de la punta de este punto (mm); sin valor, el de los ajustes */
   tip?: number;
 }
 
-export type SkipReason = "too_close" | "inside" | "on_model_off" | "vent" | "too_low";
+export type SkipReason = "too_close" | "inside" | "on_model_off" | "vent" | "too_low" | "no_room";
 
 export interface ResinResult {
   plate: number;
@@ -278,13 +294,16 @@ export function decodeLayerMask(buffer: ArrayBuffer): LayerMask {
   };
 }
 
-/** Un cambio de puntos pedido desde el visor: agregar uno (mm, Z arriba) o quitar el de ese índice */
-export type PointEdit = { add: [number, number, number] } | { remove: number };
+/** Un cambio pedido desde el visor: agregar un punto (mm, Z arriba), quitar el de ese índice o pintar ahí (pincel) */
+export type PointEdit = { add: [number, number, number] } | { remove: number } | { paint: [number, number, number] };
 
 const [data, setData] = createSignal<ResinViewData>();
 /** Puntos de soporte que se dibujan (y se editan) y los que no se pudieron poner */
 const [points, setPoints] = createSignal<SupportPoint[]>([]);
 const [skipped, setSkipped] = createSignal<number[]>([]);
+/** Zonas pintadas y la herramienta de los clics */
+const [zones, setZones] = createSignal<SupportZone[]>([]);
+const [tool, setTool] = createSignal<ResinTool>("points");
 /** Quién recibe los clics del visor al editar puntos; undefined = no se edita */
 const [editor, setEditor] = createSignal<((e: PointEdit) => void) | undefined>();
 const [visible, setVisible] = createSignal(false);
@@ -307,6 +326,10 @@ export const resinPreview = {
   setSkipped,
   editor,
   setEditor,
+  zones,
+  setZones,
+  tool,
+  setTool,
 };
 
 export interface ResinViewOptions {

@@ -42,10 +42,11 @@ fn main() {
     let (layers, parts) = if args.iter().any(|a| a == "--preparar") {
         let before = sla_check::check(&sla::slice(&tris, &pr, s.layer_height).expect("laminado"), &pr, s.layer_height);
         println!("sin preparar: {} islas, {} huecos problema", before.islands.len(), before.cavities.len());
-        // ARBOL=1: ramas; RECTOS=1: puntas verticales y sin refuerzos (como antes de SLA12).
+        // ARBOL=1: ramas; LATERALES=1: soportes laterales; RECTOS=1: puntas verticales y sin refuerzos (como antes de SLA12).
         let mut prep = sla_prepare::PrepareSettings::default();
         if let Some(sup) = prep.supports.as_mut() {
             sup.tree = std::env::var("ARBOL").is_ok();
+            sup.side_supports = std::env::var("LATERALES").is_ok();
             if std::env::var("RECTOS").is_ok() {
                 sup.tip_normal = false;
                 sup.braces = false;
@@ -54,10 +55,12 @@ fn main() {
         }
         let p = sla_prepare::prepare(&tris, &pr, &s, &prep, None).expect("preparar");
         println!(
-            "preparado en {:?}: {} venteos, {} puntos, {} triángulos de soporte; quedan {} islas, {} huecos; área máx {:.0} mm²",
+            "preparado en {:?}: {} venteos, {} puntos ({} laterales, {} descartados), {} triángulos de soporte; quedan {} islas, {} huecos; área máx {:.0} mm²",
             t.elapsed(),
             p.vents.len(),
             p.points.len(),
+            p.points.iter().filter(|q| q.kind == pinocchio_slicer::sla_supports::PointKind::Side).count(),
+            p.skipped.len(),
             p.supports.len(),
             p.report.islands.len(),
             p.report.cavities.len(),

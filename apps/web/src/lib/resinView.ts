@@ -5,7 +5,7 @@
  * escena Y arriba, así que (x, y, z) → (x, z, −y).
  */
 import * as THREE from "three";
-import type { PointEdit, ResinViewData, ResinViewOptions, SupportPoint } from "./resinPreview";
+import type { PointEdit, ResinTool, ResinViewData, ResinViewOptions, SupportPoint, SupportZone } from "./resinPreview";
 import { buildPrintBed } from "./printBed";
 import { ensureBvh } from "./meshBvh";
 
@@ -13,6 +13,9 @@ import { ensureBvh } from "./meshBvh";
 const POINT_AUTO = new THREE.Color(0x4fc3ff);
 const POINT_MANUAL = new THREE.Color(0x5be37d);
 const POINT_SKIPPED = new THREE.Color(0xff5a5a);
+/** Zonas: sin soportes (rojo) y más soportes (ámbar) */
+const ZONE_BLOCK = new THREE.Color(0xff4d6a);
+const ZONE_REINFORCE = new THREE.Color(0xffb02e);
 
 export class ResinView {
   readonly group = new THREE.Group();
@@ -22,6 +25,7 @@ export class ResinView {
   private supports: THREE.Mesh;
   private model: THREE.Mesh;
   private points: THREE.InstancedMesh | null = null;
+  private zones: THREE.InstancedMesh | null = null;
   private pointsVisible = false;
 
   constructor(data: ResinViewData) {
@@ -58,11 +62,44 @@ export class ResinView {
     this.group.add(mesh);
   }
 
+  /** Zonas pintadas como esferas translúcidas (solo al editar) */
+  setZones(zones: SupportZone[], visible: boolean): void {
+    if (this.zones) {
+      this.group.remove(this.zones);
+      this.zones.geometry.dispose();
+      (this.zones.material as THREE.Material).dispose();
+      this.zones = null;
+    }
+    if (!visible || zones.length === 0) return;
+    const mesh = new THREE.InstancedMesh(
+      new THREE.SphereGeometry(1, 24, 16),
+      new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.28, depthWrite: false }),
+      zones.length,
+    );
+    const m = new THREE.Matrix4();
+    zones.forEach((z, i) => {
+      m.makeScale(z.radius, z.radius, z.radius).setPosition(z.center[0], z.center[2], -z.center[1]);
+      mesh.setMatrixAt(i, m);
+      mesh.setColorAt(i, z.kind === "block" ? ZONE_BLOCK : ZONE_REINFORCE);
+    });
+    mesh.renderOrder = 11;
+    mesh.frustumCulled = false;
+    this.zones = mesh;
+    this.group.add(mesh);
+  }
+
   /**
-   * Qué cambia un clic al editar: sobre un punto lo quita; sobre la pieza (por debajo de la
-   * capa que se ve) agrega uno ahí. Coordenadas de la impresora (mm, Z arriba).
+   * Qué cambia un clic al editar. Con la herramienta de puntos: sobre un punto lo quita;
+   * sobre la pieza (por debajo de la capa que se ve) agrega uno ahí. Con el pincel: dónde
+   * se tocó la pieza. Coordenadas de la impresora (mm, Z arriba).
    */
-  pick(raycaster: THREE.Raycaster): PointEdit | null {
+  pick(raycaster: THREE.Raycaster, tool: ResinTool = "points"): PointEdit | null {
+    if (tool !== "points") {
+      ensureBvh(this.model);
+      const hit = raycaster.intersectObject(this.model, false)[0];
+      if (!hit || hit.point.y > this.clip.constant + 1e-3) return null;
+      return { paint: [hit.point.x, -hit.point.z, hit.point.y] };
+    }
     if (this.points && this.pointsVisible) {
       const hit = raycaster.intersectObject(this.points, false)[0];
       if (hit?.instanceId !== undefined) return { remove: hit.instanceId };

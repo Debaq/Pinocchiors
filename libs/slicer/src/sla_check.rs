@@ -225,6 +225,69 @@ pub fn check(layers: &[Layer], printer: &ResinPrinter, layer_height: f32) -> Res
     report
 }
 
+/// Partes delgadas que suben sin anclaje (para los soportes laterales, SLA12b). Capa por
+/// capa, cada componente hereda de las de abajo que pisa la menor altura desde el último
+/// anclaje; anclan una sección de más de `max_area_mm2`, un punto de `anchors` adentro y
+/// el no tener nada abajo (isla: lleva su soporte). Cuando una parte delgada pasa
+/// `every_mm` sin anclaje, devuelve un punto adentro de ella (a media capa) y vuelve a cero.
+pub fn slender(layers: &[Layer], printer: &ResinPrinter, layer_height: f32, anchors: &[[f32; 3]], max_area_mm2: f32, every_mm: f32) -> Vec<[f32; 3]> {
+    let (pw, ph) = printer.pixel_size();
+    let max_px = (max_area_mm2 / (pw * ph)).max(1.0) as u64;
+    let infos: Vec<Option<LayerInfo>> = layers.par_iter().map(|l| LayerInfo::new(l, printer.res_x, printer.res_y)).collect();
+    // Anclajes por capa, en píxeles.
+    let mut by_layer: Vec<Vec<(u32, u32)>> = vec![Vec::new(); layers.len()];
+    for a in anchors {
+        let k = ((a[2] / layer_height).floor().max(0.0) as usize).min(layers.len().saturating_sub(1));
+        if let Some(px) = printer.mm_to_pixel(a[0], a[1]) {
+            let last = (k + 1).min(layers.len().saturating_sub(1));
+            for near in &mut by_layer[k.saturating_sub(1)..=last] {
+                near.push(px);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    let mut prev_since: Vec<f32> = Vec::new();
+    for k in 0..layers.len() {
+        let Some(c) = infos[k].as_ref() else {
+            prev_since.clear();
+            continue;
+        };
+        let mut since = vec![f32::MAX; c.solid.ncomp];
+        if k > 0
+            && let Some(p) = infos[k - 1].as_ref()
+        {
+            for y in row_range(Some(p), Some(c)) {
+                let start = c.solid.row_range(y).start;
+                let pstart = p.solid.row_range(y).start;
+                overlaps(p.solid.row(y), c.solid.row(y), |i, j| {
+                    let comp = c.solid.comp[start + j] as usize;
+                    let from = prev_since[p.solid.comp[pstart + i] as usize] + layer_height;
+                    since[comp] = since[comp].min(from);
+                });
+            }
+        }
+        for &(x, y) in &by_layer[k] {
+            for j in c.solid.row_range(y) {
+                let (a, b) = c.solid.runs[j];
+                if a <= x && x < b {
+                    since[c.solid.comp[j] as usize] = 0.0;
+                }
+            }
+        }
+        for (comp, h) in since.iter_mut().enumerate() {
+            if *h == f32::MAX || c.solid.area[comp] > max_px {
+                *h = 0.0;
+            } else if *h >= every_mm {
+                let (x, y) = printer.pixel_to_mm(c.solid.sample[comp].0, c.solid.sample[comp].1);
+                out.push([x, y, layers[k].z - layer_height / 2.0]);
+                *h = 0.0;
+            }
+        }
+        prev_since = since;
+    }
+    out
+}
+
 /// Filas que hay que mirar entre dos capas (la unión de sus cajas).
 fn row_range(a: Option<&LayerInfo>, b: Option<&LayerInfo>) -> std::ops::Range<u32> {
     let r = |i: Option<&LayerInfo>| i.map(|i| (i.y0, i.y1));

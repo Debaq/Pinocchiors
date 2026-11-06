@@ -20,6 +20,9 @@ import {
   type SupportDensity,
   type SupportPoint,
   type SupportSettings,
+  type PointEdit,
+  type ResinTool,
+  type SupportZone,
   type ResinTurn,
   type TiltOption,
 } from "../../lib/resinPreview";
@@ -58,6 +61,7 @@ const SKIP_REASONS: Record<SkipReason, string> = {
   on_model_off: "abajo hay pieza",
   vent: "sobre un venteo",
   too_low: "casi sobre la balsa",
+  no_room: "sin lugar para la punta inclinada",
 };
 
 function fmtTime(seconds: number): string {
@@ -137,7 +141,12 @@ export const ResinSection: Component<{
     JSON.stringify({ printer: props.printerId, input: input(), plate: plate(), tilt: prepTurn(props.prep) ?? null, supports: props.prep.supports, lift: supports()?.lift, raft: supports()?.raft_thickness });
   /** Los puntos editados todavía calzan con la pieza */
   const pointsValid = () => props.prep.supports && slicedKey() !== undefined && slicedKey() === geometryKey();
-  const prepare = (): PrepareSettings => ({ supports: props.prep.supports ? (supports() ?? null) : null, vents: props.prep.vents, vent_diameter: props.prep.ventDiameter });
+  /** Zonas pintadas: solo valen sobre la pieza tal como se laminó */
+  const validZones = () => (pointsValid() ? resinPreview.zones() : []);
+  const prepare = (): PrepareSettings => {
+    const sp = supports();
+    return { supports: props.prep.supports && sp ? { ...sp, zones: validZones() } : null, vents: props.prep.vents, vent_diameter: props.prep.ventDiameter };
+  };
 
   const [warnings] = createResource(
     () => (settings() ? { printer: props.printerId, settings: settings()! } : undefined),
@@ -164,10 +173,23 @@ export const ResinSection: Component<{
 
   /** Diámetro de punta de los puntos que se agregan a mano (undefined = el de los ajustes) */
   const [manualTip, setManualTip] = createSignal<number>();
-  // Editar puntos: los clics del visor llegan acá
-  const applyEdit = (e: { add: [number, number, number] } | { remove: number }) => {
+  /** Radio del pincel de zonas (mm) */
+  const [brush, setBrush] = createSignal(3);
+  // Editar puntos y pintar zonas: los clics del visor llegan acá
+  const applyEdit = (e: PointEdit) => {
     const current = resinPreview.points();
-    if ("add" in e) {
+    if ("paint" in e) {
+      const tool = resinPreview.tool();
+      const zones = resinPreview.zones();
+      if (tool === "erase") {
+        // La zona que contiene el punto con el centro más cerca
+        const d = (z: SupportZone) => Math.hypot(z.center[0] - e.paint[0], z.center[1] - e.paint[1], z.center[2] - e.paint[2]);
+        const inside = zones.filter((z) => d(z) <= z.radius).sort((a, b) => d(a) - d(b))[0];
+        if (inside) resinPreview.setZones(zones.filter((z) => z !== inside));
+      } else if (tool === "block" || tool === "reinforce") {
+        resinPreview.setZones([...zones, { center: e.paint, radius: brush(), kind: tool }]);
+      }
+    } else if ("add" in e) {
       const tip = manualTip();
       const next = [...current, { pos: e.add, kind: "manual" as const, ...(tip ? { tip } : {}) }];
       resinPreview.setPoints(next);
@@ -183,14 +205,18 @@ export const ResinSection: Component<{
     const on = editing() && props.tab === "preview" && !!result() && pointsValid();
     // Una función se guarda en la señal envuelta en otra (si no, Solid la toma como actualizador)
     if (on) resinPreview.setEditor(() => applyEdit);
-    else resinPreview.setEditor(undefined);
+    else {
+      resinPreview.setEditor(undefined);
+      resinPreview.setTool("points");
+    }
     if (on) resinPreview.setVisible(true);
   });
   // La pieza cambió de lugar: los puntos editados ya no sirven
   createEffect(
     on(geometryKey, () => {
-      if (edited() && !pointsValid()) {
+      if ((edited() || resinPreview.zones().length > 0) && !pointsValid()) {
         setEdited(undefined);
+        resinPreview.setZones([]);
         setEditing(false);
       }
     }, { defer: true }),
@@ -499,6 +525,17 @@ export const ResinSection: Component<{
                         {num("Juntar columnas a menos de", sp().tree_radius, (v) => setSupport("tree_radius", v), 1, 20, 0.5, "mm")}
                         {num("Ramas por tronco", sp().tree_branches, (v) => setSupport("tree_branches", Math.round(v)), 2, 8, 1)}
                       </Show>
+                      <Checkbox
+                        small
+                        label={t("Soportes laterales")}
+                        checked={sp().side_supports}
+                        onChange={(v) => setSupport("side_supports", v)}
+                        hint={t("Las partes delgadas que suben muchos mm sin nada que las sujete se mueven al despegar: llevan un soporte con la punta inclinada en la pared.")}
+                      />
+                      <Show when={sp().side_supports}>
+                        {num("Partes de menos de", sp().side_max_area, (v) => setSupport("side_max_area", v), 0.5, 50, 0.5, "mm²")}
+                        {num("Uno cada", sp().side_every, (v) => setSupport("side_every", v), 2, 50, 1, "mm")}
+                      </Show>
                       {num("Chaflán de la balsa", sp().raft_bevel, (v) => setSupport("raft_bevel", v), 0, 2, 0.1, "mm")}
                       <Show when={Object.keys(props.prep.supportOverrides ?? {}).length > 0}>
                         <button class="text-[11px] text-text-dim hover:underline" onClick={() => set({ supportOverrides: {} })}>
@@ -647,16 +684,50 @@ export const ResinSection: Component<{
                   <Show when={pointsValid()} fallback={<p class="text-[11px] text-text-dim">{t("Cambiaste la placa, el giro o la altura: lamina de nuevo para editar los puntos.")}</p>}>
                     <Checkbox small label={t("Editar puntos en el visor")} checked={editing()} onChange={setEditing} />
                     <Show when={editing()}>
-                      <p class="text-[10px] text-text-dim">{t("Clic en la pieza: agrega un punto ahí. Clic en un punto: lo quita. Azul = automático, verde = a mano, rojo = no se pudo poner.")}</p>
                       <Select
-                        label={t("Punta de los puntos nuevos")}
+                        label={t("Herramienta")}
                         options={[
-                          { value: "", label: t("Como en Soportes") },
-                          ...[0.2, 0.3, 0.4, 0.5, 0.6, 0.8, 1].map((d) => ({ value: String(d), label: `${fmtNumber(d)} mm` })),
+                          { value: "points", label: t("Puntos") },
+                          { value: "block", label: t("Pincel: sin soportes") },
+                          { value: "reinforce", label: t("Pincel: más soportes") },
+                          { value: "erase", label: t("Borrar zona") },
                         ]}
-                        value={manualTip() ? String(manualTip()) : ""}
-                        onChange={(v) => setManualTip(v ? Number(v) : undefined)}
+                        value={resinPreview.tool()}
+                        onChange={(v) => resinPreview.setTool(v as ResinTool)}
                       />
+                      <Show
+                        when={resinPreview.tool() === "points"}
+                        fallback={
+                          <>
+                            <p class="text-[10px] text-text-dim">
+                              {resinPreview.tool() === "erase"
+                                ? t("Clic en una zona: la quita.")
+                                : t("Cada clic en la pieza pinta una esfera. Rojo = sin soportes adentro; ámbar = puntos a la mitad de distancia y también en caras más empinadas. Se aplican al rehacer los soportes.")}
+                            </p>
+                            <Show when={resinPreview.tool() !== "erase"}>{num("Tamaño del pincel", brush(), setBrush, 0.5, 30, 0.5, "mm")}</Show>
+                          </>
+                        }
+                      >
+                        <p class="text-[10px] text-text-dim">{t("Clic en la pieza: agrega un punto ahí. Clic en un punto: lo quita. Azul = automático, verde = a mano, rojo = no se pudo poner.")}</p>
+                        <Select
+                          label={t("Punta de los puntos nuevos")}
+                          options={[
+                            { value: "", label: t("Como en Soportes") },
+                            ...[0.2, 0.3, 0.4, 0.5, 0.6, 0.8, 1].map((d) => ({ value: String(d), label: `${fmtNumber(d)} mm` })),
+                          ]}
+                          value={manualTip() ? String(manualTip()) : ""}
+                          onChange={(v) => setManualTip(v ? Number(v) : undefined)}
+                        />
+                      </Show>
+                    </Show>
+                    <Show when={resinPreview.zones().length > 0}>
+                      <p class="text-[11px] text-text-muted">
+                        {t("{n} zonas pintadas", { n: resinPreview.zones().length })}
+                        {" · "}
+                        <button class="text-accent hover:underline" onClick={() => resinPreview.setZones([])}>
+                          {t("Quitar")}
+                        </button>
+                      </p>
                     </Show>
                     <p class="text-[11px] text-text-muted">
                       {t("{n} puntos ({m} a mano)", { n: resinPreview.points().length, m: resinPreview.points().filter((p) => p.kind === "manual").length })}
@@ -666,10 +737,12 @@ export const ResinSection: Component<{
                         {t("Un punto en cada isla")}
                       </Button>
                     </Show>
-                    <Show when={edited()}>
+                    <Show when={edited() || resinPreview.zones().length > 0}>
                       <Button size="sm" variant="primary" fullWidth onClick={() => void slice()} disabled={busy()} icon={<Icons.ArrowsClockwise size={14} />}>
-                        {t("Rehacer soportes con estos puntos")}
+                        {edited() ? t("Rehacer soportes con estos puntos") : t("Rehacer soportes con las zonas")}
                       </Button>
+                    </Show>
+                    <Show when={edited()}>
                       <button class="text-[11px] text-text-dim hover:underline" onClick={() => void slice(true)} disabled={busy()}>
                         {t("Volver a los automáticos")}
                       </button>

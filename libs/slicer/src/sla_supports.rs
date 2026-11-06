@@ -8,6 +8,13 @@
 //! en la pieza, columna vertical y un pie ancho sobre la balsa (o, si abajo hay pieza,
 //! otra punta apoyada en ella). La balsa es la envolvente convexa de los pies.
 //! Todo sale como triángulos que se suman a la pieza al laminar (las cáscaras se suman).
+//!
+//! **Zonas** (SLA12b): esferas pintadas con el pincel en el visor. «Sin soportes» saca los
+//! puntos de adentro (automáticos o no); «Más soportes» reparte los puntos a la mitad de
+//! distancia y también soporta caras 20° más empinadas que el ángulo límite.
+//!
+//! **Laterales** (SLA12b): una parte delgada que sube muchos mm sin nada que la sujete se
+//! mueve al despegar; [`side_points`] le pone un punto en la pared con la punta inclinada.
 
 use serde::{Deserialize, Serialize};
 
@@ -63,6 +70,44 @@ pub struct SupportSettings {
     pub tree_branches: u32,
     /// Chaflán del borde de arriba de la balsa (mm).
     pub raft_bevel: f32,
+    /// Zonas pintadas (coordenadas de la impresora, como los puntos).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub zones: Vec<SupportZone>,
+    /// Soportes laterales: partes de menos de `side_max_area` mm² de sección que suben más
+    /// de `side_every` mm sin anclaje llevan un punto en la pared.
+    pub side_supports: bool,
+    pub side_max_area: f32,
+    pub side_every: f32,
+}
+
+/// Qué hace una zona pintada.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoneKind {
+    /// Sin soportes adentro.
+    Block,
+    /// Más soportes: mitad de distancia y caras más empinadas.
+    Reinforce,
+}
+
+/// Una pincelada: esfera en mm de la impresora.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct SupportZone {
+    pub center: [f32; 3],
+    pub radius: f32,
+    pub kind: ZoneKind,
+}
+
+/// La zona de `p`: «sin soportes» gana si se pisan.
+pub fn zone_at(zones: &[SupportZone], p: &[f32; 3]) -> Option<ZoneKind> {
+    let inside = |z: &SupportZone| dist(&z.center, p) <= z.radius;
+    if zones.iter().any(|z| z.kind == ZoneKind::Block && inside(z)) {
+        Some(ZoneKind::Block)
+    } else if zones.iter().any(|z| z.kind == ZoneKind::Reinforce && inside(z)) {
+        Some(ZoneKind::Reinforce)
+    } else {
+        None
+    }
 }
 
 impl Default for SupportSettings {
@@ -101,6 +146,10 @@ impl SupportSettings {
             tree_radius: spacing * 2.0,
             tree_branches: 4,
             raft_bevel: 0.6,
+            zones: Vec::new(),
+            side_supports: false,
+            side_max_area: 4.0,
+            side_every: 10.0,
         }
     }
 
@@ -117,6 +166,8 @@ pub enum PointKind {
     Overhang,
     Island,
     Manual,
+    /// En la pared de una parte delgada (soporte lateral).
+    Side,
 }
 
 /// Un punto donde la punta toca la pieza (mm).
@@ -129,54 +180,155 @@ pub struct SupportPoint {
     pub tip: Option<f32>,
 }
 
-/// Puntos automáticos: caras en voladizo e islas. `adjust` corre o descarta un punto
-/// (venteos): `None` lo descarta; a los de voladizo solo se los deja o descarta.
+/// Puntos automáticos: caras en voladizo e islas, respetando las zonas. `adjust` corre o
+/// descarta un punto (venteos): `None` lo descarta; a los de voladizo solo se los deja o descarta.
 pub fn auto_points(
     model: &[Tri],
     islands: &[Island],
     s: &SupportSettings,
     adjust: impl Fn(&[f32; 3]) -> Option<[f32; 3]>,
 ) -> Vec<SupportPoint> {
+    let mut grid = PointGrid::new(s.spacing);
+    let mut points = Vec::new();
+    overhang_points(&mut points, &mut grid, model, s, false, &adjust);
+    // Toda isla lleva su punto salvo que ya haya uno casi encima (las chicas no se tocan
+    // con un punto a más de una punta de distancia).
+    let reach = (s.tip_diameter * 1.5).max(0.5);
+    for i in islands {
+        let Some(p) = adjust(&i.pos) else { continue };
+        if zone_at(&s.zones, &p) != Some(ZoneKind::Block) && !grid.near(&p, reach, 0.5) {
+            grid.insert(p);
+            points.push(SupportPoint { pos: p, kind: PointKind::Island, tip: None });
+        }
+    }
+    points
+}
+
+/// Las zonas sobre puntos ya elegidos (editados a mano): saca los de «sin soportes» y
+/// agrega los que faltan en «más soportes».
+pub fn zone_points(model: &[Tri], points: &[SupportPoint], s: &SupportSettings, adjust: impl Fn(&[f32; 3]) -> Option<[f32; 3]>) -> Vec<SupportPoint> {
+    let mut out: Vec<SupportPoint> = points.iter().filter(|p| zone_at(&s.zones, &p.pos) != Some(ZoneKind::Block)).copied().collect();
+    if s.zones.iter().any(|z| z.kind == ZoneKind::Reinforce) {
+        let mut grid = PointGrid::new(s.spacing);
+        for p in &out {
+            grid.insert(p.pos);
+        }
+        overhang_points(&mut out, &mut grid, model, s, true, &adjust);
+    }
+    out
+}
+
+/// Puntos en las caras en voladizo, de abajo hacia arriba, a `spacing` entre sí (la mitad
+/// en las zonas «más soportes»). Con `only_reinforce`, solo dentro de esas zonas.
+fn overhang_points(
+    points: &mut Vec<SupportPoint>,
+    grid: &mut PointGrid,
+    model: &[Tri],
+    s: &SupportSettings,
+    only_reinforce: bool,
+    adjust: &impl Fn(&[f32; 3]) -> Option<[f32; 3]>,
+) {
     let cos = s.overhang_angle.to_radians().cos();
-    let step = (s.spacing * 0.5).max(0.05);
-    let mut cand: Vec<[f32; 3]> = Vec::new();
+    let cos_dense = (s.overhang_angle + 20.0).min(80.0).to_radians().cos();
+    let dense: Vec<&SupportZone> = s.zones.iter().filter(|z| z.kind == ZoneKind::Reinforce).collect();
+    let mut cand: Vec<([f32; 3], f32)> = Vec::new();
     for t in model {
         let n = unit_normal(t);
-        if -n[2] < cos {
+        // ¿El triángulo toca una zona «más soportes»? (por caja, barato)
+        let touches = dense.iter().any(|z| (0..3).all(|c| t.iter().map(|v| v[c]).fold(f32::MAX, f32::min) <= z.center[c] + z.radius && t.iter().map(|v| v[c]).fold(f32::MIN, f32::max) >= z.center[c] - z.radius));
+        if -n[2] < if touches { cos_dense } else { cos } || (only_reinforce && !touches) {
             continue;
         }
+        let step = (s.spacing * if touches { 0.25 } else { 0.5 }).max(0.05);
         let longest = (0..3).map(|e| dist(&t[e], &t[(e + 1) % 3])).fold(0f32, f32::max);
         let k = (longest / step).ceil().max(1.0) as usize;
         // Grilla por dentro del triángulo (en las aristas el rayo hacia abajo es ambiguo).
         for i in 0..k {
             for j in 0..k - i {
                 let (u, v) = ((i as f32 + 1.0 / 3.0) / k as f32, (j as f32 + 1.0 / 3.0) / k as f32);
-                cand.push(std::array::from_fn(|c| t[0][c] + u * (t[1][c] - t[0][c]) + v * (t[2][c] - t[0][c])));
+                let p: [f32; 3] = std::array::from_fn(|c| t[0][c] + u * (t[1][c] - t[0][c]) + v * (t[2][c] - t[0][c]));
+                let spacing = match zone_at(&s.zones, &p) {
+                    Some(ZoneKind::Block) => continue,
+                    Some(ZoneKind::Reinforce) => s.spacing * 0.5,
+                    None if only_reinforce || -n[2] < cos => continue,
+                    None => s.spacing,
+                };
+                cand.push((p, spacing));
             }
         }
     }
     // Lo más bajo primero: es lo que primero se forma en el aire.
-    cand.sort_by(|a, b| a[2].total_cmp(&b[2]));
-
-    let mut grid = PointGrid::new(s.spacing);
-    let mut points = Vec::new();
-    for p in cand {
-        if adjust(&p) == Some(p) && !grid.near(&p, s.spacing, s.spacing) {
+    cand.sort_by(|a, b| a.0[2].total_cmp(&b.0[2]));
+    for (p, spacing) in cand {
+        if adjust(&p) == Some(p) && !grid.near(&p, spacing, spacing) {
             grid.insert(p);
             points.push(SupportPoint { pos: p, kind: PointKind::Overhang, tip: None });
         }
     }
-    // Toda isla lleva su punto salvo que ya haya uno casi encima (las chicas no se tocan
-    // con un punto a más de una punta de distancia).
-    let reach = (s.tip_diameter * 1.5).max(0.5);
-    for i in islands {
-        let Some(p) = adjust(&i.pos) else { continue };
-        if !grid.near(&p, reach, 0.5) {
-            grid.insert(p);
-            points.push(SupportPoint { pos: p, kind: PointKind::Island, tip: None });
+}
+
+/// Soportes laterales: para cada punto `inside` (adentro de una parte delgada, ver
+/// `sla_check::slender`) busca en 16 direcciones horizontales la pared más cercana desde
+/// la que una punta inclinada baja libre hasta la balsa, y pone ahí un punto.
+pub fn side_points(model: &[Tri], inside: &[[f32; 3]], s: &SupportSettings) -> Vec<SupportPoint> {
+    let grid = ZGrid::new(model, s.spacing.max(1.0));
+    let raft_top = s.raft_thickness;
+    let mut out = Vec::new();
+    for c in inside {
+        let z = c[2];
+        let near: Vec<&Tri> = model
+            .iter()
+            .filter(|t| t.iter().map(|v| v[2]).fold(f32::MAX, f32::min) <= z && t.iter().map(|v| v[2]).fold(f32::MIN, f32::max) >= z)
+            .collect();
+        let mut best: Option<(f32, [f32; 3])> = None;
+        for k in 0..16 {
+            let a = k as f32 * std::f32::consts::TAU / 16.0;
+            let d = [a.cos(), a.sin(), 0.0];
+            let Some(t) = near.iter().filter_map(|tri| ray_hit(c, &d, tri)).fold(None, |m: Option<f32>, h| Some(m.map_or(h, |m| m.min(h)))) else {
+                continue;
+            };
+            let p = add(*c, d, t);
+            if zone_at(&s.zones, &p) == Some(ZoneKind::Block) {
+                continue;
+            }
+            // Donde termina la punta (45° hacia abajo y afuera) no hay pieza abajo.
+            let reach = s.tip_length * std::f32::consts::FRAC_1_SQRT_2;
+            let q = [p[0] + d[0] * reach, p[1] + d[1] * reach, p[2] - reach];
+            if grid.below(q[0], q[1], q[2]).is_some_and(|(h, _)| h > raft_top) {
+                continue;
+            }
+            if best.is_none_or(|b| t < b.0) {
+                best = Some((t, p));
+            }
+        }
+        if let Some((_, p)) = best {
+            out.push(SupportPoint { pos: p, kind: PointKind::Side, tip: None });
         }
     }
-    points
+    out
+}
+
+/// Distancia por el rayo `o + t·d` hasta el triángulo (Möller–Trumbore), si lo toca adelante.
+fn ray_hit(o: &[f32; 3], d: &[f32; 3], t: &Tri) -> Option<f32> {
+    let e1 = [t[1][0] - t[0][0], t[1][1] - t[0][1], t[1][2] - t[0][2]];
+    let e2 = [t[2][0] - t[0][0], t[2][1] - t[0][1], t[2][2] - t[0][2]];
+    let p = cross(*d, e2);
+    let det = e1[0] * p[0] + e1[1] * p[1] + e1[2] * p[2];
+    if det.abs() < 1e-9 {
+        return None;
+    }
+    let s = [o[0] - t[0][0], o[1] - t[0][1], o[2] - t[0][2]];
+    let u = (s[0] * p[0] + s[1] * p[1] + s[2] * p[2]) / det;
+    if !(0.0..=1.0).contains(&u) {
+        return None;
+    }
+    let q = cross(s, e1);
+    let v = (d[0] * q[0] + d[1] * q[1] + d[2] * q[2]) / det;
+    if v < 0.0 || u + v > 1.0 {
+        return None;
+    }
+    let h = (e2[0] * q[0] + e2[1] * q[1] + e2[2] * q[2]) / det;
+    (h > 1e-4).then_some(h)
 }
 
 /// Resultado de armar los soportes.
@@ -208,6 +360,8 @@ pub enum SkipReason {
     Vent,
     /// El punto está casi sobre la balsa.
     TooLow,
+    /// Lateral sin lugar para la punta inclinada (la pieza o un venteo estorban).
+    NoRoom,
 }
 
 /// Cómo baja un punto que va hasta la balsa: la punta de `inner` (dentro de la pieza) a
@@ -244,9 +398,11 @@ pub fn build(model: &[Tri], points: &[SupportPoint], s: &SupportSettings, blocke
         let tip_r = sp.tip.map_or(s.tip_diameter, |d| d.max(0.05)) / 2.0;
         let top = z + s.tip_penetration;
         // Punta según la normal de la cara: solo si desde ahí la columna baja libre a la balsa.
-        if s.tip_normal
+        // Los laterales van siempre así (al menos a 45°): bajo una pared no hay dónde apoyar.
+        let side = sp.kind == PointKind::Side;
+        if (s.tip_normal || side)
             && let Some(n) = grid.nearest_normal(&sp.pos)
-            && let Some(t) = tip_dir(n, s.tip_max_angle)
+            && let Some(t) = tip_dir(n, if side { s.tip_max_angle.max(45.0) } else { s.tip_max_angle })
         {
             let q = add(sp.pos, t, s.tip_length);
             let inner = add(sp.pos, t, -s.tip_penetration);
@@ -256,6 +412,10 @@ pub fn build(model: &[Tri], points: &[SupportPoint], s: &SupportSettings, blocke
                 out.tilted += 1;
                 continue;
             }
+        }
+        if side {
+            out.skipped.push((idx, SkipReason::NoRoom));
+            continue;
         }
         // Lo primero que hay abajo (sin contar la cara del punto).
         match grid.below(x, y, z - 0.05) {
