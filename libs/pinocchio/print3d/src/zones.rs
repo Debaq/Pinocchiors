@@ -269,7 +269,8 @@ fn circle_fit(mesh: &Mesh, comp: &[usize], u: Vector3, v: Vector3, axis: Vector3
 }
 
 /// Busca lo que conviene dejar liso al texturizar, de entre `min_diameter` y `max_diameter` (unidades de la malla):
-/// agujeros cilíndricos, pernos (cilindros por fuera, de largo hasta tres diámetros), roscas (superficies
+/// agujeros cilíndricos, pernos (cilindros por fuera, de largo hasta tres diámetros y que son un detalle: menos del 20 %
+/// de la superficie del modelo, así un cilindro que es la pieza entera no cuenta), roscas (superficies
 /// helicoidales: se protege toda la franja entre el fondo y la cresta) y conos (avellanados). Solo devuelve las clases
 /// de `kinds`
 pub fn detect_fasteners(mesh: &Mesh, min_diameter: Real, max_diameter: Real, kinds: &[FastenerKind]) -> Vec<Fastener> {
@@ -278,6 +279,7 @@ pub fn detect_fasteners(mesh: &Mesh, min_diameter: Real, max_diameter: Real, kin
     let mut out: Vec<Fastener> = Vec::new();
     // Roscas y conos se juntan por eje (cada flanco de una rosca es una componente aparte)
     let mut helical: Vec<Fastener> = Vec::new();
+    let total_area: Real = (0..mesh.num_faces()).map(|f| mesh.get_face_area(f)).sum();
     for comp in smooth_components(mesh, 35.0) {
         if comp.len() < 8 {
             continue;
@@ -309,7 +311,7 @@ pub fn detect_fasteners(mesh: &Mesh, min_diameter: Real, max_diameter: Real, kin
             let (lo, hi) = pts.iter().fold((Real::INFINITY, Real::NEG_INFINITY), |(lo, hi), p| (lo.min(p.2), hi.max(p.2)));
             let kind = if facing < -0.8 {
                 FastenerKind::Hole
-            } else if facing > 0.8 && hi - lo <= 6.0 * radius {
+            } else if facing > 0.8 && hi - lo <= 6.0 * radius && comp.iter().map(|&f| mesh.get_face_area(f)).sum::<Real>() < 0.2 * total_area {
                 FastenerKind::Pin
             } else {
                 continue;
@@ -589,6 +591,26 @@ mod tests {
         assert!((found[0].radius - 4.0).abs() < 0.2);
         // La caja sola no tiene nada
         assert!(detect_fasteners(&b, 1.0, 100.0, &[FastenerKind::Hole, FastenerKind::Pin, FastenerKind::Thread, FastenerKind::Cone]).is_empty());
+    }
+
+    #[test]
+    fn un_cilindro_que_es_la_pieza_entera_no_es_perno() {
+        // Cilindro cerrado de Ø30 × 40 (como un vaso o un mango): los lados son casi toda la superficie
+        let (n, r, h) = (64, 15.0, 40.0);
+        let mut pos = vec![Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.0, 0.0, h)];
+        for i in 0..n {
+            let a = std::f64::consts::TAU * i as Real / n as Real;
+            pos.push(Vector3::new(r * a.cos(), r * a.sin(), 0.0));
+            pos.push(Vector3::new(r * a.cos(), r * a.sin(), h));
+        }
+        let mut tris = Vec::new();
+        for i in 0..n {
+            let j = (i + 1) % n;
+            let (b0, t0, b1, t1) = (2 + 2 * i, 3 + 2 * i, 2 + 2 * j, 3 + 2 * j);
+            tris.extend([[b0, b1, t1], [b0, t1, t0], [0, b1, b0], [1, t0, t1]]);
+        }
+        let m = Mesh::from_triangles(&pos, &tris);
+        assert!(detect_fasteners(&m, 1.0, 30.0, &[FastenerKind::Pin]).is_empty());
     }
 
     #[test]
