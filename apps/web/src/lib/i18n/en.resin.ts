@@ -84,6 +84,12 @@ export const en_resin: Catalog = {
   "Carpeta para las pruebas de exposición": "Folder for the exposure tests",
   "Pieza de calibración (no es tu modelo)": "Calibration piece (not your model)",
 
+  "Guardar en un archivo": "Save to a file",
+  "Guardar gcode ({size} MB)": "Save G-code ({size} MB)",
+  "Cópialo a la tarjeta o pendrive de la impresora, o mándalo por la red aquí abajo.": "Copy it to the printer's card or USB stick, or send it over the network below.",
+  "Mandar por la red": "Send over the network",
+  "Guardar .{ext}": "Save .{ext}",
+
   // Perfiles de resina (libs/slicer/src/sla_profiles.rs)
   "Estándar 0,05 mm": "Standard 0.05 mm",
   "Estándar 0,03 mm (detalle)": "Standard 0.03 mm (detail)",

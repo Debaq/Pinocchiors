@@ -649,9 +649,16 @@ export const ResinSection: Component<{
           <Show
             when={busy()}
             fallback={
-              <Button onClick={() => void slice()} disabled={props.disabled || !input() || !settings()} fullWidth size="sm" variant="primary" icon={<Icons.Stack size={14} />}>
-                {result() ? t("Laminar de nuevo") : t("Laminar")}
-              </Button>
+              <div class="flex gap-1.5">
+                <Button onClick={() => void slice()} disabled={props.disabled || !input() || !settings()} fullWidth size="sm" variant="primary" icon={<Icons.Stack size={14} />}>
+                  {result() ? t("Laminar de nuevo") : t("Laminar")}
+                </Button>
+                <Show when={result()?.file_bytes != null && !calibrating()}>
+                  <Button onClick={saveFile} fullWidth size="sm" icon={<Icons.Download size={14} />}>
+                    {t("Guardar .{ext}", { ext: result()!.format })}
+                  </Button>
+                </Show>
+              </div>
             }
           >
             <div class="space-y-1">

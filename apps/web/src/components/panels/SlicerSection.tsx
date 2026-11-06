@@ -535,7 +535,31 @@ export const SlicerSection: Component<{
       <div class="flex-1 min-h-0 overflow-y-auto px-3 py-2">
         <Show
           when={props.tab !== "printer"}
-          fallback={<PrinterTab confirm={props.confirm} />}
+          fallback={
+            <div class="space-y-4">
+              {/* Guardar el archivo va primero: sirve aunque la impresora no esté en la red (pendrive) */}
+              <section class="space-y-1.5 max-w-[420px]">
+                <h4 class="text-xs font-semibold uppercase tracking-wider text-text-muted">{t("Guardar en un archivo")}</h4>
+                <Show when={result()} fallback={<p class="text-[11px] text-text-dim">{t("Primero lamina la placa.")}</p>}>
+                  {(r) => (
+                    <>
+                      <Button onClick={saveGcode} fullWidth size="sm" variant="primary" icon={<Icons.Download size={14} />}>
+                        {t("Guardar gcode ({size} MB)", { size: fmtNumber(r().gcode_bytes / 1e6, { maximumFractionDigits: 1 }) })}
+                      </Button>
+                      <Show when={saved()}>
+                        <p class="text-[10px] text-green truncate">{t("Guardado en {path}", { path: saved()! })}</p>
+                      </Show>
+                      <p class="text-[10px] text-text-dim">{t("Cópialo a la tarjeta o pendrive de la impresora, o mándalo por la red aquí abajo.")}</p>
+                    </>
+                  )}
+                </Show>
+              </section>
+              <section class="space-y-1.5">
+                <h4 class="text-xs font-semibold uppercase tracking-wider text-text-muted">{t("Mandar por la red")}</h4>
+                <PrinterTab confirm={props.confirm} />
+              </section>
+            </div>
+          }
         >
         <Show
           when={info()?.available}
@@ -579,9 +603,16 @@ export const SlicerSection: Component<{
           <Show
             when={busy()}
             fallback={
-              <Button onClick={slice} disabled={props.disabled || !props.plateInput() || !printer()} fullWidth size="sm" variant="primary" icon={<Icons.Stack size={14} />}>
-                {result() ? t("Laminar de nuevo") : t("Laminar")}
-              </Button>
+              <div class="flex gap-1.5">
+                <Button onClick={slice} disabled={props.disabled || !props.plateInput() || !printer()} fullWidth size="sm" variant="primary" icon={<Icons.Stack size={14} />}>
+                  {result() ? t("Laminar de nuevo") : t("Laminar")}
+                </Button>
+                <Show when={result()}>
+                  <Button onClick={saveGcode} fullWidth size="sm" icon={<Icons.Download size={14} />}>
+                    {t("Guardar gcode")}
+                  </Button>
+                </Show>
+              </div>
             }
           >
             <div class="space-y-1">
