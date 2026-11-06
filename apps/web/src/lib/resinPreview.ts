@@ -35,6 +35,8 @@ export interface ResinSettings {
   ctb_version: number;
   /** Operaciones sobre las capas ya laminadas */
   ops: LayerOps;
+  /** `.cxdlp` de la Halot-Sky: unidad de la exposición (null = sin confirmar) y espejo */
+  cxdlp?: { exposure_unit: "tenths" | "seconds" | null; mirror: "none" | "x" | "y" | "xy" };
 }
 
 /** Operaciones sobre las capas (0 o false = apagada) */

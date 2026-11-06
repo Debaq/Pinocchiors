@@ -42,8 +42,6 @@ export const en_resin: Catalog = {
   "Soportes y balsa": "Supports and raft",
   "Subida y bajada": "Lift and retract",
   "Succión y huecos": "Suction and cavities",
-  "Todavía no se puede guardar el archivo de esta impresora: falta confirmar la unidad de exposición del formato .cxdlp.":
-    "This printer's file can't be saved yet: the exposure unit of the .cxdlp format still has to be confirmed.",
   "Un hueco encerrado hace ventosa contra el film al despegar y deja resina atrapada. Se le abre un agujero desde el piso hacia abajo.":
     "An enclosed cavity acts as a suction cup against the film when peeling and traps resin. A hole is opened from its floor downwards.",
   "Ventear huecos encerrados": "Vent enclosed cavities",
@@ -79,6 +77,30 @@ export const en_resin: Catalog = {
   "Imprimir un tapón por drenaje": "Print a plug for each drain",
   "Ahorro del vaciado": "Saved by hollowing",
   "Operaciones sobre capas": "Layer operations",
+  "Todavía no se puede guardar el .cxdlp: confirma con el archivo de prueba cómo lee la impresora la exposición (Ajustes › Impresora y resina) y vuelve a laminar.":
+    "The .cxdlp can't be saved yet: confirm with the test file how the printer reads the exposure (Settings › Printer and resin) and slice again.",
+  "Archivo .cxdlp": ".cxdlp file",
+  "Los programas no se ponen de acuerdo en cómo lee la Halot-Sky la exposición (UVtools: décimas de segundo; Lychee: segundos) ni en el espejo. Se confirma una vez con un archivo de prueba: una F de 1 mm.":
+    "Slicers disagree on how the Halot-Sky reads the exposure (UVtools: tenths of a second; Lychee: seconds) and on the mirror. Confirm it once with a test file: a 1 mm F.",
+  "Guardar archivo de prueba": "Save test file",
+  "Guardado en {path}": "Saved to {path}",
+  "1) Cópialo a la impresora y elígelo, sin imprimir: si la exposición dice 3.5 s son décimas; si dice 35 s, segundos. 2) Para el espejo, imprímelo (unos minutos) y mira en qué esquina de la placa quedó la F, con la impresora de frente.":
+    "1) Copy it to the printer and select it, without printing: if the exposure says 3.5 s it's tenths; if it says 35 s, seconds. 2) For the mirror, print it (a few minutes) and see which corner of the plate the F ended up in, facing the printer.",
+  "Exposición en el archivo": "Exposure in the file",
+  "Sin confirmar (no se guarda)": "Not confirmed (not saved)",
+  "Décimas (la prueba dijo 3.5 s)": "Tenths (the test said 3.5 s)",
+  "Segundos (la prueba dijo 35 s)": "Seconds (the test said 35 s)",
+  "Ninguno (la F quedó adelante a la izquierda)": "None (the F ended up front left)",
+  "X (quedó adelante a la derecha)": "X (it ended up front right)",
+  "Y (quedó atrás a la izquierda)": "Y (it ended up back left)",
+  "X e Y (quedó atrás a la derecha)": "X and Y (it ended up back right)",
+  "Todavía no se puede guardar el archivo .{}: falta confirmar en qué unidad lee la exposición la impresora (archivo de prueba en Impresora y resina).":
+    "The .{} file can't be saved yet: confirm which unit the printer reads the exposure in (test file in Printer and resin).",
+  "el .cxdlp de la Halot-Sky no lleva valores por capa: la subida dinámica, la exposición por tramos y la doble exposición no se hacen":
+    "the Halot-Sky .cxdlp has no per-layer values: dynamic lift, exposure by height ranges and double exposure are not applied",
+  "la exposición {} s queda en {} s (el archivo no guarda más decimales)": "the exposure {} s becomes {} s (the file stores no more decimals)",
+  "la exposición de base {} s queda en {} s (segundos enteros)": "the bottom exposure {} s becomes {} s (whole seconds)",
+  "la velocidad de {} {} mm/min queda en {} mm/min (mm/s enteros)": "the {} speed {} mm/min becomes {} mm/min (whole mm/s)",
   "Nombre en la balsa": "Name on the raft",
   "Una pestaña delante de la balsa con el texto en relieve: para saber qué placa, resina y fecha es cada pieza. Mayúsculas, sin tildes.":
     "A tab in front of the raft with embossed text: to know which plate, resin and date each part is. Capitals, no accents.",

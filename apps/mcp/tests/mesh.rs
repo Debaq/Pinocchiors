@@ -304,6 +304,10 @@ fn slice_for_resin_and_calibrate() {
     let (text, _, err) = call(&s, "resin_slice", json!({ "printer": "halot", "path": dir.path().join("x.cxdlp") }));
     assert!(err && text.contains("cannot be written"), "{text}");
     ok(&s, "resin_slice", json!({ "printer": "halot-sky", "supports": "none" }));
+    // Con la unidad confirmada sí se escribe
+    let cx = dir.path().join("x2.cxdlp");
+    ok(&s, "resin_slice", json!({ "printer": "halot-sky", "supports": "none", "path": cx, "settings": { "cxdlp": { "exposure_unit": "tenths", "mirror": "y" } } }));
+    assert!(std::fs::read(&cx).unwrap().starts_with(b"\x00\x00\x00\x09CXSW3DV2"));
 
     let (text, data) = ok(&s, "resin_calibration", json!({ "dir": dir.path(), "exposures": [2.5, 3.5] }));
     assert_eq!(data["files"].as_array().unwrap().len(), 2, "{text}");

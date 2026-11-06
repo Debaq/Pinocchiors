@@ -344,8 +344,11 @@ interior, doble exposición) y nombre en relieve en la balsa.
   pieza con y sin bordes en grises.
 - 🧪 En la app real (el arnés no dibuja 3D): editar puntos, pincel de zonas,
   drenajes y el giro elegido en el visor.
-- ⬜ CXDLP para la Halot-Sky (espera la unidad de exposición) y envío por WiFi
-  (investigar sin tocarla hasta que el usuario diga).
+- 🧪 CXDLP para la Halot-Sky: escritor hecho (igual byte a byte al de Lychee); falta
+  la prueba con el usuario (`~/Escritorio/prueba-halot-sky.cxdlp`: la pantalla dice
+  3.5 s = décimas o 35 s = segundos; impresa, la esquina dice el espejo) y elegirlo en
+  «Impresora y resina». Hasta entonces el `.cxdlp` no se guarda.
+- ⬜ Envío por WiFi a la Halot-Sky (investigar sin tocarla hasta que el usuario diga).
 - ⬜ Alto de capa por tramos: todo el laminador de resina asume alto fijo; antes,
   ver si la LD-002H respeta una z distinta por capa.
 - ⚠ Relleno de rejilla del vaciado: en piezas curvas deja bolsillos y pide más

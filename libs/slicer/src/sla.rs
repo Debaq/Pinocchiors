@@ -152,6 +152,8 @@ pub struct ResinSettings {
     pub ctb_version: u8,
     /// Operaciones sobre las capas ya laminadas (islas, huecos, balsa, atenuar, doble exposición).
     pub ops: crate::sla_ops::LayerOps,
+    /// Cómo escribir el `.cxdlp` de la Halot-Sky (unidad de la exposición y espejo, sin confirmar de fábrica).
+    pub cxdlp: crate::cxdlp::CxdlpOptions,
 }
 
 impl ResinSettings {
@@ -195,6 +197,7 @@ impl Default for ResinSettings {
             exposure_ranges: Vec::new(),
             ctb_version: 2,
             ops: crate::sla_ops::LayerOps::default(),
+            cxdlp: crate::cxdlp::CxdlpOptions::default(),
         }
     }
 }

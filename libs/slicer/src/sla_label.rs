@@ -194,7 +194,7 @@ pub fn raft_label(text: &str, raft_lo: [f32; 2], raft_hi: [f32; 2], thickness: f
 }
 
 /// Caja entre dos esquinas, con las caras hacia afuera.
-fn cuboid(out: &mut Vec<Tri>, a: [f32; 3], b: [f32; 3]) {
+pub(crate) fn cuboid(out: &mut Vec<Tri>, a: [f32; 3], b: [f32; 3]) {
     let p = |i: usize| [if i & 1 == 0 { a[0] } else { b[0] }, if i & 2 == 0 { a[1] } else { b[1] }, if i & 4 == 0 { a[2] } else { b[2] }];
     // Cada cara: cuatro esquinas en orden antihorario visto desde afuera.
     for f in [[0, 2, 3, 1], [4, 5, 7, 6], [0, 1, 5, 4], [2, 6, 7, 3], [0, 4, 6, 2], [1, 3, 7, 5]] {

@@ -15,7 +15,7 @@ use pinocchio_slicer::sla_orient::{self, Orientation, Turn};
 use pinocchio_slicer::sla_prepare::{self, PrepareSettings, VentHole};
 use pinocchio_slicer::sla_profiles::{self, ResinProfile};
 use pinocchio_slicer::sla_supports::{SkipReason, SupportDensity, SupportPoint, SupportSettings};
-use pinocchio_slicer::ctb;
+use pinocchio_slicer::{ctb, cxdlp};
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -72,9 +72,39 @@ pub struct ResinInfo {
 fn format_of(p: &ResinPrinter) -> (&'static str, bool) {
     match p.id {
         "ld-002h" => ("ctb", true),
-        // CXDLP descifrado (SLA0) pero falta confirmar la unidad de exposición
-        _ => ("cxdlp", false),
+        // CXDLP: se escribe cuando el usuario confirmó la unidad de la exposición (archivo de prueba)
+        _ => ("cxdlp", true),
     }
+}
+
+/// El archivo de la impresora: `.ctb` para la LD-002H, `.cxdlp` para la Halot-Sky (si ya
+/// se confirmó la unidad de la exposición; si no, `Ok(None)`).
+fn printer_file(layers: &[sla::Layer], pr: &ResinPrinter, settings: &ResinSettings, parts: &[Vec<Tri>]) -> Result<Option<Vec<u8>>, String> {
+    let preview = |(w, h): (u32, u32)| ctb::preview_image(parts, (w, h), [180, 190, 200]);
+    match format_of(pr).0 {
+        "ctb" => Ok(Some(ctb::write_ctb(layers, pr, settings, &preview(ctb::LARGE_PREVIEW), &preview(ctb::SMALL_PREVIEW)).map_err(|e| e.to_string())?)),
+        _ => {
+            let Some(unit) = settings.cxdlp.exposure_unit else { return Ok(None) };
+            let previews = cxdlp::PREVIEWS.map(preview);
+            Ok(Some(cxdlp::write_cxdlp(layers, pr, settings, unit, settings.cxdlp.mirror, &previews, None).map_err(|e| e.to_string())?))
+        }
+    }
+}
+
+/// Archivo de prueba para la Halot-Sky: una «F» de 1 mm con la exposición normal en el
+/// valor crudo 35 (la pantalla dice 3,5 s si son décimas, 35 s si son segundos). Con el
+/// espejo de `settings.cxdlp`. Se guarda en `path`.
+#[tauri::command]
+pub fn save_resin_probe(path: String, settings: ResinSettings) -> Result<u64, String> {
+    let pr = &sla::HALOT_SKY;
+    let piece = cxdlp::probe_piece(pr);
+    let layers = sla::slice(&piece, pr, settings.layer_height).map_err(|e| e.to_string())?;
+    let parts = vec![piece];
+    let previews = cxdlp::PREVIEWS.map(|(w, h)| ctb::preview_image(&parts, (w, h), [180, 190, 200]));
+    let bytes = cxdlp::write_cxdlp(&layers, pr, &settings, cxdlp::ExposureUnit::Tenths, settings.cxdlp.mirror, &previews, Some(cxdlp::PROBE_RAW_EXPOSURE))
+        .map_err(|e| e.to_string())?;
+    std::fs::write(&path, &bytes).map_err(|e| format!("No se pudo guardar el archivo: {e}"))?;
+    Ok(bytes.len() as u64)
 }
 
 /// Impresoras de resina, perfiles y soportes de fábrica.
@@ -238,21 +268,15 @@ fn finish(
     progress("prepare", 15, "Venteos, soportes y capas...");
     let p = sla_prepare::prepare(&tris, pr, settings, prepare, points).map_err(|e| e.to_string())?;
     progress("file", 85, "Escribiendo el archivo...");
-    let (format, can_write) = format_of(pr);
-    let file = if can_write {
-        let parts = vec![p.model.clone(), p.supports.clone()];
-        let preview = |(w, h): (u32, u32)| ctb::preview_image(&parts, (w, h), [180, 190, 200]);
-        Some(ctb::write_ctb(&p.layers, pr, settings, &preview(ctb::LARGE_PREVIEW), &preview(ctb::SMALL_PREVIEW)).map_err(|e| e.to_string())?)
-    } else {
-        None
-    };
+    let (format, _) = format_of(pr);
+    let file = printer_file(&p.layers, pr, settings, &[p.model.clone(), p.supports.clone()])?;
     let volume = sla::volume_ml(&p.layers, pr, settings.layer_height);
     let layer_z: Vec<f32> = p.layers.iter().map(|l| l.z).collect();
     let layer_area = sla_layers::layer_areas(&p.layers, pr);
     let layer_params = sla_layers::layer_params(&layer_area, &layer_z, settings);
     let mut warnings = sla_profiles::validate(settings, pr);
-    if !can_write {
-        warnings.push(format!("Todavía no se puede guardar el archivo .{format} de esta impresora (falta confirmar la unidad de exposición)."));
+    if file.is_none() {
+        warnings.push(format!("Todavía no se puede guardar el archivo .{format}: falta confirmar en qué unidad lee la exposición la impresora (archivo de prueba en Impresora y resina)."));
     }
     let result = ResinResult {
         plate,
@@ -317,17 +341,12 @@ pub(crate) fn calibration(printer: &str, settings: &ResinSettings) -> Result<Res
 pub fn save_resin_calibration(dir: String, exposures: Vec<f32>) -> Result<Vec<String>, String> {
     let last = LAST.lock().unwrap();
     let last = last.as_ref().ok_or("Todavía no hay nada laminado")?;
-    let (format, can_write) = format_of(last.printer);
-    if !can_write {
-        return Err("Todavía no se puede guardar el archivo de esta impresora".into());
-    }
+    let (format, _) = format_of(last.printer);
     let parts = vec![last.model.clone()];
-    let preview = |(w, h): (u32, u32)| ctb::preview_image(&parts, (w, h), [180, 190, 200]);
-    let (large, small) = (preview(ctb::LARGE_PREVIEW), preview(ctb::SMALL_PREVIEW));
     let mut out = Vec::new();
     for e in exposures {
         let settings = ResinSettings { exposure: e, exposure_ranges: Vec::new(), ..last.settings.clone() };
-        let bytes = ctb::write_ctb(&last.layers, last.printer, &settings, &large, &small).map_err(|e| e.to_string())?;
+        let bytes = printer_file(&last.layers, last.printer, &settings, &parts)?.ok_or("Todavía no se puede guardar el archivo de esta impresora: falta confirmar la unidad de la exposición")?;
         let name = format!("calibracion-{}-{}s.{format}", last.printer.id, format!("{e:.2}").trim_end_matches('0').trim_end_matches('.'));
         let path = std::path::Path::new(&dir).join(name);
         std::fs::write(&path, bytes).map_err(|e| format!("No se pudo guardar el archivo: {e}"))?;

@@ -277,7 +277,7 @@ fn resin_settings_props() -> Vec<Prop> {
         ("profile", string("Resin profile id or name (default standard)"), false),
         (
             "settings",
-            json!({ "type": "object", "description": "Changes to the profile: layer_height (mm), exposure and bottom_exposure (s), bottom_layers, light_off (s), lift (mm), lift_speed (mm/min), bottom_lift, bottom_lift_speed, retract_speed, density (g/ml), cost_per_ml, antialias (1 = off, 2, 4 or 8: grey edges), xy_offset (mm per side, + grows), elephant_foot (mm, bottom layers shrink), hole_offset (mm, grows holes up to hole_max mm), ctb_version (2 = same values on every layer, the tested default; 3 = per-layer values, needed for the next two), dynamic_lift {enabled, area_min, area_max (mm²), speed_min (mm/min), lift_max (mm)}: slower, higher lift on layers with more area, exposure_ranges [{from, to (mm of height), exposure (s)}], ops {remove_islands_px, fill_holes_px (0 = off: loose specks / pinholes up to that many pixels), raft_relief (bool: the raft becomes loose crosses every relief_spacing mm plus what is under the supports), dim (bool: dim_percent % light farther than dim_wall mm from the edge, not on bottom layers), double_exposure (bool, needs ctb_version 3: each layer twice, first shrunk double_erode px with double_first of the exposure)}" }),
+            json!({ "type": "object", "description": "Changes to the profile: layer_height (mm), exposure and bottom_exposure (s), bottom_layers, light_off (s), lift (mm), lift_speed (mm/min), bottom_lift, bottom_lift_speed, retract_speed, density (g/ml), cost_per_ml, antialias (1 = off, 2, 4 or 8: grey edges), xy_offset (mm per side, + grows), elephant_foot (mm, bottom layers shrink), hole_offset (mm, grows holes up to hole_max mm), ctb_version (2 = same values on every layer, the tested default; 3 = per-layer values, needed for the next two), dynamic_lift {enabled, area_min, area_max (mm²), speed_min (mm/min), lift_max (mm)}: slower, higher lift on layers with more area, exposure_ranges [{from, to (mm of height), exposure (s)}], ops {remove_islands_px, fill_holes_px (0 = off: loose specks / pinholes up to that many pixels), raft_relief (bool: the raft becomes loose crosses every relief_spacing mm plus what is under the supports), dim (bool: dim_percent % light farther than dim_wall mm from the edge, not on bottom layers), double_exposure (bool, needs ctb_version 3: each layer twice, first shrunk double_erode px with double_first of the exposure)}, cxdlp {exposure_unit: \"tenths\" | \"seconds\" (how the Halot-Sky reads the exposure; while unset its .cxdlp is not written — the user confirms it with the test file in the app), mirror: none | x | y | xy}" }),
             false,
         ),
     ]
@@ -393,6 +393,16 @@ fn resin_input(ctx: &Ctx, args: &Value, p: &Value, settings: &Value) -> Result<V
     plate_input(ctx, args, p["name"].as_str().unwrap_or(""), &p["bed"], 0.15, settings["layer_height"].as_f64().unwrap_or(0.05), "Resina")
 }
 
+/// El `.cxdlp` sin la unidad de la exposición confirmada no se escribe.
+fn unconfirmed(p: &Value) -> Fail {
+    Fail::new(format!(
+        "the .{} file of {} cannot be written yet: how the printer reads the exposure (tenths or seconds) is not confirmed",
+        p["format"].as_str().unwrap_or(""),
+        p["name"].as_str().unwrap_or("")
+    ))
+    .hint("the user checks it with the test file in the app (Printer and resin); then pass settings.cxdlp.exposure_unit, or omit `path` to only check")
+}
+
 fn resin_slice(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
     need_model(ctx)?;
     let (p, prof, settings) = resin_choice(ctx, args)?;
@@ -425,6 +435,9 @@ fn resin_slice(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
         json!({ "input": input, "plate": args["plate"].as_u64().unwrap_or(0), "printer": p["id"], "settings": settings, "prepare": prepare, "points": points, "tilt": tilt }),
     )?;
     if let Some(path) = &path {
+        if r["file_bytes"].is_null() {
+            return Err(unconfirmed(&p));
+        }
         ctx.call("save_resin", json!({ "path": path }))?;
     }
     let f = |k: &str| r[k].as_f64().unwrap_or(0.0);
@@ -562,6 +575,9 @@ fn resin_calibration(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
     let (p, _, settings) = resin_choice(ctx, args)?;
     if p["can_write"] != true {
         return Err(Fail::new(format!("the .{} file of {} cannot be written yet", p["format"].as_str().unwrap_or(""), p["name"].as_str().unwrap_or(""))));
+    }
+    if p["format"] == "cxdlp" && settings["cxdlp"]["exposure_unit"].is_null() {
+        return Err(unconfirmed(&p));
     }
     let exposures: Vec<f64> = match args["exposures"].as_array() {
         Some(list) => list.iter().filter_map(Value::as_f64).collect(),

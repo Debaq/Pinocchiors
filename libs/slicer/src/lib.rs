@@ -9,6 +9,7 @@
 //! Coordenadas: milímetros, Z arriba, origen en la esquina de la cama (como Orca).
 
 pub mod ctb;
+pub mod cxdlp;
 mod engine;
 mod error;
 pub mod gcode;

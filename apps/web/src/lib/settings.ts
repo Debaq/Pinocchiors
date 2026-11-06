@@ -96,6 +96,15 @@ function migratedPrinters(): NetPrinter[] {
   }
   return [];
 }
+/** Cómo lee la Halot-Sky el `.cxdlp` (se confirma con el archivo de prueba): unidad de la exposición y espejo */
+export interface CxdlpOptions {
+  exposure_unit: "tenths" | "seconds" | null;
+  mirror: "none" | "x" | "y" | "xy";
+}
+const [cxdlpRaw, setCxdlpRaw] = createPersisted<CxdlpOptions>("settings.resinCxdlp", { exposure_unit: null, mirror: "none" });
+export const resinCxdlp = (): CxdlpOptions => ({ exposure_unit: cxdlpRaw()?.exposure_unit ?? null, mirror: cxdlpRaw()?.mirror ?? "none" });
+export const setResinCxdlp = (patch: Partial<CxdlpOptions>) => setCxdlpRaw({ ...resinCxdlp(), ...patch });
+
 const [netPrintersRaw, setNetPrintersRaw] = createPersisted<NetPrinter[]>("settings.netPrinters", migratedPrinters());
 export const netPrinters = (): NetPrinter[] => (Array.isArray(netPrintersRaw()) ? netPrintersRaw() : []);
 /** Guarda (o reemplaza, por id) una impresora */

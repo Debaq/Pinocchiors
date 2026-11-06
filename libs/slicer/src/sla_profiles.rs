@@ -99,6 +99,14 @@ pub fn validate(s: &ResinSettings, printer: &ResinPrinter) -> Vec<String> {
     if s.lift_speed > 300.0 || s.retract_speed > 400.0 {
         w.push("velocidades muy altas: riesgo de que la pieza se suelte".into());
     }
+    if printer.id == "halot-sky" {
+        if s.per_layer() || s.ops.double_exposure {
+            w.push("el .cxdlp de la Halot-Sky no lleva valores por capa: la subida dinámica, la exposición por tramos y la doble exposición no se hacen".into());
+        }
+        if let Some(unit) = s.cxdlp.exposure_unit {
+            w.extend(crate::cxdlp::rounding_notes(s, unit));
+        }
+    }
     if s.ops.double_exposure && !s.per_layer() {
         w.push("la doble exposición necesita el archivo con valores por capa (.ctb v3): con v2 no se hace".into());
     }

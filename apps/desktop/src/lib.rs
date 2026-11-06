@@ -256,6 +256,7 @@ pub fn run() {
             resin::resin_layer,
             resin::resin_view,
             resin::save_resin,
+            resin::save_resin_probe,
             resin::resin_calibration,
             resin::save_resin_calibration,
             printers::printer_info,

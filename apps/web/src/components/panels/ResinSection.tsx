@@ -36,6 +36,7 @@ const turnLabel = (turn: ResinTurn) =>
     .map((k) => `${k.toUpperCase()} ${fmtNumber(turn[k], { maximumFractionDigits: 1 })}°`)
     .join(" · ");
 import { PrinterPicture } from "./PrinterSection";
+import { resinCxdlp, setResinCxdlp, type CxdlpOptions } from "../../lib/settings";
 import type { PlateInputArgs, SlicerTab } from "./SlicerSection";
 
 interface Progress {
@@ -121,7 +122,21 @@ export const ResinSection: Component<{
   const profile = () => profiles().find((p) => p.id === props.prep.profile) ?? profiles()[0];
   const settings = (): ResinSettings | undefined => {
     const p = profile();
-    return p ? { ...p.settings, ...props.prep.settings } : undefined;
+    // La unidad y el espejo del .cxdlp son de la impresora, no del proyecto: van en los ajustes de la app
+    return p ? { ...p.settings, ...props.prep.settings, cxdlp: resinCxdlp() } : undefined;
+  };
+  const [probeSaved, setProbeSaved] = createSignal<string>();
+  const saveProbe = async () => {
+    const s = settings();
+    if (!s) return;
+    const path = await save({ title: t("Guardar archivo de prueba"), defaultPath: "prueba-halot-sky.cxdlp", filters: [{ name: "CXDLP", extensions: ["cxdlp"] }] });
+    if (!path) return;
+    try {
+      await invoke<number>("save_resin_probe", { path, settings: s });
+      setProbeSaved(path);
+    } catch (e) {
+      setError(errText(e));
+    }
   };
   const setSetting = <K extends keyof ResinSettings>(key: K, v: ResinSettings[K]) => {
     const next = { ...props.prep.settings, [key]: v };
@@ -416,6 +431,44 @@ export const ResinSection: Component<{
                     </Show>
                   </div>
                 </div>
+                <Show when={printer()?.format === "cxdlp"}>
+                  <div class="rounded border border-border p-2 space-y-1.5">
+                    <p class="text-[11px] text-text-muted">{t("Archivo .cxdlp")}</p>
+                    <p class="text-[10px] text-text-dim">
+                      {t("Los programas no se ponen de acuerdo en cómo lee la Halot-Sky la exposición (UVtools: décimas de segundo; Lychee: segundos) ni en el espejo. Se confirma una vez con un archivo de prueba: una F de 1 mm.")}
+                    </p>
+                    <Button size="sm" variant="ghost" fullWidth onClick={() => void saveProbe()} icon={<Icons.Download size={14} />}>
+                      {t("Guardar archivo de prueba")}
+                    </Button>
+                    <Show when={probeSaved()}>
+                      <p class="text-[10px] text-green break-all">{t("Guardado en {path}", { path: probeSaved()! })}</p>
+                    </Show>
+                    <p class="text-[10px] text-text-dim">
+                      {t("1) Cópialo a la impresora y elígelo, sin imprimir: si la exposición dice 3.5 s son décimas; si dice 35 s, segundos. 2) Para el espejo, imprímelo (unos minutos) y mira en qué esquina de la placa quedó la F, con la impresora de frente.")}
+                    </p>
+                    <Select
+                      label={t("Exposición en el archivo")}
+                      options={[
+                        { value: "", label: t("Sin confirmar (no se guarda)") },
+                        { value: "tenths", label: t("Décimas (la prueba dijo 3.5 s)") },
+                        { value: "seconds", label: t("Segundos (la prueba dijo 35 s)") },
+                      ]}
+                      value={resinCxdlp().exposure_unit ?? ""}
+                      onChange={(v) => setResinCxdlp({ exposure_unit: (v || null) as CxdlpOptions["exposure_unit"] })}
+                    />
+                    <Select
+                      label={t("Espejo")}
+                      options={[
+                        { value: "none", label: t("Ninguno (la F quedó adelante a la izquierda)") },
+                        { value: "x", label: t("X (quedó adelante a la derecha)") },
+                        { value: "y", label: t("Y (quedó atrás a la izquierda)") },
+                        { value: "xy", label: t("X e Y (quedó atrás a la derecha)") },
+                      ]}
+                      value={resinCxdlp().mirror}
+                      onChange={(v) => setResinCxdlp({ mirror: v as CxdlpOptions["mirror"] })}
+                    />
+                  </div>
+                </Show>
                 <Select label={t("Resina")} options={profiles().map((p) => ({ value: p.id, label: t(p.name) }))} value={profile()?.id} onChange={(v) => set({ profile: v, settings: {} })} />
                 <p class="text-[10px] text-text-dim">{t("Los perfiles son un punto de partida: la exposición depende de la resina y de la temperatura. Calibra con una pieza de prueba.")}</p>
                 <Show when={changed() > 0}>
@@ -886,7 +939,7 @@ export const ResinSection: Component<{
         <div class="space-y-2 max-w-[420px]">
           <Show
             when={r().file_bytes != null}
-            fallback={<p class="text-[11px] text-warning">{t("Todavía no se puede guardar el archivo de esta impresora: falta confirmar la unidad de exposición del formato .cxdlp.")}</p>}
+            fallback={<p class="text-[11px] text-warning">{t("Todavía no se puede guardar el .cxdlp: confirma con el archivo de prueba cómo lee la impresora la exposición (Ajustes › Impresora y resina) y vuelve a laminar.")}</p>}
           >
             <Button onClick={saveFile} fullWidth size="sm" variant="primary" icon={<Icons.Download size={14} />}>
               {t("Guardar .{ext} ({size} MB)", { ext: r().format, size: fmtNumber((r().file_bytes ?? 0) / 1e6, { maximumFractionDigits: 1 }) })}
