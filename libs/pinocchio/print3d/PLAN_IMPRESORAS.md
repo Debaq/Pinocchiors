@@ -77,7 +77,17 @@ Referencia: `src/slic3r/Utils/CrealityPrint.cpp` de Orca 2.4.2.
   PID, malla, límites); `ReqPrinterPara` → `curZOffset`; `reqOtaInfo`; `reqElapseVideoList`;
   `reqPrintObjects`.
 - **HTTP**: `/info`, `/upload/{archivo}`, `/downloads/gcode/{archivo}`, `/downloads/video/{archivo}`.
-- `state` confirmado: 2 = terminada (el cubito), 4 = cancelada.
+- `state` oficial (tabla `statusArr` de la web de la impresora): 0 detenida, 1 imprimiendo,
+  2 terminada, 3 falló, 4 cancelada, 5 en pausa.
+- **Formatos que usa la propia web de Creality** (`http://<ip>/static/js/app.*.js`):
+  `setZOffset: "+0.05"` / `"-0.05"` (relativo; ojo, no `zOffset`), `setPosition: "X10 F3000"`
+  (relativo), `autohome: "X Y Z"`, `nozzleTempControl: 220`, `bedTempControl: {num: 0, val: 60}`,
+  ventiladores con `gcodeCmd: "M106 P0|P1|P2 S0-255"`, `fan`/`fanCase`/`fanAuxiliary: 0/1`,
+  `lightSw: 0/1`, `setFeedratePct: n`, `excludeObjects: [nombre]`, `deleteHistory`,
+  `rmProbedMatrix`, `restartKlipper: 1`, `restartFirmware: 1`, `cleanErr: 1`.
+- **Versión**: la red no da la versión del sistema (en `modelVersion` llega vacío
+  «printer sw ver:»; `/info` da la de la API, 1.0.0); solo la de la pantalla (DWIN). La del
+  sistema se ve en la pantalla de la impresora. La K1 rooteada: 1.3.3.46 (`/etc/ota_info`).
 - Hay latido (heartbeat) y la lista de archivos llega en varios mensajes que hay que juntar
   (lo cuenta el issue de 3d-cli). Sin documentación oficial: puede cambiar con el firmware.
 - En Rust hace falta un cliente WebSocket (p. ej. `tungstenite`, síncrono y sin TLS).
