@@ -67,7 +67,7 @@ gris de 7 bits extendido a 8). Decodificada da exactamente 1620 × 2560 px; el c
 **3840 × 2400 px (50 µm)**, 64 bytes en cero, 3 miniaturas RGB565 (116², 290², 290²,
 cada una seguida de `\r\n`), plataforma y capa como texto UTF-16 («192.00», «120.00»,
 «0.050»), 11 parámetros u16 (exposición 3, espera 1, base 30, 6 capas de base, subida 7,
-velocidades 1, PWM 255: **unidades a confirmar con lo que puso el usuario en Halot Box**),
+velocidades 1, PWM 255; el archivo lo hizo **Lychee**). **Unidad de la exposición sin resolver**: UVtools (desde v3.2.0) la guarda en **décimas** (3 = 0,3 s) y la de base en segundos, pero Lychee escribió 3 y 30, que en segundos (3 s / 30 s) son los valores típicos de la Halot-Sky. Se confirma sin imprimir: seleccionar el archivo en la impresora y ver qué exposición muestra la pantalla. Hacerlo antes de imprimir el primer `.cxdlp` de Pinocchio),
 tabla de áreas por capa, y cada capa: área, cantidad de líneas y **líneas verticales de 6
 bytes** (inicio Y 13 bits, fin Y 13 bits **inclusivo**, X 14 bits, gris). Pie `CXSW3DV2` y
 un **checksum XOR** de todo el archivo (verificado: coincide). El cubo da 20,00 × 20,00 mm.
