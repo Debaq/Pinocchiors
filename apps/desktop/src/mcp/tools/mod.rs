@@ -9,6 +9,7 @@ use crate::mcp::session::Session;
 
 mod assembly;
 mod basics;
+mod calibration;
 mod cad;
 mod drawing;
 mod features;
@@ -88,6 +89,7 @@ pub fn all() -> Vec<&'static Tool> {
     list.extend(print::TOOLS);
     list.extend(slice::TOOLS);
     list.extend(printers::TOOLS);
+    list.extend(calibration::TOOLS);
     list.extend(render_scan::TOOLS);
     list.extend(cad::TOOLS[5..].iter());
     list

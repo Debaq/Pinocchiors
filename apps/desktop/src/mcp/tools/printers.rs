@@ -14,10 +14,10 @@ use crate::mcp::schema::{boolean, integer, object, string};
 
 pub const TOOLS: &[Tool] = &[LIST, STATUS, CONTROL, SEND];
 
-const PRINTER_HELP: &str = "The printer: its name in the app (see `printer_list`) or its address (IP or host name)";
+pub(super) const PRINTER_HELP: &str = "The printer: its name in the app (see `printer_list`) or its address (IP or host name)";
 
 /// Las impresoras guardadas en la app (solo con la app abierta)
-fn saved(ctx: &Ctx) -> Vec<Value> {
+pub(super) fn saved(ctx: &Ctx) -> Vec<Value> {
     match ctx.session.backend.ask_with("printers", Value::Null) {
         Some(Ok(Value::Array(list))) => list,
         _ => Vec::new(),
@@ -26,7 +26,7 @@ fn saved(ctx: &Ctx) -> Vec<Value> {
 
 /// La conexión: una guardada en la app por nombre, o una dirección (se prueba Klipper y
 /// después Creality de fábrica)
-fn connection(ctx: &Ctx, args: &Value) -> Result<(Value, String), Fail> {
+pub(super) fn connection(ctx: &Ctx, args: &Value) -> Result<(Value, String), Fail> {
     let want = arg_str(args, "printer").unwrap_or("").trim().to_string();
     if want.is_empty() {
         return Err(Fail::new("which printer?").hint("pass `printer`: a name from `printer_list` or an address"));
@@ -177,7 +177,7 @@ fn status(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
 // ─── Órdenes ────────────────────────────────────────────────────────────────
 
 /// Pide al usuario que apruebe una acción sobre la impresora
-fn approve(ctx: &Ctx, args: &Value, title: &str, message: &str) -> Result<(), Fail> {
+pub(super) fn approve(ctx: &Ctx, args: &Value, title: &str, message: &str) -> Result<(), Fail> {
     match ctx.session.backend.ask_with("confirm", json!({ "title": title, "message": message })) {
         Some(Ok(Value::Bool(true))) => Ok(()),
         Some(Ok(_)) => Err(Fail::new("the user said no").hint("do not retry unless the user asks again")),

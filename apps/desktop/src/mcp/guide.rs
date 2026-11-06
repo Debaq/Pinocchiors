@@ -148,7 +148,30 @@ Texture: `print_skin` {\"pattern\": \"diamonds\", \"zone\": {\"directions\": [\"
    test files. These only write files.
 7. Printers on the network: `printer_list`, `printer_status` (reads everything: progress, temperatures, Z offset,
    bed mesh, history, files). Acting on a printer (`printer_control`: Z offset, temperatures, moving, calibrations,
-   G-code, reprint…; `printer_send`: upload/print a G-code) ONLY when the user asks; the user approves each one.",
+   G-code, reprint…; `printer_send`: upload/print a G-code) ONLY when the user asks; the user approves each one.
+8. Tuning a filament printer: see the `calibration` topic.",
+    ),
+    (
+        "calibration",
+        "Tuning a filament printer and its filament (calibration tests)",
+        "\
+Calibration belongs to one physical printer (the one saved in the app) and one filament; what is saved is applied by itself
+when slicing for that printer with that filament.
+1. `calibration_status` {\"printer\": \"K1-436A\", \"filament\": \"PETG\"} — what is calibrated and the steps in the recommended
+   order (bed and first layer, temperature, flow coarse then fine, pressure advance, retraction, max volumetric speed,
+   clearance and measured block, input shaping, VFA, corners), marking the next one. Without the app open pass the
+   printer's address (calibrations are then kept under that address) and `machine` from `print_machines`.
+2. `calibration_test` {\"printer\": ..., \"test\": \"temperature\"} — slices the test and explains how to read it: which value
+   each block or piece has, or how to turn a measured height into a value. `start`/`end`/`step` change the range. Only
+   slices unless `print: true`; printing needs the user's OK like `printer_send` (they approve in the app; without the app
+   ask them and pass `user_confirmed: true`) and a clear bed.
+3. When it is printed, ask the user which block or piece looks best, or ask them to attach a photo of the test and choose
+   from it. Say which one you chose and why before saving.
+4. `calibration_save` {\"printer\": ..., \"key\": \"temperature\", \"value\": 225, \"filament\": \"PETG\"} — saves it with the date
+   and the test; the previous value stays in the history. Then `calibration_status` for the next step.
+- Redo a step if something earlier changed (status marks it \"repeat\"): e.g. flow after a new temperature.
+- Input shaping, VFA and corners are optional and only for printers that have those (Klipper). Never change the printer's
+  own configuration to calibrate: the values go into the slicer profile for each print.",
     ),
     (
         "projects",

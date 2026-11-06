@@ -3370,7 +3370,7 @@ pub mod bridge {
     }
 
     /// Comandos que avisan su avance por un `Channel`
-    const REPORTS_PROGRESS: &[&str] = &["slice_plate", "resin_slice", "import_model", "cad_part_to_model", "remesh_preview", "remesh_apply", "repair_mesh", "unwrap_original_mesh", "ray_render_view", "scan_mesh_file"];
+    const REPORTS_PROGRESS: &[&str] = &["slice_plate", "slice_calibration", "resin_slice", "import_model", "cad_part_to_model", "remesh_preview", "remesh_apply", "repair_mesh", "unwrap_original_mesh", "ray_render_view", "scan_mesh_file"];
 
     /// Hacia dónde va el avance de un comando (`None`: no se usa)
     struct Ticks(Option<std::sync::mpsc::Sender<(f64, String)>>);
@@ -3668,6 +3668,16 @@ pub mod bridge {
             "slicer_config" => ok(crate::slicer::slicer_config(arg(args, "printer")?, arg(args, "process")?, arg(args, "filament")?)?),
             "slice_plate" => ok(crate::slicer::slice_plate_impl(state, arg(args, "input")?, arg(args, "plate")?, arg(args, "settings")?, &ticks.channel())?),
             "save_gcode" => ok(crate::slicer::save_gcode(arg(args, "path")?)?),
+            "slice_calibration" => ok(crate::slicer::slice_calibration_impl(
+                arg(args, "settings")?,
+                arg::<Option<crate::calibrations::CalTarget>>(args, "calibration")?.as_ref(),
+                &arg::<String>(args, "test")?,
+                &arg::<Option<pinocchio_slicer::calib::CalibRange>>(args, "range")?.unwrap_or_default(),
+                &ticks.channel(),
+            )?),
+            "calibration_get" => ok(crate::calibrations::calibration_get(arg(args, "target")?)?),
+            "calibration_save" => ok(crate::calibrations::calibration_save(arg(args, "target")?, arg(args, "key")?, arg(args, "value")?, arg(args, "test")?, arg(args, "note")?)?),
+            "calibration_clear" => ok(crate::calibrations::calibration_clear(arg(args, "target")?, arg(args, "key")?)?),
             "resin_presets" => ok(crate::resin::resin_presets()),
             "resin_slice" => ok(crate::resin::resin_slice_impl(
                 state,

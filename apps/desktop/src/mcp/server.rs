@@ -241,7 +241,17 @@ const PROMPTS: &[(&str, &str, &str, &str)] = &[(
     "Look at the current work and explain what can be done next",
     "Call the `status` tool to see what is loaded in Pinocchio, then read `help` with topic `overview`. \
 Summarise the current work for me in two or three sentences and suggest what I could do next.",
-)];
+),
+    (
+        "tune_printer",
+        "Tune a printer and its filament",
+        "Walk through the calibration tests of a printer, one at a time, and save the results",
+        "Help me tune a 3D printer and filament. Call `printer_list` to see the printers (ask me which one and which filament if it is not obvious), \
+then `calibration_status` to see what is done and what is next. Follow the order it gives: for each step run `calibration_test` (it only slices) and tell me \
+how to read it; print it with `print: true` ONLY after I say so and the bed is clear. When it is printed, ask me which block or piece looks best, or \
+to attach a photo of the test and choose from it: say which one you chose and why, \
+and save it with `calibration_save` once I agree. Then go to the next step. Do not change the printer's own configuration.",
+    )];
 
 fn get_prompt(params: &Value) -> Result<Value, (i64, String)> {
     let name = params.get("name").and_then(Value::as_str).unwrap_or_default();

@@ -12,27 +12,27 @@ use crate::mcp::schema::{array, boolean, integer, number_in, object, one_of, poi
 
 pub const TOOLS: &[Tool] = &[MACHINES, SLICE, RESIN_SLICE, RESIN_TILTS, RESIN_CALIBRATION];
 
-fn fmt_time(seconds: f64) -> String {
+pub(super) fn fmt_time(seconds: f64) -> String {
     let s = seconds.round() as u64;
     if s >= 3600 { format!("{} h {} min", s / 3600, (s % 3600) / 60) } else { format!("{} min {} s", s / 60, s % 60) }
 }
 
 /// Lo que se busca por nombre: sin mayúsculas ni espacios ni guiones
-fn key(s: &str) -> String {
+pub(super) fn key(s: &str) -> String {
     s.to_lowercase().chars().filter(|c| c.is_alphanumeric() || *c == '.').collect()
 }
 
-fn find_by<'a>(list: &'a [Value], field: &str, want: &str) -> Option<&'a Value> {
+pub(super) fn find_by<'a>(list: &'a [Value], field: &str, want: &str) -> Option<&'a Value> {
     let w = key(want);
     list.iter().find(|v| v[field].as_str().is_some_and(|n| key(n) == w)).or_else(|| list.iter().find(|v| v[field].as_str().is_some_and(|n| key(n).contains(&w))))
 }
 
-fn names(list: &[Value], field: &str) -> String {
+pub(super) fn names(list: &[Value], field: &str) -> String {
     list.iter().filter_map(|v| v[field].as_str()).collect::<Vec<_>>().join(", ")
 }
 
 /// Nombre corto de un perfil de Orca: «0.20mm Standard @Creality K1» → «0.20mm Standard»
-fn short(name: &str) -> &str {
+pub(super) fn short(name: &str) -> &str {
     name.split('@').next().unwrap_or(name).trim()
 }
 
