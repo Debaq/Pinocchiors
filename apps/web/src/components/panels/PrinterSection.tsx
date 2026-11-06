@@ -627,7 +627,7 @@ export const PrinterTab: Component<{ confirm: (request: ConfirmRequest) => Promi
       </Show>
       {/* Ajustes en vivo, mando manual, calibraciones, consola, historial y archivos (Klipper y K1 de fábrica) */}
       <Show when={current()?.kind !== "flashforge" && status() && current()}>
-        {(p) => <PrinterControls conn={() => conn(p())} name={p().name} state={status()?.state ?? ""} confirm={props.confirm} />}
+        {(p) => <PrinterControls conn={() => conn(p())} name={p().name} state={status()?.state ?? ""} printerKind={p().kind} confirm={props.confirm} />}
       </Show>
     </div>
   );

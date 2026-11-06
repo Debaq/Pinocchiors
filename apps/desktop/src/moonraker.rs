@@ -109,6 +109,11 @@ impl Printer {
         self.send(self.request(reqwest::Method::DELETE, path))
     }
 
+    /// La URL base («http://host:7125»)
+    pub(crate) fn base(&self) -> &str {
+        &self.base
+    }
+
     fn connection_error(&self, e: &reqwest::Error) -> String {
         if e.is_timeout() {
             format!("La impresora no respondió a tiempo ({})", self.base)

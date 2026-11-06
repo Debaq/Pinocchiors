@@ -77,6 +77,16 @@ export const en_printers: Catalog = {
   "La IA pide permiso": "The AI asks for permission",
   "Permitir": "Allow",
 
+  // Cámara (PrinterCamera)
+  "Cámara": "Camera",
+  "Conectando con la cámara...": "Connecting to the camera...",
+  "Guardar foto": "Save photo",
+  "La cámara de esta impresora está cifrada por el firmware (solo se ve por la app de Creality o la nube). Para verla aquí habría que rootearla.":
+    "This printer's camera is encrypted by the firmware (only viewable through the Creality app or the cloud). To see it here it would have to be rooted.",
+  "No se encontró cámara. Enchufa una cámara USB (UVC) a la impresora y actívala.": "No camera found. Plug a USB (UVC) camera into the printer and enable it.",
+  "No se encontró cámara local. Si enchufaste una, con el firmware de fábrica (1.3.5.22) la cámara queda cifrada y no se ve aquí.":
+    "No local camera found. If you plugged one in, on the stock firmware (1.3.5.22) the camera is encrypted and can't be seen here.",
+
   // Mensajes del backend
   "Temperatura de {what} fuera de 0–{max} °C": "{what} temperature outside 0–{max} °C",
   "El ajuste de altura va de a poco: entre −1 y 1 mm": "The height adjustment goes little by little: between −1 and 1 mm",
@@ -92,5 +102,9 @@ export const en_printers: Catalog = {
   "Esta impresora no tiene esos controles": "This printer doesn't have those controls",
   "Esta impresora no entiende esa orden": "This printer doesn't understand that command",
   "La impresora no entiende esa orden": "The printer doesn't understand that command",
+  "No se pudo leer la cámara: {}": "Couldn't read the camera: {}",
+  "La cámara respondió {}": "The camera answered {}",
+  "La cámara no mandó una imagen": "The camera didn't send an image",
+  "La foto no es de esta impresora": "The photo isn't from this printer",
   "Esta impresora no tiene timelapse en Moonraker": "This printer has no timelapse in Moonraker",
 };

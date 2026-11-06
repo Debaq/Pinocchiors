@@ -5,6 +5,7 @@ import * as Icons from "../icons";
 import { fmtNumber, t } from "../../lib/i18n";
 import { tBackend } from "../../lib/i18nBackend.ts";
 import type { ConfirmRequest } from "../layout/ConfirmDialog";
+import { PrinterCamera } from "./PrinterCamera";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TIPOS (espejo de apps/desktop/src/printer_control.rs)
@@ -113,6 +114,8 @@ export const PrinterControls: Component<{
   name: string;
   /** Estado de la impresión (printing, paused, standby…) */
   state: string;
+  /** "moonraker" | "creality" | "flashforge" */
+  printerKind: string;
   confirm: (request: ConfirmRequest) => Promise<boolean>;
 }> = (props) => {
   const [details, setDetails] = createSignal<PrinterDetails>();
@@ -189,6 +192,10 @@ export const PrinterControls: Component<{
 
   return (
     <>
+      {/* ── Cámara ── */}
+      <div>
+        <PrinterCamera conn={props.conn} printerKind={props.printerKind} />
+      </div>
       {/* ── Ajustes en vivo ── */}
       <div>
         <Panel id="printer.live" dense title={t("Ajustes en vivo")} icon={<Icons.Sliders size={14} />} defaultOpen>

@@ -292,4 +292,155 @@ mod tests {
         assert_eq!(Control::Jog { axis: "Z".into(), mm: -1.0 }.gcode().unwrap(), "G91\nG1 Z-1.00 F600\nG90");
         assert_eq!(encode("a b/ñ"), "a%20b%2F%C3%B1");
     }
+
+    #[test]
+    fn host_y_camara() {
+        assert_eq!(host_of("http://192.168.50.49:7125/x"), "192.168.50.49");
+        assert_eq!(host_of("k1.local"), "k1.local");
+        assert_eq!(host_of("192.168.1.5:80"), "192.168.1.5");
+        assert_eq!(host_of("[fe80::1]:7125"), "[fe80::1]");
+        // La foto tiene que ser del mismo host que la impresora
+        assert!(fetch_snapshot("192.168.50.49", "http://1.2.3.4:8080/?action=snapshot").is_err());
+    }
+
+    /// Baja una foto de un servidor falso en el PC (nunca una impresora real)
+    #[test]
+    fn baja_una_foto() {
+        use std::io::{Read, Write};
+        let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = server.local_addr().unwrap().port();
+        // JPEG mínimo válido (magic FFD8 … FFD9), con relleno para pasar el mínimo de 100 bytes
+        let mut jpg = vec![0xFF, 0xD8];
+        jpg.extend(std::iter::repeat_n(0x20u8, 200));
+        jpg.extend([0xFF, 0xD9]);
+        let body = jpg.clone();
+        std::thread::spawn(move || {
+            if let Ok((mut s, _)) = server.accept() {
+                let mut buf = [0u8; 1024];
+                let _ = s.read(&mut buf);
+                let _ = write!(s, "HTTP/1.1 200 OK\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                let _ = s.write_all(&body);
+            }
+        });
+        let url = format!("http://127.0.0.1:{port}/?action=snapshot");
+        let got = fetch_snapshot("127.0.0.1", &url).unwrap();
+        assert_eq!(got, jpg);
+        // Host distinto: rechazada antes de pedir nada
+        assert!(fetch_snapshot("otra.cosa", &url).is_err());
+    }
+}
+
+// ─── Cámara ─────────────────────────────────────────────────────────────────
+
+use std::net::ToSocketAddrs;
+use std::time::Duration;
+
+/// Una cámara de la impresora (stream MJPEG y foto suelta).
+#[derive(serde::Serialize, Debug, Clone, PartialEq)]
+pub struct Camera {
+    pub name: String,
+    /// Stream (MJPEG multipart) — por si el webview lo puede mostrar directo
+    pub stream_url: String,
+    /// Foto JPEG suelta — Pinocchio la pide seguido para mostrar el video
+    pub snapshot_url: String,
+    /// "mjpeg" (se puede mostrar leyendo fotos) u otro ("webrtc": cifrada/nube, no se puede)
+    pub kind: String,
+}
+
+/// El host (sin esquema, puerto ni ruta): «http://192.168.1.5:7125/x» → «192.168.1.5».
+pub fn host_of(address: &str) -> String {
+    let a = address.trim().trim_start_matches("http://").trim_start_matches("https://");
+    let a = a.split('/').next().unwrap_or("");
+    // IPv6 entre corchetes se deja como está; si no, se corta el puerto
+    if let Some(rest) = a.strip_prefix('[') {
+        format!("[{}]", rest.split(']').next().unwrap_or(""))
+    } else {
+        a.split(':').next().unwrap_or("").to_string()
+    }
+}
+
+/// Si un puerto TCP del host responde (para saber si hay stream local).
+fn port_open(host: &str, port: u16) -> bool {
+    (host, port)
+        .to_socket_addrs()
+        .ok()
+        .and_then(|mut it| it.next())
+        .map(|addr| std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(2)).is_ok())
+        .unwrap_or(false)
+}
+
+/// Cámara MJPEG en el puerto 8080 (K1 de fábrica/rooteada, Flashforge), si responde.
+pub fn mjpeg_8080(address: &str) -> Vec<Camera> {
+    let host = host_of(address);
+    if host.is_empty() || !port_open(&host, 8080) {
+        return Vec::new();
+    }
+    vec![Camera {
+        name: "Cámara".into(),
+        stream_url: format!("http://{host}:8080/?action=stream"),
+        snapshot_url: format!("http://{host}:8080/?action=snapshot"),
+        kind: "mjpeg".into(),
+    }]
+}
+
+/// Cámaras configuradas en Moonraker (su API las da; pueden estar en otro puerto o ruta).
+pub(crate) fn moonraker_cameras(p: &Printer) -> Result<Vec<Camera>, String> {
+    let host = host_of(p.base());
+    let resolve = |u: &str| -> String {
+        let u = u.trim();
+        if u.starts_with("http://") || u.starts_with("https://") {
+            u.to_string()
+        } else {
+            // Relativa: la sirve el nginx de MainsailOS en el puerto 80
+            format!("http://{host}/{}", u.trim_start_matches('/'))
+        }
+    };
+    let list = match p.get("/server/webcams/list") {
+        Ok(v) => v,
+        // Sin el módulo de cámaras: se prueba el 8080 como en las K1
+        Err(_) => return Ok(mjpeg_8080(p.base())),
+    };
+    let mut cams: Vec<Camera> = list["webcams"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|w| {
+            let stream = w["stream_url"].as_str().filter(|s| !s.is_empty())?;
+            let service = w["service"].as_str().unwrap_or("");
+            // Solo las MJPEG se pueden leer por fotos; webrtc/hls no
+            let kind = if service.contains("mjpeg") || service.contains("uv4l") { "mjpeg" } else { "webrtc" };
+            Some(Camera {
+                name: w["name"].as_str().unwrap_or("Cámara").to_string(),
+                stream_url: resolve(stream),
+                snapshot_url: resolve(w["snapshot_url"].as_str().filter(|s| !s.is_empty()).unwrap_or(stream)),
+                kind: kind.to_string(),
+            })
+        })
+        .collect();
+    if cams.is_empty() {
+        cams = mjpeg_8080(p.base());
+    }
+    Ok(cams)
+}
+
+/// Baja una foto JPEG de la cámara. `url` tiene que ser del mismo host que la impresora.
+pub(crate) fn fetch_snapshot(host: &str, url: &str) -> Result<Vec<u8>, String> {
+    if host_of(url) != host {
+        return Err("La foto no es de esta impresora".into());
+    }
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .connect_timeout(Duration::from_secs(5))
+        .build()
+        .map_err(|e| format!("Error interno: {e}"))?;
+    let r = client.get(url).send().map_err(|e| format!("No se pudo leer la cámara: {e}"))?;
+    if !r.status().is_success() {
+        return Err(format!("La cámara respondió {}", r.status().as_u16()));
+    }
+    let bytes = r.bytes().map_err(|e| format!("No se pudo leer la foto: {e}"))?.to_vec();
+    if bytes.len() < 100 {
+        return Err("La cámara no mandó una imagen".into());
+    }
+    Ok(bytes)
 }

@@ -264,6 +264,8 @@ pub fn run() {
             printers::printer_action,
             printers::printer_details,
             printers::printer_control,
+            printers::printer_cameras,
+            printers::printer_snapshot,
             // Escáneres 3D (Orizon3D)
             scanner::scanner_connect,
             scanner::scanner_disconnect,

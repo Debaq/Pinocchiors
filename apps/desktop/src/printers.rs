@@ -7,7 +7,7 @@
 use crate::creality::{self, Creality};
 use crate::flashforge::{self, Flashforge, Slot};
 use crate::moonraker::{self, PrinterStatus, SendResult};
-use crate::printer_control::{self, Control, PrinterDetails};
+use crate::printer_control::{self, Camera, Control, PrinterDetails};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -170,6 +170,29 @@ pub(crate) fn details(conn: &PrinterConn) -> Result<PrinterDetails, String> {
         Conn::Creality(p) => creality::details(&p),
         Conn::Flashforge(_) => Ok(PrinterDetails::default()),
     }
+}
+
+/// Cámaras que expone la impresora (stream MJPEG). Vacío si no hay o están cifradas.
+#[tauri::command]
+pub async fn printer_cameras(conn: PrinterConn) -> Result<Vec<Camera>, String> {
+    blocking(move || cameras(&conn)).await
+}
+
+pub(crate) fn cameras(conn: &PrinterConn) -> Result<Vec<Camera>, String> {
+    match open(conn, Duration::from_secs(8))? {
+        Conn::Moonraker(p) => printer_control::moonraker_cameras(&p),
+        Conn::Creality(_) | Conn::Flashforge(_) => Ok(printer_control::mjpeg_8080(&conn.address)),
+    }
+}
+
+/// Una foto JPEG de la cámara (Pinocchio las pide seguido para mostrar el video).
+#[tauri::command]
+pub async fn printer_snapshot(conn: PrinterConn, url: String) -> Result<tauri::ipc::Response, String> {
+    blocking(move || {
+        let host = printer_control::host_of(&conn.address);
+        printer_control::fetch_snapshot(&host, &url).map(tauri::ipc::Response::new)
+    })
+    .await
 }
 
 /// Una orden: ajuste en vivo, mando manual, calibración, gcode, archivos…
