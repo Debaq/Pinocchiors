@@ -27,6 +27,38 @@ export interface ResinSettings {
   elephant_foot: number;
   hole_offset: number;
   hole_max: number;
+  /** Subida más lenta y alta en capas con mucha área (solo `.ctb` v3) */
+  dynamic_lift: DynamicLift;
+  /** Exposición por tramos de altura (solo `.ctb` v3) */
+  exposure_ranges: ExposureRange[];
+  /** 2 = mismos valores en todas las capas; 3 = valores por capa */
+  ctb_version: number;
+}
+
+export interface DynamicLift {
+  enabled: boolean;
+  /** mm²: hasta `area_min` la subida normal; desde `area_max`, `lift_max` mm a `speed_min` mm/min */
+  area_min: number;
+  area_max: number;
+  speed_min: number;
+  lift_max: number;
+}
+
+/** Exposición entre dos alturas (mm, `from` incluido) */
+export interface ExposureRange {
+  from: number;
+  to: number;
+  exposure: number;
+}
+
+/** Lo que hace la impresora en una capa */
+export interface LayerParams {
+  exposure: number;
+  light_off: number;
+  lift: number;
+  lift_speed: number;
+  retract_speed: number;
+  pwm: number;
 }
 
 export type SupportDensity = "light" | "medium" | "heavy";
@@ -149,6 +181,9 @@ export interface ResinResult {
   format: string;
   file_bytes: number | null;
   layer_z: number[];
+  /** Área expuesta por capa, mm² */
+  layer_area: number[];
+  layer_params: LayerParams[];
 }
 
 /** Lo que se elige para resina; se guarda en el proyecto con el resto de Fabricar */

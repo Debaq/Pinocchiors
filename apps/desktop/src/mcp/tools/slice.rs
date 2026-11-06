@@ -277,7 +277,7 @@ fn resin_settings_props() -> Vec<Prop> {
         ("profile", string("Resin profile id or name (default standard)"), false),
         (
             "settings",
-            json!({ "type": "object", "description": "Changes to the profile: layer_height (mm), exposure and bottom_exposure (s), bottom_layers, light_off (s), lift (mm), lift_speed (mm/min), bottom_lift, bottom_lift_speed, retract_speed, density (g/ml), cost_per_ml, antialias (1 = off, 2, 4 or 8: grey edges), xy_offset (mm per side, + grows), elephant_foot (mm, bottom layers shrink), hole_offset (mm, grows holes up to hole_max mm)" }),
+            json!({ "type": "object", "description": "Changes to the profile: layer_height (mm), exposure and bottom_exposure (s), bottom_layers, light_off (s), lift (mm), lift_speed (mm/min), bottom_lift, bottom_lift_speed, retract_speed, density (g/ml), cost_per_ml, antialias (1 = off, 2, 4 or 8: grey edges), xy_offset (mm per side, + grows), elephant_foot (mm, bottom layers shrink), hole_offset (mm, grows holes up to hole_max mm), ctb_version (2 = same values on every layer, the tested default; 3 = per-layer values, needed for the next two), dynamic_lift {enabled, area_min, area_max (mm²), speed_min (mm/min), lift_max (mm)}: slower, higher lift on layers with more area, exposure_ranges [{from, to (mm of height), exposure (s)}]" }),
             false,
         ),
     ]
@@ -414,7 +414,9 @@ fn resin_slice(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
     }
     let mut data = r;
     if let Some(o) = data.as_object_mut() {
-        o.remove("layer_z");
+        for k in ["layer_z", "layer_area", "layer_params"] {
+            o.remove(k);
+        }
         o.insert("path".into(), json!(path));
     }
     Ok(Output::new(lines.join("\n"), data))

@@ -13,6 +13,7 @@
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::sla_layers::{DynamicLift, ExposureRange};
 use crate::sla_morph::{Compensation, Lines};
 use crate::SlicerError;
 
@@ -142,9 +143,21 @@ pub struct ResinSettings {
     pub elephant_foot: f32,
     pub hole_offset: f32,
     pub hole_max: f32,
+    /// Subida más lenta y más alta en capas con mucha área (solo con parámetros por capa).
+    pub dynamic_lift: DynamicLift,
+    /// Exposición distinta por tramos de altura (solo con parámetros por capa).
+    pub exposure_ranges: Vec<ExposureRange>,
+    /// Versión del `.ctb`: 2 (la del archivo de referencia; mismos valores en todas las capas)
+    /// o 3 (parámetros por capa: subida dinámica y exposición por tramos).
+    pub ctb_version: u8,
 }
 
 impl ResinSettings {
+    /// Si el archivo lleva parámetros por capa (`.ctb` v3).
+    pub fn per_layer(&self) -> bool {
+        self.ctb_version >= 3
+    }
+
     /// La compensación de la capa `index` (las de base llevan además la pata de elefante).
     pub fn compensation(&self, index: usize) -> Compensation {
         let foot = if (index as u32) < self.bottom_layers { self.elephant_foot.max(0.0) } else { 0.0 };
@@ -176,6 +189,9 @@ impl Default for ResinSettings {
             elephant_foot: 0.0,
             hole_offset: 0.0,
             hole_max: 10.0,
+            dynamic_lift: DynamicLift::default(),
+            exposure_ranges: Vec::new(),
+            ctb_version: 2,
         }
     }
 }

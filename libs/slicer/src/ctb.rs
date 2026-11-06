@@ -6,22 +6,34 @@
 //! tabla de capas (36 por capa) · capas.
 //!
 //! Cada capa va en RLE de 7 bits y cifrada con la clave de la cabecera («mngo»).
+//!
+//! En la versión 3 (parámetros por capa) cada capa lleva antes de sus datos un bloque de
+//! 84 bytes: copia de su entrada en la tabla + tamaño + subida, velocidades y potencia
+//! (como `LayerDefEx` de UVtools); la entrada de la tabla apunta a los datos, después del
+//! bloque. Los datos del laminador dicen `0x30` en «parámetros por capa» (0 en v2).
 //! Las miniaturas van en RGB565 sin rachas (`RRRRR GGGGG 0 BBBBB`).
 
-use crate::sla::{print_time, volume_ml, Layer, ResinPrinter, ResinSettings};
+use crate::sla::{volume_ml, Layer, ResinPrinter, ResinSettings};
+use crate::sla_layers::{layer_areas, layer_params, total_time, LayerParams};
 use crate::SlicerError;
 
 const MAGIC: u32 = 0x12FD_0086;
-const VERSION: u32 = 2;
 const HEADER: usize = 112;
 const PREVIEW_HEADER: usize = 32;
 const PARAMS: usize = 60;
 const SLICER_INFO: usize = 76;
 const LAYER_ENTRY: usize = 36;
+/// Bloque de cada capa en v3: la entrada (36) + 12 valores de 4 bytes.
+const LAYER_EX: usize = LAYER_ENTRY + 48;
 /// Clave del archivo de referencia («mngo» en little-endian).
 const KEY: u32 = 0x6F67_6E6D;
-/// Valores fijos de los datos del laminador del archivo de referencia.
-const PER_LAYER_SETTINGS: u32 = 7;
+/// Datos del laminador: bandera de antialiasing (7 sin grises, 15 con grises) y, en el
+/// último byte de la misma palabra, «parámetros por capa» (0 en v2, `0x30` en v3).
+fn aa_and_per_layer(antialias: bool, version: u32) -> u32 {
+    let aa = if antialias { 15 } else { 7 };
+    let per_layer = if version >= 3 { version * 0x10 } else { 0 };
+    aa | per_layer << 24
+}
 const MYSTERIOUS_ID: u32 = 0x6D61_6E67;
 const SOFTWARE_VERSION: u32 = 0x0106_0300;
 
@@ -57,6 +69,10 @@ pub fn write_ctb(
     if layers.is_empty() {
         return Err(SlicerError::Empty);
     }
+    let version = if settings.per_layer() { 3 } else { 2 };
+    let ex = if version >= 3 { LAYER_EX } else { 0 };
+    let z: Vec<f32> = layers.iter().map(|l| l.z).collect();
+    let params = layer_params(&layer_areas(layers, printer), &z, settings);
     let encoded: Vec<Vec<u8>> = layers
         .par_iter()
         .enumerate()
@@ -78,7 +94,7 @@ pub fn write_ctb(
     let name_at = info_at + SLICER_INFO;
     let table_at = name_at + name.len();
     let data_at = table_at + LAYER_ENTRY * layers.len();
-    let total = data_at + encoded.iter().map(Vec::len).sum::<usize>();
+    let total = data_at + encoded.iter().map(|d| ex + d.len()).sum::<usize>();
     if total > u32::MAX as usize {
         return Err(SlicerError::Settings("el archivo pasa de 4 GB".into()));
     }
@@ -90,7 +106,7 @@ pub fn write_ctb(
 
     // Cabecera.
     w.u32(MAGIC);
-    w.u32(VERSION);
+    w.u32(version);
     w.f32(printer.bed_x);
     w.f32(printer.bed_y);
     w.f32(printer.bed_z);
@@ -108,7 +124,7 @@ pub fn write_ctb(
     w.u32(table_at as u32);
     w.u32(layers.len() as u32);
     w.u32(small_at as u32);
-    w.u32(print_time(layers.len(), s).round() as u32);
+    w.u32(total_time(&params).round() as u32);
     w.u32(printer.mirror as u32);
     w.u32(params_at as u32);
     w.u32(PARAMS as u32);
@@ -151,7 +167,7 @@ pub fn write_ctb(
     w.zeros(28);
     w.u32(name_at as u32);
     w.u32(name.len() as u32);
-    w.u32(PER_LAYER_SETTINGS);
+    w.u32(aa_and_per_layer(aa_level(layers, settings) > 1, version));
     w.u32(MYSTERIOUS_ID);
     w.u32(aa_level(layers, settings)); // antialias
     w.u32(SOFTWARE_VERSION);
@@ -161,21 +177,39 @@ pub fn write_ctb(
     // Tabla de capas.
     debug_assert_eq!(w.0.len(), table_at);
     let mut at = data_at;
-    for (i, (l, d)) in layers.iter().zip(&encoded).enumerate() {
-        let bottom = (i as u32) < s.bottom_layers;
-        w.f32(l.z);
-        w.f32(if bottom { s.bottom_exposure } else { s.exposure });
-        w.f32(if bottom { s.bottom_light_off } else { s.light_off });
-        w.u32(at as u32);
-        w.u32(d.len() as u32);
-        w.zeros(16);
-        at += d.len();
+    let mut entries = Vec::with_capacity(layers.len());
+    for (d, p) in encoded.iter().zip(&params) {
+        let entry = layer_entry(p, z[entries.len()], (at + ex) as u32, d.len() as u32, version);
+        w.0.extend_from_slice(&entry);
+        entries.push(entry);
+        at += ex + d.len();
     }
-    for d in &encoded {
+    for ((d, p), entry) in encoded.iter().zip(&params).zip(&entries) {
+        if version >= 3 {
+            w.0.extend_from_slice(entry);
+            w.u32((LAYER_EX + d.len()) as u32);
+            w.f32(p.lift);
+            w.f32(p.lift_speed);
+            w.zeros(8); // segunda subida (v4)
+            w.f32(p.retract_speed);
+            w.zeros(20); // segunda bajada y esperas (v4)
+            w.f32(p.pwm as f32);
+        }
         w.0.extend_from_slice(d);
     }
     debug_assert_eq!(w.0.len(), total);
     Ok(w.0)
+}
+
+/// Entrada de la tabla de capas: z, exposición, luz apagada, dónde están los datos y (en v3)
+/// el tamaño de la entrada con su bloque.
+fn layer_entry(p: &LayerParams, z: f32, at: u32, len: u32, version: u32) -> [u8; LAYER_ENTRY] {
+    let mut e = [0u8; LAYER_ENTRY];
+    let table_size = if version >= 3 { LAYER_EX as u32 } else { 0 };
+    for (k, v) in [z.to_bits(), p.exposure.to_bits(), p.light_off.to_bits(), at, len, 0, table_size, 0, 0].into_iter().enumerate() {
+        e[k * 4..k * 4 + 4].copy_from_slice(&v.to_le_bytes());
+    }
+    e
 }
 
 /// Nivel de antialiasing que dice el archivo: el pedido si las capas traen grises.
@@ -446,6 +480,47 @@ mod tests {
     }
 
     #[test]
+    fn version_3_con_parametros_por_capa() {
+        use crate::sla_layers::{DynamicLift, ExposureRange};
+        let tris = crate::sla::tests::cube([31.31, 55.28, 0.0], [20.0, 20.0, 5.0]);
+        let s = ResinSettings {
+            ctb_version: 3,
+            dynamic_lift: DynamicLift { enabled: true, area_min: 0.0, area_max: 300.0, speed_min: 30.0, lift_max: 9.0 },
+            exposure_ranges: vec![ExposureRange { from: 2.0, to: 3.0, exposure: 6.0 }],
+            ..Default::default()
+        };
+        let layers = slice(&tris, &LD_002H, s.layer_height).unwrap();
+        let b = write_ctb(&layers, &LD_002H, &s, &blank(210, 210), &blank(200, 200)).unwrap();
+        let f = CtbFile::parse(&b).unwrap();
+        assert_eq!(f.version, 3);
+        let u = |o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+        let fl = |o: usize| f32::from_bits(u(o));
+        let info = u(104) as usize;
+        assert_eq!(u(info + 36), 0x3000_0007);
+        let table = u(64) as usize;
+        for i in [0, 20, 50, 99] {
+            let (z, exposure, ref range) = f.layers[i];
+            assert_eq!(f.mask(&b, i).unwrap(), layers[i].to_mask(1620, 2560));
+            let e = table + i * LAYER_ENTRY;
+            assert_eq!(u(e + 24), LAYER_EX as u32);
+            // El bloque de la capa: copia de la entrada, tamaño, subida, velocidades, potencia.
+            let x = range.start - LAYER_EX;
+            assert_eq!(b[x..x + LAYER_ENTRY], b[e..e + LAYER_ENTRY]);
+            assert_eq!(u(x + 36) as usize, LAYER_EX + range.len());
+            let (lift, speed, pwm) = (fl(x + 40), fl(x + 44), fl(x + 80));
+            assert_eq!(pwm, 255.0);
+            if i < 8 {
+                assert_eq!((exposure, lift, speed), (20.0, 7.0, 50.0));
+            } else {
+                // 400 mm² (cubo de 20 × 20), más de 300: lo más lento.
+                assert_eq!((lift, speed), (9.0, 30.0));
+                assert_eq!(exposure, if (2.0..3.0).contains(&(z + 1e-4)) { 6.0 } else { 3.5 }, "capa {i} z {z}");
+            }
+        }
+        assert_eq!(f.layers[50].1, 6.0);
+    }
+
+    #[test]
     fn archivo_con_grises() {
         let tris = crate::sla::tests::cube([31.31, 55.28, 0.0], [20.0, 20.0, 2.0]);
         let s = ResinSettings { antialias: 4, ..Default::default() };
@@ -454,6 +529,8 @@ mod tests {
         let b = write_ctb(&layers, &LD_002H, &s, &blank(210, 210), &blank(200, 200)).unwrap();
         let f = CtbFile::parse(&b).unwrap();
         assert_eq!(u32::from_le_bytes(b[92..96].try_into().unwrap()), 4);
+        let info = u32::from_le_bytes(b[104..108].try_into().unwrap()) as usize;
+        assert_eq!(u32::from_le_bytes(b[info + 36..info + 40].try_into().unwrap()), 15, "bandera de grises");
         for i in [0, 10, 39] {
             // El archivo guarda 7 bits: el gris leído es (v >> 1) << 1 | 1, salvo el negro.
             let want: Vec<u8> = layers[i].to_mask(1620, 2560).iter().map(|&v| if v >> 1 == 0 { 0 } else { (v >> 1) << 1 | 1 }).collect();

@@ -14,6 +14,7 @@ import {
   type ResinPrep,
   type ResinResult,
   type ResinSettings,
+  type ExposureRange,
   type SkipReason,
   type SupportDensity,
   type SupportPoint,
@@ -109,7 +110,7 @@ export const ResinSection: Component<{
   };
   const setSetting = <K extends keyof ResinSettings>(key: K, v: ResinSettings[K]) => {
     const next = { ...props.prep.settings, [key]: v };
-    if (profile()?.settings[key] === v) delete next[key];
+    if (JSON.stringify(profile()?.settings[key]) === JSON.stringify(v)) delete next[key];
     set({ settings: next });
   };
   const changed = () => Object.keys(props.prep.settings ?? {}).length;
@@ -439,6 +440,11 @@ export const ResinSection: Component<{
               </div>
             </Panel>
           </div>
+          <Show when={printer()?.format === "ctb"}>
+            <div>
+              <PerLayerPanel settings={s()} setSetting={setSetting} />
+            </div>
+          </Show>
           <div>
             <Panel id="resin.supports" dense title={t("Soportes")} defaultOpen>
               <div class="space-y-2 pb-3">
@@ -758,6 +764,9 @@ const LayerControls: Component<{ result: ResinResult }> = (props) => {
       <Button onClick={() => resinPreview.setVisible(!resinPreview.visible())} fullWidth size="sm" variant={resinPreview.visible() ? "primary" : "ghost"} icon={<Icons.Cube size={14} />}>
         {resinPreview.visible() ? t("Salir de la vista previa") : t("Ver en el visor")}
       </Button>
+      <Show when={props.result.layer_area?.length > 0}>
+        <AreaChart result={props.result} layer={layer()} onLayer={setLayer} />
+      </Show>
       <div class="flex items-center gap-1">
         <button class="px-1 text-text-dim hover:text-text" onClick={() => setLayer(layer() - 1)} aria-label={t("Capa anterior")}>
           ‹
@@ -773,6 +782,142 @@ const LayerControls: Component<{ result: ResinResult }> = (props) => {
       <canvas ref={canvas} class="w-full rounded border border-border bg-black [image-rendering:pixelated]" />
       <p class="text-[10px] text-text-dim">{t("Lo que muestra la pantalla en esta capa: blanco = luz.")}</p>
       <Checkbox small label={t("Mostrar soportes")} checked={resinPreview.showSupports()} onChange={(v) => resinPreview.setShowSupports(v)} />
+    </div>
+  );
+};
+
+/** Valores por capa (`.ctb` v3): subida dinámica y exposición por tramos de altura */
+const PerLayerPanel: Component<{ settings: ResinSettings; setSetting: <K extends keyof ResinSettings>(key: K, v: ResinSettings[K]) => void }> = (props) => {
+  const s = () => props.settings;
+  const v3 = () => (s().ctb_version ?? 2) >= 3;
+  const dyn = () => s().dynamic_lift;
+  const setDyn = (patch: Partial<ResinSettings["dynamic_lift"]>) => props.setSetting("dynamic_lift", { ...dyn(), ...patch });
+  const ranges = () => s().exposure_ranges ?? [];
+  const setRange = (i: number, patch: Partial<ExposureRange>) => props.setSetting("exposure_ranges", ranges().map((r, k) => (k === i ? { ...r, ...patch } : r)));
+  const addRange = () => {
+    const last = ranges()[ranges().length - 1];
+    const from = last ? last.to : 0;
+    props.setSetting("exposure_ranges", [...ranges(), { from, to: from + 5, exposure: s().exposure }]);
+  };
+  return (
+    <Panel id="resin.perlayer" dense title={t("Valores por capa")} defaultOpen={false}>
+      <div class="space-y-2 pb-3">
+        <Select
+          label={t("Formato del archivo")}
+          options={[
+            { value: "2", label: t("CTB v2 (mismos valores en todas las capas)") },
+            { value: "3", label: t("CTB v3 (valores por capa)") },
+          ]}
+          value={String(s().ctb_version ?? 2)}
+          onChange={(v) => props.setSetting("ctb_version", Number(v))}
+        />
+        <p class="text-[10px] text-text-dim">
+          {v3()
+            ? t("Todavía no se probó en la impresora: antes de imprimir, revisa que lo abra y muestre los tiempos.")
+            : t("El formato probado. Para cambiar la subida o la exposición según la capa hace falta el v3.")}
+        </p>
+        <Checkbox
+          small
+          label={t("Subida dinámica")}
+          checked={dyn().enabled}
+          onChange={(v) => setDyn({ enabled: v })}
+          hint={t("Al despegar del film la fuerza crece con el área de la capa: en las capas grandes sube más lento y más alto.")}
+        />
+        <Show when={dyn().enabled}>
+          <NumberInput label={t("Normal hasta")} value={dyn().area_min} onChange={(v) => setDyn({ area_min: v })} min={0} max={20000} step={50} suffix="mm²" />
+          <NumberInput label={t("Lo más lento desde")} value={dyn().area_max} onChange={(v) => setDyn({ area_max: v })} min={0} max={20000} step={50} suffix="mm²" />
+          <NumberInput label={t("Velocidad más lenta")} value={dyn().speed_min} onChange={(v) => setDyn({ speed_min: v })} min={5} max={400} step={5} suffix="mm/min" />
+          <NumberInput label={t("Subida más alta")} value={dyn().lift_max} onChange={(v) => setDyn({ lift_max: v })} min={1} max={20} step={0.5} suffix="mm" />
+        </Show>
+        <p class="text-[11px] text-text-muted pt-1">{t("Exposición por tramos de altura")}</p>
+        <For each={ranges()}>
+          {(r, i) => (
+            <div class="rounded border border-border p-1.5 space-y-1">
+              <div class="grid grid-cols-2 gap-1">
+                <NumberInput label={t("Desde")} value={r.from} onChange={(v) => setRange(i(), { from: v })} min={0} max={300} step={0.5} suffix="mm" />
+                <NumberInput label={t("Hasta")} value={r.to} onChange={(v) => setRange(i(), { to: v })} min={0} max={300} step={0.5} suffix="mm" />
+              </div>
+              <div class="flex items-end gap-1">
+                <div class="flex-1">
+                  <NumberInput label={t("Exposición")} value={r.exposure} onChange={(v) => setRange(i(), { exposure: v })} min={0.5} max={30} step={0.1} suffix="s" />
+                </div>
+                <button class="px-1.5 pb-1 text-text-dim hover:text-red" onClick={() => props.setSetting("exposure_ranges", ranges().filter((_, k) => k !== i()))} aria-label={t("Quitar tramo")}>
+                  <Icons.Trash size={12} />
+                </button>
+              </div>
+            </div>
+          )}
+        </For>
+        <Button size="sm" variant="ghost" fullWidth onClick={addRange} icon={<Icons.Plus size={14} />}>
+          {t("Agregar tramo")}
+        </Button>
+        <p class="text-[10px] text-text-dim">{t("Por ejemplo, más luz en una zona fina y alta. Las capas de base no se tocan.")}</p>
+      </div>
+    </Panel>
+  );
+};
+
+const CHART_W = 280;
+const CHART_H = 90;
+
+/** Área de cada capa (fuerza al despegar) con la velocidad de subida encima; clic = ir a esa capa */
+const AreaChart: Component<{ result: ResinResult; layer: number; onLayer: (i: number) => void }> = (props) => {
+  let svg: SVGSVGElement | undefined;
+  const n = () => props.result.layer_area.length;
+  const maxArea = () => Math.max(1, ...props.result.layer_area);
+  const speeds = () => props.result.layer_params.map((p) => p.lift_speed);
+  const maxSpeed = () => Math.max(1, ...speeds());
+  /** Base y normal dan dos velocidades; más que eso = subida dinámica */
+  const varies = () => new Set(speeds()).size > 2;
+  const x = (i: number) => (i * CHART_W) / Math.max(1, n() - 1);
+  const yArea = (a: number) => CHART_H - 2 - (a * (CHART_H - 6)) / maxArea();
+  const ySpeed = (v: number) => CHART_H - 2 - (v * (CHART_H - 6)) / maxSpeed();
+  const line = (ys: number[]) => ys.map((y, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y.toFixed(1)}`).join("");
+  const area = () => `${line(props.result.layer_area.map(yArea))}L${CHART_W},${CHART_H}L0,${CHART_H}Z`;
+  const pick = (e: PointerEvent) => {
+    if (!svg) return;
+    const box = svg.getBoundingClientRect();
+    props.onLayer(Math.round(((e.clientX - box.left) / box.width) * (n() - 1)));
+  };
+  const suction = () => props.result.cavities.filter((c) => c.suction_layers > 0);
+  return (
+    <div>
+      <div class="flex justify-between text-[10px] text-text-muted">
+        <span>{t("Área por capa")}</span>
+        <span class="font-mono">
+          {fmtNumber(props.result.layer_area[props.layer] ?? 0, { maximumFractionDigits: 0 })} mm² · {fmtNumber(props.result.layer_params[props.layer]?.lift_speed ?? 0, { maximumFractionDigits: 0 })} mm/min
+        </span>
+      </div>
+      <svg
+        ref={svg}
+        viewBox={`0 0 ${CHART_W} ${CHART_H}`}
+        preserveAspectRatio="none"
+        class="w-full h-20 block rounded bg-bg-darker/60 select-none touch-none cursor-crosshair"
+        onPointerDown={(e) => {
+          pick(e);
+          const move = (ev: PointerEvent) => pick(ev);
+          const up = () => {
+            window.removeEventListener("pointermove", move);
+            window.removeEventListener("pointerup", up);
+          };
+          window.addEventListener("pointermove", move);
+          window.addEventListener("pointerup", up);
+        }}
+      >
+        <For each={suction()}>
+          {(c) => <rect x={x(c.first_layer)} width={Math.max(1, x(c.last_layer) - x(c.first_layer))} y="0" height={CHART_H} fill="var(--color-warning)" fill-opacity="0.15" />}
+        </For>
+        <path d={area()} fill="var(--color-accent)" fill-opacity="0.35" stroke="var(--color-accent)" stroke-width="0.8" vector-effect="non-scaling-stroke" />
+        <Show when={varies()}>
+          <path d={line(speeds().map(ySpeed))} fill="none" stroke="var(--color-green)" stroke-width="1.2" vector-effect="non-scaling-stroke" />
+        </Show>
+        <line x1={x(props.layer)} x2={x(props.layer)} y1="0" y2={CHART_H} stroke="var(--color-text)" stroke-width="1" vector-effect="non-scaling-stroke" />
+      </svg>
+      <p class="text-[10px] text-text-dim">
+        {varies()
+          ? t("Relleno: área expuesta (más área, más fuerza al despegar). Verde: velocidad de subida. Amarillo: capas con ventosa.")
+          : t("Relleno: área expuesta (más área, más fuerza al despegar). Amarillo: capas con ventosa.")}
+      </p>
     </div>
   );
 };

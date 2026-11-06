@@ -9,6 +9,7 @@ use crate::state::AppState;
 use pinocchio_slicer::sla::{self, Layer, ResinPrinter, ResinSettings};
 use pinocchio_slicer::sla_calibration::{self, CalibrationRow};
 use pinocchio_slicer::sla_check::{Cavity, Island};
+use pinocchio_slicer::sla_layers::{self, LayerParams};
 use pinocchio_slicer::sla_prepare::{self, Axis, PrepareSettings, TiltOption, VentHole};
 use pinocchio_slicer::sla_profiles::{self, ResinProfile};
 use pinocchio_slicer::sla_supports::{SkipReason, SupportDensity, SupportPoint, SupportSettings};
@@ -142,6 +143,10 @@ pub struct ResinResult {
     pub file_bytes: Option<u64>,
     /// z de la cara de arriba de cada capa (mm)
     pub layer_z: Vec<f32>,
+    /// Área expuesta de cada capa (mm²), para el gráfico de despegue
+    pub layer_area: Vec<f32>,
+    /// Lo que hace la impresora en cada capa (exposición, subida...)
+    pub layer_params: Vec<LayerParams>,
 }
 
 /// Prepara (venteos, soportes), lamina y revisa una placa para la impresora de resina.
@@ -228,6 +233,9 @@ fn finish(
         None
     };
     let volume = sla::volume_ml(&p.layers, pr, settings.layer_height);
+    let layer_z: Vec<f32> = p.layers.iter().map(|l| l.z).collect();
+    let layer_area = sla_layers::layer_areas(&p.layers, pr);
+    let layer_params = sla_layers::layer_params(&layer_area, &layer_z, settings);
     let mut warnings = sla_profiles::validate(settings, pr);
     if !can_write {
         warnings.push(format!("Todavía no se puede guardar el archivo .{format} de esta impresora (falta confirmar la unidad de exposición)."));
@@ -238,7 +246,7 @@ fn finish(
         unplaced,
         layers: p.layers.len(),
         height_mm: p.layers.last().map_or(0.0, |l| l.z),
-        time_s: sla::print_time(p.layers.len(), settings),
+        time_s: sla_layers::total_time(&layer_params),
         volume_ml: volume,
         grams: volume * settings.density,
         cost: volume * settings.cost_per_ml,
@@ -257,7 +265,9 @@ fn finish(
         bed: [pr.bed_x, pr.bed_y],
         format,
         file_bytes: file.as_ref().map(|f| f.len() as u64),
-        layer_z: p.layers.iter().map(|l| l.z).collect(),
+        layer_z,
+        layer_area,
+        layer_params,
     };
     let bbox = layers_bbox(&p.layers, pr);
     *LAST.lock().unwrap() = Some(LastResin { printer: pr, settings: settings.clone(), layers: p.layers, model: p.model, supports: p.supports, bbox, file });
@@ -296,7 +306,7 @@ pub fn save_resin_calibration(dir: String, exposures: Vec<f32>) -> Result<Vec<St
     let (large, small) = (preview(ctb::LARGE_PREVIEW), preview(ctb::SMALL_PREVIEW));
     let mut out = Vec::new();
     for e in exposures {
-        let settings = ResinSettings { exposure: e, ..last.settings.clone() };
+        let settings = ResinSettings { exposure: e, exposure_ranges: Vec::new(), ..last.settings.clone() };
         let bytes = ctb::write_ctb(&last.layers, last.printer, &settings, &large, &small).map_err(|e| e.to_string())?;
         let name = format!("calibracion-{}-{}s.{format}", last.printer.id, format!("{e:.2}").trim_end_matches('0').trim_end_matches('.'));
         let path = std::path::Path::new(&dir).join(name);
@@ -494,7 +504,10 @@ mod tests {
         let verts: Vec<Vector3> = (0..n * 3).map(|i| Vector3::new(f(84 + 50 * (i / 3) + 12 + 12 * (i % 3)), f(88 + 50 * (i / 3) + 12 + 12 * (i % 3)), f(92 + 50 * (i / 3) + 12 + 12 * (i % 3)))).collect();
         let faces: Vec<[usize; 3]> = (0..n).map(|i| [3 * i, 3 * i + 1, 3 * i + 2]).collect();
         let list = vec![("pieza".to_string(), Mesh::from_triangles(&verts, &faces))];
-        let r = slice_plate(list, &input(), 0, "ld-002h", &ResinSettings::default(), &PrepareSettings::default(), None, None, |_, _, _| {}).unwrap();
+        // v3 con subida dinámica, para ver la curva de velocidad en el gráfico.
+        let mut settings = ResinSettings { ctb_version: 3, ..Default::default() };
+        settings.dynamic_lift.enabled = true;
+        let r = slice_plate(list, &input(), 0, "ld-002h", &settings, &PrepareSettings::default(), None, None, |_, _, _| {}).unwrap();
         let dir = std::path::Path::new(&out);
         std::fs::write(dir.join("presets.json"), serde_json::to_string(&resin_presets()).unwrap()).unwrap();
         std::fs::write(dir.join("result.json"), serde_json::to_string(&r).unwrap()).unwrap();

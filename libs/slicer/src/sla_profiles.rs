@@ -114,6 +114,21 @@ pub fn validate(s: &ResinSettings, printer: &ResinPrinter) -> Vec<String> {
     if !(0.0..=0.5).contains(&s.hole_offset) {
         w.push("compensación de agujeros fuera de 0–0,5 mm".into());
     }
+    let d = &s.dynamic_lift;
+    if !s.per_layer() && (d.enabled || !s.exposure_ranges.is_empty()) {
+        w.push("la subida dinámica y la exposición por tramos van en el .ctb v3: con v2 la impresora usa los mismos valores en todas las capas".into());
+    }
+    if s.per_layer() && d.enabled {
+        if d.area_max <= d.area_min {
+            w.push("subida dinámica: el área de lo más lento tiene que ser mayor que la de la subida normal".into());
+        }
+        if d.speed_min <= 0.0 {
+            w.push("las velocidades tienen que ser mayores que cero".into());
+        }
+    }
+    if s.per_layer() && s.exposure_ranges.iter().any(|r| !(0.5..=30.0).contains(&r.exposure) || r.to <= r.from) {
+        w.push("hay tramos de exposición con alturas al revés o exposición fuera de 0,5–30 s".into());
+    }
     w
 }
 

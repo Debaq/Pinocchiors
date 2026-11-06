@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Analiza un .ctb (Chitubox v2, LD-002H) y un .cxdlp (Creality v2, Halot-Sky): cabecera,
+# Analiza un .ctb (Chitubox v2/v3, LD-002H) y un .cxdlp (Creality v2, Halot-Sky): cabecera,
 # parámetros y capas decodificadas. Ver libs/pinocchio/print3d/PLAN_SLA.md (SLA0).
 #   python3 -I scripts/analizar-resina.py pieza.ctb pieza.cxdlp
 """Analiza un .ctb (v2) y un .cxdlp (v2): cabecera, parámetros y capas decodificadas."""
@@ -54,6 +54,9 @@ def ctb(path):
     for li in [0, 7, 8, 399, 400, 450, nl-1]:
         o = lt + li*36
         z, exp, off, adr, size = f(o), f(o+4), f(o+8), u(o+12), u(o+16)
+        if u(4) >= 3:  # v3: bloque de 84 bytes antes de los datos (copia de la entrada + subida, velocidades, potencia)
+            x = adr - 84
+            print(f"  capa {li:3d} v3: subida {f(x+40):.2f} mm a {f(x+44):.0f} mm/min, bajada {f(x+56):.0f} mm/min, pwm {f(x+80):.0f}")
         img = ctb_rle_decode(ctb_crypt(key, li, b[adr:adr+size]), w*h)
         bb = bbox(img, w, h)
         dims = f"{(bb[2]-bb[0]+1)*pw:.2f} × {(bb[3]-bb[1]+1)*ph:.2f} mm" if bb else "vacía"

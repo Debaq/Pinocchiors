@@ -17,6 +17,7 @@ mod settings;
 pub mod sla;
 pub mod sla_calibration;
 pub mod sla_check;
+pub mod sla_layers;
 pub mod sla_prepare;
 pub mod sla_profiles;
 pub mod sla_morph;

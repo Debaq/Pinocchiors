@@ -25,15 +25,19 @@ fn main() {
             v[c] += shift[c];
         }
     }
-    // Con AA=4 (2, 4 u 8) lamina con bordes en grises; XY, PATA y AGUJEROS (mm) compensan.
+    // Con AA=4 (2, 4 u 8) lamina con bordes en grises; XY, PATA y AGUJEROS (mm) compensan;
+    // V3=1 escribe el .ctb v3 con subida dinámica.
     let env = |k: &str| std::env::var(k).ok().and_then(|v| v.parse::<f32>().ok());
-    let s = sla::ResinSettings {
+    let v3 = env("V3").is_some_and(|v| v > 0.0);
+    let mut s = sla::ResinSettings {
         antialias: env("AA").unwrap_or(1.0) as u8,
         xy_offset: env("XY").unwrap_or(0.0),
         elephant_foot: env("PATA").unwrap_or(0.0),
         hole_offset: env("AGUJEROS").unwrap_or(0.0),
+        ctb_version: if v3 { 3 } else { 2 },
         ..Default::default()
     };
+    s.dynamic_lift.enabled = v3;
     let t = std::time::Instant::now();
     let (layers, parts) = if args.iter().any(|a| a == "--preparar") {
         let before = sla_check::check(&sla::slice(&tris, &pr, s.layer_height).expect("laminado"), &pr, s.layer_height);
