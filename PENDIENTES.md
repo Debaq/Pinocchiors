@@ -328,20 +328,28 @@ Moonraker, motor en CI para Linux; Windows y macOS escritos).
 ## 11. Resina (`libs/slicer/src/sla*.rs`, plan en `print3d/PLAN_SLA.md`)
 
 Hecho: laminado por filas en paralelo, CTB v2 para la LD-002H (igual byte a byte
-al de Lychee salvo el tiempo), revisión de islas/ventosas/huecos, venteos,
-inclinaciones, soportes automáticos editables, perfiles, pieza de calibración,
-interfaz en Fabricar, MCP, suavizado de bordes en grises (SLA9) y compensación de
-medidas XY / pata de elefante / agujeros (SLA10).
-- 🧪 Abrir un `.ctb` de Pinocchio en la LD-002H (lista, miniatura, tiempos; sin
-  imprimir), también uno con grises; fijar el espejo con una pieza asimétrica;
-  imprimir la pieza de calibración para sacar exposición y compensaciones reales.
-- ⬜ CXDLP para la Halot-Sky (espera la unidad de exposición) y envío por WiFi.
-- ⬜ A la altura de los laminadores de pago: SLA11 gráfico de área por capa y
-  subida dinámica; SLA12 soportes avanzados (refuerzos, árbol, punta según la
-  normal, balsa biselada, grosor por punto, pincel); SLA13 orientación
-  automática; SLA14 relleno interior y tapones de drenaje; SLA15 operaciones
-  sobre capas (islas chicas, doble exposición, atenuar interiores); SLA16 nombre
-  en la balsa.
+al de Lychee salvo el tiempo), revisión de islas/ventosas/huecos (con un venteo
+por bolsillo), venteos, soportes automáticos editables, perfiles, pieza de
+calibración, interfaz en Fabricar, MCP, y lo de los laminadores de pago (SLA9–SLA16,
+2026-11-06): bordes en grises, compensación de medidas, gráfico de área por capa y
+subida dinámica (CTB v3), soportes avanzados (punta según la normal, refuerzos,
+ramas, balsa biselada, grosor por punto, pincel de zonas, laterales en partes
+delgadas), orientación automática, vaciado con relleno y drenajes con tapón,
+operaciones sobre capas (islas y huecos chicos, alivio de la balsa, atenuar el
+interior, doble exposición) y nombre en relieve en la balsa.
+- 🧪 En la LD-002H, sin imprimir: que liste y muestre un `.ctb` de Pinocchio
+  (miniatura, tiempos), uno con grises y uno v3; cómo toma la doble exposición
+  (capas repetidas a la misma z). Fijar el espejo con una pieza asimétrica.
+  Imprimiendo: la pieza de calibración (exposición y compensaciones reales) y una
+  pieza con y sin bordes en grises.
+- 🧪 En la app real (el arnés no dibuja 3D): editar puntos, pincel de zonas,
+  drenajes y el giro elegido en el visor. Fotos de las dos impresoras.
+- ⬜ CXDLP para la Halot-Sky (espera la unidad de exposición) y envío por WiFi
+  (investigar sin tocarla hasta que el usuario diga).
+- ⬜ Alto de capa por tramos: todo el laminador de resina asume alto fijo; antes,
+  ver si la LD-002H respeta una z distinta por capa.
+- ⚠ Relleno de rejilla del vaciado: en piezas curvas deja bolsillos y pide más
+  venteos (Benchy: 19); por eso columnas es el de fábrica.
 
 ## 12. Impresoras (`print3d/PLAN_IMPRESORAS.md`)
 
