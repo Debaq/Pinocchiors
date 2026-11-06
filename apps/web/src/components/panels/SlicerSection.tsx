@@ -465,7 +465,19 @@ export const SlicerSection: Component<{
                 <Show when={r().unplaced.length > 0}>
                   <p class="text-[11px] text-red">{t("No caben en la cama: {names}", { names: r().unplaced.join(", ") })}</p>
                 </Show>
-                <For each={r().warnings}>{(w) => <p class="text-[11px] text-warning">{tBackend(w)}</p>}</For>
+                <For each={r().warnings}>
+                  {(w) =>
+                    // Soportes puestos solos: es información (ya está resuelto), no una advertencia
+                    w.startsWith("Se agregaron soportes") ? (
+                      <p class="flex gap-1.5 text-[11px] text-text-muted">
+                        <Icons.Info size={12} class="mt-0.5 shrink-0 text-accent" />
+                        <span>{tBackend(w)}</span>
+                      </p>
+                    ) : (
+                      <p class="text-[11px] text-warning">{tBackend(w)}</p>
+                    )
+                  }
+                </For>
                 <div class="pt-1">
                   <Button onClick={saveGcode} fullWidth size="sm" icon={<Icons.Download size={14} />}>
                     {t("Guardar gcode")}

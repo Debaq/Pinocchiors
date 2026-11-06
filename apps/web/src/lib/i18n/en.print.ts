@@ -367,7 +367,7 @@ export const en_print: Catalog = {
   "No hay nada que imprimir: la pieza es demasiado chica": "Nothing to print: the part is too small",
   "La pieza {name} tiene {what}: reoriéntala o activa los soportes": "Part {name} has {what}: re-orient it or enable supports",
   "zonas en el aire": "floating regions",
-  "Se pusieron soportes: {why}": "Supports were added: {why}",
+  "Se agregaron soportes automáticamente porque {why}. Ya están en el gcode: se ven como «Soporte» en la vista previa": "Supports were added automatically because {why}. They are already in the gcode: they show as «Support» in the preview",
   "la pieza apenas toca la cama": "the part barely touches the bed",
   "la pieza {name} tiene {what}": "part {name} has {what}",
   "un voladizo en el aire": "a floating cantilever",

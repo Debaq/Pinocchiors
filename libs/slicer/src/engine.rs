@@ -260,7 +260,7 @@ pub fn run(job: &SliceJob, engine: &Path, mut on_event: impl FnMut(Event), cance
             let mut config = job.config.clone();
             config.insert("enable_support".into(), Value::String("1".into()));
             let with = SliceJob { config, parts: job.parts.clone(), work_dir: job.work_dir.clone() };
-            let note = format!("Se pusieron soportes: {why}");
+            let note = format!("Se agregaron soportes automáticamente porque {why}. Ya están en el gcode: se ven como «Soporte» en la vista previa");
             on_event(Event::Warning { text: note.clone() });
             let mut summary = run_once(&with, engine, &mut on_event, cancel, false)?;
             summary.warnings.insert(0, note);

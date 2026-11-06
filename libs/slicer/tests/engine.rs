@@ -96,7 +96,7 @@ fn pone_soportes_solo_si_hacen_falta() {
     let job = k1_job(vec![standing_octahedron(110.0, 110.0, 20.0)], "punta");
     assert_eq!(job.config.get("enable_support").and_then(|v| v.as_str()), Some("0"), "el perfil viene sin soportes");
     let summary = run(&job, &engine, |_| {}, &AtomicBool::new(false)).expect("lamina con soportes");
-    assert!(summary.warnings.first().is_some_and(|w| w.starts_with("Se pusieron soportes")), "{:?}", summary.warnings);
+    assert!(summary.warnings.first().is_some_and(|w| w.starts_with("Se agregaron soportes")), "{:?}", summary.warnings);
     let p = parse_gcode(&std::fs::read_to_string(&summary.gcode).unwrap());
     assert!(p.length_by_feature[Feature::Support as usize] > 0.0, "sin soportes en el gcode");
     let _ = std::fs::remove_dir_all(&job.work_dir);
@@ -104,7 +104,7 @@ fn pone_soportes_solo_si_hacen_falta() {
     // Un cubo no los necesita: no se ponen
     let job = k1_job(vec![cube(100.0, 100.0, 20.0)], "cubo-sin-soportes");
     let summary = run(&job, &engine, |_| {}, &AtomicBool::new(false)).unwrap();
-    assert!(!summary.warnings.iter().any(|w| w.starts_with("Se pusieron soportes")), "{:?}", summary.warnings);
+    assert!(!summary.warnings.iter().any(|w| w.starts_with("Se agregaron soportes")), "{:?}", summary.warnings);
     let p = parse_gcode(&std::fs::read_to_string(&summary.gcode).unwrap());
     assert_eq!(p.length_by_feature[Feature::Support as usize], 0.0);
     let _ = std::fs::remove_dir_all(&job.work_dir);
