@@ -135,3 +135,23 @@ fn lamina_un_cubo_para_la_ad5x() {
     // La pantalla de la AD5X muestra la pieza con la miniatura de 140×110 que pide su perfil
     assert!(gcode.contains("; thumbnail begin 140x110"), "falta la miniatura de la AD5X");
 }
+
+/// Cada impresora del índice lamina un cubo con su perfil de fábrica (CR-10 Max, AD5X, K1…)
+#[test]
+fn lamina_en_todas_las_impresoras() {
+    let Some(engine) = find_engine() else {
+        eprintln!("sin motor: prueba saltada");
+        return;
+    };
+    for p in &index().printers {
+        let bed = p.bed.expect("cama en el índice");
+        let settings = SliceSettings { printer: p.name.clone(), process: p.default_process.clone(), filament: p.default_filament.clone(), overrides: Default::default() };
+        let config = build_config(&settings).unwrap_or_else(|e| panic!("{}: {e}", p.name));
+        let work_dir = std::env::temp_dir().join(format!("pinocchio-slicer-todas-{}-{}", std::process::id(), p.name.replace([' ', '(', ')'], "_")));
+        let (x, y) = ((bed[0] / 2.0 - 10.0) as f32, (bed[1] / 2.0 - 10.0) as f32);
+        let job = SliceJob { config, parts: vec![cube(x, y, 20.0)], work_dir: work_dir.clone() };
+        let summary = run(&job, &engine, |_| {}, &AtomicBool::new(false)).unwrap_or_else(|e| panic!("{}: {e}", p.name));
+        let _ = std::fs::remove_dir_all(&work_dir);
+        assert!(summary.layers > 50 && summary.filament_g > 1.0, "{}: {} capas, {} g", p.name, summary.layers, summary.filament_g);
+    }
+}

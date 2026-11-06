@@ -4,7 +4,6 @@ import * as Icons from "../icons";
 import { fmtNumber, t, tx } from "../../lib/i18n";
 import { tBackend } from "../../lib/i18nBackend.ts";
 import type { CutPlane } from "../../lib/printCuts.ts";
-import { customMaterials, customPrinters, removeCustomMaterial, removeCustomPrinter, saveCustomMaterial, saveCustomPrinter } from "../../lib/settings.ts";
 import type { SlicerSettings } from "./SlicerSection";
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -196,7 +195,7 @@ export const defaultPrep: PrepSettings = {
   wall: 2,
   drain: false,
   drainDiameter: 4,
-  plate: { format: "stl", spacing: 5, orient: true, compensate: true, contour: true, hollowWall: null, drain: null },
+  plate: { format: "stl", spacing: 5, orient: false, compensate: true, contour: true, hollowWall: null, drain: null },
 };
 
 export interface PlatePreview {
@@ -260,188 +259,6 @@ const Row: Component<{ label: string; value: string; tone?: "ok" | "bad" | "warn
 
 const mm = (v: number) => fmtNumber(v, { maximumFractionDigits: 1 });
 const cm3 = (mm3: number) => fmtNumber(mm3 / 1000, { maximumFractionDigits: 1 });
-
-/** Impresora y material: de ellos salen la cama, la boquilla y los voladizos */
-export const PrinterMaterial: Component<{
-  presets?: PrintPresets;
-  printer: PrinterProfile;
-  material: MaterialProfile;
-  onPrinter: (p: PrinterProfile) => void;
-  onMaterial: (m: MaterialProfile) => void;
-  /** Abre el asistente que calcula las holguras imprimiendo piezas de prueba */
-  onCalibrate?: () => void;
-}> = (props) => {
-  const materialIsSaved = () => customMaterials().some((m) => m.name === props.material.name);
-  const [newMaterial, setNewMaterial] = createSignal("");
-  const shrink = (): [number, number, number] => props.material.shrink ?? [0, 0, 0];
-  const setShrink = (axis: number, percent: number) => {
-    const next = [...shrink()] as [number, number, number];
-    next[axis] = Math.max(0, percent) / 100;
-    props.onMaterial({ ...props.material, shrink: next });
-  };
-  const printers = () => [...(props.presets?.printers ?? []), ...customPrinters()];
-  const isSaved = () => customPrinters().some((p) => p.name === props.printer.name);
-  const [newName, setNewName] = createSignal("");
-  const materials = () => [...(props.presets?.materials ?? []), ...customMaterials()];
-  const setVolume = (axis: number, v: number) => {
-    const bv = [...props.printer.build_volume] as [number, number, number];
-    bv[axis] = v;
-    props.onPrinter({ ...props.printer, name: t("Personalizada"), build_volume: bv });
-  };
-  return (
-    <div class="space-y-2">
-      <Title>{t("Impresora y material")}</Title>
-      <Select
-        label={t("Impresora")}
-        options={[...printers().map((p) => ({ value: p.name, label: p.name })), { value: t("Personalizada"), label: t("Personalizada") }]}
-        value={props.printer.name}
-        onChange={(name) => {
-          const preset = printers().find((p) => p.name === name);
-          if (preset) props.onPrinter(preset);
-        }}
-      />
-      <p class="text-[10px] text-text-dim">{t("Volumen de impresión (mm):")}</p>
-      <div class="flex gap-1.5">
-        <For each={["X", "Y", "Z"]}>
-          {(axis, i) => <NumberInput label={axis} value={props.printer.build_volume[i()]} onChange={(v) => setVolume(i(), v)} min={10} step={10} />}
-        </For>
-      </div>
-      <div class="flex gap-1.5 items-center">
-        <input
-          class="min-w-0 flex-1 px-2 py-1 rounded bg-surface/40 border border-border text-xs text-text outline-none focus:border-accent"
-          placeholder={t("Nombre para guardarla")}
-          value={newName()}
-          onInput={(e) => setNewName(e.currentTarget.value)}
-        />
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={!newName().trim()}
-          onClick={() => {
-            const name = newName().trim();
-            saveCustomPrinter({ ...props.printer, name });
-            props.onPrinter({ ...props.printer, name });
-            setNewName("");
-          }}
-        >
-          {t("Guardar")}
-        </Button>
-        <Show when={isSaved()}>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => {
-              removeCustomPrinter(props.printer.name);
-              props.onPrinter(props.presets?.printers[0] ?? props.printer);
-            }}
-          >
-            {t("Quitar")}
-          </Button>
-        </Show>
-      </div>
-      <NumberInput
-        label={t("Boquilla")}
-        value={props.printer.nozzle}
-        onChange={(v) => props.onPrinter({ ...props.printer, nozzle: v })}
-        min={0.1}
-        max={2}
-        step={0.1}
-        suffix="mm"
-      />
-      <div class="grid grid-cols-2 gap-1.5">
-        <NumberInput
-          label={t("Holgura")}
-          value={props.printer.fit_clearance ?? props.printer.nozzle}
-          onChange={(v) => props.onPrinter({ ...props.printer, fit_clearance: Math.max(0, v) })}
-          min={0}
-          max={2}
-          step={0.05}
-          suffix="mm"
-        />
-        <NumberInput
-          label={t("Agujeros")}
-          value={props.printer.hole_comp ?? props.printer.nozzle * 0.25}
-          onChange={(v) => props.onPrinter({ ...props.printer, hole_comp: Math.max(0, v) })}
-          min={0}
-          max={1}
-          step={0.05}
-          suffix="mm"
-        />
-      </div>
-      <Select
-        label={t("Material")}
-        options={materials().map((m) => ({ value: m.name, label: m.name }))}
-        value={props.material.name}
-        onChange={(name) => {
-          const m = materials().find((x) => x.name === name);
-          if (m) props.onMaterial(m);
-        }}
-      />
-      <div class="grid grid-cols-3 gap-1.5">
-        <For each={["X", "Y", "Z"]}>
-          {(axis, i) => (
-            <NumberInput
-              label={axis}
-              value={Number((shrink()[i()] * 100).toFixed(3))}
-              onChange={(v) => setShrink(i(), v)}
-              min={0}
-              max={5}
-              step={0.05}
-            />
-          )}
-        </For>
-      </div>
-      <p class="text-[10px] text-text-dim">{t("Contracción del material por eje (%)")}</p>
-      <NumberInput
-        label={t("Factor de holgura")}
-        value={props.material.clearance_factor ?? 1}
-        onChange={(v) => props.onMaterial({ ...props.material, clearance_factor: Math.max(0.1, v) })}
-        min={0.1}
-        max={4}
-        step={0.05}
-        suffix="×"
-      />
-      <div class="flex gap-1.5 items-center">
-        <input
-          class="min-w-0 flex-1 px-2 py-1 rounded bg-surface/40 border border-border text-xs text-text outline-none focus:border-accent"
-          placeholder={t("Nombre del material")}
-          value={newMaterial()}
-          onInput={(e) => setNewMaterial(e.currentTarget.value)}
-        />
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={!newMaterial().trim()}
-          onClick={() => {
-            const name = newMaterial().trim();
-            saveCustomMaterial({ ...props.material, name });
-            props.onMaterial({ ...props.material, name });
-            setNewMaterial("");
-          }}
-        >
-          {t("Guardar")}
-        </Button>
-        <Show when={materialIsSaved()}>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => {
-              removeCustomMaterial(props.material.name);
-              props.onMaterial(props.presets?.materials[0] ?? props.material);
-            }}
-          >
-            {t("Quitar")}
-          </Button>
-        </Show>
-      </div>
-      <Show when={props.onCalibrate}>
-        <Button size="sm" fullWidth onClick={props.onCalibrate} icon={<Icons.Ruler size={14} />}>
-          {t("Calibrar con piezas de prueba")}
-        </Button>
-      </Show>
-    </div>
-  );
-};
 
 export const ReadinessSection: Component<{ readiness?: Readiness; busy?: boolean; disabled?: boolean; onCheck?: () => void }> = (props) => (
   <div class="space-y-2">

@@ -6,6 +6,7 @@ import k1 from "../assets/printer-k1.png";
 import k1c from "../assets/printer-k1c.png";
 import k1max from "../assets/printer-k1max.png";
 import ad5x from "../assets/printer-ad5x.png";
+import cr10max from "../assets/printer-cr10max.png";
 import type { NetPrinterKind } from "./settings";
 
 export interface PrinterModel {
@@ -21,6 +22,8 @@ export const PRINTER_MODELS: PrinterModel[] = [
   { model: "Creality K1C", image: k1c, kind: "moonraker" },
   { model: "Creality K1 Max", image: k1max, kind: "moonraker" },
   { model: "Flashforge AD5X", image: ad5x, kind: "flashforge" },
+  // Con Marlin no tiene red; con una Raspberry y Klipper + Moonraker queda como la K1
+  { model: "Creality CR-10 Max", image: cr10max, kind: "moonraker" },
 ];
 
 /** Foto de un modelo (o de un nombre que lo contenga: «K1-436A», «AD5X»), si la hay */
@@ -30,6 +33,7 @@ export function printerImage(model: string | undefined): string | undefined {
   const exact = PRINTER_MODELS.find((p) => p.model.toLowerCase().replace(/\s+/g, "") === m);
   if (exact) return exact.image;
   if (m.includes("ad5x")) return ad5x;
+  if (m.includes("cr-10max") || m.includes("cr10max")) return cr10max;
   if (m.includes("k1max")) return k1max;
   if (m.includes("k1c")) return k1c;
   if (m.includes("k1")) return k1;

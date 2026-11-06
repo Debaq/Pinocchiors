@@ -8,6 +8,7 @@ import { tBackend } from "../../lib/i18nBackend.ts";
 import { FEATURES, ORCA_ROLE_NAMES, decodePreview, gcodePreview, type GcodeMeta } from "../../lib/gcodePreview";
 import type { ConfirmRequest } from "../layout/ConfirmDialog";
 import { PrinterPicture, PrinterTab, SendToPrinter } from "./PrinterSection";
+import { loadSlicerInfo } from "../../lib/machines";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TIPOS (espejo de apps/desktop/src/slicer.rs)
@@ -18,6 +19,8 @@ export interface SlicerPrinter {
   vendor: string;
   /** Carretes (AD5X: 4); el carrete real se elige al enviar */
   tools: number;
+  /** Cama: ancho, fondo y alto (mm) */
+  bed?: [number, number, number] | null;
   model: string;
   nozzle: number;
   default_process: string;
@@ -148,7 +151,7 @@ const BRIMS = [
 ] as const;
 
 // ═══════════════════════════════════════════════════════════════════════════
-// PANEL (a la izquierda del visor, ver layout/SlicerEditor.tsx)
+// PANEL (dentro del panel izquierdo de Fabricar, ver layout/FabricarEditor.tsx)
 // ═══════════════════════════════════════════════════════════════════════════
 
 export type SlicerTab = "settings" | "preview" | "printer";
@@ -184,8 +187,13 @@ export const SlicerSection: Component<{
   onBed?: (bed: [number, number, number] | undefined) => void;
   /** Confirmar antes de algo que no se deshace (cancelar una impresión) */
   confirm: (request: ConfirmRequest) => Promise<boolean>;
+  /** Lleva a la pestaña donde se elige la impresora y el filamento (Fabricar) */
+  onEditPrinter?: () => void;
+  /** Orientación de las piezas: la mejor automática (true) o como están en el visor */
+  orientAuto?: boolean;
+  onOrientAuto?: (auto: boolean) => void;
 }> = (props) => {
-  const [info] = createResource(() => invoke<SlicerInfo>("slicer_presets").catch(() => undefined));
+  const [info] = createResource(loadSlicerInfo);
   const [busy, setBusy] = createSignal(false);
   const [progress, setProgress] = createSignal<Progress>();
   const [result, setResult] = createSignal<SliceResult>();
@@ -196,8 +204,9 @@ export const SlicerSection: Component<{
 
   const set = (patch: Partial<SlicerSettings>) => props.onSettings({ ...props.settings, ...patch });
   const printers = () => info()?.printers ?? [];
+  // La impresora la elige Fabricar; si no tiene perfil de laminado (Creator) no hay laminador
   const printer = () =>
-    printers().find((p) => p.name === props.settings.printer) ?? matchSlicerPrinter(printers(), props.printerName) ?? printers()[0];
+    props.settings.printer ? printers().find((p) => p.name === props.settings.printer) : (matchSlicerPrinter(printers(), props.printerName) ?? printers()[0]);
   const process = () => {
     const p = printer();
     if (!p) return undefined;
@@ -238,7 +247,8 @@ export const SlicerSection: Component<{
     on([() => props.settings.process, () => props.settings.filament, () => props.settings.printer], () => {
       setResult(undefined);
       gcodePreview.setVisible(false);
-      props.onTab("settings");
+      // La vista previa ya no vale; desde otras pestañas no se salta a ninguna parte
+      if (props.tab === "preview") props.onTab("settings");
     }, { defer: true }),
   );
 
@@ -319,15 +329,16 @@ export const SlicerSection: Component<{
       <div>
         <Panel id="slicer.profile" dense title={t("Impresora y perfil")} icon={<Icons.Stack size={14} />} defaultOpen>
           <div class="space-y-2 pb-3">
-            <div class="flex items-end gap-2">
+            <div class="flex items-center gap-2">
               <PrinterPicture model={printer()?.model} size={56} />
               <div class="min-w-0 flex-1">
-                <Select
-                  label={t("Impresora")}
-                  options={printers().map((p) => ({ value: p.name, label: p.name }))}
-                  value={printer()?.name}
-                  onChange={(v) => set({ printer: v, process: undefined, filament: undefined, overrides: {} })}
-                />
+                <p class="text-xs font-semibold text-text truncate">{printer()?.model}</p>
+                <p class="text-[10px] text-text-dim truncate">{shortName(filament() ?? "")}</p>
+                <Show when={props.onEditPrinter}>
+                  <button class="text-[10px] text-accent hover:underline" onClick={() => props.onEditPrinter?.()}>
+                    {t("Cambiar impresora o filamento")}
+                  </button>
+                </Show>
               </div>
             </div>
             <Show when={(printer()?.tools ?? 1) > 1}>
@@ -338,12 +349,6 @@ export const SlicerSection: Component<{
               options={(printer()?.processes ?? []).map((p) => ({ value: p, label: shortName(p) }))}
               value={process()}
               onChange={(v) => set({ process: v, overrides: {} })}
-            />
-            <Select
-              label={t("Filamento")}
-              options={(printer()?.filaments ?? []).map((f) => ({ value: f, label: shortName(f) }))}
-              value={filament()}
-              onChange={(v) => set({ filament: v })}
             />
             <Show when={bed()}>
               {(b) => (
@@ -361,6 +366,27 @@ export const SlicerSection: Component<{
           </div>
         </Panel>
       </div>
+      <Show when={props.onOrientAuto}>
+        <div>
+          <Panel id="slicer.orient" dense title={t("Orientación de las piezas")} defaultOpen>
+            <div class="space-y-2 pb-3">
+              <Select
+                options={[
+                  { value: "keep", label: t("Como están en el visor") },
+                  { value: "auto", label: t("La mejor, automática") },
+                ]}
+                value={props.orientAuto ? "auto" : "keep"}
+                onChange={(v) => props.onOrientAuto?.(v === "auto")}
+              />
+              <p class="text-[10px] text-text-dim">
+                {props.orientAuto
+                  ? t("Antes de laminar se gira cada pieza a la cara con menos voladizos.")
+                  : t("Se laminan apoyadas tal como las dejaste. Para girarlas, usa Revisar → orientación sugerida.")}
+              </p>
+            </div>
+          </Panel>
+        </div>
+      </Show>
       <Show when={base()}>
         <div>
           <Panel id="slicer.layers" dense title={t("Capas y paredes")} defaultOpen>
@@ -519,10 +545,24 @@ export const SlicerSection: Component<{
             </p>
           }
         >
-          {/* Las secciones fluyen en columnas de ~280 px sin partirse (como Orizon3D) */}
-          <div class="[column-width:280px] [column-gap:1rem] [&>div>div]:break-inside-avoid [&>div>div]:mb-3">
-            {props.tab === "preview" ? previewPanels() : settingsPanels()}
-          </div>
+          <Show
+            when={printer()}
+            fallback={
+              <div class="space-y-2">
+                <p class="text-[11px] text-text-muted">{t("Esta impresora todavía no se puede laminar (no hay perfil de laminado). Se puede preparar y exportar desde las pestañas de Fabricar.")}</p>
+                <Show when={props.onEditPrinter}>
+                  <Button size="sm" variant="ghost" onClick={() => props.onEditPrinter?.()} icon={<Icons.Printer size={14} />}>
+                    {t("Cambiar impresora o filamento")}
+                  </Button>
+                </Show>
+              </div>
+            }
+          >
+            {/* Las secciones fluyen en columnas de ~280 px sin partirse (como Orizon3D) */}
+            <div class="[column-width:280px] [column-gap:1rem] [&>div>div]:break-inside-avoid [&>div>div]:mb-3">
+              {props.tab === "preview" ? previewPanels() : settingsPanels()}
+            </div>
+          </Show>
         </Show>
         </Show>
       </div>
@@ -539,7 +579,7 @@ export const SlicerSection: Component<{
           <Show
             when={busy()}
             fallback={
-              <Button onClick={slice} disabled={props.disabled || !props.plateInput()} fullWidth size="sm" variant="primary" icon={<Icons.Stack size={14} />}>
+              <Button onClick={slice} disabled={props.disabled || !props.plateInput() || !printer()} fullWidth size="sm" variant="primary" icon={<Icons.Stack size={14} />}>
                 {result() ? t("Laminar de nuevo") : t("Laminar")}
               </Button>
             }

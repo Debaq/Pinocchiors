@@ -2,7 +2,7 @@ import { t, tn, tx, locale } from "./lib/i18n";
 import { animationLod, defaultExportFormat, forgetRecent, meshBuild, peekBeforeImport, previewFirst, recentFiles, rememberRecent, showFps } from "./lib/settings";
 import { followUiScale } from "./lib/uiScale";
 import { tBackend } from "./lib/i18nBackend";
-import { Component, batch, createEffect, createMemo, createSignal, on, onMount, onCleanup, Show, untrack, type JSX } from "solid-js";
+import { Component, batch, createEffect, createMemo, createSignal, on, onMount, onCleanup, Show, untrack, type JSX, createResource } from "solid-js";
 import { invoke as tauriInvoke, Channel, type InvokeArgs, type InvokeOptions } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { startMcpLive } from "./lib/mcpLive";
@@ -137,11 +137,11 @@ import { composeSheet, type RenderStillOptions, type SheetCell, type StillImage 
 import { formatEta, renderRay, renderRayAnimation, type RayProgress } from "./lib/rayRender";
 import { cameraZoom, defaultRenderSettings, renderLayout, renderPixels, type RenderSettings } from "./components/steps/RenderStep";
 import { RenderEditor } from "./components/layout/RenderEditor";
-import { SlicerEditor } from "./components/layout/SlicerEditor";
 import { FabricarEditor } from "./components/layout/FabricarEditor";
 import type { FabTab } from "./components/panels/Print3DPanel";
 import type { Print3DStepProps } from "./components/steps";
-import { defaultSlicer, type SlicerTab } from "./components/panels/SlicerSection";
+import { loadSlicerInfo, syncedPrep } from "./lib/machines";
+import { defaultSlicer } from "./components/panels/SlicerSection";
 
 interface ProjectSaved {
   written: boolean;
@@ -5932,27 +5932,24 @@ export const App: Component = () => {
     const width = splitRef?.clientWidth ?? 1;
     startDrag(e, "col-resize", (dx) => setRenderEditorFraction(Math.min(0.6, Math.max(0.2, start + dx / width))));
   };
-  // ── Laminar: panel a la izquierda del visor en Fabricar ──
+  // ── Fabricar: preparar e imprimir (laminador incluido) en pestañas, a la izquierda del visor ──
   const inPrint = () => pipeline.workspace()?.id === "print";
-  const [slicerEditorOpen, setSlicerEditorOpen] = createPersisted("slicerEditor.open", false);
-  const [slicerEditorFraction, setSlicerEditorFraction] = createPersisted("slicerEditor.fraction", 0.3);
-  const [slicerTab, setSlicerTab] = createSignal<SlicerTab>("settings");
-  const [slicerBedSize, setSlicerBedSize] = createSignal<[number, number, number]>();
-  const slicerEditorVisible = () => inPrint() && slicerEditorOpen() && !textureEditor();
-  // ── Fabricar: sus herramientas en pestañas, también a la izquierda (una sola columna a la vez) ──
   const [printEditorOpen, setPrintEditorOpen] = createPersisted("printEditor.open", false);
-  const [printEditorTab, setPrintEditorTab] = createPersisted<FabTab>("printEditor.tab", "review");
+  const [printEditorTab, setPrintEditorTab] = createPersisted<FabTab>("printEditor.tab", "printer");
   const [printEditorFraction, setPrintEditorFraction] = createPersisted("printEditor.fraction", 0.3);
   const printEditorVisible = () => inPrint() && printEditorOpen() && !textureEditor();
   const openPrintEditor = (tab: FabTab) => {
     setPrintEditorTab(tab);
     setPrintEditorOpen(true);
-    setSlicerEditorOpen(false);
   };
-  const openSlicerEditor = () => {
-    setSlicerEditorOpen(true);
-    setPrintEditorOpen(false);
-  };
+  // La impresora y el material de Fabricar siguen siempre a la máquina y al filamento elegidos
+  const [slicerInfo] = createResource(loadSlicerInfo);
+  createEffect(() => {
+    const info = slicerInfo();
+    if (!info) return;
+    const next = syncedPrep(printPrep(), info, printPresets()?.materials ?? []);
+    if (next) setPrintPrep(next);
+  });
   const resizePrintEditor = (e: PointerEvent) => {
     const start = printEditorFraction();
     const width = splitRef?.clientWidth ?? 1;
@@ -6019,8 +6016,6 @@ export const App: Component = () => {
     plateView: { plate: plateViewIndex(), busy: plateViewBusy(), onView: setPlateViewIndex },
     onPreviewPlates: handlePreviewPlates,
     onExportPlates: handleExportPlates,
-    onOpenSlicer: openSlicerEditor,
-    slicerOpen: slicerEditorVisible(),
     onOpenEditor: openPrintEditor,
     editorTab: printEditorVisible() ? printEditorTab() : undefined,
     selection: {
@@ -6033,17 +6028,12 @@ export const App: Component = () => {
     canAnalyze: meshLoaded(),
     isProcessing: isProcessing(),
     });
-  const resizeSlicerEditor = (e: PointerEvent) => {
-    const start = slicerEditorFraction();
-    const width = splitRef?.clientWidth ?? 1;
-    startDrag(e, "col-resize", (dx) => setSlicerEditorFraction(Math.min(0.6, Math.max(0.2, start + dx / width))));
-  };
   // En Fabricar el modelo se ve sobre la cama de la impresora: la del laminador si está
   // abierto (su perfil de Orca), si no la elegida en Fabricar
   createEffect(() => {
     const v = viewer();
     if (!v) return;
-    const bed = inPrint() ? ((slicerEditorVisible() && slicerBedSize()) || prepPrinter(printPrep(), printPresets()).build_volume) : undefined;
+    const bed = inPrint() ? prepPrinter(printPrep(), printPresets()).build_volume : undefined;
     v.setPrintBed(bed ? [bed[0], bed[1], bed[2]] : null);
   });
 
@@ -9410,28 +9400,24 @@ export const App: Component = () => {
           {/* Herramientas de Fabricar a la izquierda del visor */}
           <Show when={printEditorVisible()}>
             <div class="shrink-0 min-w-0 border-r border-border" style={{ width: `${100 * printEditorFraction()}%` }}>
-              <FabricarEditor {...fabProps()} tab={printEditorTab()} onTab={openPrintEditor} onClose={() => setPrintEditorOpen(false)} />
-            </div>
-            <div class="shrink-0 w-1 cursor-col-resize bg-border hover:bg-orange/50 transition-colors" onPointerDown={resizePrintEditor} />
-          </Show>
-          {/* Laminador a la izquierda del visor (Fabricar) */}
-          <Show when={slicerEditorVisible()}>
-            <div class="shrink-0 min-w-0 border-r border-border" style={{ width: `${100 * slicerEditorFraction()}%` }}>
-              <SlicerEditor
-                settings={printPrep().slicer ?? defaultSlicer}
-                onSettings={(slicer) => setPrintPrep({ ...printPrep(), slicer })}
-                printerName={prepPrinter(printPrep(), printPresets()).name}
-                plateInput={() => prepPlateInput(printPrep(), printPresets())}
-                plateCount={platePreview()?.plates.length}
-                disabled={isProcessing() || !meshLoaded()}
-                tab={slicerTab()}
-                onTab={setSlicerTab}
-                onBed={setSlicerBedSize}
-                confirm={confirmAction}
-                onClose={() => setSlicerEditorOpen(false)}
+              <FabricarEditor
+                {...fabProps()}
+                tab={printEditorTab()}
+                onTab={openPrintEditor}
+                onClose={() => setPrintEditorOpen(false)}
+                slicer={{
+                  settings: printPrep().slicer ?? defaultSlicer,
+                  onSettings: (slicer) => setPrintPrep({ ...printPrep(), slicer }),
+                  plateInput: () => prepPlateInput(printPrep(), printPresets()),
+                  plateCount: platePreview()?.plates.length,
+                  disabled: isProcessing() || !meshLoaded(),
+                  confirm: confirmAction,
+                  orientAuto: printPrep().plate.orient,
+                  onOrientAuto: (orient) => setPrintPrep({ ...printPrep(), plate: { ...printPrep().plate, orient } }),
+                }}
               />
             </div>
-            <div class="shrink-0 w-1 cursor-col-resize bg-border hover:bg-accent/50 transition-colors" onPointerDown={resizeSlicerEditor} />
+            <div class="shrink-0 w-1 cursor-col-resize bg-border hover:bg-orange/50 transition-colors" onPointerDown={resizePrintEditor} />
           </Show>
           {/* Editor de texturas a la izquierda del visor */}
           <Show when={!inMaterialsWorkspace() ? textureEditor() : undefined}>

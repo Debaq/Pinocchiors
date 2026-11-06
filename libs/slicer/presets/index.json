@@ -4,6 +4,11 @@
    "name": "Creality K1 (0.4 nozzle)",
    "vendor": "Creality",
    "tools": 1,
+   "bed": [
+    220.0,
+    220.0,
+    250.0
+   ],
    "model": "Creality K1",
    "nozzle": 0.4,
    "default_process": "0.20mm Standard @Creality K1 (0.4 nozzle)",
@@ -35,6 +40,11 @@
    "name": "Creality K1C 0.4 nozzle",
    "vendor": "Creality",
    "tools": 1,
+   "bed": [
+    220.0,
+    220.0,
+    250.0
+   ],
    "model": "Creality K1C",
    "nozzle": 0.4,
    "default_process": "0.20mm Standard @Creality K1C",
@@ -113,6 +123,11 @@
    "name": "Creality K1 Max (0.4 nozzle)",
    "vendor": "Creality",
    "tools": 1,
+   "bed": [
+    300.0,
+    300.0,
+    300.0
+   ],
    "model": "Creality K1 Max",
    "nozzle": 0.4,
    "default_process": "0.20mm Standard @Creality K1Max (0.4 nozzle)",
@@ -144,6 +159,11 @@
    "name": "Flashforge AD5X 0.4 nozzle",
    "vendor": "Flashforge",
    "tools": 4,
+   "bed": [
+    220.0,
+    220.0,
+    220.0
+   ],
    "model": "Flashforge AD5X",
    "nozzle": 0.4,
    "default_process": "0.20mm Standard @FF AD5X",
@@ -199,6 +219,34 @@
     "SUNLU PLA+ @FF AD5M",
     "SUNLU Silk PLA+ @FF AD5M",
     "SUNLU Wood PLA @FF AD5M"
+   ]
+  },
+  {
+   "name": "Creality CR-10 Max 0.4 nozzle",
+   "vendor": "Creality",
+   "tools": 1,
+   "bed": [
+    450.0,
+    450.0,
+    470.0
+   ],
+   "model": "Creality CR-10 Max",
+   "nozzle": 0.4,
+   "default_process": "0.20mm Standard @Creality CR10Max",
+   "default_filament": "Creality Generic PLA",
+   "processes": [
+    "0.12mm Fine @Creality CR10Max",
+    "0.15mm Optimal @Creality CR10Max",
+    "0.20mm Standard @Creality CR10Max",
+    "0.24mm Draft @Creality CR10Max"
+   ],
+   "filaments": [
+    "Creality Generic ABS",
+    "Creality Generic ASA",
+    "Creality Generic PA-CF",
+    "Creality Generic PETG",
+    "Creality Generic PLA",
+    "Creality Generic PLA-CF"
    ]
   }
  ]

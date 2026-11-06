@@ -38,6 +38,9 @@ pub struct PrinterEntry {
     /// filamento por carrete y la pieza usa el primero (`T0`): el carrete real se elige al enviar.
     #[serde(default = "one")]
     pub tools: u32,
+    /// Cama: ancho, fondo y alto (mm), de `printable_area` y `printable_height`
+    #[serde(default)]
+    pub bed: Option<[f64; 3]>,
     pub model: String,
     pub nozzle: f64,
     pub default_process: String,

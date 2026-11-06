@@ -18,7 +18,27 @@ PRINTERS = [
     ("Creality", "Creality K1C 0.4 nozzle", 1),
     ("Creality", "Creality K1 Max (0.4 nozzle)", 1),
     ("Flashforge", "Flashforge AD5X 0.4 nozzle", 4),
+    ("Creality", "Creality CR-10 Max 0.4 nozzle", 1),
 ]
+
+
+def bed_size(machine):
+    """Cama (ancho, fondo, alto en mm) de `printable_area` y `printable_height`."""
+    pts = []
+    for p in machine.get("printable_area", []):
+        try:
+            x, y = (float(v) for v in str(p).split("x"))
+            pts.append((x, y))
+        except ValueError:
+            pass
+    if len(pts) < 3:
+        return None
+    xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+    try:
+        h = float(machine.get("printable_height", 0))
+    except (TypeError, ValueError):
+        h = 0.0
+    return [round(max(xs) - min(xs), 2), round(max(ys) - min(ys), 2), round(h, 2)]
 # Claves que solo sirven al gestor de perfiles de Orca.
 DROP = {"inherits", "setting_id", "filament_id", "instantiation", "renamed_from", "is_custom_defined", "version"}
 
@@ -108,6 +128,7 @@ def main():
             "name": printer,
             "vendor": vendor,
             "tools": tools,
+            "bed": bed_size(machine),
             "model": machine.get("printer_model", printer),
             "nozzle": float(machine.get("nozzle_diameter", ["0.4"])[0]),
             "default_process": default_process,

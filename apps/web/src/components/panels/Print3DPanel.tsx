@@ -1,9 +1,12 @@
 import { Component, Show, For, Match, Switch, createEffect, createSignal } from "solid-js";
-import { Button, Checkbox, Select, NumberInput } from "../ui";
+import { Button, Select, NumberInput } from "../ui";
 import * as Icons from "../icons";
 import { fmtNumber, t, tx } from "../../lib/i18n";
 import { CalibrationWizard, type CalibrationApply } from "../layout/CalibrationWizard";
 import { SkinPanel, type SkinPanelProps } from "./SkinPanel";
+import { MachinePanel } from "./MachinePanel";
+import { defaultSlicer } from "./SlicerSection";
+import { PrinterPicture } from "./PrinterSection";
 import type { CutPlane } from "../../lib/printCuts.ts";
 import { saveCustomMaterial, saveCustomPrinter } from "../../lib/settings.ts";
 import {
@@ -14,7 +17,6 @@ import {
   OrientationSection,
   PlatesSection,
   PrepareAllSection,
-  PrinterMaterial,
   ReadinessSection,
   type FabInfo,
   type JointSettings,
@@ -77,8 +79,16 @@ export interface PieceInfo {
   dimensions: [number, number, number];
 }
 
-/** Pestañas del panel izquierdo de Fabricar */
-export type FabTab = "printer" | "review" | "size" | "pieces" | "joints" | "infill" | "plates" | "skin";
+/** Pestañas del panel izquierdo de Fabricar: preparar el modelo e imprimir (laminar, ver, enviar) */
+export type FabTab = "printer" | "review" | "size" | "pieces" | "joints" | "infill" | "plates" | "skin" | "slice" | "preview" | "send";
+
+/** Las de imprimir (el laminador) */
+export const PRINT_TABS: { id: FabTab; label: string; icon: Component<{ size?: number }> }[] = [
+  { id: "slice", label: "Laminar", icon: Icons.Stack },
+  { id: "preview", label: "Vista previa", icon: Icons.Eye },
+  { id: "send", label: "Enviar", icon: Icons.Printer },
+];
+export const isPrintTab = (tab: FabTab | undefined) => tab === "slice" || tab === "preview" || tab === "send";
 
 export const FAB_TABS: { id: FabTab; label: string; icon: Component<{ size?: number }> }[] = [
   { id: "printer", label: "Impresora", icon: Icons.Printer },
@@ -137,9 +147,6 @@ export interface Print3DPanelProps {
   plateView?: { plate: number | null; busy?: boolean; onView: (plate: number | null) => void };
   onPreviewPlates?: (printer: PrinterProfile, material: MaterialProfile, settings: PlateSettings) => void;
   onExportPlates?: (printer: PrinterProfile, material: MaterialProfile, settings: PlateSettings) => void;
-  /** Abre el laminador (panel a la izquierda del visor) */
-  onOpenSlicer?: () => void;
-  slicerOpen?: boolean;
   /** Todo de una vez: verificar, dividir, uniones, vaciar y exportar */
   prepareReport?: PrepareReport;
   onPrepareAll?: (args: {
@@ -258,13 +265,18 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
   };
   const printer = (): PrinterProfile => prepPrinter(prep(), props.presets);
   const material = (): MaterialProfile => prepMaterial(prep(), props.presets);
-  const setPrinterChoice = (printer: PrinterProfile) => patch({ printer });
-  const setMaterialChoice = (material: MaterialProfile) => patch({ material });
   createEffect(() => props.onFabNeeded?.(printer(), material()));
   const joint = () => prep().joint;
   const setJoint = (joint: JointSettings) => patch({ joint });
-  const infill = () => prep().infill;
-  const setInfill = (infill: number) => patch({ infill });
+  // El relleno es uno solo: el del laminador (si se cambió) o el de Fabricar
+  const infill = () => {
+    const v = parseFloat(String(prep().slicer?.overrides?.["sparse_infill_density"] ?? ""));
+    return Number.isFinite(v) ? v : prep().infill;
+  };
+  const setInfill = (infill: number) => {
+    const slicer = prep().slicer ?? defaultSlicer;
+    patch({ infill, slicer: { ...slicer, overrides: { ...slicer.overrides, sparse_infill_density: `${Math.round(infill)}%` } } });
+  };
   const hollow = () => prep().hollow;
   const setHollow = (hollow: boolean) => patch({ hollow });
   const wall = () => prep().wall;
@@ -316,16 +328,7 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
         </Show>
       </Match>
       <Match when={props.tab === "printer"}>
-        <div class="space-y-4">
-          <PrinterMaterial presets={props.presets} printer={printer()} material={material()} onPrinter={setPrinterChoice} onMaterial={setMaterialChoice} onCalibrate={() => setCalibrating(true)} />
-          <Checkbox
-            small
-            label={t("Compensar los huecos del diseño")}
-            checked={!!prep().compensateAll}
-            onChange={(compensateAll) => patch({ compensateAll })}
-            hint={t("En Diseñar, los agujeros, las roscas interiores, las tuercas, las arandelas y los ejes y chaveteros de los engranes salen ya más anchos lo que esta impresora los achica. Cambia la medida de lo que ves.")}
-          />
-        </div>
+        <MachinePanel prep={prep()} onPatch={patch} presets={props.presets} printer={printer()} material={material()} onCalibrate={() => setCalibrating(true)} />
       </Match>
       <Match when={!props.analysis}>{needsAnalysis()}</Match>
       <Match when={props.tab === "review"}>
@@ -677,43 +680,49 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
         )}
       </Show>
 
-      <Show
-        when={props.onOpenEditor}
-        fallback={<PrinterMaterial presets={props.presets} printer={printer()} material={material()} onPrinter={setPrinterChoice} onMaterial={setMaterialChoice} onCalibrate={() => setCalibrating(true)} />}
-      >
+      <Show when={props.onOpenEditor}>
         <button
           type="button"
           onClick={() => props.onOpenEditor?.("printer")}
           class={`w-full space-y-1 rounded-md border p-2.5 text-left transition-colors ${props.editorTab === "printer" ? "border-orange bg-orange/10" : "border-border hover:border-orange/60"}`}
           title={t("Abrir {name} en el panel de la izquierda", { name: t("Impresora") })}
         >
-          <InfoRow label={t("Impresora")} value={printer().name} />
-          <InfoRow label={t("Cama")} value={`${printer().build_volume.map((v) => fmtNumber(v)).join(" × ")} mm`} />
-          <InfoRow label={t("Material")} value={material().name} />
+          <div class="flex items-center gap-2">
+            <PrinterPicture model={printer().name} size={44} />
+            <div class="min-w-0 flex-1 space-y-0.5">
+              <p class="text-xs font-semibold text-text truncate">{printer().name}</p>
+              <p class="text-[10px] text-text-dim">{printer().build_volume.map((v) => fmtNumber(v)).join(" × ")} mm</p>
+              <p class="text-[10px] text-text-dim truncate">{(prep().slicer?.filament ?? material().name).split("@")[0].trim()}</p>
+            </div>
+          </div>
         </button>
       </Show>
 
       <Show when={props.onOpenEditor}>
-        <div class="space-y-1.5 pt-2 border-t border-border/50">
-          <h4 class="text-xs font-semibold uppercase tracking-wider text-text-muted">{t("Preparar")}</h4>
-          <div class="grid grid-cols-4 gap-1">
-            <For each={FAB_TABS}>
-              {(tab) => (
-                <button
-                  type="button"
-                  onClick={() => props.onOpenEditor?.(tab.id)}
-                  class={`flex flex-col items-center gap-1 rounded border px-1 py-1.5 text-[10px] transition-colors ${
-                    props.editorTab === tab.id ? "border-orange bg-orange/15 text-orange" : "border-border text-text-muted hover:border-orange/60 hover:text-text"
-                  }`}
-                  title={t("Abrir {name} en el panel de la izquierda", { name: t(tab.label) })}
-                >
-                  <tab.icon size={16} />
-                  <span class="truncate max-w-full">{t(tab.label)}</span>
-                </button>
-              )}
-            </For>
-          </div>
-        </div>
+        <For each={[{ title: "Preparar", tabs: FAB_TABS }, { title: "Imprimir", tabs: PRINT_TABS }]}>
+          {(group) => (
+            <div class="space-y-1.5 pt-2 border-t border-border/50">
+              <h4 class="text-xs font-semibold uppercase tracking-wider text-text-muted">{t(group.title)}</h4>
+              <div class="grid grid-cols-4 gap-1">
+                <For each={group.tabs}>
+                  {(tab) => (
+                    <button
+                      type="button"
+                      onClick={() => props.onOpenEditor?.(tab.id)}
+                      class={`flex flex-col items-center gap-1 rounded border px-1 py-1.5 text-[10px] transition-colors ${
+                        props.editorTab === tab.id ? "border-orange bg-orange/15 text-orange" : "border-border text-text-muted hover:border-orange/60 hover:text-text"
+                      }`}
+                      title={t("Abrir {name} en el panel de la izquierda", { name: t(tab.label) })}
+                    >
+                      <tab.icon size={16} />
+                      <span class="truncate max-w-full">{t(tab.label)}</span>
+                    </button>
+                  )}
+                </For>
+              </div>
+            </div>
+          )}
+        </For>
       </Show>
 
       <Show when={props.analysis}>
@@ -734,11 +743,6 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
               })
             }
           />
-          <Show when={props.onOpenSlicer}>
-            <Button onClick={() => props.onOpenSlicer?.()} fullWidth size="sm" variant={props.slicerOpen ? "primary" : "default"} icon={<Icons.Stack size={14} />}>
-              {props.slicerOpen ? t("Laminador abierto a la izquierda") : t("Abrir el laminador")}
-            </Button>
-          </Show>
         </div>
       </Show>
     </div>

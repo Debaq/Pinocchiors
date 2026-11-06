@@ -497,4 +497,17 @@ export const en_print: Catalog = {
   "Ir a Piezas": "Go to Parts",
   "Analizar de nuevo": "Analyze again",
   "Abrir {name} en el panel de la izquierda": "Open {name} in the left panel",
+  // Fabricar con el laminador adentro (MachinePanel, FabricarEditor)
+  "Imprimir": "Print",
+  "{n} carretes": "{n} spools",
+  "Sin laminar todavía": "Not sliceable yet",
+  "La Creator original lee archivos .x3g: se puede preparar y exportar, pero para laminarla hay que cambiarle el firmware.": "The original Creator reads .x3g files: it can be prepared and exported, but its firmware has to be changed to slice for it.",
+  "Holguras y calibración": "Clearances and calibration",
+  "Cambiar impresora o filamento": "Change printer or filament",
+  "Orientación de las piezas": "Part orientation",
+  "Como están en el visor": "As they are in the viewport",
+  "La mejor, automática": "The best one, automatically",
+  "Antes de laminar se gira cada pieza a la cara con menos voladizos.": "Before slicing, each part is turned onto the face with the fewest overhangs.",
+  "Se laminan apoyadas tal como las dejaste. Para girarlas, usa Revisar → orientación sugerida.": "They are sliced resting as you left them. To turn them, use Check → suggested orientation.",
+  "Esta impresora todavía no se puede laminar (no hay perfil de laminado). Se puede preparar y exportar desde las pestañas de Fabricar.": "This printer can't be sliced for yet (no slicing profile). It can be prepared and exported from the Fabricate tabs.",
 };
