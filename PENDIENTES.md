@@ -3,7 +3,11 @@
 Regenerado el 2026-10-15 contrastando cada punto con el código actual y con los
 planes vivos (`libs/cad/ROADMAP.md` y sus `PLAN_*.md`,
 `libs/pinocchio/print3d/PLAN_PRINT3D.md`, `libs/PLAN_RENDER.md`,
-`libs/orizon3d/ROADMAP.md`). Los `ROADMAP.md` de quadriflow, uv y repair ya no
+`libs/orizon3d/ROADMAP.md`). Actualizado el 2026-11-06 con lo nuevo desde
+entonces (secciones 10–14): laminador de filamento (`PLAN_SLICER.md`), resina
+(`PLAN_SLA.md`), impresoras (`PLAN_IMPRESORAS.md`, `PLAN_MULTICOLOR.md`),
+conector MCP y chat (`apps/PLAN_MCP.md`), Android (`apps/PLAN_ANDROID.md`),
+pestañas y sketch del CAD (`libs/cad/PLAN_PESTANAS.md`, `PLAN_SKETCH_URGENTE.md`). Los `ROADMAP.md` de quadriflow, uv y repair ya no
 existen: lo que seguía abierto de ellos está aquí. Lo ya hecho no se repite
 (`git log --all -- '*ROADMAP*.md' '*PLAN*.md'`).
 
@@ -23,7 +27,14 @@ Verificado por lectura y búsqueda en el código; no se ejecutaron pruebas.
   panel de Orizon3D con el escáner real, captura con una persona real,
   abrir/guardar/cerrar con cambios/importar, constructor de cuerpo y variantes
   nuevas del esqueleto, cambios de UI de UV, panel de articulación con la
-  diseñadora.
+  diseñadora. Desde el 2026-10-15 se sumó, también sin probar en la app: pestañas
+  del CAD (F3–F8), plan urgente del sketch (U0–U8), laminador de filamento y de
+  resina dentro de Fabricar, manejo de impresoras, chat y modo en vivo del MCP
+  (el modo en vivo sí se probó una vez), actualizaciones automáticas y el APK.
+- 🐞 Abrir/guardar proyectos: arreglado (`005e530`, `535c2b8`), quedan pruebas y
+  revisiones en `roadmap_emergencia_2026-11-03.md` («Pendiente»), entre ellas el
+  arnés e2e de Diseñar roto por `LiveAiBadge` (`mcp_live_status` devuelve `null`
+  en `cad_http`).
 - 🧪 Correr `cargo test --workspace`. Hay Rust escrito sin compilar (nube, sesión
   del 2026-10-11 con `cargo` bloqueado). Para PLAN_OPERACIONES: `cargo test -p
   cad-model` (`--test operations --test hole`), luego `cad_http` + `vite` +
@@ -108,11 +119,12 @@ escaneos y comparación con referencia, atajos reasignables por área
 - 🧪 Comparar original y retopología lado a lado (casilla en Retopología): sin ver en el visor real.
 - 🟨 Rendimiento: la vista previa liviana ahora sale desde 100 000 caras (antes 400 000); faltan decodificar en workers y LOD.
 - 🟨 Pruebas: hay E2E con `node --test` y un arnés CDP en `apps/web/e2e`, no
-  Playwright ni E2E de la app Tauri completa; el CI corre ya las pruebas de
-  lógica `e2e/*.test.mjs`, no el arnés CDP.
-- 🟨 CI con clippy informativo (job nuevo en `ci.yml`, sin `-D warnings`):
-  0 errores y ~120 avisos de estilo en 12 crates (`cargo clippy --workspace --offline`
-  del 2026-10-16); falta limpiarlos para poder exigirlos.
+  Playwright ni E2E de la app Tauri completa. El único workflow es `release.yml`
+  (manual o tag `pre.*`; `ci.yml` se quitó el 2026-10-20): corre `cargo test
+  --workspace`, no las pruebas de lógica `e2e/*.test.mjs` ni el arnés CDP.
+- 🟨 Clippy: el job informativo se fue con `ci.yml`. ~120 avisos de estilo en 12
+  crates (`cargo clippy --workspace --offline` del 2026-10-16); falta limpiarlos
+  para poder exigirlos.
 - PLAN_OBJETOS sección C: probar el cráneo y un modelo de una sola pieza en la
   app real. ✅ Luces e Historial ya usan Hint y los párrafos `leading-relaxed`
   de los paneles laterales pasaron a Hint (quedan avisos de estado y los de
@@ -195,7 +207,8 @@ Detalle en `PLAN_PRINT3D.md`, «Pendientes y límites».
   orientación sugerida para el modelo entero; uniones solo en cortes planos y
   riel recto (no se pone si la cara tiene un hueco); vaciado deja macizo lo más
   fino que el doble de la pared; distribución por celdas con giros de 90°;
-  compensación de agujeros solo en CAD; pieles con una sola escala de UV.
+  compensación de agujeros en CAD y en el laminador de resina (no en filamento);
+  pieles con una sola escala de UV.
 
 ## 7. Render (`libs/geppettoray`, plan en `libs/PLAN_RENDER.md`)
 
@@ -237,6 +250,13 @@ sombra, HDRI elegible, ACES, luz de área texturizada) y 4a (fondo de estudio).
 Fases F0–F6 y F8–F10 cerradas (F9 se cerró el 2026-10-15); E0–E10 del escaneo
 con sección ✅.
 
+- 🧪 **Pestañas** (`PLAN_PESTANAS.md`, 2026-10-22/24): F0–F2 hechas y probadas
+  con fixtures; F3–F8 (barra de pestañas, objetos por pestaña, ensamble propio,
+  pieza derivada, planos 2D del ensamble, exportar pestañas, variables del
+  proyecto, subensambles) en código, falta probarlas en la app.
+- 🧪 **Sketch urgente** (`PLAN_SKETCH_URGENTE.md`, 2026-11-03/05): U0–U8 hechos con
+  pruebas `node --test`; falta probar cada uno en la app. Queda `nullspace` con
+  `max_niter = 0` (U1) y «Reparar» de U5.
 - 🟨 **F7 distribución:** un solo `release.yml` (2026-10-17) sale siempre con CAD
   (OCCT estático) y corre todos los tests con OCCT real. Linux funcionaba en la
   variante anterior; Windows tenía el C++ sin compilar con MSVC (arreglado con
@@ -292,3 +312,68 @@ con sección ✅.
   cónico con extremos cónicos falla sobre 50°; espina de pescado con canal es
   lenta; E7 no segmenta con triángulos menores que la tolerancia (0,2 % de la
   diagonal); E9 solo piezas prismáticas o de revolución simples.
+
+## 10. Laminador de filamento (`libs/slicer`, plan en `print3d/PLAN_SLICER.md`)
+
+Motor de OrcaSlicer 2.4.2 como proceso aparte, embebido en el ejecutable. S0–S8
+hechas (laminar dentro de Fabricar, vista previa, miniaturas, envío por
+Moonraker, motor en CI para Linux; Windows y macOS escritos).
+- 🧪 Comparar contra la GUI de Orca 2.4.2 con el mismo STL; probar el panel en la
+  app abierta (la vista previa solo se vio en Chromium); ver las miniaturas en la
+  pantalla de la K1.
+- 🧪 Motor en Windows y macOS: los workflows están, falta correrlos (macOS sin
+  runners propios).
+- ⬜ «Preparar todo» no termina laminando (S3).
+
+## 11. Resina (`libs/slicer/src/sla*.rs`, plan en `print3d/PLAN_SLA.md`)
+
+Hecho: laminado por filas en paralelo, CTB v2 para la LD-002H (igual byte a byte
+al de Lychee salvo el tiempo), revisión de islas/ventosas/huecos, venteos,
+inclinaciones, soportes automáticos editables, perfiles, pieza de calibración,
+interfaz en Fabricar, MCP, suavizado de bordes en grises (SLA9) y compensación de
+medidas XY / pata de elefante / agujeros (SLA10).
+- 🧪 Abrir un `.ctb` de Pinocchio en la LD-002H (lista, miniatura, tiempos; sin
+  imprimir), también uno con grises; fijar el espejo con una pieza asimétrica;
+  imprimir la pieza de calibración para sacar exposición y compensaciones reales.
+- ⬜ CXDLP para la Halot-Sky (espera la unidad de exposición) y envío por WiFi.
+- ⬜ A la altura de los laminadores de pago: SLA11 gráfico de área por capa y
+  subida dinámica; SLA12 soportes avanzados (refuerzos, árbol, punta según la
+  normal, balsa biselada, grosor por punto, pincel); SLA13 orientación
+  automática; SLA14 relleno interior y tapones de drenaje; SLA15 operaciones
+  sobre capas (islas chicas, doble exposición, atenuar interiores); SLA16 nombre
+  en la balsa.
+
+## 12. Impresoras (`print3d/PLAN_IMPRESORAS.md`)
+
+Regla: ninguna orden a una impresora sin pedido del usuario (leer sí).
+- 🧪 Hechas en código, falta probarlas desde la app con cada impresora: K1
+  rooteada por Moonraker (el envío ya se probó), K1 de fábrica por el protocolo
+  de Creality (P2: solo leída; falta subir/imprimir), Flashforge AD5X (P3/P4),
+  controles y cámara (P7), herramientas del MCP con aprobación (P6).
+- ⬜ P5: encontrarlas solas en la red (mDNS, Creality, UDP de Flashforge).
+- ⬜ P7 resto: configuración de Klipper desde la app, puesta en marcha y
+  calibraciones guiadas, cola. CR-10 Max: falta grabar MainsailOS y rehacer su
+  `printer.cfg`.
+- ⬜ Multicolor de la AD5X (`PLAN_MULTICOLOR.md`, MC0–MC7): nada empezado, con
+  preguntas abiertas para el usuario.
+
+## 13. Conector MCP y chat (`apps/PLAN_MCP.md`)
+
+M0, M2–M5, M7 y M8 hechos, más el chat dentro de la app (Claude Code o
+proveedores compatibles con OpenAI), laminado, pieles e impresoras.
+- ⏸ Pausado por decisión del usuario (2026-10-25): M6 (rig/animación, solo en
+  vivo), M9, cancelar a mitad un comando largo y ahorro de tokens (la lista de
+  herramientas pesa ~21k tokens y el chat la manda en cada paso).
+- 🟨 M1: quedan comandos sin separar de `AppHandle` (se hacen por fase).
+
+## 14. Android y distribución
+
+- 🧪 APK arm64 con CAD (`android.yml`, manual): compila desde el 2026-10-29,
+  nunca probado en un teléfono.
+- ⬜ `PLAN_ANDROID.md`: A1 clave fija (la pone el usuario, va primero), A2–A7
+  proyectos dentro de la app, importar/exportar/compartir, «Abrir con»; A8 táctil
+  después de probarlo. Chat por HTTPS en Android (falta iniciar el verificador
+  con JNI).
+- 🧪 Actualizaciones automáticas firmadas (2026-10-25): el diálogo se probó con
+  arnés; falta una actualización real de punta a punta en Windows y en el
+  AppImage.

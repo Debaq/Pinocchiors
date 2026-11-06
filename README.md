@@ -460,7 +460,7 @@ cargo test -p pinocchio-app
 
 ## Pendientes y planes
 
-Lo que falta, verificado contra el código, está en [`PENDIENTES.md`](PENDIENTES.md). Planes vivos: `libs/cad/ROADMAP.md` (y sus `PLAN_*.md`), `libs/pinocchio/print3d/PLAN_PRINT3D.md`, `libs/PLAN_RENDER.md` y `libs/orizon3d/ROADMAP.md`.
+Lo que falta, verificado contra el código, está en [`PENDIENTES.md`](PENDIENTES.md). Planes vivos: `libs/cad/ROADMAP.md` (y sus `PLAN_*.md`), `libs/pinocchio/print3d/PLAN_PRINT3D.md`, `PLAN_SLICER.md`, `PLAN_SLA.md`, `PLAN_IMPRESORAS.md` y `PLAN_MULTICOLOR.md` (en la misma carpeta), `libs/PLAN_RENDER.md`, `libs/orizon3d/ROADMAP.md`, `apps/PLAN_MCP.md` y `apps/PLAN_ANDROID.md`.
 
 ---
 
