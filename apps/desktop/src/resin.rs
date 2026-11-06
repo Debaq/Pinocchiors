@@ -145,6 +145,8 @@ pub struct ResinResult {
     /// Resina ahorrada al vaciar (ml) y tapones de drenaje puestos en la placa
     pub hollowed_ml: f32,
     pub plugs: usize,
+    /// El nombre que quedó en la balsa (vacío = ninguno)
+    pub label: String,
     pub notes: Vec<String>,
     /// Avisos de los parámetros
     pub warnings: Vec<String>,
@@ -277,6 +279,7 @@ fn finish(
         braces: p.braces,
         hollowed_ml: p.hollowed_ml,
         plugs: p.plugs,
+        label: p.label.clone(),
         notes: p.notes.clone(),
         warnings,
         bed: [pr.bed_x, pr.bed_y],

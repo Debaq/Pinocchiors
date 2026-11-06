@@ -137,6 +137,8 @@ export interface PrepareSettings {
   drain_diameter: number;
   /** Un tapón imprimible por drenaje, en la placa */
   plugs: boolean;
+  /** Texto en relieve delante de la balsa; vacío = sin nombre */
+  label?: string;
 }
 
 /** Vaciado: pared mínima y relleno (columnas o rejilla) */
@@ -263,6 +265,8 @@ export interface ResinResult {
   /** Resina ahorrada al vaciar (ml) y tapones de drenaje en la placa */
   hollowed_ml: number;
   plugs: number;
+  /** El nombre que quedó en la balsa (en mayúsculas, sin tildes) */
+  label: string;
   notes: string[];
   warnings: string[];
   bed: [number, number];
@@ -291,6 +295,9 @@ export interface ResinPrep {
   /** Diámetro de los drenajes a mano (mm) y si se imprime su tapón */
   drainDiameter?: number;
   plugs?: boolean;
+  /** Nombre en la balsa y su texto (vacío = placa, resina y fecha) */
+  label?: boolean;
+  labelText?: string;
   /** Giro de la placa antes de preparar (ver `prepTurn`) */
   tilt?: ResinTurn;
   plate?: number;

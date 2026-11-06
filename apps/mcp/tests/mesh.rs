@@ -295,6 +295,11 @@ fn slice_for_resin_and_calibrate() {
     let (text, _) = ok(&s, "resin_slice", json!({ "settings": { "ops": { "raft_relief": true, "dim": true } } }));
     assert!(text.contains("No islands left"), "{text}");
 
+    // Nombre en la balsa
+    let (text, data) = ok(&s, "resin_slice", json!({ "label": "Cubo 12 · ABS" }));
+    assert!(text.contains("Raft label: \"CUBO 12 · ABS\"") && data["label"] == "CUBO 12 · ABS", "{text}");
+    assert!(text.contains("No islands left"), "{text}");
+
     // Halot-Sky: se revisa pero no se guarda todavía
     let (text, _, err) = call(&s, "resin_slice", json!({ "printer": "halot", "path": dir.path().join("x.cxdlp") }));
     assert!(err && text.contains("cannot be written"), "{text}");

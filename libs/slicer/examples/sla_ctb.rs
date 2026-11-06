@@ -55,6 +55,10 @@ fn main() {
         println!("sin preparar: {} islas, {} huecos problema", before.islands.len(), before.cavities.len());
         // ARBOL=1: ramas; LATERALES=1: soportes laterales; RECTOS=1: puntas verticales y sin refuerzos (como antes de SLA12).
         let mut prep = sla_prepare::PrepareSettings::default();
+        // NOMBRE="P1 ABS" pone el nombre en la balsa.
+        if let Ok(label) = std::env::var("NOMBRE") {
+            prep.label = label;
+        }
         // VACIAR=2 (pared en mm) vacía; RELLENO=columnas|rejilla|nada.
         if let Some(wall) = env("VACIAR") {
             let infill = match std::env::var("RELLENO").as_deref() {
@@ -126,6 +130,12 @@ fn main() {
         (sla::slice_with(&tris, &pr, &s).expect("laminado"), vec![tris])
     };
     let sliced = t.elapsed();
+    // CAPA=k:archivo.pgm guarda la máscara de esa capa (para mirarla).
+    if let Some((k, path)) = std::env::var("CAPA").ok().and_then(|v| v.split_once(':').map(|(a, b)| (a.parse::<usize>().ok(), b.to_string()))).and_then(|(k, p)| k.map(|k| (k, p))) {
+        let mut pgm = format!("P5 {} {} 255\n", pr.res_x, pr.res_y).into_bytes();
+        pgm.extend(layers[k].to_mask(pr.res_x, pr.res_y));
+        std::fs::write(path, pgm).expect("capa");
+    }
     // Con VISTA=archivo.ppm guarda una vista grande de lo preparado (para revisar a ojo).
     if let Ok(path) = std::env::var("VISTA") {
         let img = ctb::preview_image(&parts, (900, 900), [200, 200, 200]);

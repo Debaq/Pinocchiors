@@ -315,6 +315,7 @@ previous call: mm, bed corner at the origin, Z up). Does NOT send anything to th
         props.push(("drains", array("Drain holes you place on the surface [x, y, z] in printer mm (like `points`); drilled inward along the face normal", point("Point", 3)), false));
         props.push(("drain_diameter", number_in("Drain hole diameter in mm (default 3)", 1.0, 10.0), false));
         props.push(("plugs", boolean("Print a plug for each drain on the plate next to the raft (default true)"), false));
+        props.push(("label", string("Text embossed on a tab in front of the raft, e.g. \"P1 ABS 2026-11-06\" (capitals, digits, - . : / # % +; accents are dropped)"), false));
         props.push((
             "tilt",
             object(&[
@@ -382,6 +383,9 @@ fn prepare_settings(ctx: &Ctx, args: &Value) -> Result<Value, Fail> {
     if let Some(v) = arg_bool(args, "plugs") {
         prep["plugs"] = json!(v);
     }
+    if let Some(l) = arg_str(args, "label") {
+        prep["label"] = json!(l);
+    }
     Ok(prep)
 }
 
@@ -447,6 +451,9 @@ fn resin_slice(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
         num(f("lift")),
         count("vents")
     ));
+    if let Some(l) = r["label"].as_str().filter(|l| !l.is_empty()) {
+        lines.push(format!("Raft label: \"{l}\"."));
+    }
     if f("hollowed_ml") > 0.0 {
         lines.push(format!("Hollowed: {} ml less resin; {} drain plug(s) on the plate.", num(f("hollowed_ml")), r["plugs"]));
     }

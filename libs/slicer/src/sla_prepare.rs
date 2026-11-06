@@ -15,6 +15,7 @@ use crate::sla::{slice, slice_with, Layer, ResinPrinter, ResinSettings};
 use crate::sla_check::{check, fill_holes, remove_islands, slender, Cavity, ResinReport};
 use crate::sla_ops::{dim_interior, raft_relief};
 use crate::sla_hollow::{drain_holes, plugs, Hollow, HollowSettings};
+use crate::sla_label::{normalize, raft_label};
 use crate::sla_supports::{auto_points, build, frustum, side_points, zone_points, SkipReason, SupportPoint, SupportSettings, Tri};
 use crate::SlicerError;
 
@@ -35,6 +36,11 @@ pub struct PrepareSettings {
     pub drain_diameter: f32,
     /// Un tapón imprimible por drenaje, en la placa al lado de la balsa.
     pub plugs: bool,
+    /// Texto en relieve en una pestaña delante de la balsa (SLA16); vacío = sin nombre.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub label: String,
+    /// Alto de cada píxel de la letra (mm; la letra mide 7).
+    pub label_cell: f32,
 }
 
 impl Default for PrepareSettings {
@@ -47,6 +53,8 @@ impl Default for PrepareSettings {
             drains: Vec::new(),
             drain_diameter: 3.0,
             plugs: true,
+            label: String::new(),
+            label_cell: 0.35,
         }
     }
 }
@@ -86,6 +94,8 @@ pub struct Prepared {
     /// Resina que se ahorró al vaciar (ml) y tapones puestos en la placa.
     pub hollowed_ml: f32,
     pub plugs: usize,
+    /// El texto que quedó en la balsa (vacío = ninguno).
+    pub label: String,
 }
 
 /// Prepara `model` (en mm de la cama; se respeta su x, y). Con `points` se usan esos
@@ -227,6 +237,32 @@ pub fn prepare(
         (out.columns, out.tilted, out.braces) = (sup.pillars, sup.tilted, sup.braces);
         out.points = pts;
         out.supports = sup.triangles;
+    }
+
+    // Nombre en la balsa: pestaña delante (o detrás) con el texto en relieve.
+    if !prep.label.trim().is_empty() {
+        match &prep.supports {
+            Some(s) if s.raft_thickness > 0.0 => {
+                let (mut lo, mut hi) = ([f32::MAX; 2], [f32::MIN; 2]);
+                for v in out.supports.iter().flatten().filter(|v| v[2] <= s.raft_thickness + 1e-3) {
+                    for c in 0..2 {
+                        lo[c] = lo[c].min(v[c]);
+                        hi[c] = hi[c].max(v[c]);
+                    }
+                }
+                match (lo[0] < hi[0]).then(|| raft_label(&prep.label, lo, hi, s.raft_thickness, prep.label_cell, printer)).flatten() {
+                    Some(l) => {
+                        if l.text != normalize(&prep.label) {
+                            out.notes.push(format!("el nombre de la balsa se cortó: «{}»", l.text));
+                        }
+                        out.supports.extend(l.triangles);
+                        out.label = l.text;
+                    }
+                    None => out.notes.push("el nombre no entra en la placa junto a la balsa".into()),
+                }
+            }
+            _ => out.notes.push("sin balsa no hay dónde poner el nombre".into()),
+        }
     }
 
     // Tapones de los drenajes, parados en la placa al lado de lo que ya hay.
@@ -433,5 +469,19 @@ mod tests {
         assert!(r.report.cavities.is_empty(), "{:?}", r.report.cavities);
         assert_eq!(r.plugs, 1);
         assert!(r.report.islands.is_empty(), "{:?}", r.report.islands);
+    }
+
+    #[test]
+    fn nombre_en_la_balsa() {
+        let c = cube([30.0, 50.0, 0.0], [12.0, 12.0, 8.0]);
+        let prep = PrepareSettings { label: "Placa 1 · Estándar".into(), ..Default::default() };
+        let r = prepare(&c, &LD_002H, &ResinSettings::default(), &prep, None).unwrap();
+        assert_eq!(r.label, "PLACA 1 · ESTANDAR");
+        assert!(r.report.islands.is_empty() && r.report.cavities.is_empty(), "{:?} {:?}", r.report.islands, r.report.cavities);
+        // El relieve sobre la balsa (z 1,0–1,5) delante de la pieza.
+        let (_, py) = LD_002H.mm_to_pixel(30.0, 48.0).unwrap();
+        assert!(r.layers[25].spans.iter().any(|s| s.y < py), "hay texto delante");
+        let none = prepare(&c, &LD_002H, &ResinSettings::default(), &PrepareSettings { supports: None, ..prep }, None).unwrap();
+        assert!(none.label.is_empty() && none.notes.iter().any(|n| n.contains("sin balsa")));
     }
 }

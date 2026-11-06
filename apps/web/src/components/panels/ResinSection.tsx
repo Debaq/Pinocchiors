@@ -153,6 +153,13 @@ export const ResinSection: Component<{
   };
   const setHollow = <K extends keyof HollowSettings>(key: K, v: HollowSettings[K]) => set({ hollow: { ...props.prep.hollow, [key]: v } });
   const drainDiameter = () => props.prep.drainDiameter ?? 3;
+  /** Nombre de la balsa: el escrito, o placa · resina · fecha */
+  const defaultLabel = () => {
+    const d = new Date();
+    const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    return [`P${plate() + 1}`, profile() ? t(profile()!.name) : undefined, day].filter(Boolean).join(" · ");
+  };
+  const labelText = () => props.prep.labelText?.trim() || defaultLabel();
   createEffect(() => resinPreview.setDrainRadius(drainDiameter() / 2));
   const prepare = (): PrepareSettings => {
     const sp = supports();
@@ -164,6 +171,7 @@ export const ResinSection: Component<{
       drains: validDrains(),
       drain_diameter: drainDiameter(),
       plugs: props.prep.plugs ?? true,
+      label: props.prep.label ? labelText() : "",
     };
   };
 
@@ -568,6 +576,23 @@ export const ResinSection: Component<{
                         {num("Uno cada", sp().side_every, (v) => setSupport("side_every", v), 2, 50, 1, "mm")}
                       </Show>
                       {num("Chaflán de la balsa", sp().raft_bevel, (v) => setSupport("raft_bevel", v), 0, 2, 0.1, "mm")}
+                      <Checkbox
+                        small
+                        label={t("Nombre en la balsa")}
+                        checked={!!props.prep.label}
+                        onChange={(v) => set({ label: v })}
+                        hint={t("Una pestaña delante de la balsa con el texto en relieve: para saber qué placa, resina y fecha es cada pieza. Mayúsculas, sin tildes.")}
+                      />
+                      <Show when={props.prep.label}>
+                        <input
+                          class="w-full px-2 py-1 rounded bg-surface/40 border border-border text-xs text-text outline-none focus:border-accent"
+                          placeholder={defaultLabel()}
+                          value={props.prep.labelText ?? ""}
+                          maxLength={60}
+                          onKeyDown={(e) => e.stopPropagation()}
+                          onChange={(e) => set({ labelText: e.currentTarget.value })}
+                        />
+                      </Show>
                       <Show when={Object.keys(props.prep.supportOverrides ?? {}).length > 0}>
                         <button class="text-[11px] text-text-dim hover:underline" onClick={() => set({ supportOverrides: {} })}>
                           {t("Volver a los de fábrica")}
@@ -706,6 +731,9 @@ export const ResinSection: Component<{
                 </Show>
                 <Row label={t("Capas")} value={`${r().layers} · ${fmtNumber(r().height_mm, { maximumFractionDigits: 1 })} mm`} />
                 <Row label={t("Capa con más área")} value={`${fmtNumber(r().max_area_mm2, { maximumFractionDigits: 0 })} mm² (${r().max_area_layer + 1})`} />
+                <Show when={r().label}>
+                  <Row label={t("En la balsa")} value={r().label} />
+                </Show>
                 <Show when={r().hollowed_ml > 0}>
                   <Row
                     label={t("Ahorro del vaciado")}

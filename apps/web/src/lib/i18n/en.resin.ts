@@ -79,6 +79,13 @@ export const en_resin: Catalog = {
   "Imprimir un tapón por drenaje": "Print a plug for each drain",
   "Ahorro del vaciado": "Saved by hollowing",
   "Operaciones sobre capas": "Layer operations",
+  "Nombre en la balsa": "Name on the raft",
+  "Una pestaña delante de la balsa con el texto en relieve: para saber qué placa, resina y fecha es cada pieza. Mayúsculas, sin tildes.":
+    "A tab in front of the raft with embossed text: to know which plate, resin and date each part is. Capitals, no accents.",
+  "En la balsa": "On the raft",
+  "el nombre de la balsa se cortó: «{}»": "the raft name was cut: «{}»",
+  "el nombre no entra en la placa junto a la balsa": "the name doesn't fit on the plate next to the raft",
+  "sin balsa no hay dónde poner el nombre": "without a raft there is nowhere to put the name",
   "Quitar islas de hasta": "Remove islands up to",
   "Cerrar huecos de hasta": "Close holes up to",
   "0 = no se hace. Son puntos sueltos o agujeritos de pocos píxeles que deja el laminado: no imprimen nada útil.":
