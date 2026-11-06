@@ -102,6 +102,18 @@ pub fn validate(s: &ResinSettings, printer: &ResinPrinter) -> Vec<String> {
     if s.layer_height < pw / 3.0 {
         w.push("capa mucho más fina que el píxel: más tiempo sin ganar detalle".into());
     }
+    if s.xy_offset.abs() > 0.3 {
+        w.push("compensación XY de más de 0,3 mm: las piezas cambian mucho de medida".into());
+    }
+    if !(0.0..=0.5).contains(&s.elephant_foot) {
+        w.push("pata de elefante fuera de 0–0,5 mm".into());
+    }
+    if s.elephant_foot > 0.0 && s.bottom_layers == 0 {
+        w.push("la pata de elefante solo se aplica a las capas de base y no hay capas de base".into());
+    }
+    if !(0.0..=0.5).contains(&s.hole_offset) {
+        w.push("compensación de agujeros fuera de 0–0,5 mm".into());
+    }
     w
 }
 

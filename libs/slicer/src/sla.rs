@@ -13,6 +13,7 @@
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::sla_morph::{Compensation, Lines};
 use crate::SlicerError;
 
 /// Una impresora de resina: pantalla y volumen de impresión.
@@ -135,6 +136,20 @@ pub struct ResinSettings {
     pub cost_per_ml: f32,
     /// Antialiasing: subfilas por fila para los bordes en grises (1 = apagado; 2, 4 u 8).
     pub antialias: u8,
+    /// Compensaciones en mm: agrandar (+) o achicar (−) la pieza en XY; achicar las capas de
+    /// base (pata de elefante); agrandar los agujeros de hasta `hole_max` mm.
+    pub xy_offset: f32,
+    pub elephant_foot: f32,
+    pub hole_offset: f32,
+    pub hole_max: f32,
+}
+
+impl ResinSettings {
+    /// La compensación de la capa `index` (las de base llevan además la pata de elefante).
+    pub fn compensation(&self, index: usize) -> Compensation {
+        let foot = if (index as u32) < self.bottom_layers { self.elephant_foot.max(0.0) } else { 0.0 };
+        Compensation { xy: self.xy_offset - foot, hole: self.hole_offset.max(0.0), hole_max: self.hole_max }
+    }
 }
 
 impl Default for ResinSettings {
@@ -157,6 +172,10 @@ impl Default for ResinSettings {
             density: 1.1,
             cost_per_ml: 0.0,
             antialias: 1,
+            xy_offset: 0.0,
+            elephant_foot: 0.0,
+            hole_offset: 0.0,
+            hole_max: 10.0,
         }
     }
 }
@@ -231,6 +250,21 @@ pub fn slice(triangles: &[[[f32; 3]; 3]], printer: &ResinPrinter, layer_height: 
 
 /// Como [`slice`], con bordes en grises si `antialias` > 1 (subfilas por fila, hasta 16).
 pub fn slice_aa(triangles: &[[[f32; 3]; 3]], printer: &ResinPrinter, layer_height: f32, antialias: u8) -> Result<Vec<Layer>, SlicerError> {
+    slice_impl(triangles, printer, layer_height, antialias, |_| Compensation::default())
+}
+
+/// El laminado final con todo lo de `settings`: alto de capa, antialiasing y compensaciones.
+pub fn slice_with(triangles: &[[[f32; 3]; 3]], printer: &ResinPrinter, settings: &ResinSettings) -> Result<Vec<Layer>, SlicerError> {
+    slice_impl(triangles, printer, settings.layer_height, settings.antialias, |i| settings.compensation(i))
+}
+
+fn slice_impl(
+    triangles: &[[[f32; 3]; 3]],
+    printer: &ResinPrinter,
+    layer_height: f32,
+    antialias: u8,
+    comp: impl Fn(usize) -> Compensation + Sync,
+) -> Result<Vec<Layer>, SlicerError> {
     let aa = antialias.clamp(1, 16) as u32;
     if triangles.is_empty() {
         return Err(SlicerError::Empty);
@@ -286,8 +320,13 @@ pub fn slice_aa(triangles: &[[[f32; 3]; 3]], printer: &ResinPrinter, layer_heigh
         .map(|(i, tris)| {
             let zc = (i as f32 + 0.5) * layer_height;
             let segs = cut_layer(triangles, &tris, zc, sign);
-            let mut spans = binary_spans(&segs, pw, ph, printer);
-            let mut gray = if aa > 1 { gray_spans(&segs, pw, ph, aa, printer) } else { Vec::new() };
+            let c = comp(i);
+            let lines = |rh: f32, xoff: f32, rows: u32| {
+                let l = inside_lines(&crossings(&segs, pw, rh, xoff, rows));
+                if c.is_none() { l } else { c.apply(l, pw, rh, rows) }
+            };
+            let mut spans = binary_spans(&lines(ph, 0.5, printer.res_y), printer);
+            let mut gray = if aa > 1 { gray_spans(&lines(ph / aa as f32, 0.0, printer.res_y * aa), aa, printer) } else { Vec::new() };
             if printer.flip_x {
                 mirror(&mut spans, printer.res_x);
                 mirror_gray(&mut gray, printer.res_x);
@@ -335,8 +374,9 @@ fn crossings(segs: &[([f32; 2], [f32; 2], i32)], pw: f32, rh: f32, xoff: f32, ro
     out
 }
 
-/// Recorre los cruces de cada fila y llama a `f(fila, desde, hasta)` en cada tramo con giro positivo.
-fn inside_runs(crossings: &[(u32, f32, i32)], mut f: impl FnMut(u32, f32, f32)) {
+/// Los tramos con giro positivo de cada fila de cruces.
+fn inside_lines(crossings: &[(u32, f32, i32)]) -> Lines {
+    let mut runs = Vec::new();
     let mut i = 0;
     while i < crossings.len() {
         let row = crossings[i].0;
@@ -349,58 +389,56 @@ fn inside_runs(crossings: &[(u32, f32, i32)], mut f: impl FnMut(u32, f32, f32)) 
             if before <= 0 && wind > 0 {
                 start = x;
             } else if before > 0 && wind <= 0 {
-                f(row, start, x);
+                runs.push((row, start, x));
             }
             i += 1;
         }
     }
+    Lines::from_runs(runs)
 }
 
-/// Máscara en blanco y negro: se pinta el píxel cuyo centro cae dentro.
-fn binary_spans(segs: &[([f32; 2], [f32; 2], i32)], pw: f32, ph: f32, printer: &ResinPrinter) -> Vec<Span> {
+/// Máscara en blanco y negro: se pinta el píxel cuyo centro cae dentro (líneas por el
+/// centro de cada fila y x corrida medio píxel).
+fn binary_spans(lines: &Lines, printer: &ResinPrinter) -> Vec<Span> {
     let mut spans = Vec::new();
-    inside_runs(&crossings(segs, pw, ph, 0.5, printer.res_y), |row, start, end| {
+    for (row, start, end) in lines.runs() {
         // Centros x + 0.5 de los píxeles x con start <= x < end (coordenada ya corrida).
         let x0 = start.ceil().max(0.0) as i64;
         let x1 = (end.ceil() as i64).min(printer.res_x as i64);
         if x1 > x0 {
             push_span(&mut spans, row, x0 as u32, x1 as u32);
         }
-    });
+    }
     spans
 }
 
-/// Imagen en grises: cada fila se muestrea en `aa` subfilas y en x se mide la parte exacta
-/// de cada píxel que queda dentro; el gris es la cobertura promedio.
-fn gray_spans(segs: &[([f32; 2], [f32; 2], i32)], pw: f32, ph: f32, aa: u32, printer: &ResinPrinter) -> Vec<GraySpan> {
+/// Imagen en grises: `aa` líneas por fila y en x la parte exacta de cada píxel que queda
+/// dentro; el gris es la cobertura promedio.
+fn gray_spans(lines: &Lines, aa: u32, printer: &ResinPrinter) -> Vec<GraySpan> {
     let res_x = printer.res_x;
-    let cr = crossings(segs, pw, ph / aa as f32, 0.0, printer.res_y * aa);
     let mut out = Vec::new();
     // Por fila: cambios del número de subfilas que cubren el píxel entero y fracciones sueltas.
     let mut full: Vec<(u32, i32)> = Vec::new();
     let mut part: Vec<(u32, f32)> = Vec::new();
     let mut row = u32::MAX;
-    let flush = |row: u32, full: &mut Vec<(u32, i32)>, part: &mut Vec<(u32, f32)>, out: &mut Vec<GraySpan>| {
-        if row != u32::MAX {
-            gray_row(row, full, part, aa, res_x, out);
-        }
-        full.clear();
-        part.clear();
-    };
-    inside_runs(&cr, |sub, xs, xe| {
+    for (sub, xs, xe) in lines.runs() {
         let r = sub / aa;
         if r != row {
-            flush(row, &mut full, &mut part, &mut out);
+            if row != u32::MAX {
+                gray_row(row, &mut full, &mut part, aa, res_x, &mut out);
+            }
+            full.clear();
+            part.clear();
             row = r;
         }
         let (xs, xe) = (xs.max(0.0), xe.min(res_x as f32));
         if xe <= xs {
-            return;
+            continue;
         }
         let (a, b) = (xs.floor() as u32, xe.floor() as u32);
         if a == b {
             part.push((a, xe - xs));
-            return;
+            continue;
         }
         part.push((a, (a + 1) as f32 - xs));
         if b > a + 1 {
@@ -410,8 +448,10 @@ fn gray_spans(segs: &[([f32; 2], [f32; 2], i32)], pw: f32, ph: f32, aa: u32, pri
         if b < res_x && xe > b as f32 {
             part.push((b, xe - b as f32));
         }
-    });
-    flush(row, &mut full, &mut part, &mut out);
+    }
+    if row != u32::MAX {
+        gray_row(row, &mut full, &mut part, aa, res_x, &mut out);
+    }
     out
 }
 
@@ -631,6 +671,52 @@ pub(crate) mod tests {
         for w in l.gray.windows(2) {
             assert!((w[0].y, w[0].x1) <= (w[1].y, w[1].x0), "{:?}", w);
         }
+    }
+
+    #[test]
+    fn compensaciones() {
+        let pr = LD_002H;
+        let (pw, ph) = pr.pixel_size();
+        // Placa de 20 × 20 × 1 mm con un agujero pasante de 4 × 4 mm al medio.
+        let mut tris = cube([20.0, 40.0, 0.0], [20.0, 20.0, 1.0]);
+        tris.extend(cube([28.0, 48.0, 0.0], [4.0, 4.0, 1.0]).into_iter().map(|t| [t[0], t[2], t[1]]));
+        let width = |l: &Layer| {
+            let x0 = l.spans.iter().map(|s| s.x0).min().unwrap();
+            let x1 = l.spans.iter().map(|s| s.x1).max().unwrap();
+            (x1 - x0) as f32 * pw
+        };
+        let hole = |l: &Layer| {
+            let row = (50.0 / ph) as u32;
+            let r: Vec<_> = l.spans.iter().filter(|s| s.y == row).collect();
+            assert_eq!(r.len(), 2, "{r:?}");
+            (r[1].x0 - r[0].x1) as f32 * pw
+        };
+        let base = ResinSettings { bottom_layers: 4, ..Default::default() };
+        let plain = slice_with(&tris, &pr, &base).unwrap();
+        assert!((width(&plain[10]) - 20.0).abs() <= pw);
+        assert!((hole(&plain[10]) - 4.0).abs() <= pw);
+
+        // Pata de elefante: solo las capas de base, 0,2 mm por lado.
+        let s = ResinSettings { elephant_foot: 0.2, ..base.clone() };
+        let l = slice_with(&tris, &pr, &s).unwrap();
+        assert!((width(&l[0]) - 19.6).abs() <= pw, "{}", width(&l[0]));
+        assert!((hole(&l[0]) - 4.4).abs() <= pw, "{}", hole(&l[0]));
+        assert_eq!(l[10], plain[10]);
+
+        // XY: +0,1 mm por lado en todas.
+        let s = ResinSettings { xy_offset: 0.1, ..base.clone() };
+        let l = slice_with(&tris, &pr, &s).unwrap();
+        assert!((width(&l[10]) - 20.2).abs() <= pw, "{}", width(&l[10]));
+        assert!((hole(&l[10]) - 3.8).abs() <= pw);
+
+        // Agujeros: +0,15 mm por lado, el borde de afuera no cambia.
+        let s = ResinSettings { hole_offset: 0.15, ..base.clone() };
+        let l = slice_with(&tris, &pr, &s).unwrap();
+        assert!((width(&l[10]) - 20.0).abs() <= pw);
+        assert!((hole(&l[10]) - 4.3).abs() <= pw, "{}", hole(&l[10]));
+        // Agujero más grande que hole_max: no se toca.
+        let s = ResinSettings { hole_offset: 0.15, hole_max: 3.0, ..base };
+        assert_eq!(slice_with(&tris, &pr, &s).unwrap()[10], plain[10]);
     }
 
     #[test]

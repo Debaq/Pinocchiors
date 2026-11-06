@@ -277,7 +277,7 @@ fn resin_settings_props() -> Vec<Prop> {
         ("profile", string("Resin profile id or name (default standard)"), false),
         (
             "settings",
-            json!({ "type": "object", "description": "Changes to the profile: layer_height (mm), exposure and bottom_exposure (s), bottom_layers, light_off (s), lift (mm), lift_speed (mm/min), bottom_lift, bottom_lift_speed, retract_speed, density (g/ml), cost_per_ml, antialias (1 = off, 2, 4 or 8: grey edges)" }),
+            json!({ "type": "object", "description": "Changes to the profile: layer_height (mm), exposure and bottom_exposure (s), bottom_layers, light_off (s), lift (mm), lift_speed (mm/min), bottom_lift, bottom_lift_speed, retract_speed, density (g/ml), cost_per_ml, antialias (1 = off, 2, 4 or 8: grey edges), xy_offset (mm per side, + grows), elephant_foot (mm, bottom layers shrink), hole_offset (mm, grows holes up to hole_max mm)" }),
             false,
         ),
     ]

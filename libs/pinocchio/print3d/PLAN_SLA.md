@@ -59,12 +59,12 @@ de impacto en la pieza:
 | Fase | Contenido | Estado |
 |---|---|---|
 | SLA9 | **Antialiasing**: bordes en grises (CTB v2 y CXDLP los admiten). Cada fila se muestrea en `n` subfilas y en x se mide la cobertura exacta de cada píxel (`sla::slice_aa`, `Layer::gray`); los tramos en blanco y negro (centro del píxel) se quedan para la revisión y los soportes. Niveles 1 (apagado), 2, 4, 8 («Suavizar bordes» en Exposición; `antialias` en el MCP). Benchy con nivel 8: 0,24 s, archivo 6,3 MB (3,7 sin grises); el `.ctb` con grises se decodifica bien en `scripts/analizar-resina.py` | ✅ (2026-11-06). **Falta**: ver en la LD-002H que lista el archivo con grises (sin imprimir) y comparar una pieza con y sin suavizado |
-| SLA10 | **Compensaciones**: pata de elefante (achicar en XY las capas de base), compensación de medidas en XY y de agujeros, atenuar el interior de áreas grandes | pendiente |
+| SLA10 | **Compensaciones** (`sla_morph.rs`, panel «Compensar medidas»): sobre los tramos continuos de cada línea de muestreo, antes de pasar a píxeles (exacto en x, sirve igual con grises): **XY** (agrandar/achicar con un disco), **pata de elefante** (las capas de base se achican además), **agujeros** (aire encerrado de la capa, que no llega al borde, de hasta `hole_max` mm: se agranda y se resta). La revisión y los soportes ven la pieza ya compensada. Benchy con AA 8 + XY 0,2 mm: 2,3 s | ✅ (2026-11-06). Atenuar el interior de áreas grandes pasa a SLA15. **Falta**: medir la pieza de calibración impresa para sacar valores reales |
 | SLA11 | **Gráfico de área por capa** (picos de fuerza al despegar) y **subida dinámica** (más lenta en capas con mucha área); exposición o alto de capa por tramos de altura | pendiente |
 | SLA12 | **Soportes avanzados**: refuerzos cruzados, ramas (árbol), punta según la normal, soportes laterales, balsa con borde biselado, grosor por punto, pincel de zonas y «todo bajo X°» | pendiente |
 | SLA13 | **Orientación automática**: buscar el giro (no solo 15/30/45° en X o Y) puntuando islas, succión, área por capa y altura | pendiente |
 | SLA14 | **Vaciado para resina**: relleno interior (panal/rejilla), agujeros de drenaje a mano con tapón imprimible | pendiente |
-| SLA15 | **Operaciones sobre capas** (estilo UVtools): quitar islas de menos de N píxeles, cerrar huecos chicos, doble exposición, alivio bajo la balsa | pendiente |
+| SLA15 | **Operaciones sobre capas** (estilo UVtools): quitar islas de menos de N píxeles, cerrar huecos chicos, doble exposición, alivio bajo la balsa, atenuar el interior de áreas grandes (menos luz lejos del borde) | pendiente |
 | SLA16 | **Nombre grabado en la balsa** (placa, resina, fecha) | pendiente |
 | SLA17 | **CXDLP** (Halot-Sky) y envío por WiFi (= SLA2/SLA7 pendientes) | espera al usuario |
 

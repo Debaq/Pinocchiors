@@ -12,7 +12,7 @@
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::sla::{slice, slice_aa, Layer, ResinPrinter, ResinSettings};
+use crate::sla::{slice, slice_with, Layer, ResinPrinter, ResinSettings};
 use crate::sla_check::{check, Cavity, ResinReport};
 use crate::sla_supports::{auto_points, build, frustum, SkipReason, SupportPoint, SupportSettings, Tri};
 use crate::SlicerError;
@@ -145,7 +145,7 @@ pub fn prepare(
     // 3. Laminado final y revisión.
     let mut all = part;
     all.extend_from_slice(&out.supports);
-    out.layers = slice_aa(&all, printer, h, settings.antialias)?;
+    out.layers = slice_with(&all, printer, settings)?;
     out.report = check(&out.layers, printer, h);
     if !out.report.islands.is_empty() {
         out.notes.push(format!("quedan {} isla(s) sin soporte", out.report.islands.len()));

@@ -1,7 +1,7 @@
 //! Lamina un STL binario para la LD-002H y escribe el `.ctb`, con la pieza centrada en la
 //! pantalla. Para comparar con un archivo de Chitubox/Lychee (PLAN_SLA.md, SLA2).
 //! Con `--preparar`: venteos, soportes automáticos, revisión e inclinaciones (SLA3–SLA4).
-//!   [AA=4] cargo run --release -p pinocchio-slicer --example sla_ctb -- pieza.stl salida.ctb [--preparar]
+//!   [AA=4] [XY=0.05] [PATA=0.2] [AGUJEROS=0.1] cargo run --release -p pinocchio-slicer --example sla_ctb -- pieza.stl salida.ctb [--preparar]
 use pinocchio_slicer::{ctb, sla, sla_check, sla_prepare};
 
 fn main() {
@@ -25,8 +25,15 @@ fn main() {
             v[c] += shift[c];
         }
     }
-    // Con AA=4 (2, 4 u 8) lamina con bordes en grises.
-    let s = sla::ResinSettings { antialias: std::env::var("AA").ok().and_then(|v| v.parse().ok()).unwrap_or(1), ..Default::default() };
+    // Con AA=4 (2, 4 u 8) lamina con bordes en grises; XY, PATA y AGUJEROS (mm) compensan.
+    let env = |k: &str| std::env::var(k).ok().and_then(|v| v.parse::<f32>().ok());
+    let s = sla::ResinSettings {
+        antialias: env("AA").unwrap_or(1.0) as u8,
+        xy_offset: env("XY").unwrap_or(0.0),
+        elephant_foot: env("PATA").unwrap_or(0.0),
+        hole_offset: env("AGUJEROS").unwrap_or(0.0),
+        ..Default::default()
+    };
     let t = std::time::Instant::now();
     let (layers, parts) = if args.iter().any(|a| a == "--preparar") {
         let before = sla_check::check(&sla::slice(&tris, &pr, s.layer_height).expect("laminado"), &pr, s.layer_height);
@@ -73,7 +80,7 @@ fn main() {
         }
         (p.layers, vec![p.model, p.supports])
     } else {
-        (sla::slice_aa(&tris, &pr, s.layer_height, s.antialias).expect("laminado"), vec![tris])
+        (sla::slice_with(&tris, &pr, &s).expect("laminado"), vec![tris])
     };
     let sliced = t.elapsed();
     // Con VISTA=archivo.ppm guarda una vista grande de lo preparado (para revisar a ojo).

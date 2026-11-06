@@ -22,6 +22,11 @@ export interface ResinSettings {
   cost_per_ml: number;
   /** Subfilas por fila para los bordes en grises (1 = apagado). */
   antialias: number;
+  /** Compensaciones en mm (por lado). */
+  xy_offset: number;
+  elephant_foot: number;
+  hole_offset: number;
+  hole_max: number;
 }
 
 export type SupportDensity = "light" | "medium" | "heavy";

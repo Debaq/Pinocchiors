@@ -369,6 +369,21 @@ export const ResinSection: Component<{
             </Panel>
           </div>
           <div>
+            <Panel id="resin.compensation" dense title={t("Compensar medidas")} icon={<Icons.Ruler size={14} />} defaultOpen={false}>
+              <div class="space-y-2 pb-3">
+                <p class="text-[10px] text-text-dim">{t("La resina se pasa un poco del borde de la luz: las piezas salen más grandes y los agujeros más chicos. Mide la pieza de calibración y corrige aquí.")}</p>
+                {num("Agrandar o achicar (XY)", s().xy_offset ?? 0, (v) => setSetting("xy_offset", v), -0.5, 0.5, 0.01, "mm")}
+                {num("Pata de elefante", s().elephant_foot ?? 0, (v) => setSetting("elephant_foot", v), 0, 0.5, 0.01, "mm")}
+                <p class="text-[10px] text-text-dim">{t("Achica las capas de base, que llevan más luz y se ensanchan. Solo importa si la pieza va pegada a la placa.")}</p>
+                {num("Agrandar agujeros", s().hole_offset ?? 0, (v) => setSetting("hole_offset", v), 0, 0.5, 0.01, "mm")}
+                <Show when={(s().hole_offset ?? 0) > 0}>
+                  {num("Agujeros de hasta", s().hole_max ?? 10, (v) => setSetting("hole_max", v), 0.5, 100, 0.5, "mm")}
+                </Show>
+                <p class="text-[10px] text-text-dim">{t("Medidas por lado. Los agujeros más grandes que el límite (por ejemplo, el hueco de una pieza vaciada) no se tocan.")}</p>
+              </div>
+            </Panel>
+          </div>
+          <div>
             <Panel id="resin.calibration" dense title={t("Calibrar la exposición")} defaultOpen={false}>
               <div class="space-y-2 pb-3">
                 <p class="text-[10px] text-text-dim">

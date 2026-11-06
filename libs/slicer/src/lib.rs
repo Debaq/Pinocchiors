@@ -19,6 +19,7 @@ pub mod sla_calibration;
 pub mod sla_check;
 pub mod sla_prepare;
 pub mod sla_profiles;
+pub mod sla_morph;
 pub mod sla_supports;
 mod stl;
 pub mod thumbnail;
