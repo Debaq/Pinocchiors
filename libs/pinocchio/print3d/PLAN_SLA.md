@@ -42,11 +42,11 @@ resolución del archivo no es la de la pantalla, la impresora no lo imprime.
 | Fase | Contenido | Estado |
 |---|---|---|
 | SLA0 | **Archivos reales** del usuario (cubo de 20 mm + escalón de 10 mm, 0,05 mm) | ✅ hecha (2026-11-05): ambos formatos decodificados por completo y verificados contra la pieza (`scripts/analizar-resina.py`); detalle abajo |
-| SLA1 | **Núcleo** (Rust, en `libs/slicer`, sin crear carpetas nuevas): cortar la malla en capas, pintar cada capa a la resolución de la pantalla (relleno par-impar por filas), espejo/orientación por impresora, en paralelo; volumen de resina | en curso (2026-11-05): **primero la LD-002H**; la Halot-Sky espera la unidad de exposición (el usuario la confirma mañana) |
-| SLA2 | **Formatos**: **CTB v2** para la LD-002H (cifrado «mngo» + RLE de 7 bits, como el de Chitubox/Lychee) y después **CXDLP v2** para la Halot-Sky. Prueba: laminar el mismo cubo de SLA0 y comparar capa por capa y campo por campo con el archivo de referencia | en curso: CTB primero |
-| SLA3 | **Preparar para resina** (Fabricar): inclinar 30–45° para que despegue mejor, elevar sobre la placa, vaciar con drenaje y respiradero (ya existe), detectar **islas** por capa (zonas que nacen en el aire) y **ventosas** (huecos cerrados que hacen succión) | pendiente |
-| SLA4 | **Soportes**: puntos automáticos (islas, voladizos, bordes), soportes con punta fina, ramas y base (balsa); editar puntos a mano en el visor. Decidir entre portar a Rust o compilar la parte SLA de PrusaSlicer como otro motor aparte (como hicimos con Orca) | pendiente |
-| SLA5 | **Perfiles**: por impresora (resolución, tamaño de píxel, volumen, espejo) y por resina (exposición normal y de base, capas de base, subida y velocidades, espera). Calibrar exposición con una pieza de prueba | pendiente |
+| SLA1 | **Núcleo** (Rust, `libs/slicer/src/sla.rs`): cortar la malla en capas a media altura, pintar cada capa por filas a la resolución de la pantalla (regla de giro distinto de cero: cáscaras que se pisan se suman, huecos de vaciado quedan huecos), en paralelo; volumen y tiempo estimado | ✅ hecho (2026-11-05) para las dos pantallas. Benchy: 960 capas en ~20 ms. **Falta**: confirmar el espejo con una pieza asimétrica (`flip_x`, hoy en `false`) |
+| SLA2 | **Formatos**: **CTB v2** para la LD-002H (`src/ctb.rs`: escribir y leer, cifrado «mngo» + RLE de 7 bits) y después **CXDLP v2** para la Halot-Sky | CTB ✅ (2026-11-05), detalle abajo. CXDLP espera la unidad de exposición (el usuario la confirma) |
+| SLA3 | **Preparar para resina**: elevar sobre la placa; **islas** por capa; **ventosas** (huecos encerrados sin salida hacia la placa, que succionan al despegar) y **huecos cerrados** (resina atrapada); estrategias: **venteo** automático en el piso de cada ventosa y comparar **inclinaciones** (área por capa, succión, altura). El vaciado con drenaje ya existe (`print3d::hollow`) | ✅ núcleo (2026-11-05): `sla_check.rs` (componentes por tramos, unión entre capas), `sla_prepare.rs` (`prepare`, `tilt_options`) |
+| SLA4 | **Soportes**: puntos automáticos (caras en voladizo más planas que 45°, repartidos a `spacing`; uno por isla), punta + columna + pie + balsa (envolvente convexa); apoyados en la pieza si abajo hay pieza; densidad liviana/media/pesada; puntos editables (se pasan a `prepare`). Propio en Rust (no PrusaSlicer) | ✅ núcleo (2026-11-05): `sla_supports.rs`. Benchy: 4 venteos, 223 soportes, quedan 0 islas y 0 huecos, en ~0,7 s. **Falta**: refuerzos cruzados y ramas (árbol), punta inclinada según la normal, editar puntos en el visor (SLA6) |
+| SLA5 | **Perfiles**: por impresora (`sla::printers`) y por resina (`sla_profiles.rs`: estándar, 0,03 mm, lavable, tipo ABS, tenaz; puntos de partida desde los archivos de referencia) y revisión de parámetros (`validate`). Calibrar exposición con una pieza de prueba | ✅ perfiles y revisión (2026-11-05). **Falta**: pieza de calibración |
 | SLA6 | **Interfaz**: las dos SLA en la lista de máquinas de Fabricar con su foto; pestaña de laminar para resina; **vista previa capa por capa** mostrando la máscara; estimación de resina y tiempo | pendiente |
 | SLA7 | **Enviar**: LD-002H por USB (guardar el archivo); Halot-Sky: investigar su protocolo de red (WiFi / Halot Box) sin tocarla hasta que el usuario diga | pendiente |
 | SLA8 | **Pruebas reales con el usuario**: pieza de calibración en cada una, comparando con lo que sale de Chitubox/Halot Box | pendiente |
@@ -71,6 +71,44 @@ velocidades 1, PWM 255; el archivo lo hizo **Lychee**). **Unidad de la exposici�
 tabla de áreas por capa, y cada capa: área, cantidad de líneas y **líneas verticales de 6
 bytes** (inicio Y 13 bits, fin Y 13 bits **inclusivo**, X 14 bits, gris). Pie `CXSW3DV2` y
 un **checksum XOR** de todo el archivo (verificado: coincide). El cubo da 20,00 × 20,00 mm.
+
+## CTB de Pinocchio contra el de referencia (SLA2)
+
+`cargo run --release -p pinocchio-slicer --example sla_ctb -- pieza.stl salida.ctb` lamina el
+STL centrado en la pantalla de la LD-002H. Con el cubo de SLA0, comparado byte a byte con el
+`.ctb` de Lychee:
+
+- **Mismo tamaño** (1 247 428 bytes), mismo orden de secciones y offsets.
+- **Cabecera idéntica** salvo el tiempo estimado (6301 s nuestro, 6335 s el suyo).
+- **Tabla de capas idéntica** bit a bit (z, exposición, offsets, tamaños).
+- **Las 500 máscaras con la misma forma** (mismos píxeles, 392 × 392 px), corridas 1–2 px
+  porque Lychee centra distinto; en la app la posición la da Fabricar.
+- Parámetros: mismo volumen (8,49 ml); peso y costo salen de la densidad y precio de la resina.
+- Miniaturas 210² y 200² en RGB565 sin rachas, como las de Lychee.
+
+**Falta (con el usuario)**: abrir el `.ctb` de Pinocchio en la LD-002H por USB y ver que lo
+lista y muestra la miniatura y los tiempos (sin imprimir); después una pieza **asimétrica**
+(una «F» en relieve) laminada en Chitubox/Lychee para fijar el espejo.
+
+## Revisión y soportes (SLA3–SLA5), cómo funciona
+
+- **Laminado**: se pinta donde el giro es **positivo**: cáscaras que se pisan se suman y una
+  cáscara dada vuelta resta; así el venteo es un cilindro al revés, sin booleanas. Cada
+  arista se interpola siempre desde el mismo extremo (si no, una fila pierde un cruce y un
+  hueco cerrado se «abre»: pasó con la caja hueca).
+- **Revisión** (`check`): por capa, componentes de tramos encendidos y de aire dentro de la
+  caja de la capa (aire que toca el borde = afuera). Entre capas: isla = componente sin
+  apoyo abajo (< 0,01 mm² se cuenta aparte); el aire encerrado se une con el de abajo; si
+  abajo hay aire de afuera, está venteado; si arriba hay aire de afuera, se abrió. Ventosa =
+  ≥ 1 mm² y más de 2 capas sin salida; hueco cerrado = se tapa sin salida (> 1 mm³).
+- **Flujo** (`prepare`): elevar (balsa + 5 mm) → laminar y revisar → venteo de 2,5 mm desde
+  el piso de cada hueco hasta el primer aire de abajo → puntos (los que caen en un venteo se
+  corren a su borde) → soportes → laminado final y revisión. Cada punto descartado dice por
+  qué (`SkipReason`: muy cerca de la pieza, dentro de la pieza, sobre venteo…).
+- **Inclinar** (`tilt_options`): en una pantalla gruesa de 0,2 mm, giros de 15/30/45° en X
+  e Y; puntaje = área máx. y succión relativas al giro 0 + un poco de altura.
+- Ejemplo: `cargo run --release -p pinocchio-slicer --example sla_ctb -- pieza.stl salida.ctb --preparar`
+  (con `VISTA=archivo.ppm` guarda una vista de la pieza con soportes).
 
 ## Riesgos
 

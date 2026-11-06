@@ -1,4 +1,5 @@
-//! Laminado FDM con el motor de OrcaSlicer (v2.4.2 congelado).
+//! Laminado FDM con el motor de OrcaSlicer (v2.4.2 congelado), y para resina (MSLA)
+//! con un núcleo propio en Rust (`sla*`: capas, revisión, soportes, perfiles; formato en `ctb`).
 //!
 //! El motor (`pinocchio-slicer`, C++ sobre `libslic3r`) corre como proceso aparte:
 //! si se cae o se cuelga, la app sigue viva, y cancelar es matar el proceso. Este
@@ -7,11 +8,17 @@
 //!
 //! Coordenadas: milímetros, Z arriba, origen en la esquina de la cama (como Orca).
 
+pub mod ctb;
 mod engine;
 mod error;
 pub mod gcode;
 pub mod presets;
 mod settings;
+pub mod sla;
+pub mod sla_check;
+pub mod sla_prepare;
+pub mod sla_profiles;
+pub mod sla_supports;
 mod stl;
 pub mod thumbnail;
 

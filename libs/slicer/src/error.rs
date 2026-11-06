@@ -15,6 +15,12 @@ pub enum SlicerError {
     NeedsSupport(String),
     #[error("El motor de laminado falló: {0}")]
     Engine(String),
+    #[error("La pieza no cabe en la impresora: {0}")]
+    OutOfBed(String),
+    #[error("Ajustes inválidos: {0}")]
+    Settings(String),
+    #[error("Formato inválido: {0}")]
+    Format(String),
     #[error("Error de archivo: {0}")]
     Io(#[from] std::io::Error),
     #[error("JSON inválido: {0}")]
