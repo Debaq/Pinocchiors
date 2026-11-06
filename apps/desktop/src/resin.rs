@@ -133,6 +133,10 @@ pub struct ResinResult {
     pub vents: Vec<VentHole>,
     pub points: Vec<SupportPoint>,
     pub skipped: Vec<(usize, SkipReason)>,
+    /// Columnas hasta la balsa, puntas inclinadas y refuerzos
+    pub columns: usize,
+    pub tilted: usize,
+    pub braces: usize,
     pub notes: Vec<String>,
     /// Avisos de los parámetros
     pub warnings: Vec<String>,
@@ -260,6 +264,9 @@ fn finish(
         vents: p.vents.clone(),
         points: p.points.clone(),
         skipped: p.skipped.clone(),
+        columns: p.columns,
+        tilted: p.tilted,
+        braces: p.braces,
         notes: p.notes.clone(),
         warnings,
         bed: [pr.bed_x, pr.bed_y],

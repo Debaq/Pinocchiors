@@ -62,6 +62,10 @@ pub struct Prepared {
     /// Huecos que no se pudieron ventear (piso en la placa o macizo hasta la placa).
     pub unvented: Vec<Cavity>,
     pub notes: Vec<String>,
+    /// Columnas hasta la balsa, puntas inclinadas según la cara y refuerzos.
+    pub columns: usize,
+    pub tilted: usize,
+    pub braces: usize,
 }
 
 /// Prepara `model` (en mm de la cama; se respeta su x, y). Con `points` se usan esos
@@ -138,6 +142,7 @@ pub fn prepare(
         };
         let sup = build(&model, &pts, s, |x, y, z| near_vent(&[x, y, z]));
         out.skipped = sup.skipped;
+        (out.columns, out.tilted, out.braces) = (sup.pillars, sup.tilted, sup.braces);
         out.points = pts;
         out.supports = sup.triangles;
     }

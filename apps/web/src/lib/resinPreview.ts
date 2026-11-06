@@ -77,6 +77,15 @@ export interface SupportSettings {
   raft_margin: number;
   on_model: boolean;
   segments: number;
+  tip_normal: boolean;
+  tip_max_angle: number;
+  braces: boolean;
+  brace_diameter: number;
+  brace_max_distance: number;
+  tree: boolean;
+  tree_radius: number;
+  tree_branches: number;
+  raft_bevel: number;
 }
 
 export interface PrepareSettings {
@@ -151,6 +160,8 @@ export interface VentHole {
 export interface SupportPoint {
   pos: [number, number, number];
   kind: "overhang" | "island" | "manual";
+  /** Diámetro de la punta de este punto (mm); sin valor, el de los ajustes */
+  tip?: number;
 }
 
 export type SkipReason = "too_close" | "inside" | "on_model_off" | "vent" | "too_low";
@@ -175,6 +186,9 @@ export interface ResinResult {
   vents: VentHole[];
   points: SupportPoint[];
   skipped: [number, SkipReason][];
+  columns: number;
+  tilted: number;
+  braces: number;
   notes: string[];
   warnings: string[];
   bed: [number, number];

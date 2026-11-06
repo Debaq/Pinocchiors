@@ -153,11 +153,14 @@ export const ResinSection: Component<{
     resinPreview.setEditor(undefined);
   });
 
+  /** Diámetro de punta de los puntos que se agregan a mano (undefined = el de los ajustes) */
+  const [manualTip, setManualTip] = createSignal<number>();
   // Editar puntos: los clics del visor llegan acá
   const applyEdit = (e: { add: [number, number, number] } | { remove: number }) => {
     const current = resinPreview.points();
     if ("add" in e) {
-      const next = [...current, { pos: e.add, kind: "manual" as const }];
+      const tip = manualTip();
+      const next = [...current, { pos: e.add, kind: "manual" as const, ...(tip ? { tip } : {}) }];
       resinPreview.setPoints(next);
       setEdited(next);
     } else {
@@ -459,6 +462,33 @@ export const ResinSection: Component<{
                       {num("Columna", sp().pillar_diameter, (v) => setSupport("pillar_diameter", v), 0.4, 4, 0.1, "mm")}
                       {num("Altura sobre la balsa", sp().lift, (v) => setSupport("lift", v), 1, 30, 0.5, "mm")}
                       <Checkbox small label={t("Apoyar soportes sobre la pieza")} checked={sp().on_model} onChange={(v) => setSupport("on_model", v)} />
+                      <Checkbox
+                        small
+                        label={t("Punta según la cara")}
+                        checked={sp().tip_normal}
+                        onChange={(v) => setSupport("tip_normal", v)}
+                        hint={t("La punta sale perpendicular a la cara (inclinada) en vez de vertical: toca mejor las caras en pendiente y deja menos marca.")}
+                      />
+                      <Show when={sp().tip_normal}>{num("Inclinación máxima", sp().tip_max_angle, (v) => setSupport("tip_max_angle", v), 5, 70, 5, "°")}</Show>
+                      <Checkbox
+                        small
+                        label={t("Refuerzos cruzados")}
+                        checked={sp().braces}
+                        onChange={(v) => setSupport("braces", v)}
+                        hint={t("Diagonales en zigzag entre columnas vecinas: las columnas altas no se doblan ni vibran al despegar.")}
+                      />
+                      <Checkbox
+                        small
+                        label={t("Ramas (árbol)")}
+                        checked={sp().tree}
+                        onChange={(v) => setSupport("tree", v)}
+                        hint={t("Las columnas cercanas se juntan a 45° en un tronco: menos resina y menos marcas en la balsa. Mejor con la pieza alta sobre la balsa.")}
+                      />
+                      <Show when={sp().tree}>
+                        {num("Juntar columnas a menos de", sp().tree_radius, (v) => setSupport("tree_radius", v), 1, 20, 0.5, "mm")}
+                        {num("Ramas por tronco", sp().tree_branches, (v) => setSupport("tree_branches", Math.round(v)), 2, 8, 1)}
+                      </Show>
+                      {num("Chaflán de la balsa", sp().raft_bevel, (v) => setSupport("raft_bevel", v), 0, 2, 0.1, "mm")}
                       <Show when={Object.keys(props.prep.supportOverrides ?? {}).length > 0}>
                         <button class="text-[11px] text-text-dim hover:underline" onClick={() => set({ supportOverrides: {} })}>
                           {t("Volver a los de fábrica")}
@@ -569,6 +599,9 @@ export const ResinSection: Component<{
             <Panel id="resin.check" dense title={t("Revisión")} defaultOpen>
               <div class="space-y-1 pb-3">
                 <Row label={t("Soportes")} value={String(r().points.length - r().skipped.length)} />
+                <Show when={r().columns > 0}>
+                  <Row label={t("Columnas · refuerzos")} value={`${r().columns} · ${r().braces}`} />
+                </Show>
                 <Row label={t("Venteos")} value={String(r().vents.length)} />
                 <Check ok={r().islands.length === 0} text={r().islands.length === 0 ? t("Sin islas sueltas") : t("{n} islas sin soporte (en rojo en el visor)", { n: r().islands.length })} />
                 <Check
@@ -599,6 +632,15 @@ export const ResinSection: Component<{
                     <Checkbox small label={t("Editar puntos en el visor")} checked={editing()} onChange={setEditing} />
                     <Show when={editing()}>
                       <p class="text-[10px] text-text-dim">{t("Clic en la pieza: agrega un punto ahí. Clic en un punto: lo quita. Azul = automático, verde = a mano, rojo = no se pudo poner.")}</p>
+                      <Select
+                        label={t("Punta de los puntos nuevos")}
+                        options={[
+                          { value: "", label: t("Como en Soportes") },
+                          ...[0.2, 0.3, 0.4, 0.5, 0.6, 0.8, 1].map((d) => ({ value: String(d), label: `${fmtNumber(d)} mm` })),
+                        ]}
+                        value={manualTip() ? String(manualTip()) : ""}
+                        onChange={(v) => setManualTip(v ? Number(v) : undefined)}
+                      />
                     </Show>
                     <p class="text-[11px] text-text-muted">
                       {t("{n} puntos ({m} a mano)", { n: resinPreview.points().length, m: resinPreview.points().filter((p) => p.kind === "manual").length })}

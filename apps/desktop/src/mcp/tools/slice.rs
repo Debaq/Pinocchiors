@@ -302,7 +302,7 @@ previous call: mm, bed corner at the origin, Z up). Does NOT send anything to th
         props.push(("supports", one_of("Support density, or none to print straight on the plate (default medium)", &["light", "medium", "heavy", "none"]), false));
         props.push((
             "support_settings",
-            json!({ "type": "object", "description": "Changes to the supports: spacing, overhang_angle (°), tip_diameter, pillar_diameter, lift (mm above the raft), raft_thickness, on_model (bool)" }),
+            json!({ "type": "object", "description": "Changes to the supports: spacing, overhang_angle (°), tip_diameter, pillar_diameter, lift (mm above the raft), raft_thickness, on_model (bool), tip_normal (bool: tip follows the face normal, up to tip_max_angle °), braces (bool: zigzag cross braces, brace_diameter, brace_max_distance mm), tree (bool: nearby pillars join at 45° into one trunk, tree_radius mm, tree_branches per trunk), raft_bevel (mm chamfer on the raft edge)" }),
             false,
         ));
         props.push(("vents", boolean("Vent enclosed cavities with a hole (default true)"), false));
@@ -389,10 +389,13 @@ fn resin_slice(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
         num(f("max_area_mm2")),
     )];
     lines.push(format!(
-        "Supports: {} placed ({} points, {} skipped), raised {} mm; vents: {}.",
+        "Supports: {} placed ({} points, {} skipped; {} columns, {} tilted tips, {} braces), raised {} mm; vents: {}.",
         count("points") - count("skipped"),
         count("points"),
         count("skipped"),
+        r["columns"],
+        r["tilted"],
+        r["braces"],
         num(f("lift")),
         count("vents")
     ));

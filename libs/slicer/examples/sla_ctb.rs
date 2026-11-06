@@ -42,7 +42,17 @@ fn main() {
     let (layers, parts) = if args.iter().any(|a| a == "--preparar") {
         let before = sla_check::check(&sla::slice(&tris, &pr, s.layer_height).expect("laminado"), &pr, s.layer_height);
         println!("sin preparar: {} islas, {} huecos problema", before.islands.len(), before.cavities.len());
-        let p = sla_prepare::prepare(&tris, &pr, &s, &Default::default(), None).expect("preparar");
+        // ARBOL=1: ramas; RECTOS=1: puntas verticales y sin refuerzos (como antes de SLA12).
+        let mut prep = sla_prepare::PrepareSettings::default();
+        if let Some(sup) = prep.supports.as_mut() {
+            sup.tree = std::env::var("ARBOL").is_ok();
+            if std::env::var("RECTOS").is_ok() {
+                sup.tip_normal = false;
+                sup.braces = false;
+                sup.raft_bevel = 0.0;
+            }
+        }
+        let p = sla_prepare::prepare(&tris, &pr, &s, &prep, None).expect("preparar");
         println!(
             "preparado en {:?}: {} venteos, {} puntos, {} triángulos de soporte; quedan {} islas, {} huecos; área máx {:.0} mm²",
             t.elapsed(),
