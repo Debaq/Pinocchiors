@@ -530,8 +530,8 @@ leather, lines…): white is raised, black is low, and the mesh is really displa
 `all`, or `directions` (\"sides\", \"top\", \"bottom\", \"+x\"…\"-z\", within `angle`°), optionally limited to a \
 height band `z_min`–`z_max` (mm from the bottom of the model; whole faces are taken, so on a coarse mesh with long \
 faces `mesh_remesh` it first). `pattern` is a built-in one (leather, lines, grid, \
-dots, diamonds, hex) or the absolute path of a grey image. Cylindrical holes are protected (no texture) unless \
-`protect_holes: false`. The model becomes plain geometry (no UVs or rig); `undo` brings it back. With `estimate: \
+dots, diamonds, hex) or the absolute path of a grey image. Holes, pins, threads and countersinks (1–30 mm) are \
+protected (no texture) unless `protect_holes: false`. The model becomes plain geometry (no UVs or rig); `undo` brings it back. With `estimate: \
 true` it only says how heavy it would be. Example: {\"pattern\": \"diamonds\", \"zone\": {\"directions\": \
 [\"sides\"], \"z_min\": 5, \"z_max\": 40}, \"tile_mm\": 4, \"depth_mm\": 0.6}.",
     input: || {
@@ -554,7 +554,7 @@ true` it only says how heavy it would be. Example: {\"pattern\": \"diamonds\", \
             ("rotation_deg", number_in("Turn the pattern (degrees)", -360.0, 360.0), false),
             ("invert", boolean("Swap high and low"), false),
             ("mapping", one_of("box (default: no UVs needed) or uv (the model's own UVs)", &["box", "uv"]), false),
-            ("protect_holes", boolean("Leave cylindrical holes 1–30 mm untextured (default true)"), false),
+            ("protect_holes", boolean("Leave holes, pins, threads and countersinks of 1–30 mm untextured (default true)"), false),
             ("simplify_mm", number_in("Simplify the result keeping it within this many mm (lighter mesh)", 0.005, 1.0), false),
             ("estimate", boolean("Only estimate (triangles, warnings); do not change the model"), false),
         ])
@@ -579,7 +579,7 @@ fn skin(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
     let zone = ctx.call("skin_zone_select", json!({ "criteria": args["zone"] }))?;
     let mut protected = 0;
     if arg_bool(args, "protect_holes").unwrap_or(true) {
-        let r = ctx.call("skin_protect_holes", json!({ "minMm": 1.0, "maxMm": 30.0 }))?;
+        let r = ctx.call("skin_protect_holes", json!({ "minMm": 1.0, "maxMm": 30.0, "kinds": ["hole", "pin", "thread", "cone"] }))?;
         protected = r["found"].as_u64().unwrap_or(0);
     }
     let params = json!({
@@ -598,7 +598,7 @@ fn skin(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
         zone["faces"].as_array().map_or(0, Vec::len),
         num(zone["area_mm2"].as_f64().unwrap_or(0.0)),
         num(zone["fraction"].as_f64().unwrap_or(0.0) * 100.0),
-        if protected > 0 { format!(", {protected} hole(s) protected") } else { String::new() }
+        if protected > 0 { format!(", {protected} hole(s), pin(s) or thread(s) protected") } else { String::new() }
     );
     if arg_bool(args, "estimate") == Some(true) {
         let e = ctx.call("skin_estimate", json!({ "params": params }))?;

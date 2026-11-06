@@ -196,8 +196,8 @@ escaneos y comparación con referencia, atajos reasignables por área
 
 Detalle en `PLAN_PRINT3D.md`, «Pendientes y límites».
 - ⬜ Contracción distinta por eje en la interfaz (los presets las traen iguales).
-- ⬜ Máscara de borde suave pintada, en pieles.
-- ⬜ Uniones y roscas se protegen a mano, no se detectan solas.
+- ✅ Pieles terminadas (Fase 16, 2026-11-06): escala por isla de UV, intensidad pintada, detectar pernos y
+  roscas, rehacer la piel si cambia el diseño. 🧪 Falta probar el pincel de intensidad y el rehacer en la app abierta.
 - 🧪 Nada probado con la app abierta ni con impresora; sin e2e de la sincronía
   impresora↔diseño, la selección de zona y el asistente de calibración; uniones
   y modelos de calibración sin verificar con un slicer; presets de holgura y
@@ -207,8 +207,7 @@ Detalle en `PLAN_PRINT3D.md`, «Pendientes y límites».
   orientación sugerida para el modelo entero; uniones solo en cortes planos y
   riel recto (no se pone si la cara tiene un hueco); vaciado deja macizo lo más
   fino que el doble de la pared; distribución por celdas con giros de 90°;
-  compensación de agujeros en CAD y en el laminador de resina (no en filamento);
-  pieles con una sola escala de UV.
+  compensación de agujeros en CAD y en el laminador de resina (no en filamento).
 
 ## 7. Render (`libs/geppettoray`, plan en `libs/PLAN_RENDER.md`)
 

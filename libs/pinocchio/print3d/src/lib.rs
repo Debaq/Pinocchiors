@@ -57,6 +57,7 @@ mod skin;
 mod slicer;
 mod texture;
 mod transform;
+mod region;
 mod zones;
 
 pub use analysis::*;
@@ -78,4 +79,5 @@ pub use skin::*;
 pub use slicer::*;
 pub use texture::*;
 pub use transform::*;
+pub use region::*;
 pub use zones::*;

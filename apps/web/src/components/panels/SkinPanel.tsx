@@ -1,6 +1,7 @@
 import { Component, For, Show, createEffect, createSignal, on, onCleanup } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { Button, Checkbox, NumberInput, Select } from "../ui";
+import type { MaskPaintSettings } from "../../lib/Viewer3D";
 import * as Icons from "../icons";
 import { fmtNumber, t, tx } from "../../lib/i18n";
 
@@ -16,6 +17,8 @@ export interface SkinZone {
   total: number;
   area_mm2: number;
   fraction: number;
+  /** Hay intensidad pintada (algún punto por debajo del 100 %) */
+  painted?: boolean;
 }
 
 /** Patrón de fábrica o imagen importada */
@@ -47,6 +50,8 @@ export interface SkinImageSettings {
   decimate_mm: number;
   /** Cuánto se aleja el relieve de lo protegido (mm) */
   margin_mm: number;
+  /** Ancho del borde donde el relieve nace (mm); 0 = automático (tres alturas) */
+  feather_mm?: number;
 }
 
 export const defaultSkinImage: SkinImageSettings = {
@@ -84,9 +89,15 @@ export interface SkinPanelProps {
   /** Lo que se elige con el visor: la zona de piel o las caras protegidas */
   pickTarget?: "zone" | "protected";
   onPickTarget?: (t: "zone" | "protected") => void;
-  /** Protege los agujeros cilíndricos de entre esos diámetros (mm); devuelve cuántos encontró */
-  onProtectHoles?: (minMm: number, maxMm: number) => void;
+  /** Protege lo que encuentre de entre esos diámetros (mm): `kinds` = hole, pin, thread, cone */
+  onProtectHoles?: (minMm: number, maxMm: number, kinds: string[]) => void;
   onClearProtected?: () => void;
+  /** Pincel de intensidad: encendido, sus opciones y volver todo al 100 % */
+  painting?: boolean;
+  onTogglePainting?: () => void;
+  brush?: MaskPaintSettings;
+  onBrush?: (b: MaskPaintSettings) => void;
+  onClearMask?: () => void;
   library: SkinPattern[];
   settings: SkinImageSettings;
   onSettings: (s: SkinImageSettings) => void;
@@ -149,6 +160,14 @@ const Title: Component<{ children: string }> = (props) => (
 export const SkinPanel: Component<SkinPanelProps> = (props) => {
   const [angle, setAngle] = createSignal(15);
   const [holeRange, setHoleRange] = createSignal<[number, number]>([2, 20]);
+  const [kinds, setKinds] = createSignal({ hole: true, pin: true, thread: true });
+  const chosenKinds = () => [
+    ...(kinds().hole ? ["hole"] : []),
+    ...(kinds().pin ? ["pin"] : []),
+    ...(kinds().thread ? ["thread", "cone"] : []),
+  ];
+  const brush = () => props.brush ?? { mode: "subtract" as const, radius: 0.05, strength: 0.5 };
+  const setBrush = (patch: Partial<MaskPaintSettings>) => props.onBrush?.({ ...brush(), ...patch });
   const set = (patch: Partial<SkinImageSettings>) => props.onSettings({ ...props.settings, ...patch });
   const count = () => props.zone?.faces.length ?? 0;
   const protectedCount = () => props.zone?.protected?.length ?? 0;
@@ -196,7 +215,7 @@ export const SkinPanel: Component<SkinPanelProps> = (props) => {
 
       <div class="space-y-2">
         <p class="text-[11px] font-medium text-text">{t("Zonas protegidas")}</p>
-        <p class="text-[10px] text-text-dim leading-snug">{t("Caras que se quedan lisas (agujeros de tornillos, uniones): el relieve no las toca y se aleja un margen.")}</p>
+        <p class="text-[10px] text-text-dim leading-snug">{t("Caras que se quedan lisas (agujeros de tornillos, pernos de unión, roscas): el relieve no las toca y se aleja un margen.")}</p>
         <Show when={props.picking}>
           <Select
             label={t("Elegir en el modelo")}
@@ -212,9 +231,14 @@ export const SkinPanel: Component<SkinPanelProps> = (props) => {
           <NumberInput label={t("Diámetro mín.")} value={holeRange()[0]} onChange={(v) => setHoleRange([Math.max(0.5, v), holeRange()[1]])} min={0.5} max={100} step={0.5} suffix="mm" />
           <NumberInput label={t("Diámetro máx.")} value={holeRange()[1]} onChange={(v) => setHoleRange([holeRange()[0], Math.max(0.5, v)])} min={0.5} max={200} step={1} suffix="mm" />
         </div>
+        <div class="flex flex-wrap gap-x-3 gap-y-1">
+          <Checkbox small label={t("Agujeros")} checked={kinds().hole} onChange={(v) => setKinds({ ...kinds(), hole: v })} />
+          <Checkbox small label={t("Pernos")} checked={kinds().pin} onChange={(v) => setKinds({ ...kinds(), pin: v })} />
+          <Checkbox small label={t("Roscas y avellanados")} checked={kinds().thread} onChange={(v) => setKinds({ ...kinds(), thread: v })} />
+        </div>
         <div class="flex gap-1.5">
-          <Button size="sm" onClick={() => props.onProtectHoles?.(holeRange()[0], holeRange()[1])} disabled={props.busy || !props.zone}>
-            {t("Proteger agujeros")}
+          <Button size="sm" onClick={() => props.onProtectHoles?.(holeRange()[0], holeRange()[1], chosenKinds())} disabled={props.busy || !props.zone || chosenKinds().length === 0}>
+            {t("Buscar y proteger")}
           </Button>
           <Button size="sm" variant="ghost" onClick={props.onClearProtected} disabled={props.busy || protectedCount() === 0}>
             {t("Quitar protección")}
@@ -224,6 +248,34 @@ export const SkinPanel: Component<SkinPanelProps> = (props) => {
         <p class={`text-[11px] ${protectedCount() > 0 ? "text-text" : "text-text-dim"}`}>
           {protectedCount() > 0 ? t("{n} caras protegidas", { n: fmtNumber(protectedCount()) }) : t("Nada protegido")}
         </p>
+      </div>
+
+      <div class="space-y-2">
+        <p class="text-[11px] font-medium text-text">{t("Intensidad")}</p>
+        <p class="text-[10px] text-text-dim leading-snug">{t("Pinta dónde el relieve se desvanece: rosa es el 100 %, gris oscuro es sin relieve.")}</p>
+        <Button size="sm" fullWidth variant={props.painting ? "primary" : "default"} onClick={props.onTogglePainting} disabled={count() === 0} icon={<Icons.PaintBrush size={14} />}>
+          {props.painting ? t("Terminar de pintar") : t("Pintar intensidad")}
+        </Button>
+        <Show when={props.painting}>
+          <Select
+            label={t("Pincel")}
+            options={[
+              { value: "subtract", label: t("Desvanecer") },
+              { value: "add", label: t("Reforzar") },
+              { value: "smooth", label: t("Suavizar") },
+            ]}
+            value={brush().mode}
+            onChange={(v) => setBrush({ mode: v as MaskPaintSettings["mode"] })}
+          />
+          <div class="grid grid-cols-2 gap-1.5">
+            <NumberInput label={t("Radio")} value={Math.round(brush().radius * 1000) / 10} onChange={(v) => setBrush({ radius: Math.max(0.2, Math.min(50, v)) / 100 })} min={0.2} max={50} step={0.5} suffix="%" />
+            <NumberInput label={t("Fuerza")} value={Math.round(brush().strength * 100)} onChange={(v) => setBrush({ strength: Math.max(1, Math.min(100, v)) / 100 })} min={1} max={100} step={5} suffix="%" />
+          </div>
+          <p class="text-[10px] text-text-dim leading-snug">{t("Ctrl invierte (desvanecer ↔ reforzar) y Mayús suaviza.")}</p>
+        </Show>
+        <Button size="sm" variant="ghost" onClick={props.onClearMask} disabled={props.busy || !props.zone?.painted}>
+          {t("Volver al 100 %")}
+        </Button>
       </div>
 
       <div class="space-y-2">
@@ -282,6 +334,15 @@ export const SkinPanel: Component<SkinPanelProps> = (props) => {
           <NumberInput label={t("Baldosa")} value={props.settings.tile_mm} onChange={(v) => set({ tile_mm: Math.max(1, Math.min(500, v)) })} min={1} max={500} step={1} suffix="mm" />
           <NumberInput label={t("Altura")} value={props.settings.amplitude} onChange={(v) => set({ amplitude: Math.max(0, Math.min(5, v)) })} min={0} max={5} step={0.1} suffix="mm" />
           <NumberInput label={t("Giro")} value={props.settings.rotation_deg} onChange={(v) => set({ rotation_deg: v })} min={-180} max={180} step={5} suffix="°" />
+          <NumberInput
+            label={t("Borde suave")}
+            value={props.settings.feather_mm ?? 0}
+            onChange={(v) => set({ feather_mm: Math.max(0, Math.min(50, v)) })}
+            min={0}
+            max={50}
+            step={0.5}
+            suffix="mm"
+          />
           <Select
             label={t("Crece")}
             options={[
@@ -305,6 +366,7 @@ export const SkinPanel: Component<SkinPanelProps> = (props) => {
         <Show when={props.settings.mapping === "box"}>
           <p class="text-[10px] text-text-dim leading-snug">{t("Cada punto proyecta sobre el plano del eje al que más mira. La baldosa mide lo mismo en todas partes, pero se nota una costura donde cambia de eje.")}</p>
         </Show>
+        <p class="text-[10px] text-text-dim leading-snug">{t("Borde suave: ancho donde el relieve nace de a poco desde el borde de la zona (0 = tres veces la altura).")}</p>
         <Checkbox
           small
           label={t("Simplificar el resultado")}

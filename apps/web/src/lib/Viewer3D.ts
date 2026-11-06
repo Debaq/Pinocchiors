@@ -189,6 +189,21 @@ export interface PaintSettings {
   mirror: boolean;
 }
 
+/** Pincel de intensidad de las pieles: sube, baja o suaviza un valor 0–1 por vértice */
+export interface MaskPaintSettings {
+  mode: "add" | "subtract" | "smooth";
+  /** Radio en fracción de la diagonal de la malla */
+  radius: number;
+  /** Cuánto cambia por pincelada, 0–1 */
+  strength: number;
+}
+
+/** Un trazo del pincel de intensidad: los vértices tocados y su valor nuevo */
+export interface MaskStroke {
+  vertices: Uint32Array;
+  values: Float32Array;
+}
+
 /** Un trazo del pincel: filas de influencias (pares hueso, peso) antes y después */
 export interface PaintStroke {
   vertices: Uint32Array;
@@ -232,6 +247,8 @@ export interface ViewerCallbacks {
   onContextMenu?: (x: number, y: number) => void;
   /** Radio o intensidad del pincel cambiados con F / Shift+F */
   onPaintSettingsChanged?: (change: Partial<PaintSettings>) => void;
+  /** Terminó un trazo del pincel de intensidad (pieles) */
+  onMaskPainted?: (stroke: MaskStroke) => void;
   /** Modo animación: se confirmó un giro (R) o desplazamiento (G) de estas articulaciones */
   onPoseEdited?: (joints: number[]) => void;
   /** Cambió la selección de articulaciones (Shift suma, doble clic toma la cadena) */
@@ -481,6 +498,13 @@ export class Viewer3D {
   private paintSettings: PaintSettings | null = null;
   private paintMirror: { vertex: Uint32Array; bone: Uint32Array } | null = null;
   private paintNeighbors: { offsets: Uint32Array; list: Uint32Array } | null = null;
+  /** Pincel de intensidad (pieles): opciones, valor por vértice, caras de la zona y trazo en curso */
+  private maskPaint: MaskPaintSettings | null = null;
+  private skinMask: Float32Array | null = null;
+  private maskFaces: Uint32Array = new Uint32Array(0);
+  private maskStroke: Set<number> | null = null;
+  private maskStrokeMode: MaskPaintSettings["mode"] = "add";
+  private maskOverlay: THREE.Mesh | null = null;
   /** Filas originales de los vértices tocados en el trazo en curso */
   private stroke: Map<number, Float32Array> | null = null;
   private lastDab: THREE.Vector3 | null = null;
@@ -940,6 +964,7 @@ export class Viewer3D {
       this.onCloudUp();
       this.onLightUp();
       this.finishStroke();
+      this.finishMaskStroke();
       if (this.modal?.release) this.confirmModal();
     }, { signal });
 
@@ -1098,6 +1123,10 @@ export class Viewer3D {
       this.onPaintDown(e);
       return;
     }
+    if (this.maskPaint) {
+      this.onMaskDown(e);
+      return;
+    }
     if (this.placementMode) return;
     if (this.activeTool === "measure") {
       this.onMeasureDown(e);
@@ -1225,7 +1254,10 @@ export class Viewer3D {
     this.onLightMove(e);
     this.onCloudMove(e);
     this.onNodeMove(e);
-    if (e.target === this.canvas) this.onPaintMove(e);
+    if (e.target === this.canvas) {
+      this.onPaintMove(e);
+      this.onMaskMove(e);
+    }
   }
 
   /**
@@ -1676,9 +1708,10 @@ export class Viewer3D {
   }
 
   private brushRadius(): number {
-    if (!this.paintSettings || !this.currentMesh) return 0;
+    const radius = this.paintSettings?.radius ?? this.maskPaint?.radius;
+    if (radius === undefined || !this.currentMesh) return 0;
     const size = new THREE.Box3().setFromObject(this.currentMesh).getSize(new THREE.Vector3());
-    return this.paintSettings.radius * size.length();
+    return radius * size.length();
   }
 
   private updateBrushCursor(hit: THREE.Intersection | null): void {
@@ -1800,6 +1833,175 @@ export class Viewer3D {
       }
       return count > 0 ? sum / count : this.boneWeight(v, bone);
     });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PINCEL DE INTENSIDAD (pieles imprimibles)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /** Activa el pincel de intensidad con esas opciones (`null` lo apaga) */
+  setMaskPaint(settings: MaskPaintSettings | null): void {
+    const was = !!this.maskPaint;
+    this.maskPaint = settings;
+    if (!settings) {
+      this.finishMaskStroke();
+      if (this.brushCursor && !this.paintSettings) this.brushCursor.visible = false;
+    }
+    if (was !== !!settings) {
+      this.canvas.style.cursor = settings ? "none" : "default";
+      this.updateMaskOverlay();
+      this.requestRender();
+    }
+  }
+
+  /** Intensidad por vértice de la malla (`null`: todo al 100 %) y las caras de la zona donde se ve */
+  setSkinMask(mask: Float32Array | null, faces: ArrayLike<number>): void {
+    // Un trazo en curso manda sobre lo que llega (es el mismo valor que la app va a guardar)
+    if (this.maskStroke) return;
+    const n = this.meshData ? this.meshData.positions.length / 3 : 0;
+    this.skinMask = mask && mask.length === n ? Float32Array.from(mask) : n > 0 ? new Float32Array(n).fill(1) : null;
+    this.maskFaces = Uint32Array.from(faces);
+    this.updateMaskOverlay();
+    this.requestRender();
+  }
+
+  /** Zona pintada en el visor: rosa al 100 %, gris oscuro en 0 */
+  private updateMaskOverlay(): void {
+    if (this.maskOverlay) {
+      this.meshGroup.remove(this.maskOverlay);
+      this.maskOverlay.geometry.dispose();
+      (this.maskOverlay.material as THREE.Material).dispose();
+      this.maskOverlay = null;
+    }
+    const data = this.meshData;
+    const mesh = this.currentMesh;
+    const mask = this.skinMask;
+    if (!this.maskPaint || !data || !mesh || !mask || this.maskFaces.length === 0) return;
+    const index = new Uint32Array(this.maskFaces.length * 3);
+    let at = 0;
+    for (const face of this.maskFaces) {
+      if (face * 3 + 2 >= data.indices.length) continue;
+      index.set(data.indices.subarray(face * 3, face * 3 + 3), at);
+      at += 3;
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", mesh.geometry.getAttribute("position"));
+    geometry.setAttribute("color", new THREE.BufferAttribute(new Float32Array(mask.length * 3), 3));
+    geometry.setIndex(new THREE.BufferAttribute(index.subarray(0, at), 1));
+    const material = new THREE.MeshBasicMaterial({
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.6,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+    });
+    this.maskOverlay = new THREE.Mesh(geometry, material);
+    this.maskOverlay.renderOrder = 2;
+    this.meshGroup.add(this.maskOverlay);
+    for (let v = 0; v < mask.length; v++) this.recolorMask(v);
+  }
+
+  private recolorMask(v: number): void {
+    const colors = this.maskOverlay?.geometry.getAttribute("color") as THREE.BufferAttribute | undefined;
+    const mask = this.skinMask;
+    if (!colors || !mask) return;
+    const k = Math.max(0, Math.min(1, mask[v]));
+    // De gris azulado (0) a rosa (1)
+    colors.setXYZ(v, 0.16 + k * (1 - 0.16), 0.17 + k * (0.475 - 0.17), 0.24 + k * (0.776 - 0.24));
+    colors.needsUpdate = true;
+  }
+
+  private maskHit(event: PointerEvent): THREE.Intersection | null {
+    const mesh = this.currentMesh;
+    if (!this.maskPaint || !mesh?.visible || !this.skinMask) return null;
+    this.raycaster.setFromCamera(this.getMousePosition(event), this.camera);
+    return pickMesh(this.raycaster, mesh);
+  }
+
+  private onMaskDown(event: PointerEvent): void {
+    if (event.button !== 0) return;
+    const hit = this.maskHit(event);
+    if (!hit) return;
+    this.controls.enabled = false;
+    // Como el pincel de pesos: Ctrl invierte (subir ↔ bajar) y Shift suaviza
+    const mode = this.maskPaint!.mode;
+    this.maskStrokeMode = event.shiftKey ? "smooth" : event.ctrlKey || event.metaKey ? (mode === "subtract" ? "add" : "subtract") : mode;
+    this.maskStroke = new Set();
+    this.lastDab = null;
+    this.maskDab(this.meshGroup.worldToLocal(hit.point.clone()));
+  }
+
+  private onMaskMove(event: PointerEvent): void {
+    if (!this.maskPaint) return;
+    const hit = this.maskHit(event);
+    this.updateBrushCursor(hit);
+    if (!this.maskStroke || !hit) return;
+    const point = this.meshGroup.worldToLocal(hit.point.clone());
+    if (this.lastDab && this.lastDab.distanceTo(point) < 0.25 * this.brushRadius()) return;
+    this.maskDab(point);
+  }
+
+  private finishMaskStroke(): void {
+    const stroke = this.maskStroke;
+    if (!stroke) return;
+    this.maskStroke = null;
+    this.controls.enabled = true;
+    const mask = this.skinMask;
+    if (stroke.size === 0 || !mask) return;
+    const vertices = Uint32Array.from(stroke);
+    const values = Float32Array.from(vertices, (v) => mask[v]);
+    this.callbacks.onMaskPainted?.({ vertices, values });
+  }
+
+  /** Una pincelada de intensidad centrada en `center` (coordenadas de la malla) */
+  private maskDab(center: THREE.Vector3): void {
+    const settings = this.maskPaint;
+    const mesh = this.meshData;
+    const mask = this.skinMask;
+    if (!settings || !mesh || !mask) return;
+    this.lastDab = center.clone();
+    const radius = this.brushRadius();
+    const r2 = radius * radius;
+    const positions = mesh.positions;
+    const hits: [number, number][] = [];
+    for (let v = 0; v < mask.length; v++) {
+      const dx = positions[3 * v] - center.x;
+      const dy = positions[3 * v + 1] - center.y;
+      const dz = positions[3 * v + 2] - center.z;
+      const d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 < r2) {
+        const t = 1 - d2 / r2;
+        hits.push([v, t * t * settings.strength]);
+      }
+    }
+    // El suavizado lee los valores de antes de la pincelada
+    let targets: number[] | null = null;
+    if (this.maskStrokeMode === "smooth") {
+      const neighbors = this.neighborsOf();
+      targets = hits.map(([v]) => {
+        let sum = 0;
+        let count = 0;
+        for (let j = neighbors.offsets[v]; j < neighbors.offsets[v + 1]; j++) {
+          sum += mask[neighbors.list[j]];
+          count++;
+        }
+        return count > 0 ? sum / count : mask[v];
+      });
+    }
+    hits.forEach(([v, amount], i) => {
+      const old = mask[v];
+      const next =
+        this.maskStrokeMode === "add" ? old + amount : this.maskStrokeMode === "subtract" ? old - amount : old + (targets![i] - old) * Math.min(1, amount * 2);
+      mask[v] = Math.max(0, Math.min(1, next));
+      if (mask[v] !== old) {
+        this.maskStroke?.add(v);
+        this.recolorMask(v);
+      }
+    });
+    this.requestRender();
   }
 
   /** Vecinos por aristas de la malla (formato CSR), calculados una vez */
@@ -2020,6 +2222,9 @@ export class Viewer3D {
     this.meshData = data;
     this.invalidateLod();
     this.paintNeighbors = null;
+    this.maskStroke = null;
+    this.skinMask = null;
+    this.maskFaces = new Uint32Array(0);
     this.estimatedInfluence = null;
     this.clearMesh();
 
@@ -5892,7 +6097,7 @@ export class Viewer3D {
 
   private clearMesh(): void {
     const meshGeometry = this.currentMesh?.geometry;
-    for (const key of ["nodeHighlight", "nodeHover", "faceOverlay"] as const) {
+    for (const key of ["nodeHighlight", "nodeHover", "faceOverlay", "maskOverlay"] as const) {
       const overlay = this[key];
       if (!overlay) continue;
       this.meshGroup.remove(overlay);

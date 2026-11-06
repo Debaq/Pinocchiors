@@ -94,6 +94,8 @@ struct PrintSkinDto {
     /// Caras que no se texturizan
     protected: Vec<u32>,
     images: Vec<PrintSkinImageDto>,
+    /// Intensidad pintada por vértice (vacía = todo al 100 %)
+    strength: Vec<f32>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -662,10 +664,11 @@ fn capture_model(state: &AppState) -> ProjectState {
         print_skin: {
             let zone = state.print_skin_zone.lock().unwrap();
             let images = state.print_skin_images.lock().unwrap();
-            (!zone.faces.is_empty() || !zone.protected.is_empty() || !images.is_empty()).then(|| PrintSkinDto {
+            (!zone.faces.is_empty() || !zone.protected.is_empty() || !zone.strength.is_empty() || !images.is_empty()).then(|| PrintSkinDto {
                 zone_total: zone.total,
                 zone: zone.faces.clone(),
                 protected: zone.protected.clone(),
+                strength: zone.strength.clone(),
                 images: images.iter().map(|i| PrintSkinImageDto { id: i.id.clone(), name: i.name.clone(), width: i.map.width, height: i.map.height, gray: i.map.to_gray8() }).collect(),
             })
         },
@@ -734,7 +737,7 @@ fn restore_model(state: &AppState, p: ProjectState, replace_library: bool) -> Re
     *state.scene_before_print_scale.lock().unwrap() = p.scene_before_print_scale;
     // Pieles: la zona es de este objeto; las imágenes son de la biblioteca y se suman (sin repetir id)
     let skin = p.print_skin.unwrap_or_default();
-    *state.print_skin_zone.lock().unwrap() = crate::print_skin::SkinZone { total: skin.zone_total, faces: skin.zone, protected: skin.protected };
+    *state.print_skin_zone.lock().unwrap() = crate::print_skin::SkinZone { total: skin.zone_total, faces: skin.zone, protected: skin.protected, strength: skin.strength };
     {
         let mut images = state.print_skin_images.lock().unwrap();
         if replace_library {

@@ -3652,7 +3652,11 @@ pub mod bridge {
             "skin_library" => ok(crate::print_skin::library(state)),
             "skin_import_image" => ok(crate::print_skin::import_image(state, &arg::<String>(args, "path")?)?),
             "skin_zone_select" => ok(crate::print_skin::select_zone(state, &arg(args, "criteria")?)?),
-            "skin_protect_holes" => ok(crate::print_skin::protect_holes(state, arg(args, "minMm")?, arg(args, "maxMm")?)?),
+            "skin_protect_holes" => {
+                let kinds: Option<Vec<String>> = args.get("kinds").cloned().map(serde_json::from_value).transpose().map_err(|e| e.to_string())?;
+                let kinds = crate::print_skin::fastener_kinds(&kinds.unwrap_or_else(|| vec!["hole".into()]))?;
+                ok(crate::print_skin::protect_fasteners(state, arg(args, "minMm")?, arg(args, "maxMm")?, &kinds)?)
+            }
             "skin_estimate" => ok(crate::print_skin::estimate(state, &arg(args, "params")?)?),
             "apply_print_skin" => ok(crate::print_skin::apply_skin_impl(state, &arg(args, "params")?)?),
             "printer_info" => ok(crate::printers::info(&arg(args, "conn")?)?),

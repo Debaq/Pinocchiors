@@ -7,6 +7,8 @@ import {
   MeshTextures,
   PaintSettings,
   PaintStroke,
+  MaskPaintSettings,
+  MaskStroke,
   SceneMaterial,
   LightSettings,
   SkeletonData,
@@ -104,6 +106,12 @@ export interface ViewportProps {
 
   /** Pincel de pesos activo (`undefined` = apagado) */
   paintSettings?: PaintSettings;
+  /** Pincel de intensidad de las pieles (`undefined` = apagado) */
+  maskPaint?: MaskPaintSettings;
+  /** Intensidad por vértice que se ve con el pincel (`null` = todo al 100 %) y las caras de la zona */
+  skinMask?: { mask: Float32Array | null; faces: number[] };
+  /** Terminó un trazo del pincel de intensidad */
+  onMaskPainted?: (stroke: MaskStroke) => void;
 
   /** Ítems del menú del clic derecho que agrega la app (después de los de vista) */
   contextMenuItems?: () => MenuEntry[];
@@ -164,6 +172,7 @@ export const Viewport: Component<ViewportProps> = (props) => {
         onPaintSettingsChanged: (change) => props.onPaintSettingsChanged?.(change),
         onHint: setHint,
         onWeightsPainted: (stroke) => props.onWeightsPainted?.(stroke),
+        onMaskPainted: (stroke) => props.onMaskPainted?.(stroke),
         onLightsChanged: (lights) => props.onLightsChanged?.(lights),
         onPoseEdited: (joints) => props.onPoseEdited?.(joints),
         onSelectionChanged: (joints, active) => props.onSelectionChanged?.(joints, active),
@@ -296,6 +305,16 @@ export const Viewport: Component<ViewportProps> = (props) => {
   // React to active tool
   createEffect(() => {
     viewer?.setPaintMode(props.paintSettings ?? null);
+  });
+
+  // Intensidad de las pieles: después de cargar la malla (es por vértice)
+  createEffect(() => {
+    void props.meshData;
+    const mask = props.skinMask;
+    viewer?.setSkinMask(mask?.mask ?? null, mask?.faces ?? []);
+  });
+  createEffect(() => {
+    viewer?.setMaskPaint(props.maskPaint ?? null);
   });
 
   createEffect(() => {

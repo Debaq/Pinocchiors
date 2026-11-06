@@ -56,6 +56,8 @@ import {
   MeshTextures,
   PaintSettings,
   PaintStroke,
+  type MaskPaintSettings,
+  type MaskStroke,
   SceneMaterial,
   LightSettings,
   defaultLights,
@@ -523,6 +525,8 @@ const REPLAYABLE = new Set([
   "undo_print_scale",
   "subdivide_mesh",
   "remesh_apply",
+  // La piel lleva su zona guardada por lugar (`region`): al rehacerla se busca en la malla nueva
+  "apply_print_skin",
 ]);
 
 /** Pasos deshacibles en curso que graban sus comandos (el último es el que graba) */
@@ -1657,6 +1661,10 @@ export const App: Component = () => {
   const [skinPickTarget, setSkinPickTarget] = createSignal<"zone" | "protected">("zone");
   const [skinLibrary, setSkinLibrary] = createSignal<SkinPattern[]>([]);
   const [skinImage, setSkinImage] = createSignal<SkinImageSettings>(defaultSkinImage);
+  // Pincel de intensidad: encendido, sus opciones y la intensidad por vértice (`null` = todo al 100 %)
+  const [skinMaskPainting, setSkinMaskPainting] = createSignal(false);
+  const [skinBrush, setSkinBrush] = createSignal<MaskPaintSettings>({ mode: "subtract", radius: 0.05, strength: 0.5 });
+  const [skinMask, setSkinMask] = createSignal<Float32Array | null>(null);
   // Planos de corte a mano: se dibujan en el visor mientras se eligen
   const cutPlaneQuads = createMemo(() => {
     const prep = printPrep();
@@ -2180,7 +2188,10 @@ export const App: Component = () => {
             count++;
           } else if (step?.kind === "snapshot") {
             for (const op of (step.data as { ops?: RecordedCall[] }).ops ?? []) {
-              const result = await rawInvoke(op.cmd, revive(op.args));
+              const args = revive(op.args);
+              // La piel se rehace con la zona que se encuentre en la malla nueva, no con la elegida ahora
+              if (op.cmd === "apply_print_skin") args.replay = true;
+              const result = await rawInvoke(op.cmd, args);
               if (op.cmd === "subdivide_mesh") subdivided = result as TauriSubdivideResult;
               count++;
             }
@@ -5990,6 +6001,11 @@ export const App: Component = () => {
       onPickTarget: setSkinPickTarget,
       onProtectHoles: protectSkinHoles,
       onClearProtected: clearSkinProtected,
+      painting: skinMaskPainting(),
+      onTogglePainting: toggleSkinMaskPainting,
+      brush: skinBrush(),
+      onBrush: setSkinBrush,
+      onClearMask: clearSkinMask,
       library: skinLibrary(),
       settings: skinImage(),
       onSettings: setSkinImage,
@@ -7473,12 +7489,60 @@ export const App: Component = () => {
     const zone = await skinCall("Skin zone", () => invoke<SkinZone>(command, { faces, mode }));
     if (zone) setSkinZone(zone);
   };
-  const protectSkinHoles = async (minMm: number, maxMm: number) => {
-    const r = await skinCall("Skin protect", () => busy(t("Buscando agujeros..."), () => invoke<{ zone: SkinZone; found: number }>("skin_protect_holes", { minMm, maxMm })));
+  const protectSkinHoles = async (minMm: number, maxMm: number, kinds: string[]) => {
+    type Found = { zone: SkinZone; found: number; holes: number; pins: number; threads: number; cones: number };
+    const r = await skinCall("Skin protect", () => busy(t("Buscando agujeros, pernos y roscas..."), () => invoke<Found>("skin_protect_holes", { minMm, maxMm, kinds })));
     if (!r) return;
     setSkinZone(r.zone);
-    setStatusMessage(r.found === 1 ? t("1 agujero protegido") : t("{n} agujeros protegidos", { n: r.found }));
+    if (r.found === 0) return setStatusMessage(t("No se encontró nada que proteger en ese rango de diámetros"));
+    const parts = [
+      r.holes > 0 ? t("{n} agujeros", { n: r.holes }) : "",
+      r.pins > 0 ? t("{n} pernos", { n: r.pins }) : "",
+      r.threads > 0 ? t("{n} roscas", { n: r.threads }) : "",
+      r.cones > 0 ? t("{n} avellanados", { n: r.cones }) : "",
+    ].filter(Boolean);
+    setStatusMessage(t("Protegido: {list}", { list: parts.join(", ") }));
   };
+  // ── Pincel de intensidad ──
+  const loadSkinMask = async () => {
+    const bytes = await skinCall("Skin mask", () => invoke<ArrayBuffer>("skin_mask_get"));
+    setSkinMask(bytes && bytes.byteLength > 0 ? new Float32Array(bytes) : null);
+  };
+  const toggleSkinMaskPainting = () => {
+    const on = !skinMaskPainting();
+    if (on) {
+      setSkinPicking(false);
+      setSkinPreviewOn(false);
+      void loadSkinMask();
+    }
+    setSkinMaskPainting(on);
+  };
+  const paintSkinMask = async (stroke: MaskStroke) => {
+    // Se guarda también aquí: el visor la vuelve a leer al redibujar
+    const n = meshData() ? meshData()!.positions.length / 3 : 0;
+    const next = skinMask()?.length === n ? Float32Array.from(skinMask()!) : new Float32Array(n).fill(1);
+    stroke.vertices.forEach((v, i) => (next[v] = stroke.values[i]));
+    setSkinMask(next);
+    const zone = await skinCall("Skin mask edit", () => invoke<SkinZone>("skin_mask_edit", { vertices: Array.from(stroke.vertices), values: Array.from(stroke.values) }));
+    if (zone) setSkinZone(zone);
+  };
+  const clearSkinMask = async () => {
+    const zone = await skinCall("Skin mask clear", () => invoke<SkinZone>("skin_mask_clear"));
+    if (!zone) return;
+    setSkinZone(zone);
+    setSkinMask(null);
+  };
+  // Elegir caras, ver el relieve y pintar la intensidad no van juntos
+  createEffect(() => {
+    if (skinPicking() || skinPreviewOn()) setSkinMaskPainting(false);
+  });
+  createEffect(() => {
+    if (pipeline.activeStep() !== "print3d" || animating() || plateViewIndex() !== null || piecesViewOn()) setSkinMaskPainting(false);
+  });
+  createEffect(on(meshData, () => {
+    setSkinMaskPainting(false);
+    setSkinMask(null);
+  }, { defer: true }));
   const clearSkinProtected = async () => {
     const zone = await skinCall("Skin protect clear", () => invoke<SkinZone>("skin_protect_clear"));
     if (zone) setSkinZone(zone);
@@ -7515,7 +7579,7 @@ export const App: Component = () => {
       offset: s.offset,
       rotation_deg: s.rotation_deg,
       edge_mm: null,
-      feather_mm: null,
+      feather_mm: s.feather_mm && s.feather_mm > 0 ? s.feather_mm : null,
       mapping: s.mapping ?? "uv",
       margin_mm: s.margin_mm ?? 0,
       decimate_mm: s.decimate ? s.decimate_mm : null,
@@ -7655,12 +7719,30 @@ export const App: Component = () => {
       setSkinPreviewOn(false);
     }
   });
-  const applySkin = () =>
+  const applySkin = async () => {
+    // Cambiar la geometría borra los cortes y las uniones: se avisa antes
+    if (
+      subdivideResult() &&
+      !(await confirmAction({
+        title: t("Aplicar la piel"),
+        message: t("El modelo ya está cortado en piezas. Al aplicar la piel se borran los cortes y las uniones: vas a tener que volver a dividirlo."),
+        confirmLabel: t("Aplicar y borrar los cortes"),
+        danger: true,
+      }))
+    )
+      return;
+    await applySkinNow();
+  };
+  const applySkinNow = () =>
     undoable(async (done) => {
       try {
         setIsProcessing(true);
         setStatusMessage(t("Aplicando la piel..."));
-        const r = await busy(t("Aplicando la piel..."), () => invoke<{ triangles_after: number; max_displacement_mm: number; warnings: string[] }>("apply_print_skin", { params: skinParams() }));
+        // La zona guardada por lugar va con el paso: si el diseño cambia, la piel se rehace sobre la malla nueva
+        const region = await invoke<unknown>("skin_zone_region");
+        const r = await busy(t("Aplicando la piel..."), () =>
+          invoke<{ triangles_after: number; max_displacement_mm: number; warnings: string[] }>("apply_print_skin", { params: skinParams(), region })
+        );
         done(t("Piel imprimible"));
         // La geometría cambió: el rig, la retopología y lo calculado sobre la malla de antes ya no valen
         setAutorigComplete(false);
@@ -7672,6 +7754,7 @@ export const App: Component = () => {
         setJointsReport(undefined);
         setSkinPicking(false);
         setSkinPreviewOn(false);
+        setSkinMaskPainting(false);
         setMeshData(await fetchMeshData());
         if (meshAnalysis()) setMeshAnalysis(await invoke<TauriPrint3dAnalysis>("analyze_print3d").catch(() => undefined));
         setStatusMessage(t("Piel aplicada: {n} triángulos, relieve de hasta {h} mm", { n: r.triangles_after.toLocaleString(locale()), h: r.max_displacement_mm.toFixed(2) }));
@@ -9520,6 +9603,9 @@ export const App: Component = () => {
               onPaintSettingsChanged={(change) => setPaintConfig((prev) => ({ ...prev, ...change }))}
               onWeightsPainted={handleWeightsPainted}
               paintSettings={paintSettings()}
+              maskPaint={skinMaskPainting() && !displayQuad() ? skinBrush() : undefined}
+              skinMask={skinMaskPainting() && !displayQuad() ? { mask: skinMask(), faces: skinZone()?.faces ?? [] } : undefined}
+              onMaskPainted={(stroke) => void paintSkinMask(stroke)}
               compareMesh={compareRetopo() && pipeline.activeStep() === "remesh" ? quadMeshData() : undefined}
               meshData={plateViewIndex() !== null && plateViewData() ? plateViewData() : piecesViewOn() && piecesViewData() ? piecesViewData() : skinPreviewOn() && skinPreviewData() ? skinPreviewData() : showsPreview() ? remeshPreviewData() : displayQuad() ? quadMeshData() : meshData()}
               sceneMaterials={viewerMaterials()}

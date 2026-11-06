@@ -114,6 +114,8 @@ struct Face {
     sel: bool,
     /// Cara protegida: no se texturiza ni el relieve se le acerca
     prot: bool,
+    /// Isla de UV de la zona (cada una con su escala UV → mm); `usize::MAX` fuera de la zona
+    island: usize,
 }
 
 fn face_normal_area(p: &[Vector3], v: [usize; 3]) -> (Vector3, Real) {
@@ -187,7 +189,24 @@ pub fn apply_skin(mesh: &Mesh, uvs: &[[f32; 2]], zone: &[usize], map: &HeightMap
 /// Como [`apply_skin`] con caras `protected` (un agujero, una unión): quedan fuera de la zona aunque estén en ella y el
 /// relieve se aleja de ellas `cfg.margin_mm`, naciendo desde ahí
 pub fn apply_skin_with(mesh: &Mesh, uvs: &[[f32; 2]], zone: &[usize], protected: &[usize], map: &HeightMap, cfg: &SkinConfig) -> Result<SkinResult> {
+    apply_skin_masked(mesh, uvs, zone, protected, &[], map, cfg)
+}
+
+/// Como [`apply_skin_with`] con una intensidad por vértice de la malla (`strength`, 0..1, pintada con el pincel): el
+/// relieve se multiplica por ella, así se desvanece de a poco donde se pintó menos. Vacía = todo al 100 %
+pub fn apply_skin_masked(
+    mesh: &Mesh,
+    uvs: &[[f32; 2]],
+    zone: &[usize],
+    protected: &[usize],
+    strength: &[f32],
+    map: &HeightMap,
+    cfg: &SkinConfig,
+) -> Result<SkinResult> {
     let (pos, tris) = triangles(mesh);
+    if !strength.is_empty() && strength.len() != pos.len() {
+        return Err(Print3dError::InvalidConfig("la intensidad pintada es de otra malla: vuelve a pintarla".into()));
+    }
     if tris.is_empty() {
         return Err(Print3dError::EmptyMesh);
     }
@@ -216,12 +235,20 @@ pub fn apply_skin_with(mesh: &Mesh, uvs: &[[f32; 2]], zone: &[usize], protected:
     let weld = weld_ids(&pos, (diag * 1e-7).max(1e-9));
     let mut wpos: Vec<Vector3> = Vec::new();
     let mut remap: HashMap<usize, usize> = HashMap::new();
+    // Intensidad de cada vértice unido: el promedio de los que caen en el mismo lugar
+    let mut wstrength: Vec<(Real, u32)> = Vec::new();
     for (i, &w) in weld.iter().enumerate() {
-        remap.entry(w).or_insert_with(|| {
+        let id = *remap.entry(w).or_insert_with(|| {
             wpos.push(pos[i]);
+            wstrength.push((0.0, 0));
             wpos.len() - 1
         });
+        if let Some(&s) = strength.get(i) {
+            wstrength[id].0 += Real::from(s).clamp(0.0, 1.0);
+            wstrength[id].1 += 1;
+        }
     }
+    let mut vstrength: Vec<Real> = wstrength.iter().map(|&(sum, n)| if n == 0 { 1.0 } else { sum / Real::from(n) }).collect();
     let wid = |i: usize| remap[&weld[i]];
     let mut faces: Vec<Face> = tris
         .iter()
@@ -229,22 +256,34 @@ pub fn apply_skin_with(mesh: &Mesh, uvs: &[[f32; 2]], zone: &[usize], protected:
         .filter_map(|(f, t)| {
             let v = [wid(t[0]), wid(t[1]), wid(t[2])];
             let uv = if boxed { [[0.0; 2]; 3] } else { [0, 1, 2].map(|k| [Real::from(uvs[t[k]][0]), Real::from(uvs[t[k]][1])]) };
-            (v[0] != v[1] && v[1] != v[2] && v[0] != v[2]).then_some(Face { v, uv, sel: in_zone[f], prot: is_prot[f] })
+            (v[0] != v[1] && v[1] != v[2] && v[0] != v[2]).then_some(Face { v, uv, sel: in_zone[f], prot: is_prot[f], island: usize::MAX })
         })
         .collect();
     let triangles_before = faces.len();
 
-    // Cuántos mm mide una unidad de UV en la zona (promedio por área)
+    // Cuántos mm mide una unidad de UV, por isla de UV de la zona (si las islas están estiradas distinto, la baldosa
+    // mide lo mismo en todas); una isla sin área de UV usa el promedio de la zona
+    let islands = if boxed { 0 } else { uv_islands(&mut faces) };
     let (mut area3, mut area_uv) = (0.0, 0.0);
+    let (mut isl3, mut isl_uv) = (vec![0.0; islands], vec![0.0; islands]);
     for f in faces.iter().filter(|f| f.sel) {
-        area3 += face_normal_area(&wpos, f.v).1;
-        area_uv += ((f.uv[1][0] - f.uv[0][0]) * (f.uv[2][1] - f.uv[0][1]) - (f.uv[2][0] - f.uv[0][0]) * (f.uv[1][1] - f.uv[0][1])).abs() * 0.5;
+        let a3 = face_normal_area(&wpos, f.v).1;
+        let auv = uv_area(&f.uv);
+        area3 += a3;
+        area_uv += auv;
+        if f.island < islands {
+            isl3[f.island] += a3;
+            isl_uv[f.island] += auv;
+        }
     }
     if !boxed && !(area_uv > 1e-12 && area3 > 0.0) {
         return Err(Print3dError::InvalidConfig("la zona no tiene UV (todas sus caras caen en un punto): despliégala primero en UV / Piel".into()));
     }
     // En caja el UV ya está en unidades de la malla
-    let mm_per_uv = if boxed { cfg.unit_mm } else { (area3 / area_uv).sqrt() * cfg.unit_mm };
+    let mm_per_uv_zone = if boxed { cfg.unit_mm } else { (area3 / area_uv).sqrt() * cfg.unit_mm };
+    let mm_per_uv_island: Vec<Real> = (0..islands)
+        .map(|i| if isl_uv[i] > 1e-12 * area_uv.max(1e-300) && isl3[i] > 0.0 { (isl3[i] / isl_uv[i]).sqrt() * cfg.unit_mm } else { mm_per_uv_zone })
+        .collect();
     let zone_area_mm2 = area3 * cfg.unit_mm * cfg.unit_mm;
 
     // Lado de los triángulos: el detalle del mapa, sin bajar de media boquilla (≈ 0,2 mm)
@@ -290,6 +329,7 @@ pub fn apply_skin_with(mesh: &Mesh, uvs: &[[f32; 2]], zone: &[usize], protected:
             }
             let m = wpos.len();
             wpos.push((wpos[a] + wpos[b]) * 0.5);
+            vstrength.push((vstrength[a] + vstrength[b]) * 0.5);
             for &fi in adj {
                 touched[fi] = true;
                 let f = faces[fi].clone();
@@ -297,8 +337,8 @@ pub fn apply_skin_with(mesh: &Mesh, uvs: &[[f32; 2]], zone: &[usize], protected:
                 let (p, q, r) = (f.v[k], f.v[(k + 1) % 3], f.v[(k + 2) % 3]);
                 let (up, uq, ur) = (f.uv[k], f.uv[(k + 1) % 3], f.uv[(k + 2) % 3]);
                 let um = [(up[0] + uq[0]) * 0.5, (up[1] + uq[1]) * 0.5];
-                faces[fi] = Face { v: [p, m, r], uv: [up, um, ur], sel: f.sel, prot: f.prot };
-                added.push(Face { v: [m, q, r], uv: [um, uq, ur], sel: f.sel, prot: f.prot });
+                faces[fi] = Face { v: [p, m, r], uv: [up, um, ur], ..f.clone() };
+                added.push(Face { v: [m, q, r], uv: [um, uq, ur], ..f });
             }
         }
         faces.extend(added);
@@ -366,12 +406,13 @@ pub fn apply_skin_with(mesh: &Mesh, uvs: &[[f32; 2]], zone: &[usize], protected:
     let dist_prot = nearest_distance(&wpos, &near_prot, (cfg.margin_mm + feather_of(cfg)) / cfg.unit_mm, cfg.unit_mm);
     let feather = feather_of(cfg);
 
-    // UV de cada vértice (de una cara de la zona si la hay) y su altura
-    let mut vuv: Vec<Option<[Real; 2]>> = vec![None; nv];
+    // UV de cada vértice (de una cara de la zona si la hay), con la escala de su isla, y su altura
+    let mut vuv: Vec<Option<([Real; 2], Real)>> = vec![None; nv];
     for sel_pass in [true, false] {
         for f in faces.iter().filter(|f| f.sel == sel_pass) {
+            let scale = mm_per_uv_island.get(f.island).copied().unwrap_or(mm_per_uv_zone);
             for k in 0..3 {
-                vuv[f.v[k]].get_or_insert(f.uv[k]);
+                vuv[f.v[k]].get_or_insert((f.uv[k], scale));
             }
         }
     }
@@ -387,13 +428,13 @@ pub fn apply_skin_with(mesh: &Mesh, uvs: &[[f32; 2]], zone: &[usize], protected:
         if !in_sel[v] || (in_other[v] && closed_zone) {
             continue;
         }
-        let uv = if boxed {
-            box_uv(wpos[v], normal[v].try_normalize().unwrap_or_else(Vector3::unit_z))
+        let (uv, mm_per_uv) = if boxed {
+            (box_uv(wpos[v], normal[v].try_normalize().unwrap_or_else(Vector3::unit_z)), mm_per_uv_zone)
         } else {
             let Some(uv) = vuv[v] else { continue };
             uv
         };
-        let w = if closed_zone { smooth(dist[v] / feather) } else { 1.0 } * smooth((dist_prot[v] - cfg.margin_mm) / feather);
+        let w = if closed_zone { smooth(dist[v] / feather) } else { 1.0 } * smooth((dist_prot[v] - cfg.margin_mm) / feather) * vstrength[v];
         if w <= 0.0 {
             continue;
         }
@@ -435,6 +476,57 @@ pub fn apply_skin_with(mesh: &Mesh, uvs: &[[f32; 2]], zone: &[usize], protected:
         zone_faces: faces.iter().filter(|f| f.sel).count(),
         warnings,
     })
+}
+
+fn uv_area(uv: &[[Real; 2]; 3]) -> Real {
+    ((uv[1][0] - uv[0][0]) * (uv[2][1] - uv[0][1]) - (uv[2][0] - uv[0][0]) * (uv[1][1] - uv[0][1])).abs() * 0.5
+}
+
+/// Marca en cada cara de la zona su isla de UV: caras unidas por una arista cuyos dos extremos tienen el mismo UV en
+/// las dos. Devuelve cuántas islas hay
+fn uv_islands(faces: &mut [Face]) -> usize {
+    let n = faces.len();
+    let mut parent: Vec<usize> = (0..n).collect();
+    fn find(parent: &mut [usize], mut x: usize) -> usize {
+        while parent[x] != x {
+            parent[x] = parent[parent[x]];
+            x = parent[x];
+        }
+        x
+    }
+    let same = |a: [Real; 2], b: [Real; 2]| (a[0] - b[0]).abs() <= 1e-6 && (a[1] - b[1]).abs() <= 1e-6;
+    // Arista (por vértices unidos) → (cara, UV en el menor, UV en el mayor)
+    type Side = (usize, [Real; 2], [Real; 2]);
+    let mut edges: HashMap<(usize, usize), Vec<Side>> = HashMap::new();
+    for (fi, f) in faces.iter().enumerate().filter(|(_, f)| f.sel) {
+        for k in 0..3 {
+            let (a, b, ua, ub) = (f.v[k], f.v[(k + 1) % 3], f.uv[k], f.uv[(k + 1) % 3]);
+            let entry = if a < b { (fi, ua, ub) } else { (fi, ub, ua) };
+            edges.entry((a.min(b), a.max(b))).or_default().push(entry);
+        }
+    }
+    for list in edges.values() {
+        for i in 0..list.len() {
+            for j in i + 1..list.len() {
+                let ((f, a1, b1), (g, a2, b2)) = (list[i], list[j]);
+                if same(a1, a2) && same(b1, b2) {
+                    let (rf, rg) = (find(&mut parent, f), find(&mut parent, g));
+                    if rf != rg {
+                        parent[rf] = rg;
+                    }
+                }
+            }
+        }
+    }
+    let mut ids: HashMap<usize, usize> = HashMap::new();
+    for (fi, face) in faces.iter_mut().enumerate() {
+        if face.sel {
+            let root = find(&mut parent, fi);
+            let next = ids.len();
+            face.island = *ids.entry(root).or_insert(next);
+        }
+    }
+    ids.len()
 }
 
 /// Simplifica sin pasar de `max_error` (unidades de la malla). `None` si el resultado no queda cerrado
@@ -645,6 +737,53 @@ mod tests {
             }
         }
         assert!(moved > 100 && checked > 20, "{moved} {checked}");
+    }
+
+    #[test]
+    fn cada_isla_de_uv_tiene_su_escala() {
+        // La tapa en dos islas: la segunda con el UV al doble de escala. La baldosa tiene que medir 10 mm en las dos
+        let (mesh, mut uvs, zone) = box_soup();
+        let pos: Vec<Vector3> = mesh.vertices.iter().map(|v| v.position).collect();
+        for k in 9..12 {
+            uvs[k] = [(pos[k].x() / 20.0) as f32, (pos[k].y() / 20.0) as f32];
+        }
+        let map = Pattern::Lines.generate(64);
+        let r = apply_skin(&mesh, &uvs, &zone, &map, &cfg(1.0)).unwrap();
+        assert!(r.mesh.is_closed(), "la costura entre islas se abrió");
+        let mut checked = 0;
+        for v in r.mesh.vertices.iter() {
+            let (x, y) = (v.position.x(), v.position.y());
+            if x > 4.0 && x < 36.0 && y > 4.0 && y < 36.0 && v.position.z() > 9.0 {
+                let expected = 10.0 + map.sample(x / 10.0, y / 10.0);
+                assert!((v.position.z() - expected).abs() < 1e-6, "({x:.2},{y:.2}) {} vs {expected}", v.position.z());
+                checked += 1;
+            }
+        }
+        assert!(checked > 500, "{checked}");
+    }
+
+    #[test]
+    fn la_intensidad_pintada_desvanece_el_relieve() {
+        // Intensidad 0 en x = 0 y 1 en x = 40: el relieve crece de izquierda a derecha
+        let (mesh, uvs, zone) = box_soup();
+        let strength: Vec<f32> = mesh.vertices.iter().map(|v| (v.position.x() / 40.0) as f32).collect();
+        let map = Pattern::Lines.generate(64);
+        let r = apply_skin_masked(&mesh, &uvs, &zone, &[], &strength, &map, &cfg(1.0)).unwrap();
+        assert!(r.mesh.is_closed());
+        let mut checked = 0;
+        for v in r.mesh.vertices.iter() {
+            let (x, y) = (v.position.x(), v.position.y());
+            if x > 4.0 && x < 36.0 && y > 4.0 && y < 36.0 && v.position.z() > 9.0 {
+                let expected = 10.0 + (x / 40.0) * map.sample(x / 10.0, y / 10.0);
+                assert!((v.position.z() - expected).abs() < 1e-6, "({x:.2},{y:.2}) {} vs {expected}", v.position.z());
+                checked += 1;
+            }
+        }
+        assert!(checked > 500, "{checked}");
+        // Todo en 0: no hay relieve; de otro largo: error claro
+        let zero = apply_skin_masked(&mesh, &uvs, &zone, &[], &vec![0.0; strength.len()], &map, &cfg(1.0)).unwrap();
+        assert!(zero.max_displacement_mm < 1e-12);
+        assert!(apply_skin_masked(&mesh, &uvs, &zone, &[], &strength[..4], &map, &cfg(1.0)).is_err());
     }
 
     #[test]

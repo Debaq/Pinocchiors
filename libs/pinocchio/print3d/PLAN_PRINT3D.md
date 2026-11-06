@@ -117,10 +117,8 @@ Dónde está: `texture.rs` y `zones.rs` (lib), `print_skin.rs` (comandos y estad
 
 Preguntas abiertas:
 
-- **Cortar antes o después**: el cortador (`slicer`) hoy solo conserva posiciones, así que la pieza cortada pierde los
-  UV y la máscara. Opciones: (a) texturizar el modelo entero y cortar después (las tapas de corte salen planas, pero la
-  malla es enorme al cortar) o (b) hacer que el cortador lleve UV y máscara por los cortes (más trabajo, mejor
-  resultado). Recomendado: (b).
+- **Cortar antes o después** (resuelto 2026-11-06, Fase 16): primero la piel, después cortar. Cambiar la geometría
+  borra los cortes y las uniones (ya era así); la app avisa antes de aplicar si el modelo ya estaba cortado.
 - **Amplitud y compensación**: el relieve debe quedar dentro de la medida de la pieza (desfase hacia adentro o centrado)
   para no romper ajustes; la compensación de contracción se aplica después, al exportar.
 - **Texturas con color**: esta fase solo usa la altura (grises); el color de la imagen se ignora.
@@ -202,15 +200,18 @@ Leyenda: ⬜ falta · 🧪 falta probarlo de verdad · ⚠ límite conocido (fun
 
 ### Pieles y texturas imprimibles
 
-- ⚠ Una sola escala de UV por zona: si las islas están estiradas distinto, la baldosa cambia de tamaño entre ellas.
+- ✅ Escala de UV por isla (Fase 16): la baldosa mide lo mismo en islas estiradas distinto.
 - ⚠ Aplicar la piel deja el modelo como geometría sola (sin UV, texturas ni rig) y borra la zona. Se deshace con el
-  historial; si el diseño cambia y se rehace, la piel no se vuelve a poner.
+  historial. ✅ Si el diseño cambia, la piel se rehace sola sobre la malla nueva (Fase 16); si el diseño cambió justo
+  en la zona, avisa.
 - ⚠ Con la proyección por UV necesita UV: sin ellos el botón se desactiva (se puede usar la proyección en caja, Fase 14). Solo usa la altura (grises); el color
   de la imagen se ignora. Las imágenes importadas se guardan en 8 bits y hasta 1 024 px; los patrones de fábrica
   son de 256 px.
 - ⚠ La vista previa tiene menos detalle (hasta 250 000 triángulos) y se calcula sobre el modelo entero.
-- ✅ Mapeo en caja y simplificar después de aplicar: Fase 14. ⬜ Máscara de borde suave pintada.
-- ✅ La piel no invade agujeros cilíndricos ni caras protegidas (Fase 14). ⬜ Uniones y roscas se protegen a mano (no se detectan solas).
+- ✅ Mapeo en caja y simplificar después de aplicar: Fase 14. ✅ Intensidad pintada con pincel y ancho del borde suave (Fase 16).
+- ✅ La piel no invade agujeros cilíndricos ni caras protegidas (Fase 14). ✅ Pernos, roscas (macho y hembra) y
+  avellanados se detectan solos (Fase 16). ⚠ Un perno se reconoce solo si mide hasta tres diámetros de largo; un
+  cilindro más largo del rango (un mango) no se toma como perno.
 
 
 
@@ -286,6 +287,25 @@ Leyenda: ⬜ falta · 🧪 falta probarlo de verdad · ⚠ límite conocido (fun
   normales hacia el eje (un perno o una pared plana no cuentan).
 - Escritorio: `SkinZone.protected` (se guarda en el proyecto), `skin_protect_edit/holes/clear`, `SkinParams.mapping/margin_mm/decimate_mm`.
   UI: «Zonas protegidas» (elegir en el visor, «Proteger agujeros», margen), proyección y «Simplificar el resultado».
+
+## Fase 16: pieles terminadas (hecha, 2026-11-06)
+
+- **Escala por isla de UV** (`skin.rs`, `uv_islands`): caras de la zona unidas por aristas con el mismo UV en las dos;
+  cada isla con su relación UV → mm (si no tiene área de UV, la de la zona).
+- **Intensidad pintada** (`apply_skin_masked`): un valor 0–1 por vértice que multiplica el relieve; los vértices unidos
+  toman el promedio y los que nacen al partir aristas, el del medio. Escritorio: `SkinZone.strength` (se guarda en el
+  proyecto), `skin_mask_get/edit/clear`. Visor: pincel de intensidad (`setMaskPaint`, `setSkinMask`; desvanecer, reforzar,
+  suavizar; Ctrl invierte y Mayús suaviza, como el de pesos) y la zona pintada de gris (0) a rosa (100 %). Además,
+  «Borde suave» en mm (`feather_mm`; 0 = tres alturas).
+- **Detectar uniones y roscas** (`zones.rs`, `detect_fasteners`): agujeros (como antes), pernos (cilindro convexo de
+  hasta tres diámetros de largo), roscas (flancos con las normales en un cono alrededor del eje: covarianza centrada,
+  vuelta entera, flancos del mismo eje juntos; se protege toda la franja entre fondo y cresta) y avellanados (cono que
+  avanza poco a lo largo del eje). `skin_protect_holes` acepta `kinds`; el panel tiene casillas y el MCP protege todo.
+- **Rehacer la piel si el diseño cambia** (`region.rs`, `ZoneRegion`): al aplicar se guarda qué celdas de una rejilla
+  (medio milímetro, o más si la zona es enorme) tocan la zona, lo protegido y la intensidad, con la normal de cada
+  celda. `apply_print_skin` es rehacible (`REPLAYABLE`) y al rehacerse (`replay`) busca la zona en la malla nueva:
+  cara con el centro en una celda de la zona y mirando hacia el mismo lado.
+- **Cortes**: primero la piel; aplicarla con el modelo cortado pide confirmación (borra los cortes y las uniones).
 
 ## Fase 15: preparar todo en un paso (hecha)
 
