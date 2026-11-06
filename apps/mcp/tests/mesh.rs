@@ -282,6 +282,15 @@ fn slice_for_resin_and_calibrate() {
     let (text, data) = ok(&s, "resin_slice", json!({ "points": [[41.31, 65.28, 6.0]] }));
     assert_eq!(data["points"].as_array().unwrap().len(), 1, "{text}");
 
+    // Vaciado con un drenaje en la cara de abajo y su tapón; las zonas pasan por support_settings
+    let (text, data) = ok(
+        &s,
+        "resin_slice",
+        json!({ "hollow": { "wall": 2.0 }, "drains": [[41.31, 65.28, 6.0]], "support_settings": { "zones": [{ "center": [45.0, 69.0, 6.0], "radius": 2.0, "kind": "block" }] } }),
+    );
+    assert!(text.contains("Hollowed") && data["plugs"] == 1 && data["hollowed_ml"].as_f64().unwrap() > 0.1, "{text}");
+    assert!(text.contains("No islands left"), "{text}");
+
     // Halot-Sky: se revisa pero no se guarda todavía
     let (text, _, err) = call(&s, "resin_slice", json!({ "printer": "halot", "path": dir.path().join("x.cxdlp") }));
     assert!(err && text.contains("cannot be written"), "{text}");

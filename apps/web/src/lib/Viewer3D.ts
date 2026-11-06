@@ -582,7 +582,13 @@ export class Viewer3D {
   private resinData: ResinViewData | null = null;
   private resinHid: { mesh: boolean } | null = null;
   /** Puntos de soporte a dibujar y quién recibe los clics al editarlos */
-  private resinPoints: { points: SupportPoint[]; skipped: number[]; zones: SupportZone[] } = { points: [], skipped: [], zones: [] };
+  private resinPoints: { points: SupportPoint[]; skipped: number[]; zones: SupportZone[]; drains: [number, number, number][]; drainRadius: number } = {
+    points: [],
+    skipped: [],
+    zones: [],
+    drains: [],
+    drainRadius: 1.5,
+  };
   private resinTool: ResinTool = "points";
   private resinEditor: ((e: PointEdit) => void) | null = null;
   /** Dónde se apretó el botón (para no tomar un arrastre como clic) */
@@ -3016,7 +3022,7 @@ export class Viewer3D {
         this.renderer.localClippingEnabled = true;
         this.resinView = new ResinView(data);
         this.resinView.setPoints(this.resinPoints.points, this.resinPoints.skipped, !!this.resinEditor);
-        this.resinView.setZones(this.resinPoints.zones, !!this.resinEditor);
+        this.resinView.setZones(this.resinPoints.zones, !!this.resinEditor, this.resinPoints.drains, this.resinPoints.drainRadius);
         this.scene.add(this.resinView.group);
         if (!this.resinHid) {
           this.resinHid = { mesh: this.meshGroup.visible };
@@ -3033,13 +3039,21 @@ export class Viewer3D {
     this.resinView?.update(options);
   }
 
-  /** Puntos de soporte de resina y zonas pintadas; con `editor`, editarlos con clics según `tool` (se ven solo al editar) */
-  setResinPoints(points: SupportPoint[], skipped: number[], editor: ((e: PointEdit) => void) | null, zones: SupportZone[] = [], tool: ResinTool = "points"): void {
-    this.resinPoints = { points, skipped, zones };
+  /** Puntos de soporte de resina, zonas pintadas y drenajes; con `editor`, editarlos con clics según `tool` (se ven solo al editar) */
+  setResinPoints(
+    points: SupportPoint[],
+    skipped: number[],
+    editor: ((e: PointEdit) => void) | null,
+    zones: SupportZone[] = [],
+    tool: ResinTool = "points",
+    drains: [number, number, number][] = [],
+    drainRadius = 1.5,
+  ): void {
+    this.resinPoints = { points, skipped, zones, drains, drainRadius };
     this.resinTool = tool;
     this.resinEditor = editor;
     this.resinView?.setPoints(points, skipped, !!editor);
-    this.resinView?.setZones(zones, !!editor);
+    this.resinView?.setZones(zones, !!editor, drains, drainRadius);
   }
 
   /** Clic al editar puntos de resina (sin arrastrar: arrastrar gira la vista) */

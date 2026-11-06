@@ -308,6 +308,14 @@ previous call: mm, bed corner at the origin, Z up). Does NOT send anything to th
         props.push(("vents", boolean("Vent enclosed cavities with a hole (default true)"), false));
         props.push(("vent_diameter", number_in("Vent hole diameter in mm (default 2.5)", 0.5, 10.0), false));
         props.push((
+            "hollow",
+            json!({ "description": "Hollow the part to save resin: true for the defaults (2 mm wall, pillars every 8 mm), or {wall (mm), infill: \"pillars\" (default, holds the ceiling) | \"grid\" (stiffer walls, may need more vents) | \"none\", infill_spacing, infill_width (mm)}. The hollow is vented from below automatically." }),
+            false,
+        ));
+        props.push(("drains", array("Drain holes you place on the surface [x, y, z] in printer mm (like `points`); drilled inward along the face normal", point("Point", 3)), false));
+        props.push(("drain_diameter", number_in("Drain hole diameter in mm (default 3)", 1.0, 10.0), false));
+        props.push(("plugs", boolean("Print a plug for each drain on the plate next to the raft (default true)"), false));
+        props.push((
             "tilt",
             object(&[
                 ("x", number_in("Degrees around X (applied first)", -180.0, 180.0), false),
@@ -335,8 +343,9 @@ fn prepare_settings(ctx: &Ctx, args: &Value) -> Result<Value, Fail> {
         let mut s = base.ok_or_else(|| Fail::new(format!("no support density \"{density}\"")).hint("use light, medium, heavy or none"))?;
         if let (Some(o), Some(changes)) = (s.as_object_mut(), args["support_settings"].as_object()) {
             for (k, v) in changes {
-                if !o.contains_key(k) {
-                    return Err(Fail::new(format!("unknown support setting \"{k}\"")).hint(format!("use: {}", o.keys().cloned().collect::<Vec<_>>().join(", "))));
+                // `zones` no viene en los de fábrica (vacía no se manda)
+                if !o.contains_key(k) && k != "zones" {
+                    return Err(Fail::new(format!("unknown support setting \"{k}\"")).hint(format!("use: {}, zones", o.keys().cloned().collect::<Vec<_>>().join(", "))));
                 }
                 o.insert(k.clone(), v.clone());
             }
@@ -348,6 +357,30 @@ fn prepare_settings(ctx: &Ctx, args: &Value) -> Result<Value, Fail> {
     }
     if let Some(d) = args["vent_diameter"].as_f64() {
         prep["vent_diameter"] = json!(d);
+    }
+    // Vaciado: true = de fábrica (pared 2 mm, columnas), o los cambios sobre eso.
+    match &args["hollow"] {
+        Value::Bool(true) => prep["hollow"] = info["hollow"].clone(),
+        Value::Object(changes) => {
+            let mut h = info["hollow"].clone();
+            for (k, v) in changes {
+                if h.get(k).is_none() {
+                    return Err(Fail::new(format!("unknown hollow setting \"{k}\"")).hint("use: wall, infill (none, pillars, grid), infill_spacing, infill_width"));
+                }
+                h[k] = v.clone();
+            }
+            prep["hollow"] = h;
+        }
+        _ => {}
+    }
+    if let Some(d) = args.get("drains").filter(|d| d.is_array()) {
+        prep["drains"] = d.clone();
+    }
+    if let Some(d) = args["drain_diameter"].as_f64() {
+        prep["drain_diameter"] = json!(d);
+    }
+    if let Some(v) = arg_bool(args, "plugs") {
+        prep["plugs"] = json!(v);
     }
     Ok(prep)
 }
@@ -414,6 +447,9 @@ fn resin_slice(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
         num(f("lift")),
         count("vents")
     ));
+    if f("hollowed_ml") > 0.0 {
+        lines.push(format!("Hollowed: {} ml less resin; {} drain plug(s) on the plate.", num(f("hollowed_ml")), r["plugs"]));
+    }
     if count("islands") == 0 {
         lines.push("No islands left without support.".into());
     } else {

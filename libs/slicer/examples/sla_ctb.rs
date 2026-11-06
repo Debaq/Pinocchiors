@@ -44,6 +44,15 @@ fn main() {
         println!("sin preparar: {} islas, {} huecos problema", before.islands.len(), before.cavities.len());
         // ARBOL=1: ramas; LATERALES=1: soportes laterales; RECTOS=1: puntas verticales y sin refuerzos (como antes de SLA12).
         let mut prep = sla_prepare::PrepareSettings::default();
+        // VACIAR=2 (pared en mm) vacía; RELLENO=columnas|rejilla|nada.
+        if let Some(wall) = env("VACIAR") {
+            let infill = match std::env::var("RELLENO").as_deref() {
+                Ok("columnas") => pinocchio_slicer::sla_hollow::Infill::Pillars,
+                Ok("nada") => pinocchio_slicer::sla_hollow::Infill::None,
+                _ => pinocchio_slicer::sla_hollow::Infill::Grid,
+            };
+            prep.hollow = Some(pinocchio_slicer::sla_hollow::HollowSettings { wall, infill, ..Default::default() });
+        }
         if let Some(sup) = prep.supports.as_mut() {
             sup.tree = std::env::var("ARBOL").is_ok();
             sup.side_supports = std::env::var("LATERALES").is_ok();
@@ -66,6 +75,9 @@ fn main() {
             p.report.cavities.len(),
             p.report.max_area_mm2
         );
+        if p.hollowed_ml > 0.0 {
+            println!("  vaciado: {:.2} ml menos", p.hollowed_ml);
+        }
         for n in &p.notes {
             println!("  nota: {n}");
         }

@@ -144,7 +144,7 @@ Texture: `print_skin` {\"pattern\": \"diamonds\", \"zone\": {\"directions\": [\"
 6. Slice: `print_machines` lists the lab printers. Filament: `print_slice` {\"path\": \"/abs/part.gcode\", \"machine\":
    \"K1\", \"quality\": \"0.20mm Standard\"} (OrcaSlicer engine; `settings` changes any Orca key). Resin:
    `resin_tilts` finds the best orientation (pass its `turn` as `tilt`), then `resin_slice` {\"path\": \"/abs/part.ctb\", \"supports\": \"medium\"} (raft,
-   supports, vents under cavities; reports islands left — add `points` there). `resin_calibration` writes exposure
+   supports, vents under cavities; reports islands left — add `points` there; `hollow: true` saves resin). `resin_calibration` writes exposure
    test files. These only write files.
 7. Printers on the network: `printer_list`, `printer_status` (reads everything: progress, temperatures, Z offset,
    bed mesh, history, files). Acting on a printer (`printer_control`: Z offset, temperatures, moving, calibrations,

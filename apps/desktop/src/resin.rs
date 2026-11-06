@@ -10,6 +10,7 @@ use pinocchio_slicer::sla::{self, Layer, ResinPrinter, ResinSettings};
 use pinocchio_slicer::sla_calibration::{self, CalibrationRow};
 use pinocchio_slicer::sla_check::{Cavity, Island};
 use pinocchio_slicer::sla_layers::{self, LayerParams};
+use pinocchio_slicer::sla_hollow::HollowSettings;
 use pinocchio_slicer::sla_orient::{self, Orientation, Turn};
 use pinocchio_slicer::sla_prepare::{self, PrepareSettings, VentHole};
 use pinocchio_slicer::sla_profiles::{self, ResinProfile};
@@ -62,6 +63,8 @@ pub struct ResinInfo {
     /// Soportes de fábrica: liviano, medio, pesado
     pub supports: Vec<(SupportDensity, SupportSettings)>,
     pub prepare: PrepareSettings,
+    /// Vaciado de fábrica (pared, relleno)
+    pub hollow: HollowSettings,
     /// Hileras de la pieza de calibración (de adelante hacia atrás)
     pub calibration: Vec<CalibrationRow>,
 }
@@ -101,6 +104,7 @@ pub fn resin_presets() -> ResinInfo {
         profiles: sla_profiles::profiles(),
         supports: [SupportDensity::Light, SupportDensity::Medium, SupportDensity::Heavy].into_iter().map(|d| (d, SupportSettings::preset(d))).collect(),
         prepare: PrepareSettings::default(),
+        hollow: HollowSettings::default(),
         calibration: sla_calibration::rows(),
     }
 }
@@ -138,6 +142,9 @@ pub struct ResinResult {
     pub columns: usize,
     pub tilted: usize,
     pub braces: usize,
+    /// Resina ahorrada al vaciar (ml) y tapones de drenaje puestos en la placa
+    pub hollowed_ml: f32,
+    pub plugs: usize,
     pub notes: Vec<String>,
     /// Avisos de los parámetros
     pub warnings: Vec<String>,
@@ -268,6 +275,8 @@ fn finish(
         columns: p.columns,
         tilted: p.tilted,
         braces: p.braces,
+        hollowed_ml: p.hollowed_ml,
+        plugs: p.plugs,
         notes: p.notes.clone(),
         warnings,
         bed: [pr.bed_x, pr.bed_y],

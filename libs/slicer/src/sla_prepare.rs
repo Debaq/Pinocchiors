@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::sla::{slice, slice_with, Layer, ResinPrinter, ResinSettings};
 use crate::sla_check::{check, slender, Cavity, ResinReport};
+use crate::sla_hollow::{drain_holes, plugs, Hollow, HollowSettings};
 use crate::sla_supports::{auto_points, build, frustum, side_points, zone_points, SkipReason, SupportPoint, SupportSettings, Tri};
 use crate::SlicerError;
 
@@ -25,11 +26,27 @@ pub struct PrepareSettings {
     /// Ventear ventosas y huecos cerrados.
     pub vents: bool,
     pub vent_diameter: f32,
+    /// Vaciar la pieza (SLA14); `None`: maciza.
+    pub hollow: Option<HollowSettings>,
+    /// Drenajes puestos a mano (mm de la impresora, como los puntos de soporte).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub drains: Vec<[f32; 3]>,
+    pub drain_diameter: f32,
+    /// Un tapón imprimible por drenaje, en la placa al lado de la balsa.
+    pub plugs: bool,
 }
 
 impl Default for PrepareSettings {
     fn default() -> Self {
-        Self { supports: Some(SupportSettings::default()), vents: true, vent_diameter: 2.5 }
+        Self {
+            supports: Some(SupportSettings::default()),
+            vents: true,
+            vent_diameter: 2.5,
+            hollow: None,
+            drains: Vec::new(),
+            drain_diameter: 3.0,
+            plugs: true,
+        }
     }
 }
 
@@ -65,6 +82,9 @@ pub struct Prepared {
     pub columns: usize,
     pub tilted: usize,
     pub braces: usize,
+    /// Resina que se ahorró al vaciar (ml) y tapones puestos en la placa.
+    pub hollowed_ml: f32,
+    pub plugs: usize,
 }
 
 /// Prepara `model` (en mm de la cama; se respeta su x, y). Con `points` se usan esos
@@ -85,22 +105,59 @@ pub fn prepare(
     let model: Vec<Tri> = model.iter().map(|t| t.map(|v| [v[0], v[1], v[2] + lift])).collect();
     let mut out = Prepared { lift, ..Default::default() };
 
-    // 1. Venteos.
+    // 0. Vaciado y drenajes a mano: el interior sale de las capas de la pieza sola y se
+    // apaga en cada laminado que sigue.
+    let base = slice(&model, printer, h)?;
+    let hollow = prep.hollow.as_ref().and_then(|hs| Hollow::new(&base, printer, h, hs));
+    if prep.hollow.is_some() && hollow.is_none() {
+        out.notes.push("la pieza es muy delgada para vaciarla con esa pared".into());
+    }
+    let wall = prep.hollow.as_ref().map_or(2.0, |hs| hs.wall);
+    let mut part = model.clone();
+    part.extend(drain_holes(&model, &prep.drains, prep.drain_diameter, wall + 1.0));
+    let cut = |mut layers: Vec<Layer>| {
+        if let Some(hw) = &hollow {
+            hw.apply(&mut layers);
+        }
+        layers
+    };
+    let sliced = |tris: &[Tri]| -> Result<Vec<Layer>, SlicerError> { Ok(cut(slice(tris, printer, h)?)) };
+
+    // 1. Venteos, en rondas: un hueco puede ser varios bolsillos que se juntan más arriba;
+    // con el primer venteo se ve cuál sigue succionando.
     let mut vent_tris = Vec::new();
     if prep.vents {
-        let layers = slice(&model, printer, h)?;
-        let report = check(&layers, printer, h);
-        for c in report.cavities {
-            match vent_for(&c, &layers, printer, h, prep.vent_diameter / 2.0) {
-                Some(v) => {
+        let mut layers = if prep.drains.is_empty() { cut(base) } else { sliced(&part)? };
+        for _ in 0..4 {
+            let report = check(&layers, printer, h);
+            out.unvented.clear();
+            let mut added = 0;
+            for c in report.cavities {
+                // Un venteo por bolsillo (salvo que ya haya uno ahí mismo).
+                let mut any = false;
+                for floor in &c.pockets {
+                    let Some(v) = vent_for(*floor, &c, &layers, printer, h, prep.vent_diameter / 2.0) else { continue };
+                    any = true;
+                    if out.vents.iter().any(|o| (o.pos[0] - v.pos[0]).hypot(o.pos[1] - v.pos[1]) < 2.0 * o.radius && v.bottom < o.top && o.bottom < v.top) {
+                        continue;
+                    }
                     // Cáscara dada vuelta: resta al laminar.
                     let mut t = Vec::new();
                     frustum(&mut t, [v.pos[0], v.pos[1], v.bottom], v.radius, [v.pos[0], v.pos[1], v.top], v.radius, 16);
                     vent_tris.extend(t.into_iter().map(|t| [t[0], t[2], t[1]]));
                     out.vents.push(v);
+                    added += 1;
                 }
-                None => out.unvented.push(c),
+                if !any {
+                    out.unvented.push(c);
+                }
             }
+            if added == 0 {
+                break;
+            }
+            let mut with = part.clone();
+            with.extend_from_slice(&vent_tris);
+            layers = sliced(&with)?;
         }
         if !out.unvented.is_empty() {
             out.notes.push(format!(
@@ -109,7 +166,6 @@ pub fn prepare(
             ));
         }
     }
-    let mut part = model.clone();
     part.extend_from_slice(&vent_tris);
 
     // 2. Soportes.
@@ -122,21 +178,31 @@ pub fn prepare(
         };
         let near_vent = |p: &[f32; 3]| vent_at(p).is_some();
         // Un punto sobre un venteo se corre al borde del agujero.
-        let adjust = |p: &[f32; 3]| match vent_at(p) {
-            None => Some(*p),
-            Some(v) => {
-                let (dx, dy) = (p[0] - v.pos[0], p[1] - v.pos[1]);
-                let d = (dx * dx + dy * dy).sqrt().max(1e-3);
-                let r = v.radius + tip + 0.05;
-                let q = [v.pos[0] + dx / d * r, v.pos[1] + dy / d * r, p[2]];
-                (!near_vent(&q)).then_some(q)
+        // Drenajes a mano: ningún punto adentro ni pegado al borde (el agujero se come la punta).
+        let drain_r = prep.drain_diameter / 2.0 + tip + 0.3;
+        let drain_at = |p: &[f32; 3]| prep.drains.iter().find(|d| (0..3).map(|c| (p[c] - d[c]).powi(2)).sum::<f32>() < drain_r * drain_r);
+        let near_hole = |p: &[f32; 3]| near_vent(p) || drain_at(p).is_some();
+        // Un punto sobre un venteo o un drenaje se corre al borde del agujero.
+        let away = |p: &[f32; 3], c: [f32; 2], r: f32| {
+            let (dx, dy) = (p[0] - c[0], p[1] - c[1]);
+            let d = (dx * dx + dy * dy).sqrt().max(1e-3);
+            [c[0] + dx / d * r, c[1] + dy / d * r, p[2]]
+        };
+        let adjust = |p: &[f32; 3]| {
+            let mut q = *p;
+            if let Some(v) = vent_at(&q) {
+                q = away(&q, v.pos, v.radius + tip + 0.05);
             }
+            if let Some(d) = drain_at(&q) {
+                q = away(&q, [d[0], d[1]], drain_r + 0.05);
+            }
+            (!near_hole(&q)).then_some(q)
         };
         let pts = match points {
             // Los editados ya traen sus laterales; las zonas se aplican igual.
             Some(p) => zone_points(&model, p, s, adjust),
             None => {
-                let layers = slice(&part, printer, h)?;
+                let layers = sliced(&part)?;
                 let report = check(&layers, printer, h);
                 let mut pts = auto_points(&model, &report.islands, s, adjust);
                 if s.side_supports {
@@ -151,17 +217,38 @@ pub fn prepare(
                 pts
             }
         };
-        let sup = build(&model, &pts, s, |x, y, z| near_vent(&[x, y, z]));
+        let sup = build(&model, &pts, s, |x, y, z| near_hole(&[x, y, z]));
         out.skipped = sup.skipped;
         (out.columns, out.tilted, out.braces) = (sup.pillars, sup.tilted, sup.braces);
         out.points = pts;
         out.supports = sup.triangles;
     }
 
+    // Tapones de los drenajes, parados en la placa al lado de lo que ya hay.
+    if prep.plugs && !prep.drains.is_empty() {
+        let (mut lo, mut hi) = ([f32::MAX; 2], [f32::MIN; 2]);
+        for v in model.iter().chain(&out.supports).flatten() {
+            for c in 0..2 {
+                lo[c] = lo[c].min(v[c]);
+                hi[c] = hi[c].max(v[c]);
+            }
+        }
+        let (t, n) = plugs(prep.drains.len(), prep.drain_diameter, wall, 0.1, (lo, hi), printer);
+        out.supports.extend(t);
+        out.plugs = n;
+        if n < prep.drains.len() {
+            out.notes.push(format!("{} tapón(es) no entraron en la placa", prep.drains.len() - n));
+        }
+    }
+
     // 3. Laminado final y revisión.
     let mut all = part;
     all.extend_from_slice(&out.supports);
     out.layers = slice_with(&all, printer, settings)?;
+    if let Some(hw) = &hollow {
+        let (pw, ph) = printer.pixel_size();
+        out.hollowed_ml = hw.apply(&mut out.layers) as f32 * pw * ph * h / 1000.0;
+    }
     out.report = check(&out.layers, printer, h);
     if !out.report.islands.is_empty() {
         out.notes.push(format!("quedan {} isla(s) sin soporte", out.report.islands.len()));
@@ -170,13 +257,15 @@ pub fn prepare(
     Ok(out)
 }
 
-/// Columna de venteo desde el piso del hueco hacia abajo hasta el primer aire.
-fn vent_for(c: &Cavity, layers: &[Layer], printer: &ResinPrinter, h: f32, radius: f32) -> Option<VentHole> {
-    if c.on_plate || c.first_layer == 0 {
+/// Columna de venteo desde `floor` (el piso de un bolsillo del hueco) hacia abajo hasta el primer aire.
+fn vent_for(floor: [f32; 3], c: &Cavity, layers: &[Layer], printer: &ResinPrinter, h: f32, radius: f32) -> Option<VentHole> {
+    // La capa del piso (la del bolsillo, que puede estar más arriba que la primera del hueco).
+    let first = ((floor[2] / h).round() as usize).max(c.first_layer);
+    if c.on_plate || first == 0 {
         return None;
     }
-    let (px, py) = printer.mm_to_pixel(c.floor[0], c.floor[1])?;
-    let mut j = c.first_layer - 1;
+    let (px, py) = printer.mm_to_pixel(floor[0], floor[1])?;
+    let mut j = first - 1;
     while lit(&layers[j], px, py) {
         if j == 0 {
             return None;
@@ -185,9 +274,9 @@ fn vent_for(c: &Cavity, layers: &[Layer], printer: &ResinPrinter, h: f32, radius
     }
     // Desde arriba del medio de la capa de aire j hasta arriba del medio de la última del piso.
     Some(VentHole {
-        pos: [c.floor[0], c.floor[1]],
+        pos: [floor[0], floor[1]],
         bottom: (j as f32 + 0.75) * h,
-        top: (c.first_layer as f32 + 0.25) * h,
+        top: (first as f32 + 0.25) * h,
         radius,
     })
 }
@@ -201,6 +290,7 @@ fn lit(l: &Layer, px: u32, py: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sla_hollow::HollowSettings;
     use crate::sla_supports::{self, PointKind, SupportZone, ZoneKind};
     use crate::sla::tests::cube;
     use crate::sla::LD_002H;
@@ -293,5 +383,32 @@ mod tests {
         }
         assert!((side[1].pos[2] - side[0].pos[2] - 10.0).abs() < 0.2, "{side:?}");
         assert!(r.tilted >= 2);
+    }
+
+    #[test]
+    fn cubo_vaciado_queda_venteado_y_ahorra_resina() {
+        let c = cube([20.0, 20.0, 0.0], [20.0, 20.0, 20.0]);
+        let solid = prepare(&c, &LD_002H, &ResinSettings::default(), &PrepareSettings::default(), None).unwrap();
+        let prep = PrepareSettings { hollow: Some(HollowSettings::default()), ..Default::default() };
+        let r = prepare(&c, &LD_002H, &ResinSettings::default(), &prep, None).unwrap();
+        assert!(r.hollowed_ml > 2.5, "{}", r.hollowed_ml);
+        assert_eq!(r.vents.len(), 1, "{:?}", r.notes);
+        assert!(r.report.cavities.is_empty() && r.report.islands.is_empty(), "{:?} {:?}", r.report.cavities, r.report.islands);
+        let ml = |p: &Prepared| crate::sla::volume_ml(&p.layers, &LD_002H, 0.05);
+        assert!((ml(&solid) - ml(&r) - r.hollowed_ml).abs() < 0.3, "{} {} {}", ml(&solid), ml(&r), r.hollowed_ml);
+    }
+
+    #[test]
+    fn drenaje_a_mano_con_tapon() {
+        let c = cube([20.0, 20.0, 0.0], [20.0, 20.0, 20.0]);
+        // En la cara de abajo (z = 0 antes de elevar: la de la impresora es lift + 0).
+        let lift = SupportSettings::default().model_bottom();
+        let prep = PrepareSettings { hollow: Some(HollowSettings::default()), drains: vec![[26.0, 26.0, lift]], ..Default::default() };
+        let r = prepare(&c, &LD_002H, &ResinSettings::default(), &prep, None).unwrap();
+        // El drenaje abajo ya ventea el hueco: no hace falta otro.
+        assert!(r.vents.is_empty(), "{:?}", r.vents);
+        assert!(r.report.cavities.is_empty(), "{:?}", r.report.cavities);
+        assert_eq!(r.plugs, 1);
+        assert!(r.report.islands.is_empty(), "{:?}", r.report.islands);
     }
 }

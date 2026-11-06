@@ -20,6 +20,7 @@ import {
   type SupportDensity,
   type SupportPoint,
   type SupportSettings,
+  type HollowSettings,
   type PointEdit,
   type ResinTool,
   type SupportZone,
@@ -141,11 +142,28 @@ export const ResinSection: Component<{
     JSON.stringify({ printer: props.printerId, input: input(), plate: plate(), tilt: prepTurn(props.prep) ?? null, supports: props.prep.supports, lift: supports()?.lift, raft: supports()?.raft_thickness });
   /** Los puntos editados todavía calzan con la pieza */
   const pointsValid = () => props.prep.supports && slicedKey() !== undefined && slicedKey() === geometryKey();
-  /** Zonas pintadas: solo valen sobre la pieza tal como se laminó */
+  /** Zonas pintadas y drenajes: solo valen sobre la pieza tal como se laminó */
   const validZones = () => (pointsValid() ? resinPreview.zones() : []);
+  const validDrains = () => (pointsValid() ? resinPreview.drains() : []);
+  /** Vaciado: el de fábrica con los cambios; undefined = maciza */
+  const hollow = (): HollowSettings | undefined => {
+    const base = info()?.hollow;
+    return props.prep.hollow && base ? { ...base, ...props.prep.hollow } : undefined;
+  };
+  const setHollow = <K extends keyof HollowSettings>(key: K, v: HollowSettings[K]) => set({ hollow: { ...props.prep.hollow, [key]: v } });
+  const drainDiameter = () => props.prep.drainDiameter ?? 3;
+  createEffect(() => resinPreview.setDrainRadius(drainDiameter() / 2));
   const prepare = (): PrepareSettings => {
     const sp = supports();
-    return { supports: props.prep.supports && sp ? { ...sp, zones: validZones() } : null, vents: props.prep.vents, vent_diameter: props.prep.ventDiameter };
+    return {
+      supports: props.prep.supports && sp ? { ...sp, zones: validZones() } : null,
+      vents: props.prep.vents,
+      vent_diameter: props.prep.ventDiameter,
+      hollow: hollow() ?? null,
+      drains: validDrains(),
+      drain_diameter: drainDiameter(),
+      plugs: props.prep.plugs ?? true,
+    };
   };
 
   const [warnings] = createResource(
@@ -181,7 +199,15 @@ export const ResinSection: Component<{
     if ("paint" in e) {
       const tool = resinPreview.tool();
       const zones = resinPreview.zones();
-      if (tool === "erase") {
+      const drains = resinPreview.drains();
+      const far = (c: [number, number, number]) => Math.hypot(c[0] - e.paint[0], c[1] - e.paint[1], c[2] - e.paint[2]);
+      // Borrar: primero un drenaje tocado, si no una zona
+      const drain = drains.findIndex((d) => far(d) <= resinPreview.drainRadius() + 0.5);
+      if (tool === "drain") {
+        resinPreview.setDrains([...drains, e.paint]);
+      } else if (tool === "erase" && drain >= 0) {
+        resinPreview.setDrains(drains.filter((_, i) => i !== drain));
+      } else if (tool === "erase") {
         // La zona que contiene el punto con el centro más cerca
         const d = (z: SupportZone) => Math.hypot(z.center[0] - e.paint[0], z.center[1] - e.paint[1], z.center[2] - e.paint[2]);
         const inside = zones.filter((z) => d(z) <= z.radius).sort((a, b) => d(a) - d(b))[0];
@@ -214,9 +240,10 @@ export const ResinSection: Component<{
   // La pieza cambió de lugar: los puntos editados ya no sirven
   createEffect(
     on(geometryKey, () => {
-      if ((edited() || resinPreview.zones().length > 0) && !pointsValid()) {
+      if ((edited() || resinPreview.zones().length > 0 || resinPreview.drains().length > 0) && !pointsValid()) {
         setEdited(undefined);
         resinPreview.setZones([]);
+        resinPreview.setDrains([]);
         setEditing(false);
       }
     }, { defer: true }),
@@ -559,7 +586,43 @@ export const ResinSection: Component<{
                   hint={t("Un hueco encerrado hace ventosa contra el film al despegar y deja resina atrapada. Se le abre un agujero desde el piso hacia abajo.")}
                 />
                 <Show when={props.prep.vents}>{num("Diámetro del venteo", props.prep.ventDiameter, (v) => set({ ventDiameter: v }), 1, 6, 0.5, "mm")}</Show>
-                <p class="text-[10px] text-text-dim">{t("Para vaciar la pieza (menos resina) usa la pestaña Relleno de Fabricar.")}</p>
+                <Checkbox
+                  small
+                  label={t("Vaciar la pieza")}
+                  checked={!!props.prep.hollow}
+                  onChange={(v) => set({ hollow: v ? {} : undefined })}
+                  hint={t("Deja la pieza hueca con una pared del grosor elegido: menos resina y menos fuerza al despegar. El hueco se ventea solo por abajo; puedes agregar drenajes en Vista previa › Puntos de soporte.")}
+                />
+                <Show when={hollow()}>
+                  {(h) => (
+                    <>
+                      {num("Pared", h().wall, (v) => setHollow("wall", v), 0.8, 10, 0.1, "mm")}
+                      <Select
+                        label={t("Relleno")}
+                        options={[
+                          { value: "pillars", label: t("Columnas") },
+                          { value: "grid", label: t("Rejilla") },
+                          { value: "none", label: t("Nada") },
+                        ]}
+                        value={h().infill}
+                        onChange={(v) => setHollow("infill", v as HollowSettings["infill"])}
+                      />
+                      <p class="text-[10px] text-text-dim">
+                        {h().infill === "pillars"
+                          ? t("Columnas que sostienen el techo del hueco.")
+                          : h().infill === "grid"
+                            ? t("Paredes más firmes; en piezas curvas puede pedir más venteos.")
+                            : t("Sin relleno, el techo del hueco puede quedar sin apoyo (la revisión lo marca como isla).")}
+                      </p>
+                      <Show when={h().infill !== "none"}>
+                        {num("Distancia", h().infill_spacing, (v) => setHollow("infill_spacing", v), 2, 30, 0.5, "mm")}
+                        {num("Grosor", h().infill_width, (v) => setHollow("infill_width", v), 0.4, 5, 0.1, "mm")}
+                      </Show>
+                      {num("Diámetro del drenaje", drainDiameter(), (v) => set({ drainDiameter: v }), 1, 10, 0.5, "mm")}
+                      <Checkbox small label={t("Imprimir un tapón por drenaje")} checked={props.prep.plugs ?? true} onChange={(v) => set({ plugs: v })} />
+                    </>
+                  )}
+                </Show>
                 <div class="pt-1 space-y-1.5">
                   <p class="text-xs text-text-muted">
                     {prepTurn(props.prep) ? t("Girada {turn}", { turn: turnLabel(prepTurn(props.prep)!) }) : t("Sin girar")}
@@ -639,6 +702,15 @@ export const ResinSection: Component<{
                 </Show>
                 <Row label={t("Capas")} value={`${r().layers} · ${fmtNumber(r().height_mm, { maximumFractionDigits: 1 })} mm`} />
                 <Row label={t("Capa con más área")} value={`${fmtNumber(r().max_area_mm2, { maximumFractionDigits: 0 })} mm² (${r().max_area_layer + 1})`} />
+                <Show when={r().hollowed_ml > 0}>
+                  <Row
+                    label={t("Ahorro del vaciado")}
+                    value={
+                      t("{ml} ml menos", { ml: fmtNumber(r().hollowed_ml, { maximumFractionDigits: 1 }) }) +
+                      (r().plugs > 0 ? ` · ${t("{n} tapones", { n: r().plugs })}` : "")
+                    }
+                  />
+                </Show>
                 <Show when={r().plates > 1}>
                   <Row label={t("Placa")} value={`${r().plate + 1} / ${r().plates}`} />
                 </Show>
@@ -690,7 +762,8 @@ export const ResinSection: Component<{
                           { value: "points", label: t("Puntos") },
                           { value: "block", label: t("Pincel: sin soportes") },
                           { value: "reinforce", label: t("Pincel: más soportes") },
-                          { value: "erase", label: t("Borrar zona") },
+                          { value: "drain", label: t("Agujero de drenaje") },
+                          { value: "erase", label: t("Borrar zona o drenaje") },
                         ]}
                         value={resinPreview.tool()}
                         onChange={(v) => resinPreview.setTool(v as ResinTool)}
@@ -701,10 +774,12 @@ export const ResinSection: Component<{
                           <>
                             <p class="text-[10px] text-text-dim">
                               {resinPreview.tool() === "erase"
-                                ? t("Clic en una zona: la quita.")
-                                : t("Cada clic en la pieza pinta una esfera. Rojo = sin soportes adentro; ámbar = puntos a la mitad de distancia y también en caras más empinadas. Se aplican al rehacer los soportes.")}
+                                ? t("Clic en una zona o un drenaje: lo quita.")
+                                : resinPreview.tool() === "drain"
+                                  ? t("Clic en la pieza: un agujero hacia adentro (según la cara) para que salga la resina del vaciado. Mejor cerca de la placa. Se hace al rehacer los soportes.")
+                                  : t("Cada clic en la pieza pinta una esfera. Rojo = sin soportes adentro; ámbar = puntos a la mitad de distancia y también en caras más empinadas. Se aplican al rehacer los soportes.")}
                             </p>
-                            <Show when={resinPreview.tool() !== "erase"}>{num("Tamaño del pincel", brush(), setBrush, 0.5, 30, 0.5, "mm")}</Show>
+                            <Show when={resinPreview.tool() === "block" || resinPreview.tool() === "reinforce"}>{num("Tamaño del pincel", brush(), setBrush, 0.5, 30, 0.5, "mm")}</Show>
                           </>
                         }
                       >
@@ -729,6 +804,15 @@ export const ResinSection: Component<{
                         </button>
                       </p>
                     </Show>
+                    <Show when={resinPreview.drains().length > 0}>
+                      <p class="text-[11px] text-text-muted">
+                        {t("{n} drenajes", { n: resinPreview.drains().length })}
+                        {" · "}
+                        <button class="text-accent hover:underline" onClick={() => resinPreview.setDrains([])}>
+                          {t("Quitar")}
+                        </button>
+                      </p>
+                    </Show>
                     <p class="text-[11px] text-text-muted">
                       {t("{n} puntos ({m} a mano)", { n: resinPreview.points().length, m: resinPreview.points().filter((p) => p.kind === "manual").length })}
                     </p>
@@ -737,9 +821,9 @@ export const ResinSection: Component<{
                         {t("Un punto en cada isla")}
                       </Button>
                     </Show>
-                    <Show when={edited() || resinPreview.zones().length > 0}>
+                    <Show when={edited() || resinPreview.zones().length > 0 || resinPreview.drains().length > 0}>
                       <Button size="sm" variant="primary" fullWidth onClick={() => void slice()} disabled={busy()} icon={<Icons.ArrowsClockwise size={14} />}>
-                        {edited() ? t("Rehacer soportes con estos puntos") : t("Rehacer soportes con las zonas")}
+                        {edited() ? t("Rehacer soportes con estos puntos") : t("Rehacer con las zonas y drenajes")}
                       </Button>
                     </Show>
                     <Show when={edited()}>

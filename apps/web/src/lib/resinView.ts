@@ -16,6 +16,8 @@ const POINT_SKIPPED = new THREE.Color(0xff5a5a);
 /** Zonas: sin soportes (rojo) y más soportes (ámbar) */
 const ZONE_BLOCK = new THREE.Color(0xff4d6a);
 const ZONE_REINFORCE = new THREE.Color(0xffb02e);
+/** Drenajes a mano (cian) */
+const DRAIN = new THREE.Color(0x2fd6e0);
 
 export class ResinView {
   readonly group = new THREE.Group();
@@ -62,25 +64,29 @@ export class ResinView {
     this.group.add(mesh);
   }
 
-  /** Zonas pintadas como esferas translúcidas (solo al editar) */
-  setZones(zones: SupportZone[], visible: boolean): void {
+  /** Zonas pintadas y drenajes como esferas translúcidas (solo al editar) */
+  setZones(zones: SupportZone[], visible: boolean, drains: [number, number, number][] = [], drainRadius = 1.5): void {
     if (this.zones) {
       this.group.remove(this.zones);
       this.zones.geometry.dispose();
       (this.zones.material as THREE.Material).dispose();
       this.zones = null;
     }
-    if (!visible || zones.length === 0) return;
+    const all = [
+      ...zones.map((z) => ({ c: z.center, r: z.radius, color: z.kind === "block" ? ZONE_BLOCK : ZONE_REINFORCE })),
+      ...drains.map((c) => ({ c, r: drainRadius, color: DRAIN })),
+    ];
+    if (!visible || all.length === 0) return;
     const mesh = new THREE.InstancedMesh(
       new THREE.SphereGeometry(1, 24, 16),
       new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.28, depthWrite: false }),
-      zones.length,
+      all.length,
     );
     const m = new THREE.Matrix4();
-    zones.forEach((z, i) => {
-      m.makeScale(z.radius, z.radius, z.radius).setPosition(z.center[0], z.center[2], -z.center[1]);
+    all.forEach((z, i) => {
+      m.makeScale(z.r, z.r, z.r).setPosition(z.c[0], z.c[2], -z.c[1]);
       mesh.setMatrixAt(i, m);
-      mesh.setColorAt(i, z.kind === "block" ? ZONE_BLOCK : ZONE_REINFORCE);
+      mesh.setColorAt(i, z.color);
     });
     mesh.renderOrder = 11;
     mesh.frustumCulled = false;

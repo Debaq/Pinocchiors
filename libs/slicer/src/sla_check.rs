@@ -35,6 +35,9 @@ pub struct Cavity {
     pub last_layer: usize,
     /// Punto en el piso del hueco (la cara de arriba de la capa anterior), mm. Ahí va el venteo.
     pub floor: [f32; 3],
+    /// El piso de cada bolsillo que succionó por su cuenta antes de juntarse con el resto
+    /// (un hueco puede empezar en varias partes a la vez): uno de venteo para cada uno.
+    pub pockets: Vec<[f32; 3]>,
     pub volume_ml: f32,
     /// Capas en que hizo succión (encerrado y sin salida hacia la placa).
     pub suction_layers: u32,
@@ -211,6 +214,17 @@ pub fn check(layers: &[Layer], printer: &ResinPrinter, layer_height: f32) -> Res
             first_layer: s.first,
             last_layer: s.last,
             floor: s.floor,
+            pockets: {
+                // El piso del hueco y los bolsillos que por sí solos son un problema.
+                let min_px = (MIN_CAVITY_MM2 / px_mm2).ceil() as u64;
+                let mut p = vec![s.floor];
+                for q in s.pockets.iter().filter(|p| p.1 > 2 && p.2 >= min_px) {
+                    if !p.contains(&q.0) {
+                        p.push(q.0);
+                    }
+                }
+                p
+            },
             volume_ml: s.px as f32 * px_mm2 * layer_height / 1000.0,
             suction_layers: s.suction_layers,
             max_suction_mm2: s.max_suction as f32 * px_mm2,
@@ -499,6 +513,9 @@ struct Set {
     on_plate: bool,
     suction_layers: u32,
     max_suction: u64,
+    /// Bolsillos que succionaron por su cuenta y terminaron al juntarse con aire que no
+    /// succionaba (venteado): piso, capas y área máxima en píxeles.
+    pockets: Vec<([f32; 3], u32, u64)>,
 }
 
 #[derive(Default)]
@@ -536,7 +553,21 @@ impl Sets {
         self.parent[gone as usize] = keep;
         let g = self.sets[gone as usize].clone();
         let s = &mut self.sets[keep as usize];
-        if g.first < s.first || (g.first == s.first && g.floor_area > s.floor_area) {
+        // Lo que succionó hasta acá por separado queda como bolsillo (con un venteo en el
+        // piso de cada uno, el resto ya no succiona).
+        if s.suction_layers > 0 && (g.suction_layers > 0 || g.vented) {
+            s.pockets.push((s.floor, s.suction_layers, s.max_suction));
+        }
+        if g.suction_layers > 0 && (s.suction_layers > 0 || s.vented) {
+            s.pockets.push((g.floor, g.suction_layers, g.max_suction));
+        }
+        // El piso (donde va el venteo) es el del que succionó; si los dos, el más bajo.
+        let take = match (s.suction_layers > 0, g.suction_layers > 0) {
+            (false, true) => true,
+            (true, false) => false,
+            _ => g.first < s.first || (g.first == s.first && g.floor_area > s.floor_area),
+        };
+        if take {
             s.floor = g.floor;
             s.floor_area = g.floor_area;
         }
@@ -548,6 +579,7 @@ impl Sets {
         s.on_plate |= g.on_plate;
         s.suction_layers = s.suction_layers.max(g.suction_layers);
         s.max_suction = s.max_suction.max(g.max_suction);
+        s.pockets.extend(g.pockets.iter().copied());
     }
 }
 

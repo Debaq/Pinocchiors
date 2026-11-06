@@ -102,12 +102,27 @@ export interface SupportZone {
 }
 
 /** Qué hace un clic en la pieza al editar */
-export type ResinTool = "points" | "block" | "reinforce" | "erase";
+export type ResinTool = "points" | "block" | "reinforce" | "drain" | "erase";
 
 export interface PrepareSettings {
   supports: SupportSettings | null;
   vents: boolean;
   vent_diameter: number;
+  /** Vaciar la pieza; null = maciza */
+  hollow: HollowSettings | null;
+  /** Drenajes puestos a mano (mm de la impresora, como los puntos) */
+  drains?: [number, number, number][];
+  drain_diameter: number;
+  /** Un tapón imprimible por drenaje, en la placa */
+  plugs: boolean;
+}
+
+/** Vaciado: pared mínima y relleno (columnas o rejilla) */
+export interface HollowSettings {
+  wall: number;
+  infill: "none" | "pillars" | "grid";
+  infill_spacing: number;
+  infill_width: number;
 }
 
 export interface ResinPrinterInfo {
@@ -132,6 +147,8 @@ export interface ResinInfo {
   profiles: ResinProfile[];
   supports: [SupportDensity, SupportSettings][];
   prepare: PrepareSettings;
+  /** Vaciado de fábrica */
+  hollow: HollowSettings;
   /** Hileras de la pieza de calibración (de adelante hacia atrás), tamaños en mm */
   calibration: { name: string; sizes: number[] }[];
 }
@@ -221,6 +238,9 @@ export interface ResinResult {
   columns: number;
   tilted: number;
   braces: number;
+  /** Resina ahorrada al vaciar (ml) y tapones de drenaje en la placa */
+  hollowed_ml: number;
+  plugs: number;
   notes: string[];
   warnings: string[];
   bed: [number, number];
@@ -244,6 +264,11 @@ export interface ResinPrep {
   supportOverrides?: Partial<SupportSettings>;
   vents: boolean;
   ventDiameter: number;
+  /** Vaciar (cambios sobre el vaciado de fábrica); undefined = maciza */
+  hollow?: Partial<HollowSettings>;
+  /** Diámetro de los drenajes a mano (mm) y si se imprime su tapón */
+  drainDiameter?: number;
+  plugs?: boolean;
   /** Giro de la placa antes de preparar (ver `prepTurn`) */
   tilt?: ResinTurn;
   plate?: number;
@@ -303,6 +328,9 @@ const [points, setPoints] = createSignal<SupportPoint[]>([]);
 const [skipped, setSkipped] = createSignal<number[]>([]);
 /** Zonas pintadas y la herramienta de los clics */
 const [zones, setZones] = createSignal<SupportZone[]>([]);
+/** Drenajes puestos a mano (mm de la impresora) y su radio, para dibujarlos */
+const [drains, setDrains] = createSignal<[number, number, number][]>([]);
+const [drainRadius, setDrainRadius] = createSignal(1.5);
 const [tool, setTool] = createSignal<ResinTool>("points");
 /** Quién recibe los clics del visor al editar puntos; undefined = no se edita */
 const [editor, setEditor] = createSignal<((e: PointEdit) => void) | undefined>();
@@ -328,6 +356,10 @@ export const resinPreview = {
   setEditor,
   zones,
   setZones,
+  drains,
+  setDrains,
+  drainRadius,
+  setDrainRadius,
   tool,
   setTool,
 };
