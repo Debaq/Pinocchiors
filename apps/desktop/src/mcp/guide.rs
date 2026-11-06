@@ -139,6 +139,8 @@ Works on the active mesh model (import one, or `mesh_from_part` for a CAD part).
 5. `print_plates` {\"path\": \"/abs/plate.3mf\"} — arranges the pieces on beds and writes one file per plate (optional
    hollowing with `hollow_wall` and a drain hole).
 Or all at once: `print_prepare` (check → cut if needed → joints → hollow → plates), which reports each step.
+Texture: `print_skin` {\"pattern\": \"diamonds\", \"zone\": {\"directions\": [\"sides\"]}} embosses a printable pattern
+   (grip, leather…) on part of the model; `estimate: true` first if the model is big.
 6. Slice: `print_machines` lists the lab printers. Filament: `print_slice` {\"path\": \"/abs/part.gcode\", \"machine\":
    \"K1\", \"quality\": \"0.20mm Standard\"} (OrcaSlicer engine; `settings` changes any Orca key). Resin:
    `resin_tilts` to pick a tilt, then `resin_slice` {\"path\": \"/abs/part.ctb\", \"supports\": \"medium\"} (raft,

@@ -9,7 +9,7 @@ use super::mesh::{dims, model_line, need_model, output_path, size};
 use super::{arg_bool, arg_str, Ctx, Effect, Fail, Output, Tool};
 use crate::mcp::schema::{array, boolean, integer, number_in, object, one_of, point, Prop};
 
-pub const TOOLS: &[Tool] = &[CHECK, SCALE, ORIENT, CUT, JOINTS, PLATES, PREPARE];
+pub const TOOLS: &[Tool] = &[CHECK, SCALE, ORIENT, CUT, JOINTS, PLATES, PREPARE, SKIN];
 
 const PRINTER_HELP: &str = "Printer: a preset name (\"Creality Ender 3\", \"Creality K1\", \"Prusa MK4\", \"Prusa MINI\", \
 \"Bambu Lab X1 / P1\", \"Voron 2.4 (350)\"; default Ender 3) or {\"build_volume\": [x, y, z], \"nozzle\": 0.4, \"layer_height\": 0.2}";
@@ -518,4 +518,106 @@ fn prepare(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
         return Err(Fail::new(lines.join("\n")).hint("fix what the failed step says (often `mesh_repair`) and call it again"));
     }
     Ok(Output::new(lines.join("\n"), r))
+}
+
+// ─── Pieles ─────────────────────────────────────────────────────────────────
+
+const SKIN: Tool = Tool {
+    name: "print_skin",
+    title: "Printable skin texture",
+    description: "Embosses a height-map pattern into part of the active mesh model so it comes out printed (grip, \
+leather, lines…): white is raised, black is low, and the mesh is really displaced. Choose the faces with `zone`: \
+`all`, or `directions` (\"sides\", \"top\", \"bottom\", \"+x\"…\"-z\", within `angle`°), optionally limited to a \
+height band `z_min`–`z_max` (mm from the bottom of the model; whole faces are taken, so on a coarse mesh with long \
+faces `mesh_remesh` it first). `pattern` is a built-in one (leather, lines, grid, \
+dots, diamonds, hex) or the absolute path of a grey image. Cylindrical holes are protected (no texture) unless \
+`protect_holes: false`. The model becomes plain geometry (no UVs or rig); `undo` brings it back. With `estimate: \
+true` it only says how heavy it would be. Example: {\"pattern\": \"diamonds\", \"zone\": {\"directions\": \
+[\"sides\"], \"z_min\": 5, \"z_max\": 40}, \"tile_mm\": 4, \"depth_mm\": 0.6}.",
+    input: || {
+        object(&[
+            ("pattern", crate::mcp::schema::string("Built-in pattern (leather, lines, grid, dots, diamonds, hex) or the absolute path of an image"), true),
+            (
+                "zone",
+                object(&[
+                    ("all", boolean("Every face"), false),
+                    ("directions", array("Faces facing these ways", one_of("Direction", &["sides", "top", "bottom", "+x", "-x", "+y", "-y", "+z", "-z"])), false),
+                    ("angle", number_in("Tolerance for the directions in degrees (default 30)", 0.0, 90.0), false),
+                    ("z_min", crate::mcp::schema::number("Only faces at least this high (mm from the bottom)"), false),
+                    ("z_max", crate::mcp::schema::number("Only faces at most this high (mm from the bottom)"), false),
+                ]),
+                true,
+            ),
+            ("tile_mm", number_in("Size of one pattern tile on the surface in mm (default 5)", 0.5, 200.0), false),
+            ("depth_mm", number_in("Relief height between black and white in mm (default 0.6)", 0.05, 5.0), false),
+            ("offset", one_of("Where the original surface ends up (default outward: the relief sticks out)", &["outward", "centered", "inward"]), false),
+            ("rotation_deg", number_in("Turn the pattern (degrees)", -360.0, 360.0), false),
+            ("invert", boolean("Swap high and low"), false),
+            ("mapping", one_of("box (default: no UVs needed) or uv (the model's own UVs)", &["box", "uv"]), false),
+            ("protect_holes", boolean("Leave cylindrical holes 1–30 mm untextured (default true)"), false),
+            ("simplify_mm", number_in("Simplify the result keeping it within this many mm (lighter mesh)", 0.005, 1.0), false),
+            ("estimate", boolean("Only estimate (triangles, warnings); do not change the model"), false),
+        ])
+    },
+    effect: Effect::Model,
+    run: skin,
+};
+
+fn skin(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
+    need_model(ctx)?;
+    let want = arg_str(args, "pattern").unwrap_or("");
+    let library = ctx.call("skin_library", json!({}))?;
+    let builtins: Vec<&str> = library.as_array().into_iter().flatten().filter(|p| p["builtin"] == true).filter_map(|p| p["id"].as_str()).collect();
+    let image = if builtins.contains(&want) {
+        want.to_string()
+    } else if std::path::Path::new(want).is_absolute() {
+        let info = ctx.call("skin_import_image", json!({ "path": want }))?;
+        info["id"].as_str().unwrap_or("").to_string()
+    } else {
+        return Err(Fail::new(format!("no pattern \"{want}\"")).hint(format!("use one of {} or the absolute path of an image", builtins.join(", "))));
+    };
+    let zone = ctx.call("skin_zone_select", json!({ "criteria": args["zone"] }))?;
+    let mut protected = 0;
+    if arg_bool(args, "protect_holes").unwrap_or(true) {
+        let r = ctx.call("skin_protect_holes", json!({ "minMm": 1.0, "maxMm": 30.0 }))?;
+        protected = r["found"].as_u64().unwrap_or(0);
+    }
+    let params = json!({
+        "image": image,
+        "ops": { "invert": arg_bool(args, "invert").unwrap_or(false) },
+        "tile_mm": args["tile_mm"].as_f64().unwrap_or(5.0),
+        "amplitude": args["depth_mm"].as_f64().unwrap_or(0.6),
+        "offset": arg_str(args, "offset").unwrap_or("outward"),
+        "rotation_deg": args["rotation_deg"].as_f64().unwrap_or(0.0),
+        "mapping": arg_str(args, "mapping").unwrap_or("box"),
+        "margin_mm": 0.5,
+        "decimate_mm": args["simplify_mm"].as_f64(),
+    });
+    let zone_line = format!(
+        "Zone: {} faces, {} mm² ({}% of the surface){}.",
+        zone["faces"].as_array().map_or(0, Vec::len),
+        num(zone["area_mm2"].as_f64().unwrap_or(0.0)),
+        num(zone["fraction"].as_f64().unwrap_or(0.0) * 100.0),
+        if protected > 0 { format!(", {protected} hole(s) protected") } else { String::new() }
+    );
+    if arg_bool(args, "estimate") == Some(true) {
+        let e = ctx.call("skin_estimate", json!({ "params": params }))?;
+        let mut lines = vec![zone_line, format!("Would give about {} triangles (edges of {} mm).", e["triangles"], num(e["edge_mm"].as_f64().unwrap_or(0.0)))];
+        lines.extend(e["warnings"].as_array().into_iter().flatten().filter_map(Value::as_str).map(|w| format!("Note: {w}")));
+        return Ok(Output::new(lines.join("\n"), json!({ "zone": zone, "estimate": e })));
+    }
+    let r = ctx.call("apply_print_skin", json!({ "params": params }))?;
+    let mut lines = vec![
+        zone_line,
+        format!(
+            "Skin applied: {} → {} triangles, relief up to {} mm, edges of {} mm.",
+            r["triangles_before"],
+            r["triangles_after"],
+            num(r["max_displacement_mm"].as_f64().unwrap_or(0.0)),
+            num(r["edge_mm"].as_f64().unwrap_or(0.0))
+        ),
+    ];
+    lines.extend(r["warnings"].as_array().into_iter().flatten().filter_map(Value::as_str).map(|w| format!("Note: {w}")));
+    lines.push("Look at it with `view`; `undo` takes it back.".into());
+    Ok(Output::new(lines.join("\n"), json!({ "zone": zone, "result": r })))
 }

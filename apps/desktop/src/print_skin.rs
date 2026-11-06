@@ -299,6 +299,77 @@ pub(crate) fn edit_protected(state: &AppState, faces: &[u32], mode: ZoneMode) ->
     zone_info(state)
 }
 
+/// Zona elegida por criterio en vez de cara por cara (la usa el conector MCP). Direcciones y alturas como
+/// se muestran: Z arriba, alturas en mm desde la base del modelo
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ZoneCriteria {
+    /// Todas las caras (después se recortan por altura)
+    pub all: bool,
+    /// «sides», «top», «bottom», «+x», «-x», «+y», «-y», «+z», «-z»
+    pub directions: Vec<String>,
+    /// Tolerancia de las direcciones (grados; por defecto 30)
+    pub angle: Option<f64>,
+    pub z_min: Option<f64>,
+    pub z_max: Option<f64>,
+}
+
+/// Elige la zona por criterio (reemplaza la que había) y devuelve cómo quedó
+pub(crate) fn select_zone(state: &AppState, c: &ZoneCriteria) -> Result<ZoneInfo, String> {
+    let k = mm_per_unit(state);
+    let faces: Vec<u32> = {
+        let mesh = state.mesh.lock().unwrap();
+        let mesh = mesh.as_ref().ok_or("No hay malla cargada")?;
+        let cos = c.angle.unwrap_or(30.0).clamp(0.0, 90.0).to_radians().cos();
+        let sin = c.angle.unwrap_or(30.0).clamp(0.0, 90.0).to_radians().sin();
+        // Mostrado (Z arriba) → escena (Y arriba): (x, y, z) → (x, z, −y)
+        let dirs: Vec<Option<[f64; 3]>> = c
+            .directions
+            .iter()
+            .map(|d| match d.to_lowercase().as_str() {
+                "+x" => Ok(Some([1.0, 0.0, 0.0])),
+                "-x" => Ok(Some([-1.0, 0.0, 0.0])),
+                "+y" => Ok(Some([0.0, 0.0, -1.0])),
+                "-y" => Ok(Some([0.0, 0.0, 1.0])),
+                "+z" | "top" => Ok(Some([0.0, 1.0, 0.0])),
+                "-z" | "bottom" => Ok(Some([0.0, -1.0, 0.0])),
+                "sides" => Ok(None),
+                other => Err(format!("Dirección desconocida «{other}»")),
+            })
+            .collect::<Result<_, _>>()?;
+        if !c.all && dirs.is_empty() {
+            return Err("Di qué caras: todas o alguna dirección".into());
+        }
+        let bottom = mesh.vertices.iter().map(|v| v.position.y()).fold(f64::INFINITY, f64::min);
+        (0..mesh.num_faces())
+            .filter(|&f| {
+                let p = mesh.get_face_positions(f);
+                let (a, b, c3) = (p[0].0, p[1].0, p[2].0);
+                let n = (b - a).cross(&(c3 - a));
+                let len = n.norm();
+                if len <= 0.0 {
+                    return false;
+                }
+                let n = [n[0] / len, n[1] / len, n[2] / len];
+                let height = ((a[1] + b[1] + c3[1]) / 3.0 - bottom) * k;
+                if c.z_min.is_some_and(|z| height < z) || c.z_max.is_some_and(|z| height > z) {
+                    return false;
+                }
+                c.all
+                    || dirs.iter().any(|d| match d {
+                        Some(d) => n[0] * d[0] + n[1] * d[1] + n[2] * d[2] >= cos,
+                        None => n[1].abs() <= sin,
+                    })
+            })
+            .map(|f| f as u32)
+            .collect()
+    };
+    if faces.is_empty() {
+        return Err("Ninguna cara cumple con eso".into());
+    }
+    edit_zone(state, &faces, ZoneMode::Set)
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ProtectedHoles {
     pub zone: ZoneInfo,

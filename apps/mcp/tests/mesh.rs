@@ -307,3 +307,87 @@ fn slice_for_filament() {
     let (text, _, err) = call(&s, "print_slice", json!({ "path": dir.path().join("x.gcode"), "machine": "Prusa XL" }));
     assert!(err && text.contains("K1"), "máquina desconocida dice cuáles hay: {text}");
 }
+
+/// Cilindro cerrado (radio, alto, lados) en STL ASCII
+fn cylinder_stl(dir: &Path, r: f64, h: f64, n: usize) -> String {
+    let mut out = String::from("solid c\n");
+    let mut tri = |a: [f64; 3], b: [f64; 3], c: [f64; 3]| {
+        out += &format!("facet normal 0 0 0\nouter loop\nvertex {} {} {}\nvertex {} {} {}\nvertex {} {} {}\nendloop\nendfacet\n", a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]);
+    };
+    let p = |i: usize, z: f64| {
+        let a = i as f64 / n as f64 * std::f64::consts::TAU;
+        [r * a.cos(), r * a.sin(), z]
+    };
+    let rings = 20;
+    for i in 0..n {
+        let j = (i + 1) % n;
+        for k in 0..rings {
+            let (z0, z1) = (h * k as f64 / rings as f64, h * (k + 1) as f64 / rings as f64);
+            tri(p(i, z0), p(j, z0), p(j, z1));
+            tri(p(i, z0), p(j, z1), p(i, z1));
+        }
+        tri([0.0, 0.0, 0.0], p(j, 0.0), p(i, 0.0));
+        tri([0.0, 0.0, h], p(i, h), p(j, h));
+    }
+    out += "endsolid c\n";
+    let path = dir.join("cylinder.stl");
+    std::fs::write(&path, out).unwrap();
+    path.display().to_string()
+}
+
+#[test]
+fn skin_a_cylinder_band() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = server();
+    ok(&s, "mesh_import", json!({ "path": cylinder_stl(dir.path(), 15.0, 40.0, 64) }));
+    let (text, _, err) = call(&s, "print_skin", json!({ "pattern": "plaid", "zone": { "all": true } }));
+    assert!(err && text.contains("diamonds"), "patrón desconocido dice cuáles hay: {text}");
+    let (text, _, err) = call(&s, "print_skin", json!({ "pattern": "dots", "zone": {} }));
+    assert!(err, "sin zona no hace nada: {text}");
+
+    let args = json!({ "pattern": "diamonds", "zone": { "directions": ["sides"], "z_min": 8, "z_max": 32 }, "tile_mm": 5, "depth_mm": 0.8 });
+    let (text, data) = ok(&s, "print_skin", json!({ "estimate": true, "pattern": "diamonds", "zone": args["zone"], "tile_mm": 5, "depth_mm": 0.8 }));
+    assert!(data["estimate"]["triangles"].as_u64().unwrap() > 1000, "{text}");
+    let fraction = data["zone"]["fraction"].as_f64().unwrap();
+    assert!((0.3..0.6).contains(&fraction), "franja de 24 de 40 mm de los lados: {text}");
+
+    let (text, data) = ok(&s, "print_skin", args);
+    let r = &data["result"];
+    assert!(r["triangles_after"].as_u64().unwrap() > 10 * r["triangles_before"].as_u64().unwrap(), "{text}");
+    assert!((r["max_displacement_mm"].as_f64().unwrap() - 0.8).abs() < 0.1, "{text}");
+    // Sigue cerrada e imprimible, y crece solo lo del relieve
+    let (text, data) = ok(&s, "print_check", json!({}));
+    assert!(text.contains("printable") && data["is_watertight"] != false, "{text}");
+    let (_, info) = ok(&s, "mesh_info", json!({}));
+    let d = dims(&info);
+    assert!(d[0] > 30.5 && d[0] < 32.0 && (d[2] - 40.0).abs() < 0.01, "{d:?}");
+    // Para mirarla: PINOCCHIO_SKIN_PNG=archivo.png
+    if let Ok(png) = std::env::var("PINOCCHIO_SKIN_PNG") {
+        let out = Mutex::new(Vec::new());
+        let line = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": "view", "arguments": { "show": "model", "width": 700, "height": 700 } } }).to_string();
+        s.handle(protocol::parse(&line).unwrap().unwrap(), &|m| out.lock().unwrap().push(m));
+        let r = out.into_inner().unwrap().pop().unwrap();
+        let img = r["result"]["content"].as_array().unwrap().iter().find(|c| c["type"] == "image").unwrap()["data"].as_str().unwrap().to_string();
+        std::fs::write(png, base64_decode(&img)).unwrap();
+    }
+    ok(&s, "undo", json!({}));
+    let (_, info) = ok(&s, "mesh_info", json!({}));
+    assert!((dims(&info)[0] - 30.0).abs() < 0.01, "deshacer vuelve al cilindro liso");
+}
+
+fn base64_decode(s: &str) -> Vec<u8> {
+    let val = |c: u8| match c {
+        b'A'..=b'Z' => c - b'A',
+        b'a'..=b'z' => c - b'a' + 26,
+        b'0'..=b'9' => c - b'0' + 52,
+        b'+' => 62,
+        _ => 63,
+    } as u32;
+    let bytes: Vec<u8> = s.bytes().filter(|&c| c != b'=' && !c.is_ascii_whitespace()).collect();
+    let mut out = Vec::new();
+    for chunk in bytes.chunks(4) {
+        let n = chunk.iter().enumerate().fold(0u32, |acc, (i, &c)| acc | val(c) << (18 - 6 * i));
+        out.extend_from_slice(&n.to_be_bytes()[1..chunk.len()]);
+    }
+    out
+}
