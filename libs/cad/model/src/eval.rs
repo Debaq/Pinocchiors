@@ -564,7 +564,7 @@ type ShapeFn = Box<dyn Fn(&Shape) -> R<Shape>>;
 
 /// Delgada: el anillo entre el contorno desplazado hacia afuera y hacia adentro
 /// (extrusión y revolución delgadas); sin espesor, las caras como están.
-fn thin_faces(faces: Vec<Shape>, thin: Option<f64>) -> R<Vec<Shape>> {
+fn thin_faces(faces: Vec<Shape>, thin: Option<f64>, warn: impl Fn(String)) -> R<Vec<Shape>> {
     match thin {
         Some(t) if t > 0.0 => faces
             .iter()
@@ -573,7 +573,10 @@ fn thin_faces(faces: Vec<Shape>, thin: Option<f64>) -> R<Vec<Shape>> {
                 match f.offset_face(-t / 2.0) {
                     Ok(inner) => outer.cut(&inner).map_err(err),
                     // Más angosto que la pared: queda lleno
-                    Err(_) => Ok(outer),
+                    Err(_) => {
+                        warn(format!("una región es más angosta que la pared de {t} mm: quedó llena"));
+                        Ok(outer)
+                    }
                 }
             })
             .collect(),
@@ -651,7 +654,8 @@ fn until_sheet(prism: &Shape, sheet: &Shape, start: P3, cap: P3) -> R<Shape> {
     }
 }
 
-fn until_scan(prism: &Shape, scan: &Shape, origin: P3, n: P3) -> R<Shape> {
+/// `cap`: la normal de la tapa donde arranca (la de `n` salvo con dirección propia).
+fn until_scan(prism: &Shape, scan: &Shape, origin: P3, n: P3, cap: P3) -> R<Shape> {
     let reach = prism.mass().map_err(err)?;
     let far = (0..8)
         .map(|k| [0, 1, 2].map(|a| if k >> a & 1 == 0 { reach.bbox_min[a] } else { reach.bbox_max[a] }))
@@ -662,7 +666,7 @@ fn until_scan(prism: &Shape, scan: &Shape, origin: P3, n: P3) -> R<Shape> {
     let starts = |s: &Shape| {
         (0..s.face_count()).any(|i| {
             s.face_info(i).is_ok_and(|f| {
-                f.surface == SurfaceKind::Plane && dot(f.normal, n).abs() > 0.999 && dot(sub(f.point, origin), n).abs() < size * 1e-6
+                f.surface == SurfaceKind::Plane && dot(f.normal, cap).abs() > 0.999 && dot(sub(f.point, origin), cap).abs() < size * 1e-6
             })
         })
     };
@@ -1659,25 +1663,32 @@ impl Ctx<'_> {
         }
         if !self.ev.parts.is_empty() {
             // Pieza por pieza: con varias, el cuerpo es un compuesto y la intersección falla
-            let cuts = |dir: P3| {
-                centers.iter().any(|&c| {
-                    let Ok(cyl) = Shape::cylinder(Frame { origin: sub(c, scale(dir, lift)), z: dir, x }, r, depth + lift) else {
-                        return false;
-                    };
-                    self.ev.parts.iter().any(|p| {
-                        cyl.intersect(&p.shape)
-                            .and_then(|i| i.mass())
-                            // Más que lo que sobresale del plano (`lift`)
-                            .is_ok_and(|m| m.volume > 3.0 * std::f64::consts::PI * r * r * lift)
-                    })
+            let cuts_at = |c: P3, dir: P3| {
+                let Ok(cyl) = Shape::cylinder(Frame { origin: sub(c, scale(dir, lift)), z: dir, x }, r, depth + lift) else {
+                    return false;
+                };
+                self.ev.parts.iter().any(|p| {
+                    cyl.intersect(&p.shape)
+                        .and_then(|i| i.mass())
+                        // Más que lo que sobresale del plano (`lift`)
+                        .is_ok_and(|m| m.volume > 3.0 * std::f64::consts::PI * r * r * lift)
                 })
             };
-            if !cuts(down) {
-                if h.reverse.is_none() && cuts(scale(down, -1.0)) {
-                    down = scale(down, -1.0);
-                } else {
-                    self.warn(NOTHING_CUT.into());
+            let hits = |dir: P3| centers.iter().filter(|&&c| cuts_at(c, dir)).count();
+            let mut n = hits(down);
+            if n == 0 && h.reverse.is_none() {
+                let up = scale(down, -1.0);
+                let m = hits(up);
+                if m > 0 {
+                    down = up;
+                    n = m;
                 }
+            }
+            if n == 0 {
+                self.warn(NOTHING_CUT.into());
+            } else if n < centers.len() {
+                // Algunos centros caen fuera del material
+                self.warn(format!("{} de {} agujeros no cortan nada", centers.len() - n, centers.len()));
             }
         }
         let bbox = self.body().ok().and_then(|b| b.mass().ok()).map(|m| (m.bbox_min, m.bbox_max));
@@ -1775,28 +1786,43 @@ impl Ctx<'_> {
             let len = if taper.is_some() { through_len(0.0) } else { depth };
             let r_at = |d: f64| r - d * taper.unwrap_or(0.0);
             probes.push((add(add(c, scale(down, len / 2.0)), scale(x, r_at(len / 2.0))), format!("agujero:{k}:pared")));
-            // Punta de broca en los ciegos
-            if matches!(h.depth, HoleDepth::Blind { .. }) && h.tip_angle > 0.0 && h.tip_angle < 180.0 {
+            // Punta de broca en los ciegos (si no, fondo plano)
+            let blind = matches!(h.depth, HoleDepth::Blind { .. });
+            if blind && h.tip_angle > 0.0 && h.tip_angle < 180.0 {
                 let tip = r_at(depth) / (h.tip_angle.to_radians() / 2.0).tan();
                 parts.push(Shape::cone(frame(add(c, scale(down, depth))), r_at(depth), 0.0, tip).map_err(err)?);
+                probes.push((add(add(c, scale(down, depth + tip / 2.0)), scale(x, r_at(depth) / 2.0)), format!("agujero:{k}:punta")));
+            } else if blind {
+                probes.push((add(add(c, scale(down, depth)), scale(x, r_at(depth) / 2.0)), format!("agujero:{k}:fondo")));
             }
+            // Lo más ancho del agujero: con rosca modelada, el diámetro mayor del filete
+            let widest = h.modeled.map_or(h.diameter, |t| (t.nominal + t.clearance).max(h.diameter));
             match h.style {
                 HoleStyle::Simple | HoleStyle::Tapered { .. } => {}
                 HoleStyle::Counterbore { diameter, depth: d } => {
-                    if diameter <= h.diameter || d <= 0.0 {
+                    if diameter <= widest || d <= 0.0 {
                         return Err("la caja tiene que ser más ancha que el agujero y tener profundidad".into());
+                    }
+                    if blind && d >= depth {
+                        return Err("la caja es más honda que el agujero: más profundidad o menos caja".into());
                     }
                     parts.push(Shape::cylinder(frame(top), diameter / 2.0, d + lift).map_err(err)?);
                     probes.push((add(add(c, scale(down, d / 2.0)), scale(x, diameter / 2.0)), format!("agujero:{k}:caja")));
+                    probes.push((add(add(c, scale(down, d)), scale(x, (widest / 2.0 + diameter / 2.0) / 2.0)), format!("agujero:{k}:fondo_caja")));
                 }
                 HoleStyle::Countersink { diameter, angle } => {
-                    if diameter <= h.diameter || angle <= 0.0 || angle >= 180.0 {
+                    if diameter <= widest || angle <= 0.0 || angle >= 180.0 {
                         return Err("el avellanado tiene que ser más ancho que el agujero, con ángulo entre 0 y 180°".into());
                     }
-                    let height = (diameter - h.diameter) / 2.0 / (angle.to_radians() / 2.0).tan();
+                    // Del borde hasta el taladro (con rosca modelada, el diámetro menor)
+                    let height = (diameter / 2.0 - r) / (angle.to_radians() / 2.0).tan();
+                    if blind && height >= depth {
+                        return Err("el avellanado es más hondo que el agujero: más profundidad o menos avellanado".into());
+                    }
                     // Desde un poco más arriba, para que el borde quede justo en la superficie
                     let extra = lift * (angle.to_radians() / 2.0).tan();
                     parts.push(Shape::cone(frame(top), diameter / 2.0 + extra, r, height + lift).map_err(err)?);
+                    probes.push((add(add(c, scale(down, height / 2.0)), scale(x, (diameter / 2.0 + r) / 2.0)), format!("agujero:{k}:avellanado")));
                 }
             }
         }
@@ -2132,6 +2158,16 @@ impl Ctx<'_> {
         // tocando; en el escaneo, justo hasta la piel (ya corrida la separación)
         let overlap = if scan.is_some() { 0.0 } else { (self.diag() * 1e-4).max(1e-3) };
         let mut walls = Vec::new();
+        // El nervio sigue solo líneas rectas: avisa de las curvas que quedan afuera
+        let curves = s
+            .sketch
+            .entities
+            .iter()
+            .filter(|e| !e.construction && !matches!(e.geometry, Geometry::Line { .. } | Geometry::Point { .. } | Geometry::Unknown))
+            .count();
+        if curves > 0 {
+            self.warn(format!("el nervio usa solo líneas rectas: {curves} curva(s) del sketch no cuentan"));
+        }
         for e in &s.sketch.entities {
             let Geometry::Line { start, end } = e.geometry else { continue };
             if e.construction {
@@ -2202,6 +2238,11 @@ impl Ctx<'_> {
         };
         if ids.is_empty() {
             return Err("el camino no tiene líneas, arcos ni splines".into());
+        }
+        // Una entidad borrada del sketch: referencia perdida (para repararla)
+        if let Some(k) = ids.iter().position(|&i| s.sketch.entity(i).is_err()) {
+            self.miss("path", k);
+            return Err("una entidad del camino ya no existe en el sketch".into());
         }
         let mut left: Vec<(u32, (u32, u32))> = ids.iter().map(|&i| ends(i).map(|e| (i, e)).ok_or_else(|| "el camino tiene que ser de líneas, arcos o splines abiertas".to_string())).collect::<R<_>>()?;
         // Arranque: una entidad con un extremo que no comparte con nadie
@@ -2404,16 +2445,20 @@ impl Ctx<'_> {
             }
             FeatureKind::Revolve(r) => {
                 let axis = self.axis("axis", &r.axis)?;
-                self.check_revolve_profile(r.sketch, &r.regions, axis)?;
+                self.check_revolve_profile(r.sketch, &r.regions, axis, r.thin)?;
                 let (faces, entities, samples) = self.profile(r.sketch, &r.regions)?;
-                let faces = thin_faces(faces, r.thin)?;
+                let faces = thin_faces(faces, r.thin, |m| self.warn(m))?;
                 // Desde dónde (`start`, girando el perfil antes) y cuánto en total
                 let angle = r.angle.to_radians();
                 let mut sheet = None;
                 let (start, angle) = match &r.extent {
                     RevolveExtent::One => (0.0, angle),
                     RevolveExtent::Symmetric => (-angle / 2.0, angle),
-                    RevolveExtent::TwoAngles { second } => (-second.to_radians(), angle + second.to_radians()),
+                    // `second` va hacia el lado contrario al de `angle`
+                    RevolveExtent::TwoAngles { second } => {
+                        let s = second.to_radians() * if angle < 0.0 { -1.0 } else { 1.0 };
+                        (-s, angle + s)
+                    }
                     RevolveExtent::UpToFace { face } => {
                         // Casi una vuelta (que quede tapa al final), partida por la cara extendida
                         let i = self.face("extent", face)?;
@@ -2426,7 +2471,11 @@ impl Ctx<'_> {
                     return Err("ángulo cero".into());
                 }
                 if angle.abs() > 2.0 * std::f64::consts::PI + 1e-9 {
-                    return Err("entre los dos ángulos pasan de 360°".into());
+                    return Err(match r.extent {
+                        RevolveExtent::TwoAngles { .. } => "entre los dos ángulos pasan de 360°",
+                        _ => "el ángulo pasa de 360°",
+                    }
+                    .into());
                 }
                 let solids = faces
                     .iter()
@@ -2446,14 +2495,33 @@ impl Ctx<'_> {
                     let m = cad_occt::rotation_matrix(axis, a);
                     [0, 1, 2].map(|i| m[i][0] * p[0] + m[i][1] * p[1] + m[i][2] * p[2] + m[i][3])
                 };
-                // Lateral de cada entidad: su punto medio girado a la mitad del ángulo
-                for (id, p) in &entities {
-                    mark(&shape, &mut tags, rot(*p, start + angle / 2.0), tag(f.id, format!("lado:{id}")));
+                // Lateral de cada entidad: su punto medio girado a la mitad del
+                // ángulo (delgada: a cada lado del contorno)
+                let half = r.thin.map_or(0.0, |t| t / 2.0);
+                let sides: &[f64] = if half > 0.0 { &[half, -half] } else { &[0.0] };
+                for (id, p, nrm) in &entities {
+                    for &o in sides {
+                        mark(&shape, &mut tags, rot(add(*p, scale(*nrm, o)), start + angle / 2.0), tag(f.id, format!("lado:{id}")));
+                    }
                 }
                 if angle.abs() < 2.0 * std::f64::consts::PI - 1e-9 {
                     for p in &samples {
                         mark(&shape, &mut tags, rot(*p, start), tag(f.id, "inicio"));
-                        mark(&shape, &mut tags, rot(*p, start + angle), tag(f.id, "fin"));
+                        if sheet.is_none() {
+                            mark(&shape, &mut tags, rot(*p, start + angle), tag(f.id, "fin"));
+                        }
+                    }
+                }
+                // Hasta una cara: la tapa del final es lo que quedó sobre ella
+                if let Some(sh) = &sheet {
+                    let tol = self.diag() * 1e-6;
+                    for (i, slot) in tags.iter_mut().enumerate() {
+                        if let Ok(info) = shape.face_info(i)
+                            && sh.closest_face(info.point, None, 0.0).is_some_and(|(_, d)| d <= tol)
+                            && !slot.iter().any(|t| t.name == "inicio")
+                        {
+                            slot.push(tag(f.id, "fin"));
+                        }
                     }
                 }
                 // Delgada: las paredes corridas no siempre caen en los puntos de arriba
@@ -2465,7 +2533,7 @@ impl Ctx<'_> {
                 // Arco del ángulo, a la altura del perfil
                 if !entities.is_empty() {
                     let n = entities.len() as f64;
-                    let near = entities.iter().fold([0.0; 3], |a, (_, p)| add(a, scale(*p, 1.0 / n)));
+                    let near = entities.iter().fold([0.0; 3], |a, (_, p, _)| add(a, scale(*p, 1.0 / n)));
                     let (tip, kind) = match &r.extent {
                         RevolveExtent::One => (r.angle, HandleKind::Blind),
                         RevolveExtent::Symmetric => (r.angle / 2.0, HandleKind::Symmetric),
@@ -2853,7 +2921,7 @@ impl Ctx<'_> {
                         (faces, samples, spine)
                     }
                 };
-                let faces = thin_faces(faces, sw.thin)?;
+                let faces = thin_faces(faces, sw.thin, |m| self.warn(m))?;
                 let mode = sw.orient.code();
                 let guide = sw.guide.as_ref().map(|g| self.path_wire(g, None)).transpose()?;
                 if guide.is_some() && sw.thin.is_some() {
@@ -2863,11 +2931,26 @@ impl Ctx<'_> {
                 if twist.is_some() && guide.is_some() {
                     return Err("con curva guía el giro lo da la guía: sacar la torsión".into());
                 }
+                if twist.is_some() && mode != 0 {
+                    self.warn("con torsión el perfil sigue el camino sin retorcerse: la orientación elegida no cuenta".into());
+                }
+                // Con guía se siguen contornos sueltos: los huecos se restan aparte
+                let holes: Vec<Vec<Shape>> = match (&guide, sw.circle) {
+                    (Some(_), None) => self.profile_loops(sw.sketch, &sw.regions)?.into_iter().map(|(_, h)| h).collect(),
+                    _ => Vec::new(),
+                };
                 let solids = faces
                     .iter()
-                    .map(|fc| match &guide {
+                    .enumerate()
+                    .map(|(k, fc)| match &guide {
                         // Con guía: el perfil gira y se escala para seguirla
-                        Some(g) => Shape::loft_along(std::slice::from_ref(fc), &spine, Some(g), true),
+                        Some(g) => {
+                            let mut s = Shape::loft_along(std::slice::from_ref(fc), &spine, Some(g), true)?;
+                            for h in holes.get(k).into_iter().flatten() {
+                                s = s.cut(&Shape::loft_along(std::slice::from_ref(h), &spine, Some(g), true)?)?;
+                            }
+                            Ok(s)
+                        }
                         // Con torsión: gira parejo alrededor del camino
                         None if twist.is_some() => fc.sweep_twisted(&spine, twist.unwrap_or(0.0).to_radians(), true),
                         None if mode == 0 => fc.sweep(&spine),
@@ -2880,6 +2963,14 @@ impl Ctx<'_> {
                 let mut tags = vec![Vec::new(); shape.face_count()];
                 for p in &samples {
                     mark(&shape, &mut tags, *p, tag(f.id, "inicio"));
+                }
+                // La tapa del final: donde termina el camino (si pasa por el perfil);
+                // con el camino cerrado no hay tapas
+                if let Ok(ends) = spine.sample_curve(2)
+                    && let [(a, _), (b, _)] = ends[..]
+                    && norm(sub(a, b)) > self.diag() * 1e-6
+                {
+                    mark(&shape, &mut tags, b, tag(f.id, "fin"));
                 }
                 for (i, slot) in tags.iter_mut().enumerate() {
                     if slot.is_empty() {
@@ -3361,7 +3452,7 @@ impl Ctx<'_> {
                     };
                     let dir = if out { n } else { scale(n, -1.0) };
                     let prism = body.face_shape(i).and_then(|fc| fc.prism(scale(dir, far))).map_err(err)?;
-                    let piece = until_scan(&prism, &scan, info.point, dir)?;
+                    let piece = until_scan(&prism, &scan, info.point, dir, dir)?;
                     let part = self.ev.part_of_face(i).ok_or("la cara no es de ninguna pieza")?;
                     jobs.push((part, piece, out));
                 }
@@ -3969,7 +4060,52 @@ impl Ctx<'_> {
                         None => Shape::loft_ex(faces, true, l.ruled, start, end, l.closed).map_err(err),
                     }
                 };
+                // Secciones con huecos: la transición de los contornos menos la
+                // de cada hueco (cada uno con el de las otras secciones que le
+                // corresponde: el de posición más parecida respecto del contorno)
+                let loops = l.sections.iter().map(|s| self.profile_loops(s.sketch, &s.regions)).collect::<R<Vec<_>>>()?;
+                let n_holes = loops.first().and_then(|v| v.first()).map_or(0, |(_, h)| h.len());
+                let holed = loops.iter().any(|v| v.iter().any(|(_, h)| !h.is_empty()));
+                if holed {
+                    if loops.iter().any(|v| v.first().map_or(0, |(_, h)| h.len()) != n_holes) {
+                        return Err("todas las secciones tienen que tener la misma cantidad de huecos".into());
+                    }
+                    if ends > 0 {
+                        return Err("una transición con huecos no termina en un punto".into());
+                    }
+                    if l.thin.is_some() {
+                        return Err("la transición delgada todavía no va con secciones con huecos".into());
+                    }
+                }
+                let center = |f: &Shape| f.mass().map(|m| scale(add(m.bbox_min, m.bbox_max), 0.5)).map_err(err);
                 let shape = match l.thin {
+                    _ if holed => {
+                        let outers: Vec<Shape> = loops.iter().map(|v| v[0].0.clone()).collect();
+                        let mut shape = build(&outers)?;
+                        // Posición de cada hueco respecto del centro de su contorno
+                        let rel = |v: &(Shape, Vec<Shape>)| -> R<Vec<P3>> {
+                            let c = center(&v.0)?;
+                            v.1.iter().map(|h| Ok(sub(center(h)?, c))).collect()
+                        };
+                        let first = rel(&loops[0][0])?;
+                        let mut chains: Vec<Vec<Shape>> = loops[0][0].1.iter().map(|h| vec![h.clone()]).collect();
+                        for v in &loops[1..] {
+                            let here = rel(&v[0])?;
+                            let mut used = vec![false; here.len()];
+                            for (k, want) in first.iter().enumerate() {
+                                let j = (0..here.len())
+                                    .filter(|&j| !used[j])
+                                    .min_by(|&a, &b| norm(sub(here[a], *want)).total_cmp(&norm(sub(here[b], *want))))
+                                    .ok_or("los huecos de las secciones no se corresponden")?;
+                                used[j] = true;
+                                chains[k].push(v[0].1[j].clone());
+                            }
+                        }
+                        for c in &chains {
+                            shape = shape.cut(&build(c)?).map_err(err)?;
+                        }
+                        shape
+                    }
                     // Delgada: la transición del contorno corrido afuera menos la del corrido adentro
                     Some(t) if t > 0.0 => {
                         let off = |d: f64| faces.iter().map(|f| f.offset_face(d)).collect::<Result<Vec<_>, _>>().map_err(err);
@@ -4629,11 +4765,22 @@ impl Ctx<'_> {
         let tool = self.extrude_dir(id, e, e.reverse)?;
         let auto_flip = matches!(e.op, BodyOp::Cut | BodyOp::Intersect)
             && matches!(e.extent, Extent::Blind { .. } | Extent::ThroughAll);
-        if auto_flip
-            && let Some(body) = &self.ev.body
-            && body.intersect(&tool.shape).ok().and_then(|s| s.mass().ok()).is_none_or(|m| m.volume.abs() < 1e-9)
-        {
-            return self.extrude_dir(id, e, !e.reverse);
+        // Si no toca el sólido, prueba hacia el otro lado; si la prueba falla
+        // (la booleana no sale) no se sabe: queda como se pidió
+        let misses = |t: &Tagged| -> Option<bool> {
+            let body = self.ev.body.as_ref()?;
+            let m = body.intersect(&t.shape).ok()?.mass().ok()?;
+            Some(m.volume.abs() < 1e-9)
+        };
+        if auto_flip && misses(&tool) == Some(true) {
+            let handles = self.handles.borrow().clone();
+            if let Ok(other) = self.extrude_dir(id, e, !e.reverse)
+                && misses(&other) == Some(false)
+            {
+                return Ok(other);
+            }
+            // Tampoco toca hacia el otro lado: queda el sentido pedido (y su flecha)
+            *self.handles.borrow_mut() = handles;
         }
         Ok(tool)
     }
@@ -4641,7 +4788,7 @@ impl Ctx<'_> {
     fn extrude_dir(&self, id: FeatureId, e: &Extrude, reverse: bool) -> R<Tagged> {
         let plane = self.ev.sketches.get(&e.sketch).ok_or("el sketch no está calculado")?.plane;
         let (faces, entities, samples) = self.profile(e.sketch, &e.regions)?;
-        let faces = thin_faces(faces, e.thin)?;
+        let faces = thin_faces(faces, e.thin, |m| self.warn(m))?;
         // La dirección: la normal del plano o la propia (que no puede ir a lo largo del plano)
         let dir = match &e.direction {
             None => plane.normal,
@@ -4663,6 +4810,8 @@ impl Ctx<'_> {
         let mut up_to_scan: Option<(Shape, f64)> = None;
         // Hasta una cara curva: la cara extendida, que corta el prisma
         let mut up_to_sheet: Option<Shape> = None;
+        // Hasta una cara plana inclinada: su plano (punto y normal), para nombrar la tapa
+        let mut up_to_plane: Option<(P3, P3)> = None;
         // Tramos (desde, largo) a lo largo de `n`; con desmolde, cada lado aparte
         // (las paredes se angostan a partir del plano del sketch)
         let segments: Vec<(f64, f64)> = match &e.extent {
@@ -4677,38 +4826,61 @@ impl Ctx<'_> {
                 let center = scale(add(m.bbox_min, m.bbox_max), 0.5);
                 vec![(0.0, self.diag() * 2.0 + 2.0 * norm(sub(center, plane.origin)))]
             }
-            Extent::UpToFace { face, offset } if self.body()?.face_info(self.face("extent", face)?).map_err(err)?.surface != SurfaceKind::Plane => {
-                // Curva: un prisma que la pasa entera, partido por la cara extendida
-                if offset.abs() > 1e-12 {
-                    return Err("la separación todavía solo va con caras planas".into());
-                }
+            Extent::UpToFace { face, offset } => {
                 let i = self.face("extent", face)?;
                 let body = self.body()?;
                 let info = body.face_info(i).map_err(err)?;
-                if dot(sub(info.point, plane.origin), n) < 0.0 {
-                    n = scale(n, -1.0);
+                if info.surface == SurfaceKind::Plane && dot(info.normal, plane.normal).abs() > 0.999 {
+                    // Paralela al sketch: tapa plana, a lo que se avanza por `n` hasta ella
+                    let d = dot(sub(info.point, plane.origin), plane.normal) / dot(n, plane.normal);
+                    if d.abs() < 1e-9 {
+                        return Err("la cara está sobre el plano del sketch".into());
+                    }
+                    if d < 0.0 {
+                        n = scale(n, -1.0);
+                    }
+                    if d.abs() - offset <= 1e-9 {
+                        return Err("con esa separación la extrusión no llega a empezar".into());
+                    }
+                    vec![(0.0, d.abs() - offset)]
+                } else {
+                    // Inclinada o curva: un prisma que la pasa entera, partido
+                    // por la cara extendida (corrida `offset` hacia atrás)
+                    if info.surface == SurfaceKind::Plane && dot(info.normal, n).abs() < 1e-3 {
+                        return Err("la cara va a lo largo de la dirección de la extrusión: no la tapa".into());
+                    }
+                    if dot(sub(info.point, plane.origin), n) < 0.0 {
+                        n = scale(n, -1.0);
+                    }
+                    let fm = body.face_shape(i).and_then(|s| s.mass()).map_err(err)?;
+                    let corners = (0..8).map(|k| [0, 1, 2].map(|a| if k >> a & 1 == 0 { fm.bbox_min[a] } else { fm.bbox_max[a] }));
+                    let mut reach = corners.map(|c| dot(sub(c, plane.origin), n)).fold(0.0, f64::max);
+                    // El perfil entero: hasta dónde lo alcanza el plano extendido
+                    let boxes: Vec<_> = faces.iter().filter_map(|f| f.mass().ok()).collect();
+                    let mut size = 0.0f64;
+                    if !boxes.is_empty() {
+                        let lo = boxes.iter().fold([f64::INFINITY; 3], |a, m| [0, 1, 2].map(|k| a[k].min(m.bbox_min[k])));
+                        let hi = boxes.iter().fold([f64::NEG_INFINITY; 3], |a, m| [0, 1, 2].map(|k| a[k].max(m.bbox_max[k])));
+                        size = norm(sub(hi, lo)) + norm(sub(scale(add(lo, hi), 0.5), info.point));
+                        if info.surface == SurfaceKind::Plane {
+                            for k in 0..8 {
+                                let c = [0, 1, 2].map(|a| if k >> a & 1 == 0 { lo[a] } else { hi[a] });
+                                reach = reach.max(dot(sub(info.point, c), info.normal) / dot(n, info.normal));
+                            }
+                        }
+                    }
+                    reach += (-offset).max(0.0);
+                    let ext = self.diag().max(norm(sub(fm.bbox_max, fm.bbox_min))).max(size * 2.0);
+                    let mut sheet = body.face_shape(i).and_then(|s| s.extend_face(ext)).map_err(err)?;
+                    if offset.abs() > 1e-12 {
+                        sheet = sheet.translate(scale(n, -offset)).map_err(err)?;
+                    }
+                    if info.surface == SurfaceKind::Plane {
+                        up_to_plane = Some((sub(info.point, scale(n, *offset)), info.normal));
+                    }
+                    up_to_sheet = Some(sheet);
+                    vec![(0.0, reach * 1.05 + self.diag() * 1e-3 + 1.0)]
                 }
-                let fm = body.face_shape(i).and_then(|s| s.mass()).map_err(err)?;
-                let corners = (0..8).map(|k| [0, 1, 2].map(|a| if k >> a & 1 == 0 { fm.bbox_min[a] } else { fm.bbox_max[a] }));
-                let reach = corners.map(|c| dot(sub(c, plane.origin), n)).fold(0.0, f64::max);
-                let ext = self.diag().max(norm(sub(fm.bbox_max, fm.bbox_min)));
-                up_to_sheet = Some(body.face_shape(i).and_then(|s| s.extend_face(ext)).map_err(err)?);
-                vec![(0.0, reach * 1.05 + self.diag() * 1e-3 + 1.0)]
-            }
-            Extent::UpToFace { face, offset } => {
-                let i = self.face("extent", face)?;
-                let info = self.body()?.face_info(i).map_err(err)?;
-                let d = dot(sub(info.point, plane.origin), n);
-                if d.abs() < 1e-9 {
-                    return Err("la cara está sobre el plano del sketch".into());
-                }
-                if d < 0.0 {
-                    n = scale(n, -1.0);
-                }
-                if d.abs() - offset <= 1e-9 {
-                    return Err("con esa separación la extrusión no llega a empezar".into());
-                }
-                vec![(0.0, d.abs() - offset)]
             }
             Extent::UpToVertex { point } => {
                 let p = self.point("extent", point)?;
@@ -4726,24 +4898,30 @@ impl Ctx<'_> {
                 // un prisma que lo pasa entero, menos el escaneo (ya corrido
                 // la separación), y queda lo que arranca en el perfil
                 let solid = scan_solid(mesh.as_ref())?;
-                let from: Vec<P3> = samples.iter().chain(entities.iter().map(|(_, p)| p)).copied().collect();
+                // Los rayos salen del plano de arranque (corrido `start`)
+                let shift = scale(plane.normal, e.start);
+                let from: Vec<P3> = samples.iter().chain(entities.iter().map(|(_, p, _)| p)).map(|p| add(*p, shift)).collect();
                 let first = |dir: P3| from.iter().filter_map(|p| solid.ray_hit(*p, dir)).fold(f64::INFINITY, f64::min);
                 let (ahead, behind) = (first(n), first(scale(n, -1.0)));
-                if !ahead.is_finite() && behind.is_finite() {
+                let hit = if !ahead.is_finite() && behind.is_finite() {
                     n = scale(n, -1.0);
+                    behind
                 } else if !ahead.is_finite() {
                     return Err("el perfil no apunta al escaneo".into());
-                }
+                } else {
+                    ahead
+                };
                 let m = solid.mass().map_err(err)?;
                 let corners = (0..8).map(|k| [0, 1, 2].map(|a| if k >> a & 1 == 0 { m.bbox_min[a] } else { m.bbox_max[a] }));
-                let reach = corners.map(|c| dot(sub(c, plane.origin), n)).fold(0.0, f64::max);
-                up_to_scan = Some((solid, ahead.min(behind)));
+                let reach = corners.map(|c| dot(sub(c, add(plane.origin, shift)), n)).fold(0.0, f64::max);
+                // El choque, medido desde el plano del sketch
+                up_to_scan = Some((solid, e.start / dot(n, plane.normal) + hit));
                 vec![(0.0, reach * 1.05 + self.diag() * 1e-3 + 1.0)]
             }
             Extent::UpToNext => {
                 // La primera cara que cruzan los rayos desde el perfil
                 let body = self.body()?;
-                let from = samples.iter().chain(entities.iter().map(|(_, p)| p));
+                let from = samples.iter().chain(entities.iter().map(|(_, p, _)| p));
                 let t = from.filter_map(|p| body.ray_hit(*p, n)).fold(f64::INFINITY, f64::min);
                 if !t.is_finite() {
                     return Err("no hay ninguna cara del sólido hacia ese lado".into());
@@ -4758,7 +4936,11 @@ impl Ctx<'_> {
             // El corrimiento es sobre la normal del plano: medido a lo largo de `n`
             let s = e.start / dot(n, plane.normal);
             let up_to = matches!(e.extent, Extent::UpToFace { .. } | Extent::UpToVertex { .. } | Extent::UpToNext);
-            segments.into_iter().map(|(a, l)| if up_to { (a + s, l - s) } else { (a + s, l) }).collect()
+            let v: Vec<(f64, f64)> = segments.into_iter().map(|(a, l)| if up_to { (a + s, l - s) } else { (a + s, l) }).collect();
+            if up_to && v.iter().any(|(_, l)| *l <= 1e-9) {
+                return Err("arranca más allá de donde tiene que llegar: achicar «desde el plano a»".into());
+            }
+            v
         };
         if segments.iter().all(|(_, l)| l.abs() < 1e-9) {
             return Err("distancia cero".into());
@@ -4803,7 +4985,8 @@ impl Ctx<'_> {
             shape = until_sheet(&shape, sheet, add(plane.origin, scale(n, s0)), plane.normal)?;
         }
         if let Some((scan, hit)) = &up_to_scan {
-            shape = until_scan(&shape, scan, plane.origin, n)?;
+            let s0 = segments.iter().map(|(s, _)| *s).fold(f64::INFINITY, f64::min);
+            shape = until_scan(&shape, scan, add(plane.origin, scale(n, s0)), n, plane.normal)?;
             // Los laterales se marcan antes del escaneo
             hi = hit.max(1e-6);
         }
@@ -4813,20 +4996,51 @@ impl Ctx<'_> {
         let scale_tol = self.diag().max(hi - lo) * 1e-6;
         // Las tapas son paralelas al plano; su posición, medida a lo largo de `n`
         let along = dot(n, plane.normal);
+        // «inicio» es la tapa de donde arranca la extrusión: con la distancia
+        // negativa queda del otro lado
+        let (first, last) = if segments.first().is_some_and(|(_, l)| *l < 0.0) { ("fin", "inicio") } else { ("inicio", "fin") };
         for (i, slot) in tags.iter_mut().enumerate() {
             let info = shape.face_info(i).map_err(err)?;
             if info.surface == SurfaceKind::Plane && dot(info.normal, plane.normal).abs() > 0.999 {
                 let d = dot(sub(info.point, plane.origin), plane.normal) / along;
                 if (d - lo).abs() <= scale_tol {
-                    slot.push(tag(id, "inicio"));
+                    slot.push(tag(id, first));
                 } else if (d - hi).abs() <= scale_tol {
-                    slot.push(tag(id, "fin"));
+                    slot.push(tag(id, last));
                 }
+            } else if let Some((p, m)) = up_to_plane
+                && info.surface == SurfaceKind::Plane
+                && dot(info.normal, m).abs() > 0.999
+                && dot(sub(info.point, p), m).abs() <= scale_tol
+            {
+                // La tapa sobre la cara inclinada
+                slot.push(tag(id, last));
             }
         }
-        for (eid, p) in &entities {
-            let probe = add(*p, scale(n, (lo + hi) / 2.0));
-            mark(&shape, &mut tags, probe, tag(id, format!("lado:{eid}")));
+        // Laterales: a media altura y, con pared delgada, a cada lado del
+        // contorno; con desmolde, la pared se corrió hacia algún lado
+        let half = e.thin.map_or(0.0, |t| t / 2.0);
+        let sides: &[f64] = if half > 0.0 { &[half, -half] } else { &[0.0] };
+        let tan = if drafted { e.draft.to_radians().tan().abs() } else { 0.0 };
+        for (eid, p, nrm) in &entities {
+            let heights: Vec<(f64, f64)> = if drafted {
+                segments.iter().filter(|(_, l)| l.abs() > 1e-9).map(|(a, l)| (a + l / 2.0, (l / 2.0).abs() * tan)).collect()
+            } else if let Some(sheet) = &up_to_sheet {
+                // Hasta la cara: la mitad de lo que hay hasta ella desde este punto
+                let from = add(*p, scale(n, lo));
+                let t = sheet.ray_hit(from, n).unwrap_or(hi - lo);
+                vec![(lo + t / 2.0, 0.0)]
+            } else {
+                vec![((lo + hi) / 2.0, 0.0)]
+            };
+            for &(h, d) in &heights {
+                for &o in sides {
+                    for o in if d > 0.0 { vec![o + d, o - d] } else { vec![o] } {
+                        let probe = add(add(*p, scale(n, h)), scale(*nrm, o));
+                        mark(&shape, &mut tags, probe, tag(id, format!("lado:{eid}")));
+                    }
+                }
+            }
         }
         if up_to_scan.is_some() {
             // Lo que copia la piel del escaneo
@@ -4842,7 +5056,7 @@ impl Ctx<'_> {
     #[allow(clippy::type_complexity)]
     /// La revolución no puede tener perfil a los dos lados del eje: el sólido
     /// se cortaría a sí mismo. Tocarlo o estar sobre él está bien.
-    fn check_revolve_profile(&self, sketch: FeatureId, sel: &RegionSelection, axis: Axis) -> R<()> {
+    fn check_revolve_profile(&self, sketch: FeatureId, sel: &RegionSelection, axis: Axis, thin: Option<f64>) -> R<()> {
         let s = self.ev.sketches.get(&sketch).ok_or("el sketch no está calculado")?;
         let n = s.plane.normal;
         let dir = normalize(axis.dir);
@@ -4854,21 +5068,29 @@ impl Ctx<'_> {
         let size = regions.iter().flat_map(|r| r.outer.polygon.iter()).fold(1.0f64, |m, p| m.max(p[0].abs()).max(p[1].abs()));
         let tol = 1e-6 * size;
         let (mut lo, mut hi) = (0.0f64, 0.0f64);
+        // Lo más cerca del eje que llega el perfil
+        let mut near = f64::INFINITY;
         for r in &regions {
             for p in &r.outer.polygon {
                 let w = s.plane.to_world(*p);
                 let side = dot(cross(dir, sub(w, axis.origin)), n);
                 lo = lo.min(side);
                 hi = hi.max(side);
+                near = near.min(side.abs());
             }
         }
         if lo < -tol && hi > tol {
             return Err("el perfil cruza el eje de revolución: el sólido se cortaría a sí mismo (dejar el perfil de un solo lado del eje)".into());
         }
+        // Delgada: la pared crece medio espesor hacia cada lado del contorno
+        let half = thin.map_or(0.0, |t| t / 2.0);
+        if half > 0.0 && near < half - tol {
+            return Err("con la pared delgada el perfil cruza el eje de revolución (alejarlo del eje o achicar el espesor)".into());
+        }
         Ok(())
     }
 
-    fn profile(&self, sketch: FeatureId, sel: &RegionSelection) -> R<(Vec<Shape>, Vec<(u32, P3)>, Vec<P3>)> {
+    fn profile(&self, sketch: FeatureId, sel: &RegionSelection) -> R<(Vec<Shape>, Vec<(u32, P3, P3)>, Vec<P3>)> {
         let s = self.ev.sketches.get(&sketch).ok_or("el sketch no está calculado")?;
         let regions = self.selected_regions(s, sel)?;
         let faces = regions
@@ -4881,21 +5103,38 @@ impl Ctx<'_> {
                 Shape::face(&loops).map_err(err)
             })
             .collect::<R<Vec<_>>>()?;
-        let mut entities: Vec<(u32, P3)> = Vec::new();
+        // Un punto por tramo (una entidad partida por cruces deja varias caras)
+        // con la normal de la curva ahí, en el plano
+        let mut entities: Vec<(u32, P3, P3)> = Vec::new();
         for r in &regions {
             for l in std::iter::once(&r.outer).chain(&r.holes) {
                 for piece in &l.pieces {
-                    if entities.iter().any(|(e, _)| *e == piece.entity) {
+                    let Some((p, t)) = piece_probe(&s.sketch, piece) else { continue };
+                    let w = s.plane.to_world(p);
+                    if entities.iter().any(|(e, q, _)| *e == piece.entity && norm(sub(*q, w)) < 1e-9) {
                         continue;
                     }
-                    if let Some(p) = entity_midpoint(&s.sketch, piece.entity) {
-                        entities.push((piece.entity, s.plane.to_world(p)));
-                    }
+                    let nrm = sub(s.plane.to_world([p[0] - t[1], p[1] + t[0]]), w);
+                    entities.push((piece.entity, w, nrm));
                 }
             }
         }
         let samples = regions.iter().map(|r| s.plane.to_world(r.sample)).collect();
         Ok((faces, entities, samples))
+    }
+
+    /// Por región: la cara del contorno exterior sola y una cara por cada
+    /// hueco (la transición y el barrido con guía siguen contornos sueltos).
+    fn profile_loops(&self, sketch: FeatureId, sel: &RegionSelection) -> R<Vec<(Shape, Vec<Shape>)>> {
+        let s = self.ev.sketches.get(&sketch).ok_or("el sketch no está calculado")?;
+        self.selected_regions(s, sel)?
+            .iter()
+            .map(|r| {
+                let outer = Shape::face(&[loop_curves(&s.sketch, &s.plane, &r.outer)?]).map_err(err)?;
+                let holes = r.holes.iter().map(|h| Shape::face(&[loop_curves(&s.sketch, &s.plane, h)?]).map_err(err)).collect::<R<Vec<_>>>()?;
+                Ok((outer, holes))
+            })
+            .collect()
     }
 
     /// Regiones elegidas de un sketch; las que ya no están se anotan como
@@ -4943,6 +5182,39 @@ fn mark(shape: &Shape, tags: &mut [Vec<FaceTag>], p: P3, t: FaceTag) {
     {
         slot.push(t);
     }
+}
+
+/// Punto sobre el tramo de una entidad que usa un lazo (su medio) y la
+/// dirección de la curva ahí (unitaria).
+fn piece_probe(s: &Sketch, piece: &crate::regions::LoopPiece) -> Option<(P2, P2)> {
+    let pts = crate::regions::piece_points(s, piece).ok()?;
+    let p = match piece.span {
+        None => entity_midpoint(s, piece.entity)?,
+        Some(_) => {
+            let p = crate::regions::half_way(&pts);
+            // El muestreo va por cuerdas: el punto vuelve a la curva exacta
+            let e = s.entity(piece.entity).ok()?;
+            match &e.geometry {
+                Geometry::Circle { center, .. } | Geometry::Arc { center, .. } => {
+                    let c = s.point(*center).ok()?;
+                    let r = match &e.geometry {
+                        Geometry::Circle { radius, .. } => *radius,
+                        Geometry::Arc { start, .. } => dist2(c, s.point(*start).ok()?),
+                        _ => unreachable!(),
+                    };
+                    let d = dist2(c, p);
+                    if d < 1e-12 {
+                        p
+                    } else {
+                        [c[0] + (p[0] - c[0]) * r / d, c[1] + (p[1] - c[1]) * r / d]
+                    }
+                }
+                _ => p,
+            }
+        }
+    };
+    let t = crate::regions::tangent_near(&pts, p)?;
+    Some((p, t))
 }
 
 /// Punto medio de una entidad del sketch (sobre la curva).

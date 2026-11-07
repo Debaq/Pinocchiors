@@ -480,8 +480,27 @@ fn seg_overlap(a: P2, b: P2, c: P2, d: P2, eps: f64) -> Vec<(f64, f64, P2)> {
     out
 }
 
+/// Dirección (unitaria) de la polilínea en el tramo más cercano a `p`.
+pub fn tangent_near(pts: &[P2], p: P2) -> Option<P2> {
+    let mut best: Option<(f64, P2)> = None;
+    for w in pts.windows(2) {
+        let d = [w[1][0] - w[0][0], w[1][1] - w[0][1]];
+        let l2 = d[0] * d[0] + d[1] * d[1];
+        if l2 <= 0.0 {
+            continue;
+        }
+        let t = (((p[0] - w[0][0]) * d[0] + (p[1] - w[0][1]) * d[1]) / l2).clamp(0.0, 1.0);
+        let e = dist2(p, [w[0][0] + t * d[0], w[0][1] + t * d[1]]);
+        if best.is_none_or(|(b, _)| e < b) {
+            let l = l2.sqrt();
+            best = Some((e, [d[0] / l, d[1] / l]));
+        }
+    }
+    best.map(|(_, t)| t)
+}
+
 /// Punto a mitad de largo de una polilínea.
-fn half_way(pts: &[P2]) -> P2 {
+pub fn half_way(pts: &[P2]) -> P2 {
     let total: f64 = pts.windows(2).map(|w| dist2(w[0], w[1])).sum();
     let mut left = total / 2.0;
     for w in pts.windows(2) {
