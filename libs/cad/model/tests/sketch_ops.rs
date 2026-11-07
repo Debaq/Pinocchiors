@@ -412,3 +412,57 @@ fn circulos_repetidos_no_duplican() {
     let ev = eval_ok(&doc);
     assert_relative_eq!(volume(&ev), PI * 25.0 * 2.0, max_relative = 1e-6);
 }
+
+#[test]
+fn simetrica_delgada_con_desmolde() {
+    if !occt() {
+        return;
+    }
+    let mut doc = Document::new();
+    let mut s = Sketch::new();
+    let lines = s.rectangle([0.0, 0.0], [40.0, 20.0]);
+    let sk = sketch_at(&mut doc, 0.0, s);
+    let mut e = extrude(sk, Extent::Symmetric { distance: 10.0 });
+    e.thin = Some(2.0);
+    e.draft = 5.0;
+    doc.add(FeatureKind::Extrude(e));
+    let ev = eval_ok(&doc);
+    assert!(ev.body.as_ref().unwrap().is_valid());
+    assert!(sides_named(&ev, &lines).iter().all(|&n| n >= 2), "{:?}", sides_named(&ev, &lines));
+}
+
+#[test]
+fn desmolde_con_agujeros() {
+    if !occt() {
+        return;
+    }
+    let tan = 5f64.to_radians().tan();
+    // Anillo 10/5, alto 5, 5°: afuera se angosta y el agujero se agranda
+    let mut doc = Document::new();
+    let mut s = Sketch::new();
+    s.circle([0.0, 0.0], 10.0);
+    s.circle([0.0, 0.0], 5.0);
+    let sk = sketch_at(&mut doc, 0.0, s);
+    let mut e = extrude(sk, Extent::Blind { distance: 5.0 });
+    e.draft = 5.0;
+    doc.add(FeatureKind::Extrude(e));
+    let cone = |r0: f64, r1: f64, h: f64| PI * h / 3.0 * (r0 * r0 + r0 * r1 + r1 * r1);
+    let (d, h) = (5.0 * tan, 5.0);
+    let ev = eval_ok(&doc);
+    assert_relative_eq!(volume(&ev), cone(10.0, 10.0 - d, h) - cone(5.0, 5.0 + d, h), max_relative = 1e-6);
+    assert!(ev.body.as_ref().unwrap().is_valid());
+
+    // Delgada con desmolde: la pared no se rellena (lo de adentro queda hueco)
+    let mut doc = Document::new();
+    let mut s = Sketch::new();
+    s.rectangle([0.0, 0.0], [40.0, 20.0]);
+    let sk = sketch_at(&mut doc, 0.0, s);
+    let mut e = extrude(sk, Extent::Blind { distance: 5.0 });
+    e.draft = 5.0;
+    e.thin = Some(2.0);
+    doc.add(FeatureKind::Extrude(e));
+    let v = volume(&eval_ok(&doc));
+    // Más o menos el anillo plano (pared de 2 alrededor de 40×20) por 5
+    let ring = (42.0 * 22.0 - 4.0 + PI) - 38.0 * 18.0;
+    assert_relative_eq!(v, ring * 5.0, max_relative = 0.05);
+}

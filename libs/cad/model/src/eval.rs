@@ -4965,17 +4965,57 @@ impl Ctx<'_> {
         };
         self.set_handle(Handle::arrow(origin, n, length, reverse, kind));
         let mut solids = Vec::new();
-        for f in &faces {
-            for &(start, length) in &segments {
-                if length.abs() < 1e-9 {
-                    continue;
-                }
-                let f = if start != 0.0 { f.translate(scale(n, start)).map_err(err)? } else { f.clone() };
-                if drafted {
+        if drafted {
+            // El desmolde de OCCT no sabe de agujeros: cada contorno aparte. El
+            // de afuera se angosta y los agujeros se agrandan (el material se
+            // angosta igual); delgada: la pared de cada contorno, pareja, se
+            // inclina con él. Cada tramo de la extrusión sobre caras sin
+            // agujeros y unidos antes de restar (los anillos no se unían).
+            let along = |f: &Shape, angle: f64| -> R<Shape> {
+                let mut parts = Vec::new();
+                for &(start, length) in &segments {
+                    if length.abs() < 1e-9 {
+                        continue;
+                    }
+                    let f = if start != 0.0 { f.translate(scale(n, start)).map_err(err)? } else { f.clone() };
                     // La cara mira hacia la normal del plano: la altura lleva el signo del lado
                     let height = if dot(n, plane.normal) > 0.0 { length } else { -length };
-                    solids.push(f.draft_prism(height, e.draft.to_radians()).map_err(err)?);
-                } else {
+                    parts.push(f.draft_prism(height, angle).map_err(err)?);
+                }
+                fuse(parts)
+            };
+            let a = e.draft.to_radians();
+            for (outer, holes) in self.profile_loops(e.sketch, &e.regions)? {
+                let contours = std::iter::once((outer, a)).chain(holes.into_iter().map(|h| (h, -a)));
+                match e.thin.filter(|t| *t > 0.0) {
+                    None => {
+                        let mut contours = contours;
+                        let (outer, a) = contours.next().ok_or("región sin contorno")?;
+                        let mut solid = along(&outer, a)?;
+                        for (hole, a) in contours {
+                            solid = solid.cut(&along(&hole, a)?).map_err(err)?;
+                        }
+                        solids.push(solid);
+                    }
+                    Some(t) => {
+                        for (c, a) in contours {
+                            let mut wall = along(&c.offset_face(t / 2.0).map_err(err)?, a)?;
+                            match c.offset_face(-t / 2.0) {
+                                Ok(inner) => wall = wall.cut(&along(&inner, a)?).map_err(err)?,
+                                Err(_) => self.warn(format!("una región es más angosta que la pared de {t} mm: quedó llena")),
+                            }
+                            solids.push(wall);
+                        }
+                    }
+                }
+            }
+        } else {
+            for f in &faces {
+                for &(start, length) in &segments {
+                    if length.abs() < 1e-9 {
+                        continue;
+                    }
+                    let f = if start != 0.0 { f.translate(scale(n, start)).map_err(err)? } else { f.clone() };
                     solids.push(f.prism(scale(n, length)).map_err(err)?);
                 }
             }
