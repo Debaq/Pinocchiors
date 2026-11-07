@@ -735,8 +735,12 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
 
   // ─── Archivos ─────────────────────────────────────────────────────────
 
+  // El diálogo de archivos no bloquea la ventana: un segundo clic abría otro
+  let choosingStep = false;
   const importStep = async () => {
-    const path = await open({ filters: [{ name: "STEP", extensions: ["step", "stp"] }], multiple: false });
+    if (choosingStep) return;
+    choosingStep = true;
+    const path = await open({ filters: [{ name: "STEP", extensions: ["step", "stp"] }], multiple: false }).finally(() => (choosingStep = false));
     if (typeof path !== "string") return;
     try {
       await store.importStep(path);

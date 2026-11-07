@@ -1743,6 +1743,21 @@ export const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) =>
 
 // ─── Edición de una operación ─────────────────────────────────────────────
 
+/**
+ * La tangencia de la transición necesita secciones con la misma cantidad de
+ * lados: true si se sabe que no la tienen (secciones con todas sus regiones
+ * y una sola región cada una; con regiones elegidas a mano no se sabe).
+ */
+function loftSidesDiffer(store: CadStore, sections: { sketch: number; regions: { type: string } }[]): boolean {
+  const counts = sections.map((s) => {
+    const v = store.sketchView(s.sketch);
+    if (!v || s.regions.type !== "all") return undefined;
+    const rs = v.regions.filter((r) => r.depth % 2 === 0);
+    return rs.length === 1 ? rs[0].outer.pieces.length : undefined;
+  });
+  return counts.every((c) => c !== undefined) && new Set(counts).size > 1;
+}
+
 export const FeatureEditor: Component<{
   featureId: number;
   store: CadStore;
@@ -2257,7 +2272,7 @@ export const FeatureEditor: Component<{
           <Match when={f().kind.type === "primitive" && (f().kind as Extract<FeatureKind, { type: "primitive" }>)}>
             {(k) => {
               const fields: Record<string, [string, string][]> = {
-                box: [["dx", "Ancho (X)"], ["dy", tl("Fondo (Y)")], ["dz", "Alto (Z)"]],
+                box: [["dx", tl("Ancho (X)")], ["dy", tl("Fondo (Y)")], ["dz", tl("Alto (Z)")]],
                 cylinder: [["radius", tl("Radio")], ["height", tl("Alto")]],
                 cone: [["r1", tl("Radio abajo")], ["r2", tl("Radio arriba")], ["height", tl("Alto")]],
                 sphere: [["radius", tl("Radio")]],
@@ -2421,6 +2436,8 @@ export const FeatureEditor: Component<{
                       </For>
                     </div>
                   </div>
+                  {/* La esfera es igual hacia cualquier lado: sin eje */}
+                  <Show when={k().shape.type !== "sphere"}>
                   <Row label={tl("Eje")}>
                     <Select
                       options={["x", "y", "z"].map((a) => ({ value: a, label: a.toUpperCase() }))}
@@ -2434,6 +2451,7 @@ export const FeatureEditor: Component<{
                       }
                     />
                   </Row>
+                  </Show>
                   </Show>
                   <Row label={tl("Con el sólido")}>{opSelect(k().op, (o) => update((x) => x.type === "primitive" && (x.op = o)))}</Row>
                 </>
@@ -4613,6 +4631,8 @@ export const FeatureEditor: Component<{
                 <Checkbox
                   small
                   label={tl("Sale perpendicular a la primera sección")}
+                  disabled={k().start_tangent == null && loftSidesDiffer(props.store, k().sections)}
+                  hint={loftSidesDiffer(props.store, k().sections) ? tl("Para salir o llegar perpendicular, las secciones tienen que tener la misma cantidad de lados") : undefined}
                   checked={k().start_tangent != null}
                   onChange={(c) => update((x) => x.type === "loft" && ((x.start_tangent = c ? 1 : null), c && ((x.ruled = false), (x.start_point = null), (x.end_point = null), (x.closed = undefined), (x.path = null), (x.guide = null))))}
                 />
@@ -4622,6 +4642,8 @@ export const FeatureEditor: Component<{
                 <Checkbox
                   small
                   label={tl("Llega perpendicular a la última sección")}
+                  disabled={k().end_tangent == null && loftSidesDiffer(props.store, k().sections)}
+                  hint={loftSidesDiffer(props.store, k().sections) ? tl("Para salir o llegar perpendicular, las secciones tienen que tener la misma cantidad de lados") : undefined}
                   checked={k().end_tangent != null}
                   onChange={(c) => update((x) => x.type === "loft" && ((x.end_tangent = c ? 1 : null), c && ((x.ruled = false), (x.start_point = null), (x.end_point = null), (x.closed = undefined), (x.path = null), (x.guide = null))))}
                 />
