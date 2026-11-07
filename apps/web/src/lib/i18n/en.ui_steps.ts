@@ -1053,6 +1053,8 @@ export const en_ui_steps: Catalog = {
   "Cada pedazo queda como una pieza. Con otra pieza (una superficie curva, por ejemplo) se parte por su forma; la herramienta queda como estaba. Las superficies se recortan con Superficies → Recortar.": "Each piece becomes a part. With another part (a curved surface, for example) it is split along its shape; the tool stays as it was. Surfaces are trimmed with Surfaces → Trim.",
   "Cada sección es una cadena de curvas (abierta o cerrada) de un sketch.": "Each section is a chain of curves (open or closed) from a sketch.",
   "Caja: diámetro": "Counterbore: diameter",
+  "Caja: profundidad": "Counterbore: depth",
+  "No queda ningún sketch con una región cerrada para otra sección": "No sketch with a closed region is left for another section",
   "Calco agregado: calibrarlo con dos puntos de medida conocida": "Tracing image added: calibrate it with two points of known distance",
   "Calcos": "Tracing images",
   "Calculando…": "Computing…",

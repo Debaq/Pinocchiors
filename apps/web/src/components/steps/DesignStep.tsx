@@ -1749,6 +1749,8 @@ export const FeatureEditor: Component<{
   ui: CadUi;
   sketches: Feature[];
   tools: Feature[];
+  /** Avisa al usuario (el aviso de las acciones de diseño) */
+  say?: (msg: string) => void;
 }> = (props) => {
   // Al cerrarse el diálogo la operación puede desaparecer antes que el editor:
   // se queda con la última
@@ -1988,6 +1990,7 @@ export const FeatureEditor: Component<{
                       value={extentType()}
                       onChange={(v) => {
                         if (v === extentType()) return;
+                        setUpTo(false);
                         const d = "distance" in k().extent ? (k().extent as { distance: number }).distance : 10;
                         if (v === "blind" || v === "symmetric") setExtent({ type: v, distance: d });
                         else if (v === "two_sides") setExtent({ type: "two_sides", distance: d, second: d / 2 });
@@ -2193,11 +2196,15 @@ export const FeatureEditor: Component<{
                       onChange={(v) => {
                         setUpToFace(v === "up_to_face" && k().extent?.type !== "up_to_face");
                         if (v === "up_to_face") return;
-                        update(
-                          (x) =>
-                            x.type === "revolve" &&
-                            (x.extent = v === "two_angles" ? { type: "two_angles", second: 45 } : v === "symmetric" ? { type: "symmetric" } : undefined),
-                        );
+                        update((x) => {
+                          if (x.type !== "revolve") return;
+                          if (v === "two_angles") {
+                            // entre los dos ángulos no pueden pasar de 360°
+                            const sg = x.angle < 0 ? -1 : 1;
+                            if (Math.abs(x.angle) + 45 > 360) x.angle = sg * (Math.abs(x.angle) >= 360 ? 180 : 315);
+                            x.extent = { type: "two_angles", second: 45 };
+                          } else x.extent = v === "symmetric" ? { type: "symmetric" } : undefined;
+                        });
                       }}
                     />
                   </Row>
@@ -2217,7 +2224,11 @@ export const FeatureEditor: Component<{
                     />
                     <p class="text-[11px] text-text-dim">{tl("Gira hacia el lado del signo del ángulo hasta encontrar la cara (plana o curva).")}</p>
                   </Show>
-                  {field(tl("Ángulo"), "kind.angle", k().angle, (x, v) => x.type === "revolve" && (x.angle = v), "°")}
+                  {field(tl("Ángulo"), "kind.angle", k().angle, (x, v) => {
+                    if (x.type !== "revolve") return;
+                    const room = x.extent?.type === "two_angles" ? Math.max(360 - Math.abs(x.extent.second), 0) : Infinity;
+                    x.angle = Math.sign(v) * Math.min(Math.abs(v), room) || v;
+                  }, "°")}
                   <Checkbox
                     small
                     label={tl("Delgada (solo una pared)")}
@@ -2232,7 +2243,9 @@ export const FeatureEditor: Component<{
                       tl("Hacia atrás"),
                       "kind.extent.second",
                       (k().extent as { second: number }).second,
-                      (x, v) => x.type === "revolve" && x.extent?.type === "two_angles" && (x.extent.second = v),
+                      (x, v) => {
+                        if (x.type === "revolve" && x.extent?.type === "two_angles") x.extent.second = Math.sign(v) * Math.min(Math.abs(v), Math.max(360 - Math.abs(x.angle), 0)) || v;
+                      },
                       "°",
                     )}
                   </Show>
@@ -3628,7 +3641,8 @@ export const FeatureEditor: Component<{
                   x.diameter = mode === "clearance" ? m.clearance : m.tap;
                   x.thread = mode === "clearance" ? null : m.size;
                   // Al cambiar de medida la rosca modelada toma el paso grueso y conserva la holgura
-                  x.modeled = mode === "modeled" ? { nominal: m.nominal, pitch: m.pitch, clearance: x.modeled?.clearance ?? 0, left: x.modeled?.left ?? false } : null;
+                  // (un agujero cónico no lleva rosca modelada: queda cosmética)
+                  x.modeled = mode === "modeled" && x.style.type !== "tapered" ? { nominal: m.nominal, pitch: m.pitch, clearance: x.modeled?.clearance ?? 0, left: x.modeled?.left ?? false } : null;
                   if (x.style.type === "counterbore") x.style = { type: "counterbore", diameter: m.cbore, depth: m.cboreDepth };
                   if (x.style.type === "countersink") x.style = { type: "countersink", diameter: m.csink, angle: (m as { csinkAngle?: number }).csinkAngle ?? 90 };
                 });
@@ -3802,7 +3816,7 @@ export const FeatureEditor: Component<{
                     {(st) => (
                       <>
                         {field(tl("Caja: diámetro"), "kind.style.diameter", st().diameter, (x, v) => x.type === "hole" && x.style.type === "counterbore" && (x.style.diameter = v), "mm")}
-                        {field("Caja: profundidad", "kind.style.depth", st().depth, (x, v) => x.type === "hole" && x.style.type === "counterbore" && (x.style.depth = v), "mm")}
+                        {field(tl("Caja: profundidad"), "kind.style.depth", st().depth, (x, v) => x.type === "hole" && x.style.type === "counterbore" && (x.style.depth = v), "mm")}
                       </>
                     )}
                   </Show>
@@ -4434,7 +4448,9 @@ export const FeatureEditor: Component<{
                         update(
                           (x) =>
                             x.type === "sweep" &&
-                            (x.guide = !v ? null : v.startsWith("curve:") ? { type: "curve", feature: +v.slice(6) } : { type: "sketch", sketch: +v, entities: [] }),
+                            ((x.guide = !v ? null : v.startsWith("curve:") ? { type: "curve", feature: +v.slice(6) } : { type: "sketch", sketch: +v, entities: [] }),
+                            // con guía el giro lo da la guía y no va delgado
+                            v && ((x.twist = null), (x.thin = null))),
                         )
                       }
                     />
@@ -4442,13 +4458,15 @@ export const FeatureEditor: Component<{
                   <Show when={!k().guide}>
                     {field(tl("Torsión"), "kind.twist", k().twist ?? 0, (x, v) => x.type === "sweep" && (x.twist = v === 0 ? null : v), "°")}
                   </Show>
-                  <Checkbox
-                    small
-                    label={tl("Delgado (solo una pared)")}
-                    checked={k().thin != null}
-                    onChange={(c) => update((x) => x.type === "sweep" && (x.thin = c ? 1 : null))}
-                  />
-                  <Show when={k().thin != null}>
+                  <Show when={!k().guide}>
+                    <Checkbox
+                      small
+                      label={tl("Delgado (solo una pared)")}
+                      checked={k().thin != null}
+                      onChange={(c) => update((x) => x.type === "sweep" && (x.thin = c ? 1 : null))}
+                    />
+                  </Show>
+                  <Show when={k().thin != null && !k().guide}>
                     {field(tl("Espesor"), "kind.thin", k().thin ?? 1, (x, v) => x.type === "sweep" && (x.thin = v), "mm")}
                   </Show>
                   <Row label={tl("Con el sólido")}>{opSelect(k().op, (o) => update((x) => x.type === "sweep" && (x.op = o)))}</Row>
@@ -4536,6 +4554,14 @@ export const FeatureEditor: Component<{
                             onChange={(v) => update((x) => x.type === "loft" && (x.sections[i()] = { sketch: +v, regions: { type: "all" } }))}
                           />
                         </Row>
+                        <RegionBox
+                          ui={props.ui}
+                          store={props.store}
+                          owner={`${f().id}:regiones${i()}`}
+                          sketch={sec.sketch}
+                          value={sec.regions}
+                          onChange={(r) => update((x) => x.type === "loft" && x.sections[i()] && (x.sections[i()].regions = r))}
+                        />
                       </div>
                       <IconButton
                         aria-label={tl("Quitar la sección {v1}", { v1: i() + 1 })}
@@ -4556,19 +4582,20 @@ export const FeatureEditor: Component<{
                     update((x) => {
                       if (x.type !== "loft") return;
                       const used = new Set(x.sections.map((s) => s.sketch));
-                      const next = props.sketches.find((s) => !used.has(s.id));
+                      const next = props.sketches.find((s) => !used.has(s.id) && (props.store.sketchView(s.id)?.regions.length ?? 0) > 0);
                       if (next) x.sections.push({ sketch: next.id, regions: { type: "all" } });
+                      else props.say?.(tl("No queda ningún sketch con una región cerrada para otra sección"));
                     })
                   }
                 >
                   {tl("Agregar sección")}
                 </Button>
-                <Checkbox small label={tl("Caras planas entre secciones")} checked={k().ruled} onChange={(c) => update((x) => x.type === "loft" && (x.ruled = c))} />
+                <Checkbox small label={tl("Caras planas entre secciones")} checked={k().ruled} onChange={(c) => update((x) => x.type === "loft" && ((x.ruled = c), c && ((x.start_tangent = null), (x.end_tangent = null))))} />
                 <Checkbox
                   small
                   label={tl("Empieza en un punto")}
                   checked={!!k().start_point}
-                  onChange={(c) => update((x) => x.type === "loft" && (x.start_point = c ? { type: "at", point: [0, 0, -10] } : null))}
+                  onChange={(c) => update((x) => x.type === "loft" && ((x.start_point = c ? { type: "at", point: [0, 0, -10] } : null), c && ((x.start_tangent = null), (x.end_tangent = null))))}
                 />
                 <Show when={k().start_point}>
                   {(p) => <PointField store={props.store} ui={props.ui} owner={`${f().id}:desde`} label={tl("Punta inicial")} value={p()} except={f().id} onChange={(q) => update((x) => x.type === "loft" && (x.start_point = q))} />}
@@ -4577,17 +4604,17 @@ export const FeatureEditor: Component<{
                   small
                   label={tl("Termina en un punto")}
                   checked={!!k().end_point}
-                  onChange={(c) => update((x) => x.type === "loft" && (x.end_point = c ? { type: "at", point: [0, 0, 20] } : null))}
+                  onChange={(c) => update((x) => x.type === "loft" && ((x.end_point = c ? { type: "at", point: [0, 0, 20] } : null), c && ((x.start_tangent = null), (x.end_tangent = null))))}
                 />
                 <Show when={k().end_point}>
                   {(p) => <PointField store={props.store} ui={props.ui} owner={`${f().id}:hasta`} label={tl("Punta final")} value={p()} except={f().id} onChange={(q) => update((x) => x.type === "loft" && (x.end_point = q))} />}
                 </Show>
-                <Checkbox small label={tl("Cerrada (vuelve a la primera)")} checked={!!k().closed} onChange={(c) => update((x) => x.type === "loft" && (x.closed = c || undefined))} />
+                <Checkbox small label={tl("Cerrada (vuelve a la primera)")} checked={!!k().closed} onChange={(c) => update((x) => x.type === "loft" && ((x.closed = c || undefined), c && ((x.start_tangent = null), (x.end_tangent = null))))} />
                 <Checkbox
                   small
                   label={tl("Sale perpendicular a la primera sección")}
                   checked={k().start_tangent != null}
-                  onChange={(c) => update((x) => x.type === "loft" && ((x.start_tangent = c ? 1 : null), c && (x.ruled = false)))}
+                  onChange={(c) => update((x) => x.type === "loft" && ((x.start_tangent = c ? 1 : null), c && ((x.ruled = false), (x.start_point = null), (x.end_point = null), (x.closed = undefined), (x.path = null), (x.guide = null))))}
                 />
                 <Show when={k().start_tangent != null}>
                   {field(tl("Peso al comienzo"), "kind.start_tangent", k().start_tangent ?? 1, (x, v) => x.type === "loft" && (x.start_tangent = v))}
@@ -4596,7 +4623,7 @@ export const FeatureEditor: Component<{
                   small
                   label={tl("Llega perpendicular a la última sección")}
                   checked={k().end_tangent != null}
-                  onChange={(c) => update((x) => x.type === "loft" && ((x.end_tangent = c ? 1 : null), c && (x.ruled = false)))}
+                  onChange={(c) => update((x) => x.type === "loft" && ((x.end_tangent = c ? 1 : null), c && ((x.ruled = false), (x.start_point = null), (x.end_point = null), (x.closed = undefined), (x.path = null), (x.guide = null))))}
                 />
                 <Show when={k().end_tangent != null}>
                   {field(tl("Peso al final"), "kind.end_tangent", k().end_tangent ?? 1, (x, v) => x.type === "loft" && (x.end_tangent = v))}
@@ -4616,7 +4643,9 @@ export const FeatureEditor: Component<{
                       update(
                         (x) =>
                           x.type === "loft" &&
-                          (x.path = !v ? null : v.startsWith("curve:") ? { type: "curve", feature: +v.slice(6) } : { type: "sketch", sketch: +v, entities: [] }),
+                          ((x.path = !v ? null : v.startsWith("curve:") ? { type: "curve", feature: +v.slice(6) } : { type: "sketch", sketch: +v, entities: [] }),
+                          !v && (x.guide = null),
+                          v && ((x.start_tangent = null), (x.end_tangent = null))),
                       )
                     }
                   />
@@ -4633,7 +4662,8 @@ export const FeatureEditor: Component<{
                         update(
                           (x) =>
                             x.type === "loft" &&
-                            (x.guide = !v ? null : v.startsWith("curve:") ? { type: "curve", feature: +v.slice(6) } : { type: "sketch", sketch: +v, entities: [] }),
+                            ((x.guide = !v ? null : v.startsWith("curve:") ? { type: "curve", feature: +v.slice(6) } : { type: "sketch", sketch: +v, entities: [] }),
+                            v && ((x.start_tangent = null), (x.end_tangent = null))),
                         )
                       }
                     />

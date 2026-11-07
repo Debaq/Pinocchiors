@@ -41,7 +41,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
   const features = () => store.doc()?.features ?? [];
   const selectedFeature = () => features().find((f) => f.id === store.selected());
   const sketches = () => features().filter((f) => f.kind.type === "sketch");
-  const toolFeatures = () => features().filter((f) => ["extrude", "revolve", "primitive", "import", "sweep", "loft", "pattern"].includes(f.kind.type));
+  const toolFeatures = () => features().filter((f) => ["extrude", "revolve", "primitive", "import", "derived", "scan_body", "sweep", "pattern", "thicken", "rib", "thread", "sheet_metal", "flange", "hole", "loft"].includes(f.kind.type));
 
   const say = (msg: string) => {
     setNotice(msg);
@@ -129,7 +129,8 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
   const targetSketch = (): Feature | undefined => {
     const sel = selectedFeature();
     if (sel?.kind.type === "sketch") return sel;
-    return [...sketches()].pop();
+    // sin selección: el último con regiones (no los automáticos de agujero o cara); si ninguno, el último
+    return [...sketches()].reverse().find((s) => (store.sketchView(s.id)?.regions.length ?? 0) > 0) ?? [...sketches()].pop();
   };
 
   /** El sketch no tiene regiones: avisa por qué (extremos sueltos, cruces...) */
@@ -280,7 +281,9 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
   const startRib = () => {
     if (!store.result()?.body) return say(tr("Primero hace falta un sólido"));
     const sel = selectedFeature();
-    const sketch = sel?.kind.type === "sketch" ? sel : [...sketches()].pop();
+    // el nervio solo usa líneas que no sean de construcción
+    const hasLines = (f: Feature) => f.kind.type === "sketch" && f.kind.sketch.entities.some((e) => e.geometry.type === "line" && !e.construction);
+    const sketch = sel?.kind.type === "sketch" ? sel : [...sketches()].reverse().find(hasLines);
     if (!sketch) return say(tr("Primero un sketch con la línea del nervio, en un plano que corte el sólido"));
     void store.addFeature({ type: "rib", sketch: sketch.id, thickness: 2, flip: false });
   };
@@ -457,6 +460,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     const picked = pickedRegions();
     const s = picked ? sketches().find((f) => f.id === picked.sketch) : targetSketch();
     if (!s) return say(tr("Primero hace falta un sketch con una región cerrada"));
+    if (!picked && noRegions(s)) return;
     ui.clearPicks();
     void store.addFeature({
       type: "sheet_metal",

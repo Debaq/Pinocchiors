@@ -4563,7 +4563,7 @@ export const CadView: Component<CadViewProps> = (props) => {
                         if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) ui.cancelPick();
                       }}
                     >
-                      <FeatureEditor featureId={id} store={store} ui={ui} sketches={props.actions.sketches()} tools={props.actions.toolFeatures()} />
+                      <FeatureEditor featureId={id} store={store} ui={ui} sketches={props.actions.sketches()} tools={props.actions.toolFeatures()} say={props.actions.say} />
                     </div>
                   </div>
                 )}

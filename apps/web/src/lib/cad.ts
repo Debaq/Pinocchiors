@@ -2440,7 +2440,27 @@ export function dependencies(kind: FeatureKind): number[] {
     case "surface_loft":
       return kind.sections.map((x) => x.sketch);
     case "hole":
+      return [kind.sketch, ...(kind.link ? [kind.link.feature] : [])];
+    case "rib":
       return [kind.sketch];
+    case "thread":
+      return kind.link ? [kind.link.feature] : [];
+    case "primitive": {
+      const gear = kind.shape.type === "gear" ? kind.shape.link : null;
+      return [...(kind.link ? [kind.link.feature] : []), ...(gear ? [gear.feature] : [])];
+    }
+    case "split":
+      return plane(kind.plane);
+    case "replace_face":
+      return plane(kind.target);
+    case "surface_extrude":
+      return [kind.sketch];
+    case "surface_revolve":
+      return [kind.sketch, ...axis(kind.axis)];
+    case "sew":
+      return kind.parts.map((p) => p.feature);
+    case "split_by":
+      return [...kind.parts.map((p) => p.feature), ...(kind.tool.type === "plane" ? plane(kind.tool.plane) : [kind.tool.part.feature])];
     case "extrude":
       return [kind.sketch, ...(kind.extent.type === "up_to_vertex" ? point(kind.extent.point) : []), ...(kind.direction ? axis(kind.direction) : [])];
     case "surface_planar":
