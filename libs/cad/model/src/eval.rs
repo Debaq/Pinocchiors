@@ -4920,13 +4920,16 @@ impl Ctx<'_> {
             }
             Extent::UpToNext => {
                 // La primera cara que cruzan los rayos desde el perfil
+                // (desde el plano de arranque: lo que queda detrás no cuenta)
                 let body = self.body()?;
-                let from = samples.iter().chain(entities.iter().map(|(_, p, _)| p));
-                let t = from.filter_map(|p| body.ray_hit(*p, n)).fold(f64::INFINITY, f64::min);
+                let shift = scale(plane.normal, e.start);
+                let from = samples.iter().chain(entities.iter().map(|(_, p, _)| p)).map(|p| add(*p, shift));
+                let t = from.filter_map(|p| body.ray_hit(p, n)).fold(f64::INFINITY, f64::min);
                 if !t.is_finite() {
                     return Err("no hay ninguna cara del sólido hacia ese lado".into());
                 }
-                vec![(0.0, t)]
+                // Medido desde el plano del sketch (abajo se descuenta el arranque)
+                vec![(0.0, e.start / dot(n, plane.normal) + t)]
             }
         };
         // Desde un plano corrido: lo ciego se corre entero; lo que va «hasta» algo se acorta
@@ -5493,7 +5496,53 @@ fn loop_curves(s: &Sketch, plane: &Plane, l: &Loop) -> R<Vec<Curve>> {
         };
         out.push(c);
     }
+    // Solo los contornos de regiones (los caminos abiertos vienen sin polígono)
+    if !l.polygon.is_empty() {
+        close_gaps(&mut out);
+    }
     Ok(out)
+}
+
+/// Extremos de una curva abierta en el sentido en que la recorre el lazo.
+fn curve_ends(c: &Curve) -> Option<(P3, P3)> {
+    match c {
+        Curve::Line(a, b) | Curve::Arc(a, _, b) => Some((*a, *b)),
+        Curve::Spline(p) | Curve::SplineEnds { points: p, .. } => Some((*p.first()?, *p.last()?)),
+        Curve::SplineTangents { points, periodic: false, .. } => Some((*points.first()?, *points.last()?)),
+        Curve::BSpline { poles, periodic: false, .. } => Some((*poles.first()?, *poles.last()?)),
+        Curve::EllipseArc { start, end, forward, .. } => Some(if *forward { (*start, *end) } else { (*end, *start) }),
+        _ => None,
+    }
+}
+
+/// Las regiones dan por unidos extremos casi juntos (residuos del solver, un
+/// DXF): el alambre no, y la cara sale abierta. Se cierran moviendo la punta
+/// de una línea vecina o, si las dos son curvas, con un tramo recto mínimo.
+fn close_gaps(out: &mut Vec<Curve>) {
+    let n = out.len();
+    if n < 2 {
+        return;
+    }
+    let mut bridges: Vec<(usize, Curve)> = Vec::new();
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let (Some((_, e)), Some((s, _))) = (curve_ends(&out[i]), curve_ends(&out[j])) else { continue };
+        // Lo que las regiones pudieron haber unido (no un salto real)
+        let gap = norm(sub(e, s));
+        if gap <= 1e-9 || gap > 1e-5 * norm(e).max(norm(s)).max(1.0) {
+            continue;
+        }
+        if let Curve::Line(a, _) = &mut out[j] {
+            *a = e;
+        } else if let Curve::Line(_, b) = &mut out[i] {
+            *b = s;
+        } else {
+            bridges.push((i + 1, Curve::Line(e, s)));
+        }
+    }
+    for (k, c) in bridges.into_iter().rev() {
+        out.insert(k, c);
+    }
 }
 
 // ─── Referencias por clics ─────────────────────────────────────────────────

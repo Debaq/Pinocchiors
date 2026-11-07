@@ -830,6 +830,10 @@ pub fn find_regions(s: &Sketch) -> Result<Vec<Region>, SketchError> {
         nodes.len() - 1
     };
     let mut edges: Vec<Edge> = Vec::new();
+    // Por lazo: su contorno de afuera. Un lazo que pasa dos veces por un nodo
+    // (un contorno interior que toca el borde en un punto) lo rodea a él y a
+    // lo que tiene recortado; el resto, su propio polígono
+    let mut envelopes: Vec<Vec<P2>> = Vec::new();
 
     cut_crossings(&mut curves, tol);
 
@@ -846,6 +850,7 @@ pub fn find_regions(s: &Sketch) -> Result<Vec<Region>, SketchError> {
                 if reversed {
                     poly.reverse();
                 }
+                envelopes.push(poly.clone());
                 loops.push(Loop { pieces: vec![LoopPiece { entity: c.entity, reversed, span: None }], area: a.abs(), polygon: poly });
                 continue;
             }
@@ -885,6 +890,7 @@ pub fn find_regions(s: &Sketch) -> Result<Vec<Region>, SketchError> {
         p
     };
     let to_node = |h: Half| if h.1 { edges[h.0].nodes[0] } else { edges[h.0].nodes[1] };
+    let from_node = |h: Half| if h.1 { edges[h.0].nodes[1] } else { edges[h.0].nodes[0] };
     let mut alive = vec![true; edges.len()];
     // Caras; si alguna pasa dos veces por la misma arista, esa arista es un
     // puente (una línea del contorno a una isla, o entre dos contornos): se
@@ -963,6 +969,31 @@ pub fn find_regions(s: &Sketch) -> Result<Vec<Region>, SketchError> {
         }
         let a = signed_area(&poly);
         if a > 0.0 && !flat(&poly, a) {
+            // Vueltas simples: se parte donde la cara vuelve a salir de un nodo
+            let mut stack: Vec<Half> = Vec::new();
+            let mut at: HashMap<usize, usize> = HashMap::new();
+            let mut cycles: Vec<Vec<Half>> = Vec::new();
+            for &h in &face {
+                if let Some(&k) = at.get(&from_node(h)) {
+                    let cycle: Vec<Half> = stack.drain(k..).collect();
+                    for x in &cycle {
+                        at.remove(&from_node(*x));
+                    }
+                    cycles.push(cycle);
+                }
+                at.insert(from_node(h), stack.len());
+                stack.push(h);
+            }
+            cycles.push(stack);
+            let envelope = cycles
+                .iter()
+                .map(|c| c.iter().flat_map(|&h| {
+                    let p = half_pts(h);
+                    p[..p.len() - 1].to_vec()
+                }).collect::<Vec<P2>>())
+                .max_by(|a, b| signed_area(a).total_cmp(&signed_area(b)))
+                .unwrap_or_else(|| poly.clone());
+            envelopes.push(envelope);
             let pieces = face.iter().map(|&(e, r)| LoopPiece { entity: edges[e].entity, reversed: r, span: edges[e].span }).collect();
             loops.push(Loop { pieces, polygon: poly, area: a });
         }
@@ -986,8 +1017,8 @@ pub fn find_regions(s: &Sketch) -> Result<Vec<Region>, SketchError> {
             && bi[1] >= bo[1] - slack
             && bi[2] <= bo[2] + slack
             && bi[3] <= bo[3] + slack
-            && point_in_polygon(probes[i], &outer.polygon)
-            && inner.polygon.iter().step_by((inner.polygon.len() / 8).max(1)).all(|p| point_in_polygon(*p, &outer.polygon) || on_ring(*p, &outer.polygon, slack))
+            && point_in_polygon(probes[i], &envelopes[o])
+            && inner.polygon.iter().step_by((inner.polygon.len() / 8).max(1)).all(|p| point_in_polygon(*p, &envelopes[o]) || on_ring(*p, &envelopes[o], slack))
     };
     let mut by_area: Vec<usize> = (0..n).collect();
     by_area.sort_by(|&a, &b| loops[a].area.total_cmp(&loops[b].area).then(a.cmp(&b)));
@@ -1011,7 +1042,9 @@ pub fn find_regions(s: &Sketch) -> Result<Vec<Region>, SketchError> {
     };
     let mut regions = Vec::new();
     for i in 0..n {
-        let holes: Vec<Loop> = children[i].iter().map(|&j| loops[j].clone()).collect();
+        // Lo que ya está recortado del contorno (tocaba el borde) cuenta
+        // para la profundidad pero no es un agujero aparte
+        let holes: Vec<Loop> = children[i].iter().filter(|&&j| point_in_polygon(probes[j], &loops[i].polygon)).map(|&j| loops[j].clone()).collect();
         let hole_polys: Vec<&[P2]> = holes.iter().map(|h| h.polygon.as_slice()).collect();
         let sample = interior_point(&loops[i].polygon, &hole_polys);
         regions.push(Region { outer: loops[i].clone(), holes, depth: depth(i), sample });
