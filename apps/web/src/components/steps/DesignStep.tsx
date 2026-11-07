@@ -65,6 +65,8 @@ import {
   type P2,
   type P3,
   type ScanDab,
+  type ScanSeed,
+  type ReliefMode,
   FIT_COLORS,
   type MoldOptions,
   type ReconstructProposal,
@@ -370,7 +372,6 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
   const [scanResult, setScanResult] = createSignal<{ pick: ScanPick; triangle: number }>();
   const [sliceBase, setSliceBase] = createSignal<"xy" | "xz" | "yz">("xy");
   const [sliceOffset, setSliceOffset] = createSignal(0);
-  const [brushRadius, setBrushRadius] = createSignal(5);
   const [mold, setMold] = createSignal<MoldOptions>({ axis: 2, at: 0.5, wall: 8, gap: 0.2, keys: true, sprue: 3 });
   const setMoldField = <K extends keyof MoldOptions>(k: K, v: MoldOptions[K]) => setMold({ ...mold(), [k]: v });
   const makeMold = async () => {
@@ -569,24 +570,6 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
     }
   };
 
-  /** Pincel: lo que se pinta sobre el escaneo queda como parche (carcasa de 2 mm, pieza nueva) */
-  const paintPatch = () =>
-    ui.setPick({
-      kind: "scan_brush",
-      prompt: tl("Arrastrar sobre el escaneo para pintar el parche"),
-      radius: brushRadius,
-      done: async (points) => {
-        try {
-          const dabs = await invoke<ScanDab[]>("cad_scan_dabs", { points });
-          if (!dabs.length) return say(tl("El pincel no tocó el escaneo"));
-          ui.setScanHighlight([]);
-          void store.addFeature({ type: "scan_body", offset: 0.2, thickness: 2, faces: 20000, op: "new", paint: { radius: brushRadius(), dabs } });
-        } catch (e) {
-          say(String(e));
-        }
-      },
-    });
-
   const detect = async () => {
     try {
       setDetections(await store.scanDetect());
@@ -690,44 +673,11 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                       size="sm"
                       variant="ghost"
                       fullWidth
-                      title={tl("El escaneo cerrado como sólido: restarlo de una pieza deja el hueco donde calza, con la holgura que se elija")}
-                      onClick={() => {
-                        // Con piezas, lo habitual es dejar el hueco donde calza el escaneo
-                        const cut = !!store.result()?.body;
-                        void store.addFeature({ type: "scan_body", offset: cut ? 0.2 : 0, faces: 20000, op: cut ? "cut" : "new" });
-                      }}
+                      title={tl("Una pieza que copia la piel: lleno (la cuna o el encaje, restándolo) o carcasa con espesor; en todo el escaneo, bajo un sketch o donde se pinte con el pincel")}
+                      onClick={actions.addSkinThickness}
                     >
-                      {tl("Escaneo como cuerpo")}
+                      {tl("Espesor sobre piel")}
                     </Button>
-                    <div class="grid grid-cols-2 gap-1.5">
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        title={tl("Pieza que copia la piel del escaneo con un espesor (carcasa, funda)")}
-                        onClick={() => actions.startScanShell(false)}
-                      >
-                        {tl("Carcasa")}
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        title={tl("Solo lo que cae bajo el contorno de un sketch, con espesor (férula, almohadilla, tapa que calza)")}
-                        onClick={() => actions.startScanShell(true)}
-                      >
-                        {tl("Parche desde sketch")}
-                      </Button>
-                    </div>
-                    <div class="flex items-end gap-1.5">
-                      <Num label={tl("Radio del pincel")} value={brushRadius()} onCommit={(v) => v > 0 && setBrushRadius(v)} suffix="mm" />
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        title={tl("Pintar con el pincel la zona del escaneo que será el parche (el borde queda perpendicular a la piel)")}
-                        onClick={paintPatch}
-                      >
-                        {tl("Pincel")}
-                      </Button>
-                    </div>
                     <div class="space-y-1.5" aria-label={tl("Molde")}>
                       <span class="text-xs text-text-muted">{tl("Molde de dos mitades")}</span>
                       <div class="grid grid-cols-2 gap-1.5">
@@ -760,7 +710,7 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                       </Button>
                     </div>
                     <p class="text-[11px] text-text-dim leading-relaxed">
-                      {tl("Hasta la piel: extrusión «Hasta el escaneo», «Cara al escaneo» (Modificar) y nervio «Hasta el escaneo».")}
+                      {tl("Hasta la piel: extrusión «Hasta el escaneo», «Mover cara» hasta el escaneo (Modificar), nervio «Hasta el escaneo» y «Relieve sobre la piel».")}
                     </p>
                   </div>
                   <span class="block text-xs text-text-muted">{tl("Tomar del escaneo")}</span>
@@ -1801,6 +1751,274 @@ export const FeatureEditor: Component<{
     return st?.state === "error" || st?.state === "warning" ? (st.missing ?? []).filter((m) => m.field === field).map((m) => m.index) : [];
   };
   const sketchOptions = () => props.sketches.map((s) => ({ value: String(s.id), label: s.name }));
+  /**
+   * Mover cara: el mismo grupo de caras con otro movimiento (distancia, hasta un plano o
+   * cara, hasta el escaneo, girar). Cambia el tipo de la operación y conserva las caras.
+   */
+  const faceMoveSelect = () => {
+    type Moves = "move_face" | "replace_face" | "face_to_scan" | "rotate_face";
+    const current = () => f().kind.type as Moves;
+    const change = (to: Moves) =>
+      void props.store.updateFeature(f().id, (x) => {
+        const k = x.kind;
+        if (!("faces" in k) || k.type === to) return;
+        const faces = k.faces as FaceRef[];
+        x.kind =
+          to === "move_face"
+            ? { type: "move_face", faces, distance: 5 }
+            : to === "replace_face"
+              ? { type: "replace_face", faces, target: { type: "xy" } }
+              : to === "face_to_scan"
+                ? { type: "face_to_scan", faces, offset: 0 }
+                : { type: "rotate_face", faces, axis: { type: "z" }, angle: 10 };
+      });
+    return (
+      <Row label={tl("Movimiento")}>
+        <Select
+          options={[
+            { value: "move_face", label: tl("Una distancia") },
+            { value: "replace_face", label: tl("Hasta un plano o una cara") },
+            { value: "face_to_scan", label: tl("Hasta el escaneo") },
+            { value: "rotate_face", label: tl("Girar (bisagra)") },
+          ]}
+          value={current()}
+          onChange={(v) => change(v as Moves)}
+        />
+      </Row>
+    );
+  };
+  /**
+   * Resultado sólido o superficie: extrusión, revolución, transición y barrido son la misma
+   * operación con regiones cerradas (sólido) o con curvas abiertas o cerradas (superficie).
+   */
+  const resultSelect = () => {
+    const surface = () => f().kind.type.startsWith("surface_");
+    const change = (v: string) =>
+      void props.store.updateFeature(f().id, (x) => {
+        const k = x.kind;
+        const all = { type: "all" as const };
+        if (v === "surface") {
+          if (k.type === "extrude") x.kind = { type: "surface_extrude", sketch: k.sketch, entities: [], extent: k.extent, reverse: k.reverse };
+          else if (k.type === "revolve") x.kind = { type: "surface_revolve", sketch: k.sketch, entities: [], axis: k.axis, angle: k.angle };
+          else if (k.type === "loft") x.kind = { type: "surface_loft", sections: k.sections.map((sc) => ({ sketch: sc.sketch, entities: [] })), ruled: k.ruled };
+          else if (k.type === "sweep") x.kind = { type: "surface_sweep", sketch: k.sketch, entities: [], path: k.path, orient: k.orient };
+        } else {
+          if (k.type === "surface_extrude") x.kind = { type: "extrude", sketch: k.sketch, regions: all, extent: k.extent, reverse: k.reverse, op: "join" };
+          else if (k.type === "surface_revolve") x.kind = { type: "revolve", sketch: k.sketch, regions: all, axis: k.axis, angle: k.angle, op: "join" };
+          else if (k.type === "surface_loft") x.kind = { type: "loft", sections: k.sections.map((sc) => ({ sketch: sc.sketch, regions: all })), ruled: k.ruled, op: "join" };
+          else if (k.type === "surface_sweep") x.kind = { type: "sweep", sketch: k.sketch, regions: all, path: k.path, orient: k.orient, op: "join" };
+        }
+      });
+    return (
+      <Row label={tl("Resultado")}>
+        <Select
+          options={[
+            { value: "solid", label: tl("Sólido (regiones cerradas)") },
+            { value: "surface", label: tl("Superficie (curvas, sin espesor)") },
+          ]}
+          value={surface() ? "surface" : "solid"}
+          onChange={change}
+        />
+      </Row>
+    );
+  };
+  /**
+   * Referencias tomadas del escaneo (plano de una zona o por 3 puntos, eje de un cilindro,
+   * punto): la referencia del escaneo reemplaza a esta operación.
+   */
+  const scanReferenceRow = (what: "plane" | "axis" | "point") => {
+    const replace = async (feature: Parameters<CadStore["scanAdd"]>[0]) => {
+      try {
+        const id = f().id;
+        await props.store.scanAdd(feature);
+        props.ui.setScanHighlight([]);
+        props.store.removeFeature(id);
+      } catch (e) {
+        props.say?.(String(e));
+      }
+    };
+    const zone = (shape: "plane" | "cylinder") =>
+      props.ui.setPick({
+        kind: "scan",
+        shape,
+        prompt: shape === "plane" ? tl("Clic en una zona plana del escaneo") : tl("Clic en un cilindro o agujero del escaneo"),
+        done: (_, triangle, at) => {
+          props.ui.setPick({ kind: "none" });
+          void replace(shape === "plane" ? { kind: "ref_plane", triangle, at } : { kind: "ref_axis", triangle, at });
+        },
+      });
+    const point = () => props.ui.setPick({ kind: "scan_point", prompt: tl("Clic en el punto del escaneo"), done: (at, triangle) => void replace({ kind: "ref_point", triangle, at }) });
+    const three = () => {
+      const points: [number, P3][] = [];
+      const next = () =>
+        props.ui.setPick({
+          kind: "scan_point",
+          prompt: tl("Punto {v1} de 3 sobre el escaneo", { v1: points.length + 1 }),
+          done: (at, triangle) => {
+            points.push([triangle, at]);
+            if (points.length < 3) next();
+            else void replace({ kind: "ref_plane_points", points });
+          },
+        });
+      next();
+    };
+    return (
+      <div class="flex flex-wrap items-center gap-1">
+        <span class="text-xs text-text-muted">{tl("Del escaneo:")}</span>
+        <Show when={what === "plane"}>
+          <Button size="sm" variant="ghost" onClick={() => zone("plane")}>
+            {tl("Zona plana")}
+          </Button>
+          <Button size="sm" variant="ghost" onClick={three}>
+            {tl("3 puntos")}
+          </Button>
+        </Show>
+        <Show when={what === "axis"}>
+          <Button size="sm" variant="ghost" onClick={() => zone("cylinder")}>
+            {tl("Cilindro o agujero")}
+          </Button>
+        </Show>
+        <Show when={what === "point"}>
+          <Button size="sm" variant="ghost" onClick={point}>
+            {tl("Un punto")}
+          </Button>
+        </Show>
+      </div>
+    );
+  };
+  /**
+   * Redondeo (aristas, completo, entre caras) y chaflán (aristas, vértice): el tipo se cambia
+   * en el diálogo; lo elegido que no sirve para el otro tipo se vuelve a elegir.
+   */
+  const roundTypeSelect = () => {
+    const none: FaceRef = { point: [0, 0, 0], normal: [0, 0, 1], tags: [] };
+    const fillet = ["fillet", "full_round", "face_blend"].includes(f().kind.type);
+    const change = (v: string) =>
+      void props.store.updateFeature(f().id, (x) => {
+        if (x.kind.type === v) return;
+        const k = x.kind;
+        const radius = "radius" in k ? (k.radius as number) : "distance" in k ? (k.distance as number) : 2;
+        const edges = "edges" in k ? (k.edges as EdgeRef[]) : [];
+        const faces = k.type === "face_blend" ? k.a : k.type === "full_round" ? [k.side_a] : [];
+        x.kind =
+          v === "fillet"
+            ? { type: "fillet", edges, radius }
+            : v === "full_round"
+              ? { type: "full_round", side_a: faces[0] ?? none, middle: none, side_b: none }
+              : v === "face_blend"
+                ? { type: "face_blend", a: faces, b: [], radius }
+                : v === "chamfer"
+                  ? { type: "chamfer", edges, distance: radius }
+                  : { type: "vertex_chamfer", vertex: { type: "at", point: [0, 0, 0] }, distance: radius };
+      });
+    return (
+      <Row label={tl("Tipo")}>
+        <Select
+          options={
+            fillet
+              ? [
+                  { value: "fillet", label: tl("En las aristas") },
+                  { value: "full_round", label: tl("Completo (medio cilindro)") },
+                  { value: "face_blend", label: tl("Entre dos grupos de caras") },
+                ]
+              : [
+                  { value: "chamfer", label: tl("En las aristas") },
+                  { value: "vertex_chamfer", label: tl("En un vértice") },
+                ]
+          }
+          value={f().kind.type}
+          onChange={change}
+        />
+      </Row>
+    );
+  };
+  /**
+   * Partir: con qué lado quedarse. Los dos (cada pedazo una pieza) es «partir»; uno solo es
+   * «cortar»: cambia el tipo de la operación conservando el plano y las piezas.
+   */
+  const splitKeepSelect = (_plane: PlaneSpec) => {
+    const k = () => f().kind;
+    const value = () => (k().type === "split_by" ? "both" : (k() as { flip: boolean }).flip ? "other" : "normal");
+    const change = (v: string) =>
+      void props.store.updateFeature(f().id, (x) => {
+        if (v === "both" && x.kind.type === "split") {
+          x.kind = { type: "split_by", parts: x.scope ?? [], tool: { type: "plane", plane: x.kind.plane } };
+          x.scope = undefined;
+        } else if (v !== "both") {
+          if (x.kind.type === "split_by") {
+            if (x.kind.tool.type !== "plane") return;
+            x.scope = x.kind.parts.length ? x.kind.parts : undefined;
+            x.kind = { type: "split", plane: x.kind.tool.plane, flip: v === "other" };
+          } else if (x.kind.type === "split") x.kind.flip = v === "other";
+        }
+      });
+    return (
+      <Row label={tl("Quedarse con")}>
+        <Select
+          options={[
+            { value: "both", label: tl("Los dos lados (cada uno una pieza)") },
+            { value: "normal", label: tl("El lado de la normal") },
+            { value: "other", label: tl("El otro lado") },
+          ]}
+          value={value()}
+          onChange={change}
+        />
+      </Row>
+    );
+  };
+  /** Patrón de otro tipo con valores de partida (los que piden un sketch toman el último que sirve) */
+  const patternDefault = (t: PatternKind["type"]): PatternKind | undefined => {
+    const view = (id: number) => props.store.sketchView(id);
+    const last = (ok: (s: Feature) => boolean) => props.sketches.filter(ok).pop()?.id;
+    const withRegions = last((s) => (view(s.id)?.regions.length ?? 0) > 0);
+    const withPoints = last((s) => s.kind.type === "sketch" && s.kind.sketch.entities.some((e) => e.geometry.type === "point" && !e.construction));
+    const path = last(() => true);
+    switch (t) {
+      case "linear":
+        return { type: "linear", direction: [1, 0, 0], count: 3, spacing: 10 };
+      case "circular":
+        return { type: "circular", axis: { type: "z" }, count: 6, angle: 360 };
+      case "spiral":
+        return { type: "spiral", axis: { type: "z" }, count: 6, angle: 30, step: 5 };
+      case "table":
+        return { type: "table", offsets: [[20, 0, 0], [0, 20, 0]] };
+      case "surface":
+        return { type: "surface", face: { point: [0, 0, 0], normal: [0, 0, 1], tags: [] }, count_u: 3, count_v: 3 };
+      case "curve":
+        return path === undefined ? undefined : { type: "curve", path: { type: "sketch", sketch: path, entities: [] }, count: 4 };
+      case "chain":
+        return path === undefined ? undefined : { type: "chain", path: { type: "sketch", sketch: path, entities: [] }, spacing: 10, count: 0 };
+      case "fill":
+        return withRegions === undefined ? undefined : { type: "fill", sketch: withRegions, regions: { type: "all" }, spacing: 10, hex: false, margin: 2 };
+      case "points":
+        return withPoints === undefined ? undefined : { type: "points", sketch: withPoints, points: [] };
+    }
+  };
+  /** Pincel sobre el escaneo para el espesor sobre piel: suma toques (`more`) o pinta de nuevo */
+  const paintScanBody = (more: boolean) => {
+    const k = f().kind;
+    const radius = () => (k.type === "scan_body" && k.paint ? k.paint.radius : 5);
+    props.ui.setPick({
+      kind: "scan_brush",
+      prompt: tl("Arrastrar sobre el escaneo para pintar el parche"),
+      radius,
+      done: async (points) => {
+        try {
+          const dabs = await invoke<ScanDab[]>("cad_scan_dabs", { points });
+          if (!dabs.length) return props.say?.(tl("El pincel no tocó el escaneo"));
+          props.ui.setScanHighlight([]);
+          update((x) => {
+            if (x.type !== "scan_body") return;
+            const old = more && x.paint ? x.paint.dabs : [];
+            x.paint = { radius: x.paint?.radius ?? radius(), dabs: [...old, ...dabs] };
+            x.region = null;
+          });
+        } catch (e) {
+          props.say?.(String(e));
+        }
+      },
+    });
+  };
   const planeSpecSelect = (value: PlaneSpec, set: (p: PlaneSpec) => void, lostFace = false) => {
     const current = refValue(value) ?? value.type;
     return (
@@ -1987,6 +2205,7 @@ export const FeatureEditor: Component<{
               const setExtent = (e: Extent) => update((x) => x.type === "extrude" && (x.extent = e));
               return (
                 <>
+                  {resultSelect()}
                   <Row label={tl("Sketch")}>
                     <Select options={sketchOptions()} value={String(k().sketch)} onChange={(v) => update((x) => x.type === "extrude" && (x.sketch = +v))} />
                   </Row>
@@ -2148,6 +2367,7 @@ export const FeatureEditor: Component<{
               };
               return (
                 <>
+                  {resultSelect()}
                   <Row label={tl("Sketch")}>
                     <Select options={sketchOptions()} value={String(k().sketch)} onChange={(v) => update((x) => x.type === "revolve" && (x.sketch = +v))} />
                   </Row>
@@ -2322,8 +2542,49 @@ export const FeatureEditor: Component<{
                   x.link = { ...link, offset, flip };
                 });
               };
+              // Cambiar de forma (o de pieza estándar) sin borrar la operación
+              const basic = ["box", "cylinder", "sphere", "cone", "torus"];
+              const shapeOptions = () =>
+                basic.includes(k().shape.type)
+                  ? [
+                      { value: "box", label: tl("Caja") },
+                      { value: "cylinder", label: tl("Cilindro") },
+                      { value: "sphere", label: tl("Esfera") },
+                      { value: "cone", label: tl("Cono") },
+                      { value: "torus", label: tl("Toro") },
+                    ]
+                  : standard()
+                    ? [
+                        { value: "bolt", label: tl("Tornillo") },
+                        { value: "nut", label: tl("Tuerca") },
+                        { value: "washer", label: tl("Arandela") },
+                      ]
+                    : [];
+              const setShape = (v: string) =>
+                update((x) => {
+                  if (x.type !== "primitive" || x.shape.type === v) return;
+                  const size = "size" in x.shape ? x.shape.size : "M6";
+                  const shapes: Record<string, PrimitiveShape> = {
+                    box: { type: "box", dx: 20, dy: 20, dz: 20, centered: true, centered_z: true },
+                    cylinder: { type: "cylinder", radius: 10, height: 20 },
+                    sphere: { type: "sphere", radius: 10 },
+                    cone: { type: "cone", r1: 10, r2: 0, height: 20 },
+                    torus: { type: "torus", major: 15, minor: 4 },
+                    bolt: { type: "bolt", size, length: 20, head: "socket" },
+                    nut: { type: "nut", size },
+                    washer: { type: "washer", size },
+                  };
+                  x.shape = shapes[v];
+                  // La tuerca y el tornillo piden roscas distintas: la asociación no sirve
+                  x.link = null;
+                });
               return (
                 <>
+                  <Show when={shapeOptions().length}>
+                    <Row label={tl("Forma")}>
+                      <Select options={shapeOptions()} value={k().shape.type} onChange={setShape} />
+                    </Row>
+                  </Show>
                   <Show when={k().shape.type === "gear" && (k().shape as Extract<PrimitiveShape, { type: "gear" }>)}>
                     {(g) => <GearFields store={props.store} ui={props.ui} feature={f().id} shape={g()} field={field} update={update} />}
                   </Show>
@@ -2427,7 +2688,33 @@ export const FeatureEditor: Component<{
                       </>
                     )}
                   </Show>
-                  <Show when={!linked()}>
+                  <Show when={k().on}>
+                    <p class="text-xs text-text-muted">{tl("Apoyada en la piel (sigue al escaneo)")}</p>
+                    {field(tl("Giro"), "kind.origin.0", k().origin[0], (x, v) => x.type === "primitive" && (x.origin[0] = v), "°")}
+                    {field(tl("Separación"), "kind.origin.2", k().origin[2], (x, v) => x.type === "primitive" && (x.origin[2] = v), "mm")}
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() =>
+                        update((x) => {
+                          if (x.type !== "primitive" || !x.on) return;
+                          // Queda donde estaba: el origen y el eje de la normal, ya fijos
+                          const on = x.on;
+                          const ax = on.type === "reference" ? props.store.doc()?.features.find((g) => g.id === on.feature) : undefined;
+                          if (ax?.kind.type === "axis" && ax.kind.def.type === "scan") {
+                            const { origin: o, direction: d } = ax.kind.def;
+                            x.origin = [o[0] + d[0] * x.origin[2], o[1] + d[1] * x.origin[2], o[2] + d[2] * x.origin[2]];
+                            x.z = d;
+                            x.x = Math.abs(d[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+                          }
+                          x.on = null;
+                        })
+                      }
+                    >
+                      {tl("Soltar de la piel")}
+                    </Button>
+                  </Show>
+                  <Show when={!linked() && !k().on}>
                   <div class="space-y-1">
                     <span class="text-xs text-text-muted">{tl("Posición (mm)")}</span>
                     <div class="grid grid-cols-3 gap-1">
@@ -2468,6 +2755,7 @@ export const FeatureEditor: Component<{
               };
               return (
                 <>
+                  {roundTypeSelect()}
                   <Show when={kind.type === "chamfer"}>
                     <Row label={tl("Tipo")}>
                       <Select
@@ -2641,6 +2929,27 @@ export const FeatureEditor: Component<{
             {(k) => (
               <>
                 <ToolChecklist tools={props.tools.filter((t) => t.id !== f().id)} value={k().features} onChange={(ids) => update((x) => x.type === "pattern" && (x.features = ids))} />
+                <Row label={tl("Tipo")}>
+                  <Select
+                    options={[
+                      { value: "linear", label: tl("Lineal") },
+                      { value: "circular", label: tl("Circular") },
+                      { value: "curve", label: tl("En curva") },
+                      { value: "chain", label: tl("Cadena") },
+                      { value: "spiral", label: tl("En espiral") },
+                      { value: "surface", label: tl("Sobre superficie") },
+                      { value: "table", label: tl("Por tabla") },
+                      { value: "fill", label: tl("De relleno") },
+                      { value: "points", label: tl("Por puntos") },
+                    ]}
+                    value={k().pattern.type}
+                    onChange={(v) => {
+                      const p = patternDefault(v as PatternKind["type"]);
+                      if (!p) return props.say?.(tl("Ese tipo necesita un sketch (con el camino, la región o los puntos)"));
+                      update((x) => x.type === "pattern" && x.pattern.type !== v && (x.pattern = p));
+                    }}
+                  />
+                </Row>
                 <Show when={k().pattern.type === "table" && (k().pattern as Extract<PatternKind, { type: "table" }>)}>
                   {(t) => (
                     <div class="space-y-1" aria-label={tl("Tabla de copias")}>
@@ -2940,8 +3249,27 @@ export const FeatureEditor: Component<{
             {(k) => {
               const def = () => k().def;
               const setDef = (d: CurveDef) => update((x) => x.type === "curve" && (x.def = d));
+              // Proyectar sobre caras del sólido o sobre la piel del escaneo: la misma curva con otro destino
+              const projected = () => def().type === "projected" || def().type === "scan_projected";
+              const setTarget = (v: string) => {
+                const d = def();
+                if (v === "scan" && d.type === "projected") setDef({ type: "scan_projected", sketch: d.sketch, entities: d.entities, flip: false, offset: 0 });
+                if (v === "faces" && d.type === "scan_projected") setDef({ type: "projected", sketch: d.sketch, entities: d.entities, faces: [] });
+              };
               return (
                 <>
+                  <Show when={projected()}>
+                    <Row label={tl("Sobre")}>
+                      <Select
+                        options={[
+                          { value: "faces", label: tl("Caras del sólido") },
+                          { value: "scan", label: tl("La piel del escaneo") },
+                        ]}
+                        value={def().type === "scan_projected" ? "scan" : "faces"}
+                        onChange={setTarget}
+                      />
+                    </Row>
+                  </Show>
                   <Switch>
                     <Match when={def().type === "composite" && (def() as Extract<CurveDef, { type: "composite" }>)}>
                       {(d) => (
@@ -3152,6 +3480,7 @@ export const FeatureEditor: Component<{
           <Match when={f().kind.type === "rotate_face" && (f().kind as Extract<FeatureKind, { type: "rotate_face" }>)}>
             {(k) => (
               <>
+                {faceMoveSelect()}
                 <SelectionBox
                   store={props.store}
                   ui={props.ui}
@@ -3171,6 +3500,7 @@ export const FeatureEditor: Component<{
           <Match when={f().kind.type === "vertex_chamfer" && (f().kind as Extract<FeatureKind, { type: "vertex_chamfer" }>)}>
             {(k) => (
               <>
+                {roundTypeSelect()}
                 <Show
                   when={k().vertex.type === "picked" && (k().vertex as Extract<PointSpec, { type: "picked" }>)}
                   fallback={<PointField store={props.store} ui={props.ui} owner={`${f().id}:vertice`} label={tl("Vértice")} value={k().vertex} except={f().id} onChange={(p) => update((x) => x.type === "vertex_chamfer" && (x.vertex = p))} />}
@@ -3195,6 +3525,7 @@ export const FeatureEditor: Component<{
           <Match when={f().kind.type === "full_round" && (f().kind as Extract<FeatureKind, { type: "full_round" }>)}>
             {(k) => (
               <>
+                {roundTypeSelect()}
                 <SelectionBox store={props.store} ui={props.ui} owner={`${f().id}:a`} kind="face" label={tl("Un costado")} lost={lost("side_a" as MissingRef["field"])} refs={k().side_a ? [k().side_a] : []} onChange={(r) => r[0] && update((x) => x.type === "full_round" && (x.side_a = r[0] as FaceRef))} />
                 <SelectionBox store={props.store} ui={props.ui} owner={`${f().id}:m`} kind="face" label={tl("La cara del medio")} lost={lost("middle" as MissingRef["field"])} refs={k().middle ? [k().middle] : []} onChange={(r) => r[0] && update((x) => x.type === "full_round" && (x.middle = r[0] as FaceRef))} />
                 <SelectionBox store={props.store} ui={props.ui} owner={`${f().id}:b`} kind="face" label={tl("El otro costado")} lost={lost("side_b" as MissingRef["field"])} refs={k().side_b ? [k().side_b] : []} onChange={(r) => r[0] && update((x) => x.type === "full_round" && (x.side_b = r[0] as FaceRef))} />
@@ -3205,6 +3536,7 @@ export const FeatureEditor: Component<{
           <Match when={f().kind.type === "face_blend" && (f().kind as Extract<FeatureKind, { type: "face_blend" }>)}>
             {(k) => (
               <>
+                {roundTypeSelect()}
                 <SelectionBox store={props.store} ui={props.ui} owner={`${f().id}:a`} kind="faces" label={tl("Caras de un lado")} lost={lost("a")} refs={k().a} onChange={(r) => update((x) => x.type === "face_blend" && (x.a = r as FaceRef[]))} />
                 <SelectionBox store={props.store} ui={props.ui} owner={`${f().id}:b`} kind="faces" label={tl("Caras del otro lado")} lost={lost("b")} refs={k().b} onChange={(r) => update((x) => x.type === "face_blend" && (x.b = r as FaceRef[]))} />
                 {field(tl("Radio"), "kind.radius", k().radius, (x, v) => x.type === "face_blend" && (x.radius = v), "mm")}
@@ -3430,7 +3762,7 @@ export const FeatureEditor: Component<{
                     <Select options={(["xy", "xz", "yz"] as const).map((v) => ({ value: v, label: PLANE_LABELS[v] }))} value={base()} onChange={(v) => set(v as "xy", offset())} />
                   </Row>
                   <Num label={tl("A distancia")} suffix="mm" value={offset()} onCommit={(v) => set(base(), v)} />
-                  <Checkbox small label={tl("Conservar el otro lado")} checked={k().flip} onChange={(c) => update((x) => x.type === "split" && (x.flip = c))} />
+                  {splitKeepSelect(k().plane)}
                 </>
               );
             }}
@@ -3455,8 +3787,18 @@ export const FeatureEditor: Component<{
             {(k) => (
               <>
                 <p class="text-[11px] text-text-dim leading-relaxed">
-                  {tl("El escaneo cerrado por vóxeles. Sigue al escaneo: si se alinea, se repara o se elige otro, se rehace.")}
+                  {k().exact
+                    ? tl("El STL tal cual, con todo su detalle (tiene que ser una malla cerrada). Sigue al escaneo: si se alinea o se repara, se rehace.")
+                    : tl("El escaneo cerrado por vóxeles. Sigue al escaneo: si se alinea, se repara o se elige otro, se rehace.")}
                 </p>
+                <Checkbox
+                  small
+                  label={tl("Detalle completo (el STL tal cual, sin vóxeles)")}
+                  hint={tl("Para unir o grabar sobre un STL cerrado sin redondearle las aristas. Sin holgura ni carcasa; los escaneos abiertos no sirven (se cierran por vóxeles).")}
+                  checked={!!k().exact}
+                  onChange={(c) => update((x) => x.type === "scan_body" && ((x.exact = c || undefined), c && ((x.offset = 0), (x.thickness = 0))))}
+                />
+                <Show when={!k().exact}>
                 <Num label={tl("Holgura")} suffix="mm" step={0.05} value={k().offset} onCommit={(v) => update((x) => x.type === "scan_body" && (x.offset = v))} />
                 <p class="text-[11px] text-text-dim leading-relaxed">{tl("Positiva agranda el escaneo (el encaje no aprieta); negativa lo achica.")}</p>
                 <Row label={tl("Forma")}>
@@ -3489,14 +3831,52 @@ export const FeatureEditor: Component<{
                     {tl("Desde la piel corrida la holgura. En escaneos grandes hay un mínimo (la grilla de vóxeles tiene un tope).")}
                   </p>
                 </Show>
-                <Row label={tl("Solo bajo")}>
+                </Show>
+                <Row label={tl("Dónde")}>
                   <Select
-                    options={[{ value: "", label: tl("Todo el escaneo") }, ...sketchOptions()]}
-                    value={k().region ? String(k().region!.sketch) : ""}
-                    onChange={(v) => update((x) => x.type === "scan_body" && (x.region = v ? { sketch: +v, regions: { type: "all" } } : null))}
+                    options={[
+                      { value: "all", label: tl("Todo el escaneo") },
+                      { value: "sketch", label: tl("Bajo un sketch") },
+                      { value: "paint", label: tl("Pintado con el pincel") },
+                    ]}
+                    value={k().paint ? "paint" : k().region ? "sketch" : "all"}
+                    onChange={(v) => {
+                      if (v === "paint") return paintScanBody(false);
+                      const last = props.sketches.filter((s) => (props.store.sketchView(s.id)?.regions.length ?? 0) > 0).pop();
+                      if (v === "sketch" && !last) return props.say?.(tl("Primero hace falta un sketch con una región cerrada"));
+                      update((x) => {
+                        if (x.type !== "scan_body") return;
+                        x.paint = null;
+                        x.region = v === "sketch" && last ? { sketch: last.id, regions: { type: "all" } } : null;
+                      });
+                    }}
                   />
                 </Row>
-                <Show when={k().region}>
+                <Show when={k().paint}>
+                  {(p) => (
+                    <>
+                      <p class="text-xs text-text-muted">{tl("{v1} toques del pincel", { v1: p().dabs.length })}</p>
+                      <Num
+                        label={tl("Radio del pincel")}
+                        suffix="mm"
+                        step={0.5}
+                        min={0.5}
+                        value={p().radius}
+                        onCommit={(v) => v > 0 && update((x) => x.type === "scan_body" && x.paint && (x.paint.radius = v))}
+                      />
+                      <div class="flex gap-1">
+                        <Button size="sm" variant="ghost" onClick={() => paintScanBody(true)}>
+                          {tl("Pintar más")}
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => paintScanBody(false)}>
+                          {tl("Pintar de nuevo")}
+                        </Button>
+                      </div>
+                      <p class="text-[11px] text-text-dim leading-relaxed">{tl("Arrastrar sobre el escaneo; el borde queda perpendicular a la piel.")}</p>
+                    </>
+                  )}
+                </Show>
+                <Show when={!k().paint && k().region}>
                   {(r) => (
                     <>
                       <RegionBox
@@ -3601,7 +3981,12 @@ export const FeatureEditor: Component<{
                   />
                 </Row>
                 <Show when={k().tool.type === "plane" && (k().tool as { plane: PlaneSpec })}>
-                  {(t) => <Row label={tl("Plano")}>{planeSpecSelect(t().plane, (p) => update((x) => x.type === "split_by" && x.tool.type === "plane" && (x.tool.plane = p)), lost("plane").length > 0)}</Row>}
+                  {(t) => (
+                    <>
+                      <Row label={tl("Plano")}>{planeSpecSelect(t().plane, (p) => update((x) => x.type === "split_by" && x.tool.type === "plane" && (x.tool.plane = p)), lost("plane").length > 0)}</Row>
+                      {splitKeepSelect(t().plane)}
+                    </>
+                  )}
                 </Show>
                 <p class="text-[11px] text-text-dim">
                   {tl("Cada pedazo queda como una pieza. Con otra pieza (una superficie curva, por ejemplo) se parte por su forma; la herramienta queda como estaba. Las superficies se recortan con Superficies → Recortar.")}
@@ -3930,6 +4315,7 @@ export const FeatureEditor: Component<{
           <Match when={f().kind.type === "move_face" && (f().kind as Extract<FeatureKind, { type: "move_face" }>)}>
             {(k) => (
               <>
+                {faceMoveSelect()}
                 <SelectionBox
                   store={props.store}
                   ui={props.ui}
@@ -4131,6 +4517,7 @@ export const FeatureEditor: Component<{
           <Match when={f().kind.type === "replace_face" && (f().kind as Extract<FeatureKind, { type: "replace_face" }>)}>
             {(k) => (
               <>
+                {faceMoveSelect()}
                 <SelectionBox
                   store={props.store}
                   ui={props.ui}
@@ -4158,6 +4545,7 @@ export const FeatureEditor: Component<{
           <Match when={f().kind.type === "face_to_scan" && (f().kind as Extract<FeatureKind, { type: "face_to_scan" }>)}>
             {(k) => (
               <>
+                {faceMoveSelect()}
                 <SelectionBox
                   store={props.store}
                   ui={props.ui}
@@ -4174,6 +4562,131 @@ export const FeatureEditor: Component<{
                 </p>
               </>
             )}
+          </Match>
+          <Match when={f().kind.type === "relief" && (f().kind as Extract<FeatureKind, { type: "relief" }>)}>
+            {(k) => {
+              const inward = () => !!k().inward;
+              const note = () => props.store.result()?.status.find((s) => s.id === f().id)?.note;
+              const modes = (): { value: ReliefMode; label: string }[] => [
+                { value: "even", label: tl("Pareja sobre la piel") },
+                { value: "flat_top", label: inward() ? tl("Fondo plano en el plano del sketch") : tl("Tope plano en el plano del sketch") },
+                { value: "flat_auto", label: inward() ? tl("Fondo plano automático") : tl("Tope plano automático") },
+                { value: "along", label: tl("Según la dirección del sketch") },
+              ];
+              const explain = () =>
+                ({
+                  even: inward()
+                    ? tl("Se hunde lo mismo en todo punto, medido perpendicular a la piel: el fondo copia la piel.")
+                    : tl("Se levanta lo mismo en todo punto, medido perpendicular a la piel: la cara de arriba copia la piel."),
+                  flat_top: inward()
+                    ? tl("El fondo queda plano en el plano del sketch (que tiene que estar adentro del material); desde ahí hasta la piel.")
+                    : tl("La base se amolda a la piel y la cara de arriba queda plana en el plano del sketch: donde la piel está más baja, el relieve es más alto."),
+                  flat_auto: inward()
+                    ? tl("El fondo queda plano, a la profundidad pedida bajo el punto más hondo de la piel: ninguna parte queda menos honda.")
+                    : tl("La cara de arriba queda plana, a la altura pedida sobre el punto más alto de la piel bajo el sketch: ninguna parte queda más baja."),
+                  along: tl("La piel corrida la altura en la dirección del sketch: las paredes quedan paralelas, como proyectado con una linterna."),
+                })[k().mode];
+              return (
+                <>
+                  <Row label={tl("Sketch")}>
+                    <Select options={sketchOptions()} value={String(k().sketch)} onChange={(v) => update((x) => x.type === "relief" && ((x.sketch = +v), (x.regions = { type: "all" })))} />
+                  </Row>
+                  <RegionBox
+                    ui={props.ui}
+                    store={props.store}
+                    owner={`${f().id}:regiones`}
+                    lost={lost("regions")}
+                    sketch={k().sketch}
+                    value={k().regions}
+                    onChange={(r) => update((x) => x.type === "relief" && (x.regions = r))}
+                  />
+                  <Row label={tl("Sobre")}>
+                    <Select
+                      options={[
+                        { value: "auto", label: tl("El escaneo si hay; si no, el sólido") },
+                        { value: "scan", label: tl("La piel del escaneo") },
+                        { value: "body", label: tl("El sólido del diseño") },
+                      ]}
+                      value={k().target ?? "auto"}
+                      onChange={(v) => update((x) => x.type === "relief" && (x.target = v === "auto" ? undefined : (v as "scan" | "body")))}
+                    />
+                  </Row>
+                  <Row label={tl("Sentido")}>
+                    <Select
+                      options={[
+                        { value: "out", label: tl("Hacia afuera (relieve)") },
+                        { value: "in", label: tl("Hacia adentro (grabado)") },
+                      ]}
+                      value={inward() ? "in" : "out"}
+                      onChange={(v) => update((x) => x.type === "relief" && (x.inward = v === "in" || undefined))}
+                    />
+                  </Row>
+                  <Row label={tl("Forma")}>
+                    <Select options={modes()} value={k().mode} onChange={(v) => update((x) => x.type === "relief" && (x.mode = v as ReliefMode))} />
+                  </Row>
+                  <Show when={k().mode !== "flat_top"}>
+                    {field(inward() ? tl("Profundidad") : tl("Altura"), "kind.height", k().height, (x, v) => x.type === "relief" && (x.height = v), "mm")}
+                  </Show>
+                  <p class="text-[11px] text-text-dim">{explain()}</p>
+                  <Row label={tl("Cómo llega")}>
+                    <Select
+                      options={[
+                        { value: "project", label: tl("Proyectar (medidas en el plano)") },
+                        { value: "wrap", label: tl("Envolver (medidas sobre la piel)") },
+                      ]}
+                      value={k().map?.type ?? "project"}
+                      onChange={(v) => update((x) => x.type === "relief" && (x.map = v === "wrap" ? { type: "wrap", anchor: null, angle: 0 } : { type: "project" }))}
+                    />
+                  </Row>
+                  <Show
+                    when={k().map?.type === "wrap" && (k().map as { type: "wrap"; anchor?: ScanSeed | null; angle: number })}
+                    fallback={<p class="text-[11px] text-text-dim">{tl("El sketch llega a la piel en línea recta (proyectado): sus medidas valen en el plano; sobre una piel inclinada la forma se estira.")}</p>}
+                  >
+                    {(w) => (
+                      <>
+                        <div class="flex items-center gap-1">
+                          <span class="text-xs text-text-muted flex-1">{w().anchor ? tl("Centro en el punto elegido") : tl("Centro donde lo proyecta el sketch")}</span>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() =>
+                              props.ui.setPick({
+                                kind: "scan_point",
+                                prompt: tl("Clic en la piel donde va el centro del sketch"),
+                                done: async (at, triangle) => {
+                                  try {
+                                    const dabs = await invoke<ScanDab[]>("cad_scan_dabs", { points: [[triangle, at]] });
+                                    const seed = dabs[0]?.seed;
+                                    if (seed) update((x) => x.type === "relief" && x.map?.type === "wrap" && (x.map.anchor = seed));
+                                  } catch (e) {
+                                    props.say?.(String(e));
+                                  }
+                                },
+                              })
+                            }
+                          >
+                            {tl("Elegir centro")}
+                          </Button>
+                          <Show when={w().anchor}>
+                            <Button size="sm" variant="ghost" onClick={() => update((x) => x.type === "relief" && x.map?.type === "wrap" && (x.map.anchor = null))}>
+                              {tl("Quitar")}
+                            </Button>
+                          </Show>
+                        </div>
+                        {field(tl("Giro"), "kind.map.angle", w().angle, (x, v) => x.type === "relief" && x.map?.type === "wrap" && (x.map.angle = v), "°")}
+                        <p class="text-[11px] text-text-dim">
+                          {tl("El sketch se apoya sobre la piel como una calcomanía: sus medidas valen siguiendo la superficie. En pieles curvas en dos sentidos algo se estira (se ve en las medidas).")}
+                        </p>
+                      </>
+                    )}
+                  </Show>
+                  <Show when={note()}>{(n) => <p class="text-xs text-text-muted">{tl("Medidas: {v1}", { v1: n() })}</p>}</Show>
+                  {field(tl("Triángulos"), "kind.faces", k().faces ?? 20000, (x, v) => x.type === "relief" && (x.faces = Math.round(Math.min(100000, Math.max(2000, v)))))}
+                  <p class="text-[11px] text-text-dim">{tl("Más es más fiel y hace más lentas las operaciones (unos 3 s cada 20 000).")}</p>
+                  <Row label={tl("Con el sólido")}>{opSelect(k().op, (o) => update((x) => x.type === "relief" && (x.op = o)))}</Row>
+                </>
+              );
+            }}
           </Match>
           <Match when={f().kind.type === "scale" && (f().kind as Extract<FeatureKind, { type: "scale" }>)}>
             {(k) => {
@@ -4221,6 +4734,7 @@ export const FeatureEditor: Component<{
               };
               return (
                 <>
+                  {resultSelect()}
                   <Row label={tl("Sketch")}>
                     <Select options={sketchOptions()} value={String(k().sketch)} onChange={(v) => upd((x) => ((x.sketch = +v), (x.entities = [])))} />
                   </Row>
@@ -4389,6 +4903,7 @@ export const FeatureEditor: Component<{
               const NAMES: Record<string, string> = { line: tl("Línea"), arc: tl("Arco"), spline: tl("Spline") };
               return (
                 <>
+                  {resultSelect()}
                   <Row label={tl("Tipo de perfil")}>
                     <Select
                       options={[
@@ -4495,6 +5010,7 @@ export const FeatureEditor: Component<{
           <Match when={f().kind.type === "surface_sweep" && (f().kind as Extract<FeatureKind, { type: "surface_sweep" }>)}>
             {(k) => (
               <>
+                {resultSelect()}
                 <Row label={tl("Curvas de")}>
                   <Select options={sketchOptions()} value={String(k().sketch)} onChange={(v) => update((x) => x.type === "surface_sweep" && ((x.sketch = +v), (x.entities = [])))} />
                 </Row>
@@ -4528,6 +5044,7 @@ export const FeatureEditor: Component<{
           <Match when={f().kind.type === "surface_loft" && (f().kind as Extract<FeatureKind, { type: "surface_loft" }>)}>
             {(k) => (
               <>
+                {resultSelect()}
                 <For each={k().sections}>
                   {(sec, i) => (
                     <Row label={tl("Sección {v1}", { v1: i() + 1 })}>
@@ -4561,6 +5078,7 @@ export const FeatureEditor: Component<{
           <Match when={f().kind.type === "loft" && (f().kind as Extract<FeatureKind, { type: "loft" }>)}>
             {(k) => (
               <>
+                {resultSelect()}
                 <For each={k().sections}>
                   {(sec, i) => (
                     <div class="flex items-end gap-1">
@@ -4696,8 +5214,9 @@ export const FeatureEditor: Component<{
             )}
           </Match>
           <Match when={isScanReference(f().kind)}>
+            {scanReferenceRow(f().kind.type as "plane" | "axis" | "point")}
             <p class="text-[11px] text-text-dim leading-relaxed">
-              {tl("Tomado del escaneo: sigue al escaneo si se alinea, se mueve o se repara. Para cambiar de dónde sale, borrarlo y volver a tomarlo en la pestaña «Desde el escaneo».")}
+              {tl("Tomado del escaneo: sigue al escaneo si se alinea, se mueve o se repara. Para cambiar de dónde sale, volver a tomarlo con los botones de arriba.")}
             </p>
           </Match>
           <Match when={f().kind.type === "plane" && (f().kind as Extract<FeatureKind, { type: "plane" }>)}>
@@ -4707,6 +5226,7 @@ export const FeatureEditor: Component<{
               const base = (): PlaneSpec => (def().type === "offset" || def().type === "angle" ? (def() as { base: PlaneSpec }).base : { type: "xy" });
               return (
                 <>
+                  {scanReferenceRow("plane")}
                   <Row label={tl("Tipo")}>
                     <Select
                       options={[
@@ -4808,6 +5328,7 @@ export const FeatureEditor: Component<{
               const setDef = (d: AxisDef) => update((x) => x.type === "axis" && (x.def = d));
               return (
                 <>
+                  {scanReferenceRow("axis")}
                   <Row label={tl("Tipo")}>
                     <Select
                       options={[
@@ -4895,6 +5416,7 @@ export const FeatureEditor: Component<{
           <Match when={f().kind.type === "point" && (f().kind as Extract<FeatureKind, { type: "point" }>)}>
             {(k) => (
               <>
+                {scanReferenceRow("point")}
                 <Row label={tl("Tipo")}>
                   <Select
                     options={[

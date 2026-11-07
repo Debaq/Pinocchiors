@@ -55,7 +55,7 @@ pub fn add_mold(doc: &mut Document, lo: P3, hi: P3, o: &MoldOptions) -> Result<(
             z: [0.0, 0.0, 1.0],
             x: [1.0, 0.0, 0.0],
             op: BodyOp::New,
-            link: None,
+            link: None, on: None,
         })
     };
     let cylinder = |center: [f64; 2], from: f64, height: f64, radius: f64, op: BodyOp| {
@@ -63,7 +63,7 @@ pub fn add_mold(doc: &mut Document, lo: P3, hi: P3, o: &MoldOptions) -> Result<(
         origin[a] = from;
         origin[b] = center[0];
         origin[c] = center[1];
-        FeatureKind::Primitive(Primitive { shape: PrimitiveShape::Cylinder { radius, height }, origin, z, x, op, link: None })
+        FeatureKind::Primitive(Primitive { shape: PrimitiveShape::Cylinder { radius, height }, origin, z, x, op, link: None, on: None })
     };
     {
         let named = |doc: &mut Document, kind: FeatureKind, name: &str, scope: Option<FeatureId>| {

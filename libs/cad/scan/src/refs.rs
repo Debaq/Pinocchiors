@@ -17,6 +17,25 @@ pub enum ScanGeom {
 }
 
 impl ScanMesh {
+    /// Normal de la piel cerca de un punto, promediada por área en un radio de
+    /// unas veces el lado medio (el ruido de un triángulo no la tuerce).
+    pub fn smooth_normal(&self, t: u32, at: P3, _opts: &PickOptions) -> P3 {
+        // Lado medio de un triángulo equilátero de área media
+        let n = self.face_areas.len().max(1) as f64;
+        let edge = (self.face_areas.iter().sum::<f64>() / n * 4.0 / 3f64.sqrt()).sqrt();
+        let r = (edge * 4.0).max(1e-6);
+        let mut acc = [0.0; 3];
+        for (k, c) in self.face_centroids.iter().enumerate() {
+            if norm(sub(*c, at)) <= r {
+                acc = add(acc, scale(self.face_normals[k], self.face_areas[k]));
+            }
+        }
+        if norm(acc) < 1e-12 {
+            return self.face_normals[t as usize];
+        }
+        normalize(acc)
+    }
+
     /// Huella de los triángulos (cambia si la malla se rehace, no si se mueve)
     pub fn topology(&self) -> u32 {
         // FNV-1a sobre la cantidad de vértices y los índices
@@ -113,6 +132,10 @@ pub fn fit_reference(mesh: &ScanMesh, fit: &ScanFit, opts: &PickOptions) -> Resu
             ScanGeom::Axis { origin: c.origin, direction: c.direction }
         }
         ScanFit::Point { seed } => ScanGeom::Point(mesh.locate(seed).ok_or_else(lost)?.1),
+        ScanFit::Normal { seed } => {
+            let (t, at) = mesh.locate(seed).ok_or_else(lost)?;
+            ScanGeom::Axis { origin: at, direction: mesh.smooth_normal(t, at, opts) }
+        }
     })
 }
 

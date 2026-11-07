@@ -316,7 +316,7 @@ fn scan_body_leaves_a_cradle_with_clearance() {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::New,
-        link: None,
+        link: None, on: None,
     }));
     let id = doc.add(FeatureKind::ScanBody(ScanBody { offset: clearance, faces: 8000, op: BodyOp::Cut, ..Default::default() }));
     // Sin malla (sin escaneo): la operación avisa
@@ -400,7 +400,7 @@ fn block(dx: f64, dy: f64, dz: f64) -> FeatureKind {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::New,
-        link: None,
+        link: None, on: None,
     })
 }
 

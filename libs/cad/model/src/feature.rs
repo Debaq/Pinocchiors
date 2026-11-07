@@ -138,6 +138,9 @@ pub enum ScanFit {
     Cylinder { seed: ScanSeed },
     /// El punto del clic sobre la superficie.
     Point { seed: ScanSeed },
+    /// La normal de la piel en el punto del clic (hacia afuera): un eje para
+    /// apoyar piezas sobre la piel.
+    Normal { seed: ScanSeed },
 }
 
 /// Cómo se define un plano de referencia.
@@ -539,6 +542,11 @@ pub struct Primitive {
     /// marco de arriba no se usa) y gira el filete para que calce.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link: Option<ThreadLink>,
+    /// Apoyada en un eje (p. ej. la normal de la piel en un punto): el origen va
+    /// en su origen corrido `origin[2]` a lo largo de él, Z a lo largo del eje y
+    /// X girada `origin[0]` grados (el marco de arriba no se usa).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on: Option<AxisSpec>,
 }
 
 /// Coordinación entre roscas: la operación que la lleva toma la medida (diámetro,
@@ -690,6 +698,10 @@ pub struct ScanBody {
     /// guarda: de ella solo viaja la huella, que entra en la caché).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mesh: Option<ScanBodyMesh>,
+    /// Detalle completo: el STL tal cual como sólido (tiene que ser una malla
+    /// cerrada), sin pasar por vóxeles; sin holgura ni espesor.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub exact: bool,
 }
 
 /// Pincel sobre el escaneo: toques de `radius` mm de radio ligados a la piel.
@@ -709,6 +721,99 @@ pub struct ScanDab {
     pub point: P3,
     #[serde(default)]
     pub normal: P3,
+}
+
+/// Relieve o grabado sobre la piel del escaneo: las regiones de un sketch
+/// llevadas a la piel con una altura (texto, logos, marcas, almohadillas).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Relief {
+    pub sketch: FeatureId,
+    #[serde(default)]
+    pub regions: RegionSelection,
+    /// Cómo llega el sketch a la piel.
+    #[serde(default)]
+    pub map: ReliefMap,
+    /// Sobre qué: la piel del escaneo o el sólido del diseño.
+    #[serde(default, skip_serializing_if = "ReliefTarget::is_auto")]
+    pub target: ReliefTarget,
+    /// Altura (o profundidad del grabado), mm.
+    pub height: f64,
+    #[serde(default)]
+    pub mode: ReliefMode,
+    /// Hacia adentro del material (grabado) en vez de hacia afuera.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub inward: bool,
+    #[serde(default = "relief_op")]
+    pub op: BodyOp,
+    /// Triángulos con que se trabaja la piel (más: más fiel y más lento).
+    #[serde(default = "scan_body_faces")]
+    pub faces: usize,
+    /// La piel cerrada (sin holgura), que pone la app (como en [`ScanBody`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh: Option<ScanBodyMesh>,
+    /// La carcasa de la altura pedida (para «pareja sobre la piel»), que pone la app.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell: Option<ScanBodyMesh>,
+    /// El escaneo tal cual (para envolver), que pone la app.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skin: Option<ScanBodyMesh>,
+}
+
+fn relief_op() -> BodyOp {
+    BodyOp::New
+}
+
+/// Cómo se lleva el sketch a la piel.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ReliefMap {
+    /// En línea recta por la normal del sketch: las medidas valen en el plano.
+    #[default]
+    Project,
+    /// Apoyado sobre la piel como una calcomanía: las medidas valen sobre la
+    /// piel. El centro del sketch va en `anchor` (sin elegir: donde lo proyecta
+    /// la normal del sketch) y `angle` lo gira ahí (grados).
+    Wrap {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        anchor: Option<ScanSeed>,
+        #[serde(default)]
+        angle: f64,
+    },
+}
+
+/// Sobre qué superficie va el relieve.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReliefTarget {
+    /// El escaneo si hay uno elegido; si no, el sólido del diseño.
+    #[default]
+    Auto,
+    /// La piel del escaneo.
+    Scan,
+    /// Las caras del sólido del diseño (lo que hay antes de esta operación).
+    Body,
+}
+
+impl ReliefTarget {
+    fn is_auto(&self) -> bool {
+        *self == ReliefTarget::Auto
+    }
+}
+
+/// Qué altura tiene el relieve en cada punto.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReliefMode {
+    /// El mismo espesor perpendicular a la piel en todo punto.
+    #[default]
+    Even,
+    /// Tope (o fondo) plano en el plano del sketch.
+    FlatTop,
+    /// Tope plano a `height` del punto más alto de la piel bajo el sketch (el
+    /// fondo, a `height` del más hondo).
+    FlatAuto,
+    /// La piel corrida `height` a lo largo de la normal del sketch.
+    Along,
 }
 
 /// Superficie de forma libre ajustada a una zona suave del escaneo (una
@@ -756,7 +861,7 @@ fn scan_body_faces() -> usize {
 
 impl Default for ScanBody {
     fn default() -> Self {
-        Self { offset: 0.0, faces: scan_body_faces(), op: BodyOp::New, thickness: 0.0, region: None, paint: None, mesh: None }
+        Self { offset: 0.0, faces: scan_body_faces(), op: BodyOp::New, thickness: 0.0, region: None, paint: None, mesh: None, exact: false }
     }
 }
 
@@ -979,6 +1084,8 @@ pub enum FeatureKind {
     ScanBody(ScanBody),
     /// Superficie libre ajustada a una zona del escaneo que no es plano, cilindro ni cono
     ScanSurface(ScanSurface),
+    /// Relieve o grabado de un sketch sobre la piel del escaneo.
+    Relief(Relief),
     /// Booleana entre piezas: unir todas en la primera de `targets`, restar
     /// `tools` de cada una de `targets` (conservándolas o no) o dejar lo común.
     Boolean {
@@ -1613,11 +1720,14 @@ impl FeatureKind {
             FeatureKind::Hole(h) => [vec![h.sketch], h.link.iter().map(|l| l.feature).collect()].concat(),
             FeatureKind::Primitive(p) => {
                 let gear = if let PrimitiveShape::Gear(g) = &p.shape { g.link.map(|l| l.feature) } else { None };
-                p.link.iter().map(|l| l.feature).chain(gear).collect()
+                let mut d: Vec<FeatureId> = p.link.iter().map(|l| l.feature).chain(gear).collect();
+                d.extend(p.on.iter().flat_map(axis_deps));
+                d
             }
             FeatureKind::Thread { link, .. } => link.iter().map(|l| l.feature).collect(),
             FeatureKind::Rib { sketch, .. } => vec![*sketch],
             FeatureKind::ScanBody(b) => b.region.iter().map(|r| r.sketch).collect(),
+            FeatureKind::Relief(r) => vec![r.sketch],
             FeatureKind::SheetMetal { sketch, .. } => vec![*sketch],
             FeatureKind::ReplaceFace { target, .. } => plane_deps(target),
             FeatureKind::Extrude(e) => {
@@ -1722,6 +1832,8 @@ impl FeatureKind {
             FeatureKind::ScanBody(_) => "Cuerpo del escaneo",
             FeatureKind::ScanSurface(s) if s.close.is_some() || s.thickness != 0.0 => "Sólido libre del escaneo",
             FeatureKind::ScanSurface(_) => "Superficie libre del escaneo",
+            FeatureKind::Relief(r) if r.inward => "Grabado sobre la piel",
+            FeatureKind::Relief(_) => "Relieve sobre la piel",
             FeatureKind::Boolean { .. } => "Booleana",
             FeatureKind::SplitParts { .. } => "Separar piezas",
             FeatureKind::DeleteParts { .. } => "Borrar pieza",

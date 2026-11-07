@@ -8,7 +8,7 @@ use std::f64::consts::PI;
 
 fn build(g: GearPart) -> Result<Shape, String> {
     let mut doc = Document::new();
-    doc.add(FeatureKind::Primitive(Primitive { shape: PrimitiveShape::Gear(g), origin: [0.0; 3], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op: BodyOp::Join, link: None }));
+    doc.add(FeatureKind::Primitive(Primitive { shape: PrimitiveShape::Gear(g), origin: [0.0; 3], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op: BodyOp::Join, link: None, on: None }));
     let ev = doc.evaluate();
     if let Some(e) = ev.errors().first() {
         return Err(format!("{e:?}"));
@@ -451,7 +451,7 @@ fn modulo_transversal_da_el_primitivo_sin_dividir_por_cos_beta() {
 
 fn roles(g: GearPart) -> std::collections::BTreeMap<String, usize> {
     let mut doc = Document::new();
-    doc.add(FeatureKind::Primitive(Primitive { shape: PrimitiveShape::Gear(g), origin: [0.0; 3], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op: BodyOp::New, link: None }));
+    doc.add(FeatureKind::Primitive(Primitive { shape: PrimitiveShape::Gear(g), origin: [0.0; 3], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op: BodyOp::New, link: None, on: None }));
     let ev = doc.evaluate();
     assert!(ev.errors().is_empty(), "{:?}", ev.errors());
     let mut out = std::collections::BTreeMap::new();
@@ -500,7 +500,7 @@ fn la_referencia_a_una_cara_sobrevive_al_cambiar_los_dientes() {
     }
     let eval = |z: u32| {
         let mut doc = Document::new();
-        doc.add(FeatureKind::Primitive(Primitive { shape: PrimitiveShape::Gear(GearPart { bore: 8.0, ..spur(z) }), origin: [0.0; 3], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op: BodyOp::New, link: None }));
+        doc.add(FeatureKind::Primitive(Primitive { shape: PrimitiveShape::Gear(GearPart { bore: 8.0, ..spur(z) }), origin: [0.0; 3], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op: BodyOp::New, link: None, on: None }));
         doc.evaluate()
     };
     let before = eval(20);

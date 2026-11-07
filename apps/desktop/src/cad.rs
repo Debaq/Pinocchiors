@@ -313,7 +313,7 @@ fn fit_scan_references(state: &AppState, doc: &Document) -> Option<Document> {
                     if let Some(p) = &mut b.paint {
                         p.dabs = std::mem::take(&mut p.dabs).into_iter().filter_map(|d| scan.mesh.fit_dab(d)).collect();
                     }
-                    b.mesh = Some(scan_body_mesh(scan, b.offset, b.thickness, b.faces));
+                    b.mesh = Some(if b.exact { exact_scan_mesh(scan) } else { scan_body_mesh(scan, b.offset, b.thickness, b.faces) });
                 }
                 FeatureKind::ScanSurface(sf) if !f.suppressed => {
                     let key = serde_json::to_string(&(&sf.seed, sf.angle)).unwrap_or_default();
@@ -362,6 +362,26 @@ fn fit_scan_references(state: &AppState, doc: &Document) -> Option<Document> {
                     *mesh = Some(scan_body_mesh(scan, *offset, 0.0, SCAN_FACES));
                 }
                 FeatureKind::FaceToScan { offset, mesh, .. } if !f.suppressed => *mesh = Some(scan_body_mesh(scan, *offset, 0.0, SCAN_FACES)),
+                FeatureKind::Relief(r) if !f.suppressed => {
+                    r.mesh = Some(scan_body_mesh(scan, 0.0, 0.0, r.faces));
+                    // Pareja sobre la piel: la carcasa de la altura (hacia adentro si es grabado)
+                    r.shell = (r.mode == cad_model::ReliefMode::Even && r.height > 0.0)
+                        .then(|| scan_body_mesh(scan, 0.0, if r.inward { -r.height } else { r.height }, r.faces));
+                    // Envolver: el escaneo tal cual, y el ancla donde está hoy
+                    if let cad_model::ReliefMap::Wrap { anchor, .. } = &mut r.map {
+                        if let Some(a) = anchor
+                            && let Some((t, at)) = scan.mesh.locate(a)
+                        {
+                            a.triangle = t;
+                            a.at = at;
+                        }
+                        r.skin = Some(cad_model::ScanBodyMesh {
+                            hash: scan.scene_hash,
+                            data: std::sync::Arc::new((scan.mesh.vertices.clone(), scan.mesh.triangles.clone())),
+                            error: None,
+                        });
+                    }
+                }
                 FeatureKind::Rib { scan: Some(r), .. } if !f.suppressed => r.mesh = Some(scan_body_mesh(scan, r.offset, 0.0, SCAN_FACES)),
                 _ => {}
             }
@@ -403,6 +423,7 @@ fn uses_scan(kind: &FeatureKind) -> bool {
             | FeatureKind::ScanBody(_)
             | FeatureKind::Extrude(cad_model::Extrude { extent: cad_model::Extent::UpToScan { .. }, .. })
             | FeatureKind::FaceToScan { .. }
+            | FeatureKind::Relief(_)
             | FeatureKind::Rib { scan: Some(_), .. }
             | FeatureKind::Curve { def: cad_model::CurveDef::ScanPath { .. } | cad_model::CurveDef::ScanProjected { .. } }
             | FeatureKind::ScanSurface(_)
@@ -439,6 +460,29 @@ fn scan_body_mesh(scan: &ScanCache, offset: f64, thickness: f64, faces: usize) -
             }
         })
         .clone()
+}
+
+/// El escaneo tal cual, para «detalle completo»: tiene que ser una malla
+/// cerrada (cada arista entre dos triángulos, bien orientados); si no, queda
+/// vacía con el motivo. Hasta 300 000 triángulos (las booleanas cuestan ~0,2
+/// ms por cara).
+fn exact_scan_mesh(scan: &ScanCache) -> cad_model::ScanBodyMesh {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (scan.scene_hash, "exacto").hash(&mut h);
+    let (v, t) = (&scan.mesh.vertices, &scan.mesh.triangles);
+    let p = cad_scan::solid_problems(v, t);
+    let error = if t.len() > 300_000 {
+        Some(format!("el STL tiene {} triángulos: «Detalle completo» va hasta 300 000 (simplificarlo en Preparar)", t.len()))
+    } else if p.unmatched > 0 || p.repeated > 0 {
+        Some("el STL no está cerrado (bordes abiertos o aristas de más de dos caras): «Detalle completo» necesita una malla cerrada; repararla en Preparar o usar el modo normal".to_string())
+    } else {
+        None
+    };
+    match error {
+        None => cad_model::ScanBodyMesh { hash: h.finish(), data: std::sync::Arc::new((v.clone(), t.clone())), error: None },
+        Some(e) => cad_model::ScanBodyMesh { hash: h.finish(), data: Default::default(), error: Some(e) },
+    }
 }
 
 /// Recalcula el documento guardado, sin el borrador (exportar, pasar a modelo).
@@ -3067,6 +3111,8 @@ pub enum ScanFeature {
     /// plano de la zona plana, plano por tres puntos, eje del cilindro y un
     /// punto de la superficie. `at` = el punto del clic (mm).
     RefPlane { triangle: u32, at: P3 },
+    /// Eje por la normal de la piel en el punto (para apoyar piezas ahí)
+    RefNormal { triangle: u32, at: P3 },
     RefPlanePoints { points: Vec<(u32, P3)> },
     RefAxis { triangle: u32, at: P3 },
     RefPoint { triangle: u32, at: P3 },
@@ -3205,11 +3251,13 @@ fn scan_add_impl(state: &AppState, feature: ScanFeature, options: ScanPickOption
                 }
                 ScanFeature::RefPlane { triangle, at }
                 | ScanFeature::RefAxis { triangle, at }
+                | ScanFeature::RefNormal { triangle, at }
                 | ScanFeature::RefPoint { triangle, at } => {
                     let seed = mesh.seed(*triangle, *at).ok_or("Ese lugar no es del escaneo")?;
                     let (fit, name) = match &feature {
                         ScanFeature::RefPlane { .. } => (cad_model::ScanFit::Zone { seed }, "Plano del escaneo"),
                         ScanFeature::RefAxis { .. } => (cad_model::ScanFit::Cylinder { seed }, "Eje del escaneo"),
+                        ScanFeature::RefNormal { .. } => (cad_model::ScanFit::Normal { seed }, "Normal de la piel"),
                         _ => (cad_model::ScanFit::Point { seed }, "Punto del escaneo"),
                     };
                     let geom = cad_scan::fit_reference(mesh, &fit, &options.pick()).map_err(|e| e.to_string())?;
@@ -3783,7 +3831,7 @@ mod tests {
             z: [0.0, 0.0, 1.0],
             x: [1.0, 0.0, 0.0],
             op: BodyOp::Join,
-            link: None,
+            link: None, on: None,
         }));
         doc
     }
@@ -3854,7 +3902,7 @@ mod tests {
             (cad_model::PrimitiveShape::Cylinder { radius: 3.3, height: 20.0 }, BodyOp::Cut),
         ] {
             let origin = if op == BodyOp::Cut { [0.0, 0.0, -5.0] } else { [0.0; 3] };
-            doc.add(FeatureKind::Primitive(cad_model::Primitive { shape, origin, z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op, link: None }));
+            doc.add(FeatureKind::Primitive(cad_model::Primitive { shape, origin, z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op, link: None, on: None }));
         }
         let state = AppState::new();
         state.set_cad_tabs(cad_model::Tabs::from_legacy(Some(doc)));
@@ -3888,7 +3936,7 @@ mod tests {
             z: [0.0, 0.0, 1.0],
             x: [1.0, 0.0, 0.0],
             op: BodyOp::Join,
-            link: None,
+            link: None, on: None,
         }));
         doc.fabrication = Some(cad_model::Fabrication {
             printer: PrinterProfile::new("t", [200.0; 3], 0.4, 0.2),
@@ -4029,7 +4077,7 @@ mod tests {
             z: [0.0, 0.0, 1.0],
             x: [1.0, 0.0, 0.0],
             op: BodyOp::Join,
-            link: None,
+            link: None, on: None,
         });
         let changed = part_to_model_impl(&state, part, 0, Some(first.hash), &channel).unwrap();
         assert!(changed.changed, "la pieza cambió: malla nueva");

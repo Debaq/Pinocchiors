@@ -55,6 +55,9 @@ pub struct FeatureStatus {
     /// Flechas y arcos para el visor (extrusiones, giros, desplazamientos...).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub handles: Vec<Handle>,
+    /// Lo que la operación midió para mostrar (relieve: medidas en el plano y sobre la piel).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 /// Flecha de una operación en el visor: hacia dónde va y hasta dónde llega.
@@ -293,6 +296,7 @@ struct CacheEntry {
     sketch3d: Option<Sketch3dResult>,
     reference: Option<RefGeom>,
     ref_kind: Option<String>,
+    note: Option<String>,
     curve: Option<Shape>,
     tool: Option<(Tagged, BodyOp)>,
     threads: Vec<ThreadAxis>,
@@ -728,6 +732,8 @@ struct Ctx<'a> {
     handles: RefCell<Vec<Handle>>,
     /// Distancia entre centros del engrane que se engranó en la operación en curso.
     mesh_distance: std::cell::Cell<f64>,
+    /// Medidas que muestra el diálogo (relieve: en el plano y sobre la piel).
+    measures: RefCell<HashMap<FeatureId, String>>,
 }
 
 pub fn evaluate(doc: &Document) -> Evaluation {
@@ -748,6 +754,7 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
         auto_scope: Vec::new(),
         handles: RefCell::default(),
         mesh_distance: Default::default(),
+        measures: RefCell::default(),
     };
     let limit = doc.rollback.unwrap_or(usize::MAX);
     // Las holguras de la impresora cambian la geometría de varias operaciones: entran en la clave
@@ -780,7 +787,7 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
             ctx.ev.gears.extend(e.gears.iter().cloned());
             ctx.ev.bends.extend(e.bends.iter().cloned());
             ctx.ev.replaced.extend(e.replaced.iter().cloned());
-            ctx.ev.status.push(FeatureStatus { id: f.id, state: e.state.clone(), ms: e.ms, auto_scope: e.auto_scope.clone(), handles: e.handles.clone() });
+            ctx.ev.status.push(FeatureStatus { id: f.id, state: e.state.clone(), ms: e.ms, auto_scope: e.auto_scope.clone(), handles: e.handles.clone(), note: e.note.clone() });
             continue;
         }
         let start = std::time::Instant::now();
@@ -804,6 +811,7 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
         };
         // En centésimas: el JSON queda corto y se vuelve a leer exacto
         let ms = (start.elapsed().as_secs_f64() * 100_000.0).round() / 100.0;
+        let note = ctx.measures.borrow_mut().remove(&f.id);
         cache.put(
             key,
             CacheEntry {
@@ -816,6 +824,7 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
                 sketch3d: ctx.ev.sketches3d.get(&f.id).cloned(),
                 reference: ctx.ev.references.get(&f.id).cloned(),
                 ref_kind: ctx.ev.ref_kinds.get(&f.id).cloned(),
+                note: note.clone(),
                 curve: ctx.ev.curves.get(&f.id).cloned(),
                 tool: ctx.ev.tools.get(&f.id).cloned(),
                 threads: ctx.ev.threads.iter().filter(|t| t.feature == f.id).cloned().collect(),
@@ -827,7 +836,7 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
                 used: 0,
             },
         );
-        ctx.ev.status.push(FeatureStatus { id: f.id, state, ms, auto_scope: std::mem::take(&mut ctx.auto_scope), handles: ctx.handles.take() });
+        ctx.ev.status.push(FeatureStatus { id: f.id, state, ms, auto_scope: std::mem::take(&mut ctx.auto_scope), handles: ctx.handles.take(), note });
     }
     ctx.ev
 }
@@ -2122,6 +2131,218 @@ impl Ctx<'_> {
         self.keep_scan_pieces(id, cut, tags, pieces, keep)
     }
 
+    /// Relieve o grabado de las regiones de un sketch sobre la piel del escaneo.
+    fn relief(&self, id: FeatureId, r: &Relief) -> R<Tagged> {
+        if r.height <= 0.0 && r.mode != ReliefMode::FlatTop {
+            return Err("la altura tiene que ser mayor que cero".into());
+        }
+        // La superficie: el escaneo (si hay y no se pidió el sólido) o el sólido del diseño
+        let use_scan = match r.target {
+            ReliefTarget::Scan => true,
+            ReliefTarget::Body => false,
+            ReliefTarget::Auto => r.mesh.as_ref().is_some_and(|m| m.error.is_none() && !m.data.1.is_empty()),
+        };
+        let skin = if use_scan {
+            scan_solid(r.mesh.as_ref())?
+        } else {
+            self.body().map_err(|_| "no hay escaneo ni sólido sobre el que poner el relieve".to_string())?.clone()
+        };
+        // Para envolver sobre el sólido: su teselado hace de malla
+        let body_mesh;
+        let raw: Option<(&[P3], &[[u32; 3]])> = if use_scan {
+            r.skin.as_ref().map(|m| (m.data.0.as_slice(), m.data.1.as_slice()))
+        } else if matches!(r.map, ReliefMap::Wrap { .. }) {
+            let t = skin.tessellate(self.diag() * 2e-4, 0.1).map_err(err)?;
+            // Las caras se teselan por separado: vértices soldados para que el trozo cruce aristas
+            body_mesh = weld_mesh(&t.positions, &t.triangles, self.diag() * 1e-6);
+            Some((body_mesh.0.as_slice(), body_mesh.1.as_slice()))
+        } else {
+            None
+        };
+        let (mut faces, _, mut samples) = self.profile(r.sketch, &r.regions)?;
+        let s = self.ev.sketches.get(&r.sketch).ok_or("el sketch no está calculado")?;
+        let plane = s.plane;
+        let n = normalize(plane.normal);
+        // Puntos de adentro de las regiones (para medir hasta la piel y elegir pedazos)
+        let regions = self.selected_regions(s, &r.regions)?;
+        let mut probes = relief_probes(&regions);
+        let mut world: Vec<P3> = probes.iter().map(|p| plane.to_world(*p)).chain(samples.iter().copied()).collect();
+        let first = |dir: P3| world.iter().filter_map(|p| skin.ray_hit(*p, dir)).fold(f64::INFINITY, f64::min);
+        let (ahead, behind) = (first(n), first(scale(n, -1.0)));
+        let d = match (ahead.is_finite(), behind.is_finite()) {
+            (false, false) => return Err("las regiones del sketch no miran a la piel".into()),
+            (true, false) => n,
+            (false, true) => scale(n, -1.0),
+            (true, true) => {
+                if ahead <= behind {
+                    n
+                } else {
+                    scale(n, -1.0)
+                }
+            }
+        };
+        // Envolver: las regiones apoyadas sobre la piel (medidas sobre ella) y llevadas de
+        // vuelta al plano del sketch por `d`: desde ahí todo sigue como al proyectar
+        let mut wrapped_note = None;
+        let mut wrapped_regions: Option<Vec<Region>> = None;
+        if let ReliefMap::Wrap { anchor, angle } = &r.map {
+            let (verts, tris) = raw.ok_or("falta el escaneo para envolver (¿hay un escaneo elegido?)")?;
+            let (loops, stretch) = wrap_regions(&regions, &plane, d, &skin, verts, tris, anchor.as_ref().map(|a| a.at), *angle)?;
+            faces = loops
+                .iter()
+                .map(|(outer, holes)| {
+                    let ring = |pts: &[P2]| -> Vec<Curve> {
+                        let w: Vec<P3> = pts.iter().map(|p| plane.to_world(*p)).collect();
+                        (0..w.len()).map(|k| Curve::Line(w[k], w[(k + 1) % w.len()])).collect()
+                    };
+                    let mut all = vec![ring(outer)];
+                    all.extend(holes.iter().map(|h| ring(h)));
+                    Shape::face(&all).map_err(err)
+                })
+                .collect::<R<Vec<_>>>()?;
+            // Los puntos de adentro, ahora de las regiones envueltas
+            let fake: Vec<Region> = loops
+                .iter()
+                .map(|(outer, holes)| {
+                    let lp = |poly: &Vec<P2>| Loop { pieces: Vec::new(), polygon: poly.clone(), area: crate::regions::signed_area(poly).abs() };
+                    let hs: Vec<Loop> = holes.iter().map(lp).collect();
+                    let refs: Vec<&[P2]> = hs.iter().map(|h| h.polygon.as_slice()).collect();
+                    let sample = crate::regions::interior_sample(outer, &refs);
+                    Region { outer: lp(outer), holes: hs, depth: 0, sample }
+                })
+                .collect();
+            let refs: Vec<&Region> = fake.iter().collect();
+            probes = relief_probes(&refs);
+            wrapped_regions = Some(fake.clone());
+            samples = fake.iter().map(|g| plane.to_world(g.sample)).collect();
+            world = probes.iter().map(|p| plane.to_world(*p)).chain(samples.iter().copied()).collect();
+            wrapped_note = Some(format!(" · envuelto: estira {:.1} %", (stretch - 1.0).max(0.0) * 100.0).replace('.', ","));
+        }
+        let m = skin.mass().map_err(err)?;
+        let corners = (0..8).map(|k| [0, 1, 2].map(|a| if k >> a & 1 == 0 { m.bbox_min[a] } else { m.bbox_max[a] }));
+        let reach = corners.map(|c| dot(sub(c, plane.origin), d).abs()).fold(0.0, f64::max) * 1.1 + r.height.abs() + 1.0;
+        // Prisma de las regiones desde `a` a lo largo de `d`, de largo `l`
+        let prism = |a: f64, l: f64| -> R<Shape> {
+            let ps = faces
+                .iter()
+                .map(|fc| fc.translate(scale(d, a)).and_then(|fc| fc.prism(scale(d, l))).map_err(err))
+                .collect::<R<Vec<_>>>()?;
+            fuse(ps)
+        };
+        // Lo que tocan los rayos desde el sketch hacia la piel
+        let hits: Vec<Option<f64>> = world.iter().map(|p| skin.ray_hit(*p, d)).collect();
+        if hits.iter().any(Option::is_none) {
+            self.warn("parte del sketch no queda frente a la piel".into());
+        }
+        let ts: Vec<f64> = hits.iter().flatten().copied().collect();
+        let (near, far) = ts.iter().fold((f64::INFINITY, 0.0f64), |(a, b), t| (a.min(*t), b.max(*t)));
+        self.relief_measures(id, &regions, wrapped_regions.as_deref(), &plane, &skin, d);
+        if let Some(w) = wrapped_note {
+            if let Some(t) = self.measures.borrow_mut().get_mut(&id) {
+                t.push_str(&w);
+            }
+        }
+        let h = r.height;
+        let shape = match (r.mode, r.inward) {
+            // Pareja: la carcasa de la altura, bajo las regiones, lo primero que se ve
+            (ReliefMode::Even, inward) => {
+                // La carcasa: la que pone la app (escaneo) o el sólido corrido la altura
+                let band = if use_scan {
+                    scan_solid(r.shell.as_ref())?
+                } else if inward {
+                    skin.cut(&solid_offset(&skin, -h)?).map_err(err)?
+                } else {
+                    solid_offset(&skin, h)?.cut(&skin).map_err(err)?
+                };
+                let cut = band.intersect(&prism(-reach, 2.0 * reach)?).map_err(err)?;
+                keep_seen(cut, &world, d)?
+            }
+            // Tope plano en el plano del sketch: de ahí hasta la piel
+            (ReliefMode::FlatTop, false) => until_scan(&prism(0.0, reach)?, &skin, plane.origin, d, n)?,
+            // Fondo plano en el plano del sketch (adentro del material): de ahí a la piel
+            (ReliefMode::FlatTop, true) => {
+                let cut = prism(0.0, reach)?.intersect(&skin).map_err(err)?;
+                keep_starting(cut, plane.origin, n)?
+            }
+            // Tope a `h` del punto más alto
+            (ReliefMode::FlatAuto, false) => {
+                let top = near - h;
+                until_scan(&prism(top, reach)?, &skin, add(plane.origin, scale(d, top)), d, n)?
+            }
+            // Fondo a `h` del punto más hondo
+            (ReliefMode::FlatAuto, true) => {
+                let cut = prism(0.0, far + h)?.intersect(&skin).map_err(err)?;
+                keep_seen(cut, &world, d)?
+            }
+            // La piel corrida `h` hacia el sketch, menos la piel
+            (ReliefMode::Along, false) => {
+                let moved = skin.translate(scale(d, -h)).map_err(err)?;
+                let cut = prism(-reach, 2.0 * reach)?.intersect(&moved).and_then(|c| c.cut(&skin)).map_err(err)?;
+                keep_seen(cut, &world, d)?
+            }
+            // La piel menos la piel corrida `h` hacia adentro
+            (ReliefMode::Along, true) => {
+                let moved = skin.translate(scale(d, h)).map_err(err)?;
+                let cut = prism(-reach, 2.0 * reach)?.intersect(&skin).and_then(|c| c.cut(&moved)).map_err(err)?;
+                keep_seen(cut, &world, d)?
+            }
+        };
+        if shape.mass().map(|m| m.volume.abs() < 1e-9).unwrap_or(true) {
+            return Err("no quedó nada: ¿las regiones caen sobre la piel?".into());
+        }
+        let tags = (0..shape.face_count()).map(|k| vec![tag(id, format!("cara:{k}"))]).collect();
+        Ok(Tagged { shape, tags })
+    }
+
+    /// Las medidas de las regiones en el plano y sobre la piel (lo que se ve
+    /// en el diálogo): el ancho y el alto del sketch, y los mismos tramos
+    /// llevados a la piel.
+    fn relief_measures(&self, id: FeatureId, regions: &[&Region], wrapped: Option<&[Region]>, plane: &Plane, skin: &Shape, d: P3) {
+        let bbox = |polys: &mut dyn Iterator<Item = &P2>| {
+            polys.fold(([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]), |(lo, hi), p| ([lo[0].min(p[0]), lo[1].min(p[1])], [hi[0].max(p[0]), hi[1].max(p[1])]))
+        };
+        let (slo, shi) = bbox(&mut regions.iter().flat_map(|r| r.outer.polygon.iter()));
+        // Sobre la piel se mide lo que llega a ella (lo envuelto, si se envolvió)
+        let (lo, hi) = match wrapped {
+            Some(w) => bbox(&mut w.iter().flat_map(|r| r.outer.polygon.iter())),
+            None => (slo, shi),
+        };
+        if !(lo[0].is_finite() && hi[0].is_finite() && slo[0].is_finite()) {
+            return;
+        }
+        // Largo sobre la piel de un tramo del plano (los puntos que no la tocan cortan)
+        let on_skin = |a: P2, b: P2| -> Option<f64> {
+            const N: usize = 48;
+            let mut total = 0.0;
+            let mut prev: Option<P3> = None;
+            let mut any = false;
+            for k in 0..=N {
+                let t = k as f64 / N as f64;
+                let p = plane.to_world([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+                match skin.ray_hit(p, d) {
+                    Some(h) => {
+                        let q = add(p, scale(d, h));
+                        if let Some(pr) = prev {
+                            total += norm(sub(q, pr));
+                        }
+                        prev = Some(q);
+                        any = true;
+                    }
+                    None => prev = None,
+                }
+            }
+            any.then_some(total)
+        };
+        let (w, h) = (shi[0] - slo[0], shi[1] - slo[1]);
+        let (cx, cy) = ((lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0);
+        let mm = |v: f64| format!("{:.1}", v).replace('.', ",");
+        let mut text = format!("en el plano {} × {} mm", mm(w), mm(h));
+        if let (Some(ws), Some(hs)) = (on_skin([lo[0], cy], [hi[0], cy]), on_skin([cx, lo[1]], [cx, hi[1]])) {
+            text.push_str(&format!(" · sobre la piel {} × {} mm", mm(ws), mm(hs)));
+        }
+        self.measures.borrow_mut().insert(id, text);
+    }
+
     /// Se queda con los pedazos marcados; las caras que sobreviven conservan su nombre (por su centro)
     fn keep_scan_pieces(&self, id: FeatureId, cut: Shape, tags: Vec<Vec<FaceTag>>, pieces: Vec<Shape>, keep: Vec<bool>) -> R<Tagged> {
         if keep.iter().all(|&k| k) {
@@ -2549,6 +2770,19 @@ impl Ctx<'_> {
                 self.apply(f.id, tool, r.op)
             }
             FeatureKind::Primitive(p) => {
+                // Apoyada en un eje (la normal de la piel): el marco sale de él
+                let placed;
+                let p = if let Some(on) = &p.on {
+                    let a = self.axis("on", on)?;
+                    let z = normalize(a.dir);
+                    let x0 = default_x(z);
+                    let (sa, ca) = p.origin[0].to_radians().sin_cos();
+                    let x = add(scale(x0, ca), scale(cross(z, x0), sa));
+                    placed = Primitive { origin: add(a.origin, scale(z, p.origin[2])), z, x, on: None, ..p.clone() };
+                    &placed
+                } else {
+                    p
+                };
                 let (frame, shape, threading) = self.place_standard(p)?;
                 let tool = match &shape {
                     PrimitiveShape::Box { dx, dy, dz, centered, centered_z } => {
@@ -2652,6 +2886,11 @@ impl Ctx<'_> {
                 }
                 self.ev.tools.insert(f.id, (tool.clone(), b.op));
                 self.apply(f.id, tool, b.op)
+            }
+            FeatureKind::Relief(r) => {
+                let tool = self.relief(f.id, r)?;
+                self.ev.tools.insert(f.id, (tool.clone(), r.op));
+                self.apply(f.id, tool, r.op)
             }
             FeatureKind::ScanSurface(sf) => {
                 if sf.boundary.len() < 6 {
@@ -5212,6 +5451,298 @@ impl Ctx<'_> {
             return Err("el sketch no tiene regiones cerradas".into());
         }
         Ok(regions)
+    }
+}
+
+/// Puntos de adentro de las regiones (en el sketch): los vértices del borde
+/// apenas corridos hacia adentro y una grilla de ~40 por lado.
+fn relief_probes(regions: &[&Region]) -> Vec<P2> {
+    use crate::regions::point_in_polygon;
+    let mut out = Vec::new();
+    for r in regions {
+        let poly = &r.outer.polygon;
+        let (lo, hi) = poly.iter().fold(([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]), |(lo, hi), p| {
+            ([lo[0].min(p[0]), lo[1].min(p[1])], [hi[0].max(p[0]), hi[1].max(p[1])])
+        });
+        let inside = |p: P2| point_in_polygon(p, poly) && !r.holes.iter().any(|h| point_in_polygon(p, &h.polygon));
+        let step = ((hi[0] - lo[0]).max(hi[1] - lo[1]) / 40.0).max(1e-6);
+        let mut y = lo[1] + step / 2.0;
+        while y < hi[1] {
+            let mut x = lo[0] + step / 2.0;
+            while x < hi[0] {
+                if inside([x, y]) {
+                    out.push([x, y]);
+                }
+                x += step;
+            }
+            y += step;
+        }
+        // El borde, corrido una pizca hacia el centro de la región
+        let c = r.sample;
+        for p in poly.iter().step_by((poly.len() / 64).max(1)) {
+            let q = [p[0] + (c[0] - p[0]) * 1e-3, p[1] + (c[1] - p[1]) * 1e-3];
+            if inside(q) {
+                out.push(q);
+            }
+        }
+    }
+    out
+}
+
+/// Lleva las regiones del sketch sobre la piel como una calcomanía y las trae
+/// de vuelta al plano del sketch por `d`: el trozo de piel alrededor del ancla
+/// se aplana cuidando las medidas (uv-core), el centro del sketch va en el
+/// ancla con su X hacia la X del plano (más `angle`), y cada punto vuelve a la
+/// piel desde el aplanado. Devuelve los lazos (exterior y agujeros) en
+/// coordenadas del sketch y el estiramiento medio del aplanado.
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+fn wrap_regions(
+    regions: &[&Region],
+    plane: &Plane,
+    d: P3,
+    skin: &Shape,
+    verts: &[P3],
+    tris: &[[u32; 3]],
+    anchor: Option<P3>,
+    angle: f64,
+) -> R<(Vec<(Vec<P2>, Vec<Vec<P2>>)>, f64)> {
+    if tris.is_empty() {
+        return Err("el escaneo está vacío".into());
+    }
+    let n = normalize(plane.normal);
+    let ydir = cross(n, normalize(plane.x_dir));
+    let xdir = normalize(plane.x_dir);
+    // Centro y tamaño de lo que se envuelve (en el sketch)
+    let (lo, hi) = regions.iter().flat_map(|r| r.outer.polygon.iter()).fold(([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]), |(lo, hi), p| {
+        ([lo[0].min(p[0]), lo[1].min(p[1])], [hi[0].max(p[0]), hi[1].max(p[1])])
+    });
+    let c = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
+    let half = 0.5 * ((hi[0] - lo[0]).powi(2) + (hi[1] - lo[1]).powi(2)).sqrt();
+    // El ancla: la elegida o donde la normal del sketch lleva el centro
+    let a = match anchor {
+        Some(p) => p,
+        None => {
+            let from = plane.to_world(c);
+            let t = skin.ray_hit(from, d).ok_or("el centro del sketch no mira a la piel: elegir dónde va")?;
+            add(from, scale(d, t))
+        }
+    };
+    let tri_pts = |t: usize| tris[t].map(|v| verts[v as usize]);
+    let centroid = |t: usize| {
+        let [p, q, r] = tri_pts(t);
+        scale(add(add(p, q), r), 1.0 / 3.0)
+    };
+    let ta = (0..tris.len()).min_by(|&x, &y| norm(sub(centroid(x), a)).total_cmp(&norm(sub(centroid(y), a)))).unwrap();
+    // El trozo: triángulos conectados con el del ancla, con sus vértices a menos de `reach`
+    let reach = half * 1.6 + 1.0;
+    let mut by_edge: HashMap<(u32, u32), Vec<usize>> = HashMap::new();
+    for (t, tri) in tris.iter().enumerate() {
+        for k in 0..3 {
+            let (u, v) = (tri[k], tri[(k + 1) % 3]);
+            by_edge.entry((u.min(v), u.max(v))).or_default().push(t);
+        }
+    }
+    let near = |t: usize| tri_pts(t).iter().all(|p| norm(sub(*p, a)) <= reach);
+    let mut inside = vec![false; tris.len()];
+    let mut stack = vec![ta];
+    inside[ta] = true;
+    let mut patch = Vec::new();
+    while let Some(t) = stack.pop() {
+        patch.push(t);
+        for k in 0..3 {
+            let (u, v) = (tris[t][k], tris[t][(k + 1) % 3]);
+            for &o in &by_edge[&(u.min(v), u.max(v))] {
+                if !inside[o] && near(o) {
+                    inside[o] = true;
+                    stack.push(o);
+                }
+            }
+        }
+    }
+    if patch.len() < 4 {
+        return Err("muy poca piel alrededor del ancla para envolver".into());
+    }
+    // Vértices del trozo, renumerados
+    let mut index: HashMap<u32, usize> = HashMap::new();
+    let mut pos: Vec<[f64; 3]> = Vec::new();
+    let local: Vec<[usize; 3]> = patch
+        .iter()
+        .map(|&t| {
+            tris[t].map(|v| {
+                *index.entry(v).or_insert_with(|| {
+                    pos.push(verts[v as usize]);
+                    pos.len() - 1
+                })
+            })
+        })
+        .collect();
+    let flat = uv_core::flatten_patch(&pos, &local, 20);
+    let uv = |v: usize| flat.uv[v].ok_or("el aplanado de la piel quedó incompleto");
+    // El ancla en el aplanado, y hacia dónde van la X y la Y del sketch
+    let t0 = local[0];
+    let [p0, p1, p2] = t0.map(|v| pos[v]);
+    let [q0, q1, q2] = [uv(t0[0])?, uv(t0[1])?, uv(t0[2])?];
+    let (e1, e2) = (sub(p1, p0), sub(p2, p0));
+    // Lleva un vector del plano del triángulo al aplanado
+    let to_uv = |x: P3| -> P2 {
+        let (a11, a12, a22) = (dot(e1, e1), dot(e1, e2), dot(e2, e2));
+        let (b1, b2) = (dot(x, e1), dot(x, e2));
+        let det = a11 * a22 - a12 * a12;
+        let (s, t) = ((b1 * a22 - b2 * a12) / det, (a11 * b2 - a12 * b1) / det);
+        [s * (q1[0] - q0[0]) + t * (q2[0] - q0[0]), s * (q1[1] - q0[1]) + t * (q2[1] - q0[1])]
+    };
+    let bary0 = {
+        // El ancla en ese triángulo (proyectada a su plano)
+        let x = sub(a, p0);
+        to_uv(x)
+    };
+    let u0 = [q0[0] + bary0[0], q0[1] + bary0[1]];
+    let unit = |v: P2| {
+        let l = (v[0] * v[0] + v[1] * v[1]).sqrt().max(1e-12);
+        [v[0] / l, v[1] / l]
+    };
+    let mut ux = unit(to_uv(xdir));
+    let uy0 = to_uv(ydir);
+    let dp = uy0[0] * ux[0] + uy0[1] * ux[1];
+    let mut uy = unit([uy0[0] - dp * ux[0], uy0[1] - dp * ux[1]]);
+    let (sa, ca) = angle.to_radians().sin_cos();
+    (ux, uy) = ([ca * ux[0] + sa * uy[0], ca * ux[1] + sa * uy[1]], [-sa * ux[0] + ca * uy[0], -sa * ux[1] + ca * uy[1]]);
+    // Triángulos del aplanado en una grilla, para encontrar en cuál cae cada punto
+    let tri_uv: Vec<[P2; 3]> = local.iter().map(|t| Ok([uv(t[0])?, uv(t[1])?, uv(t[2])?])).collect::<R<Vec<_>>>()?;
+    let cell = (reach / 40.0).max(1e-6);
+    let key = |p: P2| ((p[0] / cell).floor() as i64, (p[1] / cell).floor() as i64);
+    let mut grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for (k, t) in tri_uv.iter().enumerate() {
+        let (mn, mx) = t.iter().fold(([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]), |(mn, mx), p| ([mn[0].min(p[0]), mn[1].min(p[1])], [mx[0].max(p[0]), mx[1].max(p[1])]));
+        let (a0, b0) = key(mn);
+        let (a1, b1) = key(mx);
+        for i in a0..=a1 {
+            for j in b0..=b1 {
+                grid.entry((i, j)).or_default().push(k);
+            }
+        }
+    }
+    let lift = |p: P2| -> R<P2> {
+        let r = [p[0] - c[0], p[1] - c[1]];
+        let q = [u0[0] + r[0] * ux[0] + r[1] * uy[0], u0[1] + r[0] * ux[1] + r[1] * uy[1]];
+        for &k in grid.get(&key(q)).map(Vec::as_slice).unwrap_or(&[]) {
+            let [a, b, cc] = tri_uv[k];
+            let det = (b[0] - a[0]) * (cc[1] - a[1]) - (cc[0] - a[0]) * (b[1] - a[1]);
+            if det.abs() < 1e-18 {
+                continue;
+            }
+            let l1 = ((q[0] - a[0]) * (cc[1] - a[1]) - (cc[0] - a[0]) * (q[1] - a[1])) / det;
+            let l2 = ((b[0] - a[0]) * (q[1] - a[1]) - (q[0] - a[0]) * (b[1] - a[1])) / det;
+            let l0 = 1.0 - l1 - l2;
+            if l0 >= -1e-9 && l1 >= -1e-9 && l2 >= -1e-9 {
+                let [pa, pb, pc] = local[k].map(|v| pos[v]);
+                let w = add(add(scale(pa, l0), scale(pb, l1)), scale(pc, l2));
+                // De vuelta al plano del sketch, por `d`
+                let back = dot(sub(w, plane.origin), n) / dot(d, n);
+                let on = sub(w, scale(d, back));
+                let rel = sub(on, plane.origin);
+                return Ok([dot(rel, xdir), dot(rel, ydir)]);
+            }
+        }
+        Err("el sketch es más grande que la piel que hay alrededor del ancla".into())
+    };
+    // Bordes más finos (las rectas largas tienen que seguir la curva de la piel)
+    let step = (half / 60.0).max(1e-3);
+    let dense = |poly: &[P2]| -> Vec<P2> {
+        let mut out = Vec::new();
+        for k in 0..poly.len() {
+            let (p, q) = (poly[k], poly[(k + 1) % poly.len()]);
+            let l = ((q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2)).sqrt();
+            let m = (l / step).ceil().max(1.0) as usize;
+            for i in 0..m {
+                let t = i as f64 / m as f64;
+                out.push([p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]);
+            }
+        }
+        out
+    };
+    let mut loops = Vec::new();
+    for r in regions {
+        let outer = dense(&r.outer.polygon).into_iter().map(lift).collect::<R<Vec<_>>>()?;
+        let holes = r.holes.iter().map(|h| dense(&h.polygon).into_iter().map(lift).collect::<R<Vec<_>>>()).collect::<R<Vec<_>>>()?;
+        loops.push((outer, holes));
+    }
+    Ok((loops, flat.stretch))
+}
+
+/// El sólido corrido `d` (afuera; negativo, adentro). El desfase de OCCT entrega
+/// la cáscara sin cerrar: se cosen sus caras en un sólido (si no, las booleanas
+/// la toman como una superficie y no restan).
+fn solid_offset(shape: &Shape, d: f64) -> R<Shape> {
+    let o = shape.offset_shape(d).map_err(err)?;
+    if o.solids().map(|v| !v.is_empty()).unwrap_or(false) {
+        return Ok(o);
+    }
+    let faces: Vec<Shape> = (0..o.face_count()).filter_map(|i| o.face_shape(i).ok()).collect();
+    let size = o.mass().map(|m| norm(sub(m.bbox_max, m.bbox_min))).unwrap_or(1.0).max(1.0);
+    Shape::sew(&faces, size * 1e-5, true).map_err(err)
+}
+
+/// Junta los vértices a menos de `tol` (una malla teselada por caras sueltas).
+fn weld_mesh(positions: &[P3], triangles: &[[u32; 3]], tol: f64) -> (Vec<P3>, Vec<[u32; 3]>) {
+    let tol = tol.max(1e-9);
+    let key = |p: P3| p.map(|v| (v / tol).round() as i64);
+    let mut index: HashMap<[i64; 3], u32> = HashMap::new();
+    let mut verts = Vec::new();
+    let map: Vec<u32> = positions
+        .iter()
+        .map(|p| {
+            *index.entry(key(*p)).or_insert_with(|| {
+                verts.push(*p);
+                (verts.len() - 1) as u32
+            })
+        })
+        .collect();
+    let tris = triangles
+        .iter()
+        .map(|t| t.map(|v| map[v as usize]))
+        .filter(|t| t[0] != t[1] && t[1] != t[2] && t[0] != t[2])
+        .collect();
+    (verts, tris)
+}
+
+/// Los pedazos de `cut` que se ven primero desde `from` mirando hacia `dir`.
+fn keep_seen(cut: Shape, from: &[P3], dir: P3) -> R<Shape> {
+    let pieces = cut.solids().map_err(err)?;
+    if pieces.is_empty() {
+        return Err("no quedó nada: ¿las regiones caen sobre la piel?".into());
+    }
+    let mut keep = vec![false; pieces.len()];
+    for p in from {
+        if let Some((k, _)) = pieces.iter().enumerate().filter_map(|(k, s)| s.ray_hit(*p, dir).map(|t| (k, t))).min_by(|a, b| a.1.total_cmp(&b.1)) {
+            keep[k] = true;
+        }
+    }
+    let kept: Vec<Shape> = pieces.into_iter().zip(keep).filter(|(_, k)| *k).map(|(s, _)| s).collect();
+    match kept.len() {
+        0 => Err("desde el sketch no se ve la piel".into()),
+        1 => Ok(kept.into_iter().next().unwrap()),
+        _ => fuse(kept),
+    }
+}
+
+/// Los pedazos de `cut` que tienen una cara plana en el plano (`origin`, normal `n`).
+fn keep_starting(cut: Shape, origin: P3, n: P3) -> R<Shape> {
+    let size = cut.mass().map(|m| norm(sub(m.bbox_max, m.bbox_min))).unwrap_or(1.0).max(1.0);
+    let kept: Vec<Shape> = cut
+        .solids()
+        .map_err(err)?
+        .into_iter()
+        .filter(|s| {
+            (0..s.face_count()).any(|i| {
+                s.face_info(i).is_ok_and(|f| f.surface == SurfaceKind::Plane && dot(f.normal, n).abs() > 0.999 && dot(sub(f.point, origin), n).abs() < size * 1e-6)
+            })
+        })
+        .collect();
+    match kept.len() {
+        0 => Err("el plano del sketch no queda adentro del material".into()),
+        1 => Ok(kept.into_iter().next().unwrap()),
+        _ => fuse(kept),
     }
 }
 

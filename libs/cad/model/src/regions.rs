@@ -338,6 +338,11 @@ pub fn point_in_polygon(p: P2, poly: &[P2]) -> bool {
 
 /// Punto interior de un polígono simple (no siempre el centroide: puede caer
 /// fuera en formas en C). Busca sobre horizontales el tramo interior más ancho.
+/// Un punto bien adentro del polígono y afuera de sus agujeros.
+pub fn interior_sample(poly: &[P2], holes: &[&[P2]]) -> P2 {
+    interior_point(poly, holes)
+}
+
 fn interior_point(poly: &[P2], holes: &[&[P2]]) -> P2 {
     let (mut y0, mut y1) = (f64::MAX, f64::MIN);
     for p in poly {

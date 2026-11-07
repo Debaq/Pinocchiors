@@ -22,7 +22,7 @@ fn poly_area(pts: &[[f64; 2]]) -> f64 {
 
 fn build(g: GearPart) -> Result<Shape, String> {
     let mut doc = Document::new();
-    doc.add(FeatureKind::Primitive(Primitive { shape: PrimitiveShape::Gear(g), origin: [0.0; 3], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op: BodyOp::New, link: None }));
+    doc.add(FeatureKind::Primitive(Primitive { shape: PrimitiveShape::Gear(g), origin: [0.0; 3], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op: BodyOp::New, link: None, on: None }));
     let ev = doc.evaluate();
     if let Some(e) = ev.errors().first() {
         return Err(format!("{e:?}"));
@@ -126,10 +126,10 @@ fn pinon_de_cadena_solido_valido() {
     assert!(v < area * g.width + PI * 81.0 * 5.0 && v > 0.5 * area * g.width);
     // Ni polea ni piñón se engranan entre sí
     let mut doc = Document::new();
-    let ia = doc.add(FeatureKind::Primitive(Primitive { shape: PrimitiveShape::Gear(g.clone()), origin: [0.0; 3], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op: BodyOp::New, link: None }));
+    let ia = doc.add(FeatureKind::Primitive(Primitive { shape: PrimitiveShape::Gear(g.clone()), origin: [0.0; 3], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op: BodyOp::New, link: None, on: None }));
     let mut b = pulley(ToothForm::Gt2Mm2, 20);
     b.link = Some(GearLink { feature: ia, angle: 0.0, offset: 0.0, distance: None, along: 0.0 });
-    doc.add(FeatureKind::Primitive(Primitive { shape: PrimitiveShape::Gear(b), origin: [0.0; 3], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op: BodyOp::New, link: None }));
+    doc.add(FeatureKind::Primitive(Primitive { shape: PrimitiveShape::Gear(b), origin: [0.0; 3], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op: BodyOp::New, link: None, on: None }));
     let errors = format!("{:?}", doc.evaluate().errors());
     assert!(errors.contains("correa o una cadena"), "{errors}");
 }
@@ -199,10 +199,10 @@ fn par_cicloidal_calza_sin_chocar() {
         return;
     }
     let mut doc = Document::new();
-    let ia = doc.add(FeatureKind::Primitive(Primitive { shape: PrimitiveShape::Gear(cycloidal(18)), origin: [0.0; 3], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op: BodyOp::New, link: None }));
+    let ia = doc.add(FeatureKind::Primitive(Primitive { shape: PrimitiveShape::Gear(cycloidal(18)), origin: [0.0; 3], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op: BodyOp::New, link: None, on: None }));
     let mut b = cycloidal(30);
     b.link = Some(GearLink { feature: ia, angle: 40.0, offset: 0.0, distance: None, along: 0.0 });
-    doc.add(FeatureKind::Primitive(Primitive { shape: PrimitiveShape::Gear(b), origin: [0.0; 3], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op: BodyOp::New, link: None }));
+    doc.add(FeatureKind::Primitive(Primitive { shape: PrimitiveShape::Gear(b), origin: [0.0; 3], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op: BodyOp::New, link: None, on: None }));
     let ev = doc.evaluate();
     assert!(ev.errors().is_empty(), "{:?}", ev.errors());
     let g = &ev.gears;

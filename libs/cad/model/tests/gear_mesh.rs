@@ -7,7 +7,7 @@ use cad_model::*;
 use std::f64::consts::PI;
 
 fn prim(g: GearPart, op: BodyOp) -> FeatureKind {
-    FeatureKind::Primitive(Primitive { shape: PrimitiveShape::Gear(g), origin: [0.0; 3], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op, link: None })
+    FeatureKind::Primitive(Primitive { shape: PrimitiveShape::Gear(g), origin: [0.0; 3], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op, link: None, on: None })
 }
 
 fn gear(kind: GearKind, z: u32) -> GearPart {

@@ -107,21 +107,21 @@ export function designToolSets(a: DesignActions, ui: CadUi) {
     { label: "Sketch envuelto", icon: D.SurfaceSketch, run: () => void a.startSurfaceSketch(), needsBody: true, tip: "Un sketch dibujado en el desarrollo de una cara y llevado sobre ella (cilindros, conos…)" },
   ];
   const main: Tool[] = [
-    { label: "Extrusión", icon: D.Extrude, run: a.addExtrude, tip: "Las regiones elegidas en el visor o una cara plana del sólido; si no hay nada elegido, todo el último sketch" },
-    { label: "Revolución", icon: D.Revolve, run: a.addRevolve, tip: "Las regiones elegidas; eje: la primera línea de construcción del sketch, o Z" },
-    { label: "Redondeo", icon: D.Fillet, run: () => void a.startEdges("fillet"), needsBody: true, tip: "Las aristas elegidas (o se eligen en el diálogo)" },
-    { label: "Chaflán", icon: D.Chamfer, run: () => void a.startEdges("chamfer"), needsBody: true, tip: "Las aristas elegidas (o se eligen en el diálogo)" },
+    { label: "Extrusión", icon: D.Extrude, run: a.addExtrude, tip: "Las regiones elegidas en el visor o una cara plana del sólido; si no hay nada elegido, todo el último sketch. Con curvas abiertas da una superficie (el resultado se cambia en el diálogo)" },
+    { label: "Revolución", icon: D.Revolve, run: a.addRevolve, tip: "Las regiones elegidas; eje: la primera línea de construcción del sketch, o Z. Con curvas abiertas da una superficie" },
+    { label: "Redondeo", icon: D.Fillet, run: () => { const faces = ui.picks().filter((p) => p.kind === "face").length; void (faces === 3 ? a.startFullRound() : faces >= 2 ? a.startFaceBlend() : a.startEdges("fillet")); }, needsBody: true, tip: "Las aristas elegidas; con tres caras elegidas, completo (medio cilindro); con dos grupos de caras, entre ellas. El tipo se cambia en el diálogo" },
+    { label: "Chaflán", icon: D.Chamfer, run: () => void (ui.picks().some((p) => p.kind === "vertex") ? a.startVertexChamfer() : a.startEdges("chamfer")), needsBody: true, tip: "Las aristas elegidas; con un vértice elegido, corta esa esquina. El tipo se cambia en el diálogo" },
     { label: "Agujero", icon: D.Hole, run: a.addHole, needsBody: true, tip: "En los puntos (o círculos) del sketch elegido o el último: simple, con caja o avellanado" },
   ];
   const solids: (Tool | "-")[] = [
-    { label: "Barrido", icon: D.Sweep, run: a.addSweep, tip: "Un perfil a lo largo de un camino dibujado en otro sketch" },
-    { label: "Tubo", icon: D.Sweep, run: a.addTube, tip: "Barrido circular: un círculo a lo largo del último sketch o hélice, sin dibujar el perfil" },
+    { label: "Barrido", icon: D.Sweep, run: a.addSweep, tip: "Un perfil a lo largo de un camino dibujado en otro sketch; sin perfil, un tubo (un círculo) a lo largo del último sketch o hélice" },
     { label: "Transición", icon: D.Loft, run: a.addLoft, tip: "Un sólido que pasa por regiones de varios sketches" },
     "-",
     { label: "Caja", icon: D.BoxShape, run: () => a.addPrimitive({ type: "box", dx: 20, dy: 20, dz: 20, centered: true, centered_z: true }) },
     { label: "Cilindro", icon: D.Cylinder, run: () => a.addPrimitive({ type: "cylinder", radius: 10, height: 20 }) },
     { label: "Esfera", icon: D.Sphere, run: () => a.addPrimitive({ type: "sphere", radius: 10 }) },
     { label: "Cono", icon: D.Cone, run: () => a.addPrimitive({ type: "cone", r1: 10, r2: 0, height: 20 }) },
+    { label: "Sobre la piel", icon: D.Import, run: a.placeOnSkin, tip: "Clic en un STL o escaneo: una pieza apoyada ahí según la inclinación de la piel, con la base amoldada a ella (la forma se cambia en el diálogo)" },
     { label: "Toro", icon: D.Torus, run: () => a.addPrimitive({ type: "torus", major: 15, minor: 4 }) },
     "-",
     { label: "Tornillo", icon: D.Bolt, run: () => void a.addStandard("bolt"), tip: "Tornillo métrico ISO; con el borde de un agujero elegido se coloca ahí con la medida y el largo que calzan" },
@@ -135,25 +135,16 @@ export function designToolSets(a: DesignActions, ui: CadUi) {
   const modify: (Tool | "-")[] = [
     { label: "Vaciado", icon: D.Shell, run: () => void a.startFaces("shell"), needsBody: true, tip: "Ahueca el sólido; las caras elegidas quedan abiertas" },
     { label: "Desmolde", icon: D.Draft, run: () => void a.startFaces("draft"), needsBody: true, tip: "Inclina las caras elegidas" },
-    { label: "Engrosar", icon: D.Thicken, run: () => void a.startThicken(), needsBody: true, tip: "Da espesor a las caras elegidas" },
+    { label: "Engrosar", icon: D.Thicken, run: () => void a.startThicken(), needsBody: true, tip: "Da espesor a una superficie o a caras de un sólido" },
     { label: "Eliminar cara", icon: D.DeleteParts, run: () => void a.startFaces("delete_face"), needsBody: true, tip: "Saca caras (un agujero, un redondeo, un resalte) y cierra el hueco con las vecinas" },
-    { label: "Grabado", icon: D.Thicken, run: () => a.addWrap(false), needsBody: true, tip: "Hunde en la cara las regiones del último sketch envuelto (siguiendo su forma)" },
-    { label: "Relieve", icon: D.Thicken, run: () => a.addWrap(true), needsBody: true, tip: "Levanta sobre la cara las regiones del último sketch envuelto" },
     { label: "Línea de partición", icon: D.SplitPlane, run: () => void a.startSplitFaces(), needsBody: true, tip: "Parte las caras elegidas donde las cruza un plano o una curva, sin separar la pieza" },
-    { label: "Girar cara", icon: D.MoveFace, run: () => void a.startRotateFace(), needsBody: true, tip: "Gira caras planas alrededor de un eje (una bisagra): lo que sale suma, lo que entra resta" },
-    { label: "Chaflán de vértice", icon: D.Draft, run: () => void a.startVertexChamfer(), needsBody: true, tip: "Corta la esquina de un vértice de tres aristas" },
-    { label: "Redondeo completo", icon: D.Draft, run: () => void a.startFullRound(), needsBody: true, tip: "Con tres caras elegidas: la del medio entre dos costados paralelos queda como medio cilindro" },
-    { label: "Redondeo de cara", icon: D.Draft, run: () => void a.startFaceBlend(), needsBody: true, tip: "Una bola que rueda apoyada en dos grupos de caras (vecinas o no): redondea el canto o rellena el rincón entre ellas" },
-    { label: "Mover cara", icon: D.MoveFace, run: () => void a.startMoveFace(), needsBody: true, tip: "Lleva caras planas hacia afuera o hacia adentro" },
-    { label: "Reemplazar cara", icon: D.ReplaceFace, run: () => void a.startReplaceFace(), needsBody: true, tip: "Lleva caras planas hasta un plano o hasta otra cara (elegir las caras y al final la de destino)" },
-    { label: "Cara al escaneo", icon: D.ReplaceFace, run: () => void a.startFaceToScan(), needsBody: true, tip: "Lleva caras planas hasta la piel del escaneo, aunque sea curva (suma o resta según dónde esté)" },
+    { label: "Mover cara", icon: D.MoveFace, run: () => void a.startMoveFace(), needsBody: true, tip: "Lleva caras planas una distancia, hasta un plano o una cara, hasta la piel del escaneo (aunque sea curva), o las gira como una bisagra" },
+    { label: "Relieve sobre la piel", icon: D.Thicken, run: a.addRelief, tip: "Texto, logo o forma de un sketch sobre una superficie (un STL o escaneo, o las caras del sólido): hacia afuera o grabado, proyectado o envuelto, con altura pareja, tope plano o según la dirección" },
     { label: "Nervio", icon: D.Rib, run: a.startRib, needsBody: true, tip: "Pared desde las líneas de un sketch hasta el sólido" },
     { label: "Rosca", icon: D.Thread, run: () => void a.startThread(), needsBody: true, tip: "Rosca modelada sobre una cara cilíndrica: exterior en un eje, interior en un agujero" },
     { label: "Escala", icon: D.Scale, run: a.addScale, needsBody: true, tip: "Escala las piezas alrededor de un punto" },
     "-",
-    { label: "Mover cuerpo", icon: D.MoveFace, run: () => a.addTransform("translate"), needsBody: true, tip: "Mueve piezas enteras (las elegidas, o todas): un desplazamiento o de un punto a otro" },
-    { label: "Girar cuerpo", icon: D.PatternCircular, run: () => a.addTransform("rotate"), needsBody: true, tip: "Gira piezas enteras alrededor de un eje" },
-    { label: "Copiar cuerpo", icon: D.PatternLinear, run: () => a.addTransform("translate", true), needsBody: true, tip: "Copia piezas enteras corridas o giradas; las copias quedan como piezas nuevas" },
+    { label: "Mover pieza", icon: D.MoveFace, run: () => a.addTransform("translate"), needsBody: true, tip: "Mueve, gira o alinea piezas enteras (las elegidas, o todas); con «Copiar» las originales quedan" },
   ];
   const patterns: (Tool | "-")[] = [
     { label: "Patrón lineal", icon: D.PatternLinear, run: () => a.addPattern("linear"), needsBody: true },
@@ -170,8 +161,7 @@ export function designToolSets(a: DesignActions, ui: CadUi) {
   const parts: (Tool | "-")[] = [
     { label: "Booleana", icon: D.Boolean, run: a.addBoolean, needsBody: true, tip: "Unir, restar o intersecar piezas entre sí" },
     { label: "Separar", icon: D.SplitParts, run: a.addSplitParts, needsBody: true, tip: "Cada sólido suelto de una pieza pasa a ser una pieza" },
-    { label: "Cortar por plano", icon: D.SplitPlane, run: a.addSplit, needsBody: true },
-    { label: "Partir", icon: D.SplitParts, run: a.addSplitBy, needsBody: true, tip: "Parte piezas con un plano o con otra pieza (una superficie curva): cada pedazo queda como pieza" },
+    { label: "Partir", icon: D.SplitParts, run: a.addSplitBy, needsBody: true, tip: "Parte piezas con un plano o con otra pieza (una superficie curva): cada pedazo queda como pieza, o solo un lado del plano" },
     { label: "Borrar pieza", icon: D.DeleteParts, run: a.addDeleteParts, needsBody: true },
   ];
   const sheet: (Tool | "-")[] = [
@@ -182,11 +172,7 @@ export function designToolSets(a: DesignActions, ui: CadUi) {
     { label: "Desarrollo", icon: D.FlatPattern, run: () => ui.setFlatOpen(true), needsBody: true, tip: "La chapa plana para cortar, con las líneas de doblez; DXF 1:1" },
   ];
   const surfaces: (Tool | "-")[] = [
-    { label: "Superficie extruida", icon: D.SurfaceExtrude, run: a.addSurfaceExtrude, tip: "Las curvas de un sketch (abiertas o cerradas) empujadas: una superficie sin espesor" },
-    { label: "Superficie de revolución", icon: D.SurfaceRevolve, run: a.addSurfaceRevolve, tip: "Las curvas de un sketch giradas alrededor de un eje" },
     { label: "Extender superficie", icon: D.SurfaceExtrude, run: () => void a.startEdges("surface_extend"), needsBody: true, tip: "Alarga una superficie más allá de sus bordes elegidos, siguiendo su forma" },
-    { label: "Superficie por transición", icon: D.Loft, run: a.addSurfaceLoft, tip: "Superficie que pasa por las curvas de los dos últimos sketches" },
-    { label: "Superficie por barrido", icon: D.Sweep, run: a.addSurfaceSweep, tip: "Las curvas de un sketch llevadas a lo largo de otro (el último)" },
     { label: "Superficie plana", icon: D.Fill, run: a.addSurfacePlanar, tip: "Las regiones cerradas de un sketch como superficie" },
     { label: "Superficie desfasada", icon: D.Thicken, run: a.addSurfaceOffset, needsBody: true, tip: "Copia de superficies (o de la piel de una pieza) a una distancia" },
     { label: "Relleno", icon: D.Fill, run: () => void a.startFill(), needsBody: true, tip: "Superficie que cierra un borde (elegir las aristas); puede seguir tangente a las caras vecinas" },
@@ -194,18 +180,16 @@ export function designToolSets(a: DesignActions, ui: CadUi) {
     { label: "Recortar con plano", icon: D.SplitPlane, run: () => void a.trimWithPlane(), needsBody: true, tip: "Deja de las superficies elegidas (o todas) el lado de un plano" },
     { label: "Recortar con sólido", icon: D.Boolean, run: a.trimWithSolid, needsBody: true, tip: "Quita de las superficies lo que queda dentro de un sólido (o deja solo eso, con Intersecar)" },
     "-",
-    { label: "Engrosar", icon: D.Thicken, run: () => void a.startThicken(), needsBody: true, tip: "Da espesor a una superficie (o a caras de un sólido)" },
   ];
   const refs: (Tool | "-")[] = [
     { label: "Plano", icon: D.Plane, run: () => void a.addReference("plane"), tip: "Plano de referencia: desplazado, en ángulo, medio o por tres puntos" },
     { label: "Eje", icon: D.Axis, run: () => void a.addReference("axis"), tip: "Eje de referencia: por dos puntos, arista, cilindro o cruce de planos" },
     { label: "Punto", icon: D.Point, run: () => void a.addReference("point") },
     { label: "Sistema de coordenadas", icon: D.Frame, run: () => void a.addFrame(), tip: "Origen y tres ejes: sirve como sus tres planos y sus tres ejes (elegir un vértice y aristas para Z y X)" },
-    { label: "Hélice", icon: D.Helix, run: a.addHelix, tip: "Camino para resortes y roscas" },
-    { label: "Espiral", icon: D.Helix, run: a.addSpiral, tip: "Espiral plana o hélice cónica (con dos radios)" },
+    { label: "Hélice o espiral", icon: D.Helix, run: a.addHelix, tip: "Camino para resortes y roscas; también espiral plana o hélice cónica (dos radios)" },
     { label: "Curva por puntos", icon: D.Helix, run: () => void a.addCurve("points"), tip: "Spline por vértices elegidos o puntos escritos" },
     { label: "Curva compuesta", icon: D.Helix, run: () => void a.addCurve("composite"), tip: "Aristas elegidas (y otras curvas) encadenadas en una sola" },
-    { label: "Curva proyectada", icon: D.Helix, run: () => void a.addCurve("projected"), tip: "Las curvas del último sketch proyectadas sobre las caras elegidas" },
+    { label: "Curva proyectada", icon: D.Helix, run: () => void a.addCurve("projected"), tip: "Las curvas del último sketch proyectadas sobre las caras elegidas o sobre la piel del escaneo (se elige en el diálogo)" },
     { label: "Curva de cruce", icon: D.Helix, run: () => void a.addCurve("intersection"), tip: "Donde se cruzan la primera cara elegida con las demás" },
   ];
   return { sketches, main, solids, modify, patterns, parts, sheet, surfaces, refs };

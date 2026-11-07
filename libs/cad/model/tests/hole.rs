@@ -17,7 +17,7 @@ fn plate() -> (Document, FeatureId) {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Join,
-        link: None,
+        link: None, on: None,
     }));
     let ev = doc.evaluate();
     let (top, _) = ev.body.as_ref().unwrap().closest_face([0.0, 0.0, 10.0], Some([0.0, 0.0, 1.0]), 0.99).unwrap();
@@ -134,7 +134,7 @@ fn cylinder_doc(r: f64, h: f64) -> Document {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Join,
-        link: None,
+        link: None, on: None,
     }));
     doc
 }
@@ -200,7 +200,7 @@ fn hole_cuts_only_the_nearest_part_unless_scope_says_otherwise() {
             z: [0.0, 0.0, 1.0],
             x: [1.0, 0.0, 0.0],
             op: BodyOp::New,
-            link: None,
+            link: None, on: None,
         }),
     );
     let h = doc.add(hole(sk, 6.0, HoleDepth::ThroughAll, HoleStyle::Simple));

@@ -37,3 +37,4 @@ pub use surface::{UvPart, UvSurface};
 pub use tangent::{corner_frames, mikk_tangents, CornerFrames};
 pub use transfer::{face_groups, original_regions, transfer_uvs, UvTransfer};
 pub use unwrap::{unwrap, unwrap_by_parts, unwrap_with_regions, Layout, Unwrap, UnwrapOptions};
+pub use param::{flatten_patch, Flattened};

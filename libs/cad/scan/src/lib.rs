@@ -104,7 +104,7 @@ impl CylinderPick {
             z: self.direction,
             x: perpendicular(self.direction),
             op: if self.hole { BodyOp::Cut } else { BodyOp::Join },
-            link: None,
+            link: None, on: None,
         })
     }
 
@@ -123,7 +123,7 @@ impl ConePick {
             z: self.direction,
             x: perpendicular(self.direction),
             op: if self.hole { BodyOp::Cut } else { BodyOp::Join },
-            link: None,
+            link: None, on: None,
         })
     }
 }
@@ -136,7 +136,7 @@ impl TorusPick {
             z: self.axis,
             x: perpendicular(self.axis),
             op: BodyOp::Join,
-            link: None,
+            link: None, on: None,
         })
     }
 }

@@ -10,7 +10,7 @@ fn occt() -> bool {
 
 fn part(shape: PrimitiveShape) -> Shape {
     let mut doc = Document::new();
-    doc.add(FeatureKind::Primitive(Primitive { shape, origin: [0.0; 3], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op: BodyOp::Join, link: None }));
+    doc.add(FeatureKind::Primitive(Primitive { shape, origin: [0.0; 3], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op: BodyOp::Join, link: None, on: None }));
     let ev = doc.evaluate();
     assert!(ev.errors().is_empty(), "{:?}", ev.errors());
     let body = ev.body.unwrap();
@@ -128,7 +128,7 @@ fn unknown_size_is_an_error() {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Join,
-        link: None,
+        link: None, on: None,
     }));
     if occt() {
         assert!(matches!(doc.evaluate().state(id), Some(FeatureState::Error { .. })));
@@ -160,7 +160,7 @@ fn timing() {
         (PrimitiveShape::Bolt { size: "M8".into(), length: 25.0, head: BoltHead::Hex, modeled: true }, 0.0),
         (PrimitiveShape::Nut { size: "M8".into(), modeled: true }, 20.0),
     ] {
-        doc.add(FeatureKind::Primitive(Primitive { shape, origin: [x, 0.0, 0.0], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op: BodyOp::New, link: None }));
+        doc.add(FeatureKind::Primitive(Primitive { shape, origin: [x, 0.0, 0.0], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op: BodyOp::New, link: None, on: None }));
     }
     let t = Instant::now();
     let ev = doc.evaluate();

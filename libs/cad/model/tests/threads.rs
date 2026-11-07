@@ -84,7 +84,7 @@ fn plate(doc: &mut Document, op: BodyOp) -> (FeatureId, FeatureId) {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op,
-        link: None,
+        link: None, on: None,
     }));
     let ev = doc.evaluate();
     let (top, _) = ev.body.as_ref().unwrap().closest_face([15.0, 15.0, 10.0], Some([0.0, 0.0, 1.0]), 0.99).unwrap();
@@ -105,7 +105,7 @@ fn bolt(length: f64, origin: P3, x: P3, link: Option<ThreadLink>) -> FeatureKind
         z: [0.0, 0.0, 1.0],
         x,
         op: BodyOp::New,
-        link,
+        link, on: None,
     })
 }
 

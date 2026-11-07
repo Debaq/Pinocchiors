@@ -380,3 +380,30 @@ pub(crate) fn parametrize(mesh: &PolyMesh, faces: &[usize], arap_iterations: usi
     let vertex_uv = chart.vertices.iter().copied().zip(uv).collect();
     ChartUv { vertex_uv, flipped, stretch, area_3d, area_uv }
 }
+
+/// Un trozo de superficie (un disco de triángulos) aplanado a escala real.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Flattened {
+    /// Coordenadas en el plano (mm) de cada vértice de `positions`; `None` si
+    /// el vértice no está en ningún triángulo.
+    pub uv: Vec<Option<[f64; 2]>>,
+    /// Estiramiento L2 medio: 1 es sin estirar.
+    pub stretch: f64,
+    /// Triángulos que quedaron dados vuelta.
+    pub flipped: usize,
+}
+
+/// Aplana un trozo de malla con forma de disco (LSCM + ARAP) cuidando las
+/// medidas: las coordenadas quedan en las mismas unidades que la malla (el
+/// área plana se iguala a la de la malla).
+pub fn flatten_patch(positions: &[[f64; 3]], triangles: &[[usize; 3]], arap_iterations: usize) -> Flattened {
+    let mesh = PolyMesh::new(positions, triangles);
+    let faces: Vec<usize> = (0..triangles.len()).collect();
+    let uv = parametrize(&mesh, &faces, arap_iterations);
+    let k = if uv.area_uv > 0.0 { (uv.area_3d / uv.area_uv).sqrt() } else { 1.0 };
+    let mut out = vec![None; positions.len()];
+    for (v, p) in uv.vertex_uv {
+        out[v] = Some([p[0] * k, p[1] * k]);
+    }
+    Flattened { uv: out, stretch: uv.stretch, flipped: uv.flipped }
+}

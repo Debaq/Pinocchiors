@@ -130,7 +130,9 @@ export type ScanFit =
   | { type: "zone"; seed: ScanSeed }
   | { type: "points"; seeds: [ScanSeed, ScanSeed, ScanSeed] }
   | { type: "cylinder"; seed: ScanSeed }
-  | { type: "point"; seed: ScanSeed };
+  | { type: "point"; seed: ScanSeed }
+  /** La normal de la piel en el punto (eje para apoyar piezas) */
+  | { type: "normal"; seed: ScanSeed };
 
 export type PlaneDef =
   | { type: "offset"; base: PlaneSpec; distance: number }
@@ -972,7 +974,8 @@ export type FeatureKind =
   /** `thin`: revolución delgada, una pared de ese espesor siguiendo el contorno */
   | { type: "revolve"; sketch: number; regions: RegionSelection; axis: AxisSpec; angle: number; op: BodyOp; extent?: RevolveExtent; thin?: number | null }
   /** `link`: tornillo o tuerca puesto en otra rosca (el marco de arriba no se usa) */
-  | { type: "primitive"; shape: PrimitiveShape; origin: P3; z: P3; x: P3; op: BodyOp; link?: ThreadLink | null }
+  /** `on`: apoyada en un eje (la normal de la piel): `origin[0]` = giro (°), `origin[2]` = separación a lo largo del eje */
+  | { type: "primitive"; shape: PrimitiveShape; origin: P3; z: P3; x: P3; op: BodyOp; link?: ThreadLink | null; on?: AxisSpec | null }
   /** Con `radius2`, variable de `radius` al comienzo de cada arista a `radius2` al final */
   /** `points`: radios en el medio de cada arista (`at`, fracción del largo de 0 a 1) */
   | { type: "fillet"; edges: EdgeRef[]; radius: number; radius2?: number | null; points?: { at: number; radius: number }[] }
@@ -1008,6 +1011,28 @@ export type FeatureKind =
       region?: { sketch: number; regions: RegionSelection } | null;
       /** Solo lo pintado con el pincel (manda sobre `region`); la app completa `point` y `normal` */
       paint?: { radius: number; dabs: ScanDab[] } | null;
+      /** Detalle completo: el STL tal cual (malla cerrada), sin vóxeles; sin holgura ni espesor */
+      exact?: boolean;
+    }
+  /**
+   * Relieve (o grabado, `inward`) de las regiones de un sketch sobre la piel del escaneo.
+   * `mode`: pareja sobre la piel, tope plano en el plano del sketch, tope plano automático
+   * (a `height` del punto más alto) o la piel corrida `height` por la normal del sketch.
+   * La app completa la piel.
+   */
+  | {
+      type: "relief";
+      sketch: number;
+      regions: RegionSelection;
+      /** Proyectar (medidas en el plano) o envolver (medidas sobre la piel; centro en `anchor`, girado `angle`°) */
+      map?: { type: "project" } | { type: "wrap"; anchor?: ScanSeed | null; angle: number };
+      /** Sobre qué: auto (el escaneo si hay; si no, el sólido), la piel del escaneo o el sólido del diseño */
+      target?: "auto" | "scan" | "body";
+      height: number;
+      mode: ReliefMode;
+      inward?: boolean;
+      op: BodyOp;
+      faces?: number;
     }
   /**
    * Superficie libre ajustada a la zona suave del escaneo bajo `seed`; sola es una superficie, con
@@ -1576,7 +1601,10 @@ export type FeatureState =
 
 /** `ms`: lo que tardó la última vez que se calculó */
 /** `auto_scope`: piezas que eligió sola, sin alcance elegido (la más cercana a un agujero) */
-export type FeatureStatus = { id: number; ms?: number; auto_scope?: PartId[]; handles?: FeatureHandle[] } & FeatureState;
+export type FeatureStatus = { id: number; ms?: number; auto_scope?: PartId[]; handles?: FeatureHandle[]; note?: string } & FeatureState;
+
+/** Altura del relieve sobre la piel */
+export type ReliefMode = "even" | "flat_top" | "flat_auto" | "along";
 
 /**
  * Flecha de una operación en el visor (extrusión, chapa, agujero...): desde
@@ -2049,6 +2077,7 @@ export type ScanFeature =
   | { kind: "ref_plane_points"; points: [number, P3][] }
   | { kind: "ref_axis"; triangle: number; at: P3 }
   | { kind: "ref_point"; triangle: number; at: P3 }
+  | { kind: "ref_normal"; triangle: number; at: P3 }
   /** Curva por el camino más corto sobre la piel entre los puntos tocados (triángulo y punto de cada uno) */
   | { kind: "path_curve"; points: [number, P3][]; closed: boolean }
   /** Superficie libre de la zona suave bajo el clic; `close`: clic en la cara plana contra la que cerrar el sólido */
@@ -2072,8 +2101,9 @@ export const FEATURE_LABELS: Record<FeatureKind["type"], string> = {
   get split() { return tx("cad", "Corte"); },
   get import() { return tr("Importado"); },
   get derived() { return tr("Pieza derivada"); },
-  get scan_body() { return tr("Cuerpo del escaneo"); },
+  get scan_body() { return tr("Espesor sobre piel"); },
   get scan_surface() { return tr("Superficie libre del escaneo"); },
+  get relief() { return tr("Relieve sobre la piel"); },
   get boolean() { return tr("Booleana"); },
   get split_parts() { return tr("Separar piezas"); },
   get delete_parts() { return tr("Borrar pieza"); },
@@ -2374,6 +2404,7 @@ export const isScanReference = (kind: FeatureKind) =>
 export const usesScan = (kind: FeatureKind) =>
   isScanReference(kind) ||
   kind.type === "scan_body" ||
+  kind.type === "relief" ||
   kind.type === "face_to_scan" ||
   (kind.type === "extrude" && kind.extent.type === "up_to_scan") ||
   (kind.type === "rib" && !!kind.scan);
@@ -2447,7 +2478,7 @@ export function dependencies(kind: FeatureKind): number[] {
       return kind.link ? [kind.link.feature] : [];
     case "primitive": {
       const gear = kind.shape.type === "gear" ? kind.shape.link : null;
-      return [...(kind.link ? [kind.link.feature] : []), ...(gear ? [gear.feature] : [])];
+      return [...(kind.link ? [kind.link.feature] : []), ...(gear ? [gear.feature] : []), ...(kind.on ? axis(kind.on) : [])];
     }
     case "split":
       return plane(kind.plane);
@@ -2494,6 +2525,8 @@ export function dependencies(kind: FeatureKind): number[] {
     }
     case "boolean":
       return [...kind.targets, ...kind.tools].map((p) => p.feature);
+    case "relief":
+      return [kind.sketch];
     case "scan_body":
       return kind.region ? [kind.region.sketch] : [];
     case "split_parts":

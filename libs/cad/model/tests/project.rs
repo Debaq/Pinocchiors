@@ -13,7 +13,7 @@ fn occt() -> bool {
 }
 
 fn prim(shape: PrimitiveShape, origin: [f64; 3], op: BodyOp) -> FeatureKind {
-    FeatureKind::Primitive(Primitive { shape, origin, z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op, link: None })
+    FeatureKind::Primitive(Primitive { shape, origin, z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op, link: None, on: None })
 }
 
 fn cube(d: f64) -> FeatureKind {

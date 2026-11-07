@@ -7,7 +7,7 @@ use cad_model::gears::{GearKind, GearSpec};
 use cad_model::*;
 
 fn prim(shape: PrimitiveShape) -> FeatureKind {
-    FeatureKind::Primitive(Primitive { shape, origin: [0.0; 3], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op: BodyOp::New, link: None })
+    FeatureKind::Primitive(Primitive { shape, origin: [0.0; 3], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op: BodyOp::New, link: None, on: None })
 }
 
 fn gear(kind: GearKind, z: u32) -> GearPart {

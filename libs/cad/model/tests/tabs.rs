@@ -8,7 +8,7 @@ fn box_doc(dx: f64) -> Document {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Join,
-        link: None,
+        link: None, on: None,
     }));
     doc
 }

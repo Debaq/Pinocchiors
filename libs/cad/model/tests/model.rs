@@ -267,7 +267,7 @@ fn circular_pattern_of_holes_and_mirror() {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Join,
-        link: None,
+        link: None, on: None,
     }));
     let hole = doc.add(FeatureKind::Primitive(Primitive {
         shape: PrimitiveShape::Cylinder { radius: 3.0, height: 20.0 },
@@ -275,7 +275,7 @@ fn circular_pattern_of_holes_and_mirror() {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Cut,
-        link: None,
+        link: None, on: None,
     }));
     doc.add(FeatureKind::Pattern {
         features: vec![hole],
@@ -305,7 +305,7 @@ fn shell_split_and_linear_pattern() {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Join,
-        link: None,
+        link: None, on: None,
     }));
     let top = FaceRef { point: [20.0, 10.0, 10.0], normal: [0.0, 0.0, 1.0], ..Default::default() };
     doc.add(FeatureKind::Shell { faces: vec![top], thickness: 1.0, overrides: vec![] });
@@ -329,7 +329,7 @@ fn shell_split_and_linear_pattern() {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Join,
-        link: None,
+        link: None, on: None,
     }));
     doc.add(FeatureKind::Pattern {
         features: vec![pin],
@@ -360,7 +360,7 @@ fn errors_stay_local_rollback_and_suppress() {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Cut,
-        link: None,
+        link: None, on: None,
     }));
     let ev = doc.evaluate();
     assert!(matches!(ev.state(bad), Some(FeatureState::Error { .. })));
@@ -386,7 +386,7 @@ fn errors_stay_local_rollback_and_suppress() {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Cut,
-        link: None,
+        link: None, on: None,
     }));
     assert!(matches!(d2.evaluate().state(c), Some(FeatureState::Error { .. })));
 }
@@ -443,7 +443,7 @@ fn cut_on_face_points_into_material() {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Join,
-        link: None,
+        link: None, on: None,
     }));
     let mut s = Sketch::new();
     s.circle([0.0, 0.0], 5.0);
@@ -878,7 +878,7 @@ fn centered_box() {
         z: [0.0, 1.0, 0.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Join,
-        link: None,
+        link: None, on: None,
     }));
     let ev = doc.evaluate();
     assert_all_ok(&ev);
@@ -903,7 +903,7 @@ fn box_centered_on_all_axes() {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Join,
-        link: None,
+        link: None, on: None,
     }));
     let ev = doc.evaluate();
     assert_all_ok(&ev);
@@ -925,7 +925,7 @@ fn measure_faces_edges_and_vertices() {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Join,
-        link: None,
+        link: None, on: None,
     }));
     let ev = doc.evaluate();
     let body = ev.body.as_ref().unwrap();
@@ -1018,7 +1018,7 @@ fn used_edge_follows_the_solid() {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Join,
-        link: None,
+        link: None, on: None,
     }));
     let ev = doc.evaluate();
     let (edge, _) = ev.body.as_ref().unwrap().closest_edge([0.0, -10.0, 10.0], Some([1.0, 0.0, 0.0]), 0.99).unwrap();

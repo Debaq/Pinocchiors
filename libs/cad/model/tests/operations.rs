@@ -18,7 +18,7 @@ fn cube(x: f64, size: f64, op: BodyOp) -> FeatureKind {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op,
-        link: None,
+        link: None, on: None,
     })
 }
 
@@ -678,7 +678,7 @@ fn planes_on_curved_geometry_by_clicks() {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Join,
-        link: None,
+        link: None, on: None,
     }));
     let wall = RefPick::Face { face: face_at(&doc, [5.0, 0.0, 5.0], [1.0, 0.0, 0.0]) };
     let rim = RefPick::Edge { edge: edge_at(&doc, [0.0, 5.0, 10.0]) };
@@ -852,7 +852,7 @@ fn projected_and_intersection_curves() {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::New,
-        link: None,
+        link: None, on: None,
     }));
     doc.add(FeatureKind::Primitive(Primitive {
         shape: PrimitiveShape::Cylinder { radius: 5.0, height: 10.0 },
@@ -860,7 +860,7 @@ fn projected_and_intersection_curves() {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::New,
-        link: None,
+        link: None, on: None,
     }));
     let plate = face_at(&doc, [8.0, 8.0, 4.0], [0.0, 0.0, 1.0]);
     let wall = face_at(&doc, [5.0, 0.0, 8.0], [1.0, 0.0, 0.0]);
@@ -887,7 +887,7 @@ fn extrude_up_to_a_curved_face() {
         z: [1.0, 0.0, 0.0],
         x: [0.0, 1.0, 0.0],
         op: BodyOp::Join,
-        link: None,
+        link: None, on: None,
     }));
     let belly = face_at(&doc, [0.0, 0.0, -20.0], [0.0, 0.0, -1.0]);
     let mut s = Sketch::new();
@@ -916,7 +916,7 @@ fn revolve_up_to_a_face() {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Join,
-        link: None,
+        link: None, on: None,
     }));
     let wall = face_at(&doc, [0.0, 20.0, 10.0], [1.0, 0.0, 0.0]);
     let mut s = Sketch::new();
@@ -983,7 +983,7 @@ fn full_round_on_a_rib() {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Join,
-        link: None,
+        link: None, on: None,
     }));
     let a = face_at(&doc, [10.0, 0.0, 5.0], [0.0, -1.0, 0.0]);
     let b = face_at(&doc, [10.0, 4.0, 5.0], [0.0, 1.0, 0.0]);
@@ -1025,7 +1025,7 @@ fn face_blend_rounds_an_edge_and_fills_a_corner() {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Join,
-        link: None,
+        link: None, on: None,
     }));
     let floor = face_at(&doc, [2.0, 5.0, 10.0], [0.0, 0.0, 1.0]);
     let wall = face_at(&doc, [5.0, 5.0, 15.0], [-1.0, 0.0, 0.0]);
@@ -1047,7 +1047,7 @@ fn face_blend_goes_around_a_cylinder() {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Join,
-        link: None,
+        link: None, on: None,
     }));
     let top = face_at(&doc, [0.0, 0.0, 10.0], [0.0, 0.0, 1.0]);
     let wall = face_at(&doc, [8.0, 0.0, 5.0], [1.0, 0.0, 0.0]);
@@ -1074,7 +1074,7 @@ fn cylinder_with_wrapped_square() -> (Document, FeatureId) {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Join,
-        link: None,
+        link: None, on: None,
     }));
     let wall = face_at(&doc, [10.0, 0.0, 10.0], [1.0, 0.0, 0.0]);
     let mut s = Sketch::new();
@@ -1146,7 +1146,7 @@ fn parting_line_along_the_silhouette() {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Join,
-        link: None,
+        link: None, on: None,
     }));
     let ball = face_at(&doc, [0.0, 0.0, 10.0], [0.0, 0.0, 1.0]);
     let split = doc.add(FeatureKind::SplitFaces { faces: vec![ball.clone()], tool: PartingTool::Silhouette { direction: AxisSpec::Z } });

@@ -187,7 +187,7 @@ fn trim_a_surface_with_a_plane_and_with_a_solid() {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::New,
-        link: None,
+        link: None, on: None,
     }));
     let split = by_plane.add(FeatureKind::Split { plane: PlaneSpec::Custom { plane: Plane::XY.offset(4.0) }, flip: false });
     by_plane.get_mut(split).unwrap().scope = vec![surface];
@@ -204,7 +204,7 @@ fn trim_a_surface_with_a_plane_and_with_a_solid() {
             z: [0.0, 0.0, 1.0],
             x: [1.0, 0.0, 0.0],
             op: BodyOp::New,
-            link: None,
+            link: None, on: None,
         }));
         let ev = evaluate(&d);
         let solid = ev.parts.iter().find(|p| !p.is_surface()).unwrap().id;
@@ -229,7 +229,7 @@ fn split_a_box_with_a_plane_and_with_a_curved_surface() {
             z: [0.0, 0.0, 1.0],
             x: [1.0, 0.0, 0.0],
             op: BodyOp::New,
-            link: None,
+            link: None, on: None,
         }))
     };
     let volumes = |ev: &Evaluation| {

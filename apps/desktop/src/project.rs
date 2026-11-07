@@ -1678,7 +1678,7 @@ mod tests {
     }
 
     fn primitive(shape: cad_model::PrimitiveShape, origin: [f64; 3], op: cad_model::BodyOp) -> cad_model::FeatureKind {
-        cad_model::FeatureKind::Primitive(cad_model::Primitive { shape, origin, z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op, link: None })
+        cad_model::FeatureKind::Primitive(cad_model::Primitive { shape, origin, z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op, link: None, on: None })
     }
 
     /// Diseño de las muestras: caja (pieza A) y cilindro aparte (pieza B), con

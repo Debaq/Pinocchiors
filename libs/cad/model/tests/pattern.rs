@@ -168,7 +168,7 @@ fn surface_pattern_follows_a_curved_wall() {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Join,
-        link: None,
+        link: None, on: None,
     }));
     let ev = doc.evaluate();
     let (i, _) = ev.body.as_ref().unwrap().closest_face([10.0, 0.0, 10.0], Some([1.0, 0.0, 0.0]), 0.99).unwrap();
@@ -181,7 +181,7 @@ fn surface_pattern_follows_a_curved_wall() {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Join,
-        link: None,
+        link: None, on: None,
     }));
     let one = volume(&doc) - cyl;
     assert!(one > 1.0 && one < 8.0, "{one}");

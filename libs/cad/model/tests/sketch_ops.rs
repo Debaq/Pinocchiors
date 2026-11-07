@@ -55,7 +55,7 @@ fn plate(origin: [f64; 3], dx: f64, dy: f64, dz: f64) -> FeatureKind {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Join,
-        link: None,
+        link: None, on: None,
     })
 }
 
@@ -106,7 +106,7 @@ fn extrusion_hasta_una_cara_inclinada() {
         z,
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Join,
-        link: None,
+        link: None, on: None,
     }));
     let ev = eval_ok(&doc);
     let body = ev.body.as_ref().unwrap();
@@ -465,4 +465,42 @@ fn desmolde_con_agujeros() {
     // Más o menos el anillo plano (pared de 2 alrededor de 40×20) por 5
     let ring = (42.0 * 22.0 - 4.0 + PI) - 38.0 * 18.0;
     assert_relative_eq!(v, ring * 5.0, max_relative = 0.05);
+}
+
+#[test]
+fn relieve_sobre_el_solido_del_diseno() {
+    if !occt() {
+        return;
+    }
+    // Caja 40 × 40 × 10 y un círculo de radio 5 a 20 mm sobre la tapa
+    let run = |mode: ReliefMode, inward: bool| {
+        let mut doc = Document::new();
+        doc.add(plate([0.0, 0.0, 0.0], 40.0, 40.0, 10.0));
+        let mut s = Sketch::new();
+        s.circle([0.0, 0.0], 5.0);
+        let sk = sketch_at(&mut doc, 30.0, s);
+        let id = doc.add(FeatureKind::Relief(Relief {
+            sketch: sk,
+            regions: RegionSelection::All,
+            map: ReliefMap::Project,
+            target: ReliefTarget::Body,
+            height: 2.0,
+            mode,
+            inward,
+            op: BodyOp::New,
+            faces: 20000,
+            mesh: None,
+            shell: None,
+            skin: None,
+        }));
+        let ev = eval_ok(&doc);
+        let part = ev.parts.iter().find(|p| p.id.feature == id).expect("pieza del relieve");
+        part.shape.mass().unwrap().volume
+    };
+    let area = PI * 25.0;
+    assert_relative_eq!(run(ReliefMode::Even, false), 2.0 * area, max_relative = 1e-3);
+    assert_relative_eq!(run(ReliefMode::Along, false), 2.0 * area, max_relative = 1e-6);
+    assert_relative_eq!(run(ReliefMode::Even, true), 2.0 * area, max_relative = 1e-3);
+    // Tope plano en el plano del sketch: de z = 10 a z = 30
+    assert_relative_eq!(run(ReliefMode::FlatTop, false), 20.0 * area, max_relative = 1e-6);
 }

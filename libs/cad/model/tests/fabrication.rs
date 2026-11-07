@@ -14,7 +14,7 @@ fn fab(nozzle: f64) -> Fabrication {
 fn gear_doc(g: GearPart, fabrication: Option<Fabrication>) -> Document {
     let mut doc = Document::new();
     doc.fabrication = fabrication;
-    doc.add(FeatureKind::Primitive(Primitive { shape: PrimitiveShape::Gear(g), origin: [0.0; 3], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op: BodyOp::Join, link: None }));
+    doc.add(FeatureKind::Primitive(Primitive { shape: PrimitiveShape::Gear(g), origin: [0.0; 3], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op: BodyOp::Join, link: None, on: None }));
     doc
 }
 
@@ -79,7 +79,7 @@ fn plate_with_hole(compensate: bool, fabrication: Option<Fabrication>) -> Docume
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Join,
-        link: None,
+        link: None, on: None,
     }));
     let ev = doc.evaluate();
     let (top, _) = ev.body.as_ref().unwrap().closest_face([0.0, 0.0, 10.0], Some([0.0, 0.0, 1.0]), 0.99).unwrap();
@@ -148,7 +148,7 @@ fn all(nozzle: f64) -> Fabrication {
 fn standard_doc(shape: PrimitiveShape, fabrication: Option<Fabrication>) -> Document {
     let mut doc = Document::new();
     doc.fabrication = fabrication;
-    doc.add(FeatureKind::Primitive(Primitive { shape, origin: [0.0; 3], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op: BodyOp::Join, link: None }));
+    doc.add(FeatureKind::Primitive(Primitive { shape, origin: [0.0; 3], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op: BodyOp::Join, link: None, on: None }));
     doc
 }
 

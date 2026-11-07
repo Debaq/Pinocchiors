@@ -15,7 +15,7 @@ fn cube() -> Document {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Join,
-        link: None,
+        link: None, on: None,
     }));
     doc
 }
@@ -75,7 +75,7 @@ fn pattern_along_a_sketch_path() {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Join,
-        link: None,
+        link: None, on: None,
     }));
     let mut s = Sketch::default();
     let a = s.add_point(0.0, 0.0);
@@ -226,7 +226,7 @@ fn chain_links_follow_the_path_and_turn() {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Join,
-        link: None,
+        link: None, on: None,
     }));
     let mut s = Sketch::default();
     let a = s.add_point(0.0, 0.0);

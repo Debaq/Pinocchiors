@@ -92,7 +92,7 @@ fn instances_and_interference() {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Join,
-        link: None,
+        link: None, on: None,
     }));
     let ev = doc.evaluate();
     // Dos copias de la misma pieza, la segunda corrida 9 mm: chocan 1 × 10 × 10
@@ -121,7 +121,7 @@ fn tight_gaps_report_pairs_closer_than_the_clearance() {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Join,
-        link: None,
+        link: None, on: None,
     }));
     let ev = doc.evaluate();
     let mk = |id: u32, x: f64| {

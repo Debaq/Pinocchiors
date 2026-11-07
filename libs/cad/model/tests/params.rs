@@ -18,7 +18,7 @@ fn caja() -> FeatureKind {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Join,
-        link: None,
+        link: None, on: None,
     })
 }
 
@@ -162,7 +162,7 @@ fn configurations_change_parameters_and_suppression() {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::New,
-        link: None,
+        link: None, on: None,
     }));
     doc.parameters = vec![param("ancho", "40")];
     doc.bindings.insert(format!("{}.kind.shape.dx", b.0), "ancho".into());

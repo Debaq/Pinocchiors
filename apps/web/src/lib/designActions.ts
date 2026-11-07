@@ -125,6 +125,17 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     return { sketch, points };
   };
 
+  /**
+   * Sketch de curvas sin regiones cerradas (el elegido o el último) sobre el que extruir o
+   * revolucionar da una superficie en vez de un sólido
+   */
+  const openCurvesSketch = (): Feature | undefined => {
+    const sel = selectedFeature();
+    const s = sel?.kind.type === "sketch" ? sel : [...sketches()].pop();
+    if (!s || s.kind.type !== "sketch" || (store.sketchView(s.id)?.regions.length ?? 0) > 0) return undefined;
+    return s.kind.sketch.entities.some((e) => !e.construction && e.geometry.type !== "point") ? s : undefined;
+  };
+
   /** Sketch al que apuntan extrusiones y revoluciones nuevas: el elegido o el último */
   const targetSketch = (): Feature | undefined => {
     const sel = selectedFeature();
@@ -149,7 +160,15 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     const picked = pickedRegions();
     const profile = picked ? sketches().find((f) => f.id === picked.sketch) : [...profileSketches()].pop();
     const path = [...sketches()].reverse().find((s) => s.id !== profile?.id && !profileSketches().includes(s)) ?? [...sketches()].reverse().find((s) => s.id !== profile?.id);
-    if (!profile || !path) return say(tr("Hacen falta dos sketches: el perfil (una región cerrada) y el camino"));
+    // Sin perfil cerrado: con dos sketches de curvas, superficie (las curvas del anteúltimo por el
+    // último); con uno solo, un tubo por ese camino (el diálogo deja cambiar el tipo de perfil)
+    if (!profile) {
+      const list = sketches();
+      const prev = list[list.length - 2];
+      const curves = prev?.kind.type === "sketch" && prev.kind.sketch.entities.some((e) => !e.construction && e.geometry.type !== "point");
+      return curves ? addSurfaceSweep() : addTube();
+    }
+    if (!path) return say(tr("Hacen falta dos sketches: el perfil (una región cerrada) y el camino"));
     ui.clearPicks();
     void store.addFeature({
       type: "sweep",
@@ -302,11 +321,15 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
    * Carcasa que copia la piel del escaneo (pieza nueva, 2 mm hacia afuera); con `patch`, solo
    * lo que cae bajo las regiones del sketch elegido o del último (férula, almohadilla, tapa)
    */
-  const startScanShell = (patch: boolean) => {
-    const sel = selectedFeature();
-    const sketch = sel?.kind.type === "sketch" ? sel : [...sketches()].pop();
-    if (patch && !sketch) return say(tr("Primero un sketch con el contorno del parche, en un plano que mire al escaneo"));
-    const region = patch && sketch ? { sketch: sketch.id, regions: { type: "all" as const } } : null;
+  /**
+   * Espesor sobre piel (cuerpo, carcasa, parche y pincel del escaneo en uno): con regiones
+   * elegidas, el parche bajo ellas; si no, la carcasa de todo el escaneo. Forma, dónde (todo,
+   * bajo un sketch, pintado) y qué hacer con las piezas se cambian en el diálogo.
+   */
+  const addSkinThickness = () => {
+    const picked = pickedRegions();
+    ui.clearPicks();
+    const region = picked ? { sketch: picked.sketch, regions: { type: "points" as const, points: picked.points } } : null;
     void store.addFeature({ type: "scan_body", offset: 0.2, thickness: 2, faces: 20000, op: "new", region });
   };
 
@@ -317,6 +340,59 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     const refs = await Promise.all(picked.map((f) => store.faceRef(f)));
     ui.clearPicks();
     void store.addFeature({ type: "face_to_scan", faces: refs, offset: 0 });
+  };
+
+  /**
+   * Colocar sobre la piel: clic en el escaneo → la normal de la piel en ese punto (referencia
+   * que sigue al escaneo), un cilindro apoyado en ella (la forma se cambia en el diálogo) y su
+   * base llevada hasta la piel, así se amolda aunque la piel sea curva.
+   */
+  const placeOnSkin = () =>
+    ui.setPick({
+      kind: "scan_point",
+      prompt: tr("Clic en la piel del escaneo donde va la pieza"),
+      done: async (at, triangle) => {
+        try {
+          ui.setPick({ kind: "none" });
+          await store.scanAdd({ kind: "ref_normal", triangle, at });
+          const axis = [...(store.doc()?.features ?? [])].reverse().find((f) => f.kind.type === "axis" && f.kind.def.type === "scan");
+          if (!axis || axis.kind.type !== "axis" || axis.kind.def.type !== "scan") return;
+          const n = axis.kind.def.direction;
+          const lift = 2;
+          const id = await store.addFeature({
+            type: "primitive",
+            shape: { type: "cylinder", radius: 5, height: 10 },
+            origin: [0, 0, lift],
+            z: [0, 0, 1],
+            x: [1, 0, 0],
+            op: "new",
+            on: { type: "reference", feature: axis.id },
+          });
+          // La base (a `lift` de la piel) llevada hasta la piel: se amolda
+          const base: P3 = [at[0] + n[0] * lift, at[1] + n[1] * lift, at[2] + n[2] * lift];
+          await store.addFeature({ type: "face_to_scan", faces: [{ point: base, normal: [-n[0], -n[1], -n[2]], tags: [{ feature: id, name: "abajo" }] }], offset: 0 });
+          store.select(id);
+        } catch (e) {
+          say(String(e));
+        }
+      },
+    });
+
+  /** Relieve sobre la piel del escaneo: las regiones elegidas o el último sketch, 1,5 mm parejo */
+  const addRelief = () => {
+    const picked = pickedRegions();
+    const s = picked ? sketches().find((f) => f.id === picked.sketch) : targetSketch();
+    if (!s) return say(tr("Primero un sketch con el texto o la forma, frente a la piel del escaneo"));
+    if (!picked && noRegions(s)) return;
+    ui.clearPicks();
+    void store.addFeature({
+      type: "relief",
+      sketch: s.id,
+      regions: picked ? { type: "points", points: picked.points } : { type: "all" },
+      height: 1.5,
+      mode: "even",
+      op: "new",
+    });
   };
 
   /** Patrón a lo largo del último sketch (o de la operación elegida, si tiene herramienta) */
@@ -407,6 +483,8 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
   /** Transición entre los dos últimos sketches con regiones */
   const addLoft = () => {
     const list = profileSketches().slice(-2);
+    // Sin dos regiones cerradas pero con dos sketches de curvas: superficie
+    if (list.length < 2 && sketches().length >= 2 && openCurvesSketch()) return addSurfaceLoft();
     if (list.length < 2) return say(tr("Hacen falta al menos dos sketches con una región cerrada, en planos distintos"));
     void store.addFeature({ type: "loft", sections: list.map((s) => ({ sketch: s.id, regions: { type: "all" } })), ruled: false, op: "join" });
   };
@@ -441,6 +519,8 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
       ui.clearPicks();
       return void extrudeFace(face.face);
     }
+    // Curvas sin regiones cerradas: superficie (el diálogo deja cambiar el resultado)
+    if (!picked && openCurvesSketch()) return addSurfaceExtrude();
     const s = picked ? sketches().find((f) => f.id === picked.sketch) : targetSketch();
     if (!s) return say(tr("Primero hace falta un sketch con una región cerrada"));
     if (!picked && noRegions(s)) return;
@@ -476,7 +556,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
 
   /** Superficie extruida con todas las curvas del sketch elegido (o del último) */
   const addSurfaceExtrude = () => {
-    const s = targetSketch();
+    const s = openCurvesSketch() ?? targetSketch();
     if (!s) return say(tr("Primero hace falta un sketch con curvas (abiertas o cerradas)"));
     ui.clearPicks();
     void store.addFeature({ type: "surface_extrude", sketch: s.id, entities: [], extent: { type: "blind", distance: 10 }, reverse: false });
@@ -484,7 +564,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
 
   /** Superficie de revolución: eje = la primera línea de construcción del sketch, o Z */
   const addSurfaceRevolve = () => {
-    const s = targetSketch();
+    const s = openCurvesSketch() ?? targetSketch();
     if (!s || s.kind.type !== "sketch") return say(tr("Primero hace falta un sketch con curvas (abiertas o cerradas)"));
     ui.clearPicks();
     const axisLine = s.kind.sketch.entities.find((e) => e.construction && e.geometry.type === "line");
@@ -527,6 +607,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
 
   const addRevolve = () => {
     const picked = pickedRegions();
+    if (!picked && openCurvesSketch()) return addSurfaceRevolve();
     const s = picked ? sketches().find((f) => f.id === picked.sketch) : targetSketch();
     if (!s || s.kind.type !== "sketch") return say(tr("Primero hace falta un sketch con una región cerrada"));
     if (!picked && noRegions(s)) return;
@@ -860,8 +941,10 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     startThread,
     startReplaceFace,
     startFaceToScan,
-    startScanShell,
+    addSkinThickness,
     importStep,
+    addRelief,
+    placeOnSkin,
     addDerived,
     addSplitBy,
     trimWithPlane,
