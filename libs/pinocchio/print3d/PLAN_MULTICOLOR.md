@@ -57,6 +57,46 @@ cada color en su carrete.
 | MC6 | **Pruebas reales con el usuario**: cubo de 2 colores por pieza, luego uno pintado y un logo por altura. Comparar contra Orca con el mismo modelo (gramos, cambios, tiempo) | pendiente |
 | MC7 | **Menos desperdicio**: orden de colores por capa que minimice cambios, purgar en el relleno o en piezas de sacrificio, ajustar la torre; avisar cuando una pieza chica con muchos cambios no conviene | pendiente |
 
+## Ideas de interfaz (aprobadas por el usuario el 2026-11-06, todas)
+
+Lo que hace un incordio a Orca no es el motor sino la interfaz: números `T0…T3` en vez de
+carretes reales, pintar triángulo por triángulo con bordes sucios, el costo (cambios, tiempo,
+purga) recién se ve después de laminar, matriz de purga y torre confusas, color por altura
+escondido. Ideas para que en Pinocchio sea fácil:
+
+1. **Paleta = la impresora.** Al entrar a multicolor se leen los 4 carretes del IFS
+   (color + material, `/detail`). Se pinta con «PLA rojo», nunca con `T2`. El mapeo
+   herramienta → carrete sale solo al enviar; no deja enviar si falta carrete o el material
+   no coincide (MC3 + MC5).
+2. **Por pieza con un clic**: muestras de color en la lista de piezas o arrastrar la muestra
+   sobre la pieza en el visor (MC3a).
+3. **Por cara CAD** (Orca no puede): en piezas paramétricas de Pinocchio se pinta la cara
+   B-rep entera → borde exacto. En mallas: zonas de «Pieles» (relleno por ángulo, crecer,
+   invertir) + subdividir sola en el borde del color (MC3b).
+4. **Costo en vivo antes de laminar**: semáforo con cambios, tiempo de cambios (~78 s c/u) y
+   gramos purgados, más sugerencias: «este logo por altura = 2 cambios en vez de 140»,
+   «imprimir objeto por objeto = 3 cambios en total» (MC4).
+5. **Modos baratos primero**: (a) por altura con un deslizador sobre la vista previa («desde
+   aquí, blanco»), casi sin torre; (b) por pieza **en secuencia** (`print_sequence` por
+   objeto, si cabe bajo el cabezal): un cambio por pieza; (c) separar por color e imprimir
+   piezas sueltas para encajar (cortes y uniones ya existen).
+6. **Menos desperdicio**: purga calculada por colores (portar `FlushVolCalc`), purgar en el
+   relleno o en una pieza de sacrificio, ordenar colores por capa (MC2 + MC7).
+7. **Verificar antes de imprimir**: detalles de un color más finos que la boquilla (se
+   pierden), islas de color flotando, mezclas que pegan mal (PLA + PETG).
+8. **Recetas**: «logo en relieve 2 colores», «texto en la cara de arriba», «llavero»: se elige
+   y queda armado en 2 clics.
+9. **Desde el modelo**: colores de 3MF/OBJ/textura reducidos a 4 con vista previa (MC3c).
+10. **Por la IA (MCP)**: «pinta los ojos negros y el cuerpo blanco» → herramientas MCP de
+    color por pieza/cara/altura.
+
+**Orden propuesto**: MC0 (gcode real) → MC1 motor + por pieza y por altura (lo más barato y
+útil) → MC5 envío con carretes del IFS → MC4 costo en vivo → pincel y el resto.
+
+**Próximo paso (lunes 2026-11-09, en el lab)**: MC0 con un gcode multicolor real
+(`Ensamblaje.gcode`, `tm_logo.gcode`…) que pase el usuario o copiarlo de la impresora solo
+leyendo, con permiso. Responder antes las preguntas abiertas de abajo.
+
 ## Preguntas abiertas (decide el usuario)
 
 1. **Qué forma de asignar color va primero**: por pieza (lo más simple y sirve para
