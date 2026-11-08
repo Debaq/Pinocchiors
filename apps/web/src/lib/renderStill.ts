@@ -125,7 +125,8 @@ export function enableSoftShadows(
     mesh.receiveShadow = true;
   });
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  // Desde three r182 PCFShadowMap ya es suave (PCFSoftShadowMap quedó deprecado)
+  renderer.shadowMap.type = THREE.PCFShadowMap;
   const frustum = light.shadow.camera;
   Object.assign(frustum, { left: -radius, right: radius, top: radius, bottom: -radius, near: radius * 0.4, far: radius * 3.6 });
   frustum.updateProjectionMatrix();
