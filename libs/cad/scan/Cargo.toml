@@ -16,6 +16,7 @@ serde = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+manifold-rust = { workspace = true }
 approx = { workspace = true }
 serde_json = { workspace = true }
 stl_io = { workspace = true }

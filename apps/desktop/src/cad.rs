@@ -52,6 +52,9 @@ pub struct Measures {
 }
 
 fn measures(eval: &cad_model::Evaluation) -> Measures {
+    if eval.parts.iter().any(|p| p.mesh.is_some()) {
+        return mesh_measures(eval);
+    }
     let body = eval.body.as_ref().and_then(|b| {
         let m = b.mass().ok()?;
         Some(BodyInfo {
@@ -68,6 +71,37 @@ fn measures(eval: &cad_model::Evaluation) -> Measures {
         })
     });
     Measures { body, parts: eval.parts.iter().map(|p| p.shape.mass().ok()).collect() }
+}
+
+/// Medidas con piezas de malla (libs/cad/PLAN_MALLAS.md): su masa sale de los
+/// triángulos y no se validan con OCCT (son cerradas por construcción). Con un
+/// hueso de 163 000 caras OCCT tardaba 18 s en la masa y 50 s en validar.
+fn mesh_measures(eval: &cad_model::Evaluation) -> Measures {
+    let parts: Vec<Option<cad_model::occt::MassInfo>> = eval
+        .parts
+        .iter()
+        .map(|p| match &p.mesh {
+            Some(m) => Some(cad_model::mesh_bool::mass(m)),
+            None => p.shape.mass().ok(),
+        })
+        .collect();
+    let body = eval.body.as_ref().and_then(|b| {
+        let all: Vec<_> = parts.iter().flatten().copied().collect();
+        let m = cad_model::mesh_bool::combine_mass(&all)?;
+        Some(BodyInfo {
+            volume: m.volume,
+            area: m.area,
+            bbox_min: m.bbox_min,
+            bbox_max: m.bbox_max,
+            faces: b.face_count(),
+            edges: b.edge_count(),
+            valid: eval.parts.iter().all(|p| p.mesh.is_some() || p.shape.is_valid()),
+            center: m.center,
+            inertia: m.inertia,
+            axes: m.axes,
+        })
+    });
+    Measures { body, parts }
 }
 
 /// Malla del escaneo preparada para elegir zonas (cara a cara con el visor).
@@ -1545,10 +1579,70 @@ fn mesh_impl(state: &AppState) -> Result<Vec<u8>, String> {
     evaluate(state)?;
     let scale = 1.0 / mm_per_unit(state);
     let cache = state.cad_cache.lock().unwrap();
-    match cache.as_ref().and_then(|c| c.eval.body.as_ref()) {
+    let Some(eval) = cache.as_ref().map(|c| &c.eval) else { return Ok(vec![0; 16]) };
+    match eval.body.as_ref() {
+        Some(_) if eval.parts.iter().any(|p| p.mesh.is_some()) => Ok(encode_tessellation(&parts_tessellation(eval)?, scale)),
         Some(body) => encode_view_mesh(body, scale),
         None => Ok(vec![0; 16]),
     }
+}
+
+/// Los triángulos de una pieza de malla como teselado, con normales suaves por
+/// vértice (la suma de las de sus triángulos) y sin aristas.
+fn mesh_tessellation(m: &cad_model::mesh_bool::MeshData) -> cad_model::occt::Tessellation {
+    let (v, t) = (&m.0, &m.1);
+    let mut normals = vec![[0.0; 3]; v.len()];
+    for tri in t {
+        let [a, b, c] = tri.map(|i| v[i as usize]);
+        let n = cad_model::geom::cross(cad_model::geom::sub(b, a), cad_model::geom::sub(c, a));
+        for &i in tri {
+            let s = &mut normals[i as usize];
+            *s = [s[0] + n[0], s[1] + n[1], s[2] + n[2]];
+        }
+    }
+    cad_model::occt::Tessellation {
+        positions: v.clone(),
+        normals: normals.into_iter().map(cad_model::geom::normalize).collect(),
+        triangles: t.clone(),
+        triangle_face: (0..t.len() as u32).collect(),
+        edges: Vec::new(),
+    }
+}
+
+/// Teselado del cuerpo pieza por pieza: las piezas de malla con sus propios
+/// triángulos (su forma OCCT tiene una cara por triángulo, en el mismo orden;
+/// teselarla tardaba 14 s con 163 000 caras), las demás con OCCT. Mismos
+/// números de cara y arista que el cuerpo entero (las piezas van en orden).
+fn parts_tessellation(eval: &cad_model::Evaluation) -> Result<cad_model::occt::Tessellation, String> {
+    let mut out = cad_model::occt::Tessellation::default();
+    let mut face_offset = 0u32;
+    for p in &eval.parts {
+        let faces = p.shape.face_count();
+        let base = out.positions.len() as u32;
+        let own = p.mesh.as_ref().filter(|m| m.1.len() == faces && cad_model::mesh_bool::components(m) == 1);
+        match own {
+            Some(m) => {
+                let t = mesh_tessellation(m);
+                out.positions.extend(t.positions);
+                out.normals.extend(t.normals);
+                out.triangles.extend(t.triangles.iter().map(|tri| tri.map(|i| i + base)));
+                out.triangle_face.extend(t.triangle_face.iter().map(|f| f + face_offset));
+                // Sus aristas son las de los triángulos: no se dibujan
+                out.edges.extend(std::iter::repeat_n(Vec::new(), p.shape.edge_count()));
+            }
+            None => {
+                let mut t = p.shape.tessellate(VIEW_DEFLECTION, VIEW_ANGLE).map_err(|e| e.to_string())?;
+                hide_facet_edges(&p.shape, &mut t);
+                out.positions.extend(t.positions);
+                out.normals.extend(t.normals);
+                out.triangles.extend(t.triangles.iter().map(|tri| tri.map(|i| i + base)));
+                out.triangle_face.extend(t.triangle_face.iter().map(|f| f + face_offset));
+                out.edges.extend(t.edges);
+            }
+        }
+        face_offset += faces as u32;
+    }
+    Ok(out)
 }
 
 /// Herramienta de una operación (vista previa: verde si suma, roja si resta),
@@ -1638,9 +1732,14 @@ fn hide_facet_edges(body: &cad_model::Shape, t: &mut cad_model::occt::Tessellati
 /// Teselado para el visor: posiciones y normales (Y arriba, unidades de la
 /// escena), triángulos, cara de cada triángulo y aristas como polilíneas.
 fn encode_view_mesh(body: &cad_model::Shape, scale: f64) -> Result<Vec<u8>, String> {
+    let mut t = body.tessellate(VIEW_DEFLECTION, VIEW_ANGLE).map_err(|e| e.to_string())?;
+    hide_facet_edges(body, &mut t);
+    Ok(encode_tessellation(&t, scale))
+}
+
+/// [`encode_view_mesh`] de un teselado ya hecho.
+fn encode_tessellation(t: &cad_model::occt::Tessellation, scale: f64) -> Vec<u8> {
     {
-        let mut t = body.tessellate(VIEW_DEFLECTION, VIEW_ANGLE).map_err(|e| e.to_string())?;
-        hide_facet_edges(body, &mut t);
         let edge_points: usize = t.edges.iter().map(|e| e.len()).sum();
         let mut out = Vec::with_capacity(16 + t.positions.len() * 24 + t.triangles.len() * 16 + edge_points * 12);
         for w in [t.positions.len(), t.triangles.len(), t.edges.len(), edge_points] {
@@ -1661,7 +1760,7 @@ fn encode_view_mesh(body: &cad_model::Shape, scale: f64) -> Result<Vec<u8>, Stri
             out.extend_from_slice(&end.to_le_bytes());
         }
         t.edges.iter().flatten().for_each(|p| put(&mut out, *p, scale));
-        Ok(out)
+        out
     }
 }
 
@@ -2152,7 +2251,14 @@ fn parts_at_impl(state: &AppState, mut doc: Document, index: usize) -> Result<Ve
     doc.rollback = Some(doc.rollback.map_or(index, |r| r.min(index)));
     let doc = prepared(state, None, &doc).unwrap_or(doc);
     let eval = doc.evaluate_with(&mut state.cad_ops.lock().unwrap());
-    let masses: Vec<_> = eval.parts.iter().map(|p| p.shape.mass().ok()).collect();
+    let masses: Vec<_> = eval
+        .parts
+        .iter()
+        .map(|p| match &p.mesh {
+            Some(m) => Some(cad_model::mesh_bool::mass(m)),
+            None => p.shape.mass().ok(),
+        })
+        .collect();
     Ok(part_views(&doc, &eval, &masses))
 }
 
@@ -2586,26 +2692,35 @@ fn parts_scene_of(doc: &Document, eval: &cad_model::Evaluation, name: &str, only
         return Err("El diseño todavía no tiene un sólido".into());
     }
     let several = eval.parts.len() > 1;
-    let items: Vec<(&cad_model::Shape, String)> = eval
+    let items: Vec<(&cad_model::Shape, String, Option<&cad_model::mesh_bool::MeshData>)> = eval
         .parts
         .iter()
         .enumerate()
         .filter(|(_, p)| only.is_none_or(|o| o == p.id))
         // Una pieza sola conserva el nombre del diseño
-        .map(|(i, p)| (&p.shape, if several || only.is_some() { part_name(doc, p.id, i + 1) } else { name.to_string() }))
+        .map(|(i, p)| (&p.shape, if several || only.is_some() { part_name(doc, p.id, i + 1) } else { name.to_string() }, p.mesh.as_ref()))
         .collect();
     if items.is_empty() {
         return Err("Esa pieza ya no existe".into());
     }
-    shapes_scene(&items)
+    shapes_scene_with(&items)
 }
 
 /// Escena con una malla por forma, con su nombre (milímetros, Y arriba).
 fn shapes_scene(items: &[(&cad_model::Shape, String)]) -> Result<Scene, String> {
+    shapes_scene_with(&items.iter().map(|(s, n)| (*s, n.clone(), None)).collect::<Vec<_>>())
+}
+
+/// Como [`shapes_scene`]; las piezas de malla van con sus triángulos (teselar
+/// su forma OCCT, una cara por triángulo, tardaba segundos y no cambia nada).
+fn shapes_scene_with(items: &[(&cad_model::Shape, String, Option<&cad_model::mesh_bool::MeshData>)]) -> Result<Scene, String> {
     let mut scene = Scene::new();
-    for (shape, label) in items {
+    for (shape, label, own) in items {
         // Más fino que el del visor: es lo que se imprime o se exporta
-        let t = shape.tessellate(0.01, 0.1).map_err(|e| e.to_string())?;
+        let t = match own {
+            Some(m) => mesh_tessellation(m),
+            None => shape.tessellate(0.01, 0.1).map_err(|e| e.to_string())?,
+        };
         let positions: Vec<[f32; 3]> = t
             .positions
             .iter()

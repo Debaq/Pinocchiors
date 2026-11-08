@@ -189,6 +189,10 @@ pub struct Part {
     pub shape: Shape,
     /// Orígenes de cada cara de la pieza.
     pub tags: Vec<Vec<FaceTag>>,
+    /// Pieza de malla (nació de un escaneo o de una booleana con uno): sus
+    /// triángulos, que mandan en las booleanas (por manifold, sin OCCT; ver
+    /// `mesh_bool`). `shape` es la misma malla como sólido OCCT.
+    pub mesh: Option<crate::mesh_bool::MeshData>,
 }
 
 impl Part {
@@ -923,7 +927,12 @@ impl Ctx<'_> {
 
     fn new_part(&mut self, feature: FeatureId, tool: Tagged) {
         let index = self.next_part_index(feature);
-        self.ev.parts.push(Part { id: PartId { feature, index }, shape: tool.shape, tags: tool.tags });
+        self.ev.parts.push(Part { id: PartId { feature, index }, shape: tool.shape, tags: tool.tags, mesh: None });
+    }
+
+    fn new_mesh_part(&mut self, feature: FeatureId, tool: Tagged, mesh: Option<crate::mesh_bool::MeshData>) {
+        let index = self.next_part_index(feature);
+        self.ev.parts.push(Part { id: PartId { feature, index }, shape: tool.shape, tags: tool.tags, mesh });
     }
 
     /// Piezas que la forma toca (se cruzan o se apoyan).
@@ -939,7 +948,9 @@ impl Ctx<'_> {
             .filter(|(_, p)| {
                 let Ok((pmin, pmax)) = p.shape.bounds() else { return false };
                 let apart = (0..3).any(|k| pmin[k] > tmax[k] + tol || tmin[k] > pmax[k] + tol);
-                !apart && p.shape.min_distance(tool).is_some_and(|(d, _, _)| d <= tol)
+                // Pieza de malla: la distancia exacta a 100 000+ caras tarda; alcanza
+                // con que las cajas se crucen (si no la toca, la booleana no la cambia)
+                !apart && (p.mesh.is_some() || p.shape.min_distance(tool).is_some_and(|(d, _, _)| d <= tol))
             })
             .map(|(i, _)| i)
             .collect()
@@ -987,6 +998,7 @@ impl Ctx<'_> {
         }
         let p = &mut self.ev.parts[i];
         p.shape = new;
+        p.mesh = None;
         p.tags = tags;
     }
 
@@ -1029,11 +1041,36 @@ impl Ctx<'_> {
     }
 
     fn apply(&mut self, feature: FeatureId, tool: Tagged, op: BodyOp) -> R<()> {
+        self.apply_mesh(feature, tool, None, op)
+    }
+
+    /// Como [`Self::apply`], con la malla de la herramienta si la tiene (el
+    /// escaneo como cuerpo). Donde entra una pieza de malla, o una herramienta
+    /// de malla grande, la booleana va por triángulos (`mesh_bool`): con OCCT
+    /// tardaba minutos.
+    fn apply_mesh(&mut self, feature: FeatureId, tool: Tagged, tool_mesh: Option<crate::mesh_bool::MeshData>, op: BodyOp) -> R<()> {
         if self.ev.parts.is_empty() && matches!(op, BodyOp::Cut | BodyOp::Intersect) {
             return Err("no hay sólido que cortar".into());
         }
         // Una superficie no se une ni resta: queda como pieza aparte
         let op = if is_surface(&tool.shape) { BodyOp::New } else { op };
+        if op == BodyOp::New {
+            self.new_mesh_part(feature, tool, tool_mesh);
+            self.sync();
+            return Ok(());
+        }
+        let big_tool = tool_mesh.as_ref().is_some_and(|m| m.1.len() > crate::mesh_bool::MESH_BOOLEAN_FACES);
+        let targets = match op {
+            BodyOp::Join | BodyOp::Cut => self.targets(&tool.shape)?,
+            _ => {
+                let mut t = self.targets(&tool.shape)?;
+                t.sort_unstable();
+                t
+            }
+        };
+        if !targets.is_empty() && (big_tool || targets.iter().any(|&i| self.is_mesh_part(i))) {
+            return self.apply_by_mesh(feature, tool, tool_mesh, op, targets);
+        }
         match op {
             BodyOp::New => self.new_part(feature, tool),
             BodyOp::Join => {
@@ -1054,6 +1091,7 @@ impl Ctx<'_> {
                     if touched.len() == 1 {
                         let p = &mut self.ev.parts[touched[0]];
                         p.shape = new;
+                        p.mesh = None;
                         p.tags = tags;
                     } else {
                         // Une varias piezas: salen y queda una nueva
@@ -1078,6 +1116,7 @@ impl Ctx<'_> {
                     let tags = propagate(&[&self.ev.parts[i].tags, &tool.tags], &h, n).0;
                     let p = &mut self.ev.parts[i];
                     p.shape = new;
+                    p.mesh = None;
                     p.tags = tags;
                     self.split_loose(feature, i, solids_before)?;
                 }
@@ -1105,10 +1144,102 @@ impl Ctx<'_> {
                     let tags = propagate(&[&self.ev.parts[i].tags, &tool.tags], &h, n).0;
                     let p = &mut self.ev.parts[i];
                     p.shape = new;
+                    p.mesh = None;
                     p.tags = tags;
                     self.split_loose(feature, i, solids_before)?;
                 }
             }
+        }
+        self.sync();
+        Ok(())
+    }
+
+    /// Pieza de malla: guarda sus triángulos, o es tan grande en caras (una malla
+    /// pasada a OCCT por otra operación) que OCCT no conviene para booleanas.
+    fn is_mesh_part(&self, i: usize) -> bool {
+        let p = &self.ev.parts[i];
+        !p.is_surface() && (p.mesh.is_some() || p.shape.face_count() > crate::mesh_bool::MESH_BOOLEAN_FACES)
+    }
+
+    /// Los triángulos de la pieza `i`: los suyos o su forma teselada.
+    fn part_mesh(&self, i: usize) -> R<crate::mesh_bool::MeshData> {
+        let p = &self.ev.parts[i];
+        match &p.mesh {
+            Some(m) => Ok(m.clone()),
+            None => crate::mesh_bool::shape_mesh(&p.shape),
+        }
+    }
+
+    /// Booleana por triángulos (`mesh_bool`) sobre las piezas `targets`: cada
+    /// resultado es una pieza de malla. Mismas reglas de piezas que por OCCT:
+    /// lo que un corte separa sale en piezas nuevas, una unión de varias deja
+    /// una, y la intersección sin alcance quita las piezas que no toca.
+    fn apply_by_mesh(&mut self, feature: FeatureId, tool: Tagged, tool_mesh: Option<crate::mesh_bool::MeshData>, op: BodyOp, targets: Vec<usize>) -> R<()> {
+        use crate::mesh_bool::{MeshOp, boolean, shape_mesh, to_shape};
+        let tool_mesh = match tool_mesh {
+            Some(m) => m,
+            None => shape_mesh(&tool.shape)?,
+        };
+        // Todas las caras de una pieza de malla tienen el origen de su primera cara
+        // (la piel del escaneo, o lo que era la pieza)
+        let fallback = tool.tags.first().cloned().unwrap_or_else(|| vec![tag(feature, "malla")]);
+        let as_part = |m: crate::mesh_bool::MeshData, origin: &Vec<FaceTag>| -> R<(Tagged, Option<crate::mesh_bool::MeshData>)> {
+            let shape = to_shape(&m)?;
+            let tags = vec![origin.clone(); shape.face_count()];
+            Ok((Tagged { shape, tags }, Some(m)))
+        };
+        match op {
+            BodyOp::Join => {
+                let first = self.part_mesh(targets[0])?;
+                let mut others: Vec<crate::mesh_bool::MeshData> = targets[1..].iter().map(|&i| self.part_mesh(i)).collect::<R<_>>()?;
+                others.push(tool_mesh);
+                let origin = self.ev.parts[targets[0]].tags.first().cloned().unwrap_or(fallback);
+                let pieces = boolean(&first, &others, MeshOp::Union)?;
+                let new: Vec<_> = pieces.into_iter().map(|m| as_part(m, &origin)).collect::<R<_>>()?;
+                if targets.len() == 1 && new.len() == 1 {
+                    let (t, m) = new.into_iter().next().unwrap();
+                    let p = &mut self.ev.parts[targets[0]];
+                    p.shape = t.shape;
+                    p.tags = t.tags;
+                    p.mesh = m;
+                } else {
+                    self.replace_parts_mesh(feature, targets, new);
+                }
+            }
+            BodyOp::Cut | BodyOp::Intersect => {
+                let mesh_op = if op == BodyOp::Cut { MeshOp::Difference } else { MeshOp::Intersection };
+                // Por id: borrar piezas corre los índices
+                let ids: Vec<PartId> = targets.iter().map(|&i| self.ev.parts[i].id).collect();
+                if op == BodyOp::Intersect && self.scope.is_empty() {
+                    // Automático: lo que la herramienta no toca desaparece
+                    for i in (0..self.ev.parts.len()).rev() {
+                        if !targets.contains(&i) && !self.ev.parts[i].is_surface() {
+                            self.ev.parts.remove(i);
+                        }
+                    }
+                }
+                for id in ids.into_iter().rev() {
+                    let Some(i) = self.ev.parts.iter().position(|p| p.id == id) else { continue };
+                    let part = self.part_mesh(i)?;
+                    let origin = self.ev.parts[i].tags.first().cloned().unwrap_or_else(|| fallback.clone());
+                    let pieces = boolean(&part, std::slice::from_ref(&tool_mesh), mesh_op)?;
+                    if pieces.is_empty() {
+                        self.ev.parts.remove(i);
+                        continue;
+                    }
+                    let new: Vec<_> = pieces.into_iter().map(|m| as_part(m, &origin)).collect::<R<_>>()?;
+                    if new.len() == 1 {
+                        let (t, m) = new.into_iter().next().unwrap();
+                        let p = &mut self.ev.parts[i];
+                        p.shape = t.shape;
+                        p.tags = t.tags;
+                        p.mesh = m;
+                    } else {
+                        self.replace_parts_mesh(feature, vec![i], new);
+                    }
+                }
+            }
+            BodyOp::New => unreachable!("las piezas nuevas no pasan por aquí"),
         }
         self.sync();
         Ok(())
@@ -1135,7 +1266,12 @@ impl Ctx<'_> {
 
     /// Saca las piezas `old` y agrega `new` al final como piezas nuevas de la
     /// operación; queda anotado qué reemplazó a qué.
-    fn replace_parts(&mut self, feature: FeatureId, mut old: Vec<usize>, new: Vec<Tagged>) {
+    fn replace_parts(&mut self, feature: FeatureId, old: Vec<usize>, new: Vec<Tagged>) {
+        self.replace_parts_mesh(feature, old, new.into_iter().map(|t| (t, None)).collect());
+    }
+
+    /// Como [`Self::replace_parts`], con la malla de cada pieza nueva (piezas de malla).
+    fn replace_parts_mesh(&mut self, feature: FeatureId, mut old: Vec<usize>, new: Vec<(Tagged, Option<crate::mesh_bool::MeshData>)>) {
         old.sort_unstable();
         old.dedup();
         let from: Vec<PartId> = old.iter().map(|&i| self.ev.parts[i].id).collect();
@@ -1143,9 +1279,9 @@ impl Ctx<'_> {
             self.ev.parts.remove(i);
         }
         let mut into = Vec::new();
-        for t in new {
+        for (t, mesh) in new {
             let id = PartId { feature, index: self.next_part_index(feature) };
-            self.ev.parts.push(Part { id, shape: t.shape, tags: t.tags });
+            self.ev.parts.push(Part { id, shape: t.shape, tags: t.tags, mesh });
             into.push(id);
         }
         self.ev.replaced.push(Replaced { feature, from, into });
@@ -1183,6 +1319,7 @@ impl Ctx<'_> {
                 let (_, t) = pieces.pop().unwrap();
                 let p = &mut self.ev.parts[i];
                 p.shape = t.shape;
+                p.mesh = None;
                 p.tags = t.tags;
             }
             return Ok(());
@@ -1285,6 +1422,7 @@ impl Ctx<'_> {
                     let tags = propagate(&[&self.ev.parts[i].tags, &tool.tags], &h, n).0;
                     let p = &mut self.ev.parts[i];
                     p.shape = new;
+                    p.mesh = None;
                     p.tags = tags;
                     split.push((p.id, before));
                 }
@@ -2965,13 +3103,17 @@ impl Ctx<'_> {
                 // Todas sus caras son piel: entre ellas se elige por cercanía
                 let tags = vec![vec![tag(f.id, "piel")]; tool.face_count()];
                 let mut tool = Tagged { shape: tool, tags };
+                // El escaneo entero va como malla: sus booleanas, por triángulos
+                let mut mesh = b.mesh.as_ref().map(|m| m.data.clone());
                 if let Some(p) = &b.paint {
                     tool = self.scan_paint(f.id, tool, p, b.offset.abs() + b.thickness.abs())?;
+                    mesh = None;
                 } else if let Some(r) = &b.region {
                     tool = self.scan_patch(f.id, tool, r)?;
+                    mesh = None;
                 }
                 self.ev.tools.insert(f.id, (tool.clone(), b.op));
-                self.apply(f.id, tool, b.op)
+                self.apply_mesh(f.id, tool, mesh, b.op)
             }
             FeatureKind::Relief(r) => {
                 let tool = self.relief(f.id, r)?;
@@ -3172,6 +3314,7 @@ impl Ctx<'_> {
                         all.extend(copies_of(&part)?);
                         let fused = fuse_tagged(all)?;
                         self.ev.parts[i].shape = fused.shape;
+                        self.ev.parts[i].mesh = None;
                         self.ev.parts[i].tags = fused.tags;
                     }
                     self.sync();
@@ -3215,6 +3358,7 @@ impl Ctx<'_> {
                         }
                         let fused = fuse_tagged(vec![part, m])?;
                         self.ev.parts[i].shape = fused.shape;
+                        self.ev.parts[i].mesh = None;
                         self.ev.parts[i].tags = fused.tags;
                     }
                     self.sync();
@@ -4342,9 +4486,10 @@ impl Ctx<'_> {
                     let mut it = pieces.into_iter();
                     let first = it.next().unwrap();
                     self.ev.parts[i].shape = first.shape;
+                    self.ev.parts[i].mesh = None;
                     self.ev.parts[i].tags = first.tags;
                     for t in it {
-                        self.ev.parts.push(Part { id: PartId { feature: f.id, index: added }, shape: t.shape, tags: t.tags });
+                        self.ev.parts.push(Part { id: PartId { feature: f.id, index: added }, shape: t.shape, tags: t.tags, mesh: None });
                         added += 1;
                     }
                 }
@@ -4629,9 +4774,10 @@ impl Ctx<'_> {
                     let mut it = pieces.into_iter();
                     let first = it.next().unwrap();
                     self.ev.parts[i].shape = first.shape;
+                    self.ev.parts[i].mesh = None;
                     self.ev.parts[i].tags = first.tags;
                     for t in it {
-                        self.ev.parts.push(Part { id: PartId { feature: f.id, index: added }, shape: t.shape, tags: t.tags });
+                        self.ev.parts.push(Part { id: PartId { feature: f.id, index: added }, shape: t.shape, tags: t.tags, mesh: None });
                         added += 1;
                     }
                 }

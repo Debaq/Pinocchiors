@@ -429,7 +429,7 @@ impl Tabs {
             _ => crate::Shape::compound(&shapes).ok()?,
         };
         let tags = vec![Vec::new(); shape.face_count()];
-        Some(crate::eval::Part { id: tab_part(sub, SUBASSEMBLY_PART), shape, tags })
+        Some(crate::eval::Part { id: tab_part(sub, SUBASSEMBLY_PART), shape, tags, mesh: None })
     }
 
     /// Los diseños en otra configuración que usan las instancias del ensamble

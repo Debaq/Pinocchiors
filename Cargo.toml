@@ -87,6 +87,8 @@ zip = { version = "4", default-features = false }
 
 # Paralelismo
 rayon = "1.10"
+# Booleanas de mallas grandes (escaneos), Rust puro: libs/cad/PLAN_MALLAS.md
+manifold-rust = { version = "0.19", features = ["parallel"] }
 
 # Triangulación restringida y predicados exactos (reparación de intersecciones)
 spade = "2.15"

@@ -7,6 +7,9 @@
 #include <HLRBRep_HLRToShape.hxx>
 #include <HLRAlgo_Projector.hxx>
 #include <BRepAlgoAPI_Section.hxx>
+#include <gp.hxx>
+#include <Geom_Line.hxx>
+#include <unordered_map>
 #include <gp_Pln.hxx>
 #include <GCPnts_TangentialDeflection.hxx>
 #include <BRepAdaptor_Curve.hxx>
@@ -2275,17 +2278,21 @@ CadShape* cad_split_by(const CadShape* s, const CadShape* const* tools, int32_t 
 // a un hueco), huecos del sólido que las contiene.
 static TopoDS_Shape mesh_shell_direct(const double* verts, int32_t n_verts, const int32_t* tris,
                                       int32_t n_tris, double tolerance) {
-    std::map<std::pair<int32_t, int32_t>, int32_t> directed;
+    // Arista dirigida (a, b) como un número: con 163 000 triángulos los mapas
+    // ordenados de pares eran buena parte del tiempo
+    auto ekey = [](int32_t a, int32_t b) { return (uint64_t(uint32_t(a)) << 32) | uint32_t(b); };
+    std::unordered_map<uint64_t, int32_t> directed;
+    directed.reserve(size_t(n_tris) * 3);
     for (int32_t i = 0; i < n_tris; i++) {
         const int32_t* t = tris + 3 * i;
         for (int k = 0; k < 3; k++) {
             int32_t a = t[k], b = t[(k + 1) % 3];
             if (a < 0 || b < 0 || a >= n_verts || b >= n_verts || a == b) return TopoDS_Shape();
-            if (!directed.emplace(std::make_pair(a, b), i).second) return TopoDS_Shape();
+            if (!directed.emplace(ekey(a, b), i).second) return TopoDS_Shape();
         }
     }
     for (const auto& [e, f] : directed)
-        if (!directed.count({e.second, e.first})) return TopoDS_Shape();
+        if (!directed.count(ekey(int32_t(e & 0xffffffffu), int32_t(e >> 32)))) return TopoDS_Shape();
     // Piezas conexas por aristas compartidas
     std::vector<int32_t> parent(n_tris);
     for (int32_t i = 0; i < n_tris; i++) parent[i] = i;
@@ -2293,14 +2300,15 @@ static TopoDS_Shape mesh_shell_direct(const double* verts, int32_t n_verts, cons
         while (parent[x] != x) x = parent[x] = parent[parent[x]];
         return x;
     };
-    for (const auto& [e, f] : directed) parent[root(f)] = root(directed.at({e.second, e.first}));
+    for (const auto& [e, f] : directed) parent[root(f)] = root(directed.at(ekey(int32_t(e & 0xffffffffu), int32_t(e >> 32))));
     std::map<int32_t, TopoDS_Shell> shells;
     std::map<int32_t, double> volume;
     std::map<int32_t, int32_t> sample;
 
     BRep_Builder builder;
     std::vector<TopoDS_Vertex> vertex(n_verts);
-    std::map<std::pair<int32_t, int32_t>, TopoDS_Edge> edges;
+    std::unordered_map<uint64_t, TopoDS_Edge> edges;
+    edges.reserve(size_t(n_tris) * 3 / 2 + 1);
     auto vertex_of = [&](int32_t i) -> const TopoDS_Vertex& {
         if (vertex[i].IsNull()) builder.MakeVertex(vertex[i], pnt(verts + 3 * i), tolerance);
         return vertex[i];
@@ -2309,23 +2317,53 @@ static TopoDS_Shape mesh_shell_direct(const double* verts, int32_t n_verts, cons
         const int32_t* t = tris + 3 * i;
         gp_Pnt pa = pnt(verts + 3 * t[0]), pb = pnt(verts + 3 * t[1]), pc = pnt(verts + 3 * t[2]);
         gp_Vec n = gp_Vec(pa, pb).Crossed(gp_Vec(pa, pc));
-        if (n.Magnitude() < tolerance * tolerance) return TopoDS_Shape();
+        // Un triángulo casi sin área (uno en 163 000 de un escaneo) mandaba
+        // toda la malla al cosido de OCCT: minutos en vez de segundos. Su
+        // normal sirve igual; si es nula del todo, la de los triángulos que
+        // comparten sus vértices
+        if (n.Magnitude() <= gp::Resolution()) {
+            n = gp_Vec(0, 0, 0);
+            for (int32_t j = 0; j < n_tris; j++) {
+                const int32_t* u = tris + 3 * j;
+                bool shares = false;
+                for (int k = 0; k < 3; k++)
+                    for (int m = 0; m < 3; m++) shares |= u[k] == t[m];
+                if (!shares || j == i) continue;
+                gp_Pnt qa = pnt(verts + 3 * u[0]), qb = pnt(verts + 3 * u[1]), qc = pnt(verts + 3 * u[2]);
+                n += gp_Vec(qa, qb).Crossed(gp_Vec(qa, qc));
+            }
+            if (n.Magnitude() <= gp::Resolution()) return TopoDS_Shape();
+        }
         TopoDS_Wire wire;
         builder.MakeWire(wire);
         for (int k = 0; k < 3; k++) {
             int32_t a = t[k], b = t[(k + 1) % 3];
-            auto key = std::make_pair(std::min(a, b), std::max(a, b));
-            auto it = edges.find(key);
+            int32_t lo = std::min(a, b), hi = std::max(a, b);
+            auto it = edges.find(ekey(lo, hi));
             if (it == edges.end()) {
-                BRepBuilderAPI_MakeEdge me(vertex_of(key.first), vertex_of(key.second));
-                if (!me.IsDone()) return TopoDS_Shape();
-                it = edges.emplace(key, me.Edge()).first;
+                // La arista recta armada a mano: BRepBuilderAPI_MakeEdge revisa
+                // todo y era lo más lento
+                gp_Pnt p1 = pnt(verts + 3 * lo), p2 = pnt(verts + 3 * hi);
+                double len = p1.Distance(p2);
+                if (len <= gp::Resolution()) return TopoDS_Shape();
+                Handle(Geom_Line) line = new Geom_Line(p1, gp_Dir(gp_Vec(p1, p2)));
+                TopoDS_Edge e;
+                builder.MakeEdge(e, line, tolerance);
+                TopoDS_Vertex v1 = vertex_of(lo), v2 = vertex_of(hi);
+                builder.Add(e, v1.Oriented(TopAbs_FORWARD));
+                builder.Add(e, v2.Oriented(TopAbs_REVERSED));
+                builder.UpdateVertex(v1, 0.0, e, tolerance);
+                builder.UpdateVertex(v2, len, e, tolerance);
+                builder.Range(e, 0.0, len);
+                it = edges.emplace(ekey(lo, hi), e).first;
             }
             builder.Add(wire, a < b ? it->second : TopoDS::Edge(it->second.Reversed()));
         }
         wire.Closed(Standard_True);
-        BRepBuilderAPI_MakeFace mf(gp_Pln(pa, gp_Dir(n)), wire, Standard_True);
-        if (!mf.IsDone()) return TopoDS_Shape();
+        // La cara plana armada a mano (como la arista): el plano y su borde
+        TopoDS_Face face;
+        builder.MakeFace(face, new Geom_Plane(pa, gp_Dir(n)), tolerance);
+        builder.Add(face, wire);
         auto it = shells.find(root(i));
         if (it == shells.end()) {
             TopoDS_Shell shell;
@@ -2333,7 +2371,7 @@ static TopoDS_Shape mesh_shell_direct(const double* verts, int32_t n_verts, cons
             it = shells.emplace(root(i), shell).first;
             sample[root(i)] = t[0];
         }
-        builder.Add(it->second, mf.Face());
+        builder.Add(it->second, face);
         volume[root(i)] += gp_Vec(pa.XYZ()).Dot(gp_Vec(pb.XYZ()).Crossed(gp_Vec(pc.XYZ()))) / 6.0;
     }
     if (shells.size() == 1) {

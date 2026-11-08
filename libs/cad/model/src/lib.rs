@@ -19,6 +19,7 @@ pub mod gear_part;
 pub mod gear_strength;
 pub mod gears;
 pub mod measure;
+pub mod mesh_bool;
 pub mod project;
 pub mod regions;
 pub mod sheet;
