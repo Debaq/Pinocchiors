@@ -191,6 +191,28 @@ fn objects(ui: &Value) -> Vec<Value> {
     ui["objects"].as_array().cloned().unwrap_or_default()
 }
 
+/// Fija el escaneo de los diseños con la regla de la app (App.tsx,
+/// `scanObjectId`): el modelo importado activo o, si el activo es otra cosa (una
+/// pieza del diseño), el primer importado. Sin esto el escaneo era siempre el
+/// objeto activo, y al pasar una pieza a modelo (que deja activo un objeto
+/// nuevo) el diseño se quedaba sin escaneo: «el diseño todavía no tiene un sólido».
+fn pin_scan(ctx: &Ctx) -> Result<(), Fail> {
+    let ui = ctx.session.ui();
+    let list = objects(&ui);
+    let imported = |o: &&Value| o["source"]["kind"] == "import";
+    let active = ui["activeObject"].as_u64();
+    let chosen = list
+        .iter()
+        .filter(imported)
+        .find(|o| o["id"].as_u64() == active)
+        .or_else(|| list.iter().find(imported))
+        .and_then(|o| o["id"].as_u64());
+    if let Some(id) = chosen {
+        ctx.call("cad_scan_use", json!({ "object": id }))?;
+    }
+    Ok(())
+}
+
 fn push_object(ui: &mut Value, object: Value) {
     if !ui["objects"].is_array() {
         ui["objects"] = json!([]);
@@ -323,6 +345,8 @@ fn from_part(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
         let (line, a) = model_line(ctx)?;
         return Ok(Output::new(format!("The app shows the mesh of part \"{part_name}\" as the active object: {line}"), z_up(json!({ "tab": tab, "part": part, "analysis": a }))));
     }
+    // El escaneo, antes de que el objeto nuevo pase a ser el activo
+    pin_scan(ctx)?;
     let before = ctx.session.before_change()?;
     let done = (|| {
         let ui = ctx.session.ui();

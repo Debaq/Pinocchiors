@@ -103,6 +103,14 @@ Se compila igual para Linux, Windows, macOS y Android: sin C++, sin cmake.
   Push + release Linux, descargar el binario, apuntar el conector MCP a él,
   `/mcp`, y probar el grabado del hueso (reparar → detalle completo → relieve
   restado) midiendo el tiempo.
+- 2026-11-08 PROBADO EN LA APP (release c999b0c, conector sin ventana; tiempos
+  en ~/.cargo-target/bench/mallas/tiempos_app.txt): importar + reparar el hueso
+  ~5 s; Detalle completo **2 s** (antes > 2 min); grabado de texto restado
+  **14 s** (antes ~29 min), quitó 155,3 mm³ (OCCT daba 155,4), 1 pieza sin
+  astillas. Falla hallada: «pasar a modelo» (mesh_from_part) decía «el diseño
+  todavía no tiene un sólido»: el conector usaba como escaneo el objeto activo
+  y el objeto nuevo lo cambiaba. Arreglado con `pin_scan` (mcp/tools/mesh.rs,
+  regla de la app); falta probarlo en la próxima release.
 - (Plan original de M4, para referencia) para piezas de malla, en apps/desktop/src/cad.rs, volumen /
   masa / validez desde los triángulos (no OCCT) y la vista (`encode_view_mesh`)
   con los triángulos de la pieza (si las caras de `from_mesh` siguen el orden de
