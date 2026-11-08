@@ -1830,6 +1830,30 @@ fn edge_ref_impl(state: &AppState, edge: usize) -> Result<EdgeRef, String> {
     cache.as_ref().and_then(|c| c.eval.edge_ref(edge)).ok_or_else(|| "Esa arista no existe".to_string())
 }
 
+/// [`cad_face_ref`] de varias caras en una llamada (un recálculo para todas;
+/// `null` donde la cara no existe). El front junta solo los pedidos que llegan
+/// juntos (PLAN_RENDIMIENTO R4).
+#[tauri::command]
+pub async fn cad_face_refs(app: AppHandle, faces: Vec<usize>) -> Result<Vec<Option<FaceRef>>, String> {
+    in_background(app, move |state| {
+        ensure_evaluated(state)?;
+        let cache = state.cad_cache.lock().unwrap();
+        Ok(faces.iter().map(|&f| cache.as_ref().and_then(|c| c.eval.face_ref(f))).collect())
+    })
+    .await
+}
+
+/// [`cad_edge_ref`] de varias aristas en una llamada.
+#[tauri::command]
+pub async fn cad_edge_refs(app: AppHandle, edges: Vec<usize>) -> Result<Vec<Option<EdgeRef>>, String> {
+    in_background(app, move |state| {
+        ensure_evaluated(state)?;
+        let cache = state.cad_cache.lock().unwrap();
+        Ok(edges.iter().map(|&e| cache.as_ref().and_then(|c| c.eval.edge_ref(e))).collect())
+    })
+    .await
+}
+
 /// Caras del sólido que vienen de la operación `feature` (para resaltarla al
 /// pasar el mouse por el árbol).
 #[tauri::command]

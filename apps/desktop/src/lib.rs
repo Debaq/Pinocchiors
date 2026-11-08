@@ -344,6 +344,8 @@ pub fn run() {
             cad::cad_mesh,
             cad::cad_tool_mesh,
             cad::cad_face_ref,
+            cad::cad_face_refs,
+            cad::cad_edge_refs,
             cad::cad_edge_ref,
             cad::cad_face_info,
             cad::cad_face_edges,

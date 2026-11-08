@@ -41,4 +41,14 @@ release.
   `refresh_cache` devuelve la caché tomada; `ensure_evaluated` /
   `ensure_committed` reemplazan 27 `evaluate(..)?;` que botaban el resultado;
   `VIEW_MESH` guarda la malla de la vista por (huella, escala).
-- Siguiente: R3 (cad.ts: una llamada por cambio) y R4 (caras/aristas en lote).
+- R1 PROBADO en el PC: cache.rs 3 OK (incluye la nueva) + tabs.rs 18 OK.
+- R3 escrito (cad.ts `sendNow`): malla y herramienta en paralelo
+  (`Promise.all`), no en serie. La fusión en una sola respuesta queda para
+  después si hace falta.
+- R4 escrito: comandos `cad_face_refs` / `cad_edge_refs` (cad.rs, registrados
+  en lib.rs); en cad.ts `faceRef` / `edgeRef` pasan por `batchedRefs`, que
+  junta los pedidos del mismo instante en una llamada (los 35 lugares que los
+  usan no cambian). `cad_face_ref` / `cad_edge_ref` de a uno siguen (los usan
+  e2e y el conector MCP).
+- R2–R4 sin compilar en el PC (app): los revisa la release.
+- Siguiente: R5 (hover del árbol sin backend).

@@ -1341,6 +1341,31 @@ export interface VersionComparison {
 }
 
 /** Bytes de `cad_compare`: volúmenes (f64), largo de la primera malla y las dos mallas */
+/**
+ * Pedido de a uno que viaja en lote: las llamadas hechas en el mismo instante
+ * (antes de que corra la próxima microtarea) se juntan en una sola invocación
+ * de `command` con la lista en `key`; cada una recibe su resultado o, si el
+ * backend devolvió `null` para ella, el error `missing`.
+ */
+function batchedRefs<T>(command: string, key: string, missing: string): (index: number) => Promise<T> {
+  let pending: { index: number; resolve: (v: T) => void; reject: (e: unknown) => void }[] = [];
+  return (index) =>
+    new Promise<T>((resolve, reject) => {
+      pending.push({ index, resolve, reject });
+      if (pending.length > 1) return;
+      queueMicrotask(async () => {
+        const batch = pending;
+        pending = [];
+        try {
+          const out = await invoke<(T | null)[]>(command, { [key]: batch.map((b) => b.index) });
+          batch.forEach((b, k) => (out[k] == null ? b.reject(missing) : b.resolve(out[k] as T)));
+        } catch (e) {
+          batch.forEach((b) => b.reject(e));
+        }
+      });
+    });
+}
+
 export function decodeComparison(buffer: ArrayBuffer, version: number): VersionComparison {
   const v = new DataView(buffer);
   const added = v.getFloat64(0, true);
@@ -4448,6 +4473,11 @@ export function createCadStore() {
   const [resultTab, setResultTab] = createSignal(0);
   // Deshacer y rehacer de las pestañas que no están activas
   const tabHistory = new Map<number, TabHistory<CadDocument>>();
+  // Caras y aristas elegidas: los pedidos que llegan juntos (un `Promise.all`
+  // sobre las caras elegidas, las aristas de una cara) van en una sola llamada
+  // con un solo recálculo (PLAN_RENDIMIENTO R4)
+  const faceRefs = batchedRefs<FaceRef>("cad_face_refs", "faces", tr("Esa cara no existe"));
+  const edgeRefs = batchedRefs<EdgeRef>("cad_edge_refs", "edges", tr("Esa arista no existe"));
   let meshVersion = -1;
   // Envíos encadenados: el último gana y los intermedios no pisan el resultado
   let sendSeq = 0;
@@ -4515,8 +4545,9 @@ export function createCadStore() {
         : await invoke<CadResult>("cad_set_document", { document: next });
       if (seq === sendSeq) {
         setError(undefined);
-        await apply(r);
-        await refreshTool(seq);
+        // La malla y la herramienta a la vez: las dos usan el mismo recálculo,
+        // que el backend ya dejó en su caché (PLAN_RENDIMIENTO R3)
+        await Promise.all([apply(r), refreshTool(seq)]);
       }
     } catch (e) {
       if (seq === sendSeq) setError(String(e));
@@ -5196,7 +5227,7 @@ export function createCadStore() {
       });
     },
 
-    faceRef: (face: number) => invoke<FaceRef>("cad_face_ref", { face }),
+    faceRef: (face: number) => faceRefs(face),
     /** Desviación del escaneo respecto del sólido: resumen y un valor por triángulo (mm, + afuera) */
     async deviation(tolerance: number): Promise<ScanDeviation> {
       const buf = await invoke<ArrayBuffer>("cad_deviation", { tolerance });
@@ -5207,7 +5238,7 @@ export function createCadStore() {
 
     /** Medidas de una o dos cosas elegidas en el sólido mostrado */
     measure: (items: MeasureItem[]) => invoke<Measurement>("cad_measure", { items }),
-    edgeRef: (edge: number) => invoke<EdgeRef>("cad_edge_ref", { edge }),
+    edgeRef: (edge: number) => edgeRefs(edge),
     /** Caras del sólido mostrado que vienen de la operación `feature` */
     featureFaces: (feature: number) => invoke<number[]>("cad_feature_faces", { feature }),
     /** Aristas del borde de una cara del sólido mostrado */
