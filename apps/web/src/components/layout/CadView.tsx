@@ -1,4 +1,5 @@
 import { Component, For, type JSX, Index, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
+import { createPersisted } from "../../lib/ui-state";
 import { tBackend } from "../../lib/i18nBackend";
 import { invoke } from "@tauri-apps/api/core";
 import { clsx } from "clsx";
@@ -526,7 +527,8 @@ export const CadView: Component<CadViewProps> = (props) => {
   const [textSize, setTextSize] = createSignal(10);
   const [fontName, setFontName] = createSignal("Liberation Sans");
   const [scanVisible, setScanVisible] = createSignal(true);
-  const [scanOpacity, setScanOpacity] = createSignal(0.35);
+  // Se recuerda entre sesiones (antes volvía a 35 % cada vez)
+  const [scanOpacity, setScanOpacity] = createPersisted("cad.scanOpacity", 0.35);
   let dragging: number | undefined;
   // Arrastre de una curva entera (una línea se corre; un círculo cambia de radio)
   let entityDrag: { id: number; start: P2; from: Sketch; moved: boolean } | undefined;
@@ -4584,9 +4586,14 @@ export const CadView: Component<CadViewProps> = (props) => {
                     <Icons.Scan size={14} />
                   </IconButton>
                 </Tooltip>
-                <div class="w-24">
-                  <Slider value={scanOpacity()} min={0.05} max={1} step={0.05} onChange={setScanOpacity} />
-                </div>
+                <Tooltip content={tr("Opacidad del modelo de referencia (al 100 % se ve sólido)")}>
+                  <div class="flex items-center gap-1" aria-label={tr("Opacidad del modelo de referencia")}>
+                    <div class="w-24">
+                      <Slider value={scanOpacity()} min={0.05} max={1} step={0.05} onChange={setScanOpacity} />
+                    </div>
+                    <span class="w-8 text-right font-mono text-[10px] text-text-muted">{Math.round(scanOpacity() * 100)}%</span>
+                  </div>
+                </Tooltip>
               </Show>
             </div>
             {/* Diálogo de la operación elegida (por id: no se rehace con cada cambio del documento) */}

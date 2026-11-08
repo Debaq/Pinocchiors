@@ -204,6 +204,8 @@ export const en_layout2: Catalog = {
   "Ocultar los planos base": "Hide the base planes",
   "Mostrar los planos base": "Show the base planes",
   "Planos base": "Base planes",
+  "Opacidad del modelo de referencia (al 100 % se ve sólido)": "Reference model opacity (solid at 100 %)",
+  "Opacidad del modelo de referencia": "Reference model opacity",
   "Ocultar el modelo de referencia": "Hide the reference model",
   "Mostrar el modelo de referencia": "Show the reference model",
   "Modelo de referencia": "Reference model",

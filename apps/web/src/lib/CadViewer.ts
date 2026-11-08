@@ -483,6 +483,7 @@ export class CadViewer {
         depthWrite: false,
         side: THREE.DoubleSide,
       });
+      applyScanOpacity(m, this.scanOpacity);
       this.scan = new THREE.Mesh(g, m);
       this.scan.renderOrder = 2;
       this.scan.visible = this.showScan;
@@ -503,7 +504,7 @@ export class CadViewer {
       g.deleteAttribute("color");
       m.vertexColors = false;
       m.color.set(themeHex("comment"));
-      m.opacity = this.scanOpacity;
+      applyScanOpacity(m, this.scanOpacity);
       m.needsUpdate = true;
       return this.requestRender();
     }
@@ -538,7 +539,7 @@ export class CadViewer {
     g.setAttribute("color", new THREE.BufferAttribute(colors, 3));
     m.vertexColors = true;
     m.color.set(0xffffff);
-    m.opacity = Math.max(this.scanOpacity, 0.9);
+    applyScanOpacity(m, Math.max(this.scanOpacity, 0.9));
     m.needsUpdate = true;
     this.requestRender();
   }
@@ -569,7 +570,9 @@ export class CadViewer {
     if (opacity !== undefined) this.scanOpacity = opacity;
     if (this.scan) {
       this.scan.visible = visible;
-      (this.scan.material as THREE.MeshStandardMaterial).opacity = this.scanOpacity;
+      const m = this.scan.material as THREE.MeshStandardMaterial;
+      // Si `color` está, se ve la desviación: no baja del 90 % (como en setScanDeviation)
+      applyScanOpacity(m, this.scan.geometry.getAttribute("color") ? Math.max(this.scanOpacity, 0.9) : this.scanOpacity);
     }
     this.requestRender();
   }
@@ -2465,4 +2468,17 @@ function triangleTouchesBox(tri: [number, number][], box: Box2): boolean {
   const d2 = s(b, c, p);
   const d3 = s(c, a, p);
   return (d1 >= 0 && d2 >= 0 && d3 >= 0) || (d1 <= 0 && d2 <= 0 && d3 <= 0);
+}
+
+/**
+ * Opacidad del modelo de referencia (STL o escaneo). Al 100 % se dibuja sólido
+ * de verdad: opaco y escribiendo profundidad. Si no, quedaba transparente sin
+ * profundidad y se veían las caras de atrás aunque la barra estuviera al máximo
+ */
+function applyScanOpacity(m: THREE.MeshStandardMaterial, opacity: number): void {
+  const solid = opacity >= 0.99;
+  if (m.transparent === solid) m.needsUpdate = true;
+  m.transparent = !solid;
+  m.depthWrite = solid;
+  m.opacity = solid ? 1 : opacity;
 }
