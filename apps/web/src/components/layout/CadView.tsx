@@ -531,7 +531,9 @@ export const CadView: Component<CadViewProps> = (props) => {
   const [scanOpacity, setScanOpacity] = createPersisted("cad.scanOpacity", 0.35);
   // Con la pieza escaneada (PLAN_ESCANEO N1) el STL ya se ve como pieza, opaca:
   // el modelo de referencia translúcido se oculta (el botón lo vuelve a mostrar)
-  const scanPiece = createMemo(() => hasScanPiece(store.doc()));
+  // props.store y no `store`: este memo corre ya, antes de `const store` más abajo
+  // (en el paquete de producción daba «Cannot access … before initialization»)
+  const scanPiece = createMemo(() => hasScanPiece(props.store.doc()));
   createEffect(on(scanPiece, (on_) => on_ && setScanVisible(false)));
   createEffect(() => {
     const on_ = scanPiece();
