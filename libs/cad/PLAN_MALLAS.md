@@ -78,6 +78,14 @@ Se compila igual para Linux, Windows, macOS y Android: sin C++, sin cmake.
   piezas de malla), `parts_tessellation` + `mesh_tessellation` (la vista),
   `shapes_scene_with` (exportar / pasar a modelo), masas en `parts_at_impl`.
   Falta: `cargo check -p pinocchio-app` limpio, compilar la app y probar por MCP.
+- Commit a9d62b7 (2026-11-08, sin push): M1–M4. Incluye un cambio en
+  `mesh_shell_direct` SIN PROBAR (aristas/caras con BRep_Builder, mapas hash).
+  AL RETOMAR: 1) `cargo test -p cad-model` (iba pasando cuando se cortó) y
+  `cargo test -p cad-model --lib mesh_bool --test mesh_parts`; 2) recompilar
+  `cargo build --release -p cad-scan --example mallas_booleanas` y correr con
+  `~/.cargo-target/bench/mallas/hueso_nuevo.stl` (antes: convertir 10 s); 3) si
+  falla el cambio C++, volver a BRepBuilderAPI_MakeEdge/MakeFace; 4) compilar
+  la app release, apuntar el MCP a ella y probar el grabado del hueso.
 - (Plan original de M4, para referencia) para piezas de malla, en apps/desktop/src/cad.rs, volumen /
   masa / validez desde los triángulos (no OCCT) y la vista (`encode_view_mesh`)
   con los triángulos de la pieza (si las caras de `from_mesh` siguen el orden de
