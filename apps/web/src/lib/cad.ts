@@ -4476,6 +4476,7 @@ export function createCadStore() {
   // Caras y aristas elegidas: los pedidos que llegan juntos (un `Promise.all`
   // sobre las caras elegidas, las aristas de una cara) van en una sola llamada
   // con un solo recálculo (PLAN_RENDIMIENTO R4)
+  let featureFacesCache: { version: number; faces: Map<number, Promise<number[]>> } = { version: -1, faces: new Map() };
   const faceRefs = batchedRefs<FaceRef>("cad_face_refs", "faces", tr("Esa cara no existe"));
   const edgeRefs = batchedRefs<EdgeRef>("cad_edge_refs", "edges", tr("Esa arista no existe"));
   let meshVersion = -1;
@@ -5240,7 +5241,20 @@ export function createCadStore() {
     measure: (items: MeasureItem[]) => invoke<Measurement>("cad_measure", { items }),
     edgeRef: (edge: number) => edgeRefs(edge),
     /** Caras del sólido mostrado que vienen de la operación `feature` */
-    featureFaces: (feature: number) => invoke<number[]>("cad_feature_faces", { feature }),
+    featureFaces: (feature: number) => {
+      // Pasar el mouse por el árbol pide esto en cada fila: mientras el diseño
+      // no cambie, la respuesta es la misma (PLAN_RENDIMIENTO R5)
+      const version = result()?.version ?? -1;
+      if (featureFacesCache.version !== version) featureFacesCache = { version, faces: new Map() };
+      const cache = featureFacesCache;
+      let faces = cache.faces.get(feature);
+      if (!faces) {
+        faces = invoke<number[]>("cad_feature_faces", { feature });
+        cache.faces.set(feature, faces);
+        faces.catch(() => cache.faces.delete(feature));
+      }
+      return faces;
+    },
     /** Aristas del borde de una cara del sólido mostrado */
     faceEdges: (face: number) => invoke<number[]>("cad_face_edges", { face }),
     /** Vértice del sólido en `point` como punto que lo sigue (extremo de una arista) */

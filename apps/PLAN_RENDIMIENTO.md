@@ -51,4 +51,8 @@ release.
   usan no cambian). `cad_face_ref` / `cad_edge_ref` de a uno siguen (los usan
   e2e y el conector MCP).
 - R2–R4 sin compilar en el PC (app): los revisa la release.
-- Siguiente: R5 (hover del árbol sin backend).
+- R5 escrito (versión simple): `featureFaces` en cad.ts recuerda la respuesta
+  por (versión del diseño, operación); pasar el mouse otra vez por la misma
+  fila no llama al backend. Mandar la operación de cada cara con la malla
+  (sin backend del todo) queda para después.
+- Siguiente: R6 (vecinos e influencia de huesos en Rust).
