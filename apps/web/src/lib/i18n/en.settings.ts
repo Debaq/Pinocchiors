@@ -119,6 +119,7 @@ Object.assign(en_settings, {
   "Mirando el estado": "Checking the status",
   "Leyendo la guía": "Reading the guide",
   "Mirando lo que elegiste": "Looking at your selection",
+  "Revisando el visor": "Checking the viewer",
   "Deshaciendo su último paso": "Undoing its last step",
   "Rehaciendo su último paso": "Redoing its last step",
   "Creando una pestaña": "Creating a tab",
@@ -280,4 +281,12 @@ Object.assign(en_settings, {
   "Con la descarga sola, solo se pregunta cuándo reiniciar para instalarla. Nada se instala sin tu permiso.": "With automatic download, you are only asked when to restart to install it. Nothing is installed without your permission.",
   "Ver la versión nueva": "See the new version",
   "Buscar ahora": "Check now",
+  "Aceleración GPU (experimental)": "GPU acceleration (experimental)",
+  "El visor 3D dibuja con WebGPU, más moderno y rápido con modelos pesados. Si el sistema no lo trae, usa el mismo dibujador sobre WebGL2. Mientras está encendida no se ven el halo de selección, el suavizado automático de piezas ni los cuaterniones duales al animar; los renders de imagen salen igual que siempre. El diseño CAD sigue como siempre.":
+    "The 3D viewer draws with WebGPU, more modern and faster with heavy models. If the system does not have it, the same renderer runs on WebGL2. While it is on, the selection glow, automatic smoothing of parts and dual-quaternion skinning are not shown; image renders come out as always. CAD design stays as always.",
+  "Se aplica al recargar la interfaz.": "Takes effect when the interface reloads.",
+  "Recargar ahora": "Reload now",
+  "No se pudo usar: {e}": "Could not be used: {e}",
+  "Ahora: WebGPU.": "Now: WebGPU.",
+  "Ahora: sin WebGPU en este sistema, sobre WebGL2.": "Now: no WebGPU on this system, running on WebGL2.",
 });

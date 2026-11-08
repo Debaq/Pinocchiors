@@ -37,6 +37,7 @@ export function aiLabel(tool: string): string {
     status: () => t("Mirando el estado"),
     help: () => t("Leyendo la guía"),
     selection: () => t("Mirando lo que elegiste"),
+    viewer: () => t("Revisando el visor"),
     undo: () => t("Deshaciendo su último paso"),
     redo: () => t("Rehaciendo su último paso"),
     cad_tab_create: () => t("Creando una pestaña"),
@@ -123,6 +124,8 @@ export interface LiveModelHooks {
   usePart: (studio: number, part: PartId) => Promise<void>;
   /** Pedir al usuario que apruebe algo (acciones de la IA sobre una impresora) */
   confirm: (request: { title: string; message: string; confirmLabel?: string }) => Promise<boolean>;
+  /** Herramienta `viewer`: diagnóstico, captura, aceleración GPU y mediciones del visor */
+  viewer: (action: string, args: Record<string, unknown>) => Promise<unknown>;
 }
 
 /** Sin pasos durante este rato, un cliente de afuera (no el chat) terminó */
@@ -191,6 +194,14 @@ export function startMcpLive(cad: CadStore, ui: CadUi, notify: (message: string)
           return answer(id, { value: value ?? null });
         } catch (err) {
           return answer(id, { error: String(err) });
+        }
+      }
+      if (what === "viewer") {
+        const a = (args ?? {}) as Record<string, unknown>;
+        try {
+          return answer(id, { value: (await model.viewer(String(a.action ?? "diagnostics"), a)) ?? null });
+        } catch (err) {
+          return answer(id, { error: String(err instanceof Error ? err.message : err) });
         }
       }
       // Las impresoras guardadas en la app (para que la IA las nombre)

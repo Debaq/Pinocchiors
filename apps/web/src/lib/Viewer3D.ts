@@ -13,9 +13,12 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { CameraRig, type CameraPose } from "./cameraRig";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
 import { boneWeight, meshNeighbors, paintRow, VertexGrid } from "./weightPaint";
-import { boneHue, estimateInfluenceAsync, type Influence } from "./boneInfluence";
+import { boneHue, estimateInfluence, estimateInfluenceAsync, type Influence } from "./boneInfluence";
 import { BONE_STRIDE, rotationRows, skinPose } from "./poseSkin";
 import { ScreenGrid } from "./cloudBrush";
+import { createViewRenderer, gpuStatus, usingGpuRenderer } from "./gpuRenderer";
+import { perfMark, timed } from "./perfLog";
+import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { boundsAfter, type FloorCandidate } from "./placement";
 import type { Pose, Quat, Vec3 } from "./animation";
 import { chainAround, type BoneShape, type JointFrame, type RigControl } from "./rig";
@@ -598,6 +601,8 @@ export class Viewer3D {
   // Cuadros bajo demanda y FPS
   private frameCount = 0;
   private fpsTimer: number | null = null;
+  /** Cuadros del último segundo (diagnóstico del conector) */
+  private lastFps = 0;
   private animationId: number | null = null;
   /** Suelta de una vez los listeners globales en `dispose` */
   private readonly listeners = new AbortController();
@@ -819,10 +824,8 @@ export class Viewer3D {
     this.camera.position.set(2, 1.5, 2);
 
     // Renderer
-    this.renderer = new THREE.WebGLRenderer({
-      canvas: this.canvas,
-      antialias: true,
-    });
+    // Con la aceleración GPU (opción experimental), el dibujador nuevo de three
+    this.renderer = createViewRenderer({ canvas: this.canvas, antialias: true }, () => this.requestRender());
     configureRenderer(this.renderer);
     this.fullRatio = this.renderer.getPixelRatio();
     this.renderer.setSize(canvas.clientWidth, canvas.clientHeight);
@@ -869,13 +872,14 @@ export class Viewer3D {
 
     this.fpsTimer = window.setInterval(() => {
       this.callbacks.onFpsUpdate?.(this.frameCount);
+      this.lastFps = this.frameCount;
       this.frameCount = 0;
     }, 1000);
     this.requestRender();
   }
 
   private setupLights(): void {
-    this.lightRig = new LightRig(this.scene, this.camera, this.renderer);
+    this.lightRig = new LightRig(this.scene, this.camera, this.renderer, () => this.requestRender());
     this.placeLights();
   }
 
@@ -1833,6 +1837,10 @@ export class Viewer3D {
 
   /** Una pincelada centrada en `center` (coordenadas de la malla) */
   private dab(center: THREE.Vector3): void {
+    timed("visor: pincelada de pesos", () => this.dabNow(center));
+  }
+
+  private dabNow(center: THREE.Vector3): void {
     const settings = this.paintSettings;
     const mesh = this.meshData;
     const weights = this.weightsData;
@@ -2005,6 +2013,10 @@ export class Viewer3D {
 
   /** Una pincelada de intensidad centrada en `center` (coordenadas de la malla) */
   private maskDab(center: THREE.Vector3): void {
+    timed("visor: pincelada de intensidad", () => this.maskDabNow(center));
+  }
+
+  private maskDabNow(center: THREE.Vector3): void {
     const settings = this.maskPaint;
     const mesh = this.meshData;
     const mask = this.skinMask;
@@ -2048,13 +2060,13 @@ export class Viewer3D {
 
   /** Rejilla de los vértices de la malla para el pincel, armada una vez */
   private brushGrid(): VertexGrid {
-    this.paintGrid ??= new VertexGrid(this.meshData!.positions);
+    this.paintGrid ??= timed("visor: rejilla del pincel", () => new VertexGrid(this.meshData!.positions));
     return this.paintGrid;
   }
 
   /** Vecinos por aristas de la malla (formato CSR), calculados una vez */
   private neighborsOf(): { offsets: Uint32Array; list: Uint32Array } {
-    this.paintNeighbors ??= meshNeighbors(this.meshData!.positions, this.meshData!.indices);
+    this.paintNeighbors ??= timed("visor: vecinos del pincel", () => meshNeighbors(this.meshData!.positions, this.meshData!.indices));
     return this.paintNeighbors;
   }
 
@@ -2220,10 +2232,12 @@ export class Viewer3D {
     // Si la cámara sigue amortiguando, su evento "change" pide el siguiente
     this.controls.update();
     this.trackMotion();
+    const t0 = performance.now();
     this.quad?.render();
     this.renderer.render(this.scene, this.camera);
     this.renderGlow();
     this.cameraRig.renderCube(this.renderer);
+    perfMark("visor: cuadro", performance.now() - t0);
     this.frameCount++;
   };
 
@@ -2500,7 +2514,8 @@ export class Viewer3D {
   // cuadro, y `animate` llama a esto en cada cuadro (sería un bucle de render permanente)
   private renderGlow = (): void => {
     const mesh = this.rig?.mesh ?? this.currentMesh;
-    if (!this.glowMaterials || !mesh?.visible) return;
+    // El halo usa el posproceso de WebGL: con el dibujador nuevo no se dibuja
+    if (!this.glowMaterials || !mesh?.visible || usingGpuRenderer()) return;
     this.glowHalo ??= new GlowHalo(this.renderer, this.canvas.clientWidth, this.canvas.clientHeight);
     this.glowHalo.render(this.scene, this.camera, mesh, this.glowMaterials, this.glowStrength);
   };
@@ -2956,6 +2971,12 @@ export class Viewer3D {
 
   /** Aplica los giros de la pose de prueba a la malla y a las articulaciones */
   private updatePose(forceCpu = false): void {
+    const t0 = performance.now();
+    this.updatePoseNow(forceCpu);
+    perfMark(this.posePreview?.hidden && !forceCpu ? "visor: pose (GPU)" : "visor: pose (CPU)", performance.now() - t0);
+  }
+
+  private updatePoseNow(forceCpu: boolean): void {
     const mesh = this.meshData;
     const weights = this.weightsData;
     const skeleton = this.skeletonData;
@@ -3153,6 +3174,22 @@ export class Viewer3D {
     preview.mesh.geometry.deleteAttribute("skinWeight");
     preview.mesh.skeleton.dispose();
     this.posePreview = null;
+  }
+
+  /** Dibujador WebGL aparte para el render de imagen cuando el visor usa el nuevo, y sus reflejos */
+  private stillRenderer: THREE.WebGLRenderer | null = null;
+  private stillEnvironment: THREE.Texture | null = null;
+  private webglStillRenderer(): THREE.WebGLRenderer {
+    if (!this.stillRenderer) {
+      const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+      configureRenderer(renderer);
+      renderer.setPixelRatio(1);
+      const pmrem = new THREE.PMREMGenerator(renderer);
+      this.stillEnvironment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+      pmrem.dispose();
+      this.stillRenderer = renderer;
+    }
+    return this.stillRenderer;
   }
 
   /** Hay una pose de prueba aplicada */
@@ -4025,6 +4062,8 @@ export class Viewer3D {
 
   dispose(): void {
     this.disposePosePreview();
+    this.stillEnvironment?.dispose();
+    this.stillRenderer?.dispose();
     this.restoreQuality();
     this.quad?.dispose();
     this.listeners.abort();
@@ -4833,7 +4872,9 @@ export class Viewer3D {
     this.influenceRunning = true;
     this.influenceStale = false;
     const job = ++this.influenceJob;
+    const started = performance.now();
     const done = (result: Influence | null) => {
+      perfMark("visor: influencia estimada", performance.now() - started);
       if (job !== this.influenceJob) return;
       this.influenceRunning = false;
       if (result) this.estimatedInfluence = result;
@@ -6173,9 +6214,21 @@ export class Viewer3D {
     let backToLod = () => {};
     try {
       backToLod = this.holdFullMesh();
+      // Con el dibujador nuevo, la imagen sale igual con WebGL (render por partes,
+      // sombras, posproceso), con sus propios reflejos
+      const stillRenderer = usingGpuRenderer() ? this.webglStillRenderer() : this.renderer;
+      if (stillRenderer !== this.renderer && this.scene.environment && this.scene.environment === this.lightRig.environment) {
+        const liveEnvironment = this.scene.environment;
+        this.scene.environment = this.stillEnvironment!;
+        const restore = backToLod;
+        backToLod = () => {
+          this.scene.environment = liveEnvironment;
+          restore();
+        };
+      }
       return await renderStillImage(
         {
-          renderer: this.renderer,
+          renderer: stillRenderer,
           scene: this.scene,
           camera,
           viewAspect: this.canvas.clientWidth / Math.max(1, this.canvas.clientHeight),
@@ -6213,6 +6266,137 @@ export class Viewer3D {
       backToLod();
       this.onResize();
     }
+  }
+
+  // ─── Diagnóstico para el conector (herramienta `viewer`) ───────────────────
+
+  /** Cómo está el visor: dibujador, FPS, tamaño y lo cargado */
+  diagnostics(): Record<string, unknown> {
+    const size = this.renderer.getSize(new THREE.Vector2());
+    const mesh = this.meshData;
+    return {
+      renderer: usingGpuRenderer() ? `three ${THREE.REVISION} WebGPURenderer (${gpuStatus().backend ?? "arrancando"})` : `three ${THREE.REVISION} WebGLRenderer`,
+      fps: this.lastFps,
+      canvas: [Math.round(size.x), Math.round(size.y)],
+      pixelRatio: this.renderer.getPixelRatio(),
+      vertices: mesh ? mesh.positions.length / 3 : 0,
+      triangles: mesh ? mesh.indices.length / 3 : 0,
+      weights: !!this.weightsData,
+      bones: this.skeletonData?.bones.length ?? 0,
+      posed: this.pose !== null,
+      cloudPoints: this.cloud?.count ?? 0,
+      animating: this.animationMode,
+    };
+  }
+
+  /** La vista tal como se ve (PNG, el lado mayor en `maxSide` px como mucho) */
+  captureView(maxSide = 1024): string {
+    this.restoreQuality();
+    this.withFullMesh(() => {
+      this.quad?.render();
+      this.renderer.render(this.scene, this.camera);
+      this.cameraRig.renderCube(this.renderer);
+    });
+    const source = this.renderer.domElement;
+    const k = Math.min(1, maxSide / Math.max(source.width, source.height, 1));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(source.width * k));
+    canvas.height = Math.max(1, Math.round(source.height * k));
+    canvas.getContext("2d")?.drawImage(source, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/png");
+  }
+
+  /**
+   * Mediciones en la app real: `frame` (dibujar la vista), `brush` (rejilla,
+   * vecinos y búsquedas del pincel), `influence` (vista previa de huesos en
+   * Rust y en TS) y `pose` (girar una articulación con pesos: vista previa en
+   * GPU y cálculo final). No cambian el trabajo: la pose vuelve a como estaba
+   */
+  async benchmark(kind: string): Promise<Record<string, unknown>> {
+    const ms = (t0: number) => Math.round((performance.now() - t0) * 100) / 100;
+    const mesh = this.meshData;
+    if (kind === "frame") {
+      const times: number[] = [];
+      for (let i = 0; i < 30; i++) {
+        const t0 = performance.now();
+        this.renderer.render(this.scene, this.camera);
+        times.push(ms(t0));
+        await new Promise((r) => requestAnimationFrame(r));
+      }
+      return { frames: 30, avgMs: Math.round((times.reduce((a, b) => a + b, 0) / times.length) * 100) / 100, maxMs: Math.max(...times), note: "tiempo de CPU por cuadro (con WebGPU la GPU sigue después)" };
+    }
+    if (!mesh) return { error: "no hay un modelo cargado en el visor" };
+    if (kind === "brush") {
+      let t0 = performance.now();
+      const grid = new VertexGrid(mesh.positions);
+      const gridMs = ms(t0);
+      t0 = performance.now();
+      meshNeighbors(mesh.positions, mesh.indices);
+      const neighborsMs = ms(t0);
+      const box = boundsAfter(mesh.positions);
+      const radius = 0.03 * box.getSize(new THREE.Vector3()).length();
+      const n = mesh.positions.length / 3;
+      let hits = 0;
+      t0 = performance.now();
+      for (let i = 0; i < 50; i++) {
+        const v = Math.floor(Math.random() * n);
+        hits += grid.within(mesh.positions[3 * v], mesh.positions[3 * v + 1], mesh.positions[3 * v + 2], radius).vertices.length;
+      }
+      return { vertices: n, gridMs, neighborsMs, dabQueryAvgMs: Math.round((ms(t0) / 50) * 1000) / 1000, avgVerticesPerDab: Math.round(hits / 50) };
+    }
+    const skeleton = this.skeletonData;
+    if (kind === "influence") {
+      if (!skeleton) return { error: "no hay esqueleto" };
+      let t0 = performance.now();
+      await estimateInfluenceAsync(mesh.positions, skeleton.bones);
+      const backendMs = ms(t0);
+      const n = mesh.positions.length / 3;
+      let tsMs: number | null = null;
+      if (n <= 300_000) {
+        t0 = performance.now();
+        estimateInfluence(mesh.positions, skeleton.bones);
+        tsMs = ms(t0);
+      }
+      return { vertices: n, bones: skeleton.bones.length, backendMs, tsMs, note: tsMs === null ? "TS solo hasta 300 000 vértices" : "backendMs incluye el viaje (sin backend cae a TS)" };
+    }
+    if (kind === "pose") {
+      const weights = this.weightsData;
+      if (!skeleton || !weights || weights.numVertices * 3 !== mesh.positions.length) return { error: "hace falta un modelo con pesos calculados" };
+      const joint = skeleton.bones.findIndex((b, i) => b.parent !== null && skeleton.bones.some((c) => c.parent === i));
+      if (joint < 0) return { error: "el esqueleto no tiene una articulación con hijos" };
+      const saved = this.pose ? new Map(this.pose.rotations) : null;
+      const start = this.boneSpheres[joint].quaternion.clone();
+      const axis = new THREE.Vector3(0, 0, 1);
+      const updates: number[] = [];
+      let gpu = false;
+      for (let i = 1; i <= 20; i++) {
+        const t0 = performance.now();
+        this.applyPose(joint, new THREE.Quaternion().setFromAxisAngle(axis, (i * Math.PI) / 80).multiply(start));
+        updates.push(ms(t0));
+        gpu ||= !!this.posePreview?.hidden;
+        await new Promise((r) => requestAnimationFrame(r));
+      }
+      const t0 = performance.now();
+      this.settlePose();
+      const settleMs = ms(t0);
+      // Vuelve a como estaba
+      if (saved && this.pose) {
+        this.pose.rotations = saved;
+        this.updatePose(true);
+      } else {
+        this.resetPose();
+      }
+      this.requestRender();
+      return {
+        vertices: weights.numVertices,
+        joint: skeleton.bones[joint].name,
+        gpuPreview: gpu,
+        perMoveAvgMs: Math.round((updates.reduce((a, b) => a + b, 0) / updates.length) * 100) / 100,
+        perMoveMaxMs: Math.max(...updates),
+        settleMs,
+      };
+    }
+    return { error: `medición desconocida: ${kind}` };
   }
 
   /**

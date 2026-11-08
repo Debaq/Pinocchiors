@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+import { environmentFromScene, usingGpuRenderer } from "./gpuRenderer";
 
 /** Luces del visor (panel Luces); las mismas en todos los espacios */
 export interface LightSettings {
@@ -38,7 +39,8 @@ export class LightRig {
   private fillLight = new THREE.DirectionalLight(0x8be9fd, 1);
   private ambientLight = new THREE.HemisphereLight(0xffffff, 0x44475a, 1);
   private headLight = new THREE.DirectionalLight(0xffffff, 0);
-  private environmentMap: THREE.Texture;
+  /** Reflejos del entorno; con la aceleración GPU llega cuando arranca el dibujador */
+  private environmentMap: THREE.Texture | null = null;
   private settings: LightSettings = { ...defaultLights };
   private center = new THREE.Vector3();
   private radius = 5;
@@ -47,6 +49,8 @@ export class LightRig {
     private scene: THREE.Scene,
     camera: THREE.Camera,
     renderer: THREE.WebGLRenderer,
+    /** Algo cambió fuera de un `set` (los reflejos llegaron): hay que redibujar */
+    onChange?: () => void,
   ) {
     scene.add(this.ambientLight);
     scene.add(this.key, this.key.target);
@@ -55,9 +59,22 @@ export class LightRig {
     camera.add(this.headLight, this.headLight.target);
     this.headLight.target.position.set(0, 0, -1);
     if (!camera.parent) scene.add(camera);
-    const pmrem = new THREE.PMREMGenerator(renderer);
-    this.environmentMap = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    pmrem.dispose();
+    if (usingGpuRenderer()) {
+      // El dibujador nuevo arranca asíncrono: los reflejos se arman cuando esté listo
+      void environmentFromScene(renderer, new RoomEnvironment(), 0.04).then(
+        (texture) => {
+          this.environmentMap = texture;
+          this.apply();
+          onChange?.();
+        },
+        // Si el dibujador no arrancó, el panel de Preferencias ya lo cuenta
+        () => {},
+      );
+    } else {
+      const pmrem = new THREE.PMREMGenerator(renderer);
+      this.environmentMap = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+      pmrem.dispose();
+    }
     this.apply();
   }
 
@@ -97,8 +114,13 @@ export class LightRig {
     this.scene.environmentIntensity = s.environment;
   }
 
+  /** Los reflejos que pone en la escena (el render de imagen los cambia si dibuja con otro dibujador) */
+  get environment(): THREE.Texture | null {
+    return this.environmentMap;
+  }
+
   dispose() {
-    this.environmentMap.dispose();
+    this.environmentMap?.dispose();
   }
 }
 

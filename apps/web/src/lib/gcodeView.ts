@@ -8,6 +8,7 @@ import * as THREE from "three";
 import { LineSegments2 } from "three/addons/lines/LineSegments2.js";
 import { LineSegmentsGeometry } from "three/addons/lines/LineSegmentsGeometry.js";
 import { LineMaterial } from "three/addons/lines/LineMaterial.js";
+import { thickLineMaterial, thickLineSegments, type ThickLineMaterial } from "./gpuRenderer";
 import { FEATURES, type GcodePreview, type GcodeViewOptions } from "./gcodePreview";
 import { buildPrintBed } from "./printBed";
 
@@ -15,8 +16,9 @@ export class GcodeView {
   readonly group = new THREE.Group();
   private data: GcodePreview;
   private hiddenKey = "";
-  private lines: LineSegments2 | null = null;
-  private material: LineMaterial;
+  private lines: THREE.Mesh | null = null;
+  /** LineMaterial, o su versión de nodos con la aceleración GPU (lib/gpuRenderer.ts) */
+  private material: ThickLineMaterial;
   /** Primer segmento (ya filtrado) de cada capa, y el total al final */
   private layerStart: number[] = [];
   private travelLines: THREE.LineSegments;
@@ -26,7 +28,7 @@ export class GcodeView {
     this.data = data;
     const widths = Array.from(data.widths).sort((a, b) => a - b);
     const width = widths.length ? widths[Math.floor(widths.length / 2)] : 0.42;
-    this.material = new LineMaterial({ vertexColors: true, worldUnits: true, linewidth: width, resolution });
+    this.material = thickLineMaterial({ vertexColors: true, worldUnits: true, linewidth: width, resolution }, LineMaterial);
     this.travelLines = this.buildTravels();
     this.bed = this.buildBed();
     this.group.add(this.bed, this.travelLines);
@@ -41,7 +43,8 @@ export class GcodeView {
   }
 
   setResolution(w: number, h: number): void {
-    this.material.resolution.set(w, h);
+    // El material de nodos (aceleración GPU) toma el tamaño solo
+    this.material.resolution?.set(w, h);
   }
 
   update(options: GcodeViewOptions): void {
@@ -106,7 +109,7 @@ export class GcodeView {
     const geometry = new LineSegmentsGeometry();
     geometry.setPositions(pos);
     geometry.setColors(col);
-    this.lines = new LineSegments2(geometry, this.material);
+    this.lines = thickLineSegments(geometry, this.material, LineSegments2);
     this.lines.frustumCulled = false;
     this.group.add(this.lines);
     this.hiddenKey = key;

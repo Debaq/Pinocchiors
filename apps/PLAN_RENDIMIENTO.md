@@ -31,7 +31,7 @@ release.
   grandes con recoloreo incremental.
 - **R10 three.js al día**. De la 0.170 a la 0.187 (la que eligió el usuario).
 - **R11 Pendientes chicos** del estudio y de R3–R9.
-- **R12 Aceleración GPU (WebGPU) como opción** (propuesta, sin empezar).
+- **R12 Aceleración GPU (WebGPU) como opción** del visor principal.
 
 ## Avance
 
@@ -148,9 +148,47 @@ release.
   `onBeforeCompile`), pasar el posproceso (EffectComposer, GTAOPass,
   UnrealBloomPass) al de nodos, y `Line2` a su versión de nodos. Windows
   (WebView2) y macOS ya traen WebGPU encendido.
-- Todas las fases R1–R11 escritas. R1 y el motor de R6 probados en el PC; lo
-  de la app (R2–R11) sin compilar: lo revisa la próxima release.
-- Siguiente: commit, release y probar R2–R11 en la app (lista en «Para
+- R12 escrito (primer paso: visor principal; el CAD sigue en WebGL).
+  Preferencias → Visor → Pantalla → «Aceleración GPU (experimental)»,
+  apagada por defecto; apagada, todo queda como antes (ni se carga
+  `three/webgpu`, va en un pedazo aparte). Encendida:
+  - `startGpu` (lib/gpuRenderer.ts) corre antes de montar la interfaz
+    (index.tsx): si no hay `navigator.gpu`, pide `enable_webgpu` (lib.rs:
+    en Linux busca con `dlsym` las funciones de WebKitGTK ≥ 2.42 para
+    encender la función «WebGPU»; con uno más viejo no hace nada) y recarga
+    una vez; después carga `three/webgpu` (comparte `three.core.js` con
+    `three`, sin clases duplicadas).
+  - `createViewRenderer` da `WebGPURenderer` (WebGPU, o su respaldo WebGL2
+    si el sistema no lo trae) con la forma que usa el visor: no dibuja ni
+    limpia hasta que arranca (`render` antes de `init` tira error) y avisa
+    para el primer cuadro; `capabilities.getMaxAnisotropy` y
+    `forceContextLoss` adaptados.
+  - Reflejos: `environmentFromScene` espera a que arranque y usa el
+    `PMREMGenerator` de nodos (LightRig redibuja al llegar).
+  - Líneas del laminador: `thickLineMaterial` / `thickLineSegments` dan
+    `Line2NodeMaterial` y la `LineSegments2` de webgpu.
+  - Render de imagen: un `WebGLRenderer` aparte con sus propios reflejos
+    (renderStill usa render targets, sombras y posproceso de WebGL).
+  - Sin halo de selección (posproceso de WebGL). Los parches de shader
+    propios (suavizado automático, cuaterniones duales) no se aplican.
+  - Con WebGPU de verdad, los puntos de las nubes se ven de 1 px (WebGPU no
+    tiene puntos más grandes; con el respaldo WebGL2 sí).
+  - El panel muestra con qué dibuja («Ahora: WebGPU» o «sobre WebGL2») o por
+    qué no se pudo.
+  - Siguiente paso posible: el CAD (CadViewer: líneas gruesas, tapas de
+    corte con stencil) y reescribir en TSL el suavizado automático.
+- Herramienta `viewer` del conector (modo en vivo), para probar todo esto en
+  la app real: `diagnostics` (dibujador, FPS, lo cargado y los tiempos de
+  cada llamada al backend y de cada acción pesada del visor: lib/perfLog.ts
+  envuelve el `invoke` interno de Tauri y el visor anota pinceladas, pose,
+  rejilla, vecinos, influencia y cuadros), `capture` (PNG del visor tal como
+  se ve), `gpu` (prender/apagar la aceleración GPU, recarga), `benchmark`
+  (`frame`, `brush`, `influence`, `pose`; no cambia el trabajo) y `explode`
+  (deslizador del ensamble). Pregunta `viewer` en live.rs → mcpLive.ts →
+  `liveViewerAction` en App.tsx.
+- Todas las fases R1–R12 escritas. R1 y el motor de R6 probados en el PC; lo
+  de la app (R2–R12) sin compilar: lo revisa la próxima release.
+- Siguiente: commit, release y probar R2–R12 en la app (lista en «Para
   probar»).
 
 ## Para probar en la app
@@ -177,3 +215,8 @@ release.
 - Girar huesos hacia la normal; imán a vértices con el gizmo (R11).
 - Retopología con texturas: cambiar algo y que las texturas sigan bien (R11).
 - Plano con vista sombreada de una pieza grande (R11).
+- Aceleración GPU (R12): encenderla, «Recargar ahora», ver qué dice el panel
+  (WebGPU o WebGL2); con ella: abrir modelos pesados, texturas, pesos y
+  pincel, posar, animar, nubes de puntos, vista previa del laminador (líneas),
+  render de imagen (sale como siempre), capturas/miniaturas, vistas cuádruples
+  y el cubo de vista. Apagarla y comprobar que todo vuelve a lo de antes.

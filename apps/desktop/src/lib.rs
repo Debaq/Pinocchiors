@@ -92,6 +92,7 @@ pub fn run() {
             peek::peek_model,
             commands::export_model,
             commands::write_render_image,
+            enable_webgpu,
             ray_render::ray_render_start,
             ray_render::ray_render_animation_start,
             ray_render::ray_render_status,
@@ -446,6 +447,88 @@ fn show_main_window(app: &tauri::AppHandle) {
         let _ = main.set_focus();
     }
     let _ = splash.close();
+}
+
+/// Aceleración GPU (opción experimental del visor, PLAN_RENDIMIENTO R12):
+/// enciende WebGPU en el WebView de esta ventana. En Linux, WebKitGTK (2.42 o
+/// más nuevo) lo trae como función experimental apagada; la interfaz recarga
+/// después para que aparezca. En Windows (WebView2) y macOS ya viene encendido.
+/// Devuelve si quedó encendido.
+#[tauri::command]
+async fn enable_webgpu(window: tauri::WebviewWindow) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let sent = window.with_webview(move |webview| {
+            let _ = tx.send(linux_enable_webgpu(&webview.inner()));
+        });
+        if sent.is_err() {
+            return false;
+        }
+        tauri::async_runtime::spawn_blocking(move || rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap_or(false))
+            .await
+            .unwrap_or(false)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = window;
+        true
+    }
+}
+
+/// Las funciones de WebKitGTK para encender funciones experimentales llegaron
+/// en la 2.42 y los enlaces de Rust que usa la app son anteriores: se buscan al
+/// correr (con un WebKitGTK más viejo no están y no pasa nada)
+#[cfg(target_os = "linux")]
+fn linux_enable_webgpu(view: &webkit2gtk::WebView) -> bool {
+    use std::ffi::{CStr, c_char, c_int, c_void};
+    use webkit2gtk::WebViewExt;
+    use webkit2gtk::glib::object::ObjectType;
+    unsafe extern "C" {
+        fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+    }
+    // RTLD_DEFAULT: lo ya cargado en el proceso (WebKitGTK lo está)
+    let find = |name: &CStr| unsafe { dlsym(std::ptr::null_mut(), name.as_ptr()) };
+    let all = find(c"webkit_settings_get_all_features");
+    let len = find(c"webkit_feature_list_get_length");
+    let get = find(c"webkit_feature_list_get");
+    let ident = find(c"webkit_feature_get_identifier");
+    let set = find(c"webkit_settings_set_feature_enabled");
+    let unref = find(c"webkit_feature_list_unref");
+    if [all, len, get, ident, set, unref].iter().any(|p| p.is_null()) {
+        return false;
+    }
+    let Some(settings) = WebViewExt::settings(view) else { return false };
+    unsafe {
+        let all: unsafe extern "C" fn() -> *mut c_void = std::mem::transmute(all);
+        let len: unsafe extern "C" fn(*mut c_void) -> usize = std::mem::transmute(len);
+        let get: unsafe extern "C" fn(*mut c_void, usize) -> *mut c_void = std::mem::transmute(get);
+        let ident: unsafe extern "C" fn(*mut c_void) -> *const c_char = std::mem::transmute(ident);
+        let set: unsafe extern "C" fn(*mut c_void, *mut c_void, c_int) = std::mem::transmute(set);
+        let unref: unsafe extern "C" fn(*mut c_void) = std::mem::transmute(unref);
+        let list = all();
+        if list.is_null() {
+            return false;
+        }
+        let mut found = false;
+        for i in 0..len(list) {
+            let feature = get(list, i);
+            if feature.is_null() {
+                continue;
+            }
+            let id = ident(feature);
+            if id.is_null() {
+                continue;
+            }
+            let id = CStr::from_ptr(id).to_string_lossy();
+            if id == "WebGPU" || id == "WebGPUEnabled" {
+                set(settings.as_ptr() as *mut c_void, feature, 1);
+                found = true;
+            }
+        }
+        unref(list);
+        found
+    }
 }
 
 /// WebKitGTK trae la cámara apagada y niega los permisos que nadie atiende:

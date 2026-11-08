@@ -1,5 +1,5 @@
 import { t, tn, tx, locale } from "./lib/i18n";
-import { animationLod, defaultExportFormat, forgetRecent, meshBuild, peekBeforeImport, previewFirst, recentFiles, rememberRecent, showFps } from "./lib/settings";
+import { animationLod, defaultExportFormat, forgetRecent, gpuAcceleration, meshBuild, peekBeforeImport, previewFirst, recentFiles, rememberRecent, setGpuAcceleration, showFps } from "./lib/settings";
 import { followUiScale } from "./lib/uiScale";
 import { tBackend } from "./lib/i18nBackend";
 import { Component, batch, createEffect, createMemo, createSignal, on, onMount, onCleanup, Show, untrack, type JSX, createResource } from "solid-js";
@@ -70,6 +70,8 @@ import {
   type TransformSpace,
 } from "./lib/Viewer3D";
 import * as THREE from "three";
+import { gpuStatus, usingGpuRenderer } from "./lib/gpuRenderer";
+import { perfReport } from "./lib/perfLog";
 import {
   dropMatrix,
   floorMatrix,
@@ -588,6 +590,7 @@ export const App: Component = () => {
         scan: importScanFile,
         usePart: showAiPart,
         confirm: (request) => confirmAction(request),
+        viewer: (action, args) => liveViewerAction(action, args),
       })
     )
   );
@@ -1307,6 +1310,50 @@ export const App: Component = () => {
   const [autoIk, setAutoIk] = createPersisted("pose.autoIk", { enabled: false, toRoot: false });
   /** El visor, como señal: los efectos de animación lo necesitan listo */
   const [viewer, setViewer] = createSignal<Viewer3D | undefined>();
+  /**
+   * Herramienta `viewer` del conector (modo en vivo): diagnóstico, captura de
+   * la vista real, aceleración GPU y mediciones, para probar el rendimiento en
+   * la app (PLAN_RENDIMIENTO)
+   */
+  const liveViewerAction = async (action: string, args: Record<string, unknown>): Promise<unknown> => {
+    const v = viewer();
+    switch (action) {
+      case "diagnostics":
+        return {
+          viewer: v?.diagnostics() ?? null,
+          gpu: { setting: gpuAcceleration(), using: usingGpuRenderer(), ...gpuStatus(), navigatorGpu: "gpu" in navigator },
+          perf: perfReport(args.reset === true),
+        };
+      case "capture": {
+        if (!v) throw new Error("the 3D viewer is not open (it is hidden while designing or in a drawing)");
+        const max = typeof args.max_side === "number" ? args.max_side : 1024;
+        return { png: v.captureView(max).replace(/^data:image\/png;base64,/, "") };
+      }
+      case "gpu": {
+        const on = args.on === true;
+        const changed = gpuAcceleration() !== on;
+        setGpuAcceleration(on);
+        // Se aplica al recargar: después de contestar
+        if (changed || usingGpuRenderer() !== on) setTimeout(() => location.reload(), 400);
+        return { on, reloading: changed || usingGpuRenderer() !== on };
+      }
+      case "benchmark": {
+        if (!v) throw new Error("the 3D viewer is not open");
+        return await v.benchmark(String(args.kind ?? "frame"));
+      }
+      case "explode": {
+        const value = typeof args.value === "number" ? Math.max(0, Math.min(2, args.value)) : 0;
+        if (!cadUi.assemblyMode()) throw new Error("the assembly view is not open");
+        const t0 = performance.now();
+        cadUi.setAssemblyExplode(value);
+        // Lo que tarda el front en correr las piezas (el efecto corre al cambiar el valor)
+        await new Promise((r) => requestAnimationFrame(r));
+        return { value, ms: Math.round((performance.now() - t0) * 10) / 10 };
+      }
+      default:
+        throw new Error(`unknown viewer action: ${action}`);
+    }
+  };
   /** Nube de puntos del escáner en edición (Orizon3D) */
   const scanCloud = createScanCloud(viewer, (text) => setStatusMessage(text));
 

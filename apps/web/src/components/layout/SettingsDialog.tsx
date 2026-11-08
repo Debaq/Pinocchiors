@@ -16,6 +16,8 @@ import {
   setPeekBeforeImportModel,
   resetLayout,
   setAdaptiveQuality,
+  gpuAcceleration,
+  setGpuAcceleration,
   setAnimationLodEnabled,
   setDefaultExportFormat,
   setMeshBuild,
@@ -29,6 +31,7 @@ import {
 import { MOUSE_HINTS, type ShortcutHint } from "./ContextPanel";
 import { AiConnectorSettings } from "./AiConnectorSettings";
 import { IS_ANDROID } from "../../lib/platform";
+import { gpuStatus, usingGpuRenderer } from "../../lib/gpuRenderer";
 import { getVersion } from "@tauri-apps/api/app";
 import { checkForUpdate, setUpdateSettings, showUpdate, updateSettings, updateState } from "../../lib/updater";
 import {
@@ -395,6 +398,31 @@ export const SettingsDialog: Component<SettingsDialogProps> = (props) => {
                 <Checkbox label={t("Mostrar los FPS en la cabecera")} checked={showFps()} onChange={setShowFps} />
                 <Checkbox label={t("Calidad adaptativa al mover")} checked={adaptiveQuality()} onChange={setAdaptiveQuality} />
                 <Hint>{t("Mientras animas, arrastras o giras la vista, el visor baja un poco la resolución para ir más fluido y la restaura al quedar quieto. Las capturas y los renders siempre salen a calidad completa.")}</Hint>
+                <Checkbox label={t("Aceleración GPU (experimental)")} checked={gpuAcceleration()} onChange={setGpuAcceleration} />
+                <Hint>
+                  {t("El visor 3D dibuja con WebGPU, más moderno y rápido con modelos pesados. Si el sistema no lo trae, usa el mismo dibujador sobre WebGL2. Mientras está encendida no se ven el halo de selección, el suavizado automático de piezas ni los cuaterniones duales al animar; los renders de imagen salen igual que siempre. El diseño CAD sigue como siempre.")}{" "}
+                  <Show
+                    when={gpuAcceleration() === usingGpuRenderer()}
+                    fallback={
+                      <>
+                        {t("Se aplica al recargar la interfaz.")}{" "}
+                        <button class="underline hover:text-text" onClick={() => location.reload()}>
+                          {t("Recargar ahora")}
+                        </button>
+                      </>
+                    }
+                  >
+                    <Show when={usingGpuRenderer()}>
+                      {gpuStatus().failure
+                        ? t("No se pudo usar: {e}", { e: gpuStatus().failure ?? "" })
+                        : gpuStatus().backend === "webgpu"
+                          ? t("Ahora: WebGPU.")
+                          : gpuStatus().backend === "webgl2"
+                            ? t("Ahora: sin WebGPU en este sistema, sobre WebGL2.")
+                            : ""}
+                    </Show>
+                  </Show>
+                </Hint>
               </Section>
 
               <Section title={t("Grilla y unidades")}>

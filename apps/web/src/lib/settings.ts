@@ -37,6 +37,15 @@ const [meshBuildRaw, setMeshBuildRaw] = createPersisted<MeshBuildMode>("settings
 export const meshBuild = (): MeshBuildMode => (MESH_BUILD_MODES.includes(meshBuildRaw()) ? meshBuildRaw() : "background");
 export const setMeshBuild = setMeshBuildRaw;
 
+/**
+ * Aceleración GPU (experimental): el visor dibuja con el dibujador nuevo de
+ * three (WebGPU, o su respaldo en WebGL2). Se aplica al reiniciar la ventana
+ * (ver lib/gpuRenderer.ts)
+ */
+const [gpuAccelerationRaw, setGpuAccelerationRaw] = createPersisted<boolean>("settings.gpuAcceleration", false);
+export const gpuAcceleration = gpuAccelerationRaw;
+export const setGpuAcceleration = setGpuAccelerationRaw;
+
 /** Mostrar primero una vista previa liviana de los modelos muy pesados */
 const [previewFirstRaw, setPreviewFirst] = createPersisted<boolean>("settings.previewFirst", true);
 export const previewFirst = previewFirstRaw;

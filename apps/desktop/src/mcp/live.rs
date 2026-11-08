@@ -312,12 +312,14 @@ impl Bridge {
             // Preguntas a la ventana: lo que el usuario tiene elegido, deshacer,
             // rehacer, importar un modelo o un escaneo (como objeto nuevo) o traer la malla
             // de una pieza del diseño: los hace la ventana, como el usuario
-            "selection" | "undo" | "redo" | "import" | "scan" | "use_part" => {
+            // `viewer`: diagnóstico, captura y mediciones del visor (herramienta `viewer`)
+            "selection" | "undo" | "redo" | "import" | "scan" | "use_part" | "viewer" => {
                 let model = matches!(req["op"].as_str(), Some("import" | "scan" | "use_part"));
                 if model && !holds() {
                     return Err("no turn: call begin first".into());
                 }
-                let wait = if model { IMPORT } else { ANSWER };
+                // Las mediciones del visor pueden tardar (una malla grande en TS)
+                let wait = if model || req["op"] == "viewer" { IMPORT } else { ANSWER };
                 let a = self.ask_for(host, EV_ASK, json!({ "what": req["op"], "args": req["args"] }), wait)?;
                 match a["error"].as_str() {
                     Some(e) => Err(e.to_string()),

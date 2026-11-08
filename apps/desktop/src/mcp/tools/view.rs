@@ -8,9 +8,9 @@ use serde_json::{json, Value};
 use super::cad::{direction, find_tab, num, tab_prop, vec3};
 use super::{arg_str, Ctx, Effect, Fail, Output, Tool};
 use crate::mcp::render::{self, Camera, Labels, Options};
-use crate::mcp::schema::{any_object, array, integer, number_in, object, one_of};
+use crate::mcp::schema::{any_object, array, boolean, integer, number_in, object, one_of};
 
-pub const TOOLS: &[Tool] = &[VIEW, MEASURE];
+pub const TOOLS: &[Tool] = &[VIEW, MEASURE, VIEWER];
 
 const VIEWS: &[&str] = &["iso", "iso_back", "iso_below", "top", "bottom", "front", "back", "left", "right"];
 
@@ -228,4 +228,101 @@ fn measure(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
         lines.push(format!("Angle: {}°.", num(a)));
     }
     Ok(Output::new(lines.join("\n"), json!({ "tab": tab, "measurement": m })))
+}
+
+const VIEWER: Tool = Tool {
+    name: "viewer",
+    title: "Check the app's 3D viewer (performance)",
+    description: "Live mode only: looks at the real 3D viewer of the open Pinocchio window, to test speed and drawing. \
+`action`: `diagnostics` (which renderer draws — WebGL, or WebGPU / WebGL2 with the experimental GPU acceleration —, FPS, \
+what is loaded, and how long each backend call and each heavy viewer action took since the last reset; `reset: true` \
+starts counting from zero after reading), `capture` (PNG of the viewer exactly as the user sees it; `max_side` px, \
+default 1024), `gpu` (turn the experimental GPU acceleration on or off with `on`; the window reloads, wait a few \
+seconds and call `diagnostics`), `benchmark` (`kind`: `frame` drawing the view, `brush` paint-brush lookups, \
+`influence` bone-influence preview in Rust vs TypeScript, `pose` rotating a weighted joint: GPU preview and final \
+CPU pass; nothing is changed) or `explode` (assembly view open: set the exploded-view slider to `value` 0–2 and time it).",
+    input: || {
+        object(&[
+            ("action", one_of("What to do", &["diagnostics", "capture", "gpu", "benchmark", "explode"]), true),
+            ("reset", boolean("diagnostics: start counting from zero after reading"), false),
+            ("max_side", integer("capture: largest side in pixels (default 1024)", 64), false),
+            ("on", boolean("gpu: turn the GPU acceleration on (true) or off (false)"), false),
+            ("kind", one_of("benchmark: what to measure", &["frame", "brush", "influence", "pose"]), false),
+            ("value", number_in("explode: slider value, 0 = assembled", 0.0, 2.0), false),
+        ])
+    },
+    effect: Effect::Read,
+    run: viewer,
+};
+
+fn viewer(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
+    use base64::Engine;
+    let action = arg_str(args, "action").unwrap_or("diagnostics");
+    let Some(answer) = ctx.session.backend.ask_with("viewer", args.clone()) else {
+        return Err(Fail::new("there is no open Pinocchio window to look at").hint(
+            "viewer works in live mode: the user turns on \"Let an AI drive this window\" in Settings ▸ AI connector",
+        ));
+    };
+    let v = answer?;
+    match action {
+        "capture" => {
+            let png = base64::engine::general_purpose::STANDARD
+                .decode(v["png"].as_str().unwrap_or(""))
+                .map_err(|e| Fail::new(format!("the window sent a broken image: {e}")))?;
+            let mut out = Output::new("The viewer as the user sees it.", json!({ "bytes": png.len() }));
+            out.images.push(png);
+            Ok(out)
+        }
+        "diagnostics" => {
+            let viewer = &v["viewer"];
+            let gpu = &v["gpu"];
+            let mut lines = vec![format!(
+                "Renderer: {} · {} FPS · canvas {} · {} vertices, {} triangles{}{}.",
+                viewer["renderer"].as_str().unwrap_or("?"),
+                viewer["fps"],
+                viewer["canvas"],
+                viewer["vertices"],
+                viewer["triangles"],
+                if viewer["weights"] == true { ", with weights" } else { "" },
+                if viewer["posed"] == true { ", posed" } else { "" },
+            )];
+            lines.push(format!(
+                "GPU acceleration: setting {}, in use {}, backend {}, WebGPU in this webview {}{}.",
+                gpu["setting"], gpu["using"], gpu["backend"], gpu["navigatorGpu"],
+                gpu["failure"].as_str().map_or(String::new(), |f| format!(", failed: {f}")),
+            ));
+            for (title, key) in [("Slowest backend calls (total)", "calls"), ("Viewer actions", "marks")] {
+                let rows = v["perf"][key].as_array().cloned().unwrap_or_default();
+                if rows.is_empty() {
+                    continue;
+                }
+                lines.push(format!("{title}:"));
+                for r in rows.iter().take(15) {
+                    lines.push(format!(
+                        "- {}: {}× avg {} ms, max {} ms, last {} ms",
+                        r["name"].as_str().unwrap_or("?"),
+                        r["count"],
+                        r["avgMs"],
+                        r["maxMs"],
+                        r["lastMs"]
+                    ));
+                }
+            }
+            Ok(Output::new(lines.join("\n"), v))
+        }
+        "gpu" => {
+            let text = if v["reloading"] == true {
+                "GPU acceleration changed: the window is reloading. Wait a few seconds, then call `viewer` with `diagnostics`."
+            } else {
+                "GPU acceleration was already like that."
+            };
+            Ok(Output::new(text, v))
+        }
+        _ => {
+            if let Some(e) = v["error"].as_str() {
+                return Err(Fail::new(e.to_string()));
+            }
+            Ok(Output::new(serde_json::to_string_pretty(&v).unwrap_or_default(), v))
+        }
+    }
 }

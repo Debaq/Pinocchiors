@@ -7,10 +7,15 @@ import "./styles/app.css";
 import { applyTheme, storedTheme } from "./lib/theme";
 import { installWheelNumbers } from "./lib/wheelNumber";
 import { applyLocale, t } from "./lib/i18n";
+import { startGpu } from "./lib/gpuRenderer";
+import { installInvokeTiming } from "./lib/perfLog";
 
 // Antes del primer cuadro, para no pasar por el tema oscuro al abrir en claro
 applyTheme(storedTheme());
 applyLocale();
+
+// Tiempos de cada llamada al backend, para el diagnóstico del conector (lib/perfLog.ts)
+installInvokeTiming();
 
 // El splash muestra cada paso del arranque (sin Tauri no hay a quién avisar)
 const bootStep = (step: string) => void invoke("boot_step", { step }).catch(() => {});
@@ -49,6 +54,7 @@ installWheelNumbers();
 
 // Un error de la interfaz no deja la ventana en blanco: se muestra y se puede
 // recargar (el trabajo del backend sigue ahí y la recuperación también)
+const mount = () => {
 render(
   () => (
     <ErrorBoundary
@@ -78,3 +84,7 @@ setTimeout(() => {
   bootStep("app");
   void invoke("app_ready").catch(() => {});
 });
+};
+
+// Con la aceleración GPU, antes se carga el dibujador nuevo (lib/gpuRenderer.ts)
+void startGpu().finally(mount);
