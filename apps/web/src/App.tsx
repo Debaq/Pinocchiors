@@ -351,7 +351,7 @@ import { CadView } from "./components/layout/CadView";
 import { DesignTabs, changeDesignTabs } from "./components/layout/DesignTabs";
 import { neighborTab } from "./lib/designTabs";
 import { DesignStep, FeatureTree } from "./components/steps/DesignStep";
-import { createCadStore, partColor, partHidden, PLANE_LABELS, type Fabrication, type PartId } from "./lib/cad";
+import { createCadStore, insertScanPiece, partColor, partHidden, PLANE_LABELS, type Fabrication, type PartId } from "./lib/cad";
 import { createCadUi } from "./lib/cadUi";
 import { createDesignActions } from "./lib/designActions";
 import { designOperations } from "./components/design/DesignToolbar";
@@ -2380,6 +2380,46 @@ export const App: Component = () => {
       }
       if (request === scanRequest) setScanMesh(data);
     })();
+  });
+
+  // ── La pieza escaneada (PLAN_ESCANEO N1) ──
+  // Al entrar a Diseñar con un modelo y un diseño vacío, el STL pasa a ser la
+  // pieza: se repara solo si hace falta y se agrega como primera operación. Con
+  // un diseño que ya tiene trabajo no se toca nada
+  const scanPieceTried = new Set<string>();
+  /** Detalle completo hasta acá; más grande, la versión cerrada por vóxeles (rápida) */
+  const SCAN_PIECE_MAX_EXACT = 300_000;
+  const makeScanPiece = async () => {
+    let faults = await invoke<string | null>("cad_scan_faults").catch(() => null);
+    // Solo se repara el modelo activo (la reparación trabaja sobre él)
+    if (faults && scanObjectId() === activeObjectId() && !isProcessing()) {
+      await handleRepairMesh();
+      faults = await invoke<string | null>("cad_scan_faults").catch(() => null);
+    }
+    const doc = cad.doc();
+    if (!doc || doc.features.length > 0 || cad.draft()) return;
+    const triangles = (scanMesh()?.indices.length ?? 0) / 3;
+    const exact = !faults && triangles <= SCAN_PIECE_MAX_EXACT;
+    await cad.commit((d) => insertScanPiece(d, t("Pieza escaneada"), exact));
+    setStatusMessage(
+      !exact && faults
+        ? t("El modelo tiene fallas que no se pudieron arreglar: la pieza usa una versión cerrada, con un poco menos de detalle")
+        : !exact
+          ? t("Modelo muy grande: la pieza usa una versión simplificada para trabajar rápido")
+          : t("El modelo es la pieza del diseño: dibuja sobre él con Sketch y clic en la pieza (Ctrl+Z lo quita)"),
+    );
+  };
+  createEffect(() => {
+    if (!inDesign() || switching() || !cad.status()?.available || cad.draft() || cadUi.session()) return;
+    const tab = cad.activeTab();
+    const doc = cad.doc();
+    if (!tab || tab.kind !== "design" || !doc || doc.features.length > 0) return;
+    const scan = scanObjectId();
+    if (scan === undefined || !scanMesh()) return;
+    const key = `${tab.id}:${scan}`;
+    if (scanPieceTried.has(key)) return;
+    scanPieceTried.add(key);
+    void untrack(makeScanPiece).catch((e) => setStatusMessage(t("Error: {e}", { e: tBackend(String(e)) })));
   });
 
   createEffect(() => {

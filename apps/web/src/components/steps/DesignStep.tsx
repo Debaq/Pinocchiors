@@ -23,6 +23,8 @@ import {
   PLANE_LABELS,
   constraintIds,
   editsAsSketch,
+  hasScanPiece,
+  insertScanPiece,
   sketchAnchored,
   constraintValue,
   isReference,
@@ -779,7 +781,7 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                 when={props.scanId !== undefined}
                 fallback={<p class="text-xs text-text-dim">{tl("Importa un modelo (un escaneo, un STL u OBJ) para tomar de él planos, cilindros y contornos.")}</p>}
               >
-                <Show when={scanFaults()}>
+                <Show when={!hasScanPiece(store.doc()) && scanFaults()}>
                   {(why) => (
                     <div class="mb-2 space-y-1.5 rounded border border-warning/50 bg-warning/10 p-2">
                       <p class="text-xs text-text">{tl("Este modelo tiene fallas y no se puede usar como sólido en el diseño.")}</p>
@@ -790,6 +792,24 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                     </div>
                   )}
                 </Show>
+                <Section title={hasScanPiece(store.doc()) ? tl("Pieza escaneada") : tl("Modelo")}>
+                  <Show
+                    when={hasScanPiece(store.doc())}
+                    fallback={
+                      <div class="space-y-1.5">
+                        <p class="text-[11px] text-text-dim leading-relaxed">{tl("El modelo se ve de referencia. Para dibujar y sumar o grabar sobre él como en cualquier pieza, úsalo como pieza del diseño.")}</p>
+                        <Button size="sm" fullWidth onClick={() => void store.commit((d) => insertScanPiece(d, tl("Pieza escaneada"), !scanFaults()))}>
+                          {tl("Usar el modelo como pieza")}
+                        </Button>
+                      </div>
+                    }
+                  >
+                    <p class="text-[11px] text-text-dim leading-relaxed">
+                      {tl("El modelo es la pieza del diseño. Para dibujar sobre ella: «Sketch» y clic en la pieza. Después «Extruir» suma una capa que la sigue, rellena hasta ella o graba. Cilindros, conos y cajas se apoyan donde haces clic.")}
+                    </p>
+                  </Show>
+                </Section>
+                <Fold when={true}>
                 <Section title={tl("Desde el escaneo")}>
                   <p class="text-[11px] text-text-dim leading-relaxed">
                     {tl("El escaneo se ve translúcido detrás del diseño. Elegir una zona ajusta un plano o un cilindro y lo convierte en operaciones.")}
@@ -1150,6 +1170,7 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                     )}
                   </Show>
                 </Section>
+                </Fold>
               </Show>
 
             </Match>
@@ -1159,6 +1180,19 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
     </div>
   );
 };
+
+/**
+ * Lo avanzado de un diálogo, plegado (PLAN_ESCANEO: lo normal no pide nada).
+ * Con `when` falso se muestra todo como siempre
+ */
+const Fold: Component<{ when: boolean; children: JSX.Element }> = (p) => (
+  <Show when={p.when} fallback={p.children}>
+    <details class="space-y-2">
+      <summary class="text-xs text-text-muted cursor-pointer select-none hover:text-text">{tl("Ajustes avanzados")}</summary>
+      <div class="space-y-2 pt-2">{p.children}</div>
+    </details>
+  </Show>
+);
 
 const NoKernel: Component = () => (
   <div class="space-y-2">
@@ -2076,6 +2110,47 @@ export const FeatureEditor: Component<{
    * Resultado sólido o superficie: extrusión, revolución, transición y barrido son la misma
    * operación con regiones cerradas (sólido) o con curvas abiertas o cerradas (superficie).
    */
+  /**
+   * Extruir sobre la pieza escaneada (PLAN_ESCANEO N3), un solo control: recta (la
+   * extrusión de siempre), hasta la pieza (rellena hasta su superficie), una capa
+   * que la sigue o grabada. Por dentro cambia entre extrusión y relieve
+   */
+  const piece = () => hasScanPiece(props.store.doc());
+  const pieceMode = (): "straight" | "fill" | "layer" | "engrave" => {
+    const k = f().kind;
+    if (k.type === "relief") return k.inward ? "engrave" : "layer";
+    return k.type === "extrude" && k.extent.type === "up_to_scan" ? "fill" : "straight";
+  };
+  const setPieceMode = (v: string) =>
+    void props.store.updateFeature(f().id, (x) => {
+      const k = x.kind;
+      if (k.type !== "extrude" && k.type !== "relief") return;
+      const size = k.type === "relief" ? k.height : "distance" in k.extent ? (k.extent as { distance: number }).distance : 0;
+      const base = { sketch: k.sketch, regions: k.regions };
+      if (v === "straight") x.kind = { type: "extrude", ...base, extent: { type: "blind", distance: size > 0 ? size : 10 }, reverse: false, op: "join" };
+      else if (v === "fill") x.kind = { type: "extrude", ...base, extent: { type: "up_to_scan", offset: 0 }, reverse: false, op: "join" };
+      else {
+        const inward = v === "engrave";
+        x.kind = { type: "relief", ...base, map: { type: "project" }, height: size > 0 && size <= 20 ? size : inward ? 1 : 2, mode: "even", inward: inward || undefined, op: inward ? "cut" : "join" };
+      }
+    });
+  const pieceRow = () => (
+    <Show when={piece()}>
+      <Row label={tl("Sobre la pieza")}>
+        <Select
+          options={[
+            { value: "straight", label: tl("Recta") },
+            { value: "fill", label: tl("Hasta la pieza") },
+            { value: "layer", label: tl("Capa que la sigue") },
+            { value: "engrave", label: tl("Grabar") },
+          ]}
+          value={pieceMode()}
+          onChange={setPieceMode}
+        />
+      </Row>
+    </Show>
+  );
+
   const resultSelect = () => {
     const surface = () => f().kind.type.startsWith("surface_");
     const change = (v: string) =>
@@ -2499,6 +2574,8 @@ export const FeatureEditor: Component<{
               const setExtent = (e: Extent) => update((x) => x.type === "extrude" && (x.extent = e));
               return (
                 <>
+                  {pieceRow()}
+                  <Fold when={piece() && pieceMode() === "fill"}>
                   {resultSelect()}
                   <Row label={tl("Sketch")}>
                     <Select options={sketchOptions()} value={String(k().sketch)} onChange={(v) => update((x) => x.type === "extrude" && (x.sketch = +v))} />
@@ -2642,6 +2719,7 @@ export const FeatureEditor: Component<{
                   />
                   <Checkbox small label={tl("Hacia el otro lado")} checked={k().reverse} onChange={(c) => update((x) => x.type === "extrude" && (x.reverse = c))} />
                   <Row label={tl("Con el sólido")}>{opSelect(k().op, (o) => update((x) => x.type === "extrude" && (x.op = o)))}</Row>
+                  </Fold>
                 </>
               );
             }}
@@ -5199,6 +5277,11 @@ export const FeatureEditor: Component<{
                 })[k().mode];
               return (
                 <>
+                  {pieceRow()}
+                  <Show when={piece() && k().mode !== "flat_top"}>
+                    {field(inward() ? tl("Profundidad") : tl("Altura"), "kind.height", k().height, (x, v) => x.type === "relief" && (x.height = v), "mm")}
+                  </Show>
+                  <Fold when={piece()}>
                   <Row label={tl("Sketch")}>
                     <Select options={sketchOptions()} value={String(k().sketch)} onChange={(v) => update((x) => x.type === "relief" && ((x.sketch = +v), (x.regions = { type: "all" })))} />
                   </Row>
@@ -5235,7 +5318,7 @@ export const FeatureEditor: Component<{
                   <Row label={tl("Forma")}>
                     <Select options={modes()} value={k().mode} onChange={(v) => update((x) => x.type === "relief" && (x.mode = v as ReliefMode))} />
                   </Row>
-                  <Show when={k().mode !== "flat_top"}>
+                  <Show when={!piece() && k().mode !== "flat_top"}>
                     {field(inward() ? tl("Profundidad") : tl("Altura"), "kind.height", k().height, (x, v) => x.type === "relief" && (x.height = v), "mm")}
                   </Show>
                   <p class="text-[11px] text-text-dim">{explain()}</p>
@@ -5295,6 +5378,7 @@ export const FeatureEditor: Component<{
                   {field(tl("Triángulos"), "kind.faces", k().faces ?? 20000, (x, v) => x.type === "relief" && (x.faces = Math.round(Math.min(100000, Math.max(2000, v)))))}
                   <p class="text-[11px] text-text-dim">{tl("Más es más fiel y hace más lentas las operaciones (unos 3 s cada 20 000).")}</p>
                   <Row label={tl("Con el sólido")}>{opSelect(k().op, (o) => update((x) => x.type === "relief" && (x.op = o)))}</Row>
+                  </Fold>
                 </>
               );
             }}

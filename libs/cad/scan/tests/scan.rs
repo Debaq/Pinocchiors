@@ -265,6 +265,17 @@ fn references_follow_the_scan() {
     assert_relative_eq!(p.origin[2], 20.0, epsilon = 0.05);
     assert!(p.normal[2] > 0.999);
 
+    // «Sketch aquí» en la tapa plana: el plano de la zona, con origen en el clic
+    let ScanGeom::Plane(p) = fit_reference(&scan, &ScanFit::Surface { seed: seed.clone() }, &opts).unwrap() else { panic!() };
+    assert!(p.normal[2] > 0.999);
+    assert_relative_eq!(p.origin[0], at[0], epsilon = 1e-9);
+    assert_relative_eq!(p.origin[2], 20.0, epsilon = 0.05);
+    assert!(p.x_dir[2].abs() < 0.05 && dot(p.x_dir, p.normal).abs() < 1e-9);
+    // En la pared de un agujero (cilindro: sin zona plana de 1 cm²), el tangente: normal horizontal y X horizontal
+    let ScanGeom::Plane(p) = fit_reference(&scan, &ScanFit::Surface { seed: hole_seed.clone() }, &opts).unwrap() else { panic!() };
+    assert!(p.normal[2].abs() < 0.1, "{:?}", p.normal);
+    assert!(p.x_dir[2].abs() < 1e-9 && dot(p.x_dir, p.normal).abs() < 1e-9);
+
     // El escaneo girado 90° en Z y subido 5 mm: la referencia va con él
     let moved: Vec<P3> = scan.vertices.iter().map(|v| [-v[1], v[0], v[2] + 5.0]).collect();
     let moved = ScanMesh::new(&moved, &scan.triangles);

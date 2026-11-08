@@ -9,7 +9,7 @@ import type { CameraPose } from "../../lib/cameraRig";
 import { parse as parseFont, type Font } from "opentype.js";
 import { layoutText, type Contour } from "../../lib/sketchText";
 import { dragJointOf, dragPlane, mateAxis, measuredAngle, measuredDistance, nextAngle, nextDistance, turned } from "../../lib/assemblyDrag";
-import { fitReport, CONSTRAINT_LABELS, editsAsSketch, geometryPoints, type Report3d, type Sketch3d, type Plane, addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, curvePolyline, constraintValue, hasDiameterTwin, swapDiameter, isReference, isLoosePoint, isSolidPoint, removeLoosePoint, leavingDirection, placeSnap, tangentArc, type CadStore, designMass, dragByHandle, flipByHandle, handleField, handleValue, partColor, partHidden, samePart, explodeAssemblyMesh, type AssemblyRange, type CadMesh, type FeatureHandle, type FeatureKind, type MeasureItem, type Measurement, type P2, type P3, type ScanOutline, type Sketch, type SketchConstraint } from "../../lib/cad";
+import { fitReport, CONSTRAINT_LABELS, editsAsSketch, geometryPoints, type Report3d, type Sketch3d, type Plane, addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, curvePolyline, constraintValue, hasDiameterTwin, swapDiameter, isReference, isLoosePoint, isSolidPoint, removeLoosePoint, leavingDirection, placeSnap, tangentArc, type CadStore, designMass, dragByHandle, flipByHandle, handleField, handleValue, partColor, partHidden, samePart, hasScanPiece, explodeAssemblyMesh, type AssemblyRange, type CadMesh, type FeatureHandle, type FeatureKind, type MeasureItem, type Measurement, type P2, type P3, type ScanOutline, type Sketch, type SketchConstraint } from "../../lib/cad";
 import { infer, solidRefs, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
 import { angleView, applyFrame, clipCenter, invertFrame, measureConstraint, rotation, scaling, selectedEntities, splitEntityAt, transformSelection, translation, type Frame, type Xform } from "../../lib/sketchTransform";
 import { mergeDuplicate, rejoinSplit, sameEntities, trimByStroke, trimRemoved } from "../../lib/sketchEdit";
@@ -529,6 +529,14 @@ export const CadView: Component<CadViewProps> = (props) => {
   const [scanVisible, setScanVisible] = createSignal(true);
   // Se recuerda entre sesiones (antes volvía a 35 % cada vez)
   const [scanOpacity, setScanOpacity] = createPersisted("cad.scanOpacity", 0.35);
+  // Con la pieza escaneada (PLAN_ESCANEO N1) el STL ya se ve como pieza, opaca:
+  // el modelo de referencia translúcido se oculta (el botón lo vuelve a mostrar)
+  const scanPiece = createMemo(() => hasScanPiece(store.doc()));
+  createEffect(on(scanPiece, (on_) => on_ && setScanVisible(false)));
+  createEffect(() => {
+    const on_ = scanPiece();
+    if (viewer) viewer.scanPickHidden = on_;
+  });
   let dragging: number | undefined;
   // Arrastre de una curva entera (una línea se corre; un círculo cambia de radio)
   let entityDrag: { id: number; start: P2; from: Sketch; moved: boolean } | undefined;
@@ -764,6 +772,7 @@ export const CadView: Component<CadViewProps> = (props) => {
   const startPose = untrack(() => props.initialPose);
   onMount(async () => {
     viewer = new CadViewer(container);
+    viewer.scanPickHidden = scanPiece();
     viewer.onRender = () => setViewTick((t) => t + 1);
     // El plano 2D usa la cámara («tomar la vista del visor») y la escala del visor
     const v = viewer;
@@ -2688,6 +2697,20 @@ export const CadView: Component<CadViewProps> = (props) => {
         ui.setPick({ kind: "none" });
         mode.done(hit.face);
       } else if (mode.kind === "place") {
+        // Sobre la pieza escaneada: un plano apoyado ahí (zona plana o tangente) y el sketch en él
+        const onPiece = scanPiece() ? viewer.pickScanSurface(e.clientX, e.clientY) : null;
+        if (onPiece) {
+          ui.setPick({ kind: "none" });
+          const before = new Set((store.doc()?.features ?? []).map((f) => f.id));
+          try {
+            await store.scanAdd({ kind: "ref_surface", triangle: onPiece.triangle, at: viewer.fromView(onPiece.point) });
+          } catch (err) {
+            return ui.setMessage(tBackend(String(err)));
+          }
+          const plane = (store.doc()?.features ?? []).find((f) => !before.has(f.id) && f.kind.type === "plane");
+          if (plane) mode.done({ type: "reference", feature: plane.id });
+          return;
+        }
         // Dónde va el sketch: un plano base, una cara plana o el plano de otro sketch
         const hit = viewer.pick(e.clientX, e.clientY, { faces: true, planes: true, refPlanes: true, regions: true });
         const host = hit?.kind === "region" ? store.doc()?.features.find((f) => f.id === hit.sketch) : undefined;

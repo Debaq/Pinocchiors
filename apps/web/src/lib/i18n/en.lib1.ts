@@ -368,4 +368,6 @@ export const en_lib1: Catalog = {
   "Curva reparada: sigue a la arista nueva": "Curve repaired: it follows the new edge",
   "Ahora la siguiente: clic en su arista": "Now the next one: click its edge",
   "De una versión más nueva": "From a newer version",
+  "Clic en la pieza donde va el sketch (o en un plano base, una cara plana u otro sketch)": "Click on the part where the sketch goes (or on a base plane, a flat face or another sketch)",
+  "Clic en la pieza donde va": "Click on the part where it goes",
 };

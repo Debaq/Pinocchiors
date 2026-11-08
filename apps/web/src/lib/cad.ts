@@ -140,7 +140,9 @@ export type ScanFit =
   | { type: "cylinder"; seed: ScanSeed }
   | { type: "point"; seed: ScanSeed }
   /** La normal de la piel en el punto (eje para apoyar piezas) */
-  | { type: "normal"; seed: ScanSeed };
+  | { type: "normal"; seed: ScanSeed }
+  /** Plano para dibujar sobre la piel en el punto: el de la zona plana o el tangente («Sketch aquí») */
+  | { type: "surface"; seed: ScanSeed };
 
 export type PlaneDef =
   | { type: "offset"; base: PlaneSpec; distance: number }
@@ -2188,6 +2190,8 @@ export type ScanFeature =
   | { kind: "ref_axis"; triangle: number; at: P3 }
   | { kind: "ref_point"; triangle: number; at: P3 }
   | { kind: "ref_normal"; triangle: number; at: P3 }
+  /** Plano para dibujar sobre la piel en el punto («Sketch aquí») */
+  | { kind: "ref_surface"; triangle: number; at: P3 }
   /** Curva por el camino más corto sobre la piel entre los puntos tocados (triángulo y punto de cada uno) */
   | { kind: "path_curve"; points: [number, P3][]; closed: boolean }
   /** Superficie libre de la zona suave bajo el clic; `close`: clic en la cara plana contra la que cerrar el sólido */
@@ -2430,6 +2434,29 @@ export function remapFeatureIds(v: unknown, map: Map<number, number>): void {
       o[k] = x.map((i) => (typeof i === "number" && map.has(i) ? map.get(i)! : i));
     } else remapFeatureIds(x, map);
   }
+}
+
+/**
+ * La operación base que hace del STL o escaneo la pieza del diseño
+ * (PLAN_ESCANEO N1): el modelo entero como cuerpo nuevo, sin carcasa, sin
+ * holgura y sin zona. Con ella, el diseño se trabaja sobre la pieza como sobre
+ * cualquier sólido
+ */
+export function isScanPieceBase(kind: FeatureKind): boolean {
+  return kind.type === "scan_body" && !kind.region && !kind.paint && !(kind.thickness ?? 0) && !kind.offset && kind.op === "new";
+}
+
+/** El diseño tiene la pieza escaneada (activa) */
+export function hasScanPiece(doc: CadDocument | null | undefined): boolean {
+  return !!doc?.features.some((f) => !f.suppressed && isScanPieceBase(f.kind));
+}
+
+/** Agrega la pieza escaneada al principio de un documento (ver `isScanPieceBase`) */
+export function insertScanPiece(doc: CadDocument, name: string, exact: boolean): void {
+  const id = nextFeatureId(doc);
+  doc.features.unshift({ id, name, suppressed: false, kind: { type: "scan_body", offset: 0, thickness: 0, faces: exact ? 20000 : 60000, op: "new", region: null, exact } });
+  doc.next_id = id + 1;
+  if (doc.rollback != null) doc.rollback += 1;
 }
 
 function nextFeatureId(doc: CadDocument): number {

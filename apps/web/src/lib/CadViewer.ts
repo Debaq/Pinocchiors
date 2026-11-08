@@ -318,6 +318,8 @@ export class CadViewer {
   /** Se llama después de dibujar (la cámara pudo moverse): etiquetas HTML encima */
   onRender?: () => void;
   scanOpacity = 0.35;
+  /** Con la pieza escaneada el modelo de referencia va oculto, pero se sigue eligiendo sobre él */
+  scanPickHidden = false;
   showScan = true;
 
   constructor(private container: HTMLElement) {
@@ -2245,11 +2247,28 @@ export class CadViewer {
       pool.sort((a, b) => a.d - b.d || a.rank - b.rank);
       return pool[0].pick;
     }
-    if (want.scan && this.scan?.visible) {
+    if (want.scan && this.scan && (this.scan.visible || this.scanPickHidden)) {
       const hit = this.raycaster.intersectObject(this.scan)[0];
       if (hit && hit.faceIndex != null) return { kind: "scan", triangle: hit.faceIndex, point: hit.point };
     }
     return null;
+  }
+
+  /**
+   * Clic sobre la pieza escaneada (PLAN_ESCANEO N2): el triángulo del escaneo
+   * bajo el puntero, aunque el modelo de referencia esté oculto, si nada del
+   * diseño queda delante (la pieza base coincide con el escaneo: a la par cuenta
+   * como la pieza). `null` si no se tocó el escaneo o si hay algo encima
+   */
+  pickScanSurface(clientX: number, clientY: number): { triangle: number; point: THREE.Vector3 } | null {
+    if (!this.scan) return null;
+    this.setRay(clientX, clientY);
+    const hit = this.raycaster.intersectObject(this.scan)[0];
+    if (!hit || hit.faceIndex == null) return null;
+    const front = this.body ? this.raycaster.intersectObject(this.body)[0] : undefined;
+    const radius = this.scan.geometry.boundingSphere?.radius ?? 1;
+    if (front && front.distance < hit.distance - radius * 0.004) return null;
+    return { triangle: hit.faceIndex, point: hit.point };
   }
 
   /** Punto del puntero sobre un plano del CAD, en coordenadas del sketch (mm) */

@@ -846,4 +846,8 @@ export const en_app: Catalog = {
   // Piezas de otras pestañas del diseño en el Outliner
   "Pieza de «{tab}»: clic para ir a esa pestaña": "Part from «{tab}»: click to go to that tab",
   "Pieza de «{tab}»": "Part from «{tab}»",
+  "Pieza escaneada": "Scanned part",
+  "El modelo tiene fallas que no se pudieron arreglar: la pieza usa una versión cerrada, con un poco menos de detalle": "The model has faults that could not be fixed: the part uses a closed version, with a little less detail",
+  "Modelo muy grande: la pieza usa una versión simplificada para trabajar rápido": "Very large model: the part uses a simplified version to work fast",
+  "El modelo es la pieza del diseño: dibuja sobre él con Sketch y clic en la pieza (Ctrl+Z lo quita)": "The model is the design's part: draw on it with Sketch and a click on the part (Ctrl+Z removes it)",
 };

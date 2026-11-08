@@ -136,7 +136,29 @@ pub fn fit_reference(mesh: &ScanMesh, fit: &ScanFit, opts: &PickOptions) -> Resu
             let (t, at) = mesh.locate(seed).ok_or_else(lost)?;
             ScanGeom::Axis { origin: at, direction: mesh.smooth_normal(t, at, opts) }
         }
+        ScanFit::Surface { seed } => {
+            let (t, at) = mesh.locate(seed).ok_or_else(lost)?;
+            ScanGeom::Plane(surface_plane(mesh, t, at, opts))
+        }
     })
+}
+
+/// Zona plana mínima (mm²) para dibujar en su plano y no en el tangente
+const FLAT_AREA_MM2: f64 = 100.0;
+
+/// Plano para dibujar sobre la piel en `at` (triángulo `t`): el de la zona
+/// plana alrededor si tiene al menos 1 cm² (su normal ya sale hacia afuera);
+/// si no, el tangente con la normal suave. Origen en el punto y X horizontal
+/// (perpendicular a Z) salvo que la normal sea vertical
+pub fn surface_plane(mesh: &ScanMesh, t: u32, at: P3, opts: &PickOptions) -> Plane {
+    let normal = match pick_plane(mesh, t, opts) {
+        Ok(p) if p.area >= FLAT_AREA_MM2 => p.plane.normal,
+        _ => mesh.smooth_normal(t, at, opts),
+    };
+    // Horizontal y perpendicular a la normal; si la normal es casi vertical, el X del mundo proyectado
+    let h = cross([0.0, 0.0, 1.0], normal);
+    let x_dir = if norm(h) > 0.2 { normalize(h) } else { normalize(sub([1.0, 0.0, 0.0], scale(normal, normal[0]))) };
+    Plane { origin: at, normal, x_dir }
 }
 
 /// Baricéntricas del punto del triángulo más cercano a `p` (Ericson,

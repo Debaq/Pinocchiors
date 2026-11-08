@@ -19,6 +19,7 @@ import {
   type CadStore,
   type Feature,
   type FeatureKind,
+  hasScanPiece,
   type FaceRef,
   type P2,
   type PartId,
@@ -86,7 +87,11 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     }
     ui.setPick({
       kind: "place",
-      prompt: content ? tr("Elegir dónde se pega el sketch: un plano base, una cara plana u otro sketch") : tr("Elegir dónde va el sketch: un plano base, una cara plana u otro sketch"),
+      prompt: hasScanPiece(store.doc())
+        ? tr("Clic en la pieza donde va el sketch (o en un plano base, una cara plana u otro sketch)")
+        : content
+          ? tr("Elegir dónde se pega el sketch: un plano base, una cara plana u otro sketch")
+          : tr("Elegir dónde va el sketch: un plano base, una cara plana u otro sketch"),
       done: (spec, offset) => void newSketch(spec, offset),
     });
   };
@@ -347,7 +352,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
    * que sigue al escaneo), un cilindro apoyado en ella (la forma se cambia en el diálogo) y su
    * base llevada hasta la piel, así se amolda aunque la piel sea curva.
    */
-  const placeOnSkinAt = async (at: P3, triangle: number) => {
+  const placeOnSkinAt = async (at: P3, triangle: number, shape: PrimitiveShape = { type: "cylinder", radius: 5, height: 10 }) => {
     try {
       await store.scanAdd({ kind: "ref_normal", triangle, at });
       const axis = [...(store.doc()?.features ?? [])].reverse().find((f) => f.kind.type === "axis" && f.kind.def.type === "scan");
@@ -356,7 +361,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
       const lift = 2;
       const id = await store.addFeature({
         type: "primitive",
-        shape: { type: "cylinder", radius: 5, height: 10 },
+        shape,
         origin: [0, 0, lift],
         z: [0, 0, 1],
         x: [1, 0, 0],
@@ -365,7 +370,9 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
       });
       // La base (a `lift` de la piel) llevada hasta la piel: se amolda
       const base: P3 = [at[0] + n[0] * lift, at[1] + n[1] * lift, at[2] + n[2] * lift];
-      await store.addFeature({ type: "face_to_scan", faces: [{ point: base, normal: [-n[0], -n[1], -n[2]], tags: [{ feature: id, name: "abajo" }] }], offset: 0 });
+      // La cara de abajo: «abajo» en cilindros y conos, «-z» en cajas
+      const bottom = shape.type === "box" ? "-z" : "abajo";
+      await store.addFeature({ type: "face_to_scan", faces: [{ point: base, normal: [-n[0], -n[1], -n[2]], tags: [{ feature: id, name: bottom }] }], offset: 0 });
       store.select(id);
     } catch (e) {
       say(String(e));
@@ -528,14 +535,23 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     if (!s) return say(tr("Primero hace falta un sketch con una región cerrada"));
     if (!picked && noRegions(s)) return;
     ui.clearPicks();
-    void store.addFeature({
-      type: "extrude",
-      sketch: s.id,
-      regions: picked ? { type: "points", points: picked.points } : { type: "all" },
-      extent: { type: "blind", distance: 10 },
-      reverse: false,
-      op: "join",
-    });
+    const regions: RegionSelection = picked ? { type: "points", points: picked.points } : { type: "all" };
+    // Un sketch apoyado en la pieza escaneada: una capa de 2 mm que la sigue, unida a la
+    // pieza (el diálogo cambia a recta, hasta la pieza o grabar; PLAN_ESCANEO N3)
+    if (onScanPiece(s)) {
+      void store.addFeature({ type: "relief", sketch: s.id, regions, map: { type: "project" }, height: 2, mode: "even", op: "join" });
+      return;
+    }
+    void store.addFeature({ type: "extrude", sketch: s.id, regions, extent: { type: "blind", distance: 10 }, reverse: false, op: "join" });
+  };
+
+  /** El sketch está en un plano tomado de la piel de la pieza escaneada («Sketch» + clic en la pieza) */
+  const onScanPiece = (s: { kind: FeatureKind }) => {
+    const doc = store.doc();
+    if (!hasScanPiece(doc) || s.kind.type !== "sketch" || s.kind.plane.type !== "reference") return false;
+    const feature = s.kind.plane.feature;
+    const ref = doc?.features.find((f) => f.id === feature);
+    return ref?.kind.type === "plane" && ref.kind.def.type === "scan";
   };
 
   /** Chapa: las regiones elegidas o todo el último sketch, de 2 mm (radio 2, K 0,44) */
@@ -840,7 +856,22 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
   };
 
 
-  const addPrimitive = (shape: PrimitiveShape) => void store.addFeature(primitive(shape));
+  const addPrimitive = (shape: PrimitiveShape) => {
+    // Con la pieza escaneada, cilindros, conos y cajas se apoyan donde se hace clic en ella,
+    // con la base amoldada (PLAN_ESCANEO N4)
+    if (hasScanPiece(store.doc()) && (shape.type === "cylinder" || shape.type === "cone" || shape.type === "box")) {
+      const seated: PrimitiveShape = shape.type === "box" ? { ...shape, centered: true, centered_z: false } : shape;
+      return ui.setPick({
+        kind: "scan_point",
+        prompt: tr("Clic en la pieza donde va"),
+        done: (at, triangle) => {
+          ui.setPick({ kind: "none" });
+          void placeOnSkinAt(at, triangle, seated);
+        },
+      });
+    }
+    void store.addFeature(primitive(shape));
+  };
 
   /**
    * Tornillo, tuerca o arandela como pieza nueva. Con el borde de un agujero

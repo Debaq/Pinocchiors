@@ -309,6 +309,9 @@ fn evaluate(state: &AppState) -> Result<CadResult, String> {
     evaluate_doc(state, &doc)
 }
 
+/// Cuánto entra en la pieza escaneada (o sale de ella, al grabar) la capa de un relieve
+const RELIEF_EMBED_MM: f64 = 0.5;
+
 /// Las referencias tomadas del escaneo, ajustadas contra el escaneo de hoy,
 /// y los cuerpos del escaneo con su malla preparada (`None` si el diseño no
 /// usa el escaneo o no hay: se usa lo guardado). Así siguen al escaneo si se
@@ -318,6 +321,13 @@ fn fit_scan_references(state: &AppState, doc: &Document) -> Option<Document> {
         return None;
     }
     let mut out = doc.clone();
+    // Con la pieza escaneada (el STL entero como cuerpo, PLAN_ESCANEO N1) un relieve que se une
+    // o se resta entra un poco en el material: su piel es la de vóxeles, no el STL exacto, y sin
+    // eso podían quedar rendijas finas entre la capa y la pieza
+    let piece = doc.features.iter().any(|f| {
+        !f.suppressed
+            && matches!(&f.kind, FeatureKind::ScanBody(b) if b.op == BodyOp::New && b.region.is_none() && b.paint.is_none() && b.thickness == 0.0 && b.offset == 0.0)
+    });
     let done = with_scan(state, |scan| {
         let mut fits = scan.fits.lock().unwrap();
         let mut geom = |fit: &cad_model::ScanFit| {
@@ -409,8 +419,15 @@ fn fit_scan_references(state: &AppState, doc: &Document) -> Option<Document> {
                 FeatureKind::Relief(r) if !f.suppressed => {
                     r.mesh = Some(scan_body_mesh(scan, 0.0, 0.0, r.faces));
                     // Pareja sobre la piel: la carcasa de la altura (hacia adentro si es grabado)
-                    r.shell = (r.mode == cad_model::ReliefMode::Even && r.height > 0.0)
-                        .then(|| scan_body_mesh(scan, 0.0, if r.inward { -r.height } else { r.height }, r.faces));
+                    let embed = if piece && r.op != BodyOp::New { RELIEF_EMBED_MM } else { 0.0 };
+                    r.shell = (r.mode == cad_model::ReliefMode::Even && r.height > 0.0).then(|| {
+                        if r.inward {
+                            // Grabado: arranca un poco afuera de la piel para cortar limpio
+                            scan_body_mesh(scan, embed, -(r.height + embed), r.faces)
+                        } else {
+                            scan_body_mesh(scan, -embed, r.height + embed, r.faces)
+                        }
+                    });
                     // Envolver: el escaneo tal cual, y el ancla donde está hoy
                     if let cad_model::ReliefMap::Wrap { anchor, .. } = &mut r.map {
                         if let Some(a) = anchor
@@ -516,7 +533,11 @@ fn scan_seed_of(doc: &Document, p: &PointSpec) -> Option<cad_model::ScanSeed> {
     };
     match fit {
         cad_model::ScanFit::Points { .. } => None,
-        cad_model::ScanFit::Zone { seed } | cad_model::ScanFit::Cylinder { seed } | cad_model::ScanFit::Point { seed } | cad_model::ScanFit::Normal { seed } => {
+        cad_model::ScanFit::Zone { seed }
+        | cad_model::ScanFit::Cylinder { seed }
+        | cad_model::ScanFit::Point { seed }
+        | cad_model::ScanFit::Normal { seed }
+        | cad_model::ScanFit::Surface { seed } => {
             Some(seed.clone())
         }
     }
@@ -3577,6 +3598,8 @@ pub enum ScanFeature {
     RefPlane { triangle: u32, at: P3 },
     /// Eje por la normal de la piel en el punto (para apoyar piezas ahí)
     RefNormal { triangle: u32, at: P3 },
+    /// Plano para dibujar sobre la piel en el punto («Sketch aquí»)
+    RefSurface { triangle: u32, at: P3 },
     RefPlanePoints { points: Vec<(u32, P3)> },
     RefAxis { triangle: u32, at: P3 },
     RefPoint { triangle: u32, at: P3 },
@@ -3733,12 +3756,14 @@ fn scan_add_impl(state: &AppState, feature: ScanFeature, options: ScanPickOption
                 ScanFeature::RefPlane { triangle, at }
                 | ScanFeature::RefAxis { triangle, at }
                 | ScanFeature::RefNormal { triangle, at }
+                | ScanFeature::RefSurface { triangle, at }
                 | ScanFeature::RefPoint { triangle, at } => {
                     let seed = mesh.seed(*triangle, *at).ok_or("Ese lugar no es del escaneo")?;
                     let (fit, name) = match &feature {
                         ScanFeature::RefPlane { .. } => (cad_model::ScanFit::Zone { seed }, "Plano del escaneo"),
                         ScanFeature::RefAxis { .. } => (cad_model::ScanFit::Cylinder { seed }, "Eje del escaneo"),
                         ScanFeature::RefNormal { .. } => (cad_model::ScanFit::Normal { seed }, "Normal de la piel"),
+                        ScanFeature::RefSurface { .. } => (cad_model::ScanFit::Surface { seed }, "Plano en la pieza"),
                         _ => (cad_model::ScanFit::Point { seed }, "Punto del escaneo"),
                     };
                     let geom = cad_scan::fit_reference(mesh, &fit, &options.pick()).map_err(|e| e.to_string())?;

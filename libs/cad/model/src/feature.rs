@@ -141,6 +141,10 @@ pub enum ScanFit {
     /// La normal de la piel en el punto del clic (hacia afuera): un eje para
     /// apoyar piezas sobre la piel.
     Normal { seed: ScanSeed },
+    /// Un plano para dibujar sobre la piel en el punto del clic: el de la zona
+    /// plana si la hay; si no, el tangente. Origen en el punto, X horizontal
+    /// cuando se puede (PLAN_ESCANEO N2, «Sketch aquí»).
+    Surface { seed: ScanSeed },
 }
 
 /// Cómo se define un plano de referencia.

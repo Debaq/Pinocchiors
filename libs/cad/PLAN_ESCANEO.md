@@ -382,3 +382,91 @@ Partes: E4.1 carcasa y parche bajo un sketch, E4.2 región pintada con pincel, E
 - Booleanas OCCT: ~0,2 ms por cara; más de 50 k triángulos se vuelve lento (E0).
 - Escaneos abiertos: hay que cerrar antes de sólido; huecos grandes no se inventan.
 - Desfase por vóxeles pierde detalle fino según la resolución: tamaño de vóxel ≤ holgura / 2.
+
+## Fases — C (diseñar sobre la pieza, de forma natural)
+
+2026-11-08. El usuario probó el flujo con el hueso frontal y lo encontró
+«horrible»: esperaba hacer sketches y sólidos sobre la pieza como en
+cualquier CAD, con la preparación invisible. Hoy el STL es un «modelo de
+referencia» translúcido aparte, los clics van a él y no a una pieza, y cada
+resultado (placa, relieve, pieza en un punto, hasta la piel) es un botón
+distinto en un panel de veinte. Regla de estas fases: **lo normal no pide
+nada; lo avanzado aparece solo si hace falta ajustar.** El motor ya sabe casi
+todo (ScanBody exacto, UpToScan, Relief, booleanas por manifold); lo que
+cambia es cómo llega al usuario.
+
+### N1 — El STL es la pieza
+
+- Al entrar a Diseñar con un modelo activo y un diseño vacío, se agrega sola
+  la operación base «Pieza escaneada» = `ScanBody { exact: true, op: New }`
+  (el STL tal cual, pieza de malla). Un solo paso de deshacer. Con un diseño
+  que ya tiene operaciones no se toca nada (no sorprender); el panel ofrece
+  un solo botón «Usar el modelo como pieza».
+- Preparación invisible: si `cad_scan_faults` da fallas, se repara solo en
+  segundo plano (`repair_mesh` con la config por defecto, deshacible) con un
+  aviso chico «Preparando el modelo…» y después se reevalúa. Si no se puede
+  reparar, o pasa del tope de detalle exacto, la base usa la versión cerrada
+  por vóxeles (`exact: false`, sin holgura ni carcasa) y un aviso de una
+  línea. Nunca se manda al usuario a «Preparar».
+- Con la pieza base, el modelo de referencia translúcido se oculta (la pieza
+  se dibuja opaca, como cualquier sólido); la barra de opacidad solo aparece
+  si se vuelve a mostrar.
+
+### N2 — Clic en la pieza
+
+- Los clics sobre la pieza (la parte de malla de la base) se resuelven contra
+  la malla del escaneo aunque el modelo de referencia esté oculto: punto y
+  triángulo, como hoy hace el modo escaneo.
+- «Sketch» sin nada elegido + clic en la pieza → plano apoyado ahí (ajuste
+  de la zona: plano real si es plana, tangente si es curva; `PlaneDef::Scan`,
+  sigue al escaneo) y el sketch abre en él. Un gesto, como en la cara de un
+  sólido CAD.
+- Clic derecho en la pieza → menú corto: «Sketch aquí», «Pieza aquí»
+  (cilindro amoldado, lo de hoy `placeOnSkinAt`), «Punto aquí».
+
+### N3 — Extruir sobre la pieza
+
+- El mismo «Extruir». Si el sketch está sobre la pieza o mira hacia ella, el
+  cuadro muestra un solo control «Sobre la pieza» con tres opciones:
+  «Hasta la pieza» (rellena entre el sketch y la superficie: soportes,
+  bases), «Capa» (sigue la superficie con el espesor pedido: placas, texto en
+  relieve) y «Grabar» (hacia adentro: grabados, perforaciones).
+- Por dentro: «Hasta la pieza» = `Extent::UpToScan` con unir; «Capa» =
+  `Relief` parejo hacia afuera con unir (la capa entra 0,5 mm en la pieza
+  para que la unión quede limpia aunque la piel de la herramienta sea la de
+  vóxeles); «Grabar» = `Relief` hacia adentro con cortar. Las booleanas con la
+  pieza de malla van por manifold (detalle completo, segundos).
+- Por defecto: sketch apoyado en la pieza (N2) → «Capa» de 2 mm; sketch
+  separado de la pieza → «Hasta la pieza».
+
+### N4 — Las herramientas de siempre, sobre la pieza
+
+- Texto, logos y formas: sketch sobre la pieza + Extruir → relieve o grabado
+  (N3). «Relieve sobre la piel» deja de hacer falta en el flujo normal (queda
+  en Avanzado).
+- Placa amoldada: sketch con el contorno sobre la pieza + Extruir «Capa». El
+  pincel queda como ajuste avanzado.
+
+### N5 — Panel simple
+
+- El panel «Desde el escaneo» pasa a «Pieza escaneada»: una línea de estado
+  (lista / preparando / qué pasó) y el resto plegado en «Avanzado» (alinear,
+  referencias, puntos y cotas, molde, tomar formas, reconstrucción, comparar,
+  corte). Abierto solo si se pide.
+
+### N6 — Exportar sin pensar
+
+- Con la pieza base, el resultado del diseño ya es una sola pieza de malla con
+  todo su detalle y lo agregado unido o restado: el «Exportar» de siempre lo
+  saca así (STL/3MF). «Exportar el escaneo con lo agregado» queda en Avanzado
+  para el caso sin pieza base.
+
+### N7 — Conector, guía y manual
+
+- El conector para IA y su guía cuentan el flujo nuevo (la pieza base, sketch
+  en la pieza, Extruir sobre la pieza). El manual con fotos se rehace con el
+  flujo nuevo cuando esté en una release.
+
+### Avance (C)
+
+- 2026-11-08: plan escrito.

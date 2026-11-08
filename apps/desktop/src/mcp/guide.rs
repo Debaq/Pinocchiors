@@ -122,7 +122,14 @@ Mesh tools work on the active scene object (a triangle mesh, in mm with Z up).
 6. `view` {\"show\": \"model\"} — a quick picture; `render_image` — a realistic one (path tracer) to show the result.
 7. `mesh_export` — GLB/glTF, OBJ, STL, PLY, 3MF, USDZ.
 - Mesh tools change the model of the active object; every step can be undone.
-- In live mode imports and scans appear in the app as new objects in the Outliner, like when the user imports.",
+- In live mode imports and scans appear in the app as new objects in the Outliner, like when the user imports.
+- Designing on top of a model (a plate that copies a bone, text on its surface, a support that rests on it) is done in
+  a design tab, with the model as the piece: the first operation is `scan_body` with `exact: true`, `op: \"new\"`,
+  offset 0 and no thickness (\"Pieza escaneada\"; the app adds it by itself when the user opens Design with a model
+  and an empty design). Then sketch on a plane facing the area and use `cad_add_feature`: a layer that follows the
+  surface is a `relief` with `mode: \"even\"`, `height` and `op: \"join\"`; engraving is the same with `inward: true`
+  and `op: \"cut\"`; filling up to the surface is an `extrude` with `extent: {\"type\": \"up_to_scan\", \"offset\": 0}`
+  and `op: \"join\"`. Booleans with the piece keep the model's full detail."
     ),
     (
         "print",
