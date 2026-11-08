@@ -268,11 +268,47 @@ impl Document {
     /// Huella de lo que cambia el recálculo. El material, las carpetas, los
     /// nombres y colores de piezas, el ensamble, el plano y las versiones no
     /// cuentan; lo traído de otras pestañas sí (ver `Derived::source`).
+    ///
+    /// Se escribe directo al hash desde una vista prestada: antes clonaba el
+    /// documento entero (con sus versiones guardadas, documentos completos) y
+    /// armaba un texto JSON, en cada llamada de la app (PLAN_RENDIMIENTO R1).
     pub fn geometry_hash(&self) -> u64 {
         use std::hash::{Hash, Hasher};
+        #[derive(Serialize)]
+        struct View<'a> {
+            features: &'a [Feature],
+            rollback: &'a Option<usize>,
+            next_id: u32,
+            parameters: &'a [Parameter],
+            bindings: &'a BTreeMap<String, String>,
+            fabrication: &'a Option<Fabrication>,
+            configurations: &'a [Configuration],
+            active_configuration: &'a Option<usize>,
+            scan_object: &'a Option<u64>,
+        }
+        struct Sink<'a>(&'a mut std::collections::hash_map::DefaultHasher);
+        impl std::io::Write for Sink<'_> {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.write(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
         let mut h = std::collections::hash_map::DefaultHasher::new();
-        let doc = Document { material: None, folders: Vec::new(), parts: Vec::new(), assembly: None, drawing: None, versions: Vec::new(), ..self.clone() };
-        serde_json::to_string(&doc).unwrap_or_default().hash(&mut h);
+        let view = View {
+            features: &self.features,
+            rollback: &self.rollback,
+            next_id: self.next_id,
+            parameters: &self.parameters,
+            bindings: &self.bindings,
+            fabrication: &self.fabrication,
+            configurations: &self.configurations,
+            active_configuration: &self.active_configuration,
+            scan_object: &self.scan_object,
+        };
+        let _ = serde_json::to_writer(Sink(&mut h), &view);
         for f in &self.features {
             if let crate::feature::FeatureKind::Derived(d) = &f.kind {
                 (f.id, d.source.hash, &d.source.error).hash(&mut h);

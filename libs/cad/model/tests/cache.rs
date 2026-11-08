@@ -197,3 +197,25 @@ fn bench_thirty_operations() {
     let slowest = full.status.iter().map(|s| s.ms).fold(0.0, f64::max);
     println!("30 operaciones: todo {full_ms:.0} ms; cambiar el chaflán con caché {:?} ms; la más lenta {slowest:.0} ms", times.iter().map(|t| t.round()).collect::<Vec<_>>());
 }
+
+/// La huella (clave del recálculo) cambia con la geometría y no con el
+/// material, las versiones guardadas ni el ensamble (PLAN_RENDIMIENTO R1)
+#[test]
+fn geometry_hash_follows_geometry_only() {
+    let doc = sample();
+    let base = doc.geometry_hash();
+    assert_eq!(doc.clone().geometry_hash(), base, "la misma geometría, la misma huella");
+
+    let mut other = doc.clone();
+    other.material = Some(Material { name: "Acero".into(), density: 7.85 });
+    other.versions.push(NamedVersion { name: "v1".into(), created: "hoy".into(), note: None, document: sample() });
+    other.drawing = Some(serde_json::json!({ "hojas": 1 }));
+    assert_eq!(other.geometry_hash(), base, "material, versiones y plano no cuentan");
+
+    let mut changed = doc.clone();
+    changed.rollback = Some(0);
+    assert_ne!(changed.geometry_hash(), base, "volver atrás en el árbol sí cuenta");
+    let mut more = doc.clone();
+    more.add(prim(PrimitiveShape::Sphere { radius: 3.0 }, [0.0, 0.0, 0.0], BodyOp::Join));
+    assert_ne!(more.geometry_hash(), base, "una operación nueva sí cuenta");
+}

@@ -720,18 +720,24 @@ fn assembly_part_names(tabs: &Tabs, designs: &[(TabId, Document)], merged: &cad_
     out
 }
 
-fn evaluate_doc(state: &AppState, doc: &Document) -> Result<CadResult, String> {
+/// Lo que deja [`refresh_cache`] para armar el resultado: la huella y los
+/// diseños del ensamble o el documento preparado (referencias del escaneo al día).
+struct Refreshed {
+    hash: u64,
+    designs: Option<Vec<(TabId, Document)>>,
+    fitted: Option<Document>,
+}
+
+/// Deja la caché del recálculo al día con `doc` y la devuelve tomada (así nadie
+/// la cambia antes de leerla). Lo que solo necesita la caché al día (elegir
+/// caras, medir, la malla) llama a esto y no arma el [`CadResult`] entero
+/// (PLAN_RENDIMIENTO R2: 27 comandos lo armaban y lo botaban).
+fn refresh_cache<'a>(state: &'a AppState, doc: &Document) -> Result<(Refreshed, std::sync::MutexGuard<'a, Option<CadCache>>), String> {
     // Pestaña de ensamble: el recálculo es el de todos los diseños juntos
     let active = state.cad_tabs.lock().unwrap().active;
     let designs = state.cad_in_assembly().then(|| design_tabs(state, active));
-    let fitted;
-    let doc = match designs.is_none().then(|| prepared(state, None, doc)).flatten() {
-        Some(d) => {
-            fitted = d;
-            &fitted
-        }
-        None => doc,
-    };
+    let fitted = designs.is_none().then(|| prepared(state, None, doc)).flatten();
+    let doc = fitted.as_ref().unwrap_or(doc);
     let hash = match &designs {
         Some(d) => {
             let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -765,6 +771,28 @@ fn evaluate_doc(state: &AppState, doc: &Document) -> Result<CadResult, String> {
             *cache = Some(CadCache { doc_hash: hash, eval, previous, measures });
         }
     }
+    Ok((Refreshed { hash, designs, fitted }, cache))
+}
+
+/// [`evaluate`] sin armar el resultado: la caché al día con lo que muestra el visor.
+fn ensure_evaluated(state: &AppState) -> Result<(), String> {
+    let preview = state.cad_preview.lock().unwrap().clone();
+    let doc = match preview {
+        Some(d) => d,
+        None => state.cad_doc().ok_or("No hay un diseño abierto")?,
+    };
+    refresh_cache(state, &doc).map(|_| ())
+}
+
+/// [`evaluate_committed`] sin armar el resultado.
+fn ensure_committed(state: &AppState) -> Result<(), String> {
+    let doc = state.cad_doc().ok_or("No hay un diseño abierto")?;
+    refresh_cache(state, &doc).map(|_| ())
+}
+
+fn evaluate_doc(state: &AppState, doc: &Document) -> Result<CadResult, String> {
+    let (Refreshed { hash, designs, fitted }, mut cache) = refresh_cache(state, doc)?;
+    let doc = fitted.as_ref().unwrap_or(doc);
     let c = cache.as_mut().unwrap();
     let m = match c.measures.iter().find(|(h, _)| *h == hash) {
         Some((_, m)) => m.clone(),
@@ -1331,7 +1359,7 @@ pub async fn cad_deviation(app: AppHandle, tolerance: f64) -> Result<Response, S
 
 fn deviation_impl(state: &AppState, tolerance: f64) -> Result<Vec<u8>, String> {
     require_occt()?;
-    evaluate_committed(state)?;
+    ensure_committed(state)?;
     let (positions, normals, triangles) = {
         let cache = state.cad_cache.lock().unwrap();
         let body = cache.as_ref().and_then(|c| c.eval.body.as_ref()).ok_or("El diseño todavía no tiene un sólido")?;
@@ -1353,7 +1381,7 @@ fn deviation_impl(state: &AppState, tolerance: f64) -> Result<Vec<u8>, String> {
 fn assembly_shapes(state: &AppState) -> Result<(cad_model::Assembly, Vec<(u32, cad_model::Shape)>), String> {
     let doc = state.cad_doc().ok_or("No hay un diseño abierto")?;
     let asm = doc.assembly.clone().ok_or("El diseño no tiene ensamble")?;
-    evaluate_committed(state)?;
+    ensure_committed(state)?;
     let cache = state.cad_cache.lock().unwrap();
     let ev = &cache.as_ref().ok_or("El diseño todavía no tiene un sólido")?.eval;
     let sol = cad_model::assembly::solve(&asm);
@@ -1507,7 +1535,7 @@ pub struct PartClashes {
 fn part_interference_impl(state: &AppState, min_gap: Option<f64>) -> Result<PartClashes, String> {
     let doc = state.cad_doc().ok_or("No hay un diseño abierto")?;
     let gap = min_gap.or_else(|| doc.fabrication.as_ref().map(|f| f.tolerances().fit_clearance(f.fit)));
-    evaluate_committed(state)?;
+    ensure_committed(state)?;
     let cache = state.cad_cache.lock().unwrap();
     let ev = &cache.as_ref().ok_or("El diseño todavía no tiene un sólido")?.eval;
     let solids: Vec<&cad_model::Part> = ev.parts.iter().filter(|p| !p.is_surface()).collect();
@@ -1552,7 +1580,7 @@ pub async fn cad_assembly_suggest(app: AppHandle) -> Result<Vec<cad_model::Relat
 fn assembly_suggest_impl(state: &AppState) -> Result<Vec<cad_model::Relation>, String> {
     let doc = state.cad_doc().ok_or("No hay un diseño abierto")?;
     let asm = doc.assembly.ok_or("El diseño no tiene ensamble")?;
-    evaluate_committed(state)?;
+    ensure_committed(state)?;
     let cache = state.cad_cache.lock().unwrap();
     let ev = &cache.as_ref().ok_or("El diseño todavía no tiene un sólido")?.eval;
     let sol = cad_model::assembly::solve(&asm);
@@ -1568,23 +1596,38 @@ pub async fn cad_assembly_gear_warnings(app: AppHandle) -> Result<Vec<String>, S
 fn assembly_gear_warnings_impl(state: &AppState) -> Result<Vec<String>, String> {
     let doc = state.cad_doc().ok_or("No hay un diseño abierto")?;
     let asm = doc.assembly.ok_or("El diseño no tiene ensamble")?;
-    evaluate_committed(state)?;
+    ensure_committed(state)?;
     let cache = state.cad_cache.lock().unwrap();
     let ev = &cache.as_ref().ok_or("El diseño todavía no tiene un sólido")?.eval;
     let sol = cad_model::assembly::solve(&asm);
     Ok(cad_model::assembly::gear_axis_warnings(ev, &asm, &sol))
 }
 
+/// La última malla de la vista con la huella y la escala con que se armó: la
+/// vista la vuelve a pedir sin que el diseño haya cambiado (volver del
+/// borrador, cambiar de pestaña) y teselar con OCCT se pagaba cada vez
+/// (PLAN_RENDIMIENTO R2).
+static VIEW_MESH: Mutex<Option<(u64, u64, Vec<u8>)>> = Mutex::new(None);
+
 fn mesh_impl(state: &AppState) -> Result<Vec<u8>, String> {
-    evaluate(state)?;
+    ensure_evaluated(state)?;
     let scale = 1.0 / mm_per_unit(state);
     let cache = state.cad_cache.lock().unwrap();
-    let Some(eval) = cache.as_ref().map(|c| &c.eval) else { return Ok(vec![0; 16]) };
-    match eval.body.as_ref() {
-        Some(_) if eval.parts.iter().any(|p| p.mesh.is_some()) => Ok(encode_tessellation(&parts_tessellation(eval)?, scale)),
-        Some(body) => encode_view_mesh(body, scale),
-        None => Ok(vec![0; 16]),
+    let Some(c) = cache.as_ref() else { return Ok(vec![0; 16]) };
+    let key = (c.doc_hash, scale.to_bits());
+    if let Some((h, s, bytes)) = VIEW_MESH.lock().unwrap().as_ref()
+        && (*h, *s) == key
+    {
+        return Ok(bytes.clone());
     }
+    let eval = &c.eval;
+    let bytes = match eval.body.as_ref() {
+        Some(_) if eval.parts.iter().any(|p| p.mesh.is_some()) => encode_tessellation(&parts_tessellation(eval)?, scale),
+        Some(body) => encode_view_mesh(body, scale)?,
+        None => return Ok(vec![0; 16]),
+    };
+    *VIEW_MESH.lock().unwrap() = Some((key.0, key.1, bytes.clone()));
+    Ok(bytes)
 }
 
 /// Los triángulos de una pieza de malla como teselado, con normales suaves por
@@ -1653,7 +1696,7 @@ pub async fn cad_tool_mesh(app: AppHandle, feature: cad_model::FeatureId) -> Res
 }
 
 fn tool_mesh_impl(state: &AppState, feature: cad_model::FeatureId) -> Result<Vec<u8>, String> {
-    evaluate(state)?;
+    ensure_evaluated(state)?;
     let scale = 1.0 / mm_per_unit(state);
     let cache = state.cad_cache.lock().unwrap();
     match cache.as_ref().and_then(|c| c.eval.tool(feature)) {
@@ -1673,7 +1716,7 @@ pub async fn cad_compare(app: AppHandle, document: Document) -> Result<Response,
 }
 
 fn compare_impl(state: &AppState, other: &Document) -> Result<Vec<u8>, String> {
-    evaluate_committed(state)?;
+    ensure_committed(state)?;
     let now = state.cad_cache.lock().unwrap().as_ref().and_then(|c| c.eval.body.clone());
     let other = prepared(state, None, other).unwrap_or_else(|| other.clone());
     let then = other.evaluate_with(&mut state.cad_ops.lock().unwrap()).body;
@@ -1771,7 +1814,7 @@ pub async fn cad_face_ref(app: AppHandle, face: usize) -> Result<FaceRef, String
 }
 
 fn face_ref_impl(state: &AppState, face: usize) -> Result<FaceRef, String> {
-    evaluate(state)?;
+    ensure_evaluated(state)?;
     let cache = state.cad_cache.lock().unwrap();
     cache.as_ref().and_then(|c| c.eval.face_ref(face)).ok_or_else(|| "Esa cara no existe".to_string())
 }
@@ -1782,7 +1825,7 @@ pub async fn cad_edge_ref(app: AppHandle, edge: usize) -> Result<EdgeRef, String
 }
 
 fn edge_ref_impl(state: &AppState, edge: usize) -> Result<EdgeRef, String> {
-    evaluate(state)?;
+    ensure_evaluated(state)?;
     let cache = state.cad_cache.lock().unwrap();
     cache.as_ref().and_then(|c| c.eval.edge_ref(edge)).ok_or_else(|| "Esa arista no existe".to_string())
 }
@@ -1795,7 +1838,7 @@ pub async fn cad_feature_faces(app: AppHandle, feature: u32) -> Result<Vec<usize
 }
 
 fn feature_faces_impl(state: &AppState, feature: u32) -> Result<Vec<usize>, String> {
-    evaluate(state)?;
+    ensure_evaluated(state)?;
     let cache = state.cad_cache.lock().unwrap();
     let Some(c) = cache.as_ref() else { return Ok(Vec::new()) };
     Ok(c.eval.face_tags.iter().enumerate().filter(|(_, ts)| ts.iter().any(|t| t.feature.0 == feature)).map(|(f, _)| f).collect())
@@ -1808,7 +1851,7 @@ pub async fn cad_face_edges(app: AppHandle, face: usize) -> Result<Vec<usize>, S
 }
 
 fn face_edges_impl(state: &AppState, face: usize) -> Result<Vec<usize>, String> {
-    evaluate(state)?;
+    ensure_evaluated(state)?;
     let cache = state.cad_cache.lock().unwrap();
     let body = cache.as_ref().and_then(|c| c.eval.body.as_ref()).ok_or("Todavía no hay un sólido")?;
     let pairs = body.edge_face_pairs().map_err(|e| e.to_string())?;
@@ -1823,7 +1866,7 @@ pub async fn cad_vertex_spec(app: AppHandle, point: [f64; 3]) -> Result<cad_mode
 }
 
 fn vertex_spec_impl(state: &AppState, point: [f64; 3]) -> Result<cad_model::PointSpec, String> {
-    evaluate(state)?;
+    ensure_evaluated(state)?;
     let cache = state.cad_cache.lock().unwrap();
     let eval = &cache.as_ref().ok_or("No hay diseño")?.eval;
     let body = eval.body.as_ref().ok_or("Todavía no hay un sólido")?;
@@ -1860,7 +1903,7 @@ pub async fn cad_project_edge(app: AppHandle, edge: usize, plane: cad_model::Pla
 }
 
 fn project_edge_impl(state: &AppState, edge: usize, plane: &cad_model::Plane) -> Result<ProjectedEdge, String> {
-    evaluate(state)?;
+    ensure_evaluated(state)?;
     let cache = state.cad_cache.lock().unwrap();
     let eval = &cache.as_ref().ok_or("No hay sólido")?.eval;
     let body = eval.body.as_ref().ok_or("No hay sólido")?;
@@ -1880,7 +1923,7 @@ pub async fn cad_project_face(app: AppHandle, face: usize, plane: cad_model::Pla
 }
 
 fn project_face_impl(state: &AppState, face: usize, plane: &cad_model::Plane) -> Result<Vec<ProjectedEdge>, String> {
-    evaluate(state)?;
+    ensure_evaluated(state)?;
     let cache = state.cad_cache.lock().unwrap();
     let eval = &cache.as_ref().ok_or("No hay sólido")?.eval;
     let body = eval.body.as_ref().ok_or("No hay sólido")?;
@@ -1941,7 +1984,7 @@ pub async fn cad_project_sketch(app: AppHandle, feature: cad_model::FeatureId, p
 }
 
 fn project_sketch_impl(state: &AppState, feature: cad_model::FeatureId, plane: &cad_model::Plane) -> Result<Vec<ProjectedEntity>, String> {
-    evaluate(state)?;
+    ensure_evaluated(state)?;
     let cache = state.cad_cache.lock().unwrap();
     let eval = &cache.as_ref().ok_or("No hay diseño")?.eval;
     let r = eval.sketches.get(&feature).ok_or("Ese sketch no está calculado")?;
@@ -1971,7 +2014,7 @@ pub async fn cad_flat_pattern(app: AppHandle, part: Option<cad_model::PartId>) -
 }
 
 fn flat_pattern_impl(state: &AppState, part: Option<cad_model::PartId>) -> Result<cad_model::sheet::FlatPattern, String> {
-    evaluate_committed(state)?;
+    ensure_committed(state)?;
     let doc = state.cad_doc().unwrap_or_default();
     let cache = state.cad_cache.lock().unwrap();
     let eval = &cache.as_ref().ok_or("No hay sólido")?.eval;
@@ -2016,7 +2059,7 @@ pub async fn cad_edge_seat(app: AppHandle, edge: usize) -> Result<Seat, String> 
 
 fn edge_seat_impl(state: &AppState, edge: usize) -> Result<Seat, String> {
     use cad_model::geom::{add, cross, dot, normalize, scale};
-    evaluate(state)?;
+    ensure_evaluated(state)?;
     let cache = state.cad_cache.lock().unwrap();
     let body = cache.as_ref().and_then(|c| c.eval.body.as_ref()).ok_or("No hay sólido")?;
     let info = body.edge_info(edge).map_err(|e| e.to_string())?;
@@ -2050,7 +2093,7 @@ pub async fn cad_sketch_x(app: AppHandle, feature: u32, x_axis: Option<cad_model
 }
 
 fn sketch_x_impl(state: &AppState, feature: u32, x_axis: Option<&cad_model::AxisSpec>) -> Result<[f64; 3], String> {
-    evaluate(state)?;
+    ensure_evaluated(state)?;
     let cache = state.cad_cache.lock().unwrap();
     let c = cache.as_ref().ok_or("el diseño no está calculado")?;
     c.eval.sketch_x(cad_model::FeatureId(feature), x_axis)
@@ -2062,7 +2105,7 @@ pub async fn cad_resolve_refs(app: AppHandle, faces: Vec<FaceRef>, edges: Vec<Ed
 }
 
 fn resolve_refs_impl(state: &AppState, faces: &[FaceRef], edges: &[EdgeRef]) -> Result<ResolvedRefs, String> {
-    evaluate(state)?;
+    ensure_evaluated(state)?;
     let cache = state.cad_cache.lock().unwrap();
     let Some(c) = cache.as_ref() else { return Ok(ResolvedRefs::default()) };
     Ok(ResolvedRefs {
@@ -2088,7 +2131,7 @@ pub async fn cad_face_info(app: AppHandle, face: usize) -> Result<FaceDescriptio
 
 fn face_info_impl(state: &AppState, face: usize) -> Result<FaceDescription, String> {
     {
-        evaluate(state)?;
+        ensure_evaluated(state)?;
         let cache = state.cad_cache.lock().unwrap();
         let body = cache.as_ref().and_then(|c| c.eval.body.as_ref()).ok_or("No hay sólido")?;
         let f = body.face_info(face).map_err(|e| e.to_string())?;
@@ -2372,7 +2415,7 @@ fn drawing_shapes(state: &AppState) -> Result<(cad_model::Shape, Vec<(u32, cad_m
         };
         return Ok((body, pieces));
     }
-    evaluate_committed(state)?;
+    ensure_committed(state)?;
     let cache = state.cad_cache.lock().unwrap();
     let ev = &cache.as_ref().ok_or("El diseño todavía no tiene un sólido")?.eval;
     let body = ev.body.clone().ok_or("El diseño todavía no tiene un sólido")?;
@@ -2641,7 +2684,7 @@ fn measure_impl(state: &AppState, items: &[cad_model::MeasureItem]) -> Result<ca
         };
         return cad_model::measure(&all, items);
     }
-    evaluate(state)?;
+    ensure_evaluated(state)?;
     let cache = state.cad_cache.lock().unwrap();
     let eval = &cache.as_ref().ok_or("No hay sólido")?.eval;
     let body = eval.body.as_ref().ok_or("No hay sólido")?;
@@ -2665,7 +2708,7 @@ fn body_scene(state: &AppState, name: &str) -> Result<Scene, String> {
 
 /// Escena para exportar: una malla por pieza con su nombre (o solo `only`).
 fn parts_scene(state: &AppState, name: &str, only: Option<cad_model::PartId>) -> Result<Scene, String> {
-    evaluate_committed(state)?;
+    ensure_committed(state)?;
     let doc = state.cad_doc().unwrap_or_default();
     let cache = state.cad_cache.lock().unwrap();
     parts_scene_of(&doc, &cache.as_ref().ok_or("El diseño todavía no tiene un sólido")?.eval, name, only)
@@ -2864,7 +2907,7 @@ fn export_impl(state: &AppState, path: &str, format: &str, part: Option<cad_mode
     let (doc, ev): (&Document, &cad_model::Evaluation) = match &comp {
         Some((d, e, _)) => (d, e),
         None => {
-            evaluate_committed(state)?;
+            ensure_committed(state)?;
             doc_owned = state.cad_doc().unwrap_or_default();
             guard = state.cad_cache.lock().unwrap();
             (&doc_owned, &guard.as_ref().ok_or("El diseño todavía no tiene un sólido")?.eval)
@@ -2950,7 +2993,7 @@ fn export_print_impl(state: &AppState, path: &str, format: &str) -> Result<Print
         "stl" => false,
         other => return Err(format!("Para imprimir se exporta en STL o 3MF, no en {other}")),
     };
-    evaluate_committed(state)?;
+    ensure_committed(state)?;
     let doc = state.cad_doc().ok_or("No hay un diseño abierto")?;
     // El escaneo como está (mm, Z arriba como el diseño)
     let skin = with_scan(state, |scan| Ok((scan.mesh.vertices.iter().map(|p| p.map(|c| c as f32)).collect::<Vec<_>>(), scan.mesh.triangles.clone())))
@@ -3083,7 +3126,7 @@ pub async fn cad_export_assembly_animation(
 fn export_assembly_animation_impl(state: &AppState, path: &str, mate: u32, var: cad_model::assembly::SweepVar, from: f64, to: f64, frames: usize, fps: f64) -> Result<u64, String> {
     let doc = state.cad_doc().ok_or("No hay un diseño abierto")?;
     let asm = doc.assembly.clone().ok_or("El diseño no tiene ensamble")?;
-    evaluate_committed(state)?;
+    ensure_committed(state)?;
     let cache = state.cad_cache.lock().unwrap();
     let ev = &cache.as_ref().ok_or("El diseño todavía no tiene un sólido")?.eval;
     let sweep = cad_model::assembly::sweep(&asm, mate, var, from, to, frames.clamp(2, 600))?;
