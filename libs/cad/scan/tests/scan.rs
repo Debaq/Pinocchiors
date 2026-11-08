@@ -883,6 +883,7 @@ fn scan_free_surface_closes_into_a_solid() {
             boundary: zone.boundary.clone(),
             interior: zone.interior.clone(),
             close_plane: close,
+            grid: zone.grid.clone(),
         })
     };
     // Solo la superficie: una pieza sin volumen

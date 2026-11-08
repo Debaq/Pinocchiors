@@ -3131,7 +3131,12 @@ impl Ctx<'_> {
                     Shape::wire(&lines).map_err(err)
                 };
                 let wire = ring(&sf.boundary)?;
-                let face = Shape::fill(&[(wire.clone(), None)], &sf.interior).map_err(err)?;
+                // Por la red de la piel (Gordon) si la hay; si falla, el relleno
+                let face = match &sf.grid {
+                    Some(g) => Shape::grid_face(&g.points, g.rows, g.cols, g.step, &sf.boundary).or_else(|_| Shape::fill(&[(wire.clone(), None)], &sf.interior)),
+                    None => Shape::fill(&[(wire.clone(), None)], &sf.interior),
+                }
+                .map_err(err)?;
                 let shape = if let Some(plane) = &sf.close_plane {
                     let n = normalize(plane.normal);
                     let flat: Vec<P3> = sf.boundary.iter().map(|p| sub(*p, scale(n, dot(sub(*p, plane.origin), n)))).collect();

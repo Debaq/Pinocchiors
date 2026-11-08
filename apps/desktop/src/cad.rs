@@ -112,8 +112,8 @@ pub struct ScanCache {
     pub mm_per_unit: f64,
     /// Referencias ajustadas contra este escaneo (por el JSON de su `ScanFit`)
     pub fits: Mutex<HashMap<String, Option<cad_scan::ScanGeom>>>,
-    /// Zonas libres ajustadas (borde, puntos de adentro) por el JSON de su semilla y ángulo
-    pub zones: Mutex<HashMap<String, Option<(Vec<P3>, Vec<P3>)>>>,
+    /// Zonas libres ajustadas (borde, puntos de adentro, red) por el JSON de su semilla y ángulo
+    pub zones: Mutex<HashMap<String, Option<(Vec<P3>, Vec<P3>, Option<cad_model::ScanGrid>)>>>,
     /// Caminos sobre la piel ya trazados (por el JSON de sus semillas)
     pub paths: Mutex<HashMap<String, Option<Vec<P3>>>>,
     /// Cuerpos del escaneo preparados (por holgura, espesor y triángulos)
@@ -370,11 +370,11 @@ fn fit_scan_references(state: &AppState, doc: &Document) -> Option<Document> {
                             let (t, _) = scan.mesh.locate(&sf.seed)?;
                             let mut z = scan.mesh.free_zone(t, sf.angle, 150)?;
                             z.fit_surface(&scan.mesh)?;
-                            Some((z.boundary, z.interior))
+                            Some((z.boundary, z.interior, z.grid))
                         })
                         .clone();
-                    if let Some((b, i)) = zone {
-                        (sf.boundary, sf.interior) = (b, i);
+                    if let Some((b, i, g)) = zone {
+                        (sf.boundary, sf.interior, sf.grid) = (b, i, g);
                     }
                     if let Some(seed) = &sf.close
                         && let Some((t, _)) = scan.mesh.locate(seed)
@@ -3794,6 +3794,7 @@ fn scan_add_impl(state: &AppState, feature: ScanFeature, options: ScanPickOption
                         boundary: zone.boundary,
                         interior: zone.interior,
                         close_plane,
+                        grid: zone.grid,
                     };
                     vec![(FeatureKind::ScanSurface(surface), Some("Superficie libre del escaneo".to_string()))]
                 }

@@ -85,6 +85,7 @@ CadShape* cad_make_thread_trapezoid(const double* o, const double* d, const doub
 CadShape* cad_thicken(const CadShape* f, double t) { (void)f; (void)t; FAIL_PTR; }
 CadShape* cad_offset_shape(const CadShape* s, double d) { (void)s; (void)d; FAIL_PTR; }
 CadShape* cad_fill(const CadShape* const* e, const CadShape* const* f, int32_t n, const double* p, int32_t np) { (void)e; (void)f; (void)n; (void)p; (void)np; FAIL_PTR; }
+CadShape* cad_grid_face(const double* g, int32_t r, int32_t c, int32_t s, const double* b, int32_t nb) { (void)g; (void)r; (void)c; (void)s; (void)b; (void)nb; FAIL_PTR; }
 CadShape* cad_sew(const CadShape* const* s, int32_t n, double t, int32_t solid) { (void)s; (void)n; (void)t; (void)solid; FAIL_PTR; }
 CadShape* cad_split_by(const CadShape* s, const CadShape* const* t, int32_t n) { (void)s; (void)t; (void)n; FAIL_PTR; }
 CadShape* cad_draft_prism(const CadShape* f, double h, double a) { (void)f; (void)h; (void)a; FAIL_PTR; }

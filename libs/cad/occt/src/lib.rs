@@ -958,6 +958,19 @@ impl Shape {
         wrap(unsafe { ffi::cad_fill(edges.as_ptr(), faces.as_ptr(), edges.len() as i32, pts.as_ptr(), points.len() as i32) })
     }
 
+    /// Superficie por una red de puntos `rows × cols` (fila a fila) recortada
+    /// por el borde cerrado. Con OCCT 8 es una superficie de Gordon por las
+    /// curvas de cada `step` filas y columnas (cada una por todos los puntos de
+    /// su fila o columna); antes, una B-spline por la grilla.
+    pub fn grid_face(grid: &[P3], rows: usize, cols: usize, step: usize, boundary: &[P3]) -> Result<Shape> {
+        if grid.len() != rows * cols {
+            return Err(Error("superficie por red: la grilla no tiene rows × cols puntos".into()));
+        }
+        let g: Vec<f64> = grid.iter().flatten().copied().collect();
+        let b: Vec<f64> = boundary.iter().flatten().copied().collect();
+        wrap(unsafe { ffi::cad_grid_face(g.as_ptr(), rows as i32, cols as i32, step as i32, b.as_ptr(), boundary.len() as i32) })
+    }
+
     /// Parte la forma con las herramientas (caras, superficies o sólidos); el
     /// resultado tiene todos los pedazos (con historia, ver `with_history`).
     pub fn split_by(&self, tools: &[Shape]) -> Result<Shape> {

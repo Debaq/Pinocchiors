@@ -915,6 +915,20 @@ pub struct ScanSurface {
     pub interior: Vec<P3>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub close_plane: Option<Plane>,
+    /// Red de puntos de la piel: si está, la superficie va por la red (Gordon en
+    /// OCCT 8) recortada por el borde, en vez del relleno por `interior`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grid: Option<ScanGrid>,
+}
+
+/// Grilla `rows × cols` de puntos de la piel (fila a fila): las curvas de la
+/// superficie van cada `step` filas y columnas.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScanGrid {
+    pub rows: usize,
+    pub cols: usize,
+    pub step: usize,
+    pub points: Vec<P3>,
 }
 
 fn scan_surface_angle() -> f64 {

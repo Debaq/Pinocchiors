@@ -129,6 +129,10 @@
 #include <ShapeFix_Shape.hxx>
 #include <Standard_Failure.hxx>
 #include <Standard_Version.hxx>
+#include <GeomAPI_PointsToBSplineSurface.hxx>
+#if OCC_VERSION_HEX >= 0x080000
+#include <GeomFill_Gordon.hxx>
+#endif
 #include <TColgp_HArray1OfPnt.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
@@ -3012,6 +3016,70 @@ CadShape* cad_fill(const CadShape* const* edges, const CadShape* const* faces, i
         fill.Build();
         if (!fill.IsDone()) throw Standard_Failure("el borde no se pudo rellenar (¿está cerrado?)");
         return wrap(fill.Shape());
+    });
+}
+
+// Superficie por una red de puntos de la piel (rows × cols, fila a fila),
+// recortada por el borde cerrado (polilínea). Con OCCT 8, Gordon: perfiles y
+// guías interpolados cada `step` filas/columnas, cada curva por todos los puntos
+// de su fila o columna. Antes de la 8, B-spline por la grilla.
+CadShape* cad_grid_face(const double* grid, int32_t rows, int32_t cols, int32_t step, const double* boundary,
+                        int32_t nb) {
+    return guard("superficie por red", (CadShape*)nullptr, [&] {
+        if (rows < 2 || cols < 2 || step < 1 || (rows - 1) % step || (cols - 1) % step)
+            throw Standard_Failure("la red de puntos no es una grilla");
+        if (nb < 3) throw Standard_Failure("el borde tiene menos de 3 puntos");
+        auto at = [&](int r, int c) { return pnt(grid + 3 * ((size_t)r * cols + c)); };
+        Handle(Geom_Surface) surf;
+#if OCC_VERSION_HEX >= 0x080000
+        {
+            auto curve = [&](bool row, int k) -> Handle(Geom_Curve) {
+                int n = row ? cols : rows;
+                Handle(TColgp_HArray1OfPnt) a = new TColgp_HArray1OfPnt(1, n);
+                for (int i = 0; i < n; i++) a->SetValue(i + 1, row ? at(k, i) : at(i, k));
+                GeomAPI_Interpolate in(a, Standard_False, 1e-7);
+                in.Perform();
+                if (!in.IsDone()) throw Standard_Failure("una curva de la red no se pudo interpolar");
+                return in.Curve();
+            };
+            int np = (rows - 1) / step + 1, ng = (cols - 1) / step + 1;
+            NCollection_Array1<Handle(Geom_Curve)> prof(1, np), guid(1, ng);
+            for (int i = 0; i < np; i++) prof(i + 1) = curve(true, i * step);
+            for (int j = 0; j < ng; j++) guid(j + 1) = curve(false, j * step);
+            GeomFill_Gordon g;
+            g.Init(prof, guid, 1e-4);
+            g.Perform();
+            if (!g.IsDone()) {
+                g.SetApproximationMode(GeomFill_Gordon::ApproximationMode::AllowApproximateFallback);
+                g.Perform();
+            }
+            if (g.IsDone()) surf = g.Surface();
+        }
+#endif
+        if (surf.IsNull()) {
+            TColgp_Array2OfPnt pts(1, rows, 1, cols);
+            for (int r = 0; r < rows; r++)
+                for (int c = 0; c < cols; c++) pts(r + 1, c + 1) = at(r, c);
+            GeomAPI_PointsToBSplineSurface ap;
+            ap.Interpolate(pts);
+            if (!ap.IsDone()) throw Standard_Failure("la red no da una superficie");
+            surf = ap.Surface();
+        }
+        // Borde: segmentos rectos; sus curvas sobre la superficie las agrega ShapeFix
+        BRepBuilderAPI_MakePolygon poly;
+        for (int32_t k = 0; k < nb; k++) poly.Add(pnt(boundary + 3 * k));
+        poly.Close();
+        if (!poly.IsDone()) throw Standard_Failure("el borde no forma un lazo");
+        BRepBuilderAPI_MakeFace mf(surf, poly.Wire(), Standard_True);
+        if (!mf.IsDone()) throw Standard_Failure("el borde no recorta la superficie");
+        ShapeFix_Face fix(mf.Face());
+        fix.FixOrientationMode() = 1;
+        fix.Perform();
+        ShapeFix_Shape all(fix.Face());
+        all.Perform();
+        TopoDS_Shape r = all.Shape();
+        if (!BRepCheck_Analyzer(r).IsValid()) throw Standard_Failure("la superficie recortada no es válida");
+        return wrap(r);
     });
 }
 

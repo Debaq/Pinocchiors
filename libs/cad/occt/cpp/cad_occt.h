@@ -248,6 +248,10 @@ CadShape* cad_offset_shape(const CadShape* s, double distance);
    tangente a esa cara a lo largo de la arista i) y pasa por los puntos. */
 CadShape* cad_fill(const CadShape* const* edges, const CadShape* const* faces, int32_t n, const double* points,
                    int32_t n_points);
+// Superficie por una red de puntos (rows × cols, fila a fila) recortada por un
+// borde cerrado de nb puntos. OCCT 8: Gordon con curvas cada `step` filas/columnas.
+CadShape* cad_grid_face(const double* grid, int32_t rows, int32_t cols, int32_t step, const double* boundary,
+                        int32_t nb);
 /* Une superficies por sus bordes; con `solid`, cada concha cerrada se vuelve sólido. */
 CadShape* cad_sew(const CadShape* const* shapes, int32_t n, double tolerance, int32_t solid);
 /* Parte `s` con las herramientas (caras, superficies o sólidos): todos los pedazos. */
