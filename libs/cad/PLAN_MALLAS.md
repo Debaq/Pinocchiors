@@ -99,9 +99,10 @@ Se compila igual para Linux, Windows, macOS y Android: sin C++, sin cmake.
   10,3 s → **0,66 s**, sólido válido, mismo volumen; resta manifold 0,8 s.
   Pruebas OK con ese C++ (`tests_cpp_nuevo.txt`): mesh_bool 5, mesh_parts 3,
   cad-occt 31, cad-scan 4 + relief 3 + scan 21. No repetir.
-- Siguiente: compilar la app release local, apuntar el conector MCP a
-  ~/.cargo-target/release/pinocchio-app, `/mcp`, y probar el grabado del hueso
-  (reparar → detalle completo → relieve restado) midiendo el tiempo.
+- Siguiente: la app NO se compila en el PC (el usuario: eso lo hace GitHub).
+  Push + release Linux, descargar el binario, apuntar el conector MCP a él,
+  `/mcp`, y probar el grabado del hueso (reparar → detalle completo → relieve
+  restado) midiendo el tiempo.
 - (Plan original de M4, para referencia) para piezas de malla, en apps/desktop/src/cad.rs, volumen /
   masa / validez desde los triángulos (no OCCT) y la vista (`encode_view_mesh`)
   con los triángulos de la pieza (si las caras de `from_mesh` siguen el orden de
