@@ -111,6 +111,10 @@ Se compila igual para Linux, Windows, macOS y Android: sin C++, sin cmake.
   todavía no tiene un sólido»: el conector usaba como escaneo el objeto activo
   y el objeto nuevo lo cambiaba. Arreglado con `pin_scan` (mcp/tools/mesh.rs,
   regla de la app); falta probarlo en la próxima release.
+- Misma release, mallas rotas (no repetir): caja sin tapa → tapa PLANA (30 mm,
+  48 000 mm³ exactos); cuerpos cruzados → la reparación normal avisa 225 cruces
+  (antes «sana»); arista compartida → reparada, guardada en STL y reabierta
+  sigue sana (antes se rompía); hueso reparado → 1 pieza (bota 10 trocitos).
 - (Plan original de M4, para referencia) para piezas de malla, en apps/desktop/src/cad.rs, volumen /
   masa / validez desde los triángulos (no OCCT) y la vista (`encode_view_mesh`)
   con los triángulos de la pieza (si las caras de `from_mesh` siguen el orden de
