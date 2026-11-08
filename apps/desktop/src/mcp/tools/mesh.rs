@@ -67,6 +67,43 @@ pub(super) fn dims(d: &Value) -> String {
     format!("{} × {} × {} mm", num(d[0].as_f64().unwrap_or(0.0)), num(d[1].as_f64().unwrap_or(0.0)), num(d[2].as_f64().unwrap_or(0.0)))
 }
 
+/// Las posiciones que la app da en sus ejes internos (Y arriba, como glTF)
+/// pasadas a los del conector (Z arriba, frente hacia −Y): `center_of_mass` y
+/// las cajas `bounding_box` ({min, max}) en cualquier nivel. Las medidas
+/// (`dimensions`) ya vienen en X, Y, Z.
+pub(super) fn z_up(mut v: Value) -> Value {
+    fn point(p: &Value) -> Option<[f64; 3]> {
+        let a = p.as_array().filter(|a| a.len() == 3)?;
+        Some([a[0].as_f64()?, a[1].as_f64()?, a[2].as_f64()?])
+    }
+    fn walk(v: &mut Value) {
+        match v {
+            Value::Object(map) => {
+                for (key, item) in map.iter_mut() {
+                    match key.as_str() {
+                        "center_of_mass" => {
+                            if let Some([x, y, z]) = point(item) {
+                                *item = json!([x, -z, y]);
+                            }
+                        }
+                        "bounding_box" => {
+                            if let (Some([x0, y0, z0]), Some([x1, y1, z1])) = (point(&item["min"]), point(&item["max"])) {
+                                item["min"] = json!([x0, -z1, y0]);
+                                item["max"] = json!([x1, -z0, y1]);
+                            }
+                        }
+                        _ => walk(item),
+                    }
+                }
+            }
+            Value::Array(items) => items.iter_mut().for_each(walk),
+            _ => {}
+        }
+    }
+    walk(&mut v);
+    v
+}
+
 /// Una línea con lo que quedó del modelo (vértices, triángulos, medidas, si es cerrado)
 pub(super) fn model_line(ctx: &Ctx) -> Result<(String, Value), Fail> {
     let a = ctx.call("analyze_print3d", json!({}))?;
@@ -235,7 +272,7 @@ fn import(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
     if let Some(answer) = ctx.session.backend.ask_with("import", json!({ "path": path, "textures": textures })) {
         let info = answer.map_err(Fail::new)?;
         let (line, a) = model_line(ctx)?;
-        return Ok(Output::new(format!("Imported {name} in the app as a new object: {line}"), json!({ "path": path, "info": info, "analysis": a })));
+        return Ok(Output::new(format!("Imported {name} in the app as a new object: {line}"), z_up(json!({ "path": path, "info": info, "analysis": a }))));
     }
     let info = new_object_with(ctx, &name, &format!("Import {name}"), || ctx.call("import_model", json!({ "path": path, "textures": textures })).map(|i| (i.clone(), i)))?;
     let (line, a) = model_line(ctx)?;
@@ -246,7 +283,7 @@ fn import(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
     if let Some(t) = info["textures"].as_array().filter(|t| !t.is_empty()) {
         extra.push(format!("Textures attached: {}.", t.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("; ")));
     }
-    Ok(Output::new(format!("Imported {name} as a new object: {line} {}", extra.join(" ")).trim().to_string(), json!({ "path": path, "info": info, "analysis": a })))
+    Ok(Output::new(format!("Imported {name} as a new object: {line} {}", extra.join(" ")).trim().to_string(), z_up(json!({ "path": path, "info": info, "analysis": a }))))
 }
 
 const FROM_PART: Tool = Tool {
@@ -284,7 +321,7 @@ fn from_part(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
     if let Some(answer) = ctx.session.backend.ask_with("use_part", json!({ "studio": tab, "part": part })) {
         answer.map_err(Fail::new)?;
         let (line, a) = model_line(ctx)?;
-        return Ok(Output::new(format!("The app shows the mesh of part \"{part_name}\" as the active object: {line}"), json!({ "tab": tab, "part": part, "analysis": a })));
+        return Ok(Output::new(format!("The app shows the mesh of part \"{part_name}\" as the active object: {line}"), z_up(json!({ "tab": tab, "part": part, "analysis": a }))));
     }
     let before = ctx.session.before_change()?;
     let done = (|| {
@@ -314,7 +351,7 @@ fn from_part(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
     }
     ctx.session.commit(&format!("Mesh of {part_name}"), before);
     let (line, a) = model_line(ctx)?;
-    Ok(Output::new(format!("Part \"{part_name}\" of tab \"{tab_name}\" is now the active mesh object: {line}"), json!({ "tab": tab, "part": part, "analysis": a })))
+    Ok(Output::new(format!("Part \"{part_name}\" of tab \"{tab_name}\" is now the active mesh object: {line}"), z_up(json!({ "tab": tab, "part": part, "analysis": a }))))
 }
 
 // ─── Mirar ──────────────────────────────────────────────────────────────────
@@ -361,7 +398,7 @@ fn info(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
     } else if let Some(n) = summary["other_objects"].as_u64().filter(|n| *n > 0) {
         lines.push(format!("Other scene objects: {n}."));
     }
-    let mut data = json!({ "analysis": analysis, "surface": remesh, "workspace": summary });
+    let mut data = z_up(json!({ "analysis": analysis, "surface": remesh, "workspace": summary }));
     if arg_bool(args, "diagnose") == Some(true) {
         let d = ctx.call("analyze_mesh", json!({ "config": { "check_self_intersections": arg_bool(args, "self_intersections") == Some(true) } }))?;
         lines.push(diagnosis(&d));
@@ -459,7 +496,7 @@ fn repair(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
     if r["rig_kept"] == true {
         text.push_str(" The rig moved to the repaired mesh.");
     }
-    Ok(Output::new(text, json!({ "repair": r, "analysis": a })))
+    Ok(Output::new(text, z_up(json!({ "repair": r, "analysis": a }))))
 }
 
 // ─── Remallar ───────────────────────────────────────────────────────────────
@@ -520,7 +557,7 @@ fn remesh(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
             num(s["deviation"]["mean_mm"].as_f64().unwrap_or(0.0)),
             if r["rig_kept"] == true { " The rig moved to the new mesh." } else { "" }
         ),
-        json!({ "remesh": r, "analysis": a }),
+        z_up(json!({ "remesh": r, "analysis": a })),
     ))
 }
 

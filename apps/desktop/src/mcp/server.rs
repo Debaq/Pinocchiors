@@ -189,8 +189,13 @@ impl Server {
                 }
                 let mut result = json!({ "content": content, "isError": false });
                 if protocol::has_structured_content(*self.version.lock().unwrap()) {
-                    if out.data.is_object() {
-                        result["structuredContent"] = out.data;
+                    if let Value::Object(mut data) = out.data {
+                        // Hay clientes (Claude Code) que muestran solo structuredContent y
+                        // descartan el texto: el resumen (o la guía de `help`) va también ahí
+                        if !out.text.is_empty() && !data.contains_key("summary") {
+                            data.insert("summary".into(), Value::String(out.text));
+                        }
+                        result["structuredContent"] = Value::Object(data);
                     }
                 } else if !out.data.is_null() {
                     // Clientes viejos: los datos van como texto

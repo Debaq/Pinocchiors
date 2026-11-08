@@ -439,3 +439,56 @@ mod tests {
         assert_eq!(d.connected_components, 2);
     }
 }
+
+/// Aparta un poco los vértices distintos que quedaron en el mismo lugar (al
+/// separar geometría non-manifold o al cortar cruces): cada copia se corre
+/// `gap` hacia el centro de sus propias caras. Sin esto, cualquiera que vuelva
+/// a soldar por posición (un STL guardado y abierto en otra app, o el diseño
+/// sobre el escaneo) junta los vértices y la falla reaparece.
+///
+/// Solo mira vértices a menos de `gap / 10`; el más bajo de cada grupo queda
+/// quieto. Devuelve cuántos movió.
+pub fn separate_coincident(mesh: &mut TriMesh, gap: f64) -> usize {
+    if gap <= 0.0 || mesh.num_vertices() == 0 {
+        return 0;
+    }
+    let group = crate::analysis::weld::weld_map(&mesh.positions, gap * 0.1);
+    let mut sum = vec![Vector3::zero(); mesh.num_vertices()];
+    let mut count = vec![0u32; mesh.num_vertices()];
+    let mut used = vec![false; mesh.num_vertices()];
+    for t in &mesh.triangles {
+        let centre = (mesh.positions[t[0]] + mesh.positions[t[1]] + mesh.positions[t[2]]) / 3.0;
+        for &v in t {
+            sum[v] += centre;
+            count[v] += 1;
+            used[v] = true;
+        }
+    }
+    // Solo los grupos con más de un vértice usado
+    let mut users = vec![0u32; mesh.num_vertices()];
+    for v in 0..mesh.num_vertices() {
+        if used[v] {
+            users[group[v]] += 1;
+        }
+    }
+    let mut moved = 0;
+    let mut first = vec![false; mesh.num_vertices()];
+    for v in 0..mesh.num_vertices() {
+        let g = group[v];
+        if !used[v] || users[g] < 2 {
+            continue;
+        }
+        if !first[g] {
+            first[g] = true;
+            continue;
+        }
+        let toward = sum[v] / count[v] as f64 - mesh.positions[v];
+        let len = toward.length();
+        if len > 0.0 && len.is_finite() {
+            // Nunca más de un cuarto del camino a sus caras
+            mesh.positions[v] += toward * (gap.min(len * 0.25) / len);
+            moved += 1;
+        }
+    }
+    moved
+}

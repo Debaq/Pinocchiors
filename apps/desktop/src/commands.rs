@@ -3816,11 +3816,9 @@ pub(crate) fn repair_mesh_impl(state: &AppState, config: &RepairConfigInput, on_
     })
     .map_err(|e| format!("Error en reparación: {e}"))?;
     report(on_progress, "analyze", 92, "Analizando resultado...");
-    // Tras unir, comprobar que no quedaron cruces
-    let analysis = RepairAnalysisConfig {
-        check_self_intersections: repair_config.resolve_intersections,
-        ..RepairAnalysisConfig::default()
-    };
+    // Siempre contar los cruces: sin eso, dos cuerpos que se atraviesan salían
+    // como «sana» (el panel avisa y sugiere «Unir cuerpos solapados»)
+    let analysis = RepairAnalysisConfig { check_self_intersections: true, ..RepairAnalysisConfig::default() };
     let mut diagnostics = pinocchio_repair::analyze(&mesh, &analysis);
     let mut summary = summary;
     // Una sola pieza que no quedó cerrada: casi siempre son cruces de la malla

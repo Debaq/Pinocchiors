@@ -1172,6 +1172,21 @@ impl Ctx<'_> {
             .map(|s| Ok((s.mass().map(|m| m.volume).unwrap_or(0.0), Tagged { tags: tags_of(s)?, shape: s.clone() })))
             .collect::<R<_>>()?;
         pieces.sort_by(|a, b| b.0.total_cmp(&a.0));
+        // Astillas del corte (un grabado sobre un escaneo dejaba cuatro de
+        // 0,0004 mm³ como piezas aparte): fuera las de menos de una millonésima
+        // de la mayor
+        let largest = pieces[0].0.abs();
+        pieces.retain(|(v, _)| v.abs() >= largest * 1e-6);
+        if pieces.len() <= solids_before {
+            // Quedó lo que había: la pieza sigue siendo la misma, sin las astillas
+            if pieces.len() == 1 {
+                let (_, t) = pieces.pop().unwrap();
+                let p = &mut self.ev.parts[i];
+                p.shape = t.shape;
+                p.tags = t.tags;
+            }
+            return Ok(());
+        }
         self.replace_parts(feature, vec![i], pieces.into_iter().map(|(_, t)| t).collect());
         Ok(())
     }
@@ -2194,7 +2209,12 @@ impl Ctx<'_> {
         let skin = if use_scan {
             scan_solid(r.mesh.as_ref())?
         } else {
-            self.body().map_err(|_| "no hay escaneo ni sólido sobre el que poner el relieve".to_string())?.clone()
+            // Sin sólido y con un escaneo que no se pudo preparar: el motivo del escaneo
+            // (p. ej. «tiene fallas: repáralo»), no un «no hay escaneo» que confunde
+            let scan_error = r.mesh.as_ref().and_then(|m| m.error.clone());
+            self.body()
+                .map_err(|_| scan_error.unwrap_or_else(|| "no hay escaneo ni sólido sobre el que poner el relieve".to_string()))?
+                .clone()
         };
         // Para envolver sobre el sólido: su teselado hace de malla
         let body_mesh;
@@ -2297,7 +2317,19 @@ impl Ctx<'_> {
             }
         }
         let h = r.height;
-        let shape = match (r.mode, r.inward) {
+        // Pareja sobre un escaneo grande con poca altura: la carcasa de todo el
+        // escaneo no se puede armar (un grabado de 1 mm en un hueso de 12 cm pedía
+        // al menos 1,2 mm). Para ese trozo, correr la piel a lo largo de la normal
+        // del sketch da casi lo mismo
+        let shell_error = (r.mode == ReliefMode::Even && use_scan).then(|| r.shell.as_ref().and_then(|m| m.error.clone())).flatten();
+        let mode = match shell_error {
+            Some(e) => {
+                self.warn(format!("espesor parejo no disponible ({e}): se usó «a lo largo de la normal»"));
+                ReliefMode::Along
+            }
+            None => r.mode,
+        };
+        let shape = match (mode, r.inward) {
             // Pareja: la carcasa de la altura, bajo las regiones, lo primero que se ve
             (ReliefMode::Even, inward) => {
                 // La carcasa: la que pone la app (escaneo) o el sólido corrido la altura

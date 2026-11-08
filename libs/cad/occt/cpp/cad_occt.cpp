@@ -431,7 +431,13 @@ TopoDS_Shape boolean_op(const TopoDS_Shape& a, const TopoDS_Shape& b, int32_t op
         algo.SetRunParallel(Standard_True);
         algo.Build();
         if (algo.HasErrors() || !algo.IsDone()) throw Standard_Failure("la operación booleana falló");
-        algo.SimplifyResult();
+        // Unir caras del mismo plano no sirve en sólidos hechos de mallas (un
+        // escaneo en «Detalle completo», ~100 000 triángulos) y ahí era lo más
+        // lento: un grabado tardaba minutos
+        TopTools_IndexedMapOfShape fa, fb;
+        TopExp::MapShapes(a, TopAbs_FACE, fa);
+        TopExp::MapShapes(b, TopAbs_FACE, fb);
+        if (fa.Extent() + fb.Extent() <= 20000) algo.SimplifyResult();
         TopoDS_Shape r = algo.Shape();
         record(algo, {a, b}, r);
         return r;

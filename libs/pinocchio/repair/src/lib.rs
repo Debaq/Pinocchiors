@@ -140,6 +140,8 @@ pub fn repair_trimesh_with_progress(
     // vueltas ya no distingue adentro de afuera (un hueso escaneado con 581
     // cruces y 14 aristas así quedaba sin unir; unido antes, cerrado). Al
     // final se vuelve a pasar por lo que dejen la separación y el relleno.
+    // Piezas antes de unir cruces: lo que sobre al final son restos del corte
+    let pieces_before = if config.resolve_intersections { cleanup::count_components(mesh) } else { 0 };
     if config.resolve_intersections {
         progress(0.28, "Uniendo cuerpos solapados");
         let report = intersect::resolve_self_intersections(mesh);
@@ -212,7 +214,21 @@ pub fn repair_trimesh_with_progress(
         }
     }
 
+    if config.resolve_intersections && summary.intersections_cut > 0 {
+        // Trocitos sueltos que deja el corte (un hueso de una pieza quedaba en
+        // 11): fuera los de sobra, si son chicos (< 1 % del área de la mayor)
+        let before = mesh.num_faces();
+        let (debris, _) = cleanup::remove_cut_debris(mesh, pieces_before, 0.01);
+        summary.components_removed += debris;
+        summary.faces_removed += before - mesh.num_faces();
+    }
+
     mesh.remove_unreferenced_vertices();
+    if config.fix_non_manifold || config.resolve_intersections {
+        // 1e-5 de la diagonal (≈ 2 µm en un hueso de 18 cm): invisible, pero
+        // más que el redondeo de un STL (float) y que la soldadura del diseño
+        manifold::separate_coincident(mesh, diagonal * 1e-5);
+    }
     progress(1.0, "Listo");
     Ok(summary)
 }
@@ -285,6 +301,37 @@ mod tests {
         assert!(mesh.integrity_check().is_ok());
         assert!(mesh.is_closed());
         assert!(analyze(&mesh, &AnalysisConfig::default()).is_healthy());
+    }
+
+    /// Dos cubos que se tocan solo por una arista: al separarlos, las copias de
+    /// los vértices de esa arista no quedan en el mismo punto (si no, volver a
+    /// soldar por posición, como al guardar un STL, rehace la falla).
+    #[test]
+    fn split_vertices_do_not_stay_coincident() {
+        let cube = |o: [f64; 3]| {
+            let p: Vec<Vector3> = (0..8).map(|i| Vector3::new(o[0] + (i & 1) as f64, o[1] + ((i >> 1) & 1) as f64, o[2] + ((i >> 2) & 1) as f64)).collect();
+            let t = vec![
+                [0, 2, 1], [1, 2, 3], [4, 5, 6], [5, 7, 6], [0, 1, 4], [1, 5, 4],
+                [2, 6, 3], [3, 6, 7], [0, 4, 2], [2, 4, 6], [1, 3, 5], [3, 7, 5],
+            ];
+            (p, t)
+        };
+        let (mut positions, mut triangles) = cube([0.0, 0.0, 0.0]);
+        let (p2, t2) = cube([1.0, 1.0, 0.0]);
+        let base = positions.len();
+        positions.extend(p2);
+        triangles.extend(t2.into_iter().map(|t: [usize; 3]| t.map(|v| v + base)));
+        let mut m = TriMesh::new(positions, triangles);
+        repair_trimesh(&mut m, &RepairConfig::default()).unwrap();
+
+        let analysis = analyze_trimesh(&m, &AnalysisConfig::default());
+        assert_eq!(analysis.non_manifold_edges, 0);
+        let gap = m.diagonal() * 1e-6;
+        for a in 0..m.num_vertices() {
+            for b in a + 1..m.num_vertices() {
+                assert!((m.positions[a] - m.positions[b]).length() > gap, "vértices {a} y {b} en el mismo punto");
+            }
+        }
     }
 
     #[test]

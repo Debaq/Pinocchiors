@@ -232,6 +232,46 @@ pub fn remove_small_components(mesh: &mut TriMesh, ratio: Real) -> (usize, usize
     (removed_components, removed_faces)
 }
 
+/// Cuántas piezas (componentes conexas por aristas) tiene la malla.
+pub fn count_components(mesh: &TriMesh) -> usize {
+    let topo = EdgeTopology::build(&mesh.triangles);
+    topology::face_components(&topo, mesh.num_faces()).1
+}
+
+/// Restos de un corte: si la malla tiene más de `keep` piezas, quita las más
+/// chicas de sobra, pero solo las de área menor que `ratio` veces la mayor (una
+/// pieza de verdad nunca se pierde). Sirve tras unir cruces, que deja trocitos
+/// sueltos donde la superficie se cortaba consigo misma.
+///
+/// Devuelve `(piezas eliminadas, caras eliminadas)`.
+pub fn remove_cut_debris(mesh: &mut TriMesh, keep: usize, ratio: Real) -> (usize, usize) {
+    let topo = EdgeTopology::build(&mesh.triangles);
+    let (component, count) = topology::face_components(&topo, mesh.num_faces());
+    if count <= keep.max(1) {
+        return (0, 0);
+    }
+    let mut area = vec![0.0; count];
+    for (f, &c) in component.iter().enumerate() {
+        area[c] += mesh.face_area(f);
+    }
+    let largest = area.iter().cloned().fold(0.0, Real::max);
+    let mut order: Vec<usize> = (0..count).collect();
+    order.sort_by(|&a, &b| area[a].total_cmp(&area[b]));
+    let mut drop = vec![false; count];
+    let mut removed = 0;
+    for &c in order.iter().take(count - keep.max(1)) {
+        if area[c] < ratio * largest {
+            drop[c] = true;
+            removed += 1;
+        }
+    }
+    if removed == 0 {
+        return (0, 0);
+    }
+    let faces = mesh.retain_faces(|f, _| !drop[component[f]]);
+    (removed, faces)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

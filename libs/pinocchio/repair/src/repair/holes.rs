@@ -80,6 +80,7 @@ pub fn fill_holes_with_progress(
     }
     let mut new_vertices = Vec::new();
     let mut new_faces = Vec::new();
+    let mut flat: Vec<usize> = Vec::new();
 
     for (done, hole) in loops.iter().enumerate() {
         progress(done, loops.len());
@@ -87,10 +88,16 @@ pub fn fill_holes_with_progress(
             .find(hole.vertices[0], hole.vertices[1 % hole.vertices.len()])
             .map(|e| component_area[component[topo.faces(e)[0].face]])
             .unwrap_or(0.0);
+        let first_new = new_vertices.len();
         match fill_one(mesh, &topo, hole, piece, config, &mut sigma, &mut new_vertices) {
             Some(patch) => {
                 report.filled += 1;
                 new_faces.extend(patch);
+                // Borde plano (una pieza mecánica cortada, una taza sin tapa):
+                // la tapa queda plana; el fairing la abombaría para empalmar con las paredes
+                if is_flat_hole(mesh, &topo, &hole.vertices) {
+                    flat.extend_from_slice(&new_vertices[first_new..]);
+                }
             }
             None => report.skipped += 1,
         }
@@ -101,9 +108,46 @@ pub fn fill_holes_with_progress(
     mesh.triangles.extend(new_faces);
 
     if config.fair && !new_vertices.is_empty() {
-        fair(mesh, &new_vertices);
+        let free: Vec<usize> = if flat.is_empty() {
+            new_vertices
+        } else {
+            let flat: std::collections::HashSet<usize> = flat.into_iter().collect();
+            new_vertices.into_iter().filter(|v| !flat.contains(v)).collect()
+        };
+        if !free.is_empty() {
+            fair(mesh, &free);
+        }
     }
     report
+}
+
+/// Agujero de pieza mecánica, que se tapa plano: el borde está en un plano
+/// (hasta 1e-4 de su tamaño; normal de Newell) y las caras vecinas son paredes
+/// perpendiculares a él o caras en ese mismo plano. Un borde plano sobre una
+/// superficie que se va curvando (el casquete de una esfera) no cuenta: ahí
+/// el fairing sigue la curva.
+fn is_flat_hole(mesh: &TriMesh, topo: &EdgeTopology, loop_vertices: &[usize]) -> bool {
+    let n = loop_vertices.len();
+    if n < 3 {
+        return false;
+    }
+    let points: Vec<Vector3> = loop_vertices.iter().map(|&v| mesh.positions[v]).collect();
+    let centre = points.iter().fold(Vector3::zero(), |acc, &p| acc + p) / n as Real;
+    let mut normal = Vector3::zero();
+    for i in 0..n {
+        normal += (points[i] - centre).cross(&(points[(i + 1) % n] - centre));
+    }
+    let Some(normal) = normal.try_normalize() else { return false };
+    let size = points.iter().map(|p| (*p - centre).length()).fold(0.0, Real::max);
+    if !(size > 0.0) || !points.iter().all(|p| (*p - centre).dot(&normal).abs() <= 1e-4 * size) {
+        return false;
+    }
+    (0..n).all(|i| {
+        let Some(e) = topo.find(loop_vertices[i], loop_vertices[(i + 1) % n]) else { return false };
+        let Some(side) = mesh.face_cross(topo.faces(e)[0].face).try_normalize() else { return true };
+        let cos = side.dot(&normal).abs();
+        cos < 0.05 || cos > 0.999
+    })
 }
 
 /// Triangula y refina un agujero; devuelve las caras nuevas. `piece_area`
@@ -542,6 +586,23 @@ mod tests {
         ];
         let tris = triangulate(&pts, &[None; 4], |i, j| (i, j) == (0, 2)).unwrap();
         assert!(tris.iter().all(|t| !(t.contains(&0) && t.contains(&2))));
+    }
+
+    /// Caja sin tapa (paredes perpendiculares al borde): la tapa queda plana
+    /// aunque se refine y se haga fairing (antes salía abombada)
+    #[test]
+    fn flat_hole_of_a_box_stays_flat() {
+        let mut m = open_box();
+        // Más grande que un triángulo para que el refinamiento agregue vértices
+        for p in &mut m.positions {
+            *p *= 40.0;
+        }
+        let r = fill_holes(&mut m, &HoleFillConfig::default());
+        assert_eq!(r.filled, 1);
+        let worst = m.positions.iter().map(|p| p.z()).fold(Real::MIN, Real::max);
+        assert!((worst - 40.0).abs() < 1e-9, "la tapa se abombó hasta z = {worst}");
+        let d = analyze_trimesh(&m, &AnalysisConfig::default());
+        assert!(d.is_closed && (d.volume - 64_000.0).abs() < 1e-6, "{d:#?}");
     }
 
     #[test]
