@@ -3821,7 +3821,25 @@ pub(crate) fn repair_mesh_impl(state: &AppState, config: &RepairConfigInput, on_
         check_self_intersections: repair_config.resolve_intersections,
         ..RepairAnalysisConfig::default()
     };
-    let diagnostics = pinocchio_repair::analyze(&mesh, &analysis);
+    let mut diagnostics = pinocchio_repair::analyze(&mesh, &analysis);
+    let mut summary = summary;
+    // Una sola pieza que no quedó cerrada: casi siempre son cruces de la malla
+    // consigo misma (un escaneo con zonas finas). Se reintenta desde la original
+    // uniéndolos; con varias piezas no, porque borraría las internas puestas a
+    // propósito (ojos dentro de una cabeza). Se queda con el que salga cerrado.
+    if !diagnostics.is_closed && diagnostics.connected_components == 1 && !repair_config.resolve_intersections {
+        report(on_progress, "repair", 70, "No quedó cerrada: uniendo los cruces...");
+        let mut retry = original_mesh.clone();
+        let config = pinocchio_repair::RepairConfig { resolve_intersections: true, ..repair_config.clone() };
+        if let Ok(s2) = pinocchio_repair::repair_all(&mut retry, &config) {
+            let d2 = pinocchio_repair::analyze(&retry, &RepairAnalysisConfig { check_self_intersections: true, ..RepairAnalysisConfig::default() });
+            if d2.is_closed {
+                mesh = retry;
+                diagnostics = d2;
+                summary = s2;
+            }
+        }
+    }
 
     // Reconstruir Scene desde la malla reparada (la topología cambió), con la
     // piel del original. La malla queda en el orden de vértices de la escena

@@ -31,9 +31,7 @@ fn skin(offset: f64, thickness: f64, hash: u64) -> ScanBodyMesh {
     }
     let t = Shape::sphere([0.0; 3], R).unwrap().tessellate(0.02, 0.05).unwrap();
     let scan = ScanMesh::new(&t.positions, &t.triangles);
-    let t0 = std::time::Instant::now();
     let b = prepare_body(&scan.vertices, &scan.triangles, &BodyOptions { faces: 12000, offset, thickness }).unwrap();
-    eprintln!("TIEMPO piel offset={offset} espesor={thickness}: {:.1} s", t0.elapsed().as_secs_f64());
     let m = ScanBodyMesh { hash: hash ^ key.1.rotate_left(7), data: std::sync::Arc::new((b.vertices, b.triangles)), error: None };
     cache.lock().unwrap().insert(key, m.clone());
     m
@@ -60,9 +58,7 @@ fn relief(z: f64, mode: ReliefMode, inward: bool, height: f64) -> (f64, Evaluati
         shell,
         skin: None,
     }));
-    let t0 = std::time::Instant::now();
     let ev = doc.evaluate();
-    eprintln!("TIEMPO relieve {mode:?} adentro={inward}: {:.1} s", t0.elapsed().as_secs_f64());
     assert!(ev.errors().is_empty(), "{mode:?} adentro={inward}: {:?}", ev.errors());
     let v = ev.body.as_ref().unwrap().mass().unwrap().volume;
     (v, ev)
@@ -141,9 +137,16 @@ fn wrap_keeps_lengths_on_the_skin() {
         assert!(ev.errors().is_empty(), "{:?}", ev.errors());
         ev.status[1].note.clone().unwrap_or_default()
     };
+    // El ancho sobre la piel que informa el relieve (lo que sigue a «sobre la piel »)
+    let width = |note: &str| -> f64 {
+        let rest = note.split("sobre la piel ").nth(1).unwrap_or_else(|| panic!("{note}"));
+        rest.split(' ').next().unwrap().replace(',', ".").parse().unwrap()
+    };
     let projected = run(ReliefMap::Project);
-    assert!(projected.contains("sobre la piel 20,9") || projected.contains("sobre la piel 21,0"), "{projected}");
+    let along = 2.0 * R * (10.0f64 / R).asin();
+    assert!((width(&projected) - along).abs() < 0.3, "{projected}");
     let wrapped = run(ReliefMap::Wrap { anchor: None, angle: 0.0 });
-    assert!(wrapped.contains("sobre la piel 20,0") || wrapped.contains("sobre la piel 19,9") || wrapped.contains("sobre la piel 20,1"), "{wrapped}");
+    // Envuelto mide 20 sobre la piel (1,5 %: una piel curva no se aplana sin estirar algo)
+    assert!((width(&wrapped) - 20.0).abs() < 0.3, "{wrapped}");
     assert!(wrapped.contains("envuelto"), "{wrapped}");
 }

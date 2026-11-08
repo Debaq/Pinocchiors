@@ -2159,6 +2159,11 @@ impl Ctx<'_> {
         } else {
             None
         };
+        // Rayos contra la piel por su malla (la del escaneo tal cual llega, o el teselado del sólido)
+        let rays = match r.mesh.as_ref().filter(|_| use_scan) {
+            Some(m) => MeshRay::new(m.data.0.clone(), m.data.1.clone()),
+            None => MeshRay::of_shape(&skin)?,
+        };
         let (mut faces, _, mut samples) = self.profile(r.sketch, &r.regions)?;
         let s = self.ev.sketches.get(&r.sketch).ok_or("el sketch no está calculado")?;
         let plane = s.plane;
@@ -2167,7 +2172,7 @@ impl Ctx<'_> {
         let regions = self.selected_regions(s, &r.regions)?;
         let mut probes = relief_probes(&regions);
         let mut world: Vec<P3> = probes.iter().map(|p| plane.to_world(*p)).chain(samples.iter().copied()).collect();
-        let first = |dir: P3| world.iter().filter_map(|p| skin.ray_hit(*p, dir)).fold(f64::INFINITY, f64::min);
+        let first = |dir: P3| world.iter().filter_map(|p| rays.hit(*p, dir)).fold(f64::INFINITY, f64::min);
         let (ahead, behind) = (first(n), first(scale(n, -1.0)));
         let d = match (ahead.is_finite(), behind.is_finite()) {
             (false, false) => return Err("las regiones del sketch no miran a la piel".into()),
@@ -2230,13 +2235,13 @@ impl Ctx<'_> {
             fuse(ps)
         };
         // Lo que tocan los rayos desde el sketch hacia la piel
-        let hits: Vec<Option<f64>> = world.iter().map(|p| skin.ray_hit(*p, d)).collect();
+        let hits: Vec<Option<f64>> = world.iter().map(|p| rays.hit(*p, d)).collect();
         if hits.iter().any(Option::is_none) {
             self.warn("parte del sketch no queda frente a la piel".into());
         }
         let ts: Vec<f64> = hits.iter().flatten().copied().collect();
         let (near, far) = ts.iter().fold((f64::INFINITY, 0.0f64), |(a, b), t| (a.min(*t), b.max(*t)));
-        self.relief_measures(id, &regions, wrapped_regions.as_deref(), &plane, &skin, d);
+        self.relief_measures(id, &regions, wrapped_regions.as_deref(), &plane, &rays, d);
         if let Some(w) = wrapped_note {
             if let Some(t) = self.measures.borrow_mut().get_mut(&id) {
                 t.push_str(&w);
@@ -2296,7 +2301,7 @@ impl Ctx<'_> {
     /// Las medidas de las regiones en el plano y sobre la piel (lo que se ve
     /// en el diálogo): el ancho y el alto del sketch, y los mismos tramos
     /// llevados a la piel.
-    fn relief_measures(&self, id: FeatureId, regions: &[&Region], wrapped: Option<&[Region]>, plane: &Plane, skin: &Shape, d: P3) {
+    fn relief_measures(&self, id: FeatureId, regions: &[&Region], wrapped: Option<&[Region]>, plane: &Plane, skin: &MeshRay, d: P3) {
         let bbox = |polys: &mut dyn Iterator<Item = &P2>| {
             polys.fold(([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]), |(lo, hi), p| ([lo[0].min(p[0]), lo[1].min(p[1])], [hi[0].max(p[0]), hi[1].max(p[1])]))
         };
@@ -2309,6 +2314,7 @@ impl Ctx<'_> {
         if !(lo[0].is_finite() && hi[0].is_finite() && slo[0].is_finite()) {
             return;
         }
+
         // Largo sobre la piel de un tramo del plano (los puntos que no la tocan cortan)
         let on_skin = |a: P2, b: P2| -> Option<f64> {
             const N: usize = 48;
@@ -2318,7 +2324,7 @@ impl Ctx<'_> {
             for k in 0..=N {
                 let t = k as f64 / N as f64;
                 let p = plane.to_world([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
-                match skin.ray_hit(p, d) {
+                match skin.hit(p, d) {
                     Some(h) => {
                         let q = add(p, scale(d, h));
                         if let Some(pr) = prev {
@@ -5453,8 +5459,9 @@ impl Ctx<'_> {
     }
 }
 
-/// Puntos de adentro de las regiones (en el sketch): los vértices del borde
-/// apenas corridos hacia adentro y una grilla de ~40 por lado.
+/// Puntos de adentro de las regiones (en el sketch): una grilla de ~10 por lado
+/// y unos 24 del borde apenas corridos hacia adentro. Cada uno es un rayo
+/// contra la piel (miles de caras): con 40 por lado el relieve tardaba minutos.
 fn relief_probes(regions: &[&Region]) -> Vec<P2> {
     use crate::regions::point_in_polygon;
     let mut out = Vec::new();
@@ -5464,7 +5471,7 @@ fn relief_probes(regions: &[&Region]) -> Vec<P2> {
             ([lo[0].min(p[0]), lo[1].min(p[1])], [hi[0].max(p[0]), hi[1].max(p[1])])
         });
         let inside = |p: P2| point_in_polygon(p, poly) && !r.holes.iter().any(|h| point_in_polygon(p, &h.polygon));
-        let step = ((hi[0] - lo[0]).max(hi[1] - lo[1]) / 40.0).max(1e-6);
+        let step = ((hi[0] - lo[0]).max(hi[1] - lo[1]) / 10.0).max(1e-6);
         let mut y = lo[1] + step / 2.0;
         while y < hi[1] {
             let mut x = lo[0] + step / 2.0;
@@ -5478,7 +5485,7 @@ fn relief_probes(regions: &[&Region]) -> Vec<P2> {
         }
         // El borde, corrido una pizca hacia el centro de la región
         let c = r.sample;
-        for p in poly.iter().step_by((poly.len() / 64).max(1)) {
+        for p in poly.iter().step_by((poly.len() / 24).max(1)) {
             let q = [p[0] + (c[0] - p[0]) * 1e-3, p[1] + (c[1] - p[1]) * 1e-3];
             if inside(q) {
                 out.push(q);
@@ -5531,7 +5538,17 @@ fn wrap_regions(
         let [p, q, r] = tri_pts(t);
         scale(add(add(p, q), r), 1.0 / 3.0)
     };
-    let ta = (0..tris.len()).min_by(|&x, &y| norm(sub(centroid(x), a)).total_cmp(&norm(sub(centroid(y), a)))).unwrap();
+    // El triángulo del ancla: el más cercano con área (los teselados dejan
+    // triángulos degenerados, p. ej. en los polos, y con ellos la orientación da NaN)
+    let area = |t: usize| {
+        let [p, q, r] = tri_pts(t);
+        norm(cross(sub(q, p), sub(r, p)))
+    };
+    let min_area = (half * half * 1e-10).max(1e-18);
+    let ta = (0..tris.len())
+        .filter(|&t| area(t) > min_area)
+        .min_by(|&x, &y| norm(sub(centroid(x), a)).total_cmp(&norm(sub(centroid(y), a))))
+        .ok_or("la piel no tiene triángulos con área")?;
     // El trozo: triángulos conectados con el del ancla, con sus vértices a menos de `reach`
     let reach = half * 1.6 + 1.0;
     let mut by_edge: HashMap<(u32, u32), Vec<usize>> = HashMap::new();
@@ -5575,7 +5592,28 @@ fn wrap_regions(
             })
         })
         .collect();
-    let flat = uv_core::flatten_patch(&pos, &local, 20);
+    let mut flat = uv_core::flatten_patch(&pos, &local, 20);
+    // La escala, de la zona que cubre el sketch (alrededor del ancla): el aplanado
+    // iguala el área del trozo entero y en una piel curva eso achica todo unos %
+    {
+        let (mut a3, mut a2) = (0.0, 0.0);
+        for t in &local {
+            let p = t.map(|v| pos[v]);
+            let c = scale(add(add(p[0], p[1]), p[2]), 1.0 / 3.0);
+            if norm(sub(c, a)) > half {
+                continue;
+            }
+            let (Some(q0), Some(q1), Some(q2)) = (flat.uv[t[0]], flat.uv[t[1]], flat.uv[t[2]]) else { continue };
+            a3 += norm(cross(sub(p[1], p[0]), sub(p[2], p[0])));
+            a2 += ((q1[0] - q0[0]) * (q2[1] - q0[1]) - (q2[0] - q0[0]) * (q1[1] - q0[1])).abs();
+        }
+        if a2 > 0.0 && a3 > 0.0 {
+            let k = (a3 / a2).sqrt();
+            for q in flat.uv.iter_mut().flatten() {
+                *q = [q[0] * k, q[1] * k];
+            }
+        }
+    }
     let uv = |v: usize| flat.uv[v].ok_or("el aplanado de la piel quedó incompleto");
     // El ancla en el aplanado, y hacia dónde van la X y la Y del sketch
     let t0 = local[0];
@@ -5682,6 +5720,56 @@ fn solid_offset(shape: &Shape, d: f64) -> R<Shape> {
     Shape::sew(&faces, size * 1e-5, true).map_err(err)
 }
 
+/// Rayos contra una malla de triángulos, sin OpenCASCADE: con miles de caras
+/// cada `Shape::ray_hit` cuesta décimas de segundo y el relieve tira cientos.
+struct MeshRay {
+    verts: Vec<P3>,
+    tris: Vec<[u32; 3]>,
+}
+
+impl MeshRay {
+    fn new(verts: Vec<P3>, tris: Vec<[u32; 3]>) -> Self {
+        MeshRay { verts, tris }
+    }
+
+    /// El teselado de un sólido (fino según su tamaño)
+    fn of_shape(shape: &Shape) -> R<Self> {
+        let size = shape.mass().map(|m| norm(sub(m.bbox_max, m.bbox_min))).unwrap_or(1.0).max(1.0);
+        let t = shape.tessellate(size * 2e-4, 0.1).map_err(err)?;
+        Ok(MeshRay::new(t.positions, t.triangles))
+    }
+
+    /// Distancia al primer triángulo a lo largo de `dir` (unitario), o `None`
+    fn hit(&self, o: P3, dir: P3) -> Option<f64> {
+        let mut best = f64::INFINITY;
+        for t in &self.tris {
+            let [a, b, c] = t.map(|v| self.verts[v as usize]);
+            let (e1, e2) = (sub(b, a), sub(c, a));
+            let p = cross(dir, e2);
+            let det = dot(e1, p);
+            if det.abs() < 1e-14 {
+                continue;
+            }
+            let inv = 1.0 / det;
+            let s = sub(o, a);
+            let u = dot(s, p) * inv;
+            if !(-1e-9..=1.0 + 1e-9).contains(&u) {
+                continue;
+            }
+            let q = cross(s, e1);
+            let v = dot(dir, q) * inv;
+            if v < -1e-9 || u + v > 1.0 + 1e-9 {
+                continue;
+            }
+            let d = dot(e2, q) * inv;
+            if d > 1e-9 && d < best {
+                best = d;
+            }
+        }
+        best.is_finite().then_some(best)
+    }
+}
+
 /// Junta los vértices a menos de `tol` (una malla teselada por caras sueltas).
 fn weld_mesh(positions: &[P3], triangles: &[[u32; 3]], tol: f64) -> (Vec<P3>, Vec<[u32; 3]>) {
     let tol = tol.max(1e-9);
@@ -5712,8 +5800,9 @@ fn keep_seen(cut: Shape, from: &[P3], dir: P3) -> R<Shape> {
         return Err("no quedó nada: ¿las regiones caen sobre la piel?".into());
     }
     let mut keep = vec![false; pieces.len()];
+    let rays = pieces.iter().map(MeshRay::of_shape).collect::<R<Vec<_>>>()?;
     for p in from {
-        if let Some((k, _)) = pieces.iter().enumerate().filter_map(|(k, s)| s.ray_hit(*p, dir).map(|t| (k, t))).min_by(|a, b| a.1.total_cmp(&b.1)) {
+        if let Some((k, _)) = rays.iter().enumerate().filter_map(|(k, m)| m.hit(*p, dir).map(|t| (k, t))).min_by(|a, b| a.1.total_cmp(&b.1)) {
             keep[k] = true;
         }
     }
