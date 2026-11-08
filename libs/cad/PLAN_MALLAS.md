@@ -95,6 +95,13 @@ Se compila igual para Linux, Windows, macOS y Android: sin C++, sin cmake.
   (44 grupos: lib + 42 archivos de tests + doctests, ~490 pruebas, 0 fallas;
   ignoradas solo las que ya lo estaban). No repetir salvo que cambie eval.rs.
   Resultados: ~/.cargo-target/bench/mallas/tests_cad_model.txt
+- C++ de aristas/caras a mano PROBADO: banco (`banco3.txt`) convertir el hueso
+  10,3 s → **0,66 s**, sólido válido, mismo volumen; resta manifold 0,8 s.
+  Pruebas OK con ese C++ (`tests_cpp_nuevo.txt`): mesh_bool 5, mesh_parts 3,
+  cad-occt 31, cad-scan 4 + relief 3 + scan 21. No repetir.
+- Siguiente: compilar la app release local, apuntar el conector MCP a
+  ~/.cargo-target/release/pinocchio-app, `/mcp`, y probar el grabado del hueso
+  (reparar → detalle completo → relieve restado) midiendo el tiempo.
 - (Plan original de M4, para referencia) para piezas de malla, en apps/desktop/src/cad.rs, volumen /
   masa / validez desde los triángulos (no OCCT) y la vista (`encode_view_mesh`)
   con los triángulos de la pieza (si las caras de `from_mesh` siguen el orden de
