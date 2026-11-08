@@ -9,11 +9,17 @@ import { fmtNumber, t, tx } from "../../lib/i18n";
 // TIPOS
 // ═══════════════════════════════════════════════════════════════════════════
 
-/** Zona de caras elegida (las caras se numeran como las dibuja el visor) */
+/**
+ * Resumen de la zona de caras elegida (las caras se numeran como las dibuja el
+ * visor). Las caras mismas se piden aparte, en binario (`skin_zone_faces`),
+ * solo cuando cambia `revision`.
+ */
 export interface SkinZone {
-  faces: number[];
+  count: number;
   /** Caras que no se texturizan (agujeros, uniones…) */
-  protected: number[];
+  protected_count: number;
+  /** Cambia solo cuando cambian las caras o las protegidas */
+  revision: number;
   total: number;
   area_mm2: number;
   fraction: number;
@@ -169,8 +175,8 @@ export const SkinPanel: Component<SkinPanelProps> = (props) => {
   const brush = () => props.brush ?? { mode: "subtract" as const, radius: 0.05, strength: 0.5 };
   const setBrush = (patch: Partial<MaskPaintSettings>) => props.onBrush?.({ ...brush(), ...patch });
   const set = (patch: Partial<SkinImageSettings>) => props.onSettings({ ...props.settings, ...patch });
-  const count = () => props.zone?.faces.length ?? 0;
-  const protectedCount = () => props.zone?.protected?.length ?? 0;
+  const count = () => props.zone?.count ?? 0;
+  const protectedCount = () => props.zone?.protected_count ?? 0;
   const selected = () => props.library.find((p) => p.id === props.settings.image);
 
   return (

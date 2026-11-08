@@ -86,7 +86,8 @@ import {
   type HatchStyle,
   type SectionDef,
 } from "../../lib/drawingCuts";
-import { dataUrlBytes, shadeView, type DrawingMesh } from "../../lib/drawingShade";
+import { shadeView, type DrawingMesh } from "../../lib/drawingShade";
+import { dataUrlBytes, writeBytes } from "../../lib/writeBytes";
 import { themeColor } from "../../lib/theme";
 import { Button, Select } from "../ui";
 import { t } from "../../lib/i18n";
@@ -231,8 +232,16 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
   const [images, setImages] = createSignal<Record<string, { href: string; min: P2; max: P2 }>>({});
   const sectionOn = createMemo(() => !!d()?.section && !d()!.section!.hidden);
   const sectionY = createMemo(() => d()?.section?.y ?? undefined);
+  /**
+   * Vistas ya calculadas del diseño en su versión actual, por cómo se pidieron
+   * (y la imagen de las sombreadas): al cambiar una vista, ocultar otra o
+   * mover un corte solo se piden las que cambiaron (PLAN_RENDIMIENTO R8)
+   */
+  type ViewResult = { lines: DrawingLine[]; hatch: [P2, P2, P2][]; hatch_part?: number[]; mesh?: DrawingMesh };
+  type ViewImage = { href: string; min: P2; max: P2 } | null;
+  let viewCache: { version: unknown; map: Map<string, { res: ViewResult; img?: ViewImage }> } = { version: undefined, map: new Map() };
   createEffect(
-    on([() => store.result()?.version, requests, sectionOn, sectionY], async () => {
+    on([() => store.result()?.version, requests, sectionOn, sectionY], async ([version]) => {
       const asked = JSON.parse(requests()) as { name: string; eye: P3; xdir: P3; cut: CutPrism[]; shaded: boolean }[];
       const names = asked.map((x) => x.name);
       const n = ++seq;
@@ -245,7 +254,23 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
         const specs = asked.map(({ name, eye, xdir, cut, shaded }) =>
           name === "front" && sectionOn() ? { eye, xdir, cut, shaded, section: { origin: [0, at, 0], normal: [0, 1, 0] } } : { eye, xdir, cut, shaded },
         );
-        const res = await invoke<{ lines: DrawingLine[]; hatch: [P2, P2, P2][]; hatch_part?: number[]; mesh?: DrawingMesh }[]>("cad_drawing", { views: specs });
+        // El ensamble (instancias movidas) cuenta aparte de la huella de los diseños
+        const key = `${version}:${store.result()?.assembly?.version ?? ""}`;
+        if (viewCache.version !== key) viewCache = { version: key, map: new Map() };
+        const cache = viewCache.map;
+        const keys = specs.map((spec) => JSON.stringify(spec));
+        const missing = keys.flatMap((key, i) => (cache.has(key) ? [] : [i]));
+        if (missing.length) {
+          const got = await invoke<ViewResult[]>("cad_drawing", { views: missing.map((i) => specs[i]) });
+          missing.forEach((i, j) => cache.set(keys[i], { res: got[j] }));
+          // Las más viejas se sueltan (mover un corte deja muchas que ya no se usan)
+          for (const key of cache.keys()) {
+            if (cache.size <= 64) break;
+            if (!keys.includes(key)) cache.delete(key);
+          }
+        }
+        const entries = keys.map((key) => cache.get(key)!);
+        const res = entries.map((e) => e.res);
         if (n === seq) {
           setViews(Object.fromEntries(names.map((v, i) => [v, res[i].lines])));
           setHatch(Object.fromEntries(names.map((v, i) => [v, res[i].hatch])));
@@ -255,9 +280,13 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
           asked.forEach((a, i) => {
             const mesh = res[i].mesh;
             if (!a.shaded || !mesh || !res[i].lines.length) return;
-            const b = bounds(res[i].lines);
-            const href = shadeView(mesh, { eye: a.eye, xdir: a.xdir }, b.min, b.max, 1600 / Math.max(b.max[0] - b.min[0], b.max[1] - b.min[1], 1e-9));
-            if (href) imgs[a.name] = { href, min: b.min, max: b.max };
+            if (entries[i].img === undefined) {
+              const b = bounds(res[i].lines);
+              const href = shadeView(mesh, { eye: a.eye, xdir: a.xdir }, b.min, b.max, 1600 / Math.max(b.max[0] - b.min[0], b.max[1] - b.min[1], 1e-9));
+              entries[i].img = href ? { href, min: b.min, max: b.max } : null;
+            }
+            const img = entries[i].img;
+            if (img) imgs[a.name] = img;
           });
           setImages(imgs);
           setSectionAt(at);
@@ -698,7 +727,7 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
     const path = await save({ filters: [{ name: "PNG", extensions: ["png"] }], defaultPath: `${fileBase()}_${name}.png` });
     if (!path) return;
     try {
-      const bytes = await invoke<number>("cad_write_bytes", { path, bytes: dataUrlBytes(im.href) });
+      const bytes = await writeBytes(path, dataUrlBytes(im.href));
       setMessage(t("Imagen guardada ({kb} KB)", { kb: Math.round(bytes / 1024) }));
     } catch (e) {
       setMessage(String(e));

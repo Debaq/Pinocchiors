@@ -1418,10 +1418,36 @@ fn explode_shapes(shapes: Vec<(u32, cad_model::Shape)>, explode: f64) -> Result<
         .collect()
 }
 
-fn assembly_mesh_impl(state: &AppState, explode: f64) -> Result<Vec<u8>, String> {
-    let (_, shapes) = assembly_shapes(state)?;
-    let shapes = explode_shapes(shapes, explode)?;
+/// Malla y rangos del ensamble armado, guardados por (huella del diseño,
+/// ensamble, escala). La malla y los rangos se piden juntos y antes cada uno
+/// resolvía y teselaba todo por su cuenta; el candado se tiene mientras se arma,
+/// así el segundo pedido espera y usa lo del primero (PLAN_RENDIMIENTO R8).
+type AssemblyView = (Vec<u8>, Vec<[u32; 5]>);
+static ASSEMBLY_VIEW: Mutex<Option<((u64, u64, u64), AssemblyView)>> = Mutex::new(None);
+
+fn assembly_view(state: &AppState) -> Result<AssemblyView, String> {
+    use std::hash::{Hash, Hasher};
+    let mut saved = ASSEMBLY_VIEW.lock().unwrap_or_else(|e| e.into_inner());
+    let doc = state.cad_doc().ok_or("No hay un diseño abierto")?;
+    let asm = doc.assembly.as_ref().ok_or("El diseño no tiene ensamble")?;
+    let design = refresh_cache(state, &doc)?.0.hash;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    serde_json::to_string(asm).unwrap_or_default().hash(&mut h);
     let scale = 1.0 / mm_per_unit(state);
+    let key = (design, h.finish(), scale.to_bits());
+    if let Some((k, view)) = saved.as_ref()
+        && *k == key
+    {
+        return Ok(view.clone());
+    }
+    let (_, shapes) = assembly_shapes(state)?;
+    let view = (assembly_shapes_mesh(&shapes, scale)?, assembly_ranges(&shapes));
+    *saved = Some((key, view.clone()));
+    Ok(view)
+}
+
+/// Malla de la vista de estas instancias, todas juntas y en orden
+fn assembly_shapes_mesh(shapes: &[(u32, cad_model::Shape)], scale: f64) -> Result<Vec<u8>, String> {
     if shapes.is_empty() {
         return Ok(vec![0; 16]);
     }
@@ -1430,24 +1456,40 @@ fn assembly_mesh_impl(state: &AppState, explode: f64) -> Result<Vec<u8>, String>
     encode_view_mesh(&all, scale)
 }
 
-/// Caras de cada instancia dentro de la malla del ensamble: [id, desde, hasta).
+/// Por instancia: [id, primera cara, fin de caras, primera arista, fin de aristas)
+fn assembly_ranges(shapes: &[(u32, cad_model::Shape)]) -> Vec<[u32; 5]> {
+    let (mut face, mut edge) = (0u32, 0u32);
+    shapes
+        .iter()
+        .map(|(id, s)| {
+            let (f, e) = (s.face_count() as u32, s.edge_count() as u32);
+            let r = [*id, face, face + f, edge, edge + e];
+            face += f;
+            edge += e;
+            r
+        })
+        .collect()
+}
+
+fn assembly_mesh_impl(state: &AppState, explode: f64) -> Result<Vec<u8>, String> {
+    // Armado: lo guardado. Explotado (e2e, conector): se arma aparte; el visor
+    // explota en el front corriendo las piezas, sin volver a teselar
+    if explode <= 0.0 {
+        return assembly_view(state).map(|v| v.0);
+    }
+    let (_, shapes) = assembly_shapes(state)?;
+    assembly_shapes_mesh(&explode_shapes(shapes, explode)?, 1.0 / mm_per_unit(state))
+}
+
+/// Piezas de cada instancia dentro de la malla del ensamble:
+/// [id, desde, hasta) en caras y después [desde, hasta) en aristas.
 #[tauri::command]
-pub async fn cad_assembly_faces(app: AppHandle) -> Result<Vec<[u32; 3]>, String> {
+pub async fn cad_assembly_faces(app: AppHandle) -> Result<Vec<[u32; 5]>, String> {
     in_background(app, assembly_faces_impl).await
 }
 
-fn assembly_faces_impl(state: &AppState) -> Result<Vec<[u32; 3]>, String> {
-    let (_, shapes) = assembly_shapes(state)?;
-    let mut start = 0u32;
-    Ok(shapes
-        .iter()
-        .map(|(id, s)| {
-            let n = s.face_count() as u32;
-            let r = [*id, start, start + n];
-            start += n;
-            r
-        })
-        .collect())
+fn assembly_faces_impl(state: &AppState) -> Result<Vec<[u32; 5]>, String> {
+    assembly_view(state).map(|v| v.1)
 }
 
 /// Conector sobre la cara `face` de la malla del ensamble, en coordenadas de
@@ -1460,7 +1502,7 @@ pub async fn cad_assembly_connector(app: AppHandle, face: usize) -> Result<cad_m
 
 fn assembly_connector_impl(state: &AppState, face: usize) -> Result<cad_model::Connector, String> {
     let ranges = assembly_faces_impl(state)?;
-    let [id, start, _] = *ranges.iter().find(|r| (r[1] as usize..r[2] as usize).contains(&face)).ok_or("Esa cara no es de ninguna instancia")?;
+    let [id, start, ..] = *ranges.iter().find(|r| (r[1] as usize..r[2] as usize).contains(&face)).ok_or("Esa cara no es de ninguna instancia")?;
     let doc = state.cad_doc().ok_or("No hay un diseño abierto")?;
     let asm = doc.assembly.ok_or("El diseño no tiene ensamble")?;
     let inst = asm.instances.iter().find(|i| i.id == id).ok_or("La instancia ya no existe")?;
@@ -1866,6 +1908,34 @@ fn feature_faces_impl(state: &AppState, feature: u32) -> Result<Vec<usize>, Stri
     let cache = state.cad_cache.lock().unwrap();
     let Some(c) = cache.as_ref() else { return Ok(Vec::new()) };
     Ok(c.eval.face_tags.iter().enumerate().filter(|(_, ts)| ts.iter().any(|t| t.feature.0 == feature)).map(|(f, _)| f).collect())
+}
+
+/// Operaciones de cada cara del sólido mostrado, todas de una vez, en binario
+/// (`u32` little-endian): cuántas caras, dónde empieza la lista de cada una
+/// (caras + 1) y los ids de operación. El visor resuelve con esto qué caras
+/// resaltar al pasar el mouse por cualquier fila del árbol, sin una llamada
+/// por fila (PLAN_RENDIMIENTO R5)
+#[tauri::command]
+pub async fn cad_face_tags(app: AppHandle) -> Result<Response, String> {
+    in_background(app, |state| {
+        ensure_evaluated(state)?;
+        let cache = state.cad_cache.lock().unwrap();
+        let tags: &[_] = cache.as_ref().map_or(&[], |c| &c.eval.face_tags);
+        let total: usize = tags.iter().map(|ts| ts.len()).sum();
+        let mut out = Vec::with_capacity(4 * (2 + tags.len() + total));
+        out.extend_from_slice(&(tags.len() as u32).to_le_bytes());
+        let mut end = 0u32;
+        out.extend_from_slice(&end.to_le_bytes());
+        for ts in tags {
+            end += ts.len() as u32;
+            out.extend_from_slice(&end.to_le_bytes());
+        }
+        for t in tags.iter().flatten() {
+            out.extend_from_slice(&t.feature.0.to_le_bytes());
+        }
+        Ok(Response::new(out))
+    })
+    .await
 }
 
 /// Aristas del borde de una cara (para redondear o achaflanar la cara entera).

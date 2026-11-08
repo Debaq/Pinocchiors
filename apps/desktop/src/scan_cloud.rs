@@ -497,6 +497,59 @@ pub async fn scan_cloud_data(app: AppHandle) -> Result<Response, String> {
 /// decidir en el visor
 #[tauri::command]
 pub async fn scan_cloud_edit(app: AppHandle, op: CloudOp, select_only: Option<bool>) -> Result<CloudEditResult, String> {
+    edit_cloud(app, op, select_only).await
+}
+
+/// Borrar (`kind` = «delete») o conservar («keep») los puntos elegidos, con la
+/// selección en binario: el cuerpo son los índices (`u32` little-endian) y
+/// `kind` y `version` van en las cabeceras. Con millones de puntos la lista en
+/// JSON pesaba megas (PLAN_RENDIMIENTO R9).
+#[tauri::command]
+pub async fn scan_cloud_edit_selection(app: AppHandle, request: tauri::ipc::Request<'_>) -> Result<CloudEditResult, String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("Falta la selección".to_string());
+    };
+    let header = |name: &str| request.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_string);
+    let version: u32 = header("version").and_then(|v| v.parse().ok()).ok_or("Falta la versión de la nube")?;
+    if bytes.len() % 4 != 0 {
+        return Err("La selección no es válida".to_string());
+    }
+    let indices: Vec<u32> = bytes.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
+    let op = match header("kind").as_deref() {
+        Some("delete") => CloudOp::Delete { indices, version },
+        Some("keep") => CloudOp::Keep { indices, version },
+        _ => return Err("Operación desconocida".to_string()),
+    };
+    edit_cloud(app, op, None).await
+}
+
+/// Lo que quitaría una operación, sin cambiar la nube, en binario (con millones
+/// de puntos la lista en JSON pesaba megas). Palabras `u32` little-endian:
+/// cuántos índices, largo de la nota en bytes, la nota en UTF-8 rellenada a 4
+/// bytes, y los índices
+#[tauri::command]
+pub async fn scan_cloud_select(app: AppHandle, op: CloudOp) -> Result<Response, String> {
+    let out = with_editor(app, move |editor| {
+        let s = editor.as_mut().ok_or("No hay una nube en edición")?;
+        let (mask, note) = mask_of(s, &op)?.ok_or("Esta operación no quita puntos: no hay nada que seleccionar")?;
+        let note = note.unwrap_or_default().into_bytes();
+        let selected: Vec<u32> = mask.iter().enumerate().filter(|(_, k)| !**k).map(|(i, _)| i as u32).collect();
+        let pad = (4 - note.len() % 4) % 4;
+        let mut out = Vec::with_capacity(8 + note.len() + pad + 4 * selected.len());
+        out.extend_from_slice(&(selected.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(note.len() as u32).to_le_bytes());
+        out.extend_from_slice(&note);
+        out.extend(std::iter::repeat_n(0u8, pad));
+        for i in &selected {
+            out.extend_from_slice(&i.to_le_bytes());
+        }
+        Ok(out)
+    })
+    .await?;
+    Ok(Response::new(out))
+}
+
+async fn edit_cloud(app: AppHandle, op: CloudOp, select_only: Option<bool>) -> Result<CloudEditResult, String> {
     with_editor(app, move |editor| {
         let s = editor.as_mut().ok_or("No hay una nube en edición")?;
         let before = s.cur().cloud.points.len();

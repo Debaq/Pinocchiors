@@ -12,8 +12,10 @@ import { THEME_EVENT, themeHex } from "./theme";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { CameraRig, type CameraPose } from "./cameraRig";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
-import { boneWeight, paintRow } from "./weightPaint";
-import { boneHue, estimateInfluence, type Influence } from "./boneInfluence";
+import { boneWeight, meshNeighbors, paintRow, VertexGrid } from "./weightPaint";
+import { boneHue, estimateInfluenceAsync, type Influence } from "./boneInfluence";
+import { BONE_STRIDE, rotationRows, skinPose } from "./poseSkin";
+import { ScreenGrid } from "./cloudBrush";
 import { boundsAfter, type FloorCandidate } from "./placement";
 import type { Pose, Quat, Vec3 } from "./animation";
 import { chainAround, type BoneShape, type JointFrame, type RigControl } from "./rig";
@@ -487,8 +489,13 @@ export class Viewer3D {
   private meshData: MeshData | null = null;
   private weightsData: WeightsData | null = null;
   private skeletonData: SkeletonData | null = null;
-  /** Influencia estimada mientras no hay pesos (se calcula al mostrarla) */
+  /** Influencia estimada mientras no hay pesos (se calcula al mostrarla, en el backend) */
   private estimatedInfluence: Influence | null = null;
+  /** Hay que (re)calcular la estimación la próxima vez que se muestre */
+  private influenceStale = true;
+  /** Cálculo en curso (su número: los que llegan de un modelo anterior se botan) */
+  private influenceJob = 0;
+  private influenceRunning = false;
   /** Recalcular la estimación cuando el esqueleto deja de moverse */
   private influenceTimer: number | null = null;
   /** Octaedros de los huesos: relleno y aristas, por hueso (índice = articulación de la punta) */
@@ -498,6 +505,7 @@ export class Viewer3D {
   private paintSettings: PaintSettings | null = null;
   private paintMirror: { vertex: Uint32Array; bone: Uint32Array } | null = null;
   private paintNeighbors: { offsets: Uint32Array; list: Uint32Array } | null = null;
+  private paintGrid: VertexGrid | null = null;
   /** Pincel de intensidad (pieles): opciones, valor por vértice, caras de la zona y trazo en curso */
   private maskPaint: MaskPaintSettings | null = null;
   private skinMask: Float32Array | null = null;
@@ -513,6 +521,22 @@ export class Viewer3D {
   private brushCursor: THREE.Mesh | null = null;
 
   /** Pose de prueba en curso: posiciones y normales de reposo para restaurar */
+  /**
+   * Vista previa de la pose en la GPU: mientras se arrastra una articulación la
+   * malla se deforma con skinning en la tarjeta de video; al quedarse quieta
+   * (`settlePose`) se calcula una vez en CPU, que es lo que leen elegir, pintar
+   * y medir (PLAN_RENDIMIENTO R9)
+   */
+  private posePreview: {
+    source: THREE.Mesh;
+    weights: WeightsData;
+    rest: Float32Array;
+    mesh: THREE.SkinnedMesh;
+    bones: THREE.Bone[];
+    /** Lo que se ocultó mientras se ve la vista previa, con su visibilidad de antes */
+    hidden: { object: THREE.Object3D; visible: boolean }[] | null;
+  } | null = null;
+  private poseSettleTimer: number | null = null;
   private pose: {
     positions: Float32Array;
     normals: Float32Array;
@@ -691,6 +715,8 @@ export class Viewer3D {
     mode: "set" | "add" | "remove";
     path: [number, number][];
     screen: Float32Array;
+    /** Rejilla de la proyección para el pincel (se arma en el primer tramo) */
+    grid?: ScreenGrid;
   } | null = null;
   /** Cuerda en curso: vértices en px del lienzo, cursor y último clic */
   private cloudPolygon: {
@@ -1017,6 +1043,31 @@ export class Viewer3D {
     let best: THREE.Vector3 | null = null;
     let bestD = limit2;
     const p = new THREE.Vector3();
+    // El modelo propio: con la rejilla del pincel, en sus coordenadas (sin recorrer la malla)
+    const own = this.currentMesh;
+    if (!wholeObject && own && this.meshData && own.geometry.getAttribute("position")?.array === this.meshData.positions) {
+      own.updateWorldMatrix(true, false);
+      const local = own.worldToLocal(world.clone());
+      // El radio en coordenadas de la malla, con la escala más chica (no se escapa ninguno)
+      const scale = new THREE.Vector3();
+      own.matrixWorld.decompose(new THREE.Vector3(), new THREE.Quaternion(), scale);
+      const minScale = Math.max(Math.min(Math.abs(scale.x), Math.abs(scale.y), Math.abs(scale.z)), 1e-12);
+      const near = this.brushGrid().within(local.x, local.y, local.z, Math.sqrt(limit2) / minScale);
+      const positions = this.meshData.positions;
+      for (const v of near.vertices) {
+        p.set(positions[3 * v], positions[3 * v + 1], positions[3 * v + 2]).applyMatrix4(own.matrixWorld);
+        const d = p.distanceToSquared(world);
+        if (d < bestD) {
+          bestD = d;
+          best = (best ?? new THREE.Vector3()).copy(p);
+        }
+      }
+      if (best) {
+        object.parent?.updateWorldMatrix(true, false);
+        object.position.copy(object.parent ? object.parent.worldToLocal(best) : best);
+      }
+      return;
+    }
     for (const mesh of sources) {
       const attr = mesh.geometry?.getAttribute?.("position");
       if (!attr) continue;
@@ -1603,6 +1654,7 @@ export class Viewer3D {
     const m = this.modal;
     if (!m) return;
     this.modal = null;
+    this.settlePose();
     this.controls.enabled = true;
     this.callbacks.onHint?.(null);
     if (m.control && (m.kind === "grab" || m.kind === "rotate")) {
@@ -1788,18 +1840,13 @@ export class Viewer3D {
     this.lastDab = center.clone();
     const radius = this.brushRadius();
     const r2 = radius * radius;
-    const positions = mesh.positions;
+    const near = this.brushGrid().within(center.x, center.y, center.z, radius);
     const hits: [number, number][] = [];
-    for (let v = 0; v < weights.numVertices; v++) {
-      const dx = positions[3 * v] - center.x;
-      const dy = positions[3 * v + 1] - center.y;
-      const dz = positions[3 * v + 2] - center.z;
-      const d2 = dx * dx + dy * dy + dz * dz;
-      if (d2 < r2) {
-        const t = 1 - d2 / r2;
-        hits.push([v, t * t]);
-      }
-    }
+    near.vertices.forEach((v, i) => {
+      if (v >= weights.numVertices) return;
+      const t = 1 - near.d2[i] / r2;
+      hits.push([v, t * t]);
+    });
     const mirror = settings.mirror ? this.paintMirror : null;
     // El suavizado lee los pesos de antes de la pincelada
     const smoothTargets = this.strokeMode === "smooth" ? this.smoothTargets(hits, settings.bone) : null;
@@ -1965,18 +2012,13 @@ export class Viewer3D {
     this.lastDab = center.clone();
     const radius = this.brushRadius();
     const r2 = radius * radius;
-    const positions = mesh.positions;
+    const near = this.brushGrid().within(center.x, center.y, center.z, radius);
     const hits: [number, number][] = [];
-    for (let v = 0; v < mask.length; v++) {
-      const dx = positions[3 * v] - center.x;
-      const dy = positions[3 * v + 1] - center.y;
-      const dz = positions[3 * v + 2] - center.z;
-      const d2 = dx * dx + dy * dy + dz * dz;
-      if (d2 < r2) {
-        const t = 1 - d2 / r2;
-        hits.push([v, t * t * settings.strength]);
-      }
-    }
+    near.vertices.forEach((v, i) => {
+      if (v >= mask.length) return;
+      const t = 1 - near.d2[i] / r2;
+      hits.push([v, t * t * settings.strength]);
+    });
     // El suavizado lee los valores de antes de la pincelada
     let targets: number[] | null = null;
     if (this.maskStrokeMode === "smooth") {
@@ -2004,37 +2046,15 @@ export class Viewer3D {
     this.requestRender();
   }
 
+  /** Rejilla de los vértices de la malla para el pincel, armada una vez */
+  private brushGrid(): VertexGrid {
+    this.paintGrid ??= new VertexGrid(this.meshData!.positions);
+    return this.paintGrid;
+  }
+
   /** Vecinos por aristas de la malla (formato CSR), calculados una vez */
   private neighborsOf(): { offsets: Uint32Array; list: Uint32Array } {
-    if (this.paintNeighbors) return this.paintNeighbors;
-    const mesh = this.meshData!;
-    const n = mesh.positions.length / 3;
-    const sets: Set<number>[] = Array.from({ length: n }, () => new Set());
-    for (let t = 0; t + 2 < mesh.indices.length; t += 3) {
-      const [a, b, c] = [mesh.indices[t], mesh.indices[t + 1], mesh.indices[t + 2]];
-      sets[a].add(b).add(c);
-      sets[b].add(a).add(c);
-      sets[c].add(a).add(b);
-    }
-    // Vértices en la misma posición (costuras UV) comparten vecinos
-    const byPosition = new Map<string, number[]>();
-    for (let v = 0; v < n; v++) {
-      const key = `${mesh.positions[3 * v]},${mesh.positions[3 * v + 1]},${mesh.positions[3 * v + 2]}`;
-      const group = byPosition.get(key);
-      if (group) group.push(v);
-      else byPosition.set(key, [v]);
-    }
-    for (const group of byPosition.values()) {
-      if (group.length < 2) continue;
-      const union = new Set<number>();
-      group.forEach((v) => sets[v].forEach((w) => union.add(w)));
-      group.forEach((v) => (sets[v] = union));
-    }
-    const offsets = new Uint32Array(n + 1);
-    for (let v = 0; v < n; v++) offsets[v + 1] = offsets[v] + sets[v].size;
-    const list = new Uint32Array(offsets[n]);
-    for (let v = 0; v < n; v++) list.set([...sets[v]], offsets[v]);
-    this.paintNeighbors = { offsets, list };
+    this.paintNeighbors ??= meshNeighbors(this.meshData!.positions, this.meshData!.indices);
     return this.paintNeighbors;
   }
 
@@ -2222,10 +2242,11 @@ export class Viewer3D {
     this.meshData = data;
     this.invalidateLod();
     this.paintNeighbors = null;
+    this.paintGrid = null;
     this.maskStroke = null;
     this.skinMask = null;
     this.maskFaces = new Uint32Array(0);
-    this.estimatedInfluence = null;
+    this.clearInfluence();
     this.clearMesh();
 
     // Create geometry
@@ -2715,7 +2736,7 @@ export class Viewer3D {
     }
     this.clearSkeleton();
     this.boneSpheres = [];
-    this.estimatedInfluence = null;
+    this.clearInfluence();
     this.selectedSet = new Set([...this.selectedSet].filter((j) => j < data.bones.length));
 
     const bonesGroup = new THREE.Group();
@@ -2934,7 +2955,7 @@ export class Viewer3D {
   }
 
   /** Aplica los giros de la pose de prueba a la malla y a las articulaciones */
-  private updatePose(): void {
+  private updatePose(forceCpu = false): void {
     const mesh = this.meshData;
     const weights = this.weightsData;
     const skeleton = this.skeletonData;
@@ -2975,37 +2996,32 @@ export class Viewer3D {
       return parent !== null ? { q: rotations[parent]!, t: offsets[parent]! } : { q: identity, t: zero };
     };
 
-    const { positions: rest, normals: restNormals } = pose;
-    const p = new THREE.Vector3();
-    const n = new THREE.Vector3();
-    const k = weights.maxInfluences;
-    for (let v = 0; v < weights.numVertices; v++) {
-      const o = 3 * v;
-      let px = rest[o], py = rest[o + 1], pz = rest[o + 2];
-      let nx = restNormals[o], ny = restNormals[o + 1], nz = restNormals[o + 2];
-      for (let i = 0; i < k; i++) {
-        const w = weights.weights[(v * k + i) * 2 + 1];
-        if (w <= 0) continue;
-        const { q, t } = segment(weights.weights[(v * k + i) * 2]);
-        if (q === identity) continue;
-        p.set(rest[o], rest[o + 1], rest[o + 2]).applyQuaternion(q).add(t);
-        px += w * (p.x - rest[o]);
-        py += w * (p.y - rest[o + 1]);
-        pz += w * (p.z - rest[o + 2]);
-        n.set(restNormals[o], restNormals[o + 1], restNormals[o + 2]).applyQuaternion(q);
-        nx += w * (n.x - restNormals[o]);
-        ny += w * (n.y - restNormals[o + 1]);
-        nz += w * (n.z - restNormals[o + 2]);
-      }
-      n.set(nx, ny, nz).normalize();
-      mesh.positions[o] = px;
-      mesh.positions[o + 1] = py;
-      mesh.positions[o + 2] = pz;
-      mesh.normals[o] = n.x;
-      mesh.normals[o + 1] = n.y;
-      mesh.normals[o + 2] = n.z;
+    const previewBones = forceCpu ? null : this.showPosePreview(weights, bones.length);
+    if (previewBones) {
+      // En la GPU: cada hueso lleva la transformación de su segmento; la CPU espera a que se suelte
+      const one = new THREE.Vector3(1, 1, 1);
+      bones.forEach((_, b) => {
+        const { q, t } = segment(b);
+        previewBones[b].matrixWorld.compose(t, q, one);
+      });
+      this.scheduleSettlePose();
+      this.requestRender();
+    } else {
+      // Matriz del segmento de cada hueso, armada una vez (poseSkin.ts)
+      const matrices = new Float64Array(bones.length * BONE_STRIDE);
+      const moved = new Uint8Array(bones.length);
+      bones.forEach((_, b) => {
+        const { q, t } = segment(b);
+        if (q === identity || (Math.abs(q.w) >= 1 - 1e-12 && t.lengthSq() === 0)) return;
+        moved[b] = 1;
+        rotationRows(q.x, q.y, q.z, q.w, matrices, b * BONE_STRIDE);
+        matrices[b * BONE_STRIDE + 9] = t.x;
+        matrices[b * BONE_STRIDE + 10] = t.y;
+        matrices[b * BONE_STRIDE + 11] = t.z;
+      });
+      skinPose(pose.positions, pose.normals, weights.weights, weights.maxInfluences, weights.numVertices, matrices, moved, mesh.positions, mesh.normals);
+      this.markMeshDirty();
     }
-    this.markMeshDirty();
 
     // Cada articulación se mueve con su padre y lleva su giro acumulado (el gizmo parte de ahí)
     bones.forEach((bone, b) => {
@@ -3020,6 +3036,7 @@ export class Viewer3D {
 
   /** Vuelve a la pose de reposo (malla y esqueleto) */
   resetPose(): void {
+    this.disposePosePreview();
     const pose = this.pose;
     this.pose = null;
     if (!pose) return;
@@ -3037,12 +3054,115 @@ export class Viewer3D {
     }
   }
 
+  /**
+   * Muestra (armándola si hace falta) la malla con skin de la vista previa en
+   * lugar de la malla visible; devuelve sus huesos, o `null` si no se puede
+   * (sin malla a la vista): entonces se deforma en CPU como siempre
+   */
+  private showPosePreview(weights: WeightsData, numBones: number): THREE.Bone[] | null {
+    const pose = this.pose;
+    const source = this.weightsMesh?.visible ? this.weightsMesh : this.currentMesh?.visible ? this.currentMesh : null;
+    if (!pose || !source?.parent) return null;
+    let preview = this.posePreview;
+    if (preview && (preview.source !== source || preview.weights !== weights || preview.rest !== pose.positions || preview.bones.length !== numBones)) {
+      this.disposePosePreview();
+      preview = null;
+    }
+    if (!preview) {
+      const numVertices = pose.positions.length / 3;
+      // Sin pasar el peso de los huesos que no deforman: igual que el cálculo en CPU
+      const targets = Array.from({ length: numBones }, (_, b) => b);
+      const { skinIndex, skinWeight } = skinAttributes(weights, numVertices, numBones, targets);
+      // Comparte todo con la malla visible (colores de pesos, UV…) menos la posición y la normal de reposo
+      const geometry = new THREE.BufferGeometry();
+      for (const [name, attribute] of Object.entries(source.geometry.attributes)) {
+        if (name !== "position" && name !== "normal") geometry.setAttribute(name, attribute);
+      }
+      geometry.setAttribute("position", new THREE.BufferAttribute(pose.positions, 3));
+      geometry.setAttribute("normal", new THREE.BufferAttribute(pose.normals, 3));
+      geometry.setIndex(source.geometry.index);
+      for (const group of source.geometry.groups) geometry.addGroup(group.start, group.count, group.materialIndex);
+      geometry.setAttribute("skinIndex", new THREE.Uint16BufferAttribute(skinIndex, 4));
+      geometry.setAttribute("skinWeight", new THREE.Float32BufferAttribute(skinWeight, 4));
+      // Huesos sueltos (fuera de la escena): su matriz es directamente x → q·x + t en el espacio de la malla
+      const bones = Array.from({ length: numBones }, () => new THREE.Bone());
+      const skeleton = new THREE.Skeleton(bones, bones.map(() => new THREE.Matrix4()));
+      const mesh = new THREE.SkinnedMesh(geometry, source.material);
+      mesh.bindMode = THREE.DetachedBindMode;
+      mesh.bind(skeleton, new THREE.Matrix4());
+      mesh.frustumCulled = false;
+      mesh.position.copy(source.position);
+      mesh.quaternion.copy(source.quaternion);
+      mesh.scale.copy(source.scale);
+      mesh.renderOrder = source.renderOrder;
+      mesh.visible = false;
+      source.parent.add(mesh);
+      preview = this.posePreview = { source, weights, rest: pose.positions, mesh, bones, hidden: null };
+    }
+    if (!preview.hidden) {
+      const shown = [this.currentMesh, this.weightsMesh, this.currentWireframe].filter((o): o is THREE.Mesh => !!o?.visible);
+      preview.hidden = shown.map((object) => ({ object, visible: object.visible }));
+      shown.forEach((object) => (object.visible = false));
+      preview.mesh.visible = true;
+    }
+    return preview.bones;
+  }
+
+  /** La pose se queda quieta un momento: se calcula en CPU */
+  private scheduleSettlePose(): void {
+    if (this.poseSettleTimer !== null) clearTimeout(this.poseSettleTimer);
+    this.poseSettleTimer = window.setTimeout(() => {
+      this.poseSettleTimer = null;
+      this.settlePose();
+    }, 200);
+  }
+
+  /** Pasa de la vista previa en GPU a la malla posada en CPU (lo que leen elegir, pintar y medir) */
+  private settlePose(): void {
+    if (this.poseSettleTimer !== null) {
+      clearTimeout(this.poseSettleTimer);
+      this.poseSettleTimer = null;
+    }
+    const preview = this.posePreview;
+    if (!preview?.hidden) return;
+    if (this.pose) this.updatePose(true);
+    this.restorePosePreview();
+    this.requestRender();
+  }
+
+  /** Vuelve a mostrar lo que tapaba la vista previa */
+  private restorePosePreview(): void {
+    const preview = this.posePreview;
+    if (!preview?.hidden) return;
+    preview.mesh.visible = false;
+    preview.hidden.forEach(({ object, visible }) => (object.visible = visible));
+    preview.hidden = null;
+  }
+
+  private disposePosePreview(): void {
+    if (this.poseSettleTimer !== null) {
+      clearTimeout(this.poseSettleTimer);
+      this.poseSettleTimer = null;
+    }
+    const preview = this.posePreview;
+    if (!preview) return;
+    this.restorePosePreview();
+    preview.mesh.parent?.remove(preview.mesh);
+    // Solo lo propio (los atributos compartidos y el material son de la malla visible)
+    preview.mesh.geometry.deleteAttribute("skinIndex");
+    preview.mesh.geometry.deleteAttribute("skinWeight");
+    preview.mesh.skeleton.dispose();
+    this.posePreview = null;
+  }
+
   /** Hay una pose de prueba aplicada */
   isPosed(): boolean {
     return this.pose !== null;
   }
 
   private markMeshDirty(): void {
+    // Los vértices se movieron (posar): la rejilla del pincel se rearma al pintar
+    this.paintGrid = null;
     for (const mesh of [this.currentMesh, this.weightsMesh]) {
       if (!mesh) continue;
       mesh.geometry.getAttribute("position").needsUpdate = true;
@@ -3061,7 +3181,7 @@ export class Viewer3D {
     this.invalidateLod();
     this.boneSpheres = [];
     this.skeletonData = null;
-    this.estimatedInfluence = null;
+    this.clearInfluence();
     this.selectedBoneIndex = -1;
     this.selectedSet.clear();
     this.updateAxesHelper();
@@ -3375,6 +3495,7 @@ export class Viewer3D {
 
     controls.addEventListener("dragging-changed", (event) => {
       this.controls.enabled = !event.value;
+      if (!event.value) this.settlePose();
       const object = controls.object;
       if (object === this.objectPivot) {
         if (event.value) this.objectDragStart = this.pivotMatrix(this.objectPivot);
@@ -3903,6 +4024,7 @@ export class Viewer3D {
   }
 
   dispose(): void {
+    this.disposePosePreview();
     this.restoreQuality();
     this.quad?.dispose();
     this.listeners.abort();
@@ -4325,6 +4447,8 @@ export class Viewer3D {
         colors[j + 2] = cloud.base[j + 2];
       }
     }
+    // Todo el arreglo (quedaba un tramo parcial de una pincelada sin subir)
+    attr.clearUpdateRanges();
     attr.needsUpdate = true;
   }
 
@@ -4584,17 +4708,52 @@ export class Viewer3D {
     const [x0, x1] = [Math.min(a[0], b[0]) - r, Math.max(a[0], b[0]) + r];
     const [y0, y1] = [Math.min(a[1], b[1]) - r, Math.max(a[1], b[1]) + r];
     const s = drag.screen;
-    for (let i = 0; i < cloud.count; i++) {
+    if (!drag.grid) {
+      const rect = this.canvas.getBoundingClientRect();
+      drag.grid = new ScreenGrid(s, rect.width, rect.height);
+    }
+    // Solo los puntos cerca del tramo, y se recolorean solo los que cambian
+    const changed: number[] = [];
+    drag.grid.forEachNear(x0, x1, y0, y1, (i) => {
       const x = s[i * 2];
       const y = s[i * 2 + 1];
-      if (!(x >= x0 && x <= x1 && y >= y0 && y <= y1)) continue;
+      if (!(x >= x0 && x <= x1 && y >= y0 && y <= y1)) return;
       // Distancia al segmento
       const t = len2 > 0 ? Math.max(0, Math.min(1, ((x - a[0]) * dx + (y - a[1]) * dy) / len2)) : 0;
       const ex = x - (a[0] + t * dx);
       const ey = y - (a[1] + t * dy);
-      if (ex * ex + ey * ey <= r2) cloud.selected[i] = value;
+      if (ex * ex + ey * ey <= r2 && cloud.selected[i] !== value) {
+        cloud.selected[i] = value;
+        changed.push(i);
+      }
+    });
+    this.recolorCloudPoints(changed);
+  }
+
+  /** Recolorea solo estos puntos y sube a la GPU solo el tramo que los cubre */
+  private recolorCloudPoints(indices: number[]): void {
+    const cloud = this.cloud;
+    if (!cloud || indices.length === 0) return;
+    const attr = cloud.points.geometry.getAttribute("color") as THREE.BufferAttribute;
+    const colors = attr.array as Uint8Array;
+    let lo = Infinity;
+    let hi = -1;
+    for (const i of indices) {
+      const j = i * 3;
+      if (cloud.selected[i]) {
+        colors[j] = 255;
+        colors[j + 1] = 85;
+        colors[j + 2] = 85;
+      } else {
+        colors[j] = cloud.base[j];
+        colors[j + 1] = cloud.base[j + 1];
+        colors[j + 2] = cloud.base[j + 2];
+      }
+      if (i < lo) lo = i;
+      if (i > hi) hi = i;
     }
-    this.recolorCloud();
+    attr.addUpdateRange(lo * 3, (hi - lo + 1) * 3);
+    attr.needsUpdate = true;
   }
 
   /** Dibuja el rectángulo, el lazo o el pincel sobre el lienzo */
@@ -4662,8 +4821,34 @@ export class Viewer3D {
     if (weights && weights.numVertices * 3 === mesh.positions.length) return weights;
     const skeleton = this.skeletonData;
     if (!skeleton) return null;
-    this.estimatedInfluence ??= estimateInfluence(mesh.positions, skeleton.bones);
-    return this.estimatedInfluence;
+    if (this.influenceStale) this.requestInfluence(mesh, skeleton);
+    // Mientras se calcula sigue la anterior, si es del mismo modelo
+    const estimate = this.estimatedInfluence;
+    return estimate && estimate.numVertices * 3 === mesh.positions.length && estimate.numBones === skeleton.bones.length ? estimate : null;
+  }
+
+  /** Calcula la estimación aparte y la muestra al llegar */
+  private requestInfluence(mesh: MeshData, skeleton: SkeletonData): void {
+    if (this.influenceRunning) return;
+    this.influenceRunning = true;
+    this.influenceStale = false;
+    const job = ++this.influenceJob;
+    const done = (result: Influence | null) => {
+      if (job !== this.influenceJob) return;
+      this.influenceRunning = false;
+      if (result) this.estimatedInfluence = result;
+      // Si el esqueleto se movió mientras tanto, esto pide la siguiente
+      if (this.settings.showWeights) this.applySettings();
+    };
+    estimateInfluenceAsync(mesh.positions, skeleton.bones).then(done, () => done(null));
+  }
+
+  /** Otro modelo u otro esqueleto: la estimación anterior ya no sirve */
+  private clearInfluence(): void {
+    this.estimatedInfluence = null;
+    this.influenceStale = true;
+    this.influenceRunning = false;
+    this.influenceJob++;
   }
 
   /**
@@ -4671,11 +4856,11 @@ export class Viewer3D {
    * se queda quieto (con mallas grandes tarda); mientras, sigue la anterior
    */
   private refreshEstimatedWeights(): void {
-    if (this.estimatedInfluence === null) return;
+    if (this.estimatedInfluence === null && !this.influenceRunning) return;
     if (this.influenceTimer !== null) clearTimeout(this.influenceTimer);
     this.influenceTimer = window.setTimeout(() => {
       this.influenceTimer = null;
-      this.estimatedInfluence = null;
+      this.influenceStale = true;
       if (this.settings.showWeights) this.applySettings();
     }, 250);
   }
@@ -5815,19 +6000,9 @@ export class Viewer3D {
   nearestNormal(point: Vec3): Vec3 | null {
     const mesh = this.meshData;
     if (!mesh) return null;
-    const { positions, normals } = mesh;
-    let best = -1;
-    let bestD = Infinity;
-    for (let v = 0; v < positions.length / 3; v++) {
-      const dx = positions[3 * v] - point[0];
-      const dy = positions[3 * v + 1] - point[1];
-      const dz = positions[3 * v + 2] - point[2];
-      const d = dx * dx + dy * dy + dz * dz;
-      if (d < bestD) {
-        bestD = d;
-        best = v;
-      }
-    }
+    const { normals } = mesh;
+    // La rejilla del pincel (se arma una vez por malla) en vez de recorrer todos los vértices
+    const best = this.brushGrid().nearest(point[0], point[1], point[2]);
     return best < 0 ? null : [normals[3 * best], normals[3 * best + 1], normals[3 * best + 2]];
   }
 
@@ -6090,12 +6265,13 @@ export class Viewer3D {
   unloadMesh(): void {
     this.disposeRig();
     this.meshData = null;
-    this.estimatedInfluence = null;
+    this.clearInfluence();
     this.clearMesh();
     this.buildRig();
   }
 
   private clearMesh(): void {
+    this.disposePosePreview();
     const meshGeometry = this.currentMesh?.geometry;
     for (const key of ["nodeHighlight", "nodeHover", "faceOverlay", "maskOverlay"] as const) {
       const overlay = this[key];

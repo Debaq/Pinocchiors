@@ -29,6 +29,9 @@ release.
 - **R8 Ensambles y planos**. Explosión en el visor; caché por vista en planos.
 - **R9 Visor**. Pincel de pesos con BVH; posar con skinning en GPU; nubes
   grandes con recoloreo incremental.
+- **R10 three.js al día**. De la 0.170 a la 0.187 (la que eligió el usuario).
+- **R11 Pendientes chicos** del estudio y de R3–R9.
+- **R12 Aceleración GPU (WebGPU) como opción** (propuesta, sin empezar).
 
 ## Avance
 
@@ -55,4 +58,122 @@ release.
   por (versión del diseño, operación); pasar el mouse otra vez por la misma
   fila no llama al backend. Mandar la operación de cada cara con la malla
   (sin backend del todo) queda para después.
-- Siguiente: R6 (vecinos e influencia de huesos en Rust).
+- R6 escrito. Influencia de huesos: `estimate_influence` en
+  libs/pinocchio/attachment/src/estimate.rs (rayon; 3 pruebas OK en el PC) y
+  comando `estimate_bone_influence` (cuerpo binario crudo, commands.rs). En el
+  visor la estimación llega asíncrona (`estimateInfluenceAsync`; sin backend
+  usa la de TS) y mientras se ve la anterior. Vecinos del pincel: quedaron en
+  TS pero con arreglos planos (`meshNeighbors` en weightPaint.ts, soldado por
+  bits de la posición): mismo resultado que antes en 504 100 vértices y
+  1 088 ms → 168 ms; no valía la pena mandar la malla al backend.
+- R7 escrito. Zona de la piel: `ZoneInfo` trae solo el resumen (`count`,
+  `protected_count`, `revision` = firma de las caras); las caras van en
+  binario por `skin_zone_faces` y el front (`applySkinZone` en App.tsx) las
+  pide solo si cambió la firma: pintar intensidad ya no baja las caras. El
+  conector usa `zone["count"]`. Texturas: `TextureInfo.hash` (firma rápida
+  del contenido, structure.rs) y `loadSceneAppearance` guarda lo bajado y
+  decodificado por firma: cada cambio de malla o guardado de GIMP baja solo
+  las que cambiaron (las de la piel retopologizada, `get_skin_texture`, siguen
+  como antes). PNG de planos e imágenes del chat: `writeBytes`
+  (lib/writeBytes.ts) con cuerpo crudo por `write_render_image`, no lista
+  JSON. `cad_write_bytes` queda para cad_http.
+- R8 escrito. Ensambles: `assembly_view` (cad.rs) guarda malla y rangos del
+  ensamble armado por (huella, ensamble, escala) y los dos pedidos
+  (`cad_assembly_mesh` + `cad_assembly_faces`) comparten el cálculo; los
+  rangos traen también las aristas de cada instancia. El deslizador de
+  explosión ya no va al backend: `explodeAssemblyMesh` (cad.ts) corre las
+  piezas en el front. `cad_assembly_mesh` con `explode` > 0 sigue para e2e y
+  el conector. Planos: DrawingView recuerda cada vista (y la imagen de las
+  sombreadas) por (versión del diseño y del ensamble, pedido) y pide solo las
+  que cambiaron. Las vistas siguen viajando en JSON (el binario no hizo falta
+  con la caché).
+- R9 escrito. Pincel de pesos y de intensidad: `VertexGrid` (weightPaint.ts,
+  rejilla armada una vez por malla y al moverse los vértices) en vez de
+  recorrer todos; mismo resultado y 7× más rápido con pinceles de tamaño
+  normal (500 k vértices). Posar: se quedó en CPU a propósito (elegir, pintar
+  y medir leen la malla posada; en GPU habría que rehacer todo eso):
+  `skinPose` (poseSkin.ts) con una matriz por hueso, mismo resultado exacto,
+  ~20 % más rápido (V8 ya optimizaba bien el bucle viejo). Nubes: el pincel
+  usa `ScreenGrid` (cloudBrush.ts) sobre la proyección del trazo y recolorea
+  solo lo que cambió, subiendo a la GPU solo ese tramo (3 M de puntos: 25 →
+  3,7 ms por tramo); borrar o conservar la selección va en binario
+  (`scan_cloud_edit_selection`). Queda en JSON lo que devuelve «solo
+  seleccionar» de los filtros de ruido.
+- R9 terminado: posar con vista previa en GPU. Mientras se arrastra una
+  articulación, `showPosePreview` (Viewer3D.ts) muestra una `SkinnedMesh` que
+  comparte los atributos de la malla visible (o de la vista de pesos) con las
+  posiciones de reposo; cada hueso suelto lleva la matriz de su segmento
+  (`DetachedBindMode`, sin pasar el peso de los que no deforman, igual que en
+  CPU). 200 ms después del último movimiento, al confirmar el giro o al
+  soltar el gizmo, `settlePose` calcula una vez en CPU (`skinPose`) y vuelve
+  a la malla de siempre: elegir, pintar y medir siguen leyendo la malla
+  posada. Mientras se arrastra no se ve el alambre.
+- R10: three 0.170 → 0.187.0 y @types/three 0.187.0 (package.json y
+  package-lock con `--package-lock-only`; npm 12 pidió `--allow-remote=all`
+  por un tarball de Tailwind del registro oficial). De la guía de migración
+  solo tocó `PCFSoftShadowMap` → `PCFShadowMap` (renderStill.ts; desde r182
+  ya es suave). Revisado contra el código de la 0.187: los chunks que
+  parchean dqSkinning.ts y autoSmooth.ts no cambiaron, `Skeleton.update` lee
+  la matriz de los huesos tal cual; `setViewport`/`setScissor` solo cambian
+  con un render target puesto (ViewCube dibuja en el lienzo). Cambios
+  visuales esperables: reflejos PMREM (r181, r187) y `RoomEnvironment`
+  (r183) un poco distintos.
+- R11 escrito:
+  - `VertexGrid.nearest` (vértice más cercano por anillos de celdas, mismo
+    resultado que recorrer todo): `nearestNormal` (girar huesos hacia la
+    normal) y el imán a vértices del modelo propio usan la rejilla (antes
+    recorrían la malla, el imán en cada movimiento del gizmo y salteando
+    vértices en mallas grandes; ahora exacto). El imán a otros objetos sigue
+    como antes.
+  - `boundsAfter` (placement.ts) sin un vector por vértice; no se pasó a Rust
+    (son acciones de un clic y mandar la malla costaría más).
+  - `shadeView` (drawingShade.ts): `Math.max(...posiciones)` podía romper con
+    mallas grandes (demasiados argumentos); ahora un bucle, y el color por
+    triángulo sin crear arreglos.
+  - Texturas de la piel retopologizada: `get_skin_texture_hashes` y caché por
+    firma en `refreshSkin` (como las de la escena en R7).
+  - «Solo seleccionar» de los filtros de la nube: `scan_cloud_select` en
+    binario (cuántos, nota y los índices).
+  - Árbol del CAD: `cad_face_tags` trae las operaciones de todas las caras
+    en una llamada por versión; `featureFaces` resuelve cualquier fila en el
+    front (R5 completo).
+  - No se hizo (no valía): `recordableArgs` (solo copia ajustes chicos de
+    unos pocos comandos) y fusionar malla + herramienta en una respuesta (ya
+    van en paralelo; ahorraría ~1 ms y obliga a tocar `apply`).
+- R12 (propuesta): WebKitGTK 2.54 trae WebGPU compilado como función
+  experimental, apagado. Opción «Aceleración GPU (experimental)» en
+  Preferencias que encienda la función en el WebView (Linux) y use
+  `WebGPURenderer` de three (con WebGL2 de respaldo). Requiere: reescribir en
+  TSL los parches de shader (dqSkinning, autoSmooth, xray y otros
+  `onBeforeCompile`), pasar el posproceso (EffectComposer, GTAOPass,
+  UnrealBloomPass) al de nodos, y `Line2` a su versión de nodos. Windows
+  (WebView2) y macOS ya traen WebGPU encendido.
+- Todas las fases R1–R11 escritas. R1 y el motor de R6 probados en el PC; lo
+  de la app (R2–R11) sin compilar: lo revisa la próxima release.
+- Siguiente: commit, release y probar R2–R11 en la app (lista en «Para
+  probar»).
+
+## Para probar en la app
+
+- Diseño CAD: editar, pasar el mouse por el árbol, elegir varias caras (R2–R5).
+- Esqueleto sin pesos con «ver pesos»: la vista previa aparece y sigue al
+  mover articulaciones (R6).
+- Pincel de pesos y de intensidad en modo suavizar, con una malla grande
+  (R6, R9); posar un hueso con pesos: arrastrar fluido, al soltar la malla
+  queda igual y se puede pintar/elegir sobre ella; con la vista de pesos
+  encendida también (R9).
+- Todo el visor tras subir three (R10): materiales, reflejos, sombras del
+  render, gizmos, líneas gruesas, animación con cuaterniones duales.
+- Fabricar → piel: elegir zona, proteger, ampliar, invertir, pintar
+  intensidad; el panel muestra las caras y el visor las resalta (R7).
+- Modelo con texturas: cambiar la malla y editar en GIMP (R7).
+- Plano: guardar PNG de una vista sombreada; chat: guardar imagen y
+  conversación (R7).
+- Ensamble: mover el deslizador de explosión; elegir caras de una instancia
+  explotada; planos de un ensamble (R8).
+- Planos: cambiar una vista, ocultar otra, mover el corte (R8).
+- Nube de puntos: pincel, borrar y recortar a la selección (R9); «solo
+  seleccionar» de quitar ruido, puntos sueltos, fragmentos y mesa (R11).
+- Girar huesos hacia la normal; imán a vértices con el gizmo (R11).
+- Retopología con texturas: cambiar algo y que las texturas sigan bien (R11).
+- Plano con vista sombreada de una pieza grande (R11).

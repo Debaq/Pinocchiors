@@ -40,14 +40,24 @@ export function shadeView(mesh: DrawingMesh, dir: ViewDir, min: P2, max: P2, pxP
   const col = new Float32Array(n * 3);
   const body = new THREE.Color(0x9aa3ad);
   const face = new THREE.Color(0xd9c9a3);
+  let extent = 1;
   for (let i = 0; i < n; i++) {
     const v = mesh.indices[i];
     for (let c = 0; c < 3; c++) {
-      pos[i * 3 + c] = mesh.positions[v * 3 + c];
+      const x = mesh.positions[v * 3 + c];
+      pos[i * 3 + c] = x;
       nor[i * 3 + c] = mesh.normals[v * 3 + c];
+      if (Math.abs(x) > extent) extent = Math.abs(x);
     }
-    const color = cut.has(Math.floor(i / 3)) ? face : body;
-    col.set([color.r, color.g, color.b], i * 3);
+  }
+  // El color va por triángulo
+  for (let t = 0; t < n / 3; t++) {
+    const color = cut.has(t) ? face : body;
+    for (let i = t * 9; i < t * 9 + 9; i += 3) {
+      col[i] = color.r;
+      col[i + 1] = color.g;
+      col[i + 2] = color.b;
+    }
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
@@ -59,7 +69,8 @@ export function shadeView(mesh: DrawingMesh, dir: ViewDir, min: P2, max: P2, pxP
 
   // Cámara ortográfica: x de la cámara = la derecha de la hoja, y = arriba (eye × xdir)
   const up = viewUp(dir);
-  const far = 4 * Math.max(1, ...mesh.positions.map(Math.abs));
+  // Sin `Math.max(...lista)`: con mallas grandes revienta la pila de argumentos
+  const far = 4 * extent;
   const cam = new THREE.OrthographicCamera(min[0], max[0], max[1], min[1], 0.01, 2 * far);
   cam.position.set(dir.eye[0] * far, dir.eye[1] * far, dir.eye[2] * far);
   cam.up.set(up[0], up[1], up[2]);
@@ -77,10 +88,3 @@ export function shadeView(mesh: DrawingMesh, dir: ViewDir, min: P2, max: P2, pxP
   return url;
 }
 
-/** Bytes de una URL de datos (para guardar el PNG) */
-export function dataUrlBytes(url: string): number[] {
-  const bin = atob(url.slice(url.indexOf(",") + 1));
-  const out = new Array<number>(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}

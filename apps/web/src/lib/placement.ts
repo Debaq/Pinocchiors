@@ -44,13 +44,33 @@ const AXES: Record<Axis, THREE.Vector3> = {
 
 /** Caja de los vértices tras aplicar `m` (sin `m`, tal como están) */
 export function boundsAfter(positions: Float32Array, m?: THREE.Matrix4): THREE.Box3 {
-  const box = new THREE.Box3();
-  const p = new THREE.Vector3();
+  // Cuentas a mano (sin un vector por vértice): con medio millón de vértices se nota
+  const e = (m ?? new THREE.Matrix4()).elements;
+  const affine = e[3] === 0 && e[7] === 0 && e[11] === 0 && e[15] === 1;
+  let x0 = Infinity, y0 = Infinity, z0 = Infinity;
+  let x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
   for (let i = 0; i < positions.length; i += 3) {
-    p.set(positions[i], positions[i + 1], positions[i + 2]);
-    if (m) p.applyMatrix4(m);
-    box.expandByPoint(p);
+    const px = positions[i];
+    const py = positions[i + 1];
+    const pz = positions[i + 2];
+    let x = px;
+    let y = py;
+    let z = pz;
+    if (m) {
+      const w = affine ? 1 : 1 / (e[3] * px + e[7] * py + e[11] * pz + e[15]);
+      x = (e[0] * px + e[4] * py + e[8] * pz + e[12]) * w;
+      y = (e[1] * px + e[5] * py + e[9] * pz + e[13]) * w;
+      z = (e[2] * px + e[6] * py + e[10] * pz + e[14]) * w;
+    }
+    if (x < x0) x0 = x;
+    if (x > x1) x1 = x;
+    if (y < y0) y0 = y;
+    if (y > y1) y1 = y;
+    if (z < z0) z0 = z;
+    if (z > z1) z1 = z;
   }
+  const box = new THREE.Box3();
+  if (positions.length >= 3) box.set(new THREE.Vector3(x0, y0, z0), new THREE.Vector3(x1, y1, z1));
   return box;
 }
 

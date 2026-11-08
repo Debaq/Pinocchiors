@@ -40,7 +40,7 @@ export interface ViewportProps {
   /** Elegir triángulos sueltos (clic y recuadro) y cuáles están elegidos */
   onFacesPicked?: (faces: number[], mode: "set" | "add" | "remove" | "toggle") => void;
   facePicking?: boolean;
-  pickedFaces?: number[];
+  pickedFaces?: ArrayLike<number>;
   onBoneSelected?: (index: number) => void;
   onBoneMoved?: (index: number, position: [number, number, number]) => void;
   /** Modo animación: se confirmó un giro o desplazamiento de estas articulaciones */
@@ -109,7 +109,7 @@ export interface ViewportProps {
   /** Pincel de intensidad de las pieles (`undefined` = apagado) */
   maskPaint?: MaskPaintSettings;
   /** Intensidad por vértice que se ve con el pincel (`null` = todo al 100 %) y las caras de la zona */
-  skinMask?: { mask: Float32Array | null; faces: number[] };
+  skinMask?: { mask: Float32Array | null; faces: ArrayLike<number> };
   /** Terminó un trazo del pincel de intensidad */
   onMaskPainted?: (stroke: MaskStroke) => void;
 

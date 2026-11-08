@@ -595,7 +595,7 @@ fn skin(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
     });
     let zone_line = format!(
         "Zone: {} faces, {} mm² ({}% of the surface){}.",
-        zone["faces"].as_array().map_or(0, Vec::len),
+        zone["count"].as_u64().unwrap_or(0),
         num(zone["area_mm2"].as_f64().unwrap_or(0.0)),
         num(zone["fraction"].as_f64().unwrap_or(0.0) * 100.0),
         if protected > 0 { format!(", {protected} hole(s), pin(s) or thread(s) protected") } else { String::new() }

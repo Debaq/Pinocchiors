@@ -3,7 +3,12 @@
  * se reparte entre los huesos más cercanos (distancia al segmento padre →
  * hueso), como una vista previa de qué mueve cada uno. No reemplaza a los
  * pesos calculados, que miran el grosor de la malla.
+ *
+ * En la app de escritorio la cuenta la hace el backend en varios núcleos
+ * (`estimate_bone_influence`); `estimateInfluence` queda de respaldo.
  */
+
+import { invoke } from "@tauri-apps/api/core";
 
 export interface InfluenceBone {
   position: [number, number, number];
@@ -107,6 +112,37 @@ export function estimateInfluence(positions: Float32Array, bones: InfluenceBone[
     }
   }
   return { numVertices, numBones: bones.length, weights, maxInfluences: k };
+}
+
+/**
+ * Lo mismo que `estimateInfluence`, calculado en el backend (no traba el
+ * visor con mallas grandes). Sin backend, o si falla, se calcula aquí.
+ */
+export async function estimateInfluenceAsync(positions: Float32Array, bones: InfluenceBone[], maxInfluences = 4): Promise<Influence> {
+  const numVertices = positions.length / 3;
+  const k = maxInfluences;
+  try {
+    // u32 huesos, u32 k, por hueso f32 x, y, z + i32 padre, y las posiciones
+    const head = 2 + bones.length * 4;
+    const body = new ArrayBuffer((head + positions.length) * 4);
+    const view = new DataView(body);
+    view.setUint32(0, bones.length, true);
+    view.setUint32(4, k, true);
+    bones.forEach((bone, b) => {
+      const o = (2 + b * 4) * 4;
+      view.setFloat32(o, bone.position[0], true);
+      view.setFloat32(o + 4, bone.position[1], true);
+      view.setFloat32(o + 8, bone.position[2], true);
+      view.setInt32(o + 12, bone.parent ?? -1, true);
+    });
+    // Las posiciones van tal cual (los visores corren en little-endian)
+    new Float32Array(body, head * 4).set(positions);
+    const weights = new Float32Array(await invoke<ArrayBuffer>("estimate_bone_influence", new Uint8Array(body)));
+    if (weights.length === numVertices * k * 2) return { numVertices, numBones: bones.length, weights, maxInfluences: k };
+  } catch {
+    // Sin backend (app web) o error: se calcula aquí
+  }
+  return estimateInfluence(positions, bones, k);
 }
 
 /** Tono (0–1) propio de cada hueso: ángulo áureo, vecinos bien distintos */

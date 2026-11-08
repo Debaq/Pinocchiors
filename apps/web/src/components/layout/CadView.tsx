@@ -8,7 +8,7 @@ import type { CameraPose } from "../../lib/cameraRig";
 import { parse as parseFont, type Font } from "opentype.js";
 import { layoutText, type Contour } from "../../lib/sketchText";
 import { dragJointOf, dragPlane, mateAxis, measuredAngle, measuredDistance, nextAngle, nextDistance, turned } from "../../lib/assemblyDrag";
-import { fitReport, CONSTRAINT_LABELS, editsAsSketch, geometryPoints, type Report3d, type Sketch3d, type Plane, addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, curvePolyline, constraintValue, hasDiameterTwin, swapDiameter, isReference, isLoosePoint, isSolidPoint, removeLoosePoint, leavingDirection, placeSnap, tangentArc, type CadStore, designMass, dragByHandle, flipByHandle, handleField, handleValue, partColor, partHidden, samePart, type FeatureHandle, type FeatureKind, type MeasureItem, type Measurement, type P2, type P3, type ScanOutline, type Sketch, type SketchConstraint } from "../../lib/cad";
+import { fitReport, CONSTRAINT_LABELS, editsAsSketch, geometryPoints, type Report3d, type Sketch3d, type Plane, addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, curvePolyline, constraintValue, hasDiameterTwin, swapDiameter, isReference, isLoosePoint, isSolidPoint, removeLoosePoint, leavingDirection, placeSnap, tangentArc, type CadStore, designMass, dragByHandle, flipByHandle, handleField, handleValue, partColor, partHidden, samePart, explodeAssemblyMesh, type AssemblyRange, type CadMesh, type FeatureHandle, type FeatureKind, type MeasureItem, type Measurement, type P2, type P3, type ScanOutline, type Sketch, type SketchConstraint } from "../../lib/cad";
 import { infer, solidRefs, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
 import { angleView, applyFrame, clipCenter, invertFrame, measureConstraint, rotation, scaling, selectedEntities, splitEntityAt, transformSelection, translation, type Frame, type Xform } from "../../lib/sketchTransform";
 import { mergeDuplicate, rejoinSplit, sameEntities, trimByStroke, trimRemoved } from "../../lib/sketchEdit";
@@ -857,34 +857,47 @@ export const CadView: Component<CadViewProps> = (props) => {
     }
     hadBody = !!m;
   });
-  // Ensamble: cada instancia en su lugar, con el color de su pieza
+  // Ensamble: cada instancia en su lugar, con el color de su pieza. La malla
+  // armada se pide al cambiar el ensamble; el deslizador de explosión solo
+  // corre las piezas en el front (antes re-teselaba todo en cada movimiento)
   let asmSeq = 0;
-  let asmFaceRanges: [number, number, number][] = [];
+  let asmFaceRanges: AssemblyRange[] = [];
+  const [asmBase, setAsmBase] = createSignal<{ mesh: CadMesh | null; ranges: AssemblyRange[] }>();
   createEffect(
-    on([() => ui.assemblyMode(), () => store.result()?.assembly?.version, () => ui.assemblyExplode()], async ([on_]) => {
+    on([() => ui.assemblyMode(), () => store.result()?.assembly?.version], async ([on_]) => {
       const n = ++asmSeq;
       if (!on_) {
+        setAsmBase(undefined);
         viewer?.setBody(store.mesh());
         return;
       }
-      if (!store.result()?.assembly) return viewer?.setBody(null);
+      if (!store.result()?.assembly) {
+        setAsmBase(undefined);
+        return viewer?.setBody(null);
+      }
       try {
-        const [mesh, faces] = await Promise.all([store.assemblyMesh(ui.assemblyExplode()), store.assemblyFaces()]);
-        if (n !== asmSeq || !viewer) return;
-        asmFaceRanges = faces;
-        viewer.setBody(mesh);
-        const doc = store.doc();
-        const parts = store.result()?.parts ?? [];
-        viewer.setParts(
-          faces.map(([id, a, b]) => {
-            const inst = doc?.assembly?.instances.find((i) => i.id === id);
-            const k = parts.findIndex((p) => inst && samePart(p.id, inst.part));
-            return { faces: [a, b] as [number, number], edges: [0, 0] as [number, number], color: parseInt((k >= 0 ? partColor(doc, parts[k], k) : "#9aa4b8").slice(1), 16), hidden: false };
-          }),
-        );
+        const [mesh, ranges] = await Promise.all([store.assemblyMesh(), store.assemblyFaces()]);
+        if (n !== asmSeq) return;
+        asmFaceRanges = ranges;
+        setAsmBase({ mesh, ranges });
       } catch (e) {
         ui.setMessage(tBackend(String(e)));
       }
+    }),
+  );
+  createEffect(
+    on([asmBase, () => ui.assemblyExplode()], ([base, explode]) => {
+      if (!base || !viewer || !ui.assemblyMode()) return;
+      viewer.setBody(base.mesh && explodeAssemblyMesh(base.mesh, base.ranges, explode));
+      const doc = untrack(() => store.doc());
+      const parts = untrack(() => store.result()?.parts ?? []);
+      viewer.setParts(
+        base.ranges.map(([id, a, b, e0, e1]) => {
+          const inst = doc?.assembly?.instances.find((i) => i.id === id);
+          const k = parts.findIndex((p) => inst && samePart(p.id, inst.part));
+          return { faces: [a, b] as [number, number], edges: [e0 ?? 0, e1 ?? 0] as [number, number], color: parseInt((k >= 0 ? partColor(doc, parts[k], k) : "#9aa4b8").slice(1), 16), hidden: false };
+        }),
+      );
     }),
   );
   // Operación bajo el mouse en el árbol: su sketch o sus caras en ámbar

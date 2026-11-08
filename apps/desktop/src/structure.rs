@@ -73,6 +73,9 @@ pub struct TextureInfo {
     pub width: u32,
     pub height: u32,
     pub bytes: usize,
+    /// Firma del contenido: el visor vuelve a bajar y decodificar solo las
+    /// texturas cuya firma cambió (cabe exacta en un número de JS)
+    pub hash: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -229,6 +232,7 @@ pub fn scene_structure(scene: &Scene) -> SceneStructure {
             width: t.width,
             height: t.height,
             bytes: t.data.len(),
+            hash: content_hash(&t.data),
         })
         .collect();
     let skeletons = scene
@@ -275,6 +279,23 @@ pub fn scene_structure(scene: &Scene) -> SceneStructure {
         skeletons,
         animations,
     }
+}
+
+/// Firma rápida de unos bytes (de a 8, multiplicar y mezclar): detecta cambios,
+/// no es criptográfica. Corre a varios GB/s, así que firmar todas las texturas
+/// en cada consulta cuesta poco
+pub(crate) fn content_hash(data: &[u8]) -> u64 {
+    let mut h = 0xcbf2_9ce4_8422_2325u64 ^ data.len() as u64;
+    let mut chunks = data.chunks_exact(8);
+    for c in &mut chunks {
+        h = (h.rotate_left(5) ^ u64::from_le_bytes(c.try_into().unwrap())).wrapping_mul(0x517c_c1b7_2722_0a95);
+    }
+    for &b in chunks.remainder() {
+        h = (h.rotate_left(5) ^ b as u64).wrapping_mul(0x517c_c1b7_2722_0a95);
+    }
+    h ^= h >> 29;
+    h = h.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    (h ^ (h >> 32)) & ((1 << 52) - 1)
 }
 
 /// Estructura del archivo importado

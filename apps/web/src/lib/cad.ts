@@ -2040,6 +2040,70 @@ export function decodeCadMesh(buffer: ArrayBuffer): CadMesh | null {
   return { positions, normals, indices, triangleFace, edgeEnds, edgePoints };
 }
 
+/** Por instancia del ensamble: [id, desde, hasta) en caras y [desde, hasta) en aristas */
+export type AssemblyRange = [number, number, number, number, number];
+
+/**
+ * Vista explosionada sin volver a teselar: cada instancia se corre desde el
+ * centro del conjunto en la dirección de su propio centro, `explode` veces la
+ * distancia que los separa (lo mismo que `explode_shapes` del backend, con los
+ * centros de su malla). Devuelve otra malla; la de entrada no cambia.
+ */
+export function explodeAssemblyMesh(mesh: CadMesh, ranges: AssemblyRange[], explode: number): CadMesh {
+  if (explode <= 0 || ranges.length < 2) return mesh;
+  const n = mesh.positions.length / 3;
+  // Instancia de cada vértice (por sus triángulos) y de cada arista
+  const faceInstance = (face: number) => ranges.findIndex((r) => face >= r[1] && face < r[2]);
+  const vertexInstance = new Int32Array(n).fill(-1);
+  let lastFace = -1;
+  let lastInstance = -1;
+  for (let t = 0; t < mesh.triangleFace.length; t++) {
+    const face = mesh.triangleFace[t];
+    if (face !== lastFace) {
+      lastFace = face;
+      lastInstance = faceInstance(face);
+    }
+    for (let k = 0; k < 3; k++) vertexInstance[mesh.indices[t * 3 + k]] = lastInstance;
+  }
+  // Centro de la caja de cada instancia
+  const lo = new Float64Array(ranges.length * 3).fill(Infinity);
+  const hi = new Float64Array(ranges.length * 3).fill(-Infinity);
+  for (let v = 0; v < n; v++) {
+    const i = vertexInstance[v];
+    if (i < 0) continue;
+    for (let k = 0; k < 3; k++) {
+      const x = mesh.positions[v * 3 + k];
+      if (x < lo[i * 3 + k]) lo[i * 3 + k] = x;
+      if (x > hi[i * 3 + k]) hi[i * 3 + k] = x;
+    }
+  }
+  const centers = ranges.map((_, i) => [0, 1, 2].map((k) => (lo[i * 3 + k] + hi[i * 3 + k]) / 2));
+  const valid = centers.filter((c) => c.every(Number.isFinite));
+  if (valid.length < 2) return mesh;
+  const mid = [0, 1, 2].map((k) => valid.reduce((sum, c) => sum + c[k], 0) / valid.length);
+  const offset = centers.map((c) => (c.every(Number.isFinite) ? c.map((x, k) => (x - mid[k]) * explode) : [0, 0, 0]));
+
+  const positions = Float32Array.from(mesh.positions);
+  for (let v = 0; v < n; v++) {
+    const i = vertexInstance[v];
+    if (i < 0) continue;
+    positions[v * 3] += offset[i][0];
+    positions[v * 3 + 1] += offset[i][1];
+    positions[v * 3 + 2] += offset[i][2];
+  }
+  const edgePoints = Float32Array.from(mesh.edgePoints);
+  ranges.forEach(([, , , e0, e1], i) => {
+    const from = e0 > 0 ? mesh.edgeEnds[e0 - 1] : 0;
+    const to = e1 > 0 ? mesh.edgeEnds[Math.min(e1, mesh.edgeEnds.length) - 1] : 0;
+    for (let p = from; p < to; p++) {
+      edgePoints[p * 3] += offset[i][0];
+      edgePoints[p * 3 + 1] += offset[i][1];
+      edgePoints[p * 3 + 2] += offset[i][2];
+    }
+  });
+  return { ...mesh, positions, edgePoints };
+}
+
 // ─── Escaneo → CAD ────────────────────────────────────────────────────────
 
 export interface PlanePick {
@@ -4476,7 +4540,12 @@ export function createCadStore() {
   // Caras y aristas elegidas: los pedidos que llegan juntos (un `Promise.all`
   // sobre las caras elegidas, las aristas de una cara) van en una sola llamada
   // con un solo recálculo (PLAN_RENDIMIENTO R4)
-  let featureFacesCache: { version: number; faces: Map<number, Promise<number[]>> } = { version: -1, faces: new Map() };
+  let featureFacesCache: {
+    version: number;
+    faces: Map<number, Promise<number[]>>;
+    /** Operaciones de cada cara (CSR), pedidas una vez por versión */
+    tags?: Promise<{ offsets: Uint32Array; ids: Uint32Array }>;
+  } = { version: -1, faces: new Map() };
   const faceRefs = batchedRefs<FaceRef>("cad_face_refs", "faces", tr("Esa cara no existe"));
   const edgeRefs = batchedRefs<EdgeRef>("cad_edge_refs", "edges", tr("Esa arista no existe"));
   let meshVersion = -1;
@@ -5244,12 +5313,35 @@ export function createCadStore() {
     featureFaces: (feature: number) => {
       // Pasar el mouse por el árbol pide esto en cada fila: mientras el diseño
       // no cambie, la respuesta es la misma (PLAN_RENDIMIENTO R5)
+      // Las operaciones de todas las caras llegan juntas, una vez por versión
       const version = result()?.version ?? -1;
       if (featureFacesCache.version !== version) featureFacesCache = { version, faces: new Map() };
       const cache = featureFacesCache;
+      if (!cache.tags) {
+        const tags = invoke<ArrayBuffer>("cad_face_tags").then((buf) => {
+          const [n] = new Uint32Array(buf, 0, 1);
+          const offsets = new Uint32Array(buf, 4, n + 1);
+          return { offsets, ids: new Uint32Array(buf, 4 * (n + 2), offsets[n]) };
+        });
+        cache.tags = tags;
+        tags.catch(() => {
+          if (cache.tags === tags) cache.tags = undefined;
+        });
+      }
       let faces = cache.faces.get(feature);
       if (!faces) {
-        faces = invoke<number[]>("cad_feature_faces", { feature });
+        faces = cache.tags.then(({ offsets, ids }) => {
+          const out: number[] = [];
+          for (let f = 0; f + 1 < offsets.length; f++) {
+            for (let j = offsets[f]; j < offsets[f + 1]; j++) {
+              if (ids[j] === feature) {
+                out.push(f);
+                break;
+              }
+            }
+          }
+          return out;
+        });
         cache.faces.set(feature, faces);
         faces.catch(() => cache.faces.delete(feature));
       }
@@ -5293,8 +5385,9 @@ export function createCadStore() {
     /** La unión recorrida de `from` a `to` (° o mm) como GLB animado, una pose por cuadro */
     exportAssemblyAnimation: (path: string, mate: number, v: "angle" | "distance", from: number, to: number, frames = 30, fps = 30) =>
       invoke<number>("cad_export_assembly_animation", { path, mate, var: v, from, to, frames, fps }),
-    assemblyMesh: async (explode = 0) => decodeCadMesh(await invoke<ArrayBuffer>("cad_assembly_mesh", { explode })),
-    assemblyFaces: () => invoke<[number, number, number][]>("cad_assembly_faces"),
+    /** Malla del ensamble armado (el backend la guarda; la explosión la hace `explodeAssemblyMesh`) */
+    assemblyMesh: async () => decodeCadMesh(await invoke<ArrayBuffer>("cad_assembly_mesh", { explode: 0 })),
+    assemblyFaces: () => invoke<AssemblyRange[]>("cad_assembly_faces"),
     assemblyConnector: (face: number) => invoke<Connector>("cad_assembly_connector", { face }),
     assemblyInterference: () => invoke<[number, number, number][]>("cad_assembly_interference"),
     /** Pares que quedan más cerca que la holgura de la impresora del diseño (o de `minGap`, en mm) */

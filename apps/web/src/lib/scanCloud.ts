@@ -174,31 +174,41 @@ export function createScanCloud(viewer: () => Viewer3D | undefined, onMessage: (
   /** Aplica una edición; con `selectOnly` solo marca en el visor lo que quitaría */
   const edit = (op: CloudOp, label: string, selectOnly = false) =>
     run(label, async () => {
-      const result = await invoke<CloudEditResult>("scan_cloud_edit", { op, selectOnly });
-      const note = result.note ? ` (${result.note})` : "";
       if (selectOnly) {
-        viewer()?.setCloudSelection(result.selected ?? []);
-        onMessage(t("{label}: {n} puntos seleccionados{note}", { label: t(label), n: fmtNumber(result.removed), note }));
+        // Los índices llegan en binario (`scan_cloud_select`): cuántos, la nota y la lista
+        const buf = await invoke<ArrayBuffer>("scan_cloud_select", { op });
+        const [count, noteBytes] = new Uint32Array(buf, 0, 2);
+        const text = new TextDecoder().decode(new Uint8Array(buf, 8, noteBytes));
+        const indices = new Uint32Array(buf, 8 + Math.ceil(noteBytes / 4) * 4, count);
+        viewer()?.setCloudSelection(indices);
+        const note = text ? ` (${text})` : "";
+        onMessage(t("{label}: {n} puntos seleccionados{note}", { label: t(label), n: fmtNumber(count), note }));
         return;
       }
+      const result = await invoke<CloudEditResult>("scan_cloud_edit", { op });
+      const note = result.note ? ` (${result.note})` : "";
       await adopt(result.info);
       const what = op.kind === "downsample" || op.kind === "smooth" ? t("quedan {n} puntos", { n: fmtNumber(result.info.points) }) : t("{n} puntos quitados", { n: fmtNumber(result.removed) });
       onMessage(`${t(label)}: ${what}${note}`);
     });
 
-  const selection = () => Array.from(viewer()?.getCloudSelection() ?? []);
-
-  const deleteSelection = () => {
+  /** Borra o conserva la selección; los índices viajan en binario (`scan_cloud_edit_selection`) */
+  const editSelection = (kind: "delete" | "keep", label: string) => {
     const current = info();
-    if (!current || selected() === 0) return;
-    return edit({ kind: "delete", indices: selection(), version: current.version }, "Borrar selección");
+    const indices = viewer()?.getCloudSelection();
+    if (!current || selected() === 0 || !indices) return;
+    return run(label, async () => {
+      const bytes = new Uint8Array(indices.buffer, indices.byteOffset, indices.byteLength);
+      const result = await invoke<CloudEditResult>("scan_cloud_edit_selection", bytes, { headers: { kind, version: String(current.version) } });
+      await adopt(result.info);
+      const note = result.note ? ` (${result.note})` : "";
+      onMessage(`${t(label)}: ${t("{n} puntos quitados", { n: fmtNumber(result.removed) })}${note}`);
+    });
   };
 
-  const keepSelection = () => {
-    const current = info();
-    if (!current || selected() === 0) return;
-    return edit({ kind: "keep", indices: selection(), version: current.version }, "Recortar a la selección");
-  };
+  const deleteSelection = () => editSelection("delete", "Borrar selección");
+
+  const keepSelection = () => editSelection("keep", "Recortar a la selección");
 
   const history = (redo: boolean) =>
     run(redo ? "Rehacer" : "Deshacer", async () => {

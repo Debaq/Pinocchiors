@@ -2706,6 +2706,43 @@ pub async fn get_weights_data(app: AppHandle) -> Result<Response, String> {
     Ok(Response::new(bytes))
 }
 
+/// Influencia estimada de los huesos (vista previa sin pesos calculados), en
+/// núcleos aparte. El cuerpo viaja crudo, en little-endian: `u32` huesos,
+/// `u32` influencias por vértice, por hueso `f32` x, y, z + `i32` padre (-1 =
+/// raíz), y después las posiciones de los vértices (`f32` x, y, z). Devuelve
+/// por vértice los pares (hueso, peso) en `f32`, como `estimateInfluence`.
+#[tauri::command]
+pub async fn estimate_bone_influence(request: tauri::ipc::Request<'_>) -> Result<Response, String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("Faltan los datos de la influencia".to_string());
+    };
+    let bytes = bytes.clone();
+    let out = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<u8>, String> {
+        let word = |i: usize| -> Option<[u8; 4]> { bytes.get(4 * i..4 * i + 4)?.try_into().ok() };
+        let bad = || "Datos de influencia incompletos".to_string();
+        let num_bones = u32::from_le_bytes(word(0).ok_or_else(bad)?) as usize;
+        let k = (u32::from_le_bytes(word(1).ok_or_else(bad)?) as usize).min(16);
+        let start = 2 + 4 * num_bones;
+        if bytes.len() < 4 * start || (bytes.len() - 4 * start) % 12 != 0 {
+            return Err(bad());
+        }
+        let f = |i: usize| f32::from_le_bytes(word(i).unwrap());
+        let bones: Vec<([f32; 3], Option<usize>)> = (0..num_bones)
+            .map(|b| {
+                let o = 2 + 4 * b;
+                let parent = i32::from_le_bytes(word(o + 3).unwrap());
+                ([f(o), f(o + 1), f(o + 2)], usize::try_from(parent).ok().filter(|&p| p < num_bones))
+            })
+            .collect();
+        let positions: Vec<f32> = bytes[4 * start..].chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect();
+        let weights = pinocchio_attachment::estimate_influence(&positions, &bones, k);
+        Ok(weights.iter().flat_map(|w| w.to_le_bytes()).collect())
+    })
+    .await
+    .map_err(|e| format!("La tarea terminó inesperadamente: {e}"))??;
+    Ok(Response::new(out))
+}
+
 /// Pesos en el orden de vértices del visor (con el rig sobre la malla de
 /// quads, los vértices duplicados en costuras UV repiten la fila de su vértice)
 pub(crate) fn get_weights_data_impl(state: &AppState) -> Result<WeightsData, String> {
@@ -3603,6 +3640,14 @@ pub async fn get_checker_texture(app: AppHandle) -> Result<Response, String> {
 pub fn get_skin_materials(state: State<'_, AppState>) -> Vec<crate::structure::MaterialInfo> {
     let skin = state.quad_skin.lock().unwrap();
     skin.as_ref().map_or_else(Vec::new, |s| s.materials.iter().map(crate::structure::material_info).collect())
+}
+
+/// Firma del contenido de cada textura de la piel (como `TextureInfo.hash`): el
+/// visor vuelve a bajar y decodificar solo las que cambiaron
+#[tauri::command]
+pub fn get_skin_texture_hashes(state: State<'_, AppState>) -> Vec<u64> {
+    let skin = state.quad_skin.lock().unwrap();
+    skin.as_ref().map_or_else(Vec::new, |s| s.textures.iter().map(|t| crate::structure::content_hash(&t.data)).collect())
 }
 
 /// Imagen de una textura de la piel, tal cual (PNG, JPEG o WebP)
@@ -5440,9 +5485,10 @@ mod tests {
     }
 }
 
-/// Guarda la imagen de un render. El cuerpo de la petición es el archivo tal cual
-/// (sin pasar por JSON: pesa megas) y la ruta va en la cabecera `path`, con
-/// `encodeURIComponent`.
+/// Guarda un archivo binario: renders, PNG de vistas de planos, imágenes del
+/// chat (`writeBytes` en apps/web/src/lib/writeBytes.ts). El cuerpo de la
+/// petición es el archivo tal cual (sin pasar por JSON: pesa megas) y la ruta va
+/// en la cabecera `path`, con `encodeURIComponent`.
 #[tauri::command]
 pub async fn write_render_image(request: tauri::ipc::Request<'_>) -> Result<u64, String> {
     let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {

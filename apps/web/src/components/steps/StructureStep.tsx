@@ -55,7 +55,8 @@ export interface SceneStructure {
   nodes: NodeInfo[];
   meshes: { name: string; primitives: PrimitiveInfo[] }[];
   materials: MaterialInfo[];
-  textures: { name: string; format: string; width: number; height: number; bytes: number }[];
+  /** `hash`: firma del contenido (cambia si cambia la imagen) */
+  textures: { name: string; format: string; width: number; height: number; bytes: number; hash: number }[];
   skeletons: { name: string; joints: string[]; roots: number[] }[];
   animations: {
     name: string;

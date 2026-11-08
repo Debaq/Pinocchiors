@@ -1,5 +1,6 @@
 import { Component, For, Match, Show, Switch, createEffect, createSignal, on, onCleanup, onMount } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
+import { base64Bytes, writeBytes } from "../../lib/writeBytes";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import * as Icons from "../icons";
@@ -118,14 +119,13 @@ function entryText(e: Entry): string {
   }
 }
 
-const b64ToBytes = (b64: string) => Array.from(atob(b64), (c) => c.charCodeAt(0));
 const extOf = (mime: string) => (mime === "image/jpeg" ? "jpg" : mime.split("/")[1] ?? "png");
 
 /** Guarda una imagen (pregunta dónde) */
 async function downloadPicture(p: Picture, name = "imagen") {
   const ext = extOf(p.mime);
   const path = await save({ defaultPath: `${name}.${ext}`, filters: [{ name: ext.toUpperCase(), extensions: [ext] }] });
-  if (path) await invoke("cad_write_bytes", { path, bytes: b64ToBytes(p.data) });
+  if (path) await writeBytes(path, base64Bytes(p.data));
 }
 
 /** La conversación en Markdown; las imágenes van en archivos al lado (`<nombre>-imagen-N.ext`) */
@@ -139,7 +139,7 @@ async function saveConversation() {
   const picture = async (p: Picture) => {
     n += 1;
     const file = `${stem}-imagen-${n}.${extOf(p.mime)}`;
-    await invoke("cad_write_bytes", { path: file, bytes: b64ToBytes(p.data) });
+    await writeBytes(file, base64Bytes(p.data));
     lines.push(`![](${base}-imagen-${n}.${extOf(p.mime)})`, "");
   };
   for (const e of entries()) {

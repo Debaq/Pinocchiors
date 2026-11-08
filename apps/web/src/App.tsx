@@ -361,6 +361,7 @@ import { recordTemplateUse } from "./lib/templateUsage";
 import { TemplateGallery } from "./components/layout/TemplateGallery";
 import type { TemplateShape } from "./lib/skeletonThumb";
 import { toSceneMatrix, type Mat4 } from "./lib/scanAlign";
+import { writeBytes } from "./lib/writeBytes";
 import { SkeletonEditor, type SkeletonEditorTab } from "./components/layout/SkeletonEditor";
 import { SkeletonFitTab, SkeletonWeightsTab, type SkeletonStepProps } from "./components/steps/SkeletonStep";
 import { JointTunePanel, type TuneDirection, type TuneRotation } from "./components/panels/JointTunePanel";
@@ -875,6 +876,12 @@ export const App: Component = () => {
     }));
   };
 
+  /**
+   * Texturas ya bajadas y decodificadas, por firma de contenido y formato: al
+   * recargar (cada cambio de malla, cada guardado en GIMP) solo se piden las
+   * que cambiaron
+   */
+  let textureCache = new Map<string, Promise<{ url: string; image: ImageBitmap | undefined }>>();
   /** Estructura, materiales y texturas de la escena (miniaturas e imágenes para el visor) */
   let appearanceRequest = 0;
   const loadSceneAppearance = async () => {
@@ -884,20 +891,34 @@ export const App: Component = () => {
         invoke<SceneStructure>("get_scene_structure"),
         invoke<MaterialInfo[]>("get_scene_materials"),
       ]);
-      const buffers = await Promise.all(
-        structure.textures.map((_, index) => invoke<ArrayBuffer>("get_scene_texture", { index }))
-      );
       const mime = (format: string) => (format === "JPEG" ? "image/jpeg" : format === "WebP" ? "image/webp" : "image/png");
-      const blobs = buffers.map((b, i) => new Blob([b], { type: mime(structure.textures[i].format) }));
-      const images = await Promise.all(blobs.map((b) => createImageBitmap(b).catch(() => undefined)));
-      // Otra recarga empezó después: la suya es la que vale
-      if (request !== appearanceRequest) {
-        images.forEach((image) => image?.close());
-        return;
+      const keys = structure.textures.map((tex) => `${tex.hash}:${tex.bytes}:${tex.format}`);
+      const entries = keys.map((key, index) => {
+        let entry = textureCache.get(key);
+        if (!entry) {
+          entry = invoke<ArrayBuffer>("get_scene_texture", { index }).then(async (buffer) => {
+            const blob = new Blob([buffer], { type: mime(structure.textures[index].format) });
+            return { url: URL.createObjectURL(blob), image: await createImageBitmap(blob).catch(() => undefined) };
+          });
+          // Si falla, que la próxima recarga la vuelva a pedir
+          entry.catch(() => textureCache.delete(key));
+          textureCache.set(key, entry);
+        }
+        return entry;
+      });
+      const loaded = await Promise.all(entries);
+      // Otra recarga empezó después: la suya es la que vale (lo bajado queda guardado)
+      if (request !== appearanceRequest) return;
+      // Se sueltan las que ya no usa la escena
+      const used = new Set(keys);
+      const next = new Map<string, Promise<{ url: string; image: ImageBitmap | undefined }>>();
+      for (const [key, entry] of textureCache) {
+        if (used.has(key)) next.set(key, entry);
+        else void entry.then((e) => URL.revokeObjectURL(e.url), () => {});
       }
-      textureUrls().forEach((url) => URL.revokeObjectURL(url));
-      setTextureUrls(blobs.map((b) => URL.createObjectURL(b)));
-      setSceneMaterials(toSceneMaterials(materials, images));
+      textureCache = next;
+      setTextureUrls(loaded.map((e) => e.url));
+      setSceneMaterials(toSceneMaterials(materials, loaded.map((e) => e.image)));
       setSceneStructure(structure);
     } catch (e) {
       console.error("Scene structure error:", e);
@@ -1335,6 +1356,8 @@ export const App: Component = () => {
   const decodeImage = async (buffer: ArrayBuffer): Promise<ImageBitmap | undefined> =>
     buffer.byteLength > 0 ? createImageBitmap(new Blob([buffer])) : undefined;
 
+  /** Texturas de la piel ya decodificadas, por firma de contenido */
+  const skinTextureCache = new Map<string, Promise<ImageBitmap | undefined>>();
   /** Lee del backend la piel actual: estado, atlas, texturas y la malla con UV */
   let skinRequest = 0;
   const refreshSkin = async () => {
@@ -1347,9 +1370,10 @@ export const App: Component = () => {
       setSkinMaterialInfos([]);
       return;
     }
-    const [materials, mesh] = await Promise.all([
+    const [materials, mesh, hashes] = await Promise.all([
       invoke<MaterialInfo[]>("get_skin_materials"),
       invoke<ArrayBuffer>("get_quad_mesh_data"),
+      invoke<number[]>("get_skin_texture_hashes").catch(() => [] as number[]),
     ]);
     // Solo las texturas que usa algún material
     const used = new Set(
@@ -1362,16 +1386,27 @@ export const App: Component = () => {
       ])
     );
     const count = Math.max(0, ...[...used].map((i) => (i ?? -1) + 1));
+    // Lo ya bajado y decodificado se reusa por firma de contenido (solo se piden las que cambiaron)
+    const keys = Array.from({ length: count }, (_, index) => (hashes[index] !== undefined ? String(hashes[index]) : undefined));
     const images = await Promise.all(
-      Array.from({ length: count }, (_, index) =>
-        used.has(index) ? invoke<ArrayBuffer>("get_skin_texture", { index }).then(decodeImage) : undefined
-      )
+      Array.from({ length: count }, (_, index) => {
+        if (!used.has(index)) return undefined;
+        const key = keys[index];
+        let entry = key !== undefined ? skinTextureCache.get(key) : undefined;
+        if (!entry) {
+          entry = invoke<ArrayBuffer>("get_skin_texture", { index }).then(decodeImage);
+          if (key !== undefined) {
+            skinTextureCache.set(key, entry);
+            entry.catch(() => skinTextureCache.delete(key));
+          }
+        }
+        return entry;
+      })
     );
-    // Otra lectura empezó después: la suya es la que vale
-    if (request !== skinRequest) {
-      images.forEach((image) => image?.close());
-      return;
-    }
+    // Otra lectura empezó después: la suya es la que vale (lo bajado queda guardado)
+    if (request !== skinRequest) return;
+    const usedKeys = new Set(keys.filter((k, i): k is string => k !== undefined && used.has(i)));
+    for (const key of [...skinTextureCache.keys()]) if (!usedKeys.has(key)) skinTextureCache.delete(key);
     setSkinMaterials(toSceneMaterials(materials, images));
     setSkinMaterialInfos(materials);
     setQuadMeshData(decodeMesh(mesh));
@@ -1662,6 +1697,8 @@ export const App: Component = () => {
   const [printPrep, setPrintPrep] = createSignal<PrepSettings>(defaultPrep);
   // Pieles imprimibles: la zona de caras (la guarda el backend), la biblioteca de imágenes y la elegida
   const [skinZone, setSkinZone] = createSignal<SkinZone | undefined>();
+  /** Caras de la zona y protegidas (llegan en binario, solo cuando cambian) */
+  const [skinZoneFaces, setSkinZoneFaces] = createSignal<{ faces: Uint32Array; protected: Uint32Array }>();
   const [skinPicking, setSkinPicking] = createSignal(false);
   const [skinPickTarget, setSkinPickTarget] = createSignal<"zone" | "protected">("zone");
   const [skinLibrary, setSkinLibrary] = createSignal<SkinPattern[]>([]);
@@ -6379,7 +6416,7 @@ export const App: Component = () => {
     const pose = v.getCameraPose();
     const saved: string[] = [];
     // El archivo viaja como cuerpo crudo (sin JSON): las imágenes grandes pesan megas
-    const write = (image: StillImage, to: string) => invoke<number>("write_render_image", image.bytes, { headers: { path: encodeURIComponent(to) } });
+    const write = (image: StillImage, to: string) => writeBytes(to, image.bytes);
     try {
       const cells: SheetCell[] = [];
       let size = 0;
@@ -7476,14 +7513,38 @@ export const App: Component = () => {
   const loadSkin = async () => {
     try {
       setSkinLibrary((await invoke<SkinPattern[] | null>("skin_library")) ?? []);
-      setSkinZone(await invoke<SkinZone>("skin_zone_get"));
+      await applySkinZone(await invoke<SkinZone>("skin_zone_get"));
     } catch (e) {
       setSkinZone(undefined);
+      setSkinZoneFaces(undefined);
       console.error("Skin load error:", e);
     }
   };
+  /** Guarda el resumen de la zona y, si cambiaron, pide las caras en binario */
+  let skinFacesRevision: number | undefined;
+  const applySkinZone = async (zone: SkinZone) => {
+    setSkinZone(zone);
+    if (zone.revision === skinFacesRevision && skinZoneFaces()) return;
+    skinFacesRevision = zone.revision;
+    const buf = await invoke<ArrayBuffer>("skin_zone_faces");
+    // Llegó otra zona mientras tanto: esa pide las suyas
+    if (skinFacesRevision !== zone.revision) return;
+    const [faces, prot] = buf.byteLength >= 8 ? new Uint32Array(buf, 0, 2) : [0, 0];
+    setSkinZoneFaces({ faces: new Uint32Array(buf, 8, faces), protected: new Uint32Array(buf, 8 + faces * 4, prot) });
+  };
   // Otra malla: la zona de antes ya no vale, se vuelve a pedir
-  createEffect(on(meshData, (data) => (data ? void loadSkin() : setSkinZone(undefined)), { defer: false }));
+  createEffect(
+    on(
+      meshData,
+      (data) => {
+        skinFacesRevision = undefined;
+        setSkinZoneFaces(undefined);
+        if (data) void loadSkin();
+        else setSkinZone(undefined);
+      },
+      { defer: false },
+    ),
+  );
   // La elección de caras solo vale mientras se está en Fabricar
   createEffect(() => {
     if (pipeline.activeStep() !== "print3d" || animating()) setSkinPicking(false);
@@ -7500,13 +7561,13 @@ export const App: Component = () => {
   const pickSkinFaces = async (faces: number[], mode: "set" | "add" | "remove" | "toggle") => {
     const command = skinPickTarget() === "protected" ? "skin_protect_edit" : "skin_zone_edit";
     const zone = await skinCall("Skin zone", () => invoke<SkinZone>(command, { faces, mode }));
-    if (zone) setSkinZone(zone);
+    if (zone) await applySkinZone(zone);
   };
   const protectSkinHoles = async (minMm: number, maxMm: number, kinds: string[]) => {
     type Found = { zone: SkinZone; found: number; holes: number; pins: number; threads: number; cones: number };
     const r = await skinCall("Skin protect", () => busy(t("Buscando agujeros, pernos y roscas..."), () => invoke<Found>("skin_protect_holes", { minMm, maxMm, kinds })));
     if (!r) return;
-    setSkinZone(r.zone);
+    await applySkinZone(r.zone);
     if (r.found === 0) return setStatusMessage(t("No se encontró nada que proteger en ese rango de diámetros"));
     const parts = [
       r.holes > 0 ? t("{n} agujeros", { n: r.holes }) : "",
@@ -7537,12 +7598,12 @@ export const App: Component = () => {
     stroke.vertices.forEach((v, i) => (next[v] = stroke.values[i]));
     setSkinMask(next);
     const zone = await skinCall("Skin mask edit", () => invoke<SkinZone>("skin_mask_edit", { vertices: Array.from(stroke.vertices), values: Array.from(stroke.values) }));
-    if (zone) setSkinZone(zone);
+    if (zone) await applySkinZone(zone);
   };
   const clearSkinMask = async () => {
     const zone = await skinCall("Skin mask clear", () => invoke<SkinZone>("skin_mask_clear"));
     if (!zone) return;
-    setSkinZone(zone);
+    await applySkinZone(zone);
     setSkinMask(null);
   };
   // Elegir caras, ver el relieve y pintar la intensidad no van juntos
@@ -7558,19 +7619,19 @@ export const App: Component = () => {
   }, { defer: true }));
   const clearSkinProtected = async () => {
     const zone = await skinCall("Skin protect clear", () => invoke<SkinZone>("skin_protect_clear"));
-    if (zone) setSkinZone(zone);
+    if (zone) await applySkinZone(zone);
   };
   const growSkinZone = async (angle: number) => {
     const zone = await skinCall("Skin grow", () => busy(t("Ampliando la zona..."), () => invoke<SkinZone>("skin_zone_grow", { angle })));
-    if (zone) setSkinZone(zone);
+    if (zone) await applySkinZone(zone);
   };
   const invertSkinZone = async () => {
     const zone = await skinCall("Skin invert", () => invoke<SkinZone>("skin_zone_invert"));
-    if (zone) setSkinZone(zone);
+    if (zone) await applySkinZone(zone);
   };
   const clearSkinZone = async () => {
     const zone = await skinCall("Skin clear", () => invoke<SkinZone>("skin_zone_clear"));
-    if (zone) setSkinZone(zone);
+    if (zone) await applySkinZone(zone);
   };
   const importSkinImage = async () => {
     const path = await open({ multiple: false, filters: [{ name: t("Imágenes"), extensions: ["png", "jpg", "jpeg", "webp", "bmp"] }] });
@@ -7602,7 +7663,7 @@ export const App: Component = () => {
   let skinEstimateRequest = 0;
   createEffect(() => {
     const params = skinParams();
-    const faces = skinZone()?.faces.length ?? 0;
+    const faces = skinZone()?.count ?? 0;
     const loaded = meshLoaded();
     const mine = ++skinEstimateRequest;
     if (!loaded || faces === 0) {
@@ -7622,7 +7683,7 @@ export const App: Component = () => {
   let skinPreviewRequest = 0;
   createEffect(() => {
     const params = skinParams();
-    const faces = skinZone()?.faces.length ?? 0;
+    const faces = skinZone()?.count ?? 0;
     const on = skinPreviewOn();
     const mine = ++skinPreviewRequest;
     if (!on || faces === 0) {
@@ -9589,7 +9650,7 @@ export const App: Component = () => {
               nodePicking={["prepare", "materials"].includes(pipeline.workspace()?.id ?? "") && !animating()}
               onNodesPicked={pickNodes}
               facePicking={(faceMode() && materialEditorVisible() && materialEditorTab() === "materials" && !animating() && !displayQuad()) || (skinPicking() && !displayQuad())}
-              pickedFaces={skinPicking() ? (skinPickTarget() === "protected" ? (skinZone()?.protected ?? []) : (skinZone()?.faces ?? [])) : pickedFaces()}
+              pickedFaces={skinPicking() ? (skinPickTarget() === "protected" ? (skinZoneFaces()?.protected ?? []) : (skinZoneFaces()?.faces ?? [])) : pickedFaces()}
               onFacesPicked={skinPicking() ? pickSkinFaces : pickFaces}
               onNodePicked={(node) => {
                 setExtraFileNodes([]);
@@ -9617,7 +9678,7 @@ export const App: Component = () => {
               onWeightsPainted={handleWeightsPainted}
               paintSettings={paintSettings()}
               maskPaint={skinMaskPainting() && !displayQuad() ? skinBrush() : undefined}
-              skinMask={skinMaskPainting() && !displayQuad() ? { mask: skinMask(), faces: skinZone()?.faces ?? [] } : undefined}
+              skinMask={skinMaskPainting() && !displayQuad() ? { mask: skinMask(), faces: skinZoneFaces()?.faces ?? [] } : undefined}
               onMaskPainted={(stroke) => void paintSkinMask(stroke)}
               compareMesh={compareRetopo() && pipeline.activeStep() === "remesh" ? quadMeshData() : undefined}
               meshData={plateViewIndex() !== null && plateViewData() ? plateViewData() : piecesViewOn() && piecesViewData() ? piecesViewData() : skinPreviewOn() && skinPreviewData() ? skinPreviewData() : showsPreview() ? remeshPreviewData() : displayQuad() ? quadMeshData() : meshData()}

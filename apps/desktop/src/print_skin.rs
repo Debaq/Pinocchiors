@@ -146,12 +146,17 @@ pub fn skin_remove_image(id: String, state: tauri::State<'_, AppState>) -> Vec<P
 // ZONAS
 // ═══════════════════════════════════════════════════════════════════════════
 
+/// Resumen de la zona. Las caras no viajan aquí (con mallas grandes eran ~1 MB
+/// de JSON en cada trazo del pincel): `skin_zone_faces` las da en binario, y
+/// `revision` cambia solo cuando cambian las caras o las protegidas.
 #[derive(Debug, Clone, Serialize)]
 pub struct ZoneInfo {
-    /// Caras de la zona, ordenadas
-    pub faces: Vec<u32>,
+    /// Caras de la zona
+    pub count: usize,
     /// Caras protegidas
-    pub protected: Vec<u32>,
+    pub protected_count: usize,
+    /// Firma de las caras y las protegidas (cabe exacta en un número de JS)
+    pub revision: u64,
     pub total: usize,
     /// Área de la zona en mm²
     pub area_mm2: f64,
@@ -188,13 +193,37 @@ fn zone_info(state: &AppState) -> Result<ZoneInfo, String> {
     let area = p3d::zone_area(mesh, &faces) * k * k;
     let all = p3d::zone_area(mesh, &(0..total).collect::<Vec<_>>()) * k * k;
     Ok(ZoneInfo {
-        faces: zone.faces.clone(),
-        protected: zone.protected.clone(),
+        count: zone.faces.len(),
+        protected_count: zone.protected.len(),
+        revision: zone_revision(&zone),
         total,
         area_mm2: area,
         fraction: if all > 0.0 { area / all } else { 0.0 },
         painted: zone.strength.iter().any(|&s| s < 0.999),
     })
+}
+
+/// Firma de las caras y las protegidas: el visor vuelve a pedirlas solo si cambia
+fn zone_revision(zone: &SkinZone) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (zone.total, &zone.faces, &zone.protected).hash(&mut h);
+    h.finish() & ((1 << 52) - 1)
+}
+
+/// Caras de la zona y protegidas, en binario (`u32` little-endian): cuántas
+/// caras, cuántas protegidas, las caras y las protegidas
+#[tauri::command]
+pub fn skin_zone_faces(state: tauri::State<'_, AppState>) -> Result<Response, String> {
+    zone_info(&state)?;
+    let zone = state.print_skin_zone.lock().unwrap();
+    let mut out = Vec::with_capacity(8 + 4 * (zone.faces.len() + zone.protected.len()));
+    out.extend_from_slice(&(zone.faces.len() as u32).to_le_bytes());
+    out.extend_from_slice(&(zone.protected.len() as u32).to_le_bytes());
+    for f in zone.faces.iter().chain(&zone.protected) {
+        out.extend_from_slice(&f.to_le_bytes());
+    }
+    Ok(Response::new(out))
 }
 
 /// La zona elegida
@@ -246,14 +275,14 @@ pub async fn skin_zone_grow(app: AppHandle, angle: f64) -> Result<ZoneInfo, Stri
 }
 
 pub(crate) fn grow_zone(state: &AppState, angle: f64) -> Result<ZoneInfo, String> {
-    let current = zone_info(state)?;
-    if current.faces.is_empty() {
+    zone_info(state)?;
+    let seeds: Vec<usize> = state.print_skin_zone.lock().unwrap().faces.iter().map(|&f| f as usize).collect();
+    if seeds.is_empty() {
         return Err("Elige primero algunas caras".into());
     }
     let grown: Vec<u32> = {
         let mesh = state.mesh.lock().unwrap();
         let mesh = mesh.as_ref().ok_or("No hay malla cargada")?;
-        let seeds: Vec<usize> = current.faces.iter().map(|&f| f as usize).collect();
         p3d::grow_by_angle(mesh, &seeds, angle).into_iter().map(|f| f as u32).collect()
     };
     state.print_skin_zone.lock().unwrap().faces = grown;
@@ -264,8 +293,10 @@ pub(crate) fn grow_zone(state: &AppState, angle: f64) -> Result<ZoneInfo, String
 #[tauri::command]
 pub fn skin_zone_invert(state: tauri::State<'_, AppState>) -> Result<ZoneInfo, String> {
     let current = zone_info(&state)?;
-    let seeds: Vec<usize> = current.faces.iter().map(|&f| f as usize).collect();
-    state.print_skin_zone.lock().unwrap().faces = p3d::invert_zone(current.total, &seeds).into_iter().map(|f| f as u32).collect();
+    let mut zone = state.print_skin_zone.lock().unwrap();
+    let seeds: Vec<usize> = zone.faces.iter().map(|&f| f as usize).collect();
+    zone.faces = p3d::invert_zone(current.total, &seeds).into_iter().map(|f| f as u32).collect();
+    drop(zone);
     zone_info(&state)
 }
 
@@ -766,15 +797,33 @@ mod tests {
         state
     }
 
+    /// Caras de la zona guardada después de `r` (el resumen ya no las trae)
+    fn faces_after(state: &AppState, r: Result<ZoneInfo, String>) -> Vec<u32> {
+        r.unwrap();
+        state.print_skin_zone.lock().unwrap().faces.clone()
+    }
+
+    #[test]
+    fn la_firma_cambia_solo_con_las_caras() {
+        let state = state_with_cube();
+        let a = edit_zone(&state, &[2, 3], ZoneMode::Set).unwrap();
+        let b = edit_mask(&state, &[0], &[0.5]).unwrap();
+        assert_eq!(a.revision, b.revision, "pintar intensidad no cambia las caras");
+        assert!(b.painted);
+        let c = edit_zone(&state, &[4], ZoneMode::Add).unwrap();
+        assert_ne!(a.revision, c.revision);
+        assert!(c.revision < 1 << 53, "cabe exacta en un número de JS");
+    }
+
     #[test]
     fn editar_la_zona_en_sus_cuatro_modos() {
         let state = state_with_cube();
-        assert_eq!(edit_zone(&state, &[2, 3], ZoneMode::Set).unwrap().faces, vec![2, 3]);
-        assert_eq!(edit_zone(&state, &[3, 5], ZoneMode::Add).unwrap().faces, vec![2, 3, 5]);
-        assert_eq!(edit_zone(&state, &[3], ZoneMode::Remove).unwrap().faces, vec![2, 5]);
-        assert_eq!(edit_zone(&state, &[5, 7], ZoneMode::Toggle).unwrap().faces, vec![2, 7]);
+        assert_eq!(faces_after(&state, edit_zone(&state, &[2, 3], ZoneMode::Set)), vec![2, 3]);
+        assert_eq!(faces_after(&state, edit_zone(&state, &[3, 5], ZoneMode::Add)), vec![2, 3, 5]);
+        assert_eq!(faces_after(&state, edit_zone(&state, &[3], ZoneMode::Remove)), vec![2, 5]);
+        assert_eq!(faces_after(&state, edit_zone(&state, &[5, 7], ZoneMode::Toggle)), vec![2, 7]);
         // Las caras que no existen se ignoran
-        assert_eq!(edit_zone(&state, &[2, 99], ZoneMode::Set).unwrap().faces, vec![2]);
+        assert_eq!(faces_after(&state, edit_zone(&state, &[2, 99], ZoneMode::Set)), vec![2]);
     }
 
     #[test]
@@ -792,10 +841,10 @@ mod tests {
         let state = state_with_cube();
         assert!(grow_zone(&state, 20.0).is_err(), "sin caras no hay de dónde crecer");
         edit_zone(&state, &[2], ZoneMode::Set).unwrap();
-        assert_eq!(grow_zone(&state, 20.0).unwrap().faces, vec![2, 3]);
-        assert_eq!(grow_zone(&state, 100.0).unwrap().faces.len(), 12);
+        assert_eq!(faces_after(&state, grow_zone(&state, 20.0)), vec![2, 3]);
+        assert_eq!(grow_zone(&state, 100.0).unwrap().count, 12);
         let ts = edit_zone(&state, &[2, 3], ZoneMode::Set).unwrap();
-        assert_eq!(ts.faces.len(), 2);
+        assert_eq!(ts.count, 2);
     }
 
     /// Escena de una caja de 40 × 40 × 10 con UV planos en la tapa (x, y) / 40
@@ -916,7 +965,7 @@ mod tests {
         edit_zone(&state, &[1, 2], ZoneMode::Set).unwrap();
         // Una malla con otro número de caras
         *state.mesh.lock().unwrap() = Some(Mesh::from_triangles(&[Vector3::zero(), Vector3::unit_x(), Vector3::unit_y()], &[[0, 1, 2]]));
-        assert!(zone_info(&state).unwrap().faces.is_empty());
+        assert!(zone_info(&state).unwrap().count == 0);
     }
 
     #[test]
@@ -1027,7 +1076,7 @@ mod tests {
         scene.meters_per_unit = 0.001;
         *state.scene.lock().unwrap() = Some(scene);
         *state.mesh.lock().unwrap() = Some(finer);
-        assert!(zone_info(&state).unwrap().faces.is_empty(), "la zona de antes ya no vale");
+        assert!(zone_info(&state).unwrap().count == 0, "la zona de antes ya no vale");
         let again = apply_skin_full(&state, &params, Some(&region)).unwrap();
         assert!(again.max_displacement_mm > 0.5);
         let (l, r) = moved_at(&state);
@@ -1057,12 +1106,12 @@ mod tests {
         // Escena en mm: agujeros de 3 a 20 mm
         let found = protect_holes(&state, 3.0, 20.0).unwrap();
         assert_eq!(found.found, 1);
-        assert_eq!(found.zone.protected.len(), 48);
+        assert_eq!(found.zone.protected_count, 48);
         // Fuera de rango no encuentra otros y no borra lo que ya había
         assert_eq!(protect_holes(&state, 10.0, 30.0).unwrap().found, 0);
-        assert_eq!(edit_protected(&state, &[0, 1], ZoneMode::Add).unwrap().protected.len(), 50);
-        assert_eq!(edit_protected(&state, &[0], ZoneMode::Remove).unwrap().protected.len(), 49);
-        assert!(edit_protected(&state, &[total as u32 + 5], ZoneMode::Add).unwrap().protected.len() == 49, "las caras que no existen se ignoran");
+        assert_eq!(edit_protected(&state, &[0, 1], ZoneMode::Add).unwrap().protected_count, 50);
+        assert_eq!(edit_protected(&state, &[0], ZoneMode::Remove).unwrap().protected_count, 49);
+        assert!(edit_protected(&state, &[total as u32 + 5], ZoneMode::Add).unwrap().protected_count == 49, "las caras que no existen se ignoran");
         // Aplicar con toda la malla como zona deja el agujero liso
         edit_zone(&state, &(0..total as u32).collect::<Vec<_>>(), ZoneMode::Set).unwrap();
         let params = SkinParams {
