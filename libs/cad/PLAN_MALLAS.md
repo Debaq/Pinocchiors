@@ -86,6 +86,15 @@ Se compila igual para Linux, Windows, macOS y Android: sin C++, sin cmake.
   `~/.cargo-target/bench/mallas/hueso_nuevo.stl` (antes: convertir 10 s); 3) si
   falla el cambio C++, volver a BRepBuilderAPI_MakeEdge/MakeFace; 4) compilar
   la app release, apuntar el MCP a ella y probar el grabado del hueso.
+- Pruebas de `cargo test -p cad-model` (2026-11-08; compiladas con el C++
+  anterior al cambio de aristas/caras a mano, que estas no usan salvo
+  from_mesh), ya pasadas, no repetir: lib (11, incluye 5 de mesh_bool), assembly (6),
+  assembly_relations (19), belts (7), cache (2 + 1 ignorada de antes),
+  dimension (4), extrude (4), fabrication (13). mesh_parts (3) pasó aparte.
+  Después terminó la tanda completa: **todo `cargo test -p cad-model` OK**
+  (44 grupos: lib + 42 archivos de tests + doctests, ~490 pruebas, 0 fallas;
+  ignoradas solo las que ya lo estaban). No repetir salvo que cambie eval.rs.
+  Resultados: ~/.cargo-target/bench/mallas/tests_cad_model.txt
 - (Plan original de M4, para referencia) para piezas de malla, en apps/desktop/src/cad.rs, volumen /
   masa / validez desde los triángulos (no OCCT) y la vista (`encode_view_mesh`)
   con los triángulos de la pieza (si las caras de `from_mesh` siguen el orden de
