@@ -630,7 +630,7 @@ pub(crate) fn estimate(state: &AppState, params: &SkinParams) -> Result<SkinEsti
     let map = height_map(state, &params.image, &params.ops)?;
     let pixel_mm = params.tile_mm.max(0.01) / map.width.max(map.height) as f64;
     let edge_mm = params.edge_mm.unwrap_or_else(|| pixel_mm.max(0.2));
-    let outside = zone.total.saturating_sub(zone.faces.len());
+    let outside = zone.total.saturating_sub(zone.count);
     let triangles = outside + (zone.area_mm2 / (0.19 * edge_mm * edge_mm)) as usize;
     let mut warnings = Vec::new();
     if params.amplitude > 0.0 && params.amplitude < 0.1 {
@@ -660,7 +660,7 @@ pub async fn skin_preview_mesh(app: AppHandle, params: SkinParams) -> Result<Res
 
 pub(crate) fn preview_mesh(state: &AppState, params: &SkinParams) -> Result<Vec<u8>, String> {
     let zone = zone_info(state)?;
-    if zone.faces.is_empty() {
+    if zone.count == 0 {
         return Err("Elige primero la zona donde va la piel".into());
     }
     let scene = state.scene.lock().unwrap().clone().ok_or("No hay escena cargada")?;
@@ -673,7 +673,7 @@ pub(crate) fn preview_mesh(state: &AppState, params: &SkinParams) -> Result<Vec<
     // El lado que cabe en el presupuesto de triángulos (nunca más fino que el real)
     let pixel_mm = params.tile_mm.max(0.01) / map.width.max(map.height) as f64;
     let wanted = params.edge_mm.unwrap_or_else(|| pixel_mm.max(0.2));
-    let outside = zone.total.saturating_sub(zone.faces.len());
+    let outside = zone.total.saturating_sub(zone.count);
     let budget = PREVIEW_TRIANGLES.saturating_sub(outside).max(10_000) as f64;
     let affordable = (zone.area_mm2 / (0.19 * budget)).sqrt();
     let cfg = p3d::SkinConfig {
@@ -689,9 +689,13 @@ pub(crate) fn preview_mesh(state: &AppState, params: &SkinParams) -> Result<Vec<
         margin_mm: params.margin_mm,
         decimate_mm: None,
     };
-    let faces: Vec<usize> = zone.faces.iter().map(|&f| f as usize).collect();
-    let protected: Vec<usize> = zone.protected.iter().map(|&f| f as usize).collect();
-    let strength = state.print_skin_zone.lock().unwrap().strength.clone();
+    // Las caras van en la zona guardada (el resumen solo trae cuántas)
+    let (faces, protected, strength) = {
+        let saved = state.print_skin_zone.lock().unwrap();
+        let faces: Vec<usize> = saved.faces.iter().map(|&f| f as usize).collect();
+        let protected: Vec<usize> = saved.protected.iter().map(|&f| f as usize).collect();
+        (faces, protected, saved.strength.clone())
+    };
     let result = p3d::apply_skin_masked(&mesh, &uvs, &faces, &protected, &strength, &map, &cfg).map_err(|e| format!("No se pudo armar la vista previa: {e}"))?;
     Ok(crate::commands::scene_mesh_data(&crate::commands::mesh_to_scene(&result.mesh, "Vista previa", Some(&scene))).to_bytes())
 }
@@ -734,11 +738,11 @@ pub(crate) fn apply_skin_full(state: &AppState, params: &SkinParams, region: Opt
             (faces, protected, strength)
         }
         None => {
-            if zone.faces.is_empty() {
+            if zone.count == 0 {
                 return Err("Elige primero la zona donde va la piel".into());
             }
-            let strength = state.print_skin_zone.lock().unwrap().strength.clone();
-            (zone.faces.iter().map(|&f| f as usize).collect(), zone.protected.iter().map(|&f| f as usize).collect(), strength)
+            let saved = state.print_skin_zone.lock().unwrap();
+            (saved.faces.iter().map(|&f| f as usize).collect(), saved.protected.iter().map(|&f| f as usize).collect(), saved.strength.clone())
         }
     };
     let uvs = if params.mapping == p3d::SkinMapping::Box { Vec::new() } else { scene_uvs(&scene)? };

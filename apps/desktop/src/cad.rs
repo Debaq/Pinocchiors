@@ -1422,12 +1422,12 @@ fn explode_shapes(shapes: Vec<(u32, cad_model::Shape)>, explode: f64) -> Result<
 /// ensamble, escala). La malla y los rangos se piden juntos y antes cada uno
 /// resolvía y teselaba todo por su cuenta; el candado se tiene mientras se arma,
 /// así el segundo pedido espera y usa lo del primero (PLAN_RENDIMIENTO R8).
-type AssemblyView = (Vec<u8>, Vec<[u32; 5]>);
-static ASSEMBLY_VIEW: Mutex<Option<((u64, u64, u64), AssemblyView)>> = Mutex::new(None);
+type AssemblyMeshView = (Vec<u8>, Vec<[u32; 5]>);
+static ASSEMBLY_VIEW: Mutex<Option<((u64, u64, u64), AssemblyMeshView)>> = Mutex::new(None);
 
-fn assembly_view(state: &AppState) -> Result<AssemblyView, String> {
+fn assembly_view(state: &AppState) -> Result<AssemblyMeshView, String> {
     use std::hash::{Hash, Hasher};
-    let mut saved = ASSEMBLY_VIEW.lock().unwrap_or_else(|e| e.into_inner());
+    let mut saved = ASSEMBLY_VIEW.lock().unwrap();
     let doc = state.cad_doc().ok_or("No hay un diseño abierto")?;
     let asm = doc.assembly.as_ref().ok_or("El diseño no tiene ensamble")?;
     let design = refresh_cache(state, &doc)?.0.hash;
