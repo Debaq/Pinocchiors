@@ -46,14 +46,30 @@ export function timed<T>(name: string, fn: () => T): T {
  * Tauri (vista previa web) no hace nada
  */
 export function installInvokeTiming(): void {
-  const internals = (window as unknown as { __TAURI_INTERNALS__?: { invoke?: (...args: unknown[]) => unknown } }).__TAURI_INTERNALS__;
-  const original = internals?.invoke;
-  if (!internals || !original) return;
-  internals.invoke = (...args: unknown[]) => {
-    const cmd = String(args[0]);
-    const t0 = performance.now();
-    return Promise.resolve(original.apply(internals, args)).finally(() => add(calls, cmd, performance.now() - t0));
-  };
+  // Tauri define `invoke` de solo lectura (Object.defineProperty sin writable): asignarlo
+  // tira error en un módulo y la interfaz no arrancaba (ventana negra). Solo se envuelve si
+  // se puede; si no, no se miden las llamadas
+  try {
+    const internals = (window as unknown as { __TAURI_INTERNALS__?: { invoke?: (...args: unknown[]) => unknown } }).__TAURI_INTERNALS__;
+    const original = internals?.invoke;
+    if (!internals || !original) return;
+    const desc = Object.getOwnPropertyDescriptor(internals, "invoke");
+    if (desc && !desc.writable && !desc.configurable) return;
+    const wrapped = (...args: unknown[]) => {
+      const cmd = String(args[0]);
+      const t0 = performance.now();
+      return Promise.resolve(original.apply(internals, args)).finally(() => add(calls, cmd, performance.now() - t0));
+    };
+    if (desc && !desc.writable) Object.defineProperty(internals, "invoke", { ...desc, value: wrapped });
+    else internals.invoke = wrapped;
+  } catch {
+    // Sin medir: nunca a costa de que la interfaz no arranque
+  }
+}
+
+/** Anota cuánto tardó una llamada al backend (para quien la mida por su cuenta) */
+export function perfCall(cmd: string, ms: number): void {
+  add(calls, cmd, ms);
 }
 
 const round = (ms: number) => Math.round(ms * 10) / 10;
