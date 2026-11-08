@@ -189,8 +189,15 @@ R guard(const char* what, R fallback, F f) {
     try {
         return f();
     } catch (const Standard_Failure& e) {
+#if OCC_VERSION_HEX >= 0x080000
+        // OCCT 8: Standard_Failure hereda de std::exception y ya no es Standard_Transient
+        const char* m = e.what();
+        const char* type = e.ExceptionType();
+#else
         const char* m = e.GetMessageString();
-        set_error(std::string(what) + ": " + e.DynamicType()->Name() +
+        const char* type = e.DynamicType()->Name();
+#endif
+        set_error(std::string(what) + ": " + type +
                   (m && *m ? std::string(" — ") + m : std::string()));
     } catch (const std::exception& e) {
         set_error(std::string(what) + ": " + e.what());

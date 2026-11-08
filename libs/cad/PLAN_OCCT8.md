@@ -101,3 +101,99 @@ la release recién al final, con todo verde acá.
 
 - 2026-11-08: plan escrito (notas de 8.0.0, 8.0.0p1 y 8.0.1 leídas y cruzadas
   con la app).
+- 2026-11-08 (rama `occt8`): O1, O2 y O3 hechos en el PC. Detalle abajo.
+- 2026-11-08: O5.1 (Gordon) empezado en la rama `occt8-gordon`; falla una prueba (ver abajo). O4 sin hacer.
+
+## Resultados (2026-11-08)
+
+### O1 — compilar
+
+- `scripts/build-occt.sh ~/.cargo-target/occt-8.0.1 8.0.1` compila **sin
+  cambios** en el script (la 8 reordenó el árbol, pero los módulos y
+  `BUILD_ADDITIONAL_TOOLKITS` siguen valiendo; CMake agrega `TKHelix`,
+  `TKXMesh`, `TKExpress` solo). Prefijo: 263 MB.
+- `build.rs` ya elegía OCCT por `OCCT_INCLUDE_DIR`/`OCCT_LIB_DIR`/`OCCT_STATIC`:
+  nada que tocar.
+
+### O2 — puente y pruebas
+
+- `cad_occt.cpp`: un solo error. `Standard_Failure` ya no es
+  `Standard_Transient` (sin `DynamicType()`): se usa `ExceptionType()` y
+  `what()` con `#if OCC_VERSION_HEX >= 0x080000`, así compila con 7.9 y 8.
+  El resto son avisos de obsoletos (`Standard_True/False`, typedefs `TColgp_*`,
+  `TopTools_*`); siguen andando, se pueden limpiar después.
+- `cargo test -p cad-occt -p cad-model -p cad-scan`: **511 pasan, 0 fallan, 4
+  ignoradas**, igual que con 7.9.3.
+- `cargo check -p pinocchio-app --tests` limpio (el único aviso,
+  `evaluate_committed` sin usar, ya estaba).
+- App real (debug, OCCT 8 estática): abre bien (no negra). Por el conector en
+  vivo se armó una pieza (cajas, 18 agujeros, eje, chaflán, perno M10 con
+  rosca, vista, plano PDF, STEP, STL) en la ventana: mismos volúmenes, caras,
+  aristas y tamaños de archivo al byte que la pre-release 33001fe (7.9.3).
+
+### O3 — 7.9.3 contra 8.0.1
+
+Banco `libs/cad/occt/examples/bench_occt.rs` (`cargo run --release -p cad-occt
+--example bench_occt [filtro]`), las dos versiones estáticas compiladas con el
+mismo `build-occt.sh`, máquina libre:
+
+- **Geometría idéntica** en los 24 casos (volúmenes, caras, aristas, válido),
+  salvo 0,003 mm³ en un loft de 72 890 mm³.
+- **Más rápida o igual en todo**: booleanas con muchos agujeros ×1,8–1,9,
+  booleanas curvas ×2,1, roscas ×1,9, STEP grande ida y vuelta ×2,1, redondeos
+  de muchas aristas ×1,5, loft ×1,4, HLR de placa ×1,3, malla de vista ×1,1–1,2,
+  4 tareas en 4 hilos ×1,17. Masa (`BRepGProp`) igual (×0,97).
+- **Estabilidad**: el vaciado de una caja redondeada que no se puede hacer
+  **tumba el proceso con la 7.9.3 en 8 de 20 intentos** (violación de segmento:
+  en la app se cierra todo); con la 8.0.1, 0 de 20 (da el error limpio).
+  Redondeos y chaflanes: 0 caídas en las dos.
+
+Lo nuestro contra lo nuevo de la 8 (`libs/cad/occt/bench/t_occt8.cpp`,
+`OCCT_PREFIX=… bench/build8.sh t_occt8 [superficie|helice|hlr|malla]`):
+
+- **Superficie libre (E10)**: piel de prueba de 60×40 mm. Relleno de hoy
+  (`cad_fill`, borde + 100 puntos): desvío máx 1,34 mm (rms 0,38). **Gordon**
+  con red 3×3: máx 0,10 mm (rms 0,035), 0,16 s; red 5×5: máx 0,003 mm, 1,4 s.
+  Ojo: cada curva de la red con pocos puntos (4 tramos por celda); con 20 la
+  superficie se infla a 397×397 polos y todo se vuelve lento.
+- **Hélice**: la nuestra ya es exacta (error 5·10⁻⁶ mm, 0,4 ms). `TKHelix` es
+  más exacta (5·10⁻⁸) pero más lenta (0,65 ms); sirve para lo que no tenemos:
+  **resortes cónicos y de paso variable** (probado: anda).
+- **Plano 2D**: el HLR exacto de hoy (75 ms, 4 vistas) es **más rápido** que
+  `HLRBRep_PolyAlgo` por malla (129 ms). Se queda el nuestro.
+- **Malla a sólido**: `BRepBuilderAPI_FastSewing` **no sirve** para
+  triángulos (solo une parches de bordes naturales). Se queda `cad_from_mesh`.
+
+Visor (OCCT 7.9.3, DRAWEXE): la placa de 625 agujeros dibuja en 0,5 ms de CPU
+por cuadro; la diferencia con el nuestro no es velocidad sino funciones. Lo que
+OCCT tiene y el nuestro no: varios planos de corte con tapa y rayado, cámara
+ortográfica, selección exacta sobre el B-Rep, grilla infinita, teselado según
+el zoom, instancias en ensambles. Lo nuestro que OCCT no tiene: croquis con
+restricciones, render de fotos (GTAO, WebGPU), visor de mallas con rig y
+animación, escaneo y resina.
+
+### O5 en curso: Gordon (rama `occt8-gordon`, sin terminar)
+
+- `cad_grid_face` (puente): superficie por una red de puntos de la piel
+  (Gordon con OCCT 8, B-spline por la grilla antes de la 8) recortada por el
+  borde (polilínea, curvas sobre la superficie con `ShapeFix`).
+- `FreeZone::skin_grid` (cad-scan): grilla sobre el plano medio de la zona;
+  cada punto es donde la recta perpendicular toca la zona; las esquinas fuera
+  de la zona siguen suave a los vecinos; `None` si la zona se dobla.
+  `fit_surface` se queda con la red si se aparta menos que el relleno.
+- `ScanSurface.grid` (modelo, opcional) y la app lo pasa desde la caché de
+  zonas.
+- **Falla**: `scan_free_surface_closes_into_a_solid` da el sólido cerrado con
+  7 % menos de volumen (15 067 contra 16 264 mm³) y la prueba tarda 26 s.
+  Revisar: el recorte por el borde (¿la cara queda chica o del lado de
+  afuera?) y el costo de probar dos redes.
+
+### Qué sigue
+
+- O4 (release con la 8): `OCCT_VERSION: "8.0.1"` en `release.yml` y
+  `android.yml`. Falta probar la compilación de la 8 en Windows (MSVC) y
+  Android en CI. Sin hacer todavía: master tenía la app compilada fallando
+  (2026-11-08) y eso va primero.
+- O5, por lo que más rinde: (1) Gordon para la superficie libre del escaneo,
+  (2) resortes cónicos y de paso variable con `TKHelix`, (3) planos 2D y piezas
+  en paralelo. Regiones del sketch con booleanas 2D de OCCT: evaluar aparte.
