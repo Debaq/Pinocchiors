@@ -304,6 +304,73 @@ fn point_deps(p: &PointSpec) -> Vec<FeatureId> {
     }
 }
 
+/// Qué mide una cota.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum DimensionKind {
+    /// Entre dos puntos: directa o solo a lo largo de un eje del diseño.
+    Distance {
+        a: PointSpec,
+        b: PointSpec,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        axis: Option<DimAxis>,
+    },
+    /// Ángulo en `vertex` entre las rectas hacia `a` y hacia `b` (grados).
+    Angle { a: PointSpec, vertex: PointSpec, b: PointSpec },
+    /// Por la piel del escaneo pasando por los puntos (el camino más corto);
+    /// `path` es lo último trazado, que pone la app.
+    Surface {
+        points: Vec<PointSpec>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        path: Vec<P3>,
+    },
+    /// Diámetro de la zona redonda del escaneo donde está el punto; `fit` lo
+    /// ajusta la app.
+    Diameter {
+        at: PointSpec,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fit: Option<DimCylinder>,
+    },
+    /// Espesor del escaneo en el punto: de la piel a la cara de enfrente, por la
+    /// normal; `span` (de un lado al otro) lo mide la app.
+    Thickness {
+        at: PointSpec,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        span: Option<[P3; 2]>,
+    },
+}
+
+impl DimensionKind {
+    /// Los puntos que usa.
+    pub fn points(&self) -> Vec<&PointSpec> {
+        match self {
+            DimensionKind::Distance { a, b, .. } => vec![a, b],
+            DimensionKind::Angle { a, vertex, b } => vec![a, vertex, b],
+            DimensionKind::Surface { points, .. } => points.iter().collect(),
+            DimensionKind::Diameter { at, .. } | DimensionKind::Thickness { at, .. } => vec![at],
+        }
+    }
+}
+
+/// Eje del diseño a lo largo del que se mide.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DimAxis {
+    X,
+    Y,
+    Z,
+}
+
+/// Cilindro ajustado al escaneo para medir un diámetro.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct DimCylinder {
+    pub origin: P3,
+    pub direction: P3,
+    pub radius: f64,
+    /// El punto de la piel donde se mide
+    pub at: P3,
+}
+
 /// Qué hace la herramienta con las piezas. Unir funde la herramienta con las
 /// piezas que toca (si no toca ninguna, es una pieza nueva); restar e
 /// intersectar actúan sobre cada pieza; `New` siempre crea una pieza aparte.
@@ -652,6 +719,9 @@ pub enum PatternKind {
         #[serde(default)]
         points: Vec<u32>,
     },
+    /// Una copia en cada punto de referencia (los P1, P2… sobre la piel, u
+    /// otros), desde el punto más cercano al original.
+    AtPoints { points: Vec<PointSpec> },
     /// Copias en grilla (cuadrada o hexagonal) que llenan regiones de un
     /// sketch, a `spacing` entre centros y a `margin` como mínimo del borde.
     /// La grilla pasa por la operación original (su centro, en el plano).
@@ -1142,7 +1212,8 @@ pub enum FeatureKind {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         flat: bool,
     },
-    /// Mueve caras planas a lo largo de su normal (afuera suma, adentro resta).
+    /// Mueve caras a lo largo de su normal (afuera suma, adentro resta); las curvas se
+    /// corren por su normal en cada punto (un agujero se achica o se agranda).
     MoveFace { faces: Vec<FaceRef>, distance: f64 },
     /// Gira caras planas alrededor de un eje (una bisagra): lo que sale suma, lo que entra resta.
     RotateFace { faces: Vec<FaceRef>, axis: AxisSpec, angle: f64 },
@@ -1188,8 +1259,15 @@ pub enum FeatureKind {
         scan: Option<ScanReach>,
     },
     /// Lleva caras planas hasta un plano (una cara plana del sólido o uno de
-    /// referencia): suma o resta lo que hay entre la cara y el plano.
-    ReplaceFace { faces: Vec<FaceRef>, target: PlaneSpec },
+    /// referencia): suma o resta lo que hay entre la cara y el plano. Con
+    /// `surface`, hasta esas caras (una superficie o caras curvas de otra pieza,
+    /// extendidas si hace falta) en vez del plano.
+    ReplaceFace {
+        faces: Vec<FaceRef>,
+        target: PlaneSpec,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        surface: Vec<FaceRef>,
+    },
     /// Lleva caras planas hasta la piel del escaneo (a `offset` de ella):
     /// suma si el escaneo está afuera, resta si está adentro de la pieza.
     FaceToScan {
@@ -1277,6 +1355,24 @@ pub enum FeatureKind {
     FlatSolid {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         part: Option<PartId>,
+    },
+    /// Cota: una medida guardada en el diseño y dibujada en el visor (no cambia
+    /// el sólido). Entre puntos con nombre, por lo general sobre el escaneo.
+    Dimension {
+        measure: DimensionKind,
+        /// Da su medida a este parámetro del diseño (lo crea o lo reemplaza): así
+        /// una medida del escaneo manda en el diseño y se actualiza con él.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parameter: Option<String>,
+    },
+    /// Volver a doblar: los cortes hechos sobre un desarrollo plano (`flat`: la
+    /// operación «Desarrollo plano»; vacío = la última) pasan a la pieza doblada,
+    /// siguiendo los dobleces. Sin `keep`, la pieza plana deja de estar.
+    Refold {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        flat: Option<FeatureId>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        keep: bool,
     },
     /// Superficie (sin espesor) que deja una curva de un sketch empujada a lo
     /// largo de la normal del plano: ciega, simétrica o a los dos lados.
@@ -1606,6 +1702,13 @@ pub struct Loft {
     /// Tangencia al final: llega perpendicular a la última sección.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub end_tangent: Option<f64>,
+    /// Con tangencia al comienzo: en vez de salir perpendicular a la sección, sigue estas
+    /// caras vecinas sin quiebre (las paredes del sólido sobre el que se apoya la sección).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub start_faces: Vec<FaceRef>,
+    /// Lo mismo al final.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub end_faces: Vec<FaceRef>,
 }
 
 /// Una sección de una superficie por recubrimiento: curvas de un sketch (vacío = todas).
@@ -1729,6 +1832,8 @@ impl FeatureKind {
             FeatureKind::ScanBody(b) => b.region.iter().map(|r| r.sketch).collect(),
             FeatureKind::Relief(r) => vec![r.sketch],
             FeatureKind::SheetMetal { sketch, .. } => vec![*sketch],
+            FeatureKind::Refold { flat, .. } => flat.iter().copied().collect(),
+            FeatureKind::Dimension { measure, .. } => measure.points().into_iter().flat_map(point_deps).collect(),
             FeatureKind::ReplaceFace { target, .. } => plane_deps(target),
             FeatureKind::Extrude(e) => {
                 let mut d = vec![e.sketch];
@@ -1768,6 +1873,7 @@ impl FeatureKind {
                     PatternKind::Curve { path: SweepPath::Sketch { sketch, .. }, .. } | PatternKind::Chain { path: SweepPath::Sketch { sketch, .. }, .. } => d.push(*sketch),
                     PatternKind::Curve { path: SweepPath::Curve { feature }, .. } | PatternKind::Chain { path: SweepPath::Curve { feature }, .. } => d.push(*feature),
                     PatternKind::Fill { sketch, .. } | PatternKind::Points { sketch, .. } => d.push(*sketch),
+                    PatternKind::AtPoints { points } => d.extend(points.iter().flat_map(point_deps)),
                     _ => {}
                 }
                 d
@@ -1854,6 +1960,8 @@ impl FeatureKind {
             FeatureKind::SheetMetal { .. } => "Chapa",
             FeatureKind::Flange { .. } => "Pestaña",
             FeatureKind::FlatSolid { .. } => "Desarrollo plano",
+            FeatureKind::Refold { .. } => "Volver a doblar",
+            FeatureKind::Dimension { .. } => "Cota",
             FeatureKind::SurfaceExtrude { .. } => "Superficie extruida",
             FeatureKind::SurfacePlanar { .. } => "Superficie plana",
             FeatureKind::SurfaceSweep { .. } => "Superficie por barrido",

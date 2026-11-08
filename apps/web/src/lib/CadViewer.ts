@@ -1682,6 +1682,19 @@ export class CadViewer {
           line.renderOrder = 5;
           this.refsGroup.add(line);
         }
+      } else if (r.kind === "dimension") {
+        // Cota: sus tramos en cian, siempre por delante, con marcas en los extremos
+        const cyan = themeHex("cyan");
+        for (const pts of r.lines) {
+          const g = new THREE.BufferGeometry().setFromPoints(pts.map((p) => this.toView(p)));
+          const line = new THREE.Line(g, new THREE.LineBasicMaterial({ color: cyan, depthTest: false }));
+          line.renderOrder = 7;
+          this.refsGroup.add(line);
+        }
+        const ends = r.lines.flatMap((l) => (l.length ? [l[0], l[l.length - 1]] : [])).map((p) => this.toView(p));
+        const dots = new THREE.Points(new THREE.BufferGeometry().setFromPoints(ends), new THREE.PointsMaterial({ color: cyan, size: 6, sizeAttenuation: false, depthTest: false }));
+        dots.renderOrder = 7;
+        this.refsGroup.add(dots);
       } else if (r.kind === "frame") {
         // Tres flechas (X rojo, Y verde, Z azul) desde el origen, y el origen
         const o = this.toView(r.origin);

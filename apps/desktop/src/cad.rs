@@ -339,6 +339,16 @@ fn fit_scan_references(state: &AppState, doc: &Document) -> Option<Document> {
                         sf.close_plane = Some(p.plane);
                     }
                 }
+                // Curva suave con puntos tomados sobre la piel: cada uno sigue al escaneo
+                FeatureKind::Curve { def: cad_model::CurveDef::Points { points, .. } } => {
+                    for p in points.iter_mut() {
+                        if let PointSpec::Scan { fit, point } = p
+                            && let Some(cad_scan::ScanGeom::Point(q)) = geom(fit)
+                        {
+                            *point = q;
+                        }
+                    }
+                }
                 FeatureKind::Curve { def: cad_model::CurveDef::ScanPath { seeds, closed, points } } => {
                     let key = serde_json::to_string(&(&*seeds, *closed)).unwrap_or_default();
                     let traced = scan
@@ -383,6 +393,50 @@ fn fit_scan_references(state: &AppState, doc: &Document) -> Option<Document> {
                     }
                 }
                 FeatureKind::Rib { scan: Some(r), .. } if !f.suppressed => r.mesh = Some(scan_body_mesh(scan, r.offset, 0.0, SCAN_FACES)),
+                // Cotas sobre el escaneo: lo que se mide en la malla
+                FeatureKind::Dimension { measure, .. } if !f.suppressed => match measure {
+                    cad_model::DimensionKind::Surface { points, path } => {
+                        let seeds: Option<Vec<_>> = points.iter().map(|p| scan_seed_of(doc, p)).collect();
+                        if let Some(seeds) = seeds {
+                            let key = serde_json::to_string(&(&seeds, false)).unwrap_or_default();
+                            let traced = scan
+                                .paths
+                                .lock()
+                                .unwrap()
+                                .entry(key)
+                                .or_insert_with(|| {
+                                    let stops = seeds.iter().map(|s| scan.mesh.locate(s)).collect::<Option<Vec<_>>>()?;
+                                    scan.mesh.geodesic(&stops, false)
+                                })
+                                .clone();
+                            if let Some(p) = traced {
+                                *path = p;
+                            }
+                        }
+                    }
+                    cad_model::DimensionKind::Diameter { at, fit } => {
+                        if let Some(seed) = scan_seed_of(doc, at)
+                            && let Some((t, p)) = scan.mesh.locate(&seed)
+                            && let Ok(c) = cad_scan::pick_cylinder(&scan.mesh, t, &PickOptions::default())
+                        {
+                            *fit = Some(cad_model::DimCylinder { origin: c.origin, direction: c.direction, radius: c.radius, at: p });
+                        }
+                    }
+                    cad_model::DimensionKind::Thickness { at, span } => {
+                        if let Some(seed) = scan_seed_of(doc, at)
+                            && let Some((t, p)) = scan.mesh.locate(&seed)
+                        {
+                            // Hacia adentro por la normal hasta salir por la cara de enfrente
+                            let n = scan.mesh.face_normals[t as usize];
+                            let inward = [-n[0], -n[1], -n[2]];
+                            let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt().max(1e-12);
+                            if let Some((d, _)) = scan.mesh.raycast_exit(p, inward, 1e-6) {
+                                *span = Some([p, [p[0] + inward[0] / len * d, p[1] + inward[1] / len * d, p[2] + inward[2] / len * d]]);
+                            }
+                        }
+                    }
+                    _ => {}
+                },
                 _ => {}
             }
         }
@@ -414,7 +468,30 @@ fn prepared(state: &AppState, tab: Option<TabId>, doc: &Document) -> Option<Docu
     Some(out)
 }
 
+/// Dónde está sobre el escaneo un punto de una cota: un punto (o una normal) tomado del
+/// escaneo, directo o por referencia a su operación.
+fn scan_seed_of(doc: &Document, p: &PointSpec) -> Option<cad_model::ScanSeed> {
+    let fit = match p {
+        PointSpec::Scan { fit, .. } => fit,
+        PointSpec::Reference { feature } => match &doc.get(*feature)?.kind {
+            FeatureKind::Point { def: PointSpec::Scan { fit, .. } } => fit,
+            FeatureKind::Axis { def: AxisDef::Scan { fit, .. } } => fit,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    match fit {
+        cad_model::ScanFit::Points { .. } => None,
+        cad_model::ScanFit::Zone { seed } | cad_model::ScanFit::Cylinder { seed } | cad_model::ScanFit::Point { seed } | cad_model::ScanFit::Normal { seed } => {
+            Some(seed.clone())
+        }
+    }
+}
+
 fn uses_scan(kind: &FeatureKind) -> bool {
+    if let FeatureKind::Curve { def: cad_model::CurveDef::Points { points, .. } } = kind {
+        return points.iter().any(|p| matches!(p, PointSpec::Scan { .. }));
+    }
     matches!(
         kind,
         FeatureKind::Plane { def: PlaneDef::Scan { .. } }
@@ -427,6 +504,10 @@ fn uses_scan(kind: &FeatureKind) -> bool {
             | FeatureKind::Rib { scan: Some(_), .. }
             | FeatureKind::Curve { def: cad_model::CurveDef::ScanPath { .. } | cad_model::CurveDef::ScanProjected { .. } }
             | FeatureKind::ScanSurface(_)
+            | FeatureKind::Dimension {
+                measure: cad_model::DimensionKind::Surface { .. } | cad_model::DimensionKind::Diameter { .. } | cad_model::DimensionKind::Thickness { .. },
+                ..
+            }
     )
 }
 
@@ -2730,6 +2811,122 @@ fn export_impl(state: &AppState, path: &str, format: &str, part: Option<cad_mode
     Ok(std::fs::metadata(p).map(|m| m.len()).unwrap_or(0))
 }
 
+/// Lo que salió de «Exportar para imprimir».
+#[derive(Debug, Clone, Serialize)]
+pub struct PrintExport {
+    pub bytes: u64,
+    /// Avisos para el usuario (lo que quedó fuera y por qué)
+    pub notes: Vec<String>,
+}
+
+/// Para imprimir: el escaneo o STL original tal cual (con todo su detalle, sin
+/// vóxeles) más lo agregado en el diseño, en un solo archivo y sin booleanas:
+/// el laminador junta lo que se toca. En 3MF los grabados van como volumen
+/// negativo (el laminador los resta); en STL no se puede y quedan fuera.
+#[tauri::command]
+pub async fn cad_export_print(app: AppHandle, path: String, format: String) -> Result<PrintExport, String> {
+    require_occt()?;
+    in_background(app, move |state| export_print_impl(state, &path, &format)).await
+}
+
+fn export_print_impl(state: &AppState, path: &str, format: &str) -> Result<PrintExport, String> {
+    let three = match format {
+        "3mf" => true,
+        "stl" => false,
+        other => return Err(format!("Para imprimir se exporta en STL o 3MF, no en {other}")),
+    };
+    evaluate_committed(state)?;
+    let doc = state.cad_doc().ok_or("No hay un diseño abierto")?;
+    // El escaneo como está (mm, Z arriba como el diseño)
+    let skin = with_scan(state, |scan| Ok((scan.mesh.vertices.iter().map(|p| p.map(|c| c as f32)).collect::<Vec<_>>(), scan.mesh.triangles.clone())))
+        .map_err(|_| "Para exportar para imprimir hace falta el escaneo o STL elegido en el diseño".to_string())?;
+    // (nombre, vértices, triángulos, negativo)
+    let mut volumes: Vec<(String, Vec<[f32; 3]>, Vec<[u32; 3]>, bool)> = vec![("Escaneo".into(), skin.0, skin.1, false)];
+    let mut notes = Vec::new();
+    let mesh = |shape: &cad_model::Shape| -> Result<(Vec<[f32; 3]>, Vec<[u32; 3]>), String> {
+        let t = shape.tessellate(0.01, 0.1).map_err(|e| e.to_string())?;
+        Ok((t.positions.iter().map(|p| p.map(|c| c as f32)).collect(), t.triangles))
+    };
+    {
+        let cache = state.cad_cache.lock().unwrap();
+        let ev = &cache.as_ref().ok_or("El diseño todavía no tiene un sólido")?.eval;
+        let (mut copies, mut engraved_out) = (0, 0);
+        // Los relieves y grabados van por su herramienta: así entran aunque se hayan unido o
+        // restado a una copia del escaneo (que no sale, porque el escaneo va tal cual)
+        let mut reliefs = 0;
+        for f in &doc.features {
+            let FeatureKind::Relief(r) = &f.kind else { continue };
+            let Some((tool, op)) = ev.tool(f.id) else { continue };
+            // Sobre el sólido del diseño ya está en su pieza (salvo que sea pieza nueva)
+            if r.target == cad_model::ReliefTarget::Body && op != BodyOp::New {
+                continue;
+            }
+            if r.inward && !three {
+                engraved_out += 1;
+                continue;
+            }
+            reliefs += 1;
+            let (v, t) = mesh(tool)?;
+            let name = if f.name.is_empty() { if r.inward { "Grabado".to_string() } else { "Relieve".to_string() } } else { f.name.clone() };
+            volumes.push((name, v, t, r.inward));
+        }
+        for (i, part) in ev.parts.iter().enumerate() {
+            if doc.parts.iter().any(|q| q.part == part.id && q.hidden) || part.is_surface() {
+                continue;
+            }
+            match doc.get(part.id.feature).map(|f| &f.kind) {
+                // Copias del escaneo: lo reemplaza el escaneo original
+                Some(FeatureKind::ScanBody(_)) => copies += 1,
+                // Ya entró como relieve
+                Some(FeatureKind::Relief(_)) => {}
+                _ => {
+                    let (v, t) = mesh(&part.shape)?;
+                    volumes.push((part_name(&doc, part.id, i + 1), v, t, false));
+                }
+            }
+        }
+        if copies > 0 {
+            notes.push(format!(
+                "{copies} pieza(s) hechas del escaneo no salen: va el escaneo original con todo su detalle (lo que se les unió que no sea relieve queda fuera)"
+            ));
+        }
+        if engraved_out > 0 {
+            notes.push(format!("{engraved_out} grabado(s) no van en STL: para que el laminador los reste, exportar en 3MF"));
+        }
+        if volumes.len() == 1 && reliefs == 0 {
+            notes.push("El diseño no agrega nada al escaneo: sale solo el escaneo".into());
+        }
+    }
+    let p = std::path::Path::new(path);
+    if three {
+        let list: Vec<converter_3mf::PrintVolume> = volumes
+            .iter()
+            .map(|(name, v, t, negative)| converter_3mf::PrintVolume { name, positions: v, triangles: t, negative: *negative })
+            .collect();
+        let name = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Diseño".into());
+        converter_3mf::export_3mf_volumes(&name, &list, p).map_err(|e| format!("Error exportando 3MF: {e}"))?;
+    } else {
+        let mut scene = Scene::new();
+        for (name, v, t, _) in &volumes {
+            let positions: Vec<[f32; 3]> = v.iter().map(|q| converter_scene::z_up_to_y_up(*q)).collect();
+            let mesh = scene.meshes.len();
+            scene.meshes.push(SceneMesh {
+                name: name.clone(),
+                primitives: vec![Primitive {
+                    attributes: vec![VertexAttribute::Positions(positions)],
+                    indices: Some(IndexData::U32(t.iter().flatten().copied().collect())),
+                    material: None,
+                }],
+            });
+            scene.root_nodes.push(scene.nodes.len());
+            scene.nodes.push(Node { name: name.clone(), transform: Transform::identity(), mesh: Some(mesh), skin: None, children: Vec::new() });
+        }
+        scene.meters_per_unit = 0.001;
+        export_scene(&scene, p, "stl")?;
+    }
+    Ok(PrintExport { bytes: std::fs::metadata(p).map(|m| m.len()).unwrap_or(0), notes })
+}
+
 /// Cuaternión (x, y, z, w) de una matriz de giro.
 fn quat_of(m: &[[f64; 3]; 3]) -> [f64; 4] {
     let t = m[0][0] + m[1][1] + m[2][2];
@@ -3354,6 +3551,9 @@ fn scan_add_impl(state: &AppState, feature: ScanFeature, options: ScanPickOption
                     e.sketch = s;
                 }
                 let is_sketch = matches!(kind, FeatureKind::Sketch { .. });
+                // Los puntos sobre la piel con nombre corto y seguido (P1, P2…): así se usan en las cotas
+                let point = matches!(kind, FeatureKind::Point { def: PointSpec::Scan { .. } });
+                let name = if point { Some(next_point_name(doc)) } else { name };
                 let id = doc.add(kind);
                 if let Some(n) = name {
                     doc.get_mut(id).unwrap().name = n;
@@ -3365,6 +3565,12 @@ fn scan_add_impl(state: &AppState, feature: ScanFeature, options: ScanPickOption
         })?;
         evaluate(state)
     }
+}
+
+/// El primer nombre «P<n>» libre para un punto sobre la piel.
+fn next_point_name(doc: &Document) -> String {
+    let used: Vec<u32> = doc.features.iter().filter_map(|f| f.name.strip_prefix('P').and_then(|n| n.parse().ok())).collect();
+    format!("P{}", (1..).find(|k| !used.contains(k)).unwrap_or(1))
 }
 
 /// Operación de referencia (plano, eje o punto) ligada al escaneo

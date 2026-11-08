@@ -61,7 +61,7 @@ pintado) / Hacia dónde; el diálogo muestra los toques del pincel y deja agrega
 «Movimiento: distancia / hasta un plano o cara / hasta el escaneo / girar». Se puede cambiar
 entre ellos en el diálogo sin perder las caras elegidas.
 
-### U5 — Llevar a la superficie (curvas) 🟡
+### U5 — Llevar a la superficie (curvas) ✅
 «Sketch envuelto», «Curva proyectada», «Sketch a la piel»: una herramienta con destino (caras
 o escaneo) y forma (proyectar / envolver). «Curva por puntos» y «Camino por puntos»: una sola,
 sobre vértices del sólido o sobre la piel.
@@ -96,12 +96,12 @@ Clic en un punto del STL o de una cara curva: un sistema de coordenadas ligado a
 (origen en el punto, Z por la normal). Primitivas, piezas estándar y piezas derivadas se
 pueden colocar ahí, con «rellenar hasta la piel» (la base se amolda).
 
-### U12 — Unir y grabar en el STL sin perder detalle 🟡
+### U12 — Unir y grabar en el STL sin perder detalle ✅
 Hoy juntar lo agregado con el STL pasa el STL entero por vóxeles (20 000 triángulos): se
 redondean las aristas. Booleanas directas sobre la malla (unir, restar) para exportar el STL
 con lo agregado o grabado conservando su detalle.
 
-### U13 — Puntos, medidas y cotas sobre el STL ❌
+### U13 — Puntos, medidas y cotas sobre el STL ✅
 Pedido del usuario (2026-11-08): «poner puntos en el STL, medir entre ellos, hacer cotas para
 dimensionar correctamente el objeto, y que esos puntos sirvan de referencia para construir encima».
 
@@ -181,4 +181,50 @@ repararlo en Preparar»):
 - Diseñar no usa un escaneo con fallas como sólido (`scan_mesh_faults` en `apps/desktop/src/cad.rs`):
   las operaciones dan el error «repáralo en Preparar → Reparar…» y el panel del escaneo avisa con un
   botón «Reparar en Preparar» (`cad_scan_faults`, `onRepairScan` en App.tsx).
+
+2026-11-08, U5 y U12 terminadas (sin compilar ni probar todavía):
+
+- U5: el diálogo de la curva por puntos tiene «Entre los puntos: curva suave / por la superficie»
+  (convierte `CurveDef::Points` ↔ `CurveDef::ScanPath`: los puntos `scan` pasan su semilla, los `at`
+  caen en la piel más cercana con `cad_scan_seeds_near`, los demás quedan fuera con aviso) y
+  «Agregar puntos sobre la piel» (clics seguidos hasta «Listo»). El camino muestra sus puntos y deja
+  quitarlos. Los puntos `PointSpec::Scan` dentro de una curva suave ahora siguen al escaneo
+  (`fit_scan_references` y `uses_scan` en `apps/desktop/src/cad.rs`).
+- U12: «Exportar el escaneo con lo agregado» (panel del escaneo → Para imprimir; comando
+  `cad_export_print`): el escaneo tal cual + las piezas del diseño + la herramienta de cada relieve,
+  sin booleanas. Las piezas hechas del escaneo (`ScanBody`) no salen (las reemplaza el original). En
+  3MF un solo objeto con partes (`converter_3mf::export_3mf_volumes`, rangos de triángulos y
+  `volume_type` en `Metadata/Slic3r_PE_model.config`): los grabados como `NegativeVolume`. En STL los
+  grabados quedan fuera con aviso. El laminador propio todavía no entiende volúmenes negativos.
+  **Falta probar** que Orca/PrusaSlicer abran el 3MF con el grabado restado.
+
+2026-11-08, U13 primera parte (puntos, construir encima, cotas; pruebas del modelo pasan, la app sin
+compilar):
+
+- Puntos con nombre: «Puntos en la piel» (panel del escaneo → Puntos y cotas) pone puntos seguidos
+  hasta «Listo»; cada uno es un `Point` con `PointSpec::Scan` llamado P1, P2… (`next_point_name` en
+  `apps/desktop/src/cad.rs`). El visor escribe el nombre junto a cada punto (`refLabels` en
+  `CadView.tsx`).
+- Construir encima, con los puntos elegidos (en orden) o los últimos puestos: «Plano por 3»
+  (`PlaneDef::ThreePoints`), «Eje por 2» (`AxisDef::TwoPoints`), «Sistema en el punto» (normal de la
+  piel + `Frame`), «Pieza en el punto» (`placeOnSkinAt`). Un sketch se ancla eligiendo ese plano.
+- Cotas: `FeatureKind::Dimension { measure: DimensionKind }` — distancia (directa o en X, Y, Z),
+  ángulo entre tres puntos, por la superficie (camino más corto), diámetro de una zona redonda y
+  espesor en un punto. Las del escaneo las completa la app en `fit_scan_references` (camino,
+  `pick_cylinder`, rayo hacia adentro). El resultado va como `RefGeom::Dimension` (valor, tramos,
+  dónde va el número): el visor lo dibuja en cian con su valor. Pruebas `model/tests/dimension.rs`.
+
+2026-11-08, U13 segunda parte (pruebas del modelo pasan, la app sin compilar):
+
+- Dimensionar el objeto: «Medidas» en el panel del escaneo lista las cotas con su valor; «Escalar…»
+  pide cuánto tiene que medir y escala el escaneo alrededor del primer punto de la cota
+  (`scaleAbout` en `scanAlign.ts`, por `onAlignScan`: queda como paso del historial del objeto).
+  Solo para cotas en mm que miden el escaneo.
+- Cotas como parámetros: `Dimension.parameter` da la medida a ese parámetro (lo crea o lo
+  reemplaza) antes de resolver las fórmulas (`published_dimensions` en `eval.rs`); sirve con puntos
+  sueltos o del escaneo (si no, aviso). Se actualiza con el escaneo.
+- Lista de medidas: «Exportar medidas (CSV)» (cota, qué mide, valor, unidad).
+- Patrón en puntos de referencia: `PatternKind::AtPoints` (una copia trasladada en cada punto,
+  el original en el más cercano); «Repetir en los puntos» en el panel y tipo nuevo en el diálogo
+  del patrón.
 

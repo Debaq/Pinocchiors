@@ -9,7 +9,7 @@
 //! desarrollado, θ·(R + K·t) (fibra neutra). Lo que queda en el borde de ese
 //! lado (contorno, agujeros, recortes) es el contorno del desarrollo.
 
-use crate::geom::{P2, P3, cross, dot, norm, normalize, scale, sub};
+use crate::geom::{P2, P3, add, cross, dot, norm, normalize, scale, sub};
 use cad_occt::{CurveKind, FaceInfo, Shape, SurfaceKind};
 use serde::Serialize;
 use std::collections::VecDeque;
@@ -47,6 +47,8 @@ struct PlaneMap {
     c: P2,
     a2: P2,
     b2: P2,
+    /// Normal de la pared (afuera del material): el otro lado está a −n·t
+    n: P3,
 }
 
 impl PlaneMap {
@@ -57,6 +59,12 @@ impl PlaneMap {
     fn map(&self, x: P3) -> P2 {
         let l = self.lin(sub(x, self.q0));
         [self.c[0] + l[0], self.c[1] + l[1]]
+    }
+    /// Al revés: el punto de la pared que cae en `p` (a2 y b2 son ortonormales)
+    fn unmap(&self, p: P2) -> P3 {
+        let l = [p[0] - self.c[0], p[1] - self.c[1]];
+        let (a, b) = (l[0] * self.a2[0] + l[1] * self.a2[1], l[0] * self.b2[0] + l[1] * self.b2[1]);
+        add(self.q0, add(scale(self.a3, a), scale(self.b3, b)))
     }
 }
 
@@ -99,6 +107,9 @@ struct BendMap {
     length: f64,
     along: P2,
     across: P2,
+    /// Radio de esta cara del doblez y cuánto cambia hasta el otro lado de la chapa (∓t)
+    radius: f64,
+    other: f64,
 }
 
 impl BendMap {
@@ -112,6 +123,16 @@ impl BendMap {
         let s = (phi / self.theta).clamp(0.0, 1.0) * self.length;
         let a = dot(sub(x, self.s1), self.axis);
         [self.base[0] + self.along[0] * a + self.across[0] * s, self.base[1] + self.along[1] * a + self.across[1] * s]
+    }
+    /// Al revés: el punto del doblez que cae en `p` y el del otro lado de la chapa
+    fn unmap(&self, p: P2) -> (P3, P3) {
+        let rel = [p[0] - self.base[0], p[1] - self.base[1]];
+        let a = rel[0] * self.along[0] + rel[1] * self.along[1];
+        let s = rel[0] * self.across[0] + rel[1] * self.across[1];
+        let psi = self.sign * (s / self.length).clamp(0.0, 1.0) * self.theta;
+        let rx = add(scale(self.r1, psi.cos()), scale(cross(self.axis, self.r1), psi.sin()));
+        let c = add(self.origin, scale(self.axis, dot(sub(self.s1, self.origin), self.axis) + a));
+        (add(c, scale(rx, self.radius)), add(c, scale(rx, self.radius + self.other)))
     }
 }
 
@@ -127,6 +148,16 @@ impl FaceMap {
             FaceMap::Bend(m) => m.map(x),
         }
     }
+    /// El punto de la cara que cae en `p` y el del otro lado de la chapa (espesor `t`)
+    fn unmap(&self, p: P2, t: f64) -> (P3, P3) {
+        match self {
+            FaceMap::Plane(m) => {
+                let x = m.unmap(p);
+                (x, sub(x, scale(m.n, t)))
+            }
+            FaceMap::Bend(m) => m.unmap(p),
+        }
+    }
 }
 
 fn unit2(v: P2) -> P2 {
@@ -140,9 +171,129 @@ fn toward(n: P3, u: P3, from: P3, inside: P3) -> P3 {
     if dot(w, sub(inside, from)) >= 0.0 { w } else { scale(w, -1.0) }
 }
 
+/// La pieza desplegada: cómo va cada cara del lado que se recorre al plano.
+struct Unfolded {
+    maps: Vec<Option<FaceMap>>,
+    face_edges: Vec<Vec<usize>>,
+    pairs: Vec<[Option<usize>; 2]>,
+    bends: Vec<FlatBend>,
+    t: f64,
+}
+
+impl Unfolded {
+    fn other(&self, edge: usize, f: usize) -> Option<usize> {
+        let p = self.pairs[edge];
+        match (p[0], p[1]) {
+            (Some(a), Some(b)) if a == f => Some(b),
+            (Some(a), Some(b)) if b == f => Some(a),
+            _ => None,
+        }
+    }
+
+    /// Los puntos de las aristas de la cara `f` (o solo las del borde del lado, con `border`), llevados al plano
+    fn edge_pieces(&self, shape: &Shape, f: usize, border: bool) -> Result<Vec<Vec<P2>>, String> {
+        let e = |x: cad_occt::Error| x.to_string();
+        let Some(m) = &self.maps[f] else { return Ok(Vec::new()) };
+        let edges = shape.edges().map_err(e)?;
+        let mut out = Vec::new();
+        for &k in &self.face_edges[f] {
+            if border && self.other(k, f).is_some_and(|o| self.maps[o].is_some()) {
+                continue;
+            }
+            let ed = &edges[k];
+            let pts: Vec<P3> = if ed.curve == CurveKind::Line {
+                vec![ed.start, ed.end]
+            } else {
+                shape.edge_shape(k).and_then(|s| s.sample_curve(33)).map_err(e)?.into_iter().map(|(p, _)| p).collect()
+            };
+            out.push(pts.into_iter().map(|p| m.map(p)).collect::<Vec<P2>>());
+        }
+        Ok(out)
+    }
+}
+
 /// Desarrollo de `shape` (una pieza). `fixed`: la cara plana que queda quieta
 /// (sin ella, la plana más grande); `thickness` sin dar se mide.
 pub fn flat_pattern(shape: &Shape, k_factor: f64, thickness: Option<f64>, fixed: Option<usize>) -> Result<FlatPattern, String> {
+    let u = unfold(shape, k_factor, thickness, fixed)?;
+    // El borde de ese lado: las aristas que dan a una cara de afuera del lado
+    let mut outline = Vec::new();
+    for f in 0..u.maps.len() {
+        outline.extend(u.edge_pieces(shape, f, true)?);
+    }
+    let (min, max) = bounds(&outline);
+    // Quieta en el origen: la esquina de abajo a la izquierda en (0, 0)
+    let shift = |p: P2| [p[0] - min[0], p[1] - min[1]];
+    let outline: Vec<Vec<P2>> = outline.into_iter().map(|l| l.into_iter().map(shift).collect()).collect();
+    let bends = u.bends.into_iter().map(|b| FlatBend { line: b.line.map(shift), ..b }).collect();
+    Ok(FlatPattern { outline, bends, thickness: u.t, k_factor, min: [0.0, 0.0], max: [max[0] - min[0], max[1] - min[1]] })
+}
+
+fn bounds(pieces: &[Vec<P2>]) -> (P2, P2) {
+    let mut min = [f64::INFINITY; 2];
+    let mut max = [f64::NEG_INFINITY; 2];
+    for p in pieces.iter().flatten() {
+        for i in 0..2 {
+            min[i] = min[i].min(p[i]);
+            max[i] = max[i].max(p[i]);
+        }
+    }
+    (min, max)
+}
+
+/// Volver a doblar: puntos del desarrollo (en el plano de [`flat_pattern`], con los
+/// mismos argumentos) llevados a la pieza doblada. Para cada uno, el punto del lado
+/// que se desarrolla y el del otro lado de la chapa (a través del espesor). Un punto
+/// fuera de la chapa va a la cara más cercana.
+pub fn refold_points(shape: &Shape, k_factor: f64, thickness: Option<f64>, fixed: Option<usize>, points: &[P2]) -> Result<Vec<(P3, P3)>, String> {
+    let u = unfold(shape, k_factor, thickness, fixed)?;
+    let mut outline = Vec::new();
+    for f in 0..u.maps.len() {
+        outline.extend(u.edge_pieces(shape, f, true)?);
+    }
+    let (min, _) = bounds(&outline);
+    // Cada cara del lado, como tramos en el plano (sus aristas, lazos con agujeros)
+    let regions: Vec<(usize, Vec<Vec<P2>>)> =
+        (0..u.maps.len()).filter(|&f| u.maps[f].is_some()).map(|f| u.edge_pieces(shape, f, false).map(|p| (f, p))).collect::<Result<_, _>>()?;
+    let inside = |q: P2, pieces: &[Vec<P2>]| {
+        let mut odd = false;
+        for w in pieces.iter().flat_map(|l| l.windows(2)) {
+            let (a, b) = (w[0], w[1]);
+            if (a[1] > q[1]) != (b[1] > q[1]) && q[0] < a[0] + (q[1] - a[1]) / (b[1] - a[1]) * (b[0] - a[0]) {
+                odd = !odd;
+            }
+        }
+        odd
+    };
+    let dist = |q: P2, pieces: &[Vec<P2>]| {
+        pieces
+            .iter()
+            .flat_map(|l| l.windows(2))
+            .map(|w| {
+                let (a, b) = (w[0], w[1]);
+                let d = [b[0] - a[0], b[1] - a[1]];
+                let l2 = (d[0] * d[0] + d[1] * d[1]).max(1e-18);
+                let s = (((q[0] - a[0]) * d[0] + (q[1] - a[1]) * d[1]) / l2).clamp(0.0, 1.0);
+                ((q[0] - a[0] - s * d[0]).powi(2) + (q[1] - a[1] - s * d[1]).powi(2)).sqrt()
+            })
+            .fold(f64::INFINITY, f64::min)
+    };
+    points
+        .iter()
+        .map(|p| {
+            let q = [p[0] + min[0], p[1] + min[1]];
+            let f = regions
+                .iter()
+                .find(|(_, pieces)| inside(q, pieces))
+                .or_else(|| regions.iter().min_by(|a, b| dist(q, &a.1).total_cmp(&dist(q, &b.1))))
+                .map(|(f, _)| *f)
+                .ok_or("la chapa no tiene caras desplegadas")?;
+            Ok(u.maps[f].as_ref().unwrap().unmap(q, u.t))
+        })
+        .collect()
+}
+
+fn unfold(shape: &Shape, k_factor: f64, thickness: Option<f64>, fixed: Option<usize>) -> Result<Unfolded, String> {
     let e = |x: cad_occt::Error| x.to_string();
     let faces: Vec<FaceInfo> = shape.faces().map_err(e)?;
     let edges = shape.edges().map_err(e)?;
@@ -188,7 +339,7 @@ pub fn flat_pattern(shape: &Shape, k_factor: f64, thickness: Option<f64>, fixed:
         Some(&k) => normalize(sub(edges[k].end, edges[k].start)),
         None => normalize(cross(n0, if n0[0].abs() < 0.9 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] })),
     };
-    let fixed_map = PlaneMap { q0: faces[start].point, a3, b3: cross(n0, a3), c: [0.0, 0.0], a2: [1.0, 0.0], b2: [0.0, 1.0] };
+    let fixed_map = PlaneMap { q0: faces[start].point, a3, b3: cross(n0, a3), c: [0.0, 0.0], a2: [1.0, 0.0], b2: [0.0, 1.0], n: n0 };
 
     let mut maps: Vec<Option<FaceMap>> = (0..faces.len()).map(|_| None).collect();
     maps[start] = Some(FaceMap::Plane(fixed_map));
@@ -264,7 +415,7 @@ pub fn flat_pattern(shape: &Shape, k_factor: f64, thickness: Option<f64>, fixed:
             let along = mp.lin(u);
             let across = unit2(mp.lin(t3));
             let base = mp.map(s1);
-            let bm = BendMap { s1, base, origin: ax.origin, axis: u, r1, sign, theta, length, along, across };
+            let bm = BendMap { s1, base, origin: ax.origin, axis: u, r1, sign, theta, length, along, across, radius: r, other: if convex { -t } else { t } };
             maps[c] = Some(FaceMap::Bend(bm));
             // Línea de doblez: por el medio, de punta a punta de la arista
             let (a, b) = (dot(sub(edges[k].start, s1), u), dot(sub(edges[k].end, s1), u));
@@ -279,38 +430,9 @@ pub fn flat_pattern(shape: &Shape, k_factor: f64, thickness: Option<f64>, fixed:
             let b3 = toward(nq, u, s2, faces[q].point);
             let shift = dot(sub(s2, s1), u);
             let c2 = [base[0] + along[0] * shift + across[0] * length, base[1] + along[1] * shift + across[1] * length];
-            maps[q] = Some(FaceMap::Plane(PlaneMap { q0: s2, a3: u, b3, c: c2, a2: along, b2: across }));
+            maps[q] = Some(FaceMap::Plane(PlaneMap { q0: s2, a3: u, b3, c: c2, a2: along, b2: across, n: nq }));
             queue.push_back(q);
         }
     }
-    // El borde de ese lado: las aristas que dan a una cara de afuera del lado
-    let mut outline = Vec::new();
-    for (f, m) in maps.iter().enumerate() {
-        let Some(m) = m else { continue };
-        for &k in &face_edges[f] {
-            if other(k, f).is_some_and(|o| maps[o].is_some()) {
-                continue;
-            }
-            let ed = &edges[k];
-            let pts: Vec<P3> = if ed.curve == CurveKind::Line {
-                vec![ed.start, ed.end]
-            } else {
-                shape.edge_shape(k).and_then(|s| s.sample_curve(33)).map_err(e)?.into_iter().map(|(p, _)| p).collect()
-            };
-            outline.push(pts.into_iter().map(|p| m.map(p)).collect::<Vec<P2>>());
-        }
-    }
-    let mut min = [f64::INFINITY; 2];
-    let mut max = [f64::NEG_INFINITY; 2];
-    for p in outline.iter().flatten() {
-        for i in 0..2 {
-            min[i] = min[i].min(p[i]);
-            max[i] = max[i].max(p[i]);
-        }
-    }
-    // Quieta en el origen: la esquina de abajo a la izquierda en (0, 0)
-    let shift = |p: P2| [p[0] - min[0], p[1] - min[1]];
-    let outline: Vec<Vec<P2>> = outline.into_iter().map(|l| l.into_iter().map(shift).collect()).collect();
-    let bends = bends.into_iter().map(|b| FlatBend { line: b.line.map(shift), ..b }).collect();
-    Ok(FlatPattern { outline, bends, thickness: t, k_factor, min: [0.0, 0.0], max: [max[0] - min[0], max[1] - min[1]] })
+    Ok(Unfolded { maps, face_edges, pairs, bends, t })
 }

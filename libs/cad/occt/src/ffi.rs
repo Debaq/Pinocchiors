@@ -123,6 +123,15 @@ unsafe extern "C" {
     pub fn cad_face_patch(face: *const CadShape, uv: *const f64, sizes: *const i32, n: i32) -> *mut CadShape;
     pub fn cad_pipe_twist(profile: *const CadShape, spine: *const CadShape, twist: f64, solid: i32) -> *mut CadShape;
     pub fn cad_loft_tangent(wires: *const *const CadShape, n: i32, start_w: f64, end_w: f64, solid: i32) -> *mut CadShape;
+    pub fn cad_loft_tangent_faces(
+        wires: *const *const CadShape,
+        n: i32,
+        start_w: f64,
+        end_w: f64,
+        faces0: *const CadShape,
+        faces1: *const CadShape,
+        solid: i32,
+    ) -> *mut CadShape;
     pub fn cad_face_blend(s: *const CadShape, fa: *const i32, na: i32, fb: *const i32, nb: i32, r: f64, side: i32) -> *mut CadShape;
     pub fn cad_split_silhouette(s: *const CadShape, faces: *const i32, n: i32, dir: *const f64) -> *mut CadShape;
     pub fn cad_split_faces(s: *const CadShape, faces: *const i32, n: i32, tool: *const CadShape) -> *mut CadShape;

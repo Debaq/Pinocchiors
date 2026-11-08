@@ -120,6 +120,84 @@ fn model_xml(scene: &Scene) -> Result<String, ThreeMfExportError> {
     Ok(xml)
 }
 
+/// Una parte de un objeto para imprimir: malla en milímetros con Z arriba.
+pub struct PrintVolume<'a> {
+    pub name: &'a str,
+    pub positions: &'a [[f32; 3]],
+    pub triangles: &'a [[u32; 3]],
+    /// Volumen negativo: el laminador lo resta de lo demás (grabados).
+    pub negative: bool,
+}
+
+/// Un solo objeto con varias partes (la pieza, lo agregado y los volúmenes
+/// negativos), como lo guardan PrusaSlicer y OrcaSlicer: la malla de todas
+/// juntas y, en `Metadata/Slic3r_PE_model.config`, el rango de triángulos y el
+/// tipo de cada parte. Sin booleanas: el laminador junta lo que se toca y resta
+/// lo negativo.
+pub fn export_3mf_volumes(name: &str, volumes: &[PrintVolume], path: impl AsRef<Path>) -> Result<(), ThreeMfExportError> {
+    std::fs::write(path, export_3mf_volumes_bytes(name, volumes)?)?;
+    Ok(())
+}
+
+/// Como [`export_3mf_volumes`], en memoria.
+pub fn export_3mf_volumes_bytes(name: &str, volumes: &[PrintVolume]) -> Result<Vec<u8>, ThreeMfExportError> {
+    let (mut vertices, mut triangles) = (String::new(), String::new());
+    let mut config = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<config>\n<object id=\"2\" instances_count=\"1\">\n");
+    let _ = writeln!(config, " <metadata type=\"object\" key=\"name\" value=\"{}\"/>", escape(name));
+    let (mut base, mut first) = (0u32, 0usize);
+    for v in volumes {
+        let (positions, tris) = weld(v.positions, v.triangles);
+        // 3MF no admite triángulos degenerados (y los rangos cuentan los que quedan)
+        let tris: Vec<[u32; 3]> = tris.into_iter().filter(|[a, b, c]| a != b && b != c && a != c).collect();
+        if tris.is_empty() {
+            continue;
+        }
+        for [x, y, z] in &positions {
+            let _ = writeln!(vertices, "<vertex x=\"{x}\" y=\"{y}\" z=\"{z}\"/>");
+        }
+        for [a, b, c] in &tris {
+            let _ = writeln!(triangles, "<triangle v1=\"{}\" v2=\"{}\" v3=\"{}\"/>", a + base, b + base, c + base);
+        }
+        let last = first + tris.len() - 1;
+        let kind = if v.negative { "NegativeVolume" } else { "ModelPart" };
+        let _ = writeln!(config, " <volume firstid=\"{first}\" lastid=\"{last}\">");
+        let _ = writeln!(config, "  <metadata type=\"volume\" key=\"name\" value=\"{}\"/>", escape(v.name));
+        let _ = writeln!(config, "  <metadata type=\"volume\" key=\"volume_type\" value=\"{kind}\"/>");
+        let _ = writeln!(config, "  <metadata type=\"volume\" key=\"matrix\" value=\"1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1\"/>");
+        config.push_str(" </volume>\n");
+        base += positions.len() as u32;
+        first = last + 1;
+    }
+    if first == 0 {
+        return Err(ThreeMfExportError::NoGeometry);
+    }
+    config.push_str("</object>\n</config>\n");
+    let model = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <model unit=\"millimeter\" xml:lang=\"en-US\" \
+         xmlns=\"http://schemas.microsoft.com/3dmanufacturing/core/2015/02\" \
+         xmlns:slic3rpe=\"http://schemas.slic3r.org/3mf/2017/06\">\n\
+         <metadata name=\"Application\">Pinocchiors</metadata>\n\
+         <metadata name=\"slic3rpe:Version3mf\">1</metadata>\n\
+         <resources>\n<object id=\"2\" type=\"model\" name=\"{}\">\n<mesh>\n<vertices>\n{vertices}</vertices>\n\
+         <triangles>\n{triangles}</triangles>\n</mesh>\n</object>\n</resources>\n\
+         <build>\n<item objectid=\"2\"/>\n</build>\n</model>\n",
+        escape(name)
+    );
+    let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    for (file, content) in [
+        ("[Content_Types].xml", CONTENT_TYPES),
+        ("_rels/.rels", RELS),
+        ("3D/3dmodel.model", model.as_str()),
+        ("Metadata/Slic3r_PE_model.config", config.as_str()),
+    ] {
+        zip.start_file(file, options)?;
+        zip.write_all(content.as_bytes())?;
+    }
+    Ok(zip.finish()?.into_inner())
+}
+
 /// Une los vértices con la misma posición. Las costuras de UV y de normales
 /// duplican vértices; en una malla indexada el slicer las vería como bordes
 /// abiertos (STL no tiene el problema porque los slicers sueldan al leerlo).
@@ -212,6 +290,25 @@ mod tests {
         let (unique, triangles) = weld(&positions, &[[0, 1, 2], [3, 5, 4]]);
         assert_eq!(unique.len(), 4);
         assert_eq!(triangles, vec![[0, 1, 2], [1, 3, 2]]);
+    }
+
+    #[test]
+    fn negative_volume_keeps_its_triangle_range() {
+        let tri = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        // La primera parte trae un triángulo degenerado que no cuenta en el rango
+        let a = PrintVolume { name: "escaneo", positions: &tri, triangles: &[[0, 1, 2], [0, 0, 1]], negative: false };
+        let b = PrintVolume { name: "grabado", positions: &tri, triangles: &[[0, 1, 2]], negative: true };
+        let bytes = export_3mf_volumes_bytes("pieza", &[a, b]).unwrap();
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+        let mut model = String::new();
+        archive.by_name("3D/3dmodel.model").unwrap().read_to_string(&mut model).unwrap();
+        let mut config = String::new();
+        archive.by_name("Metadata/Slic3r_PE_model.config").unwrap().read_to_string(&mut config).unwrap();
+        assert_eq!(model.matches("<triangle ").count(), 2);
+        assert!(model.contains("<triangle v1=\"3\" v2=\"4\" v3=\"5\"/>"), "la segunda parte usa sus propios vértices");
+        assert!(config.contains("firstid=\"0\" lastid=\"0\""));
+        assert!(config.contains("firstid=\"1\" lastid=\"1\""));
+        assert!(config.contains("value=\"NegativeVolume\""));
     }
 
     #[test]

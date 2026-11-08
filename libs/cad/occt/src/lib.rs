@@ -524,6 +524,16 @@ impl Shape {
         wrap(unsafe { ffi::cad_loft_tangent(p.as_ptr(), p.len() as i32, start_weight, end_weight, solid as i32) })
     }
 
+    /// Como [`Shape::loft_tangent`], pero en una punta con caras vecinas (un compuesto de
+    /// caras) la superficie sigue esas caras sin quiebre en vez de salir perpendicular a la
+    /// sección: en cada punto, dentro del plano tangente de la cara que lo toca (en una esquina
+    /// entre dos caras, por la recta donde se cortan).
+    pub fn loft_tangent_faces(sections: &[Shape], start_weight: f64, end_weight: f64, start_faces: Option<&Shape>, end_faces: Option<&Shape>, solid: bool) -> Result<Shape> {
+        let p = ptrs(sections);
+        let f = |s: Option<&Shape>| s.map_or(std::ptr::null(), |s| s.ptr());
+        wrap(unsafe { ffi::cad_loft_tangent_faces(p.as_ptr(), p.len() as i32, start_weight, end_weight, f(start_faces), f(end_faces), solid as i32) })
+    }
+
     /// Loft entre perfiles (alambres o caras).
     pub fn loft(sections: &[Shape], solid: bool, ruled: bool) -> Result<Shape> {
         let p = ptrs(sections);

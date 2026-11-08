@@ -145,6 +145,9 @@ pub enum RefGeom {
     Curves { lines: Vec<Vec<P3>> },
     /// Sistema de coordenadas: origen y ejes unitarios (derecho: z = x × y).
     Frame { origin: P3, x: P3, y: P3, z: P3 },
+    /// Cota: el valor (mm o grados, con `unit`), lo que se dibuja (polilíneas) y
+    /// dónde va el número.
+    Dimension { value: f64, unit: String, lines: Vec<Vec<P3>>, label: P3 },
 }
 
 impl RefGeom {
@@ -233,6 +236,21 @@ pub struct Evaluation {
     pub bends: Vec<BendInfo>,
     /// Piezas reemplazadas por cortes que las parten y uniones, en orden.
     pub replaced: Vec<Replaced>,
+    /// Desarrollos hechos como pieza, para volver a doblar lo que se les corte.
+    pub flats: HashMap<FeatureId, FlatRecord>,
+}
+
+/// Cómo se hizo un desarrollo como pieza: de qué pieza doblada (y cómo era en ese
+/// momento), la chapa plana que salió y dónde se puso.
+#[derive(Debug, Clone)]
+pub struct FlatRecord {
+    pub source: PartId,
+    pub folded: Shape,
+    pub original: Shape,
+    /// Corrimiento del plano del desarrollo a donde quedó la pieza (z = 0 abajo)
+    pub shift: P3,
+    pub k_factor: f64,
+    pub thickness: f64,
 }
 
 /// Piezas que una operación consumió y las que salieron: un corte que parte
@@ -281,6 +299,8 @@ struct FlangeGeom {
     b: P3,
     angle: f64,
     length: f64,
+    /// Sale de una arista circular: sin alivios, esquinas ni desarrollo
+    curved: bool,
 }
 
 /// Estado después de una operación, guardado por la huella de todo lo que
@@ -303,6 +323,7 @@ struct CacheEntry {
     gears: Vec<crate::gear_part::GearAxis>,
     bends: Vec<BendInfo>,
     replaced: Vec<Replaced>,
+    flat: Option<FlatRecord>,
     auto_scope: Vec<PartId>,
     handles: Vec<Handle>,
     /// Para descartar las menos usadas.
@@ -622,6 +643,14 @@ fn propagate(inputs: &[&[Vec<FaceTag>]], h: &History, n_out: usize) -> (Vec<Vec<
     (out, k)
 }
 
+/// Dobladillo cerrado (180° sin radio): la pared queda apoyada en la chapa. Con radio cero
+/// las dos se tocarían en toda la cara y se fundirían en una sola: queda una rendija mínima
+/// (y el doblez sigue siendo un cilindro para el desarrollo).
+fn closed_hem(r: f64, t: f64, angle: f64) -> f64 {
+    let least = (t * 0.01).max(0.005);
+    if angle >= 180.0 - 1e-9 && r < least { least } else { r }
+}
+
 /// Copia de los orígenes con un sufijo (copias de patrones y simetrías).
 fn suffixed(tags: &[Vec<FaceTag>], h: &History, n_out: usize, suffix: &str) -> Vec<Vec<FaceTag>> {
     let renamed: Vec<Vec<FaceTag>> =
@@ -742,6 +771,22 @@ pub fn evaluate(doc: &Document) -> Evaluation {
 
 /// Como `evaluate`, reutilizando lo que la caché ya tiene calculado.
 pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
+    // Las cotas que dan su medida a un parámetro, antes que las fórmulas (lo crean o lo reemplazan)
+    let published = published_dimensions(doc);
+    let with_dims;
+    let doc = if published.is_empty() {
+        doc
+    } else {
+        let mut d = doc.clone();
+        for p in published {
+            match d.parameters.iter_mut().find(|q| q.name == p.name) {
+                Some(q) => q.expr = p.expr,
+                None => d.parameters.push(p),
+            }
+        }
+        with_dims = d;
+        &with_dims
+    };
     // Primero las fórmulas: el árbol se calcula con los números que dan
     let res = doc.resolve();
     let doc = &res.document;
@@ -787,6 +832,9 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
             ctx.ev.gears.extend(e.gears.iter().cloned());
             ctx.ev.bends.extend(e.bends.iter().cloned());
             ctx.ev.replaced.extend(e.replaced.iter().cloned());
+            if let Some(x) = &e.flat {
+                ctx.ev.flats.insert(f.id, x.clone());
+            }
             ctx.ev.status.push(FeatureStatus { id: f.id, state: e.state.clone(), ms: e.ms, auto_scope: e.auto_scope.clone(), handles: e.handles.clone(), note: e.note.clone() });
             continue;
         }
@@ -831,6 +879,7 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
                 gears: ctx.ev.gears.iter().filter(|g| g.feature == f.id).cloned().collect(),
                 bends: ctx.ev.bends.iter().filter(|b| b.feature == f.id).cloned().collect(),
                 replaced: ctx.ev.replaced.iter().filter(|r| r.feature == f.id).cloned().collect(),
+                flat: ctx.ev.flats.get(&f.id).cloned(),
                 auto_scope: ctx.auto_scope.clone(),
                 handles: ctx.handles.borrow().clone(),
                 used: 0,
@@ -3443,12 +3492,16 @@ impl Ctx<'_> {
                 let mut jobs = Vec::new();
                 for &i in &idx {
                     let info = body.face_info(i).map_err(err)?;
-                    if info.surface != SurfaceKind::Plane {
-                        return Err("por ahora solo se mueven caras planas".into());
-                    }
                     let part = self.ev.part_of_face(i).ok_or("la cara no es de ninguna pieza")?;
-                    let n = normalize(info.normal);
-                    let prism = body.face_shape(i).and_then(|fc| fc.prism(scale(n, *distance))).map_err(err)?;
+                    let prism = if info.surface == SurfaceKind::Plane {
+                        let n = normalize(info.normal);
+                        body.face_shape(i).and_then(|fc| fc.prism(scale(n, *distance))).map_err(err)?
+                    } else {
+                        // Curva (un agujero, un eje, una cara libre): lo que barre al correrse por su
+                        // normal es la cara engrosada esa distancia (afuera suma, adentro resta). Las
+                        // vecinas no se estiran: con caras a 90° (agujeros y ejes) queda justo
+                        body.face_shape(i).and_then(|fc| fc.thicken(*distance)).map_err(|e| format!("no se pudo correr la cara curva: {e}"))?
+                    };
                     jobs.push((part, prism, i));
                 }
                 let saved = std::mem::take(&mut self.scope);
@@ -3623,7 +3676,60 @@ impl Ctx<'_> {
                 self.ev.tools.insert(f.id, (tool.clone(), BodyOp::Join));
                 self.apply(f.id, tool, BodyOp::Join)
             }
-            FeatureKind::ReplaceFace { faces, target } => {
+            FeatureKind::ReplaceFace { faces, surface, .. } if !surface.is_empty() => {
+                if faces.is_empty() {
+                    return Err("elegir al menos una cara".into());
+                }
+                let idx = self.faces("faces", faces)?;
+                let body = self.body()?.clone();
+                let far = self.diag() * 4.0;
+                // La superficie de llegada: una cara extendida por sus lados (así tapa toda la cara
+                // que se mueve) o varias cosidas tal cual
+                let to = self.faces("surface", surface)?;
+                if to.iter().any(|j| idx.contains(j)) {
+                    return Err("la superficie de llegada no puede ser una de las caras que se mueven".into());
+                }
+                let sheet = if to.len() == 1 {
+                    body.face_shape(to[0]).and_then(|fc| fc.extend_face(self.diag())).map_err(err)?
+                } else {
+                    let fs = to.iter().map(|&j| body.face_shape(j)).collect::<Result<Vec<_>, _>>().map_err(err)?;
+                    Shape::sew(&fs, 1e-6, false).map_err(err)?
+                };
+                let mut jobs = Vec::new();
+                for &i in &idx {
+                    let info = body.face_info(i).map_err(err)?;
+                    if info.surface != SurfaceKind::Plane {
+                        return Err("hasta una superficie se llevan caras planas".into());
+                    }
+                    let n = normalize(info.normal);
+                    // Hacia donde está la superficie: afuera (suma) o adentro (resta)
+                    let (ahead, behind) = (sheet.ray_hit(info.point, n), sheet.ray_hit(info.point, scale(n, -1.0)));
+                    let out = match (ahead, behind) {
+                        (Some(a), Some(b)) => a <= b,
+                        (Some(_), None) => true,
+                        (None, Some(_)) => false,
+                        (None, None) => return Err("la superficie no queda frente a la cara: no tiene hasta dónde llegar".into()),
+                    };
+                    let dir = if out { n } else { scale(n, -1.0) };
+                    let prism = body.face_shape(i).and_then(|fc| fc.prism(scale(dir, far))).map_err(err)?;
+                    let tool = until_sheet(&prism, &sheet, info.point, n)?;
+                    let part = self.ev.part_of_face(i).ok_or("la cara no es de ninguna pieza")?;
+                    jobs.push((part, tool, out));
+                }
+                let saved = std::mem::take(&mut self.scope);
+                for (k, (part, tool, out)) in jobs.into_iter().enumerate() {
+                    let tags = vec![vec![tag(f.id, format!("cara:{k}"))]; tool.face_count()];
+                    self.scope = vec![part];
+                    let r = self.apply(f.id, Tagged { shape: tool, tags }, if out { BodyOp::Join } else { BodyOp::Cut });
+                    if r.is_err() {
+                        self.scope = saved;
+                        return r;
+                    }
+                }
+                self.scope = saved;
+                Ok(())
+            }
+            FeatureKind::ReplaceFace { faces, target, .. } => {
                 if faces.is_empty() {
                     return Err("elegir al menos una cara".into());
                 }
@@ -3874,13 +3980,39 @@ impl Ctx<'_> {
                 loops.swap(0, big);
                 let face = Shape::face(&loops).map_err(err)?;
                 let shape = face.prism([0.0, 0.0, t]).map_err(err)?;
+                let record = FlatRecord { source: source.id, folded: source.shape.clone(), original: shape.clone(), shift, k_factor: k, thickness: t };
+                self.ev.flats.insert(f.id, record);
                 let tags = (0..shape.face_count()).map(|k| vec![tag(f.id, format!("plano:{k}"))]).collect();
                 self.new_part(f.id, Tagged { shape, tags });
+                Ok(())
+            }
+            FeatureKind::Refold { flat, keep } => self.refold(f.id, *flat, *keep),
+            FeatureKind::Dimension { measure, parameter } => {
+                let geom = dimension_geom(measure, &|field, p| self.point(field, p))?;
+                if parameter.as_deref().is_some_and(|n| !n.trim().is_empty()) && dimension_geom(measure, &|_, p| fixed_point(self.doc, p)).is_err() {
+                    self.warn("para dar su medida a un parámetro, la cota tiene que ir entre puntos sueltos o del escaneo".into());
+                }
+                if let RefGeom::Dimension { value, unit, .. } = &geom {
+                    self.measures.borrow_mut().insert(f.id, format!("{value:.2} {unit}"));
+                }
+                self.ev.references.insert(f.id, geom);
                 Ok(())
             }
             FeatureKind::Flange { edge, length, angle, flip, radius, relief, relief_width, corner_relief, corner_size, closed_corner, corner_gap } => {
                 let edge = edge.as_ref().ok_or("elegir la arista del borde de la chapa")?;
                 let (tool, part, g) = self.flange_tool(f.id, edge, *length, *angle, *flip, *radius)?;
+                if g.curved {
+                    // Sobre un arco: la pestaña sola (sin alivios ni esquinas), y no entra en el desarrollo
+                    if *closed_corner || *corner_relief != CornerRelief::None {
+                        self.warn("una pestaña sobre una arista curva no lleva alivios de esquina ni esquina cerrada".into());
+                    }
+                    self.measures.borrow_mut().insert(f.id, "Sobre una arista curva: la chapa se estira al doblarse, no entra en el desarrollo".into());
+                    self.ev.tools.insert(f.id, (tool.clone(), BodyOp::Join));
+                    let saved = std::mem::replace(&mut self.scope, vec![part]);
+                    let r = self.apply(f.id, tool, BodyOp::Join);
+                    self.scope = saved;
+                    return r;
+                }
                 // Esquinas cerradas: las extensiones de las paredes van con la pestaña
                 let tool = if *closed_corner {
                     let extra = self.closed_corners(part, &g, corner_gap.unwrap_or(0.2))?;
@@ -4291,6 +4423,19 @@ impl Ctx<'_> {
                     faces.extend(fs);
                     samples.push(sm);
                 }
+                // Caras vecinas que sigue la tangencia de cada punta (un compuesto de caras del sólido)
+                let neighbors = |field: &str, refs: &[FaceRef]| -> R<Option<Shape>> {
+                    if refs.is_empty() {
+                        return Ok(None);
+                    }
+                    let body = self.body()?;
+                    let fs = self.faces(field, refs)?.into_iter().map(|i| body.face_shape(i)).collect::<Result<Vec<_>, _>>().map_err(err)?;
+                    Ok(Some(Shape::compound(&fs).map_err(err)?))
+                };
+                if (!l.start_faces.is_empty() && tan0 <= 0.0) || (!l.end_faces.is_empty() && tan1 <= 0.0) {
+                    self.warn("las caras vecinas solo cuentan con tangencia en esa punta".into());
+                }
+                let (faces0, faces1) = (neighbors("start_faces", &l.start_faces)?, neighbors("end_faces", &l.end_faces)?);
                 let spine = l.path.as_ref().map(|p| self.path_wire(p, samples[0].first().copied())).transpose()?;
                 let guide = l.guide.as_ref().map(|p| self.path_wire(p, None)).transpose()?;
                 if guide.is_some() && spine.is_none() {
@@ -4299,6 +4444,9 @@ impl Ctx<'_> {
                 let build = |faces: &[Shape]| -> R<Shape> {
                     match &spine {
                         Some(sp) => Shape::loft_along(faces, sp, guide.as_ref(), true).map_err(err),
+                        None if tangent && (faces0.is_some() || faces1.is_some()) => {
+                            Shape::loft_tangent_faces(faces, tan0, tan1, faces0.as_ref(), faces1.as_ref(), true).map_err(err)
+                        }
                         None if tangent => Shape::loft_tangent(faces, tan0, tan1, true).map_err(err),
                         None if ends == 0 && !l.closed => Shape::loft(faces, true, l.ruled).map_err(err),
                         None => Shape::loft_ex(faces, true, l.ruled, start, end, l.closed).map_err(err),
@@ -4520,6 +4668,20 @@ impl Ctx<'_> {
                             continue;
                         }
                         let v = add(scale(d, spacing * i as f64), scale(d2, spacing2 * j as f64));
+                        out.push(Box::new(move |s: &Shape| s.translate(v).map_err(err)));
+                    }
+                }
+            }
+            PatternKind::AtPoints { points } => {
+                let pts = points.iter().map(|p| self.point("pattern", p)).collect::<R<Vec<P3>>>()?;
+                if pts.len() < 2 {
+                    return Err("hacen falta al menos 2 puntos (en uno queda el original)".into());
+                }
+                // Desde el punto más cercano a lo que se copia: ahí está el original
+                let from = pts.iter().copied().min_by(|a, b| norm(sub(*a, seed)).total_cmp(&norm(sub(*b, seed)))).unwrap();
+                for p in pts {
+                    let v = sub(p, from);
+                    if norm(v) > 1e-9 {
                         out.push(Box::new(move |s: &Shape| s.translate(v).map_err(err)));
                     }
                 }
@@ -4798,6 +4960,110 @@ impl Ctx<'_> {
         })
     }
 
+    /// Volver a doblar: lo que se le cortó al desarrollo (una pieza de «Desarrollo plano»)
+    /// se lleva a la pieza doblada y se le resta ahí; los cortes que cruzan un doblez lo
+    /// siguen. Cuenta la huella de cada corte en el plano (se toma de lado a lado). Sin
+    /// `keep`, la pieza plana deja de estar.
+    fn refold(&mut self, id: FeatureId, flat: Option<FeatureId>, keep: bool) -> R<()> {
+        let fid = match flat {
+            Some(x) => x,
+            None => self
+                .doc
+                .features
+                .iter()
+                .take_while(|g| g.id != id)
+                .filter(|g| matches!(g.kind, FeatureKind::FlatSolid { .. }) && self.ev.flats.contains_key(&g.id))
+                .last()
+                .map(|g| g.id)
+                .ok_or("hace falta un «Desarrollo plano» antes")?,
+        };
+        let rec = self.ev.flats.get(&fid).cloned().ok_or("ese desarrollo no está calculado")?;
+        let flat_part = self.ev.parts.iter().find(|p| p.id.feature == fid).ok_or("la pieza del desarrollo ya no está")?.shape.clone();
+        if !self.ev.parts.iter().any(|p| p.id == rec.source) {
+            return Err("la pieza doblada ya no está".into());
+        }
+        let t = rec.thickness;
+        let removed = rec.original.cut(&flat_part).map_err(err)?.solids().map_err(err)?;
+        // Cada corte: su huella (las caras que miran abajo), en el plano del desarrollo
+        let mut tools = Vec::new();
+        let step = t.clamp(0.2, 1.0);
+        for piece in &removed {
+            let faces = piece.faces().map_err(err)?;
+            for (j, fi) in faces.iter().enumerate() {
+                if fi.surface != SurfaceKind::Plane || fi.normal[2] > -0.999 {
+                    continue;
+                }
+                let fs = piece.face_shape(j).map_err(err)?;
+                let mut pieces2 = Vec::new();
+                for (k, ed) in fs.edges().map_err(err)?.iter().enumerate() {
+                    let pts: Vec<P3> = if ed.curve == cad_occt::CurveKind::Line {
+                        vec![ed.start, ed.end]
+                    } else {
+                        fs.edge_shape(k).and_then(|e| e.sample_curve(33)).map_err(err)?.into_iter().map(|(p, _)| p).collect()
+                    };
+                    pieces2.push(pts.into_iter().map(|p| [p[0] - rec.shift[0], p[1] - rec.shift[1]]).collect::<Vec<P2>>());
+                }
+                let loops: Vec<Vec<P2>> = crate::sheet::chain_loops(&pieces2).into_iter().filter(|l| l.len() > 3).collect();
+                if loops.is_empty() {
+                    continue;
+                }
+                let area = |l: &Vec<P2>| l.windows(2).map(|w| w[0][0] * w[1][1] - w[1][0] * w[0][1]).sum::<f64>().abs() / 2.0;
+                let outer = (0..loops.len()).max_by(|&a, &b| area(&loops[a]).total_cmp(&area(&loops[b]))).unwrap();
+                let mut tool: Option<Shape> = None;
+                for (li, l) in loops.iter().enumerate() {
+                    // Puntos seguidos (a lo sumo `step`), así el corte sigue la curva de los dobleces
+                    let mut dense: Vec<P2> = Vec::new();
+                    for w in l.windows(2) {
+                        let d = ((w[1][0] - w[0][0]).powi(2) + (w[1][1] - w[0][1]).powi(2)).sqrt();
+                        let n = (d / step).ceil().max(1.0) as usize;
+                        for s in 0..n {
+                            let a = s as f64 / n as f64;
+                            dense.push([w[0][0] + (w[1][0] - w[0][0]) * a, w[0][1] + (w[1][1] - w[0][1]) * a]);
+                        }
+                    }
+                    if dense.len() < 3 {
+                        continue;
+                    }
+                    let both = crate::sheet::refold_points(&rec.folded, rec.k_factor, Some(t), None, &dense)?;
+                    // De un poco afuera de un lado a un poco afuera del otro: el corte queda limpio
+                    let ring = |side: f64| -> R<Shape> {
+                        let pts: Vec<P3> = both.iter().map(|(a, b)| add(if side > 0.0 { *a } else { *b }, scale(sub(*a, *b), 0.1 * side))).collect();
+                        let lines: Vec<Curve> = (0..pts.len())
+                            .map(|k| (pts[k], pts[(k + 1) % pts.len()]))
+                            .filter(|(a, b)| norm(sub(*b, *a)) > 1e-9)
+                            .map(|(a, b)| Curve::Line(a, b))
+                            .collect();
+                        Shape::wire(&lines).map_err(err)
+                    };
+                    let solid = Shape::loft(&[ring(1.0)?, ring(-1.0)?], true, true).map_err(err)?;
+                    tool = Some(match (tool, li == outer) {
+                        (None, _) => solid,
+                        (Some(acc), true) => solid.cut(&acc).map_err(err)?,
+                        (Some(acc), false) => acc.cut(&solid).map_err(err)?,
+                    });
+                }
+                tools.extend(tool);
+            }
+        }
+        if tools.is_empty() {
+            self.warn("al desarrollo no se le cortó nada: no hay qué volver a doblar".into());
+        } else {
+            let shape = if tools.len() == 1 { tools.pop().unwrap() } else { fuse(tools)? };
+            let tags = (0..shape.face_count()).map(|k| vec![tag(id, format!("corte:{k}"))]).collect();
+            let tool = Tagged { shape, tags };
+            self.ev.tools.insert(id, (tool.clone(), BodyOp::Cut));
+            let saved = std::mem::replace(&mut self.scope, vec![rec.source]);
+            let r = self.apply(id, tool, BodyOp::Cut);
+            self.scope = saved;
+            r?;
+        }
+        if !keep && let Some(i) = self.ev.parts.iter().position(|p| p.id.feature == fid) {
+            self.ev.parts.remove(i);
+            self.sync();
+        }
+        Ok(())
+    }
+
     /// Doblez y pared de una pestaña desde la arista `edge` (recta, entre la
     /// cara grande de la chapa y su canto). Devuelve la herramienta y la pieza.
     fn flange_tool(&self, id: FeatureId, edge: &EdgeRef, length: f64, angle: f64, flip: bool, radius: Option<f64>) -> R<(Tagged, PartId, FlangeGeom)> {
@@ -4810,8 +5076,11 @@ impl Ctx<'_> {
         let i = self.edge("edge", edge)?;
         let body = self.body()?;
         let info = body.edge_info(i).map_err(err)?;
+        if info.curve == cad_occt::CurveKind::Circle {
+            return self.flange_tool_curved(id, i, &info, length, angle, flip, radius);
+        }
         if info.curve != cad_occt::CurveKind::Line {
-            return Err("la pestaña sale de una arista recta".into());
+            return Err("la pestaña sale de una arista recta o de un arco de círculo".into());
         }
         let dir = normalize(sub(info.end, info.start));
         let faces: Vec<(usize, cad_occt::FaceInfo)> =
@@ -4827,6 +5096,7 @@ impl Ctx<'_> {
         if r < 0.0 {
             return Err("el radio no puede ser negativo".into());
         }
+        let r = closed_hem(r, t, angle);
         let n = normalize(top.1.normal);
         let m = normalize(side.1.normal);
         if dot(n, m).abs() > 1e-3 || dot(n, dir).abs() > 1e-3 || dot(m, dir).abs() > 1e-3 {
@@ -4856,7 +5126,83 @@ impl Ctx<'_> {
         };
         let part = self.ev.part_of_face(side.0).ok_or("la arista no es de ninguna pieza")?;
         let tags = (0..shape.face_count()).map(|k| vec![tag(id, format!("pestaña:{k}"))]).collect();
-        let g = FlangeGeom { start: info.start, end: info.end, dir, n, m, t, r, b, angle, length };
+        let g = FlangeGeom { start: info.start, end: info.end, dir, n, m, t, r, b, angle, length, curved: false };
+        Ok((Tagged { shape, tags }, part, g))
+    }
+
+    /// Pestaña desde una arista circular (el borde de un disco o de un agujero): el corte de la
+    /// pestaña (doblez y pared, en el plano que pasa por el eje del círculo) girado a lo largo
+    /// de la arista. La pared queda cónica (cilíndrica a 90°). Esa chapa se estira al doblarse:
+    /// no entra en el desarrollo.
+    #[allow(clippy::too_many_arguments)]
+    fn flange_tool_curved(&self, id: FeatureId, i: usize, info: &cad_occt::EdgeInfo, length: f64, angle: f64, flip: bool, radius: Option<f64>) -> R<(Tagged, PartId, FlangeGeom)> {
+        let body = self.body()?;
+        let (center, axis_c, _) = info.circle.ok_or("la arista curva tiene que ser un arco de círculo")?;
+        let ac = normalize(axis_c);
+        let faces: Vec<(usize, cad_occt::FaceInfo)> =
+            body.edge_faces(i).map_err(err)?.into_iter().filter_map(|k| body.face_info(k).ok().map(|x| (k, x))).collect();
+        let top = faces.iter().find(|(_, x)| x.surface == cad_occt::SurfaceKind::Plane);
+        let side = faces.iter().find(|(k, x)| top.is_none_or(|t| t.0 != *k) && x.surface == cad_occt::SurfaceKind::Cylinder);
+        let (Some(top), Some(side)) = (top, side) else {
+            return Err("la arista curva tiene que estar entre la cara plana de la chapa y su canto".into());
+        };
+        let n = normalize(top.1.normal);
+        if dot(n, ac).abs() < 0.999 {
+            return Err("el círculo de la arista tiene que estar en el plano de la chapa".into());
+        }
+        let t = self.sheet_params(id).map(|p| p.0).unwrap_or(side.1.area / info.length.max(1e-9));
+        let r = radius.or(self.sheet_params(id).map(|p| p.1)).unwrap_or(t);
+        if r < 0.0 {
+            return Err("el radio no puede ser negativo".into());
+        }
+        // Con radio cero un borde del corte caería sobre el eje del doblez (un arco sin radio)
+        let r = closed_hem(r, t, angle).max(t * 1e-3);
+        let flat = |v: P3| sub(v, scale(ac, dot(v, ac)));
+        let p0 = info.start;
+        let radial = normalize(flat(sub(p0, center)));
+        // Hacia afuera del canto: lejos del eje (borde de un disco) o hacia él (borde de un agujero)
+        let away = dot(side.1.normal, flat(sub(side.1.point, center))) > 0.0;
+        let m = if away { radial } else { scale(radial, -1.0) };
+        let dir = normalize(cross(ac, radial));
+        let b = if flip { scale(n, -1.0) } else { n };
+        let edge_on_b = if flip { sub(p0, scale(n, t)) } else { p0 };
+        let bend_axis = Axis { origin: add(edge_on_b, scale(b, r)), dir };
+        let sign = if dot(cross(dir, scale(b, -1.0)), m) >= 0.0 { 1.0 } else { -1.0 };
+        let a = sign * angle.to_radians();
+        let turn = |p: P3, th: f64| {
+            let k = cad_occt::rotation_matrix(bend_axis, th);
+            [0, 1, 2].map(|j| k[j][0] * p[0] + k[j][1] * p[1] + k[j][2] * p[2] + k[j][3])
+        };
+        // El corte: del borde (A arriba, B abajo) doblado `a` y la pared a lo largo de `d`
+        let (pa, pb) = (p0, add(p0, scale(n, -t)));
+        let (pa2, pb2) = (turn(pa, a), turn(pb, a));
+        let mut ring = vec![Curve::Arc(pa, turn(pa, a / 2.0), pa2)];
+        if length > 0.0 {
+            let rot = cad_occt::rotation_matrix(bend_axis, a);
+            let d = [0, 1, 2].map(|k| rot[k][0] * m[0] + rot[k][1] * m[1] + rot[k][2] * m[2]);
+            let (qa, qb) = (add(pa2, scale(d, length)), add(pb2, scale(d, length)));
+            ring.extend([Curve::Line(pa2, qa), Curve::Line(qa, qb), Curve::Line(qb, pb2)]);
+        } else {
+            ring.push(Curve::Line(pa2, pb2));
+        }
+        ring.extend([Curve::Arc(pb2, turn(pb, a / 2.0), pb), Curve::Line(pb, pa)]);
+        let section = Shape::face(&[ring]).map_err(err)?;
+        // A lo largo de toda la arista, desde su comienzo hacia donde sigue
+        let ang = |u: P3, v: P3| dot(cross(u, v), ac).atan2(dot(u, v));
+        let sweep = if info.closed {
+            2.0 * std::f64::consts::PI
+        } else {
+            let (u, w, v) = (flat(sub(info.start, center)), flat(sub(info.mid, center)), flat(sub(info.end, center)));
+            ang(u, w) + ang(w, v)
+        };
+        if sweep.abs() < 1e-9 {
+            return Err("la arista curva no tiene largo".into());
+        }
+        let around = if sweep > 0.0 { Axis { origin: center, dir: ac } } else { Axis { origin: center, dir: scale(ac, -1.0) } };
+        let shape = section.revolve(around, sweep.abs()).map_err(err)?;
+        let part = self.ev.part_of_face(side.0).ok_or("la arista no es de ninguna pieza")?;
+        let tags = (0..shape.face_count()).map(|k| vec![tag(id, format!("pestaña:{k}"))]).collect();
+        let g = FlangeGeom { start: info.start, end: info.end, dir, n, m, t, r, b, angle, length, curved: true };
         Ok((Tagged { shape, tags }, part, g))
     }
 
@@ -6644,4 +6990,106 @@ impl Ctx<'_> {
             _ => return Err(format!("no sé armar un punto con eso ({} elegidos): un vértice; una arista (su medio o su centro); una esfera; dos puntos; una arista y una cara; dos líneas", g.len())),
         })
     }
+}
+
+/// Dónde está un punto sin calcular el árbol: uno suelto o del escaneo (directo o por
+/// referencia a su operación). Lo usan las cotas que dan su medida a un parámetro.
+fn fixed_point(doc: &Document, p: &PointSpec) -> R<P3> {
+    match p {
+        PointSpec::At { point } | PointSpec::Scan { point, .. } => Ok(*point),
+        PointSpec::Reference { feature } => match doc.get(*feature).map(|f| &f.kind) {
+            Some(FeatureKind::Point { def: PointSpec::At { point } | PointSpec::Scan { point, .. } }) => Ok(*point),
+            _ => Err("punto que depende del modelo".into()),
+        },
+        _ => Err("punto que depende del modelo".into()),
+    }
+}
+
+/// Las cotas que dan su medida a un parámetro, como parámetros (con su valor).
+pub(crate) fn published_dimensions(doc: &Document) -> Vec<crate::document::Parameter> {
+    doc.features
+        .iter()
+        .filter(|f| !f.suppressed)
+        .filter_map(|f| {
+            let FeatureKind::Dimension { measure, parameter: Some(name) } = &f.kind else { return None };
+            let name = name.trim();
+            if name.is_empty() {
+                return None;
+            }
+            match dimension_geom(measure, &|_, p| fixed_point(doc, p)).ok()? {
+                RefGeom::Dimension { value, .. } => Some(crate::document::Parameter { name: name.to_string(), expr: format!("{value}") }),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// Lo que mide una cota y cómo se dibuja; `point` resuelve cada punto.
+fn dimension_geom(m: &DimensionKind, point: &dyn Fn(&str, &PointSpec) -> R<P3>) -> R<RefGeom> {
+    let mid = |a: P3, b: P3| scale(add(a, b), 0.5);
+    let mm = |value: f64, lines: Vec<Vec<P3>>, label: P3| RefGeom::Dimension { value, unit: "mm".into(), lines, label };
+    Ok(match m {
+        DimensionKind::Distance { a, b, axis } => {
+            let (pa, pb) = (point("a", a)?, point("b", b)?);
+            match axis {
+                None => mm(norm(sub(pb, pa)), vec![vec![pa, pb]], mid(pa, pb)),
+                Some(ax) => {
+                    let i = match ax {
+                        DimAxis::X => 0,
+                        DimAxis::Y => 1,
+                        DimAxis::Z => 2,
+                    };
+                    // La medida a lo largo del eje y, punteado, lo que falta hasta el otro punto
+                    let mut q = pa;
+                    q[i] = pb[i];
+                    mm((pb[i] - pa[i]).abs(), vec![vec![pa, q], vec![q, pb]], mid(pa, q))
+                }
+            }
+        }
+        DimensionKind::Angle { a, vertex, b } => {
+            let (pa, v, pb) = (point("a", a)?, point("vertex", vertex)?, point("b", b)?);
+            let (da, db) = (sub(pa, v), sub(pb, v));
+            if norm(da) < 1e-9 || norm(db) < 1e-9 {
+                return Err("el vértice del ángulo no puede ser uno de los otros puntos".into());
+            }
+            let (ua, ub) = (normalize(da), normalize(db));
+            let angle = dot(ua, ub).clamp(-1.0, 1.0).acos();
+            // Arco cerca del vértice, de una recta a la otra
+            let r = 0.3 * norm(da).min(norm(db));
+            let w = sub(ub, scale(ua, dot(ua, ub)));
+            let w = if norm(w) > 1e-9 { normalize(w) } else { ua };
+            let arc: Vec<P3> = (0..=24)
+                .map(|k| {
+                    let t = angle * k as f64 / 24.0;
+                    add(v, add(scale(ua, r * t.cos()), scale(w, r * t.sin())))
+                })
+                .collect();
+            let label = arc[12];
+            RefGeom::Dimension { value: angle.to_degrees(), unit: "°".into(), lines: vec![vec![pa, v, pb], arc], label }
+        }
+        DimensionKind::Surface { points, path } => {
+            if points.len() < 2 {
+                return Err("hacen falta al menos dos puntos".into());
+            }
+            if path.len() < 2 {
+                return Err("para medir por la superficie hace falta el escaneo, con los puntos sobre él".into());
+            }
+            let len: f64 = path.windows(2).map(|w| norm(sub(w[1], w[0]))).sum();
+            mm(len, vec![path.clone()], path[path.len() / 2])
+        }
+        DimensionKind::Diameter { fit, .. } => {
+            let c = fit.ok_or("para medir el diámetro hace falta el escaneo, con el punto en una zona redonda")?;
+            let d = normalize(c.direction);
+            let v = sub(c.at, c.origin);
+            let center = add(c.origin, scale(d, dot(v, d)));
+            let across = sub(c.at, center);
+            let far = if norm(across) > 1e-9 { sub(center, scale(normalize(across), c.radius)) } else { center };
+            let near = if norm(across) > 1e-9 { add(center, scale(normalize(across), c.radius)) } else { center };
+            mm(2.0 * c.radius, vec![vec![near, far]], center)
+        }
+        DimensionKind::Thickness { span, .. } => {
+            let [a, b] = span.ok_or("para medir el espesor hace falta el escaneo, con el punto sobre él")?;
+            mm(norm(sub(b, a)), vec![vec![a, b]], mid(a, b))
+        }
+    })
 }

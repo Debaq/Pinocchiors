@@ -945,7 +945,54 @@ static std::vector<Side> rotated(const std::vector<Side>& b, size_t shift, bool 
 // con peso > 0 la tangente es la normal de la sección × peso × distancia a la vecina: la
 // superficie sale perpendicular a la sección; con peso ≤ 0, la diferencia con la vecina (libre).
 // Las secciones tienen que tener la misma cantidad de aristas.
-CadShape* cad_loft_tangent(const CadShape* const* wires, int32_t n, double start_w, double end_w, int32_t solid) {
+// Con caras vecinas en una punta (`faces0`, `faces1`), la tangente en cada punto de la sección
+// va dentro del plano tangente de la cara que lo toca (en las esquinas, por la recta donde se
+// cortan las dos caras), así la transición continúa las caras sin quiebre.
+extern "C++" {
+// Dirección dentro de las caras (de `faces`) que tocan `p`, hacia adelante (`fwd`): con una cara,
+// `fwd` llevada a su plano tangente; en una esquina entre dos caras, la recta donde se cortan
+// (así los dos lados que se juntan ahí calculan lo mismo). Nula si no hay ninguna cara cerca.
+static gp_Vec along_face(const TopoDS_Shape& faces, const gp_Pnt& p, const gp_Vec& fwd) {
+    std::vector<std::pair<double, gp_Vec>> found;
+    for (TopExp_Explorer fx(faces, TopAbs_FACE); fx.More(); fx.Next()) {
+        TopoDS_Face f = TopoDS::Face(fx.Current());
+        Handle(Geom_Surface) S = BRep_Tool::Surface(f);
+        if (S.IsNull()) continue;
+        GeomAPI_ProjectPointOnSurf pr(p, S);
+        if (!pr.IsDone() || pr.NbPoints() < 1) continue;
+        double u, v;
+        pr.LowerDistanceParameters(u, v);
+        gp_Pnt q;
+        gp_Vec du, dv;
+        S->D1(u, v, q, du, dv);
+        gp_Vec n = du.Crossed(dv);
+        if (n.Magnitude() < 1e-12) continue;
+        found.push_back({pr.LowerDistance(), n.Normalized()});
+    }
+    if (found.empty() || fwd.Magnitude() < 1e-12) return gp_Vec(0, 0, 0);
+    double best = 1e300;
+    for (auto& fd : found) best = std::min(best, fd.first);
+    std::vector<gp_Vec> near;
+    for (auto& fd : found) {
+        if (fd.first > best + 1e-5) continue;
+        bool same = false;
+        for (auto& m : near) same = same || std::abs(m.Dot(fd.second)) > 1 - 1e-9;
+        if (!same) near.push_back(fd.second);
+    }
+    const gp_Vec f = fwd.Normalized();
+    gp_Vec d(0, 0, 0);
+    if (near.size() == 2) d = near[0].Crossed(near[1]);
+    if (d.Magnitude() < 1e-6) {
+        for (auto& n : near) d += f - n * n.Dot(f);
+    }
+    if (d.Magnitude() < 1e-6) return gp_Vec(0, 0, 0);
+    d.Normalize();
+    return d.Dot(f) < 0 ? d.Reversed() : d;
+}
+}  // extern "C++"
+
+static CadShape* loft_tangent_impl(const CadShape* const* wires, int32_t n, double start_w, double end_w, const CadShape* faces0,
+                                   const CadShape* faces1, int32_t solid) {
     return guard("transición con tangencia", (CadShape*)nullptr, [&] {
         if (n < 2) throw Standard_Failure("se necesitan al menos 2 secciones");
         std::vector<std::vector<hermite::Side>> secs;
@@ -1019,10 +1066,12 @@ CadShape* cad_loft_tangent(const CadShape* const* wires, int32_t n, double start
         const int M = 25;
         TColStd_Array1OfReal params(1, M);
         for (int m = 0; m < M; m++) params(m + 1) = double(m) / (M - 1);
-        auto samples = [&](const hermite::Side& sd) {
+        // `dirs`: si no es nulo, la dirección de la arista en cada punto (en el sentido en que se recorre)
+        auto samples = [&](const hermite::Side& sd, std::vector<gp_Vec>* dirs) {
             GeomAdaptor_Curve ac(sd.c, sd.f, sd.l);
             double len = GCPnts_AbscissaPoint::Length(ac, sd.f, sd.l);
             std::vector<gp_Pnt> pts(M);
+            if (dirs) dirs->assign(M, gp_Vec(0, 0, 0));
             for (int m = 0; m < M; m++) {
                 double s = double(m) / (M - 1);
                 double u;
@@ -1033,6 +1082,12 @@ CadShape* cad_loft_tangent(const CadShape* const* wires, int32_t n, double start
                     u = ap.IsDone() ? ap.Parameter() : (sd.reversed ? sd.l - (sd.l - sd.f) * s : sd.f + (sd.l - sd.f) * s);
                 }
                 pts[m] = sd.c->Value(u);
+                if (dirs) {
+                    gp_Pnt q;
+                    gp_Vec d1;
+                    sd.c->D1(u, q, d1);
+                    (*dirs)[m] = sd.reversed ? d1.Reversed() : d1;
+                }
             }
             return pts;
         };
@@ -1049,15 +1104,38 @@ CadShape* cad_loft_tangent(const CadShape* const* wires, int32_t n, double start
         };
 
         BRepBuilderAPI_Sewing sew(1e-6 * std::max(1.0, centers[0].Distance(centers[n - 1])));
+        // Tangente que sigue las caras vecinas en la punta `i`: por punto de la arista, llevada a
+        // polos interpolando los puntos corridos (la interpolación con nudos fijos es lineal)
+        auto face_tangents = [&](int i, int toward, double w, const TopoDS_Shape& faces, size_t k) {
+            std::vector<gp_Pnt> pts = samples(secs[i][k], nullptr);
+            gp_Vec d(centers[i], centers[toward]);
+            gp_Vec fwd = toward > i ? d : d.Reversed();
+            const double len = w * d.Magnitude();
+            std::vector<gp_Pnt> moved(M);
+            for (int m = 0; m < M; m++) {
+                gp_Vec t = along_face(faces, pts[m], fwd);
+                // Sin cara cerca (o la cara está de frente): perpendicular a la sección
+                if (t.Magnitude() < 0.5) t = normals[i].Magnitude() > 0.5 ? normals[i] : fwd.Normalized();
+                if (t.Dot(fwd) < 0) t.Reverse();
+                moved[m] = pts[m].Translated(t * len);
+            }
+            Handle(Geom_BSplineCurve) a = interp(pts), b = interp(moved);
+            std::vector<gp_Vec> out;
+            for (int p = 1; p <= a->NbPoles(); p++) out.push_back(gp_Vec(a->Pole(p), b->Pole(p)));
+            return out;
+        };
+        const bool along0 = fixed0 && faces0, along1 = fixed1 && faces1;
         for (size_t k = 0; k < K; k++) {
             std::vector<Handle(Geom_BSplineCurve)> cs;
-            for (int32_t i = 0; i < n; i++) cs.push_back(interp(samples(secs[i][k])));
+            for (int32_t i = 0; i < n; i++) cs.push_back(interp(samples(secs[i][k], nullptr)));
             const int NP = cs[0]->NbPoles();
             auto pole = [&](int i, int p) { return gp_Vec(cs[i]->Pole(p).XYZ()); };
+            const std::vector<gp_Vec> F0 = along0 ? face_tangents(0, 1, start_w, faces0->s, k) : std::vector<gp_Vec>();
+            const std::vector<gp_Vec> F1 = along1 ? face_tangents(n - 1, n - 2, end_w, faces1->s, k) : std::vector<gp_Vec>();
             // Tangente (por polo) en cada sección
             auto tangent = [&](int i, int p) {
-                if (i == 0) return fixed0 ? T0 : pole(1, p) - pole(0, p);
-                if (i == n - 1) return fixed1 ? T1 : pole(n - 1, p) - pole(n - 2, p);
+                if (i == 0) return along0 ? F0[p - 1] : fixed0 ? T0 : pole(1, p) - pole(0, p);
+                if (i == n - 1) return along1 ? F1[p - 1] : fixed1 ? T1 : pole(n - 1, p) - pole(n - 2, p);
                 return (pole(i + 1, p) - pole(i - 1, p)) * 0.5;
             };
             const int NV = 3 * (n - 1) + 1;
@@ -1102,6 +1180,15 @@ CadShape* cad_loft_tangent(const CadShape* const* wires, int32_t n, double start
         BRepLib::OrientClosedSolid(so);
         return wrap_checked(so, "transición con tangencia");
     });
+}
+
+CadShape* cad_loft_tangent(const CadShape* const* wires, int32_t n, double start_w, double end_w, int32_t solid) {
+    return loft_tangent_impl(wires, n, start_w, end_w, nullptr, nullptr, solid);
+}
+
+CadShape* cad_loft_tangent_faces(const CadShape* const* wires, int32_t n, double start_w, double end_w, const CadShape* faces0,
+                                 const CadShape* faces1, int32_t solid) {
+    return loft_tangent_impl(wires, n, start_w, end_w, faces0, faces1, solid);
 }
 
 CadShape* cad_loft(const CadShape* const* wires, int32_t n, int32_t solid, int32_t ruled) {

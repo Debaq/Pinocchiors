@@ -84,7 +84,7 @@ fn transicion_entre_anillos_conserva_el_hueco() {
         path: None,
         guide: None,
         start_tangent: None,
-        end_tangent: None,
+        end_tangent: None, start_faces: Vec::new(), end_faces: Vec::new(),
     }));
     let ev = eval_ok(&doc);
     assert_relative_eq!(volume(&ev), PI * (100.0 - 25.0) * 20.0, max_relative = 1e-3);

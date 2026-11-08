@@ -347,34 +347,37 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
    * que sigue al escaneo), un cilindro apoyado en ella (la forma se cambia en el diálogo) y su
    * base llevada hasta la piel, así se amolda aunque la piel sea curva.
    */
+  const placeOnSkinAt = async (at: P3, triangle: number) => {
+    try {
+      await store.scanAdd({ kind: "ref_normal", triangle, at });
+      const axis = [...(store.doc()?.features ?? [])].reverse().find((f) => f.kind.type === "axis" && f.kind.def.type === "scan");
+      if (!axis || axis.kind.type !== "axis" || axis.kind.def.type !== "scan") return;
+      const n = axis.kind.def.direction;
+      const lift = 2;
+      const id = await store.addFeature({
+        type: "primitive",
+        shape: { type: "cylinder", radius: 5, height: 10 },
+        origin: [0, 0, lift],
+        z: [0, 0, 1],
+        x: [1, 0, 0],
+        op: "new",
+        on: { type: "reference", feature: axis.id },
+      });
+      // La base (a `lift` de la piel) llevada hasta la piel: se amolda
+      const base: P3 = [at[0] + n[0] * lift, at[1] + n[1] * lift, at[2] + n[2] * lift];
+      await store.addFeature({ type: "face_to_scan", faces: [{ point: base, normal: [-n[0], -n[1], -n[2]], tags: [{ feature: id, name: "abajo" }] }], offset: 0 });
+      store.select(id);
+    } catch (e) {
+      say(String(e));
+    }
+  };
   const placeOnSkin = () =>
     ui.setPick({
       kind: "scan_point",
       prompt: tr("Clic en la piel del escaneo donde va la pieza"),
-      done: async (at, triangle) => {
-        try {
-          ui.setPick({ kind: "none" });
-          await store.scanAdd({ kind: "ref_normal", triangle, at });
-          const axis = [...(store.doc()?.features ?? [])].reverse().find((f) => f.kind.type === "axis" && f.kind.def.type === "scan");
-          if (!axis || axis.kind.type !== "axis" || axis.kind.def.type !== "scan") return;
-          const n = axis.kind.def.direction;
-          const lift = 2;
-          const id = await store.addFeature({
-            type: "primitive",
-            shape: { type: "cylinder", radius: 5, height: 10 },
-            origin: [0, 0, lift],
-            z: [0, 0, 1],
-            x: [1, 0, 0],
-            op: "new",
-            on: { type: "reference", feature: axis.id },
-          });
-          // La base (a `lift` de la piel) llevada hasta la piel: se amolda
-          const base: P3 = [at[0] + n[0] * lift, at[1] + n[1] * lift, at[2] + n[2] * lift];
-          await store.addFeature({ type: "face_to_scan", faces: [{ point: base, normal: [-n[0], -n[1], -n[2]], tags: [{ feature: id, name: "abajo" }] }], offset: 0 });
-          store.select(id);
-        } catch (e) {
-          say(String(e));
-        }
+      done: (at, triangle) => {
+        ui.setPick({ kind: "none" });
+        void placeOnSkinAt(at, triangle);
       },
     });
 
@@ -603,6 +606,12 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
   const addFlatSolid = () => {
     if (!store.result()?.body) return say(tr("Primero hace falta una chapa"));
     void store.addFeature({ type: "flat_solid", part: null });
+  };
+
+  /** Los cortes hechos sobre el desarrollo como pieza, llevados a la chapa doblada */
+  const addRefold = () => {
+    if (!store.doc()?.features.some((f) => f.kind.type === "flat_solid")) return say(tr("Primero hace falta un desarrollo como pieza, con los cortes hechos sobre él"));
+    void store.addFeature({ type: "refold", flat: null });
   };
 
   const addRevolve = () => {
@@ -930,6 +939,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     addCurvePattern,
     addChainPattern,
     addFlatSolid,
+    addRefold,
     addSurfacePattern,
     addBoolean,
     pickedParts,
@@ -945,6 +955,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     importStep,
     addRelief,
     placeOnSkin,
+    placeOnSkinAt,
     addDerived,
     addSplitBy,
     trimWithPlane,

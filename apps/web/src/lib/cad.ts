@@ -86,6 +86,14 @@ export type PointSpec =
   /** Por clics: el tipo sale de lo elegido (vértice, medio o centro de una arista, cruce...) */
   | { type: "picked"; refs: RefPick[] };
 
+/** Qué mide una cota (entre puntos con nombre; lo del escaneo lo completa la app) */
+export type DimensionKind =
+  | { type: "distance"; a: PointSpec; b: PointSpec; axis?: "x" | "y" | "z" | null }
+  | { type: "angle"; a: PointSpec; vertex: PointSpec; b: PointSpec }
+  | { type: "surface"; points: PointSpec[]; path?: P3[] }
+  | { type: "diameter"; at: PointSpec; fit?: unknown }
+  | { type: "thickness"; at: PointSpec; span?: [P3, P3] | null };
+
 /** Cómo se arma una curva de referencia (usable como camino) */
 export type CurveDef =
   /** Aristas del sólido y curvas del historial encadenadas */
@@ -161,6 +169,8 @@ export type RefView = { id: number; how?: string } & (
   | { kind: "curves"; lines: P3[][] }
   /** Sistema de coordenadas: origen y ejes unitarios */
   | { kind: "frame"; origin: P3; x: P3; y: P3; z: P3 }
+  /** Cota: el valor (mm o °), lo que se dibuja y dónde va el número */
+  | { kind: "dimension"; value: number; unit: string; lines: P3[][]; label: P3 }
 );
 
 // ─── Sketch 3D ─────────────────────────────────────────────────────────────
@@ -944,7 +954,9 @@ export type PatternKind =
   /** Copias en grilla (cuadrada o hexagonal) que llenan regiones de un sketch */
   | { type: "fill"; sketch: number; regions: RegionSelection; spacing: number; hex: boolean; margin: number }
   /** Una copia en cada punto suelto de un sketch (o en `points`), desde el punto más cercano al original */
-  | { type: "points"; sketch: number; points: number[] };
+  | { type: "points"; sketch: number; points: number[] }
+  /** Una copia en cada punto de referencia (P1, P2… sobre la piel), desde el más cercano al original */
+  | { type: "at_points"; points: PointSpec[] };
 
 /** Con qué se parte: un plano u otra pieza (una superficie curva, por ejemplo) */
 export type SplitTool = { type: "plane"; plane: PlaneSpec } | { type: "part"; part: PartId };
@@ -1111,7 +1123,8 @@ export type FeatureKind =
   /** `scan`: hasta la piel del escaneo (a `offset` mm) en vez del sólido */
   | { type: "rib"; sketch: number; thickness: number; flip: boolean; scan?: { offset: number } | null }
   /** Caras planas llevadas hasta un plano (cara plana o plano de referencia) */
-  | { type: "replace_face"; faces: FaceRef[]; target: PlaneSpec }
+  /** Con `surface`, las caras llegan hasta esas caras (una superficie, extendida si es una) en vez del plano */
+  | { type: "replace_face"; faces: FaceRef[]; target: PlaneSpec; surface?: FaceRef[] }
   /** Caras planas hasta la piel del escaneo (a `offset` mm): suma si está afuera, resta si está adentro */
   | { type: "face_to_scan"; faces: FaceRef[]; offset: number }
   /** Escala por eje alrededor de un punto */
@@ -1136,6 +1149,10 @@ export type FeatureKind =
       start_tangent?: number | null;
       /** Llega perpendicular a la última sección */
       end_tangent?: number | null;
+      /** Con tangencia al comienzo: sigue estas caras vecinas sin quiebre (en vez de salir perpendicular) */
+      start_faces?: FaceRef[];
+      /** Lo mismo al final */
+      end_faces?: FaceRef[];
     }
   /** Superficie que pasa por curvas de varios sketches */
   | { type: "surface_loft"; sections: { sketch: number; entities: number[] }[]; ruled: boolean }
@@ -1168,6 +1185,10 @@ export type FeatureKind =
   | { type: "sheet_metal"; sketch: number; regions: RegionSelection; thickness: number; radius: number; k_factor: number; flip: boolean; op: BodyOp }
   /** El desarrollo de una pieza de chapa (`part` vacío: la última) como pieza nueva, al espesor y a un lado del modelo */
   | { type: "flat_solid"; part?: PartId | null }
+  /** Los cortes hechos sobre un desarrollo plano (`flat`: su operación; sin ella, la última) pasan a la pieza doblada; sin `keep`, la plana deja de estar */
+  | { type: "refold"; flat?: number | null; keep?: boolean }
+  /** Cota guardada en el diseño, dibujada en el visor (no cambia el sólido) */
+  | { type: "dimension"; measure: DimensionKind; parameter?: string | null }
   /** Pestaña: pared doblada desde una arista del borde de la chapa (`length` después del doblez) */
   | {
       type: "flange";
@@ -1587,7 +1608,7 @@ export interface ResolvedValue {
 
 /** Referencia que no se encontró: campo de la operación y posición en su lista */
 export interface MissingRef {
-  field: "edges" | "faces" | "regions" | "plane" | "neutral" | "axis" | "extent" | "targets" | "tools" | "parts" | "scope" | "base" | "a" | "b" | "edge" | "face" | "points" | "def" | "target" | "uses" | "uses_shape";
+  field: "edges" | "faces" | "regions" | "plane" | "neutral" | "axis" | "extent" | "targets" | "tools" | "parts" | "scope" | "base" | "a" | "b" | "edge" | "face" | "points" | "def" | "target" | "uses" | "uses_shape" | "start_faces" | "end_faces" | "surface";
   index: number;
 }
 
@@ -2124,6 +2145,8 @@ export const FEATURE_LABELS: Record<FeatureKind["type"], string> = {
   get sheet_metal() { return tr("Chapa"); },
   get flange() { return tr("Pestaña"); },
   get flat_solid() { return tr("Desarrollo plano"); },
+  get refold() { return tr("Volver a doblar"); },
+  get dimension() { return tr("Cota"); },
   get surface_extrude() { return tr("Superficie extruida"); },
   get surface_revolve() { return tr("Superficie de revolución"); },
   get fill() { return tr("Relleno"); },
@@ -2460,6 +2483,13 @@ export function dependencies(kind: FeatureKind): number[] {
       return axis(kind.axis);
     case "vertex_chamfer":
       return point(kind.vertex);
+    case "dimension": {
+      const m = kind.measure;
+      const pts = m.type === "distance" ? [m.a, m.b] : m.type === "angle" ? [m.a, m.vertex, m.b] : m.type === "surface" ? m.points : [m.at];
+      return pts.flatMap(point);
+    }
+    case "refold":
+      return kind.flat != null ? [kind.flat] : [];
     case "curve": {
       const d = kind.def;
       return d.type === "composite" ? d.curves : d.type === "projected" || d.type === "scan_projected" ? [d.sketch] : d.type === "points" ? d.points.flatMap(point) : [];
@@ -2511,7 +2541,9 @@ export function dependencies(kind: FeatureKind): number[] {
             ? [p.path.type === "sketch" ? p.path.sketch : p.path.feature]
             : p.type === "fill" || p.type === "points"
               ? [p.sketch]
-              : [];
+              : p.type === "at_points"
+                ? p.points.flatMap(point)
+                : [];
       return [...kind.features, ...extra];
     }
     case "scale":
@@ -5204,6 +5236,11 @@ export function createCadStore() {
     /** Con `assembly`, las instancias del ensamble en su lugar */
     exportDesign: (path: string, format: string, part?: PartId, assembly = false, compensate = false) =>
       invoke<number>("cad_export", { path, format, part: part ?? null, assembly, compensate }),
+    /**
+     * Para imprimir: el escaneo original tal cual más lo agregado, en un solo archivo y sin
+     * booleanas (STL o 3MF; en 3MF los grabados van como volumen negativo). `notes`: lo que quedó fuera
+     */
+    exportPrint: (path: string, format: "stl" | "3mf") => invoke<{ bytes: number; notes: string[] }>("cad_export_print", { path, format }),
     /** Exporta la pestaña `tab` (sus piezas, o las instancias de un ensamble) o, con `null`, todos los diseños en un archivo */
     exportTabs: (path: string, format: string, tab: number | null) => invoke<number>("cad_export_tabs", { path, format, tab }),
 

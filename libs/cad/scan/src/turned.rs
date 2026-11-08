@@ -111,7 +111,7 @@ pub fn add_skin(doc: &mut Document, mesh: &ScanMesh, direction: P3, count: usize
         path: None,
         guide: None,
         start_tangent: None,
-        end_tangent: None,
+        end_tangent: None, start_faces: Vec::new(), end_faces: Vec::new(),
     }));
     doc.get_mut(id).unwrap().name = "Recubrimiento de cortes".to_string();
     Ok(id)

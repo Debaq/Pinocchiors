@@ -44,6 +44,18 @@ function compose(r: number[][], t: P3): Mat4 {
   return [r[0][0], r[1][0], r[2][0], 0, r[0][1], r[1][1], r[2][1], 0, r[0][2], r[1][2], r[2][2], 0, t[0], t[1], t[2], 1];
 }
 
+/** Escala uniforme `k` alrededor de `c` (dimensionar un escaneo sin escala) */
+export function scaleAbout(c: P3, k: number): Mat4 {
+  return compose(
+    [
+      [k, 0, 0],
+      [0, k, 0],
+      [0, 0, k],
+    ],
+    [c[0] - k * c[0], c[1] - k * c[1], c[2] - k * c[2]],
+  );
+}
+
 export function applyMat(m: Mat4, p: P3): P3 {
   return [0, 1, 2].map((i) => m[i] * p[0] + m[4 + i] * p[1] + m[8 + i] * p[2] + m[12 + i]) as P3;
 }

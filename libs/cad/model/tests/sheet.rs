@@ -334,3 +334,105 @@ fn flat_solid_is_the_unfolded_sheet_as_a_new_part() {
     doc.add(FeatureKind::FlatSolid { part: None });
     assert!(!doc.evaluate().errors().is_empty());
 }
+
+#[test]
+fn closed_hem_rests_on_the_sheet() {
+    if !occt() {
+        return;
+    }
+    // Dobladillo cerrado: 180° con radio 0 → la pared apoyada en la chapa (con una rendija mínima)
+    let mut doc = plate();
+    let ev = doc.evaluate();
+    let b = ev.body.as_ref().unwrap();
+    let (edge, _) = b.closest_edge([50.0, 0.0, 2.0], Some([1.0, 0.0, 0.0]), 0.99).unwrap();
+    let edge = ev.edge_ref(edge).unwrap();
+    doc.add(FeatureKind::Flange { edge: Some(edge), length: 15.0, angle: 180.0, flip: false, radius: Some(0.0), relief: BendRelief::Rectangle, relief_width: None, corner_relief: CornerRelief::None, corner_size: None, closed_corner: false, corner_gap: None });
+    let b = body(&doc);
+    // Radio de 0,02 (1 % del espesor): la pared va de z = 2,04 a 4,04
+    assert_relative_eq!(b.mass().unwrap().bbox_max[2], 4.04, epsilon = 1e-6);
+    let flat = sheet::flat_pattern(&b, 0.44, Some(2.0), None).unwrap();
+    assert_eq!(flat.bends.len(), 1);
+    assert_relative_eq!(flat.bends[0].angle, 180.0, epsilon = 1e-6);
+    let size = [flat.max[0] - flat.min[0], flat.max[1] - flat.min[1]];
+    assert_relative_eq!(size[0].min(size[1]), 50.0 + PI * (0.02 + 0.44 * 2.0) + 15.0, epsilon = 1e-4);
+}
+
+#[test]
+fn flange_on_a_circular_edge_is_a_revolved_wall() {
+    if !occt() {
+        return;
+    }
+    // Disco de radio 30 y 2 de espesor; pestaña de 10 a 90° hacia arriba desde su borde
+    let mut doc = Document::new();
+    let mut s = Sketch::default();
+    s.circle([0.0, 0.0], 30.0);
+    let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 0.0, sketch: s });
+    doc.add(FeatureKind::SheetMetal { sketch: sk, regions: RegionSelection::All, thickness: 2.0, radius: 2.0, k_factor: 0.44, flip: false, op: BodyOp::Join });
+    let ev = doc.evaluate();
+    let b = ev.body.as_ref().unwrap();
+    // A 45°: en x = 30 está la costura del canto (una recta)
+    let q = 30.0 / 2f64.sqrt();
+    let (edge, _) = b.closest_edge([q, q, 2.0], None, 0.0).unwrap();
+    let edge = ev.edge_ref(edge).unwrap();
+    let fl = doc.add(FeatureKind::Flange { edge: Some(edge), length: 10.0, angle: 90.0, flip: false, radius: None, relief: BendRelief::Rectangle, relief_width: None, corner_relief: CornerRelief::None, corner_size: None, closed_corner: false, corner_gap: None });
+    let b = body(&doc);
+    // Disco + doblez (cuarto de anillo de 2 a 4 girado: Pappus) + pared cilíndrica de 32 a 34
+    let quarter = PI / 4.0 * (16.0 - 4.0);
+    let centroid = 30.0 + 4.0 / (3.0 * PI) * (64.0 - 8.0) / (16.0 - 4.0);
+    let expected = PI * 900.0 * 2.0 + quarter * 2.0 * PI * centroid + PI * (34.0f64.powi(2) - 32.0f64.powi(2)) * 10.0;
+    let m = b.mass().unwrap();
+    assert_relative_eq!(m.volume, expected, max_relative = 1e-4);
+    assert_relative_eq!(m.bbox_max[2], 14.0, epsilon = 1e-6);
+    assert_relative_eq!(m.bbox_max[0], 34.0, epsilon = 1e-6);
+    // Avisa que no entra en el desarrollo
+    let ev = doc.evaluate();
+    let st = ev.status.iter().find(|s| s.id == fl).unwrap();
+    assert!(st.note.as_deref().is_some_and(|n| n.contains("desarrollo")), "{:?}", st.note);
+}
+
+#[test]
+fn refold_takes_cuts_on_the_flat_back_to_the_folded_sheet() {
+    if !occt() {
+        return;
+    }
+    let mut doc = plate();
+    flange(&mut doc, [50.0, 0.0, 2.0], 20.0, 90.0, false);
+    let folded = body(&doc);
+    let pattern = sheet::flat_pattern(&folded, 0.44, Some(2.0), None).unwrap();
+    doc.add(FeatureKind::FlatSolid { part: None });
+    let ev = doc.evaluate();
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    let before = ev.parts[0].shape.mass().unwrap().volume;
+    let flat = ev.parts[1].shape.mass().unwrap();
+    let o = flat.bbox_min;
+    // Dos agujeros sobre la pieza plana: Ø10 en el medio de la chapa y Ø6 sobre la línea de doblez
+    let bend = pattern.bends[0].line;
+    let on_bend = [o[0] + (bend[0][0] + bend[1][0]) / 2.0, o[1] + (bend[0][1] + bend[1][1]) / 2.0];
+    let mid = [(flat.bbox_min[0] + flat.bbox_max[0]) / 2.0, (flat.bbox_min[1] + flat.bbox_max[1]) / 2.0];
+    // El del medio, lejos del doblez (a lo largo del doblez, a un cuarto)
+    let along = [bend[1][0] - bend[0][0], bend[1][1] - bend[0][1]];
+    let len = (along[0].powi(2) + along[1].powi(2)).sqrt();
+    let plain = [mid[0] + along[0] / len * 25.0, mid[1] + along[1] / len * 25.0];
+    let mut s = Sketch::default();
+    s.circle(plain, 5.0);
+    s.circle(on_bend, 3.0);
+    let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 0.0, sketch: s });
+    doc.add(FeatureKind::Extrude(Extrude { sketch: sk, regions: RegionSelection::All, extent: Extent::ThroughAll, reverse: false, op: BodyOp::Cut, draft: 0.0, thin: None, direction: None, start: 0.0 }));
+    let ev = doc.evaluate();
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    assert_relative_eq!(ev.parts[0].shape.mass().unwrap().volume, before, max_relative = 1e-9);
+    let rf = doc.add(FeatureKind::Refold { flat: None, keep: false });
+    let ev = doc.evaluate();
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    assert!(ev.status.iter().find(|s| s.id == rf).is_some_and(|s| matches!(s.state, FeatureState::Ok)), "{:?}", ev.status.last());
+    assert_eq!(ev.parts.len(), 1, "la pieza plana deja de estar");
+    let after = ev.parts[0].shape.mass().unwrap().volume;
+    assert!(ev.parts[0].shape.is_valid());
+    // Lo quitado: los dos agujeros a través del espesor (el del doblez, estirado, aproximado)
+    let want = PI * 25.0 * 2.0 + PI * 9.0 * 2.0;
+    let removed = before - after;
+    assert!((removed - want).abs() < want * 0.08, "quitó {removed}, se esperaba ~{want}");
+    // Con `keep`, la plana se queda
+    doc.get_mut(rf).unwrap().kind = FeatureKind::Refold { flat: None, keep: true };
+    assert_eq!(doc.evaluate().parts.len(), 2);
+}

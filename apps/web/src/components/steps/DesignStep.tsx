@@ -81,6 +81,7 @@ import {
   type PointSpec,
   type RefPick,
   type CurveDef,
+  type DimensionKind,
   type Plane,
   type Sketch3d,
   type Constraint3d,
@@ -139,7 +140,7 @@ import { sampleCurve } from "../../lib/sketchFormula";
 import { addShapes, parseCoordinates, parseDxf, parseSvg, sketchToDxf, sketchToSvg, type Shape } from "../../lib/sketchFiles";
 import { addLayer, createBlock, explodeBlock, refreshBlock, removeLayer, setLayer } from "../../lib/sketchBlocks";
 import { partKey } from "../../lib/objects";
-import { axisToVertical, faceToFloor, faceToFront, pointToOrigin, type Mat4 } from "../../lib/scanAlign";
+import { axisToVertical, faceToFloor, faceToFront, pointToOrigin, scaleAbout, type Mat4 } from "../../lib/scanAlign";
 import { Button, Checkbox, IconButton, NumberInput, Select, Slider, Tooltip } from "../ui";
 import * as Icons from "../icons";
 import { t as tl, locale, tn } from "../../lib/i18n";
@@ -427,6 +428,138 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
     }
   };
 
+  // Puntos sobre la piel con nombre (P1, P2…): para medir y para construir encima
+  const skinPoints = () => (store.doc()?.features ?? []).filter((f) => f.kind.type === "point" && f.kind.def.type === "scan");
+  /** Los elegidos, en el orden en que se tocaron */
+  const [chosenPts, setChosenPts] = createSignal<number[]>([]);
+  const togglePt = (id: number) => setChosenPts(chosenPts().includes(id) ? chosenPts().filter((x) => x !== id) : [...chosenPts(), id]);
+  const [placing, setPlacing] = createSignal(false);
+  const placePoints = () => {
+    setPlacing(true);
+    ui.setPick({
+      kind: "scan_point",
+      prompt: tl("Clic en la piel para poner puntos (P1, P2…); «Listo» para terminar"),
+      done: (at, triangle) => {
+        placePoints();
+        void addScan({ kind: "ref_point", triangle, at });
+      },
+    });
+  };
+  const stopPlacing = () => {
+    if (placing() && ui.pick().kind === "scan_point") ui.setPick({ kind: "none" });
+    setPlacing(false);
+  };
+  onCleanup(stopPlacing);
+  /** Los `n` puntos para una acción: los elegidos o, sin elegir, los últimos puestos */
+  const usePts = (n: number): number[] | undefined => {
+    const alive = new Set(skinPoints().map((f) => f.id));
+    const chosen = chosenPts().filter((id) => alive.has(id));
+    const list = chosen.length ? chosen : skinPoints().slice(-n).map((f) => f.id);
+    if (list.length < n) {
+      say(n === 1 ? tl("Primero un punto sobre la piel («Puntos en la piel»)") : tl("Hacen falta {v1} puntos sobre la piel (elegirlos o ponerlos)", { v1: n }));
+      return undefined;
+    }
+    return list.slice(0, n);
+  };
+  const ptRef = (id: number): PointSpec => ({ type: "reference", feature: id });
+  const addDimension = () => {
+    const p = usePts(2);
+    if (p) void store.addFeature({ type: "dimension", measure: { type: "distance", a: ptRef(p[0]), b: ptRef(p[1]) } });
+  };
+  const planeByPoints = () => {
+    const p = usePts(3);
+    if (p) void store.addFeature({ type: "plane", def: { type: "three_points", points: [ptRef(p[0]), ptRef(p[1]), ptRef(p[2])] } });
+  };
+  const axisByPoints = () => {
+    const p = usePts(2);
+    if (p) void store.addFeature({ type: "axis", def: { type: "two_points", a: ptRef(p[0]), b: ptRef(p[1]) } });
+  };
+  /** Dónde está hoy un punto sobre la piel (triángulo y lugar), para lo que se apoya en él */
+  const seedOfPoint = async (id: number) => {
+    const f = store.doc()?.features.find((x) => x.id === id);
+    if (f?.kind.type !== "point" || f.kind.def.type !== "scan") return undefined;
+    const [seed] = await invoke<({ triangle: number; at: P3 } | null)[]>("cad_scan_seeds_near", { points: [f.kind.def.point] }).catch(() => [null]);
+    if (!seed) say(tl("Ese punto ya no está sobre el escaneo"));
+    return seed ?? undefined;
+  };
+  /** Sistema de coordenadas en el punto: Z por la normal de la piel ahí */
+  const frameAtPoint = async () => {
+    const p = usePts(1);
+    const seed = p && (await seedOfPoint(p[0]));
+    if (!p || !seed) return;
+    await addScan({ kind: "ref_normal", triangle: seed.triangle, at: seed.at });
+    const axis = [...(store.doc()?.features ?? [])].reverse().find((f) => f.kind.type === "axis" && f.kind.def.type === "scan");
+    if (axis) void store.addFeature({ type: "frame", origin: ptRef(p[0]), z: { type: "reference", feature: axis.id } });
+  };
+  /** Una pieza apoyada en el punto, con la base amoldada a la piel */
+  const partAtPoint = async () => {
+    const p = usePts(1);
+    const seed = p && (await seedOfPoint(p[0]));
+    if (seed) void actions.placeOnSkinAt(seed.at, seed.triangle);
+  };
+
+  /** Lo elegido en el árbol, repetido en cada punto elegido (o en todos los de la piel) */
+  const patternAtPoints = () => {
+    const sel = store.doc()?.features.find((f) => f.id === store.selected());
+    if (!sel || ["sketch", "point", "plane", "axis", "frame", "dimension", "curve"].includes(sel.kind.type)) return say(tl("Elegir en el árbol la operación que se repite (una pieza, un agujero…)"));
+    const alive = new Set(skinPoints().map((f) => f.id));
+    const chosen = chosenPts().filter((id) => alive.has(id));
+    const ids = chosen.length ? chosen : [...alive];
+    if (ids.length < 2) return say(tl("Hacen falta {v1} puntos sobre la piel (elegirlos o ponerlos)", { v1: 2 }));
+    void store.addFeature({ type: "pattern", features: [sel.id], pattern: { type: "at_points", points: ids.map(ptRef) } });
+  };
+
+  // Medidas: las cotas del diseño con su valor, para dimensionar el escaneo y exportarlas
+  const dimensions = () =>
+    (store.doc()?.features ?? []).flatMap((f) => {
+      if (f.kind.type !== "dimension") return [];
+      const r = store.result()?.references.find((x) => x.id === f.id);
+      return [{ feature: f, measure: f.kind.measure, value: r?.kind === "dimension" ? r : undefined }];
+    });
+  const MEASURE_NAMES: Record<DimensionKind["type"], () => string> = {
+    distance: () => tl("Distancia"),
+    angle: () => tl("Ángulo"),
+    surface: () => tl("Por la superficie"),
+    diameter: () => tl("Diámetro"),
+    thickness: () => tl("Espesor"),
+  };
+  const measureName = (m: DimensionKind) => (m.type === "distance" && m.axis ? tl("Distancia en {v1}", { v1: m.axis.toUpperCase() }) : MEASURE_NAMES[m.type]());
+  /** Si la cota mide algo del escaneo (escalarlo la cambia) */
+  const onScan = (m: DimensionKind) => {
+    if (m.type === "surface" || m.type === "diameter" || m.type === "thickness") return true;
+    const ids = (m.type === "distance" ? [m.a, m.b] : [m.a, m.vertex, m.b]).flatMap((p) => (p.type === "reference" ? [p.feature] : p.type === "scan" ? [-1] : []));
+    return ids.some((id) => id === -1 || skinPoints().some((f) => f.id === id));
+  };
+  const [scaling, setScaling] = createSignal<number>();
+  const [target, setTarget] = createSignal(0);
+  /** Escala el escaneo (paso de su historial) para que la cota mida `target` */
+  const scaleToDimension = (id: number) => {
+    const d = dimensions().find((x) => x.feature.id === id);
+    const v = d?.value;
+    if (!d || !v || v.unit !== "mm" || v.value <= 1e-9) return say(tl("Esa cota no tiene una medida en mm"));
+    if (!onScan(d.measure)) return say(tl("Esa cota no mide el escaneo: escalarlo no la cambia"));
+    if (!(target() > 0)) return say(tl("La medida tiene que ser mayor que cero"));
+    const k = target() / v.value;
+    const center = v.lines[0]?.[0] ?? v.label;
+    setScaling(undefined);
+    void props.onAlignScan(scaleAbout(center, k), tl("Escaneo: escalado para que {v1} mida {v2} mm", { v1: d.feature.name, v2: fmt(target()) })).catch((e) => say(String(e)));
+  };
+  /** La lista de medidas como CSV (para comparar con el objeto real) */
+  const exportMeasures = async () => {
+    const list = dimensions();
+    if (!list.length) return say(tl("Todavía no hay cotas"));
+    const path = await save({ filters: [{ name: "CSV", extensions: ["csv"] }], defaultPath: "medidas.csv" });
+    if (!path) return;
+    const q = (s: string) => `"${s.replace(/"/g, '""')}"`;
+    const lines = ["Cota;Mide;Valor;Unidad", ...list.map((d) => [q(d.feature.name), q(measureName(d.measure)), d.value ? d.value.value.toFixed(3).replace(".", ",") : "", d.value?.unit ?? ""].join(";"))];
+    try {
+      await invoke("cad_write_text", { path, content: lines.join("\n") + "\n" });
+      say(tl("Medidas exportadas ({v1})", { v1: list.length }));
+    } catch (e) {
+      say(String(e));
+    }
+  };
+
   /** Comandos que arman operaciones desde el escaneo (revolución, recubrimiento) */
   const runScan = async (go: () => Promise<unknown>) => {
     try {
@@ -523,6 +656,24 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
     if (closed === null) return;
     if (!pts || pts.length < (closed ? 3 : 2)) return say(tl("Hacen falta al menos dos puntos (tres si es cerrada)"));
     void addScan({ kind: "path_curve", points: pts, closed });
+  };
+  /** El escaneo tal cual más lo agregado, en un archivo para el laminador (sin booleanas) */
+  const exportForPrint = async () => {
+    const path = await save({
+      filters: [
+        { name: "3MF", extensions: ["3mf"] },
+        { name: "STL", extensions: ["stl"] },
+      ],
+      defaultPath: "para_imprimir.3mf",
+    });
+    if (!path) return;
+    const format = path.toLowerCase().endsWith(".stl") ? "stl" : "3mf";
+    try {
+      const r = await store.exportPrint(path, format);
+      say([tl("Exportado ({kb} KB)", { kb: Math.max(1, Math.round(r.bytes / 1024)) }), ...r.notes.map(tBackend)].join(" · "));
+    } catch (e) {
+      say(tBackend(String(e)));
+    }
   };
   /** Curvas del sketch elegido (o del último) llevadas a la piel del escaneo */
   const projectToSkin = () => {
@@ -687,6 +838,108 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                       </Button>
                     </div>
                   </div>
+                  <div class="space-y-1.5" aria-label={tl("Puntos y cotas")}>
+                    <span class="text-xs text-text-muted">{tl("Puntos y cotas sobre la piel")}</span>
+                    <Show
+                      when={placing() && ui.pick().kind === "scan_point"}
+                      fallback={
+                        <Button size="sm" variant="ghost" fullWidth title={tl("Clics seguidos en la piel: cada uno deja un punto con nombre (P1, P2…) que sigue al escaneo")} onClick={placePoints}>
+                          {tl("Puntos en la piel")}
+                        </Button>
+                      }
+                    >
+                      <Button size="sm" variant="primary" fullWidth onClick={stopPlacing}>
+                        {tl("Listo")}
+                      </Button>
+                    </Show>
+                    <Show when={skinPoints().length}>
+                      <div class="flex flex-wrap gap-1" aria-label={tl("Puntos sobre la piel")}>
+                        <For each={skinPoints()}>
+                          {(pt) => {
+                            const order = () => chosenPts().indexOf(pt.id);
+                            return (
+                              <button
+                                class={clsx(
+                                  "px-1.5 py-0.5 rounded border text-[11px] font-mono",
+                                  order() >= 0 ? "bg-warning/20 border-warning text-text" : "border-border text-text-muted hover:text-text",
+                                )}
+                                title={tl("Elegir para medir o construir (en orden)")}
+                                onClick={() => togglePt(pt.id)}
+                              >
+                                {pt.name}
+                                <Show when={order() >= 0}>
+                                  <sup class="ml-0.5">{order() + 1}</sup>
+                                </Show>
+                              </button>
+                            );
+                          }}
+                        </For>
+                      </div>
+                      <p class="text-[11px] text-text-dim">{tl("Sin elegir, se usan los últimos puestos.")}</p>
+                      <div class="grid grid-cols-2 gap-1.5">
+                        <Button size="sm" variant="ghost" title={tl("Distancia entre dos puntos (en el diálogo: por eje, ángulo, por la superficie, diámetro o espesor)")} onClick={addDimension}>
+                          {tl("Cota")}
+                        </Button>
+                        <Button size="sm" variant="ghost" title={tl("Plano que pasa por tres puntos (para un sketch encima)")} onClick={planeByPoints}>
+                          {tl("Plano por 3")}
+                        </Button>
+                        <Button size="sm" variant="ghost" title={tl("Eje que pasa por dos puntos")} onClick={axisByPoints}>
+                          {tl("Eje por 2")}
+                        </Button>
+                        <Button size="sm" variant="ghost" title={tl("Sistema de coordenadas en el punto, con Z por la normal de la piel")} onClick={() => void frameAtPoint()}>
+                          {tl("Sistema en el punto")}
+                        </Button>
+                        <Button size="sm" variant="ghost" title={tl("Una pieza apoyada en el punto, con la base amoldada a la piel")} onClick={() => void partAtPoint()}>
+                          {tl("Pieza en el punto")}
+                        </Button>
+                        <Button size="sm" variant="ghost" title={tl("Repite lo elegido en el árbol en cada punto elegido (el original queda en el más cercano)")} onClick={patternAtPoints}>
+                          {tl("Repetir en los puntos")}
+                        </Button>
+                      </div>
+                    </Show>
+                    <Show when={dimensions().length}>
+                      <div class="space-y-1" aria-label={tl("Medidas")}>
+                        <span class="text-xs text-text-muted">{tl("Medidas")}</span>
+                        <For each={dimensions()}>
+                          {(d) => (
+                            <div class="space-y-1">
+                              <div class="flex items-center gap-1.5 text-[11px]">
+                                <button class="flex-1 min-w-0 text-left truncate text-text hover:text-accent" title={measureName(d.measure)} onClick={() => store.select(d.feature.id)}>
+                                  {d.feature.name}
+                                </button>
+                                <span class="font-mono text-text">{d.value ? `${fmt(d.value.value)} ${d.value.unit}` : "—"}</span>
+                                <Show when={d.value?.unit === "mm" && onScan(d.measure)}>
+                                  <button
+                                    class="px-1 rounded border border-border text-text-muted hover:text-text"
+                                    title={tl("Escalar el escaneo para que esta cota mida lo que tiene que medir")}
+                                    onClick={() => {
+                                      setTarget(Math.round((d.value?.value ?? 0) * 100) / 100);
+                                      setScaling(scaling() === d.feature.id ? undefined : d.feature.id);
+                                    }}
+                                  >
+                                    {tl("Escalar…")}
+                                  </button>
+                                </Show>
+                              </div>
+                              <Show when={scaling() === d.feature.id}>
+                                <div class="flex items-end gap-1.5">
+                                  <div class="flex-1">
+                                    <Num label={tl("Tiene que medir")} value={target()} step={0.1} suffix="mm" onCommit={setTarget} />
+                                  </div>
+                                  <Button size="sm" variant="primary" onClick={() => scaleToDimension(d.feature.id)}>
+                                    {tl("Escalar")}
+                                  </Button>
+                                </div>
+                              </Show>
+                            </div>
+                          )}
+                        </For>
+                        <Button size="sm" variant="ghost" fullWidth title={tl("Lista de cotas con su valor, para comparar con el objeto real")} onClick={() => void exportMeasures()}>
+                          {tl("Exportar medidas (CSV)")}
+                        </Button>
+                      </div>
+                    </Show>
+                  </div>
                   <div class="space-y-1.5" aria-label={tl("Escaneo como cuerpo")}>
                     <span class="text-xs text-text-muted">{tl("El escaneo como cuerpo (encajes, cunas, moldes)")}</span>
                     <Button
@@ -819,6 +1072,18 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                         </Button>
                       </div>
                     </Show>
+                  </div>
+                  <div class="space-y-1.5">
+                    <span class="text-xs text-text-muted">{tl("Para imprimir")}</span>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      fullWidth
+                      title={tl("El STL original con todo su detalle más lo agregado (relieves, piezas sobre la piel), en un solo archivo; en 3MF los grabados van para que el laminador los reste")}
+                      onClick={() => void exportForPrint()}
+                    >
+                      {tl("Exportar el escaneo con lo agregado")}
+                    </Button>
                   </div>
                   <Show when={scanResult()}>
                     {(r) => <ScanResultCard result={r()} onAdd={addScan} onTurned={(o, d) => void runScan(() => store.scanTurned(o, d))} onSkin={(d, n) => void runScan(() => store.scanSkin(d, n))} />}
@@ -2012,7 +2277,16 @@ export const FeatureEditor: Component<{
         return withRegions === undefined ? undefined : { type: "fill", sketch: withRegions, regions: { type: "all" }, spacing: 10, hex: false, margin: 2 };
       case "points":
         return withPoints === undefined ? undefined : { type: "points", sketch: withPoints, points: [] };
+      case "at_points": {
+        const pts = namedPoints();
+        return pts.length < 2 ? undefined : { type: "at_points", points: pts.map((x) => ({ type: "reference", feature: x.id })) };
+      }
     }
+  };
+  /** Puntos de referencia que hay antes de esta operación (P1, P2… sobre la piel y los demás) */
+  const namedPoints = () => {
+    const list = props.store.doc()?.features ?? [];
+    return list.slice(0, list.findIndex((x) => x.id === f().id)).filter((x) => x.kind.type === "point");
   };
   /** Pincel sobre el escaneo para el espesor sobre piel: suma toques (`more`) o pinta de nuevo */
   const paintScanBody = (more: boolean) => {
@@ -2961,10 +3235,12 @@ export const FeatureEditor: Component<{
                       { value: "table", label: tl("Por tabla") },
                       { value: "fill", label: tl("De relleno") },
                       { value: "points", label: tl("Por puntos") },
+                      { value: "at_points", label: tl("En puntos de referencia (P1, P2…)") },
                     ]}
                     value={k().pattern.type}
                     onChange={(v) => {
                       const p = patternDefault(v as PatternKind["type"]);
+                      if (!p && v === "at_points") return props.say?.(tl("Hacen falta al menos dos puntos de referencia antes (por ejemplo, «Puntos en la piel»)"));
                       if (!p) return props.say?.(tl("Ese tipo necesita un sketch (con el camino, la región o los puntos)"));
                       update((x) => x.type === "pattern" && x.pattern.type !== v && (x.pattern = p));
                     }}
@@ -3064,6 +3340,26 @@ export const FeatureEditor: Component<{
                     );
                   }}
                 </Show>
+                <Show when={k().pattern.type === "at_points" && (k().pattern as Extract<PatternKind, { type: "at_points" }>)}>
+                  {(ap) => {
+                    const chosen = (id: number) => ap().points.some((p) => p.type === "reference" && p.feature === id);
+                    const toggle = (id: number, on: boolean) =>
+                      update(
+                        (x) =>
+                          x.type === "pattern" &&
+                          x.pattern.type === "at_points" &&
+                          (x.pattern.points = on ? [...x.pattern.points, { type: "reference", feature: id }] : x.pattern.points.filter((p) => !(p.type === "reference" && p.feature === id))),
+                      );
+                    return (
+                      <>
+                        <div class="flex flex-wrap gap-x-3 gap-y-1">
+                          <For each={namedPoints()}>{(pt) => <Checkbox small label={pt.name} checked={chosen(pt.id)} onChange={(c) => toggle(pt.id, c)} />}</For>
+                        </div>
+                        <p class="text-[11px] text-text-dim">{tl("Una copia en cada punto elegido, desde el más cercano a lo que se repite (ahí queda el original). Las copias se trasladan, no giran.")}</p>
+                      </>
+                    );
+                  }}
+                </Show>
                 <Show when={k().pattern.type === "surface" && (k().pattern as Extract<PatternKind, { type: "surface" }>)}>
                   {(sf) => (
                     <>
@@ -3073,7 +3369,7 @@ export const FeatureEditor: Component<{
                     </>
                   )}
                 </Show>
-                <Show when={k().pattern.type !== "table" && k().pattern.type !== "fill" && k().pattern.type !== "points" && k().pattern.type !== "surface"}>
+                <Show when={k().pattern.type !== "table" && k().pattern.type !== "fill" && k().pattern.type !== "points" && k().pattern.type !== "at_points" && k().pattern.type !== "surface"}>
                 <Show
                   when={k().pattern.type !== "curve" && k().pattern.type !== "chain"}
                   fallback={
@@ -3247,7 +3543,13 @@ export const FeatureEditor: Component<{
                     </>
                   )}
                 </Show>
-                <SkipCopies value={k().skip ?? []} onChange={(v) => update((x) => x.type === "pattern" && (x.skip = v.length ? v : undefined))} />
+                <SkipCopies
+                  value={k().skip ?? []}
+                  onChange={(v) => update((x) => x.type === "pattern" && (x.skip = v.length ? v : undefined))}
+                  ui={props.ui}
+                  owner={`${f().id}:omitir`}
+                  features={k().features}
+                />
               </>
             )}
           </Match>
@@ -3276,8 +3578,62 @@ export const FeatureEditor: Component<{
                 if (v === "scan" && d.type === "projected") setDef({ type: "scan_projected", sketch: d.sketch, entities: d.entities, flip: false, offset: 0 });
                 if (v === "faces" && d.type === "scan_projected") setDef({ type: "projected", sketch: d.sketch, entities: d.entities, faces: [] });
               };
+              // Entre los puntos: curva suave por el aire o camino más corto por la piel; los mismos puntos
+              const byPoints = () => def().type === "points" || def().type === "scan_path";
+              const seedOf = (p: PointSpec): ScanSeed | undefined => (p.type === "scan" && p.fit.type !== "points" ? p.fit.seed : undefined);
+              const onSkin = (seed: ScanSeed): PointSpec => ({ type: "scan", fit: { type: "point", seed }, point: seed.at });
+              const seedsNear = (points: P3[]) => invoke<(ScanSeed | null)[]>("cad_scan_seeds_near", { points }).catch(() => null);
+              const setBetween = async (v: string) => {
+                const d = def();
+                if (v === "points" && d.type === "scan_path") setDef({ type: "points", closed: d.closed, points: d.seeds.map(onSkin) });
+                if (v !== "scan_path" || d.type !== "points") return;
+                // Los puntos sueltos caen en el lugar de la piel más cercano; los del escaneo ya están ahí
+                const free = d.points.flatMap((p) => (p.type === "at" ? [p.point] : []));
+                const near = free.length ? await seedsNear(free) : [];
+                if (!near) return props.ui.setMessage(tl("Hace falta un escaneo en el diseño para llevar los puntos a su piel"));
+                let k = 0;
+                const seeds = d.points.map((p) => (p.type === "at" ? near[k++] : seedOf(p))).filter((s): s is ScanSeed => !!s);
+                if (seeds.length < (d.closed ? 3 : 2)) return props.ui.setMessage(tl("Hacen falta al menos dos puntos sobre el escaneo (tres si es cerrada)"));
+                setDef({ type: "scan_path", seeds, closed: d.closed });
+                const skipped = d.points.length - seeds.length;
+                if (skipped) props.ui.setMessage(tl("Se dejaron fuera {v1} puntos que no están sobre el escaneo", { v1: skipped }));
+              };
+              // Agregar puntos sobre la piel: clics seguidos hasta «Listo»
+              const [adding, setAdding] = createSignal(false);
+              const addOnSkin = () => {
+                setAdding(true);
+                props.ui.setPick({
+                  kind: "scan_point",
+                  prompt: tl("Clic en la piel del escaneo para agregar puntos; «Listo» para terminar"),
+                  done: async (at) => {
+                    addOnSkin();
+                    const seed = (await seedsNear([at]))?.[0];
+                    const d = def();
+                    if (!seed) return props.ui.setMessage(tl("Ese punto no está sobre el escaneo"));
+                    if (d.type === "scan_path") setDef({ ...d, seeds: [...d.seeds, seed] });
+                    else if (d.type === "points") setDef({ ...d, points: [...d.points, onSkin(seed)] });
+                  },
+                });
+              };
+              const stopAdding = () => {
+                if (adding() && props.ui.pick().kind === "scan_point") props.ui.setPick({ kind: "none" });
+                setAdding(false);
+              };
+              onCleanup(stopAdding);
               return (
                 <>
+                  <Show when={byPoints()}>
+                    <Row label={tl("Entre los puntos")}>
+                      <Select
+                        options={[
+                          { value: "points", label: tl("Curva suave") },
+                          { value: "scan_path", label: tl("Por la superficie") },
+                        ]}
+                        value={def().type}
+                        onChange={(v) => void setBetween(v)}
+                      />
+                    </Row>
+                  </Show>
                   <Show when={projected()}>
                     <Row label={tl("Sobre")}>
                       <Select
@@ -3360,6 +3716,21 @@ export const FeatureEditor: Component<{
                           <p class="text-[11px] text-text-dim leading-relaxed">
                             {tl("Camino más corto sobre la piel del escaneo por {v1} puntos; sigue al escaneo si se alinea o se repara.", { v1: d().seeds.length })}
                           </p>
+                          <For each={d().seeds}>
+                            {(_, i) => (
+                              <div class="flex items-center gap-1">
+                                <span class="flex-1 text-[11px] text-text-muted">{tl("Punto {v1} sobre la piel", { v1: i() + 1 })}</span>
+                                <IconButton
+                                  aria-label={tl("Quitar el punto {v1}", { v1: i() + 1 })}
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => setDef({ ...d(), seeds: d().seeds.filter((_, k) => k !== i()) })}
+                                >
+                                  <Icons.Trash size={11} />
+                                </IconButton>
+                              </div>
+                            )}
+                          </For>
                           <Checkbox small label={tl("Cerrada")} checked={d().closed} onChange={(c) => setDef({ ...d(), closed: c })} />
                         </>
                       )}
@@ -3408,6 +3779,20 @@ export const FeatureEditor: Component<{
                       )}
                     </Match>
                   </Switch>
+                  <Show when={byPoints()}>
+                    <Show
+                      when={adding() && props.ui.pick().kind === "scan_point"}
+                      fallback={
+                        <Button size="sm" variant="ghost" fullWidth title={tl("Clics seguidos en el escaneo; los puntos siguen al escaneo si se alinea o se repara")} onClick={addOnSkin}>
+                          {tl("Agregar puntos sobre la piel")}
+                        </Button>
+                      }
+                    >
+                      <Button size="sm" variant="primary" fullWidth onClick={stopAdding}>
+                        {tl("Listo")}
+                      </Button>
+                    </Show>
+                  </Show>
                 </>
               );
             }}
@@ -4341,13 +4726,14 @@ export const FeatureEditor: Component<{
                   ui={props.ui}
                   owner={`${f().id}:caras`}
                   kind="faces"
-                  label={tl("Caras planas")}
+                  label={tl("Caras")}
                   refs={k().faces}
                   lost={lost("faces")}
                   onChange={(refs) => update((x) => x.type === "move_face" && (x.faces = refs as FaceRef[]))}
                 />
                 {field(tl("Distancia"), "kind.distance", k().distance, (x, v) => x.type === "move_face" && (x.distance = v), "mm")}
                 <p class="text-[11px] text-text-dim">{tl("Positiva: hacia afuera (suma material); negativa: hacia adentro.")}</p>
+                <p class="text-[11px] text-text-dim">{tl("Las caras curvas (un agujero, un eje) se corren por su normal: un agujero se achica o se agranda.")}</p>
               </>
             )}
           </Match>
@@ -4377,6 +4763,167 @@ export const FeatureEditor: Component<{
               </>
             )}
           </Match>
+          <Match when={f().kind.type === "dimension" && (f().kind as Extract<FeatureKind, { type: "dimension" }>)}>
+            {(k) => {
+              const m = () => k().measure;
+              // Los puntos que hay antes (los de la piel y los demás de referencia)
+              const options = () => {
+                const list = props.store.doc()?.features ?? [];
+                return list
+                  .slice(0, list.findIndex((x) => x.id === f().id))
+                  .filter((x) => x.kind.type === "point")
+                  .map((x) => ({ value: String(x.id), label: x.name }));
+              };
+              const ref = (v: string): PointSpec => ({ type: "reference", feature: +v });
+              const idOf = (p: PointSpec) => (p.type === "reference" ? String(p.feature) : "");
+              const used = (): PointSpec[] => {
+                const x = m();
+                return x.type === "distance" ? [x.a, x.b] : x.type === "angle" ? [x.a, x.vertex, x.b] : x.type === "surface" ? x.points : [x.at];
+              };
+              const setMeasure = (d: DimensionKind) => update((x) => x.type === "dimension" && (x.measure = d));
+              const kindValue = () => {
+                const x = m();
+                return x.type === "distance" && x.axis ? `distance_${x.axis}` : x.type;
+              };
+              // Cambiar el tipo conserva los puntos que se puedan (y completa con los primeros que haya)
+              const setKind = (v: string) => {
+                const have = used();
+                const take = (i: number): PointSpec => have[i] ?? (options()[i] ? ref(options()[i].value) : have[0]);
+                if (v.startsWith("distance")) setMeasure({ type: "distance", a: take(0), b: take(1), axis: v.includes("_") ? (v.slice(9) as "x" | "y" | "z") : null });
+                else if (v === "angle") setMeasure({ type: "angle", a: take(0), vertex: take(1), b: take(2) });
+                else if (v === "surface") setMeasure({ type: "surface", points: have.length >= 2 ? have : [take(0), take(1)] });
+                else if (v === "diameter") setMeasure({ type: "diameter", at: take(0) });
+                else setMeasure({ type: "thickness", at: take(0) });
+              };
+              const pointRow = (label: string, p: PointSpec, set: (q: PointSpec) => void) => (
+                <Row label={label}>
+                  <Select options={options()} value={idOf(p)} onChange={(v) => set(ref(v))} />
+                </Row>
+              );
+              const value = () => {
+                const r = props.store.result()?.references.find((x) => x.id === f().id);
+                return r?.kind === "dimension" ? `${r.value.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${r.unit}` : undefined;
+              };
+              return (
+                <>
+                  <Row label={tl("Mide")}>
+                    <Select
+                      options={[
+                        { value: "distance", label: tl("Distancia") },
+                        { value: "distance_x", label: tl("Distancia en X") },
+                        { value: "distance_y", label: tl("Distancia en Y") },
+                        { value: "distance_z", label: tl("Distancia en Z") },
+                        { value: "angle", label: tl("Ángulo entre tres puntos") },
+                        { value: "surface", label: tl("Por la superficie") },
+                        { value: "diameter", label: tl("Diámetro de una zona redonda") },
+                        { value: "thickness", label: tl("Espesor en un punto") },
+                      ]}
+                      value={kindValue()}
+                      onChange={setKind}
+                    />
+                  </Row>
+                  <Switch>
+                    <Match when={m().type === "distance" && (m() as Extract<DimensionKind, { type: "distance" }>)}>
+                      {(d) => (
+                        <>
+                          {pointRow(tl("Desde"), d().a, (q) => setMeasure({ ...d(), a: q }))}
+                          {pointRow(tl("Hasta"), d().b, (q) => setMeasure({ ...d(), b: q }))}
+                        </>
+                      )}
+                    </Match>
+                    <Match when={m().type === "angle" && (m() as Extract<DimensionKind, { type: "angle" }>)}>
+                      {(d) => (
+                        <>
+                          {pointRow(tl("Punto"), d().a, (q) => setMeasure({ ...d(), a: q }))}
+                          {pointRow(tl("Vértice"), d().vertex, (q) => setMeasure({ ...d(), vertex: q }))}
+                          {pointRow(tl("Punto"), d().b, (q) => setMeasure({ ...d(), b: q }))}
+                        </>
+                      )}
+                    </Match>
+                    <Match when={m().type === "surface" && (m() as Extract<DimensionKind, { type: "surface" }>)}>
+                      {(d) => (
+                        <>
+                          <Index each={d().points}>
+                            {(p, i) => (
+                              <div class="flex items-center gap-1">
+                                <div class="flex-1">{pointRow(tl("Punto {v1}", { v1: i + 1 }), p(), (q) => setMeasure({ ...d(), points: d().points.map((x, j) => (j === i ? q : x)) }))}</div>
+                                <IconButton
+                                  aria-label={tl("Quitar el punto {v1}", { v1: i + 1 })}
+                                  size="sm"
+                                  variant="ghost"
+                                  disabled={d().points.length <= 2}
+                                  onClick={() => setMeasure({ ...d(), points: d().points.filter((_, j) => j !== i) })}
+                                >
+                                  <Icons.Trash size={11} />
+                                </IconButton>
+                              </div>
+                            )}
+                          </Index>
+                          <Button size="sm" fullWidth disabled={!options().length} onClick={() => setMeasure({ ...d(), points: [...d().points, ref(options()[options().length - 1].value)] })}>
+                            {tl("Agregar punto")}
+                          </Button>
+                        </>
+                      )}
+                    </Match>
+                    <Match when={(m().type === "diameter" || m().type === "thickness") && (m() as Extract<DimensionKind, { type: "diameter" | "thickness" }>)}>
+                      {(d) => pointRow(tl("En el punto"), d().at, (q) => setMeasure({ ...d(), at: q } as DimensionKind))}
+                    </Match>
+                  </Switch>
+                  <Show when={value()}>
+                    {(v) => <p class="text-sm font-mono text-text">{v()}</p>}
+                  </Show>
+                  <label class="flex items-center gap-2 text-xs">
+                    <span class="text-text-muted shrink-0 w-24">{tl("Parámetro")}</span>
+                    <input
+                      type="text"
+                      aria-label={tl("Dar su medida al parámetro")}
+                      placeholder={tl("ninguno")}
+                      value={k().parameter ?? ""}
+                      class="w-full min-w-0 px-2 py-1 rounded bg-surface/40 border border-border text-xs text-text font-mono outline-none focus:border-accent"
+                      onChange={(e) => {
+                        const name = e.currentTarget.value.trim();
+                        update((x) => x.type === "dimension" && (x.parameter = name || null));
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") e.currentTarget.blur();
+                        e.stopPropagation();
+                      }}
+                    />
+                  </label>
+                  <p class="text-[11px] text-text-dim">
+                    {tl("Con un nombre, la medida pasa a ese parámetro del diseño (lo crea o lo reemplaza) y se actualiza si cambia el escaneo: úsalo en fórmulas de otras operaciones.")}
+                  </p>
+                  <p class="text-[11px] text-text-dim">
+                    {tl("La cota se guarda en el diseño y se dibuja en el visor; si el escaneo se alinea o se repara, se vuelve a medir. Por la superficie, diámetro y espesor se miden sobre el escaneo.")}
+                  </p>
+                </>
+              );
+            }}
+          </Match>
+          <Match when={f().kind.type === "refold" && (f().kind as Extract<FeatureKind, { type: "refold" }>)}>
+            {(k) => {
+              // Los desarrollos como pieza que hay antes
+              const flats = () => {
+                const list = props.store.doc()?.features ?? [];
+                return list.slice(0, list.findIndex((x) => x.id === f().id)).filter((x) => x.kind.type === "flat_solid");
+              };
+              return (
+                <>
+                  <Row label={tl("Desarrollo")}>
+                    <Select
+                      options={[{ value: "", label: tl("El último") }, ...flats().map((x) => ({ value: String(x.id), label: x.name || tl("Desarrollo plano") }))]}
+                      value={k().flat == null ? "" : String(k().flat)}
+                      onChange={(v) => update((x) => x.type === "refold" && (x.flat = v ? +v : null))}
+                    />
+                  </Row>
+                  <Checkbox small label={tl("Dejar también la pieza plana")} checked={!!k().keep} onChange={(c) => update((x) => x.type === "refold" && (x.keep = c || undefined))} />
+                  <p class="text-[11px] text-text-dim">
+                    {tl("Los agujeros y recortes hechos sobre la pieza plana pasan a la chapa doblada; si cruzan un doblez, lo siguen. Cuenta la forma del corte vista desde arriba (atraviesa la chapa).")}
+                  </p>
+                </>
+              );
+            }}
+          </Match>
           <Match when={f().kind.type === "flange" && (f().kind as Extract<FeatureKind, { type: "flange" }>)}>
             {(k) => {
               // El radio de la chapa de la que sale (la última antes)
@@ -4404,11 +4951,20 @@ export const FeatureEditor: Component<{
                   {field(tl("Ángulo"), "kind.angle", k().angle, (x, v) => x.type === "flange" && (x.angle = v), "°")}
                   <Show when={k().angle >= 180}>
                     <p class="text-[11px] text-text-dim">{tl("180° deja un dobladillo: la pared vuelve sobre la chapa.")}</p>
+                    <Checkbox
+                      small
+                      label={tl("Dobladillo cerrado (sin radio, la pared apoyada en la chapa)")}
+                      checked={k().radius === 0}
+                      onChange={(c) => update((x) => x.type === "flange" && (x.radius = c ? 0 : null))}
+                    />
                   </Show>
                   {field(tl("Radio"), "kind.radius", k().radius ?? sheetRadius() ?? 0, (x, v) => x.type === "flange" && (x.radius = v), "mm")}
                   <Checkbox small label={tl("Doblar hacia el otro lado")} checked={k().flip} onChange={(c) => update((x) => x.type === "flange" && (x.flip = c))} />
                   <p class="text-[11px] text-text-dim">
                     {tl("Dobla hacia el lado de la cara de la arista elegida. El largo es la pared después del doblez; el radio, el interior (el de la chapa si no se cambia).")}
+                  </p>
+                  <p class="text-[11px] text-text-dim">
+                    {tl("También sale de una arista curva (el borde de un disco o de un agujero): la pared queda cónica, sin alivios, y no entra en el desarrollo porque esa chapa se estira.")}
                   </p>
                   <Row label={tl("Alivio")}>
                     <Select
@@ -4548,17 +5104,52 @@ export const FeatureEditor: Component<{
                   lost={lost("faces")}
                   onChange={(refs) => update((x) => x.type === "replace_face" && (x.faces = refs as FaceRef[]))}
                 />
-                <PlaneField
-                  store={props.store}
-                  ui={props.ui}
-                  owner={`${f().id}:hasta`}
-                  label={tl("Hasta")}
-                  value={k().target}
-                  except={f().id}
-                  lost={lost("target").length > 0}
-                  onChange={(p) => update((x) => x.type === "replace_face" && (x.target = p))}
-                />
-                <p class="text-[11px] text-text-dim">{tl("Las caras llegan hasta el plano: suma material si queda afuera, resta si queda adentro.")}</p>
+                <Row label={tl("Hasta")}>
+                  <Select
+                    options={[
+                      { value: "plane", label: tl("Un plano") },
+                      { value: "surface", label: tl("Una superficie") },
+                    ]}
+                    value={k().surface ? "surface" : "plane"}
+                    onChange={(v) => update((x) => x.type === "replace_face" && (x.surface = v === "surface" ? [] : undefined))}
+                  />
+                </Row>
+                <Show
+                  when={k().surface}
+                  fallback={
+                    <>
+                      <PlaneField
+                        store={props.store}
+                        ui={props.ui}
+                        owner={`${f().id}:hasta`}
+                        label={tl("Plano")}
+                        value={k().target}
+                        except={f().id}
+                        lost={lost("target").length > 0}
+                        onChange={(p) => update((x) => x.type === "replace_face" && (x.target = p))}
+                      />
+                      <p class="text-[11px] text-text-dim">{tl("Las caras llegan hasta el plano: suma material si queda afuera, resta si queda adentro.")}</p>
+                    </>
+                  }
+                >
+                  {(sf) => (
+                    <>
+                      <SelectionBox
+                        store={props.store}
+                        ui={props.ui}
+                        owner={`${f().id}:superficie`}
+                        kind="faces"
+                        label={tl("Superficie")}
+                        refs={sf()}
+                        lost={lost("surface")}
+                        onChange={(refs) => update((x) => x.type === "replace_face" && (x.surface = refs as FaceRef[]))}
+                      />
+                      <p class="text-[11px] text-text-dim">
+                        {tl("Las caras llegan hasta la superficie aunque sea curva (una superficie o caras de otra pieza; una sola se extiende por sus lados): suma material si queda afuera, resta si queda adentro.")}
+                      </p>
+                    </>
+                  )}
+                </Show>
               </>
             )}
           </Match>
@@ -5176,6 +5767,17 @@ export const FeatureEditor: Component<{
                 />
                 <Show when={k().start_tangent != null}>
                   {field(tl("Peso al comienzo"), "kind.start_tangent", k().start_tangent ?? 1, (x, v) => x.type === "loft" && (x.start_tangent = v))}
+                  <SelectionBox
+                    store={props.store}
+                    ui={props.ui}
+                    owner={`${f().id}:caras-inicio`}
+                    kind="faces"
+                    label={tl("Tangente a las caras")}
+                    lost={lost("start_faces")}
+                    refs={k().start_faces ?? []}
+                    onChange={(refs) => update((x) => x.type === "loft" && (x.start_faces = refs.length ? (refs as FaceRef[]) : undefined))}
+                  />
+                  <p class="text-[11px] text-text-dim">{tl("Con caras elegidas, la transición las continúa sin quiebre en vez de salir perpendicular.")}</p>
                 </Show>
                 <Checkbox
                   small
@@ -5187,6 +5789,16 @@ export const FeatureEditor: Component<{
                 />
                 <Show when={k().end_tangent != null}>
                   {field(tl("Peso al final"), "kind.end_tangent", k().end_tangent ?? 1, (x, v) => x.type === "loft" && (x.end_tangent = v))}
+                  <SelectionBox
+                    store={props.store}
+                    ui={props.ui}
+                    owner={`${f().id}:caras-fin`}
+                    kind="faces"
+                    label={tl("Tangente a las caras")}
+                    lost={lost("end_faces")}
+                    refs={k().end_faces ?? []}
+                    onChange={(refs) => update((x) => x.type === "loft" && (x.end_faces = refs.length ? (refs as FaceRef[]) : undefined))}
+                  />
                 </Show>
                 <Checkbox small label={tl("Delgada (solo una pared)")} checked={k().thin != null} onChange={(c) => update((x) => x.type === "loft" && (x.thin = c ? 1 : null))} />
                 <Show when={k().thin != null}>
@@ -5761,33 +6373,89 @@ const PointField: Component<{ store: CadStore; ui: CadUi; owner: string; label: 
  * (otra vez la quita), y la lista muestra solo las elegidas (con muchas piezas,
  * una lista de casillas no sirve). Sin elegir, las que toca.
  */
-/** Copias de un patrón que no se hacen, escritas como lista ("2, 5") */
-const SkipCopies: Component<{ value: number[]; onChange: (v: number[]) => void }> = (props) => (
-  <>
-    <label class="flex items-center gap-2 text-xs">
-      <span class="text-text-muted shrink-0 w-24">{tl("Omitir copias")}</span>
-      <input
-        type="text"
-        aria-label={tl("Omitir copias")}
-        placeholder={tl("ninguna")}
-        value={props.value.join(", ")}
-        class="w-full min-w-0 px-2 py-1 rounded bg-surface/40 border border-border text-xs text-text font-mono outline-none focus:border-accent"
-        onChange={(e) => {
-          const nums = e.currentTarget.value
-            .split(/[\s,;]+/)
-            .map(Number)
-            .filter((n) => Number.isInteger(n) && n >= 1);
-          props.onChange([...new Set(nums)].sort((a, b) => a - b));
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") e.currentTarget.blur();
-          e.stopPropagation();
-        }}
-      />
-    </label>
-    <p class="text-[11px] text-text-dim">{tl("Números de las copias que no se hacen (1 es la primera; en dos direcciones se cuentan por filas).")}</p>
-  </>
-);
+/**
+ * La copia de un patrón a la que pertenece una cara: las caras de las copias llevan el
+ * número de la copia al final de su origen ("cara:1#3"). Solo cuentan las que vienen de lo
+ * que repite el patrón (`features`; vacío = todo el sólido).
+ */
+function patternCopyOf(face: FaceRef, features: number[]): number | undefined {
+  const copy = (mine: boolean) => {
+    for (const tag of face.tags ?? []) {
+      if (mine && features.length && !features.includes(tag.feature)) continue;
+      const m = /#(\d+)$/.exec(tag.name);
+      if (m) return +m[1];
+    }
+    return undefined;
+  };
+  // Un patrón de un patrón repite caras de otras operaciones: el último número es el suyo
+  return copy(true) ?? copy(false);
+}
+
+/**
+ * Copias de un patrón que no se hacen: escritas como lista ("2, 5") o con clic en el visor
+ * sobre la copia (clics seguidos hasta «Listo»); las omitidas se devuelven con su ×.
+ */
+const SkipCopies: Component<{ value: number[]; onChange: (v: number[]) => void; ui: CadUi; owner: string; features: number[] }> = (props) => {
+  const picking = () => (props.ui.pick() as { owner?: string }).owner === props.owner;
+  const set = (nums: number[]) => props.onChange([...new Set(nums)].sort((a, b) => a - b));
+  const pickCopies = () =>
+    props.ui.setPick({
+      kind: "face",
+      owner: props.owner,
+      prompt: tl("Clic en las copias que no se hacen; «Listo» para terminar"),
+      done: (face) => {
+        const k = patternCopyOf(face, props.features);
+        if (k === undefined) props.ui.setMessage(tl("Esa cara no es de una copia del patrón (la original no se puede omitir)"));
+        else set([...props.value, k]);
+        pickCopies();
+      },
+    });
+  onCleanup(() => picking() && props.ui.setPick({ kind: "none" }));
+  return (
+    <>
+      <label class="flex items-center gap-2 text-xs">
+        <span class="text-text-muted shrink-0 w-24">{tl("Omitir copias")}</span>
+        <input
+          type="text"
+          aria-label={tl("Omitir copias")}
+          placeholder={tl("ninguna")}
+          value={props.value.join(", ")}
+          class="w-full min-w-0 px-2 py-1 rounded bg-surface/40 border border-border text-xs text-text font-mono outline-none focus:border-accent"
+          onChange={(e) =>
+            set(
+              e.currentTarget.value
+                .split(/[\s,;]+/)
+                .map(Number)
+                .filter((n) => Number.isInteger(n) && n >= 1),
+            )
+          }
+          onKeyDown={(e) => {
+            if (e.key === "Enter") e.currentTarget.blur();
+            e.stopPropagation();
+          }}
+        />
+      </label>
+      <Show when={props.value.length}>
+        <div class="flex flex-wrap gap-1">
+          <For each={props.value}>
+            {(n) => (
+              <span class="inline-flex items-center gap-0.5 rounded bg-surface/60 border border-border pl-1.5 text-[11px] text-text-muted">
+                {tl("Copia {v1}", { v1: n })}
+                <IconButton aria-label={tl("Volver a hacer la copia {v1}", { v1: n })} size="sm" variant="ghost" onClick={() => set(props.value.filter((x) => x !== n))}>
+                  <Icons.X size={10} />
+                </IconButton>
+              </span>
+            )}
+          </For>
+        </div>
+      </Show>
+      <Button size="sm" variant={picking() ? "primary" : "ghost"} fullWidth onClick={() => (picking() ? props.ui.setPick({ kind: "none" }) : pickCopies())}>
+        {picking() ? tl("Listo") : tl("Omitir con clic en el visor")}
+      </Button>
+      <p class="text-[11px] text-text-dim">{tl("Números de las copias que no se hacen (1 es la primera; en dos direcciones se cuentan por filas).")}</p>
+    </>
+  );
+};
 
 /** Lo que trae una pieza derivada: de qué pestaña, qué piezas (ninguna marcada = todas) y en qué configuración */
 const DerivedBox: Component<{

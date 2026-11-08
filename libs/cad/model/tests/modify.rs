@@ -2,6 +2,7 @@
 
 use approx::assert_relative_eq;
 use cad_model::*;
+use std::f64::consts::PI;
 
 fn occt() -> bool {
     occt::available()
@@ -152,7 +153,7 @@ fn replace_face_up_to_a_plane() {
     let mut doc = cube();
     let face = top_face(&doc);
     let plane = |origin: P3, normal: P3| PlaneSpec::Custom { plane: Plane { origin, normal, x_dir: [1.0, 0.0, 0.0] } };
-    let rf = doc.add(FeatureKind::ReplaceFace { faces: vec![face], target: plane([0.0, 0.0, 15.0], [0.0, 0.0, 1.0]) });
+    let rf = doc.add(FeatureKind::ReplaceFace { faces: vec![face], target: plane([0.0, 0.0, 15.0], [0.0, 0.0, 1.0]), surface: vec![] });
     assert_relative_eq!(eval_ok(&doc).body.unwrap().mass().unwrap().volume, 1500.0, max_relative = 1e-9);
     // Inclinado: z = 12 + 0,2 x → 10 × ∫(12 + 0,2 x) dx = 1300
     let k = (1.0f64 + 0.04).sqrt();
@@ -257,4 +258,68 @@ fn chain_links_follow_the_path_and_turn() {
         *spacing = 100.0;
     }
     assert!(!doc.evaluate().errors().is_empty());
+}
+
+#[test]
+fn move_a_curved_face_shrinks_a_hole() {
+    if !occt() {
+        return;
+    }
+    // Placa de 40 × 40 × 10 con un agujero de radio 5 en el medio
+    let mut doc = Document::new();
+    let mut s = Sketch::default();
+    let p = [[0.0, 0.0], [40.0, 0.0], [40.0, 40.0], [0.0, 40.0]].map(|q: [f64; 2]| s.add_point(q[0], q[1]));
+    for k in 0..4 {
+        s.add_line(p[k], p[(k + 1) % 4]);
+    }
+    s.circle([20.0, 20.0], 5.0);
+    let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 0.0, sketch: s });
+    doc.add(FeatureKind::Extrude(Extrude { sketch: sk, regions: RegionSelection::All, extent: Extent::Blind { distance: 10.0 }, reverse: false, op: BodyOp::Join, draft: 0.0, thin: None, direction: None, start: 0.0 }));
+    let ev = eval_ok(&doc);
+    assert_relative_eq!(ev.body.as_ref().unwrap().mass().unwrap().volume, 16000.0 - PI * 25.0 * 10.0, max_relative = 1e-6);
+    let (wall, _) = ev.body.as_ref().unwrap().closest_face([25.0, 20.0, 5.0], None, 0.0).unwrap();
+    let face = ev.face_ref(wall).unwrap();
+    // Hacia afuera del material (hacia el eje del agujero) 1: el agujero queda de radio 4
+    let mv = doc.add(FeatureKind::MoveFace { faces: vec![face], distance: 1.0 });
+    let b = eval_ok(&doc).body.unwrap();
+    assert!(b.is_valid());
+    assert_relative_eq!(b.mass().unwrap().volume, 16000.0 - PI * 16.0 * 10.0, max_relative = 1e-5);
+    // Hacia adentro: radio 6
+    if let FeatureKind::MoveFace { distance, .. } = &mut doc.get_mut(mv).unwrap().kind {
+        *distance = -1.0;
+    }
+    assert_relative_eq!(eval_ok(&doc).body.unwrap().mass().unwrap().volume, 16000.0 - PI * 36.0 * 10.0, max_relative = 1e-5);
+}
+
+#[test]
+fn replace_face_up_to_a_curved_surface() {
+    if !occt() {
+        return;
+    }
+    // El cubo de 10 y, aparte, un cilindro de radio 8 a lo largo de X con eje en y = 5, z = 20
+    let mut doc = cube();
+    doc.add(FeatureKind::Primitive(Primitive {
+        shape: PrimitiveShape::Cylinder { radius: 8.0, height: 20.0 },
+        origin: [-5.0, 5.0, 20.0],
+        z: [1.0, 0.0, 0.0],
+        x: [0.0, 1.0, 0.0],
+        op: BodyOp::New,
+        link: None,
+        on: None,
+    }));
+    let ev = eval_ok(&doc);
+    let body = ev.body.as_ref().unwrap();
+    let (top, _) = body.closest_face([5.0, 5.0, 10.0], Some([0.0, 0.0, 1.0]), 0.99).unwrap();
+    let (round, _) = body.closest_face([5.0, 5.0, 12.0], None, 0.0).unwrap();
+    let (top, round) = (ev.face_ref(top).unwrap(), ev.face_ref(round).unwrap());
+    doc.add(FeatureKind::ReplaceFace { faces: vec![top], target: PlaneSpec::Xy, surface: vec![round] });
+    let ev = eval_ok(&doc);
+    let cube = ev.parts[0].shape.mass().unwrap();
+    // La cara llega al cilindro: z = 20 − √(64 − (y − 5)²), de 12 en el medio a 13,76 en los bordes
+    let area: f64 = {
+        let n = 2000;
+        (0..n).map(|k| (k as f64 + 0.5) * 10.0 / n as f64).map(|y| 20.0 - (64.0 - (y - 5.0f64).powi(2)).sqrt()).sum::<f64>() * 10.0 / n as f64
+    };
+    assert_relative_eq!(cube.volume, area * 10.0, max_relative = 1e-4);
+    assert_relative_eq!(cube.bbox_max[2], 20.0 - 39f64.sqrt(), epsilon = 1e-4);
 }

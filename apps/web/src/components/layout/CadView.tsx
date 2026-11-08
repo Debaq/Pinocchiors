@@ -961,6 +961,26 @@ export const CadView: Component<CadViewProps> = (props) => {
     viewer?.setSection({ origin, normal });
   });
 
+  // Nombres de los puntos de referencia (P1, P2…) y números de las cotas, sobre el visor
+  const refLabels = createMemo(() => {
+    viewTick();
+    if (!viewer || ui.session()) return [];
+    const hidden = ui.hiddenSketches();
+    const names = new Map((store.doc()?.features ?? []).map((f) => [f.id, f.name]));
+    const rect = container.getBoundingClientRect();
+    const at = (p: P3) => {
+      const [x, y] = viewer!.screenOf(p);
+      return { x: x - rect.left, y: y - rect.top };
+    };
+    return (store.result()?.references ?? [])
+      .filter((r) => !hidden.includes(r.id) && (r.kind === "point" || r.kind === "dimension"))
+      .map((r) =>
+        r.kind === "dimension"
+          ? { id: r.id, dim: true, text: `${r.value.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${r.unit}`, ...at(r.label) }
+          : { id: r.id, dim: false, text: names.get(r.id) ?? "", ...at(r.kind === "point" ? r.point : [0, 0, 0]) },
+      );
+  });
+
   // Medidas de lo elegido en el sólido (una o dos cosas), como en Onshape
   const [measurement, setMeasurement] = createSignal<Measurement>();
   let measureSeq = 0;
@@ -4013,6 +4033,24 @@ export const CadView: Component<CadViewProps> = (props) => {
           </span>
         )}
       </Show>
+
+      {/* Nombres de los puntos y valores de las cotas (clic en una cota la elige en el árbol) */}
+      <For each={refLabels()}>
+        {(l) => (
+          <span
+            class={clsx(
+              "absolute z-10 px-1 rounded text-[11px] leading-tight whitespace-nowrap border",
+              l.dim
+                ? "-translate-x-1/2 -translate-y-1/2 bg-bg-lighter/90 border-cyan text-text font-mono cursor-pointer"
+                : "translate-x-1.5 -translate-y-full bg-bg-lighter/80 border-warning/60 text-warning pointer-events-none",
+            )}
+            style={{ left: `${l.x}px`, top: `${l.y}px` }}
+            onClick={() => l.dim && store.select(l.id)}
+          >
+            {l.text}
+          </span>
+        )}
+      </For>
 
       {/* Íconos de restricciones: clic elige (Mayús suma), Supr borra */}
       <Index each={glyphs()}>

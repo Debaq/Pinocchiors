@@ -116,6 +116,9 @@ CadShape* cad_loft_ex(const CadShape* const* wires, int32_t n, int32_t solid, in
 CadShape* cad_loft_pipe(const CadShape* const* wires, int32_t n, const CadShape* spine, const CadShape* guide, int32_t solid);
 // Transición que sale y/o llega perpendicular a la sección de la punta (peso ≤ 0: libre).
 CadShape* cad_loft_tangent(const CadShape* const* wires, int32_t n, double start_w, double end_w, int32_t solid);
+/* Como cad_loft_tangent; con caras (compuesto, o NULL) en una punta, la tangente sigue esas caras */
+CadShape* cad_loft_tangent_faces(const CadShape* const* wires, int32_t n, double start_w, double end_w, const CadShape* faces0,
+                                 const CadShape* faces1, int32_t solid);
 // Extiende las superficies por los bordes libres `edges`, `distance` más allá (cada cara por sus lados).
 CadShape* cad_extend_surface(const CadShape* s, const int32_t* edges, int32_t n, double distance);
 // Saca caras y cierra el hueco extendiendo las vecinas (BRepAlgoAPI_Defeaturing).

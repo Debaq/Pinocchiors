@@ -76,7 +76,7 @@ fn loft_between_squares() {
     let l = doc.add(FeatureKind::Loft(Loft {
         sections: vec![LoftSection { sketch: a, regions: RegionSelection::All }, LoftSection { sketch: b, regions: RegionSelection::All }],
         ruled: true,
-        op: BodyOp::Join, start_point: None, end_point: None, closed: false, thin: None, path: None, guide: None, start_tangent: None, end_tangent: None,
+        op: BodyOp::Join, start_point: None, end_point: None, closed: false, thin: None, path: None, guide: None, start_tangent: None, end_tangent: None, start_faces: Vec::new(), end_faces: Vec::new(),
     }));
     assert_relative_eq!(vol(&doc), 1000.0, max_relative = 1e-6);
     // De 10 a 6 reglada: tronco de pirámide
@@ -259,7 +259,7 @@ fn loft(sections: Vec<FeatureId>) -> Loft {
         path: None,
         guide: None,
         start_tangent: None,
-        end_tangent: None,
+        end_tangent: None, start_faces: Vec::new(), end_faces: Vec::new(),
     }
 }
 
@@ -351,4 +351,43 @@ fn surface_loft_between_two_lines() {
     assert!(ev.errors().is_empty(), "{:?}", ev.errors());
     assert!(ev.parts[0].is_surface());
     assert_relative_eq!(ev.parts[0].shape.mass().unwrap().area, 100.0, max_relative = 1e-6);
+}
+
+#[test]
+fn loft_tangent_to_neighbor_faces_continues_their_slope() {
+    if !occt() {
+        return;
+    }
+    // Base: tronco de pirámide de un cuadrado de 4 (z = −10) a uno de 8 (z = 0), paredes abiertas
+    let mut doc = Document::new();
+    let a = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: -10.0, sketch: square(4.0) });
+    let b = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 0.0, sketch: square(8.0) });
+    doc.add(FeatureKind::Loft(loft(vec![a, b])));
+    let ev = doc.evaluate();
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    let body = ev.body.as_ref().unwrap();
+    let walls: Vec<FaceRef> = [[3.0, 0.0, -5.0, 1.0, 0.0], [-3.0, 0.0, -5.0, -1.0, 0.0], [0.0, 3.0, -5.0, 0.0, 1.0], [0.0, -3.0, -5.0, 0.0, -1.0]]
+        .iter()
+        .map(|q| ev.face_ref(body.closest_face([q[0], q[1], q[2]], Some([q[3], q[4], 0.0]), 0.9).unwrap().0).unwrap())
+        .collect();
+    // Arriba: del cuadrado de 8 (z = 0) al de 8 en z = 20, saliendo tangente
+    let c = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 20.0, sketch: square(8.0) });
+    let up = doc.add(FeatureKind::Loft(Loft { ruled: false, start_tangent: Some(1.0), ..loft(vec![b, c]) }));
+    let section = |doc: &Document| {
+        let ev = doc.evaluate();
+        assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+        let body = ev.body.unwrap();
+        assert!(body.is_valid());
+        let slab = Shape::make_box(occt::Frame { origin: [-50.0, -50.0, 0.9], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0] }, 100.0, 100.0, 0.2).unwrap();
+        body.intersect(&slab).unwrap().mass().unwrap().volume / 0.2
+    };
+    // Perpendicular a la sección: apenas arriba sigue de 8 × 8
+    let straight = section(&doc);
+    assert_relative_eq!(straight, 64.0, max_relative = 0.01);
+    // Siguiendo las paredes (que se abren 0,2 por cada 1 de alto): más ancha
+    if let FeatureKind::Loft(l) = &mut doc.get_mut(up).unwrap().kind {
+        l.start_faces = walls;
+    }
+    let along = section(&doc);
+    assert!(along > straight * 1.03, "con las caras {along}, perpendicular {straight}");
 }

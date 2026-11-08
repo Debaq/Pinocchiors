@@ -76,10 +76,10 @@ Leyenda: ✅ hecho · 🟡 a medias · ❌ falta · (F*n*) fase de este plan que
 | Vaciado | ✅ |
 | Vaciado con espesores distintos por cara | ✅ (`Shell.overrides`, 2026-10-11) |
 | Ángulo de desmoldeo, engrosar | ✅ |
-| Desfasar cara, mover cara | 🟡 solo planas y a lo largo de la normal (F6) |
+| Desfasar cara, mover cara | ✅ planas y curvas (la curva se corre por su normal: `MoveFace` engrosa la cara, 2026-11-08) |
 | Eliminar cara | ✅ (`DeleteFace`, defeaturing, 2026-10-11) |
 | Rotar cara | ✅ caras planas con bisagra (`RotateFace`, 2026-10-11) |
-| Reemplazar cara | 🟡 solo hasta un plano (F6) |
+| Reemplazar cara | ✅ hasta un plano o hasta una superficie (`ReplaceFace.surface`, 2026-11-08) |
 
 ### Patrones y simetría
 | Función | Estado |
@@ -90,7 +90,7 @@ Leyenda: ✅ hecho · 🟡 a medias · ❌ falta · (F*n*) fase de este plan que
 | Variable (cada copia cambia de tamaño) y patrón de patrón | ✅ (`Pattern.vary` con `PatternVary`; un patrón puede repetir a otro, 2026-10-15) |
 | Lineal en dos direcciones | ✅ (`Linear.second`, 2026-10-11) |
 | Guiado por puntos de sketch | ✅ (`PatternKind::Points`, 2026-10-11) |
-| Omitir instancias | 🟡 escritas en el diálogo (`Pattern.skip`, `SkipCopies`); falta prender y apagar con clic en el visor (F2) |
+| Omitir instancias | ✅ escritas o con clic en la copia en el visor; se devuelven con su × (`SkipCopies`, 2026-11-08) |
 | Simetría de operaciones | ✅ |
 | Simetría de cuerpos | ✅ unido o como pieza aparte (`Mirror.op`, 2026-10-11) |
 
@@ -521,3 +521,22 @@ También se repararon las cuatro del grupo «interfaz» que fallaban en la base:
 - Redondeo completo general no tiene API directa en OCCT.
 - Copiar y pegar operaciones con referencias por geometría: al pegar en otro lugar pueden
   apuntar a caras distintas; mostrar como referencia perdida en vez de adivinar.
+
+## 2026-11-08: lo que quedaba abierto (pruebas Rust pasan; falta probar en la app)
+
+- Omitir copias con clic: «Omitir con clic en el visor» en el patrón; la copia sale del número al
+  final del origen de la cara (`#k`).
+- Transición tangente a caras vecinas: `Loft.start_faces` / `end_faces`; en cada punto de la
+  sección la tangente es el avance llevado al plano tangente de la cara que lo toca, y en una
+  esquina entre dos caras la recta donde se cortan, así los lados calzan (`cad_loft_tangent_faces`
+  en `cad_occt.cpp`).
+- Mover caras curvas: `MoveFace` engrosa la cara curva la distancia y suma o resta (las vecinas no
+  se estiran: justo con caras a 90°, como agujeros y ejes).
+- Reemplazar cara hasta una superficie: `ReplaceFace.surface` (una cara extendida o varias cosidas;
+  el prisma de la cara partido por ella, `until_sheet`).
+- Chapa: pestaña sobre arista circular (`flange_tool_curved`: el corte girado a lo largo del arco;
+  pared cónica, sin alivios, fuera del desarrollo porque se estira); **volver a doblar**
+  (`Refold`: lo cortado al desarrollo como pieza, con `sheet::refold_points`, se resta de la pieza
+  doblada siguiendo los dobleces; `Evaluation.flats` guarda cada desarrollo); dobladillo cerrado
+  (180° con radio 0: rendija mínima, `closed_hem`).
+

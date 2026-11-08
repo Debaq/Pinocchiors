@@ -169,6 +169,7 @@ export function designToolSets(a: DesignActions, ui: CadUi) {
     { label: "Pestaña", icon: D.Flange, run: () => void a.startFlange(), needsBody: true, tip: "Pared doblada desde una arista del borde de la chapa (elegir la arista)" },
     "-",
     { label: "Desarrollo como pieza", icon: D.FlatPattern, run: a.addFlatSolid, needsBody: true, tip: "La chapa desplegada como una pieza nueva, al espesor y a un lado del modelo (para cortar, imprimir o comprobar medidas)" },
+    { label: "Volver a doblar", icon: D.Flange, run: a.addRefold, needsBody: true, tip: "Los cortes hechos sobre el desarrollo como pieza pasan a la chapa doblada, siguiendo los dobleces" },
     { label: "Desarrollo", icon: D.FlatPattern, run: () => ui.setFlatOpen(true), needsBody: true, tip: "La chapa plana para cortar, con las líneas de doblez; DXF 1:1" },
   ];
   const surfaces: (Tool | "-")[] = [
