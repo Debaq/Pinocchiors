@@ -2104,4 +2104,6 @@ export const en_ui_steps: Catalog = {
   "El escaneo si hay; si no, el sólido": "The scan if there is one; otherwise the solid",
   "El sólido del diseño": "The design's solid",
   "Texto, logo o forma de un sketch sobre una superficie (un STL o escaneo, o las caras del sólido): hacia afuera o grabado, proyectado o envuelto, con altura pareja, tope plano o según la dirección": "Text, logo or shape from a sketch on a surface (an STL or scan, or the solid's faces): raised or engraved, projected or wrapped, with even height, flat top or along the direction",
+  "Este modelo tiene fallas y no se puede usar como sólido en el diseño.": "This model has faults and can't be used as a solid in the design.",
+  "Reparar en Preparar": "Repair in Prepare",
 };

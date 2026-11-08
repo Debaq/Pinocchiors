@@ -135,6 +135,21 @@ pub fn repair_trimesh_with_progress(
         summary.faces_removed += summary.duplicate_faces_removed;
     }
 
+    // Los cruces se unen primero sobre la malla todavía cerrada: separar las
+    // aristas non-manifold deja rendijas abiertas y con ellas el número de
+    // vueltas ya no distingue adentro de afuera (un hueso escaneado con 581
+    // cruces y 14 aristas así quedaba sin unir; unido antes, cerrado). Al
+    // final se vuelve a pasar por lo que dejen la separación y el relleno.
+    if config.resolve_intersections {
+        progress(0.28, "Uniendo cuerpos solapados");
+        let report = intersect::resolve_self_intersections(mesh);
+        if report.changed() {
+            summary.intersections_cut += report.pairs_cut;
+            summary.inner_patches_removed += report.patches_removed;
+        }
+        summary.intersections_skipped += report.pairs_skipped;
+    }
+
     if config.fix_normals || config.fix_non_manifold {
         progress(0.30, "Orientando y separando geometría non-manifold");
         let report = manifold::orient_and_split(mesh, config.fix_normals, config.fix_non_manifold);
@@ -178,10 +193,11 @@ pub fn repair_trimesh_with_progress(
         progress(0.92, "Uniendo cuerpos solapados");
         let before = mesh.num_faces();
         let report = intersect::resolve_self_intersections(mesh);
-        summary.intersections_cut = if report.reverted { 0 } else { report.pairs_cut };
-        summary.intersections_skipped = report.pairs_skipped;
-        summary.inner_patches_removed = if report.reverted { 0 } else { report.patches_removed };
-        summary.intersections_reverted = report.reverted;
+        summary.intersections_cut += if report.reverted { 0 } else { report.pairs_cut };
+        summary.intersections_skipped += report.pairs_skipped;
+        summary.inner_patches_removed += if report.reverted { 0 } else { report.patches_removed };
+        // Deshecho solo si no se pudo unir nada en ninguna de las dos pasadas
+        summary.intersections_reverted = report.reverted && summary.intersections_cut == 0;
         if report.changed() {
             // Los cortes dejan astillas y, donde dos cuerpos solo se tocan,
             // aristas non-manifold

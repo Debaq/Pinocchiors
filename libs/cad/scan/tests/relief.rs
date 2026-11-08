@@ -19,11 +19,24 @@ fn area() -> f64 {
     PI * RHO * RHO
 }
 
+/// La piel de la esfera (o su carcasa), preparada una sola vez por espesor
 fn skin(offset: f64, thickness: f64, hash: u64) -> ScanBodyMesh {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<HashMap<(u64, u64), ScanBodyMesh>>> = OnceLock::new();
+    let key = (offset.to_bits(), thickness.to_bits());
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(m) = cache.lock().unwrap().get(&key) {
+        return m.clone();
+    }
     let t = Shape::sphere([0.0; 3], R).unwrap().tessellate(0.02, 0.05).unwrap();
     let scan = ScanMesh::new(&t.positions, &t.triangles);
-    let b = prepare_body(&scan.vertices, &scan.triangles, &BodyOptions { faces: 20000, offset, thickness }).unwrap();
-    ScanBodyMesh { hash, data: std::sync::Arc::new((b.vertices, b.triangles)), error: None }
+    let t0 = std::time::Instant::now();
+    let b = prepare_body(&scan.vertices, &scan.triangles, &BodyOptions { faces: 12000, offset, thickness }).unwrap();
+    eprintln!("TIEMPO piel offset={offset} espesor={thickness}: {:.1} s", t0.elapsed().as_secs_f64());
+    let m = ScanBodyMesh { hash: hash ^ key.1.rotate_left(7), data: std::sync::Arc::new((b.vertices, b.triangles)), error: None };
+    cache.lock().unwrap().insert(key, m.clone());
+    m
 }
 
 /// Volumen del relieve con el círculo en el plano z = `z`
@@ -47,7 +60,9 @@ fn relief(z: f64, mode: ReliefMode, inward: bool, height: f64) -> (f64, Evaluati
         shell,
         skin: None,
     }));
+    let t0 = std::time::Instant::now();
     let ev = doc.evaluate();
+    eprintln!("TIEMPO relieve {mode:?} adentro={inward}: {:.1} s", t0.elapsed().as_secs_f64());
     assert!(ev.errors().is_empty(), "{mode:?} adentro={inward}: {:?}", ev.errors());
     let v = ev.body.as_ref().unwrap().mass().unwrap().volume;
     (v, ev)

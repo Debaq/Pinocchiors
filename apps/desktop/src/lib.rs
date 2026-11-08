@@ -382,6 +382,8 @@ pub fn run() {
             cad::cad_scan_slice,
             cad::cad_scan_add,
             cad::cad_scan_dabs,
+            cad::cad_scan_faults,
+            cad::cad_scan_seeds_near,
             cad::cad_scan_mold,
             cad::cad_scan_propose,
             cad::cad_scan_apply,

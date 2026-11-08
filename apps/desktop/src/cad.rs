@@ -433,6 +433,19 @@ fn uses_scan(kind: &FeatureKind) -> bool {
 /// Triángulos del escaneo cuando lo usa otra operación (extruir hasta él)
 const SCAN_FACES: usize = 20_000;
 
+/// Si la malla del escaneo tiene fallas (bordes abiertos, aristas de más de dos
+/// caras o mal orientadas, caras repetidas), el motivo para el usuario: hay
+/// que repararla en Preparar antes de usarla como sólido en el diseño.
+fn scan_mesh_faults(scan: &ScanCache) -> Option<String> {
+    let p = cad_scan::solid_problems(&scan.mesh.vertices, &scan.mesh.triangles);
+    let bad = p.unmatched + p.repeated;
+    (bad > 0).then(|| {
+        format!(
+            "el modelo tiene fallas ({bad} aristas abiertas, mal cosidas o caras repetidas): repáralo en Preparar → Reparar (con «Unir cuerpos solapados» si se cruza consigo mismo) antes de usarlo en el diseño"
+        )
+    })
+}
+
 /// El escaneo cerrado con la holgura (o la carcasa de ese espesor), listo para
 /// sólido (en caché por escaneo, holgura, espesor y triángulos). Si no se
 /// puede, la malla queda vacía con el motivo.
@@ -450,6 +463,11 @@ fn scan_body_mesh(scan: &ScanCache, offset: f64, thickness: f64, faces: usize) -
         .or_insert_with(|| {
             let mut h = std::collections::hash_map::DefaultHasher::new();
             (scan.scene_hash, key).hash(&mut h);
+            // Una malla con fallas no se usa: primero se repara en Preparar
+            if let Some(e) = scan_mesh_faults(scan) {
+                e.hash(&mut h);
+                return cad_model::ScanBodyMesh { hash: h.finish(), data: Default::default(), error: Some(e) };
+            }
             let options = cad_scan::BodyOptions { faces, offset, thickness };
             match cad_scan::prepare_body(&scan.mesh.vertices, &scan.mesh.triangles, &options) {
                 Ok(b) => cad_model::ScanBodyMesh { hash: h.finish(), data: std::sync::Arc::new((b.vertices, b.triangles)), error: None },
@@ -471,13 +489,10 @@ fn exact_scan_mesh(scan: &ScanCache) -> cad_model::ScanBodyMesh {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     (scan.scene_hash, "exacto").hash(&mut h);
     let (v, t) = (&scan.mesh.vertices, &scan.mesh.triangles);
-    let p = cad_scan::solid_problems(v, t);
     let error = if t.len() > 300_000 {
         Some(format!("el STL tiene {} triángulos: «Detalle completo» va hasta 300 000 (simplificarlo en Preparar)", t.len()))
-    } else if p.unmatched > 0 || p.repeated > 0 {
-        Some("el STL no está cerrado (bordes abiertos o aristas de más de dos caras): «Detalle completo» necesita una malla cerrada; repararla en Preparar o usar el modo normal".to_string())
     } else {
-        None
+        scan_mesh_faults(scan)
     };
     match error {
         None => cad_model::ScanBodyMesh { hash: h.finish(), data: std::sync::Arc::new((v.clone(), t.clone())), error: None },
@@ -3120,6 +3135,23 @@ pub enum ScanFeature {
     FreeSurface { triangle: u32, at: P3, angle: f64, thickness: f64, close: Option<(u32, P3)> },
     /// Curva por el camino más corto sobre la piel entre los puntos tocados
     PathCurve { points: Vec<(u32, P3)>, closed: bool },
+}
+
+/// Si el escaneo elegido tiene fallas que impiden usarlo como sólido en el
+/// diseño (el motivo), o `None` si está sano.
+#[tauri::command]
+pub async fn cad_scan_faults(app: AppHandle) -> Result<Option<String>, String> {
+    in_background(app, move |state| with_scan(state, |scan| Ok(scan_mesh_faults(scan)))).await
+}
+
+/// Dónde caen sobre el escaneo unos puntos (mm): el lugar de la piel más
+/// cercano a cada uno, como lo guardan las referencias del escaneo.
+#[tauri::command]
+pub async fn cad_scan_seeds_near(app: AppHandle, points: Vec<P3>) -> Result<Vec<Option<cad_model::ScanSeed>>, String> {
+    in_background(app, move |state| {
+        with_scan(state, |scan| Ok(points.iter().map(|p| scan.mesh.closest(*p).and_then(|(t, _)| scan.mesh.seed(t, *p))).collect()))
+    })
+    .await
 }
 
 /// Toques del pincel sobre el escaneo (triángulo y punto en mm de cada uno).

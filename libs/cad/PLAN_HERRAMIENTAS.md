@@ -101,6 +101,31 @@ Hoy juntar lo agregado con el STL pasa el STL entero por vóxeles (20 000 trián
 redondean las aristas. Booleanas directas sobre la malla (unir, restar) para exportar el STL
 con lo agregado o grabado conservando su detalle.
 
+### U13 — Puntos, medidas y cotas sobre el STL ❌
+Pedido del usuario (2026-11-08): «poner puntos en el STL, medir entre ellos, hacer cotas para
+dimensionar correctamente el objeto, y que esos puntos sirvan de referencia para construir encima».
+
+Hoy: Medir (tecla M, en los espacios de mallas) da una distancia de paso, sin guardarla; en Diseñar hay
+puntos ligados al escaneo (`PointSpec::Scan`), sin cotas; las cotas existen solo en el plano 2D de
+piezas CAD.
+
+- **Puntos sobre la piel con nombre** (P1, P2…): clic en el STL; quedan ligados (siguen al escaneo si se
+  alinea o se repara) y se ven en el visor con su nombre. Varios seguidos sin volver a abrir la
+  herramienta.
+- **Referencias para construir encima** (el motor ya lo admite vía `PointSpec::Reference`; falta que sea
+  directo): plano por 3 puntos, eje por 2 puntos, sistema de coordenadas (origen + hacia dónde van Z y X),
+  sketch anclado (su origen en un punto, su plano por 3), «Sobre la piel» en un punto ya puesto, patrón
+  por puntos.
+- **Cotas guardadas en el diseño**, dibujadas en el visor con flechas y número: distancia directa y por
+  eje (X, Y, Z); distancia por la superficie (geodésica, como `ScanPath`); ángulo entre tres puntos;
+  diámetro de una zona cilíndrica (ajuste de cilindro existente); espesor en un punto (de una cara a la
+  otra, por rayo).
+- **Dimensionar el objeto**: «esta cota tiene que medir 85 mm» escala el STL para que la cumpla (escaneos
+  sin escala o dudosa); queda como paso del historial del objeto.
+- **Cotas como parámetros**: una medida del STL alimenta un parámetro del diseño (el ancho de una férula =
+  una distancia medida) y se actualiza si cambia el escaneo.
+- **Lista de medidas** exportable (informe, comparar con el objeto real).
+
 ## Registro
 
 2026-11-07/08 (sin probar todavía en la app real; pruebas Rust y de tipos):
@@ -118,8 +143,13 @@ con lo agregado o grabado conservando su detalle.
   «Pintar más» y «Pintar de nuevo».
 - U4: «Mover cara» con «Movimiento: distancia / hasta un plano o cara / hasta el escaneo / girar»
   (cambia el tipo de la operación conservando las caras).
-- U5 a medias: la curva proyectada elige «Sobre: caras del sólido / la piel del escaneo». Falta juntar
-  «Curva por puntos» con «Camino por puntos» (el camino necesita los clics sobre la piel).
+- U5 a medias: la curva proyectada elige «Sobre: caras del sólido / la piel del escaneo». **Falta** juntar
+  «Curva por puntos» (`CurveDef::Points`, spline por el aire) con «Camino por puntos» (`CurveDef::ScanPath`,
+  geodésica por la piel): en el diálogo de la curva (`DesignStep.tsx`, `Match` de `def().type === "points"`
+  y `"scan_path"`) un selector «Entre los puntos: curva suave / por la superficie» que convierte entre los
+  dos (puntos `scan`/`at` ↔ semillas; para las `at` ya existe el comando `cad_scan_seeds_near` en
+  `apps/desktop/src/cad.rs`), y un botón «Agregar puntos sobre la piel» (clics `scan_point` → `PointSpec::Scan`).
+  «Camino por puntos» del panel del escaneo queda como atajo.
 - U6: los diálogos de Plano, Eje y Punto tienen «Del escaneo: zona plana / 3 puntos / cilindro / un
   punto» (reemplaza la operación por la del escaneo). El panel del escaneo conserva sus atajos.
 - U7: tipo de patrón, forma de la primitiva (y tornillo/tuerca/arandela) en el diálogo; «Mover
@@ -135,6 +165,20 @@ con lo agregado o grabado conservando su detalle.
   (`ScanFit::Normal`, sigue al escaneo), cilindro apoyado en él (`Primitive.on`: giro y separación) y
   su base llevada a la piel (`face_to_scan`).
 - U12 a medias: «Detalle completo» en el espesor sobre piel (`ScanBody.exact`): un STL cerrado entra tal
-  cual como sólido, sin vóxeles, para unir o grabar sin redondearlo (hasta 300 000 triángulos). Las
-  pieles abiertas siguen por vóxeles; booleanas de malla propias: no hay biblioteca disponible.
+  cual como sólido, sin vóxeles, para unir o grabar sin redondearlo (hasta 300 000 triángulos). **Falta**
+  «Exportar para imprimir»: el STL original más lo agregado (relieves, piezas sobre la piel) en un solo
+  archivo, sin booleanas (el laminador junta lo que se toca), y los grabados como volumen negativo en 3MF.
+  Booleanas de malla propias: no hay biblioteca disponible (solo `robust`).
+
+2026-11-08, en el camino (pedido del usuario: «si un STL tiene fallas, que no deje usarlo y pida
+repararlo en Preparar»):
+
+- La reparación avanzada («Unir cuerpos solapados») no cerraba el hueso frontal (581 cruces + 14
+  aristas non-manifold): unía los cruces después de separar las aristas, con rendijas abiertas que
+  confunden el número de vueltas, y se deshacía. Ahora une primero (sobre la malla todavía cerrada) y
+  juzga el resultado ya limpio (`libs/pinocchio/repair/src/lib.rs`, `repair/intersect.rs`): el hueso
+  queda cerrado y manifold (0 aristas malas, 6 cruces de 581).
+- Diseñar no usa un escaneo con fallas como sólido (`scan_mesh_faults` en `apps/desktop/src/cad.rs`):
+  las operaciones dan el error «repáralo en Preparar → Reparar…» y el panel del escaneo avisa con un
+  botón «Reparar en Preparar» (`cad_scan_faults`, `onRepairScan` en App.tsx).
 

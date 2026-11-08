@@ -233,7 +233,19 @@ pub fn resolve_self_intersections(mesh: &mut TriMesh) -> IntersectionReport {
     // Si el resultado tiene más bordes o aristas non-manifold que la entrada
     // (superficies abiertas, donde dentro y fuera no están bien definidos),
     // se descarta entero
-    if open_or_non_manifold_edges(&result) > open_or_non_manifold_edges(&mesh.triangles) {
+    // Se juzga ya limpio: las aristas de más de dos caras que dejan los cortes
+    // se separan en abanicos (como después de cualquier reparación) y las
+    // rendijas se vuelven a coser; si aun así queda peor que la entrada, se
+    // descarta
+    let mut candidate = TriMesh::new(positions.clone(), result.clone());
+    crate::repair::manifold::orient_and_split(&mut candidate, true, true);
+    for _ in 0..4 {
+        if crate::repair::manifold::zip_slits(&mut candidate) == 0 {
+            break;
+        }
+        crate::repair::manifold::orient_and_split(&mut candidate, true, true);
+    }
+    if open_or_non_manifold_edges(&candidate.triangles) > open_or_non_manifold_edges(&mesh.triangles) {
         report.reverted = true;
         return report;
     }

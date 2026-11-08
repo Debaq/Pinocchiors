@@ -6544,6 +6544,13 @@ export const App: Component = () => {
     await applyPlacement(new THREE.Matrix4().fromArray(toSceneMatrix(matrix, mm)), description);
   };
 
+  /** Lleva a Preparar → Reparar con el escaneo activo (una malla con fallas no sirve en el diseño) */
+  const repairScan = async () => {
+    const id = scanObjectId();
+    if (id !== undefined && id !== activeObjectId()) await activateObject(id);
+    pipeline.setActiveStep("repair");
+  };
+
   const applyPlacement = async (matrix: THREE.Matrix4 | null, description: string) => {
     if (!matrix) return false;
     try {
@@ -9823,7 +9830,7 @@ export const App: Component = () => {
           <Show when={showContextPanel()}>
           <ContextPanel
             activeStep={pipeline.activeStep()}
-            designPanel={(section) => <DesignStep store={cad} ui={cadUi} actions={designActions} section={section()} scans={scanCandidates()} scanId={scanObjectId()} onAlignScan={alignScan} />}
+            designPanel={(section) => <DesignStep store={cad} ui={cadUi} actions={designActions} section={section()} scans={scanCandidates()} scanId={scanObjectId()} onAlignScan={alignScan} onRepairScan={() => void repairScan()} />}
             structureProps={{
               structure: sceneStructure(),
               fileName: fileName(),

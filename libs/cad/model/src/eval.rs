@@ -2274,16 +2274,15 @@ impl Ctx<'_> {
                 let cut = prism(0.0, far + h)?.intersect(&skin).map_err(err)?;
                 keep_seen(cut, &world, d)?
             }
-            // La piel corrida `h` hacia el sketch, menos la piel
-            (ReliefMode::Along, false) => {
-                let moved = skin.translate(scale(d, -h)).map_err(err)?;
-                let cut = prism(-reach, 2.0 * reach)?.intersect(&moved).and_then(|c| c.cut(&skin)).map_err(err)?;
-                keep_seen(cut, &world, d)?
-            }
-            // La piel menos la piel corrida `h` hacia adentro
-            (ReliefMode::Along, true) => {
-                let moved = skin.translate(scale(d, h)).map_err(err)?;
-                let cut = prism(-reach, 2.0 * reach)?.intersect(&skin).and_then(|c| c.cut(&moved)).map_err(err)?;
+            // La piel corrida `h` a lo largo de `d` (hacia el sketch o hacia adentro): solo el
+            // trozo bajo las regiones (la piel entera contra su copia corrida, casi paralelas,
+            // tardaba muchísimo). Las paredes del prisma van a lo largo de `d`: al correrlo
+            // quedan en el mismo lugar
+            (ReliefMode::Along, inward) => {
+                let column = prism(-reach, 2.0 * reach)?;
+                let piece = skin.intersect(&column).map_err(err)?;
+                let moved = piece.translate(scale(d, if inward { h } else { -h })).map_err(err)?;
+                let cut = if inward { piece.cut(&moved) } else { moved.cut(&piece) }.map_err(err)?;
                 keep_seen(cut, &world, d)?
             }
         };

@@ -163,6 +163,8 @@ export interface DesignStepProps {
   scanId?: number;
   /** Mueve el escaneo (matriz del CAD por columnas, ver lib/scanAlign.ts) */
   onAlignScan: (matrix: Mat4, description: string) => Promise<void>;
+  /** Lleva a Preparar → Reparar con el escaneo activo */
+  onRepairScan?: () => void;
 }
 
 // ─── Controles chicos ─────────────────────────────────────────────────────
@@ -408,6 +410,13 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
     });
   };
 
+  // Fallas del escaneo elegido (se revisa al cambiar de escaneo o de pestaña)
+  const [scanFaults] = createResource(
+    // (con cada recálculo: al volver de reparar el escaneo se rehace el diseño)
+    () => (props.section === "design_scan" && props.scanId !== undefined ? { id: props.scanId, result: store.result() } : undefined),
+    () => invoke<string | null>("cad_scan_faults").catch(() => null),
+  );
+
   const addScan = async (feature: Parameters<CadStore["scanAdd"]>[0]) => {
     try {
       await store.scanAdd(feature);
@@ -619,6 +628,17 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                 when={props.scanId !== undefined}
                 fallback={<p class="text-xs text-text-dim">{tl("Importa un modelo (un escaneo, un STL u OBJ) para tomar de él planos, cilindros y contornos.")}</p>}
               >
+                <Show when={scanFaults()}>
+                  {(why) => (
+                    <div class="mb-2 space-y-1.5 rounded border border-warning/50 bg-warning/10 p-2">
+                      <p class="text-xs text-text">{tl("Este modelo tiene fallas y no se puede usar como sólido en el diseño.")}</p>
+                      <p class="text-[11px] text-text-dim leading-relaxed">{why()}</p>
+                      <Button size="sm" onClick={() => props.onRepairScan?.()}>
+                        {tl("Reparar en Preparar")}
+                      </Button>
+                    </div>
+                  )}
+                </Show>
                 <Section title={tl("Desde el escaneo")}>
                   <p class="text-[11px] text-text-dim leading-relaxed">
                     {tl("El escaneo se ve translúcido detrás del diseño. Elegir una zona ajusta un plano o un cilindro y lo convierte en operaciones.")}
