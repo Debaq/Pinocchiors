@@ -1692,8 +1692,8 @@ mod tests {
         let b = doc.add(primitive(PrimitiveShape::Cylinder { radius: 5.0, height: 30.0 }, [100.0, 0.0, 0.0], BodyOp::New));
         doc.folders.push(Folder { name: "Base".into(), first: a, last: b, collapsed: false });
         doc.parts = vec![
-            PartProps { part: PartId { feature: a, index: 0 }, name: Some("Caja".into()), color: Some("#336699".into()), hidden: false, material: Some(Material { name: "PLA".into(), density: 1.24 }) },
-            PartProps { part: PartId { feature: b, index: 0 }, name: Some("Eje".into()), color: Some("#cc3300".into()), hidden: false, material: None },
+            PartProps { part: PartId { feature: a, index: 0 }, name: Some("Caja".into()), color: Some("#336699".into()), hidden: false, material: Some(Material { name: "PLA".into(), density: 1.24 }), purchased: None },
+            PartProps { part: PartId { feature: b, index: 0 }, name: Some("Eje".into()), color: Some("#cc3300".into()), hidden: false, material: None, purchased: None },
         ];
         doc.configurations.push(Configuration { name: "Corta".into(), values: [("largo".to_string(), "25".to_string())].into(), suppressed: vec![] });
         doc.versions.push(NamedVersion { name: "v1".into(), created: "2026-10-22T12:00:00Z".into(), note: Some("primera".into()), document: doc.clone() });

@@ -376,6 +376,7 @@ pub fn describe(shape: &crate::feature::PrimitiveShape) -> Option<String> {
         P::Nut { size, .. } => Some(format!("Tuerca {size}")),
         P::Washer { size } => Some(format!("Arandela {size}")),
         P::Gear(g) => Some(crate::gear_part::describe(g)),
+        P::Library(l) => Some(crate::library::describe(l)),
         _ => None,
     }
 }

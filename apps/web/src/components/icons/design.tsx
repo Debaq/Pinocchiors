@@ -339,6 +339,18 @@ export const Washer = (p: IconProps) => (
   </DesignIcon>
 );
 
+/** Biblioteca: estante con piezas (un motor, un perfil, una placa) */
+export const Library = (p: IconProps) => (
+  <DesignIcon {...p}>
+    <rect x="3" y="5" width="6" height="11" rx="0.8" {...soft} />
+    <circle cx="6" cy="8.5" r="1.4" />
+    <path d="M11 5h3v11h-3z M12.5 7.5v6" />
+    <rect x="16" y="9" width="5" height="7" rx="0.6" {...soft} />
+    <path d="M17.3 10.5h0.01 M19.7 14.5h0.01" />
+    <path d="M2 19h20" />
+  </DesignIcon>
+);
+
 export const Gear = (p: IconProps) => (
   <DesignIcon {...p}>
     <circle cx="12" cy="12" r="6.5" {...soft} />

@@ -698,7 +698,42 @@ export type PrimitiveShape =
   | { type: "bolt"; size: string; length: number; head?: BoltHead; modeled?: boolean }
   | { type: "nut"; size: string; modeled?: boolean }
   | { type: "washer"; size: string }
-  | ({ type: "gear" } & GearPart);
+  | ({ type: "gear" } & GearPart)
+  /** Pieza de la biblioteca maker (motor, perfil, placa, imán…) */
+  | ({ type: "library" } & LibraryPart);
+
+/** Qué se arma de una pieza de la biblioteca: ella, sus agujeros o sus soportes */
+export type LibraryRole = "part" | "holes" | "mounts";
+
+/** Pieza de la biblioteca maker en un diseño */
+export interface LibraryPart {
+  item: string;
+  variant?: string;
+  /** Largo de las que se cortan a medida (perfiles, varillas, tornillos) */
+  length?: number;
+  role?: LibraryRole;
+  /** Agujeros: hasta dónde entran en el material (0 = lo de la pieza) */
+  depth?: number;
+  /** Agujeros y bolsillos: holgura extra en el diámetro */
+  clearance?: number;
+  /** Placas: alto de los postes */
+  lift?: number;
+}
+
+export type LibraryCategory = "motors" | "profiles" | "boards" | "magnets" | "fasteners" | "motion" | "modules";
+
+/** Una pieza del catálogo de la biblioteca */
+export interface CatalogItem {
+  id: string;
+  category: LibraryCategory;
+  name: string;
+  description: string;
+  variants: { id: string; label: string }[];
+  length?: { default: number; min: number; max: number };
+  holes: boolean;
+  mounts: boolean;
+  color: string;
+}
 
 export type GearKind = "external" | "internal" | "rack" | "bevel" | "worm" | "pulley" | "sprocket";
 
@@ -1497,6 +1532,8 @@ export interface PartProps {
   hidden?: boolean;
   /** Material propio (si no, el del diseño) */
   material?: Material | null;
+  /** Comprada (no se fabrica): marcada a mano; sin marcar, lo son las piezas de la biblioteca */
+  purchased?: boolean | null;
 }
 
 export interface PartView {
@@ -1512,6 +1549,8 @@ export interface PartView {
   surface?: boolean;
   /** Salió de un corte o una unión: hereda color, material y visibilidad de esa pieza */
   inherit?: PartId;
+  /** Se compra (pieza de la biblioteca o marcada): no se fabrica ni se manda a imprimir */
+  purchased?: boolean;
 }
 
 /** Piezas que reemplazó una operación (un corte que las partió o una unión): se ven tachadas */
@@ -2490,6 +2529,7 @@ const PRIMITIVE_LABELS: Record<PrimitiveShape["type"], string> = {
   get nut() { return tr("Tuerca"); },
   get washer() { return tr("Arandela"); },
   get gear() { return tr("Engrane"); },
+  get library() { return tr("Pieza de biblioteca"); },
 };
 
 /** Un paso del árbol que propone el asistente de reconstrucción */
@@ -4950,7 +4990,8 @@ export function createCadStore() {
      * Agrega una operación al final (o donde está la barra de retroceso) y abre
      * su diálogo; los sketches entran directo al documento.
      */
-    async addFeature(kind: FeatureKind, name?: string): Promise<number> {
+    /** `extra` cambia además el documento con la operación ya puesta (p. ej. el color de su pieza) */
+    async addFeature(kind: FeatureKind, name?: string, extra?: (d: CadDocument, id: number) => void): Promise<number> {
       if (draft()) void acceptDraft();
       const current = committed() ?? { features: [] };
       const id = nextFeatureId(current);
@@ -4959,6 +5000,7 @@ export function createCadStore() {
         d.features.splice(at, 0, { id, name: name ?? defaultName(d, kind), suppressed: false, kind });
         d.next_id = id + 1;
         if (d.rollback != null) d.rollback += 1;
+        extra?.(d, id);
       };
       if (editsAsSketch(kind)) {
         setSelected(id);
@@ -5438,6 +5480,33 @@ export function createCadStore() {
     /** Acoplamientos de los engranes enlazados que están en el ensamble */
     assemblySuggest: () => invoke<Relation[]>("cad_assembly_suggest"),
     assemblyGearWarnings: () => invoke<string[]>("cad_assembly_gear_warnings"),
+    /**
+     * Pieza de la biblioteca en el ensamble: vive en la pestaña «Piezas compradas»
+     * (se crea si no está; una igual se reusa) y se agrega como una instancia más
+     */
+    async addPurchased(part: LibraryPart) {
+      if (draft()) await acceptDraft();
+      await lastSend;
+      const r = await invoke<{ studio: number; part: PartId; name: string; color: string; tabs: CadTabs }>("cad_library_purchased", { part });
+      setTabs(r.tabs);
+      return commit((d) => {
+        const a = d.assembly ?? { instances: [], mates: [], next_id: 1 };
+        const id = a.next_id || 1;
+        const copies = a.instances.filter((i) => samePart(i.part, r.part)).length;
+        a.instances.push({
+          id,
+          studio: r.studio,
+          part: r.part,
+          name: copies ? `${r.name} (${copies + 1})` : r.name,
+          position: [a.instances.length * 60, 0, 0],
+          rotation: [0, 0, 0],
+          fixed: a.instances.length === 0,
+        });
+        a.next_id = id + 1;
+        d.assembly = a;
+      });
+    },
+
     /** Cambia el ensamble (deshacible); lo crea si no hay */
     editAssembly(mutate: (a: Assembly) => void, join = false) {
       return commit((d) => {

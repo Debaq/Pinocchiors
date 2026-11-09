@@ -18,6 +18,7 @@ pub mod geom;
 pub mod gear_part;
 pub mod gear_strength;
 pub mod gears;
+pub mod library;
 pub mod measure;
 pub mod mesh_bool;
 pub mod project;

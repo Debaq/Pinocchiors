@@ -583,6 +583,8 @@ pub enum PrimitiveShape {
     Washer { size: String },
     /// Engrane de evolvente (ver [`crate::gear_part`]).
     Gear(crate::gear_part::GearPart),
+    /// Pieza de la biblioteca maker (motor, perfil, placa, imán…; ver [`crate::library`])
+    Library(crate::library::LibraryPart),
 }
 
 /// Cabeza del tornillo.
@@ -1949,6 +1951,11 @@ impl FeatureKind {
                     crate::gears::GearKind::Worm => "Sin fin",
                     crate::gears::GearKind::Pulley => "Polea dentada",
                     crate::gears::GearKind::Sprocket => "Piñón de cadena",
+                },
+                PrimitiveShape::Library(l) => match l.role {
+                    crate::library::LibraryRole::Part => "Pieza de biblioteca",
+                    crate::library::LibraryRole::Holes => "Agujeros para pieza",
+                    crate::library::LibraryRole::Mounts => "Soportes para pieza",
                 },
             },
             FeatureKind::Fillet { .. } => "Redondeo",

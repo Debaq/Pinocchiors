@@ -3164,6 +3164,7 @@ impl Ctx<'_> {
                     },
                     PrimitiveShape::Washer { size } => Ok(crate::standard::washer_fitted(frame, size, self.comp_all().map_or(0.0, |t| t.hole_comp))?),
                     PrimitiveShape::Gear(g) => Ok(crate::gear_part::gear(frame, g)?),
+                    PrimitiveShape::Library(l) => Ok(crate::library::build(frame, l)?),
                 }
                 .map_err(err)?;
                 let mut tags = primitive_tags(f.id, p, &tool);
@@ -6606,7 +6607,7 @@ fn primitive_tags(id: FeatureId, p: &Primitive, shape: &Shape) -> Vec<Vec<FaceTa
     let y = cross(z, x);
     // Las piezas estándar se nombran por índice: sin medir cada cara (el área
     // de las caras de una rosca se integra y tardaba segundos)
-    if matches!(p.shape, PrimitiveShape::Bolt { .. } | PrimitiveShape::Nut { .. } | PrimitiveShape::Washer { .. } | PrimitiveShape::Gear(_)) {
+    if matches!(p.shape, PrimitiveShape::Bolt { .. } | PrimitiveShape::Nut { .. } | PrimitiveShape::Washer { .. } | PrimitiveShape::Gear(_) | PrimitiveShape::Library(_)) {
         return (0..shape.face_count()).map(|i| vec![tag(id, format!("cara:{i}"))]).collect();
     }
     (0..shape.face_count())
@@ -6629,7 +6630,7 @@ fn primitive_tags(id: FeatureId, p: &Primitive, shape: &Shape) -> Vec<Vec<FaceTa
                     .to_string(),
                 ),
                 PrimitiveShape::Sphere { .. } | PrimitiveShape::Torus { .. } => Some("lado".to_string()),
-                PrimitiveShape::Bolt { .. } | PrimitiveShape::Nut { .. } | PrimitiveShape::Washer { .. } | PrimitiveShape::Gear(_) => unreachable!(),
+                PrimitiveShape::Bolt { .. } | PrimitiveShape::Nut { .. } | PrimitiveShape::Washer { .. } | PrimitiveShape::Gear(_) | PrimitiveShape::Library(_) => unreachable!(),
             };
             name.map(|n| vec![tag(id, n)]).unwrap_or_default()
         })

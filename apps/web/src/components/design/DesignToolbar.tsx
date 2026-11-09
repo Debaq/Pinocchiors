@@ -128,6 +128,7 @@ export function designToolSets(a: DesignActions, ui: CadUi) {
     { label: "Tuerca", icon: D.Nut, run: () => void a.addStandard("nut"), tip: "Tuerca hexagonal ISO 4032; en el borde de un agujero elegido" },
     { label: "Arandela", icon: D.Washer, run: () => void a.addStandard("washer"), tip: "Arandela plana ISO 7089; en el borde de un agujero elegido" },
     { label: "Engrane", icon: D.Gear, run: () => a.addGear(), tip: "Engrane de evolvente (recto, corona o cremallera) con módulo, dientes, agujero, cubo y chavetero" },
+    { label: "Biblioteca", icon: D.Library, run: () => ui.setLibraryOpen(!ui.libraryOpen()), tip: "Motores, perfiles de aluminio, placas Arduino/Raspberry/ESP, imanes, tornillería, piezas de movimiento y módulos con sus medidas reales" },
     "-",
     { label: "STEP...", icon: D.Import, run: () => void a.importStep(), tip: "Traer un sólido de un archivo STEP" },
     { label: "Pieza derivada", icon: D.Import, run: a.addDerived, tip: "Piezas de otra pestaña de diseño que se rehacen cuando cambia el original (molde, tapa que calza con su caja)" },
@@ -225,6 +226,7 @@ export const DesignSideTools: Component<{ store: CadStore; ui: CadUi; actions: D
   const { sketches, main } = designToolSets(a, ui);
   const button = (tool: Tool) => <SideButton label={tool.label} icon={tool.icon} tip={tool.tip} disabled={!!tool.needsBody && !hasBody()} onClick={tool.run} />;
   return (
+    <>
     <Show when={!ui.assemblyMode()}>
       <SideFamily name="Más sketches" tools={sketches} hasBody={hasBody()} />
       <For each={main}>{button}</For>
@@ -232,8 +234,26 @@ export const DesignSideTools: Component<{ store: CadStore; ui: CadUi; actions: D
         {button({ label: "Pegar sketch", icon: D.Sketch, run: a.pasteSketch, tip: "El sketch copiado, como uno nuevo en el plano o la cara elegida" })}
       </Show>
       <SideSep />
+      <SideButton
+        label="Biblioteca"
+        icon={D.Library}
+        tip="Motores, perfiles, placas, imanes, tornillería y más con sus medidas reales"
+        active={ui.libraryOpen()}
+        onClick={() => ui.setLibraryOpen(!ui.libraryOpen())}
+      />
       {button({ label: "Plano 2D", icon: D.Drawing, run: () => ui.setDrawingOpen(true), needsBody: true, tip: "Vistas, líneas ocultas, cotas y cajetín" })}
     </Show>
+    {/* En un ensamble: las piezas compradas salen de la biblioteca */}
+    <Show when={ui.assemblyMode()}>
+      <SideButton
+        label="Biblioteca"
+        icon={D.Library}
+        tip="Piezas compradas (imanes, tornillos, motores, placas…) para ubicar en el ensamble, sin diseñarlas"
+        active={ui.libraryOpen()}
+        onClick={() => ui.setLibraryOpen(!ui.libraryOpen())}
+      />
+    </Show>
+    </>
   );
 };
 

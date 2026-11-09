@@ -551,12 +551,26 @@ impl Tabs {
                 props.push(p);
             }
         }
+        // Compradas: lo dice su diseño (el ensamble no tiene las operaciones)
+        let doc_of = |tab: TabId| match tab.checked_sub(VARIANT_BASE) {
+            Some(k) => variants.get(k as usize).and_then(|(studio, _)| self.design(*studio)),
+            None => self.design(tab),
+        };
+        let purchased = |id: PartId| {
+            let (tab, feature) = split_tab_feature(id.feature);
+            doc_of(tab).is_some_and(|d| d.is_purchased(PartId { feature, index: id.index }))
+        };
+        for p in &mut props {
+            if p.purchased.is_none() && purchased(p.part) {
+                p.purchased = Some(true);
+            }
+        }
         for (id, name) in names {
             let name = tagged(split_tab_feature(id.feature).0, name);
             match props.iter_mut().find(|p| p.part == *id) {
                 Some(p) if p.name.is_none() => p.name = Some(name),
                 Some(_) => {}
-                None => props.push(PartProps { part: *id, name: Some(name), color: None, hidden: false, material: None }),
+                None => props.push(PartProps { part: *id, name: Some(name), color: None, hidden: false, material: None, purchased: purchased(*id).then_some(true) }),
             }
         }
         (props, fabrication)

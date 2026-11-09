@@ -271,6 +271,9 @@ pub struct PartView {
     /// material y si está oculta (la más cercana que los tiene puestos)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inherit: Option<cad_model::PartId>,
+    /// Se compra (pieza de la biblioteca o marcada): no se fabrica
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub purchased: bool,
 }
 
 fn inherit_from(doc: &Document, eval: &cad_model::Evaluation, id: cad_model::PartId) -> Option<cad_model::PartId> {
@@ -1002,6 +1005,82 @@ pub async fn cad_preview(app: AppHandle, document: Option<Document>) -> Result<C
 fn preview_impl(state: &AppState, document: Option<Document>) -> Result<CadResult, String> {
     *state.cad_preview.lock().unwrap() = document;
     evaluate(state)
+}
+
+// ─── Biblioteca maker ───────────────────────────────────────────────────────
+
+/// Las piezas de la biblioteca (motores, perfiles, placas, imanes…) para el panel
+#[tauri::command]
+pub fn cad_library_catalog() -> Vec<cad_model::library::CatalogItem> {
+    cad_model::library::catalog()
+}
+
+/// Nombre de la pestaña de diseño donde viven las piezas compradas de los ensambles
+pub const PURCHASED_TAB: &str = "Piezas compradas";
+
+/// Una pieza comprada lista para ponerla en un ensamble
+#[derive(Serialize)]
+pub struct PurchasedPart {
+    /// Pestaña «Piezas compradas» y la pieza con el número de todas las pestañas
+    pub studio: TabId,
+    pub part: cad_model::PartId,
+    pub name: String,
+    pub color: String,
+    pub tabs: TabsView,
+}
+
+/// Una pieza de la biblioteca para un ensamble: vive en la pestaña «Piezas
+/// compradas» (se crea si no está; una igual se reusa) y el ensamble la usa
+/// como cualquier pieza: uniones, lista de materiales, exportar.
+#[tauri::command]
+pub fn cad_library_purchased(state: tauri::State<'_, AppState>, part: cad_model::library::LibraryPart) -> Result<PurchasedPart, String> {
+    library_purchased_impl(&state, part)
+}
+
+pub(crate) fn library_purchased_impl(state: &AppState, part: cad_model::library::LibraryPart) -> Result<PurchasedPart, String> {
+    use cad_model::library::{LibraryPart, LibraryRole};
+    let part = LibraryPart { role: LibraryRole::Part, depth: 0.0, clearance: 0.0, lift: 0.0, ..part };
+    let catalog = cad_model::library::catalog();
+    let item = catalog.iter().find(|i| i.id == part.item).ok_or_else(|| format!("No conozco la pieza «{}»", part.item))?;
+    let name = cad_model::library::describe(&part);
+    let shape = cad_model::PrimitiveShape::Library(part);
+    let mut tabs = state.cad_tabs.lock().unwrap();
+    let studio = match tabs.tabs.iter().find(|t| t.name == PURCHASED_TAB && t.kind.is_design()) {
+        Some(t) => t.id,
+        None => {
+            // Sin cambiar la pestaña que se está viendo
+            let active = tabs.active;
+            let id = tabs.add_design(Some(PURCHASED_TAB.into()));
+            tabs.active = active;
+            id
+        }
+    };
+    let doc = tabs.design_mut(studio).ok_or("No se pudo crear la pestaña de piezas compradas")?;
+    let same = doc.features.iter().find(|f| matches!(&f.kind, FeatureKind::Primitive(p) if p.shape == shape && p.op == BodyOp::New)).map(|f| f.id);
+    let feature = match same {
+        Some(id) => id,
+        None => {
+            // Cada una a un costado de la anterior, para que no se pisen en su pestaña
+            let k = doc.features.len() as f64;
+            let id = doc.add(FeatureKind::Primitive(cad_model::Primitive {
+                shape,
+                origin: [k * 120.0, 0.0, 0.0],
+                z: [0.0, 0.0, 1.0],
+                x: [1.0, 0.0, 0.0],
+                op: BodyOp::New,
+                link: None,
+                on: None,
+            }));
+            if let Some(f) = doc.get_mut(id) {
+                f.name = name.clone();
+            }
+            let pid = cad_model::PartId { feature: id, index: 0 };
+            doc.parts.push(cad_model::PartProps { part: pid, name: None, color: Some(item.color.to_string()), hidden: false, material: None, purchased: None });
+            id
+        }
+    };
+    let flat = cad_model::PartId { feature: cad_model::tab_feature(studio, feature), index: 0 };
+    Ok(PurchasedPart { studio, part: flat, name, color: item.color.to_string(), tabs: tabs_view(&tabs) })
 }
 
 // ─── Pestañas ───────────────────────────────────────────────────────────────
@@ -2487,6 +2566,7 @@ fn part_views(doc: &Document, eval: &cad_model::Evaluation, masses: &[Option<cad
                 center: m.map_or([0.0; 3], |m| m.center),
                 surface: eval.parts.get(i).is_some_and(|p| p.is_surface()),
                 inherit: if doc.parts.iter().any(|p| p.part == id) { None } else { inherit_from(doc, eval, id) },
+                purchased: doc.is_purchased(id),
             }
         })
         .collect()
@@ -2917,12 +2997,16 @@ fn parts_scene_of(doc: &Document, eval: &cad_model::Evaluation, name: &str, only
         .parts
         .iter()
         .enumerate()
-        .filter(|(_, p)| only.is_none_or(|o| o == p.id))
+        // Las compradas (motores, placas, imanes de la biblioteca) no se fabrican: solo si se piden
+        .filter(|(_, p)| match only {
+            Some(o) => o == p.id,
+            None => !doc.is_purchased(p.id),
+        })
         // Una pieza sola conserva el nombre del diseño
         .map(|(i, p)| (&p.shape, if several || only.is_some() { part_name(doc, p.id, i + 1) } else { name.to_string() }, p.mesh.as_ref()))
         .collect();
     if items.is_empty() {
-        return Err("Esa pieza ya no existe".into());
+        return Err(if only.is_some() { "Esa pieza ya no existe" } else { "Solo hay piezas compradas: no hay nada que fabricar" }.into());
     }
     shapes_scene_with(&items)
 }
@@ -4083,6 +4167,8 @@ pub mod bridge {
             "cad_tool_mesh" => tool_mesh_impl(state, arg(args, "feature")?).map(Reply::Bytes),
             "cad_flat_pattern" => ok(flat_pattern_impl(state, arg::<Option<cad_model::PartId>>(args, "part").unwrap_or(None))?),
             "cad_edge_seat" => ok(edge_seat_impl(state, arg(args, "edge")?)?),
+            "cad_library_catalog" => ok(cad_model::library::catalog()),
+            "cad_library_purchased" => ok(library_purchased_impl(state, arg(args, "part")?)?),
             "cad_compare" => compare_impl(state, &arg::<Document>(args, "document")?).map(Reply::Bytes),
             "cad_face_ref" => ok(face_ref_impl(state, arg(args, "face")?)?),
             "cad_edge_ref" => ok(edge_ref_impl(state, arg(args, "edge")?)?),
@@ -5073,5 +5159,61 @@ mod tests {
         .unwrap();
         assert!((pick.0 - 30.0).abs() < 1e-3);
         assert!((pick.1.unwrap() - 30.0).abs() < 1e-3);
+    }
+}
+
+#[cfg(test)]
+mod library_tests {
+    use super::*;
+    use cad_model::library::LibraryPart;
+
+    fn primitive(shape: cad_model::PrimitiveShape, x: f64) -> FeatureKind {
+        FeatureKind::Primitive(cad_model::Primitive { shape, origin: [x, 0.0, 0.0], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op: BodyOp::New, link: None, on: None })
+    }
+
+    /// Una pieza de la biblioteca para un ensamble va a «Piezas compradas» (una sola pestaña,
+    /// sin cambiar la que se ve) y una igual se reusa
+    #[test]
+    fn purchased_parts_live_in_their_tab() {
+        let state = AppState::new();
+        let mut tabs = cad_model::Tabs::default();
+        let asm = tabs.add_assembly(None);
+        state.set_cad_tabs(tabs);
+        let magnet = LibraryPart::new("magnet_disc", "10x3");
+        let a = library_purchased_impl(&state, magnet.clone()).unwrap();
+        let b = library_purchased_impl(&state, magnet).unwrap();
+        assert_eq!(a.part, b.part, "la misma pieza se reusa");
+        let c = library_purchased_impl(&state, LibraryPart::new("nema17", "48")).unwrap();
+        assert_ne!(a.part, c.part);
+        assert_eq!(a.name, "Imán de disco · Ø10 × 3 mm");
+        let tabs = state.cad_tabs.lock().unwrap();
+        assert_eq!(tabs.tabs.len(), 2);
+        assert_eq!(tabs.active, asm, "sigue en el ensamble");
+        let doc = tabs.design(a.studio).unwrap();
+        assert_eq!(doc.features.len(), 2);
+        let (_, f) = cad_model::split_tab_feature(a.part.feature);
+        assert!(doc.is_purchased(cad_model::PartId { feature: f, index: 0 }));
+        assert!(library_purchased_impl(&state, LibraryPart::new("no_existe", "")).is_err());
+    }
+
+    /// Lo comprado no se manda a fabricar; pedido a propósito, sí
+    #[test]
+    fn purchased_parts_are_not_exported() {
+        if !cad_model::occt::available() {
+            return;
+        }
+        let mut doc = Document::default();
+        let caja = doc.add(primitive(cad_model::PrimitiveShape::Box { dx: 10.0, dy: 10.0, dz: 10.0, centered: true, centered_z: false }, 0.0));
+        let placa = doc.add(primitive(cad_model::PrimitiveShape::Library(LibraryPart::new("arduino_uno", "")), 100.0));
+        let eval = doc.evaluate();
+        assert_eq!(eval.parts.len(), 2);
+        let all = parts_scene_of(&doc, &eval, "x", None).unwrap();
+        assert_eq!(all.meshes.len(), 1, "solo la caja");
+        let only = parts_scene_of(&doc, &eval, "x", Some(cad_model::PartId { feature: placa, index: 0 })).unwrap();
+        assert_eq!(only.meshes.len(), 1);
+        assert!(!doc.is_purchased(cad_model::PartId { feature: caja, index: 0 }));
+        // Marcada a mano como fabricada, sale
+        doc.parts.push(cad_model::PartProps { part: cad_model::PartId { feature: placa, index: 0 }, name: None, color: None, hidden: false, material: None, purchased: Some(false) });
+        assert_eq!(parts_scene_of(&doc, &eval, "x", None).unwrap().meshes.len(), 2);
     }
 }

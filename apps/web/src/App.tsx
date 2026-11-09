@@ -354,6 +354,7 @@ import { DesignStep, FeatureTree } from "./components/steps/DesignStep";
 import { createCadStore, insertScanPiece, partColor, partHidden, PLANE_LABELS, type Fabrication, type PartId } from "./lib/cad";
 import { createCadUi } from "./lib/cadUi";
 import { createDesignActions } from "./lib/designActions";
+import { LibraryPanel as MakerLibraryPanel } from "./components/design/LibraryPanel";
 import { designOperations } from "./components/design/DesignToolbar";
 import { designHints } from "./lib/designHints";
 import { createScanCloud } from "./lib/scanCloud";
@@ -2466,7 +2467,8 @@ export const App: Component = () => {
   const syncDesignObjects = () => {
     const r = cad.result();
     if (!r || cad.draft() || cad.tabs().tabs.find((x) => x.id === cad.resultTab())?.kind === "assembly") return;
-    setObjects((list) => syncCadObjects(list, r.parts.map((p) => ({ id: p.id, name: p.name })), cad.resultTab()));
+    // Las compradas (motores, placas, imanes de la biblioteca) no se fabrican: no son objetos
+    setObjects((list) => syncCadObjects(list, r.parts.filter((p) => !p.purchased).map((p) => ({ id: p.id, name: p.name })), cad.resultTab()));
   };
   createEffect(syncDesignObjects);
 
@@ -9541,6 +9543,12 @@ export const App: Component = () => {
           {/* Viewport y, al animar, la línea de tiempo debajo */}
           <div class="flex flex-col flex-1 min-w-0 min-h-0">
           <div ref={splitRef} class="flex flex-1 min-w-0 min-h-0">
+          {/* Biblioteca maker a la izquierda del visor (Diseñar) */}
+          <Show when={inDesign() && cadUi.libraryOpen()}>
+            <div class="shrink-0 min-w-0 w-72 border-r border-border">
+              <MakerLibraryPanel store={cad} ui={cadUi} actions={designActions} onClose={() => cadUi.setLibraryOpen(false)} />
+            </div>
+          </Show>
           {/* Editor de pose y rig a la izquierda del visor */}
           <Show when={rigEditorVisible()}>
             <div class="shrink-0 min-w-0 border-r border-border" style={{ width: `${100 * rigEditorFraction()}%` }}>

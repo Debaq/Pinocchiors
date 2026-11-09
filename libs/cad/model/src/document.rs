@@ -128,6 +128,10 @@ pub struct PartProps {
     /// Material propio (si no, el del diseño).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub material: Option<Material>,
+    /// Comprada (no se fabrica): marcada a mano; sin marcar, lo son las piezas
+    /// de la biblioteca (ver [`Document::is_purchased`])
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub purchased: Option<bool>,
 }
 
 /// Carpeta del árbol: las operaciones desde `first` hasta `last` en el orden
@@ -204,6 +208,21 @@ impl Document {
         let name = self.default_name(&kind);
         self.features.insert(index.min(self.features.len()), Feature { id, name, suppressed: false, kind, scope: Vec::new() });
         id
+    }
+
+    /// La pieza se compra en vez de fabricarse: marcada a mano, o una pieza de
+    /// la biblioteca maker (motor, placa, imán…) puesta como pieza aparte. No
+    /// se manda a imprimir y va en «Para comprar» de la lista de materiales.
+    pub fn is_purchased(&self, id: crate::feature::PartId) -> bool {
+        if let Some(p) = self.parts.iter().find(|p| p.part == id).and_then(|p| p.purchased) {
+            return p;
+        }
+        match self.get(id.feature).map(|f| &f.kind) {
+            Some(FeatureKind::Primitive(p)) if id.index == 0 && p.op == crate::feature::BodyOp::New => {
+                matches!(&p.shape, crate::feature::PrimitiveShape::Library(l) if crate::library::is_purchased(l))
+            }
+            _ => false,
+        }
     }
 
     pub fn index_of(&self, id: FeatureId) -> Option<usize> {

@@ -16,9 +16,10 @@ import { en_print } from "./en.print.ts";
 import { en_resin } from "./en.resin.ts";
 import { en_printers } from "./en.printers.ts";
 import { en_calibration } from "./en.calibration.ts";
+import { en_library } from "./en.library.ts";
 
 /**
  * Inglés: clave = texto en español tal cual está en el código. Un archivo por
  * zona (en.<zona>.ts) para que se trabajen sin pisarse
  */
-export const en: Catalog = { ...enShell, ...en_layout1, ...en_layout2, ...en_ui_steps, ...en_panels1, ...en_panels2, ...en_lib1, ...en_lib2, ...en_app, ...en_settings, ...enFixes, ...en_render, ...en_hints, ...en_print, ...en_resin, ...en_printers, ...en_calibration };
+export const en: Catalog = { ...enShell, ...en_layout1, ...en_layout2, ...en_ui_steps, ...en_panels1, ...en_panels2, ...en_lib1, ...en_lib2, ...en_app, ...en_settings, ...enFixes, ...en_render, ...en_hints, ...en_print, ...en_resin, ...en_printers, ...en_calibration, ...en_library };

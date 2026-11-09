@@ -31,7 +31,9 @@ import {
   type PrimitiveShape,
   defaultGear,
   type RegionSelection,
+  type LibraryPart,
 } from "./cad";
+import { libraryCatalog, libraryName } from "./library";
 import type { CadUi } from "./cadUi";
 import { whyNoRegions } from "./sketchCheck";
 
@@ -935,10 +937,35 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     void store.addFeature({ type: "primitive", shape: { type: "gear", ...defaultGear() }, ...place, op: face ? "join" : "new" });
   };
 
+  /**
+   * Pieza de la biblioteca (motor, perfil, placa, imán…) como pieza aparte de
+   * referencia: apoyada en la cara plana elegida (Z hacia afuera), o en el origen
+   */
+  const addLibrary = async (part: LibraryPart) => {
+    const face = ui.picks().find((p) => p.kind === "face");
+    let place: { origin: P3; z: P3; x: P3 } = { origin: [0, 0, 0], z: [0, 0, 1], x: [1, 0, 0] };
+    if (face?.kind === "face") {
+      const f = await invoke<{ surface: string; point: P3; normal: P3 }>("cad_face_info", { face: face.face });
+      if (f.surface !== "plane") return say(tr("Elige una cara plana para apoyarla (o nada, para ponerla en el origen)"));
+      const n = f.normal;
+      const a: P3 = Math.abs(n[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+      const c: P3 = [a[1] * n[2] - a[2] * n[1], a[2] * n[0] - a[0] * n[2], a[0] * n[1] - a[1] * n[0]];
+      const l = Math.hypot(...c);
+      place = { origin: f.point, z: n, x: [c[0] / l, c[1] / l, c[2] / l] };
+      ui.clearPicks();
+    }
+    const items = await libraryCatalog();
+    const color = items.find((i) => i.id === part.item)?.color;
+    await store.addFeature({ type: "primitive", shape: { type: "library", ...part }, ...place, op: "new" }, libraryName(items, part), (d, id) => {
+      if (color) d.parts = [...(d.parts ?? []), { part: { feature: id, index: 0 }, color }];
+    });
+  };
+
   return {
     notice,
     say,
     addGear,
+    addLibrary,
     startSketch,
     pasteSketch,
     addExtrude,

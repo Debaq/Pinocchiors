@@ -384,6 +384,8 @@ pub fn run() {
             cad::cad_project_sketch,
             cad::cad_compare,
             cad::cad_edge_seat,
+            cad::cad_library_catalog,
+            cad::cad_library_purchased,
             cad::cad_flat_pattern,
             cad::cad_import_step,
             cad::cad_part_to_model,

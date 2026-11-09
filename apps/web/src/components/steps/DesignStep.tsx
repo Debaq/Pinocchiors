@@ -127,6 +127,7 @@ import {
 } from "../../lib/cad";
 import type { BrokenLink, CadUi, Hit3d } from "../../lib/cadUi";
 import { TOOL3D } from "../design/Sketch3dBars";
+import { itemLabel, libraryCatalog, libraryName } from "../../lib/library";
 import type { DesignActions } from "../../lib/designActions";
 import { regionContains } from "../../lib/CadViewer";
 import { flipSketchY, insertClip, rotateSketch, rotation, scaling, selectionCenter, translation } from "../../lib/sketchTransform";
@@ -2874,6 +2875,7 @@ export const FeatureEditor: Component<{
                 nut: [],
                 washer: [],
                 gear: [],
+                library: [],
               };
               type Standard = Extract<PrimitiveShape, { type: "bolt" | "nut" | "washer" }>;
               const standard = () => (["bolt", "nut", "washer"].includes(k().shape.type) ? (k().shape as Standard) : undefined);
@@ -2960,6 +2962,9 @@ export const FeatureEditor: Component<{
                   </Show>
                   <Show when={k().shape.type === "gear" && (k().shape as Extract<PrimitiveShape, { type: "gear" }>)}>
                     {(g) => <GearFields store={props.store} ui={props.ui} feature={f().id} shape={g()} field={field} update={update} />}
+                  </Show>
+                  <Show when={k().shape.type === "library" && (k().shape as Extract<PrimitiveShape, { type: "library" }>)}>
+                    {(lib) => <LibraryFields store={props.store} feature={f()} primitive={k()} shape={lib()} field={field} update={update} />}
                   </Show>
                   {/* Pieza estándar: medida, cabeza y rosca */}
                   <Show when={threaded()}>
@@ -7331,6 +7336,89 @@ const GearStrengthBox: Component<{ store: CadStore; first: GearPart; second: Gea
 };
 
 /** Medidas de un engrane (cuadro de propiedades de su operación) */
+/**
+ * Pieza de la biblioteca en su ventana: medida, largo y, según qué se arma,
+ * holgura y profundidad de los agujeros o alto de los postes; con la pieza,
+ * botones para hacerle los agujeros o los soportes en el mismo lugar.
+ */
+const LibraryFields: Component<{
+  store: CadStore;
+  feature: Feature;
+  primitive: Extract<FeatureKind, { type: "primitive" }>;
+  shape: Extract<PrimitiveShape, { type: "library" }>;
+  field: (label: string, rel: string, raw: number, write: (k: FeatureKind, v: number) => void, suffix?: string) => JSX.Element;
+  update: (mutate: (k: FeatureKind) => void) => void;
+}> = (props) => {
+  const [catalog] = createResource(libraryCatalog);
+  const item = () => catalog()?.find((i) => i.id === props.shape.item);
+  const role = () => props.shape.role ?? "part";
+  const set = (mutate: (s: Extract<PrimitiveShape, { type: "library" }>) => void) =>
+    props.update((x) => {
+      if (x.type === "primitive" && x.shape.type === "library") mutate(x.shape);
+    });
+  /** Agujeros o soportes en el mismo marco: corte o unión con el sólido de abajo */
+  const companion = (r: "holes" | "mounts") => {
+    const items = catalog() ?? [];
+    const { type: _t, ...part } = props.shape;
+    const next = { ...part, role: r };
+    void props.store.addFeature(
+      { type: "primitive", shape: { type: "library", ...next }, origin: props.primitive.origin, z: props.primitive.z, x: props.primitive.x, op: r === "holes" ? "cut" : "join" },
+      libraryName(items, next),
+      // Solo con lo que se fabrica: la pieza comprada (y las otras) no se cortan ni se unen
+      (d, id) => {
+        const made = (props.store.result()?.parts ?? []).filter((p) => !p.purchased).map((p) => p.id);
+        const added = d.features.find((x) => x.id === id);
+        if (added && made.length) added.scope = made;
+      },
+    );
+  };
+  return (
+    <Show when={item()} fallback={<p class="text-[11px] text-text-dim">{props.shape.item}</p>}>
+      {(it) => (
+        <>
+          <p class="text-xs text-text">{itemLabel(it())}</p>
+          <p class="text-[11px] text-text-dim leading-snug">{tBackend(it().description)}</p>
+          <Show when={it().variants.length > 1}>
+            <Row label={tl("Medida")}>
+              <Select
+                options={it().variants.map((v) => ({ value: v.id, label: tBackend(v.label) }))}
+                value={props.shape.variant || it().variants[0].id}
+                onChange={(v) => set((s) => (s.variant = v))}
+              />
+            </Row>
+          </Show>
+          <Show when={it().length}>
+            {(l) => props.field(tl("Largo"), "kind.shape.length", props.shape.length ?? l().default, (x, v) => x.type === "primitive" && x.shape.type === "library" && (x.shape.length = v), "mm")}
+          </Show>
+          <Show when={role() === "holes"}>
+            {props.field(tl("Holgura"), "kind.shape.clearance", props.shape.clearance ?? 0, (x, v) => x.type === "primitive" && x.shape.type === "library" && (x.shape.clearance = v), "mm")}
+            {props.field(tl("Profundidad"), "kind.shape.depth", props.shape.depth ?? 0, (x, v) => x.type === "primitive" && x.shape.type === "library" && (x.shape.depth = v), "mm")}
+            <p class="text-[11px] text-text-dim">{tl("Holgura 0 y profundidad 0 usan las de la pieza (agujeros pasantes, bolsillo a presión).")}</p>
+          </Show>
+          <Show when={it().mounts && role() !== "holes"}>
+            {props.field(tl("Alto de los postes"), "kind.shape.lift", props.shape.lift ?? 0, (x, v) => x.type === "primitive" && x.shape.type === "library" && (x.shape.lift = v), "mm")}
+          </Show>
+          <Show when={role() === "part"}>
+            <p class="text-[11px] text-text-dim">{tl("Se compra: no se fabrica ni se manda a imprimir. Sirve de referencia para diseñar a su alrededor.")}</p>
+            <div class="flex flex-wrap gap-1.5">
+              <Show when={it().holes}>
+                <Button size="sm" onClick={() => companion("holes")}>
+                  {tl("Hacer agujeros para esta pieza")}
+                </Button>
+              </Show>
+              <Show when={it().mounts}>
+                <Button size="sm" variant="ghost" onClick={() => companion("mounts")}>
+                  {tl("Hacer soportes")}
+                </Button>
+              </Show>
+            </div>
+          </Show>
+        </>
+      )}
+    </Show>
+  );
+};
+
 const GearFields: Component<{
   store: CadStore;
   ui: CadUi;
@@ -8383,24 +8471,30 @@ const BomSection: Component<{ store: CadStore }> = (props) => {
   const rows = createMemo(() => {
     const doc = props.store.doc();
     const parts = props.store.result()?.parts ?? [];
-    const out: { name: string; qty: number; material: string; mass: number | null; volume: number }[] = [];
+    const out: { name: string; qty: number; material: string; mass: number | null; volume: number; purchased: boolean }[] = [];
     for (const inst of doc?.assembly?.instances ?? []) {
       const p = parts.find((x) => samePart(x.id, inst.part));
       if (!p) continue;
       const row = out.find((r) => r.name === p.name);
       if (row) row.qty += 1;
-      else out.push({ name: p.name, qty: 1, material: partMaterial(doc, p)?.name ?? "", mass: partMass(doc, p), volume: p.volume });
+      else if (p.purchased) out.push({ name: p.name, qty: 1, material: "", mass: null, volume: p.volume, purchased: true });
+      else out.push({ name: p.name, qty: 1, material: partMaterial(doc, p)?.name ?? "", mass: partMass(doc, p), volume: p.volume, purchased: false });
     }
-    return out;
+    // Lo que se fabrica primero; lo que se compra al final
+    return [...out.filter((r) => !r.purchased), ...out.filter((r) => r.purchased)];
   });
-  const total = () => (rows().every((r) => r.mass !== null) ? rows().reduce((a, r) => a + r.mass! * r.qty, 0) : null);
+  const made = () => rows().filter((r) => !r.purchased);
+  const bought = () => rows().filter((r) => r.purchased);
+  const total = () => (made().every((r) => r.mass !== null) ? made().reduce((a, r) => a + r.mass! * r.qty, 0) : null);
   const exportCsv = async () => {
     const path = await save({ filters: [{ name: "CSV", extensions: ["csv"] }], defaultPath: "lista_de_materiales.csv" });
     if (!path) return;
     const q = (s: string) => `"${s.replace(/"/g, '""')}"`;
     const lines = [
-      "Elemento;Pieza;Cantidad;Material;Masa unitaria (g);Volumen unitario (cm³)",
-      ...rows().map((r, i) => [i + 1, q(r.name), r.qty, q(r.material), r.mass === null ? "" : r.mass.toFixed(2).replace(".", ","), (r.volume / 1000).toFixed(3).replace(".", ",")].join(";")),
+      "Elemento;Pieza;Cantidad;Material;Masa unitaria (g);Volumen unitario (cm³);Se compra",
+      ...rows().map((r, i) =>
+        [i + 1, q(r.name), r.qty, q(r.material), r.mass === null ? "" : r.mass.toFixed(2).replace(".", ","), r.purchased ? "" : (r.volume / 1000).toFixed(3).replace(".", ","), r.purchased ? "Sí" : ""].join(";"),
+      ),
     ];
     await invoke("cad_write_text", { path, content: lines.join("\n") + "\n" });
   };
@@ -8416,7 +8510,7 @@ const BomSection: Component<{ store: CadStore }> = (props) => {
           </tr>
         </thead>
         <tbody>
-          <For each={rows()}>
+          <For each={made()}>
             {(r) => (
               <tr class="text-text" data-bom-row>
                 <td class="truncate max-w-[7rem]">{r.name}</td>
@@ -8426,6 +8520,20 @@ const BomSection: Component<{ store: CadStore }> = (props) => {
               </tr>
             )}
           </For>
+          <Show when={bought().length}>
+            <tr>
+              <td colspan="4" class="pt-1.5 text-text-dim">{tl("Para comprar")}</td>
+            </tr>
+            <For each={bought()}>
+              {(r) => (
+                <tr class="text-text" data-bom-row data-bom-purchased>
+                  <td class="truncate max-w-[7rem]">{tBackend(r.name)}</td>
+                  <td class="text-right font-mono">{r.qty}</td>
+                  <td class="pl-2 text-text-dim" colspan="2">{tl("comprada")}</td>
+                </tr>
+              )}
+            </For>
+          </Show>
         </tbody>
       </table>
       <Show when={total() !== null}>

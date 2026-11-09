@@ -195,7 +195,7 @@ fn flat_part_props_carry_names_and_materials() {
     let mut a = box_doc(10.0);
     a.material = Some(Material { name: "PLA".into(), density: 1.24 });
     let pa = PartId { feature: a.features[0].id, index: 0 };
-    a.parts.push(PartProps { part: pa, name: Some("Caja".into()), color: Some("#ff0000".into()), hidden: false, material: None });
+    a.parts.push(PartProps { part: pa, name: Some("Caja".into()), color: Some("#ff0000".into()), hidden: false, material: None, purchased: None });
     let mut tabs = Tabs::from_legacy(Some(a));
     let b = tabs.add(TabKind::Design { document: Box::new(box_doc(20.0)) }, None);
     let pb = PartId { feature: tab_feature(b, FeatureId(0)), index: 0 };
@@ -352,7 +352,7 @@ fn derived_uses_the_named_configuration() {
 fn instances_in_other_configurations_are_variants() {
     let mut a = box_doc(10.0);
     a.configurations.push(Configuration { name: "Larga".into(), values: Default::default(), suppressed: vec![] });
-    a.parts.push(PartProps { part: PartId { feature: a.features[0].id, index: 0 }, name: Some("Caja".into()), color: None, hidden: false, material: None });
+    a.parts.push(PartProps { part: PartId { feature: a.features[0].id, index: 0 }, name: Some("Caja".into()), color: None, hidden: false, material: None, purchased: None });
     let mut tabs = Tabs::from_legacy(Some(a));
     let b = tabs.add_design(None);
     let asm = tabs.add_assembly(None);
