@@ -41,6 +41,8 @@ import { FeatureEditor, pickSummary } from "../steps/DesignStep";
 import type { DesignActions } from "../../lib/designActions";
 import * as Icons from "../icons";
 import * as SketchIcons from "../icons/sketch";
+import { Sketch3dSideTools, Sketch3dTopBar, TOOL3D, hit3dLabel, tool3dKey } from "../design/Sketch3dBars";
+import type { Constraint3d } from "../../lib/cad";
 // `t` se usa como nombre de variable en muchos lugares de este archivo: se importa como `tr`
 import { fmtNumber, t as tr, tx } from "../../lib/i18n";
 import { registerSketchKeys, sketchKey } from "../../lib/shortcuts";
@@ -155,6 +157,40 @@ const FAMILY_MENU: Record<string, string> = {
 const PRESELECT = new Set<SketchTool>(["select", "trim", "extend", "split", "circle_tan", "spline_point"]);
 /** Tope de íconos de restricciones a la vista */
 const MAX_GLYPHS = 500;
+
+/** Símbolo de cada restricción del sketch 3D (las cotas llevan su valor; «paralela al eje», la letra del eje) */
+const GLYPHS3D: Partial<Record<Constraint3d["type"], string>> = {
+  coincident: "◉",
+  fixed: "⊡",
+  attach: "⊙",
+  on_plane: "▱",
+  parallel: "∥",
+  perpendicular: "⊥",
+  equal: "=",
+  tangent: "◠",
+  midpoint: "½",
+};
+
+/** Nombre de cada restricción del sketch 3D */
+const CONSTRAINT3D_LABELS: Record<Constraint3d["type"], string> = {
+  coincident: "Coincidentes",
+  fixed: "Fijo",
+  attach: "Sobre el modelo",
+  on_plane: "Sobre el plano",
+  along_axis: "Paralela al eje",
+  parallel: "Paralelas",
+  perpendicular: "Perpendiculares",
+  equal: "Mismo largo",
+  tangent: "Tangentes",
+  midpoint: "Punto medio",
+  length: "Largo",
+  distance: "Distancia",
+  angle: "Ángulo",
+};
+
+/** Puntos y curvas que nombra una restricción del sketch 3D */
+const ids3dOf = (c: Constraint3d): number[] =>
+  (["a", "b", "point", "line"] as const).flatMap((k) => (k in c ? [(c as Record<string, unknown>)[k] as number] : []));
 
 /** Herramientas que transforman lo elegido */
 const TRANSFORMS: SketchTool[] = ["move", "copy", "rotate", "scale"];
@@ -2487,6 +2523,9 @@ export const CadView: Component<CadViewProps> = (props) => {
     }
     const v = viewer.pick(e.clientX, e.clientY, { vertices: true });
     if (v?.kind === "vertex") return { at: v.at, vertex: true };
+    // Lo que está delante (una cara del sólido o la piel del escaneo) antes que el plano activo
+    const s = ui.snapSurface3d() ? viewer.pickSurface(e.clientX, e.clientY) : null;
+    if (s) return { at: s.at.map((x) => Math.round(x * 1e4) / 1e4) as P3, surface: s.kind };
     const p = viewer.planePoint3(e.clientX, e.clientY, plane);
     return p ? { at: p.map((x) => Math.round(x * 1e4) / 1e4) as P3 } : undefined;
   };
@@ -2921,7 +2960,12 @@ export const CadView: Component<CadViewProps> = (props) => {
     prePointer = e.buttons === 0 ? { x: e.clientX, y: e.clientY } : undefined;
     schedulePreselect();
     const mode3 = ui.pick();
-    if (mode3.kind === "sketch3d" && e.buttons === 0) ui.setCursor3d(hit3d(e, mode3.feature, mode3.plane)?.at);
+    if (mode3.kind === "sketch3d" && e.buttons === 0) {
+      const h = hit3d(e, mode3.feature, mode3.plane);
+      ui.setCursor3d(h?.at);
+      const rect = container.getBoundingClientRect();
+      ui.setHover3d(h ? { hit: h, x: e.clientX - rect.left, y: e.clientY - rect.top } : undefined);
+    }
     const ts = trimStroke();
     if (ts && trimFrom && (e.buttons & 1) === 1) {
       const ss = ui.session();
@@ -3459,6 +3503,26 @@ export const CadView: Component<CadViewProps> = (props) => {
       e.stopPropagation();
       return;
     }
+    // Sketch 3D abierto: sus herramientas, cortar el trazo, borrar lo elegido
+    if (!ui.session() && editing3d() && !e.ctrlKey && !e.metaKey && !e.altKey && !target.closest?.("select, [role=listbox], [role=dialog], [role=alertdialog], [role=menu]")) {
+      const key = e.key.toLowerCase();
+      const api = ui.sketch3dApi();
+      let done = true;
+      if ((e.key === "Escape" || e.key === "Enter") && ui.trace3d().length) api?.endTrace();
+      else if (e.key === "Escape" && ui.sel3d().length) ui.setSel3d([]);
+      else if ((e.key === "Delete" || e.key === "Backspace") && ui.sel3d().length) api?.removeSelected();
+      else if (key === "q" && !e.shiftKey) ui.sel3d().length ? api?.toggleConstruction() : ui.setConstruction3d(!ui.construction3d());
+      else {
+        const tool = e.shiftKey ? undefined : TOOL3D.find((t) => tool3dKey(t) === key);
+        if (tool) ui.setTool3d(tool.id);
+        else done = false;
+      }
+      if (done) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+    }
     if (ui.session()) {
       // Una lista, un menú o un diálogo usan sus teclas (Esc, Enter, Supr…)
       if (target.closest?.("select, a, [aria-haspopup], [role=listbox], [role=option], [role=combobox], [role=dialog], [role=alertdialog], [role=menu], [role=menuitem]")) return;
@@ -3572,6 +3636,69 @@ export const CadView: Component<CadViewProps> = (props) => {
         return { ...g, x: x - rect.left + 10 + k * 15, y: y - rect.top + 12, selected: sel.has(g.index), conflict: conflict.has(g.index) };
       });
   });
+
+  /** El sketch 3D abierto (su diálogo está a la vista) */
+  const editing3d = createMemo(() => {
+    const d = store.draft();
+    const f = d ? store.doc()?.features.find((x) => x.id === d.feature) : undefined;
+    return f?.kind.type === "sketch3d" ? f : undefined;
+  });
+  /** Símbolos de las restricciones y cotas del sketch 3D, en pantalla */
+  const overlay3d = createMemo(() => {
+    viewTick();
+    const f = editing3d();
+    const view = f ? sketch3dOf(f.id) : undefined;
+    if (!f || !view || !viewer) return { glyphs: [], dims: [] };
+    const sk = view.sketch;
+    const rect = container.getBoundingClientRect();
+    const at = new Map(sk.points.map((p) => [p.id, [p.x, p.y, p.z] as P3]));
+    const ent = new Map(sk.entities.map((e) => [e.id, e.geometry]));
+    const mid = (a?: P3, b?: P3): P3 | undefined => (a && b ? [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2] : undefined);
+    /** Un lugar visible de una curva (su medio) o de un punto */
+    const place = (id: number): P3 | undefined => {
+      const g = ent.get(id);
+      if (!g) return at.get(id);
+      if (g.type === "line") return mid(at.get(g.start), at.get(g.end));
+      if (g.type === "arc") return at.get(g.mid);
+      if (g.type === "point") return at.get(g.point);
+      return at.get(g.points[Math.floor(g.points.length / 2)]);
+    };
+    const screen = (p: P3): [number, number] => {
+      const [x, y] = viewer!.screenOf(p);
+      return [x - rect.left, y - rect.top];
+    };
+    const conflict = new Set(view.report?.conflicting ?? []);
+    const sel = new Set(ui.sel3d());
+    const count = new Map<number, number>();
+    const glyphs: { index: number; glyph: string; x: number; y: number; ids: number[]; conflict: boolean; selected: boolean }[] = [];
+    const dims: { index: number; text: string; value: number; x: number; y: number; conflict: boolean }[] = [];
+    sk.constraints.forEach((c, index) => {
+      const ids = ids3dOf(c);
+      const value = "value" in c ? c.value : "degrees" in c ? c.degrees : undefined;
+      if (value !== undefined) {
+        const p = c.type === "distance" ? mid(at.get(c.a), at.get(c.b)) : c.type === "length" ? place(c.line) : c.type === "angle" ? mid(place(c.a), place(c.b)) : undefined;
+        if (!p) return;
+        const [x, y] = screen(p);
+        dims.push({ index, value, text: c.type === "angle" ? `${fmtNumber(value, { maximumFractionDigits: 2 })}°` : fmtNumber(value, { maximumFractionDigits: 3 }), x, y: y - 14, conflict: conflict.has(index) });
+        return;
+      }
+      const glyph = c.type === "along_axis" ? c.axis.toUpperCase() : GLYPHS3D[c.type];
+      const host = "line" in c ? c.line : "point" in c ? c.point : c.a;
+      const p = place(host);
+      if (!glyph || !p) return;
+      const k = count.get(host) ?? 0;
+      count.set(host, k + 1);
+      const [x, y] = screen(p);
+      glyphs.push({ index, glyph, x: x + 10 + k * 15, y: y + 12, ids, conflict: conflict.has(index), selected: ids.length > 0 && ids.every((i) => sel.has(i)) });
+    });
+    return { glyphs, dims };
+  });
+  /** Cota del sketch 3D que se está escribiendo */
+  const [editing3dDim, setEditing3dDim] = createSignal<number>();
+  const editing3dConstraint = (i: number) => {
+    const f = editing3d();
+    return f ? sketch3dOf(f.id)?.sketch.constraints[i] : undefined;
+  };
 
   /** Dónde va el campo del texto en edición (arriba a la izquierda de su caja) */
   const textEditView = createMemo(() => {
@@ -4092,6 +4219,84 @@ export const CadView: Component<CadViewProps> = (props) => {
         )}
       </For>
 
+      {/* Sketch 3D: lo que hay bajo el cursor, símbolos de las restricciones y cotas (clic para escribir el valor) */}
+      <Show when={editing3d() && ui.pick().kind === "sketch3d" && ui.hover3d()}>
+        {(h) => {
+          const l = () => hit3dLabel(h().hit, ui.plane3d());
+          return (
+            <span
+              data-snap3d
+              class="absolute pointer-events-none px-1 rounded text-[11px] bg-bg-lighter/90 border border-border text-cyan whitespace-nowrap"
+              style={{ left: `${h().x + 14}px`, top: `${h().y + 14}px` }}
+            >
+              {l().glyph} {l().label}
+            </span>
+          );
+        }}
+      </Show>
+      <Index each={overlay3d().glyphs}>
+        {(g) => (
+          <button
+            data-constraint3d-glyph={g().index}
+            class={clsx(
+              "absolute -translate-x-1/2 -translate-y-1/2 min-w-4 h-4 px-0.5 rounded text-[10px] leading-none border flex items-center justify-center",
+              g().selected ? "bg-cyan text-bg border-cyan" : g().conflict ? "bg-bg/90 text-error border-error" : "bg-bg/80 text-text-muted border-border hover:text-text hover:border-cyan",
+            )}
+            style={{ left: `${g().x}px`, top: `${g().y}px` }}
+            title={tr(CONSTRAINT3D_LABELS[editing3dConstraint(g().index)?.type ?? "coincident"])}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => ui.setSel3d(g().ids)}
+          >
+            {g().glyph}
+          </button>
+        )}
+      </Index>
+      <Index each={overlay3d().dims}>
+        {(d) => (
+          <Show
+            when={editing3dDim() === d().index}
+            fallback={
+              <button
+                data-dim3d={d().index}
+                class={clsx(
+                  "absolute -translate-x-1/2 -translate-y-1/2 px-1 rounded text-[11px] font-mono border",
+                  d().conflict ? "bg-bg/90 text-error border-error" : "bg-bg/85 text-text border-border hover:border-cyan",
+                )}
+                style={{ left: `${d().x}px`, top: `${d().y}px` }}
+                title={tr("Clic para cambiar la medida")}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={() => setEditing3dDim(d().index)}
+              >
+                {d().text}
+              </button>
+            }
+          >
+            <input
+              data-dim3d-input
+              type="text"
+              value={String(d().value)}
+              class="absolute -translate-x-1/2 -translate-y-1/2 w-20 px-1 py-0.5 rounded text-[11px] font-mono bg-bg border border-accent text-text outline-none"
+              style={{ left: `${d().x}px`, top: `${d().y}px` }}
+              ref={(el) => queueMicrotask(() => (el.focus(), el.select()))}
+              onPointerDown={(e) => e.stopPropagation()}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  e.currentTarget.dataset.done = "1";
+                  setEditing3dDim(undefined);
+                } else if (e.key === "Enter") e.currentTarget.blur();
+                e.stopPropagation();
+              }}
+              onBlur={(e) => {
+                const input = e.currentTarget;
+                const v = parseFloat(input.value.replace(",", "."));
+                if (!input.dataset.done && Number.isFinite(v) && v !== d().value) ui.sketch3dApi()?.setValue(d().index, v);
+                setEditing3dDim(undefined);
+              }}
+            />
+          </Show>
+        )}
+      </Index>
+
       {/* Íconos de restricciones: clic elige (Mayús suma), Supr borra */}
       <Index each={glyphs()}>
         {(g) => (
@@ -4443,7 +4648,7 @@ export const CadView: Component<CadViewProps> = (props) => {
             <Show
               when={ui.session()}
               fallback={
-                <Show when={ui.drawingOpen()} fallback={<DesignSideTools store={store} ui={ui} actions={props.actions} />}>
+                <Show when={ui.drawingOpen()} fallback={<Show when={editing3d()} fallback={<DesignSideTools store={store} ui={ui} actions={props.actions} />}><Sketch3dSideTools ui={ui} /></Show>}>
                   <DrawingSideTools ui={ui} />
                 </Show>
               }
@@ -4538,7 +4743,9 @@ export const CadView: Component<CadViewProps> = (props) => {
           when={ui.session()}
           fallback={
             <>
-            <DesignToolbar store={store} ui={ui} actions={props.actions} />
+            <Show when={editing3d()} fallback={<DesignToolbar store={store} ui={ui} actions={props.actions} />}>
+              {(f) => <Sketch3dTopBar ui={ui} name={f().name} onDone={() => void store.acceptDraft()} />}
+            </Show>
             <div class="flex items-center gap-1 rounded-md border border-border bg-bg-lighter/90 px-1.5 py-1 pointer-events-auto">
               <IconButton aria-label={tr("Encuadrar todo")} size="sm" onClick={() => viewer?.frameAll()}>
                 <Icons.FrameCorners size={14} />

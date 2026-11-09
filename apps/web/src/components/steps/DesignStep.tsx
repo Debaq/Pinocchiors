@@ -126,6 +126,7 @@ import {
   isScanReference,
 } from "../../lib/cad";
 import type { BrokenLink, CadUi, Hit3d } from "../../lib/cadUi";
+import { TOOL3D } from "../design/Sketch3dBars";
 import type { DesignActions } from "../../lib/designActions";
 import { regionContains } from "../../lib/CadViewer";
 import { flipSketchY, insertClip, rotateSketch, rotation, scaling, selectionCenter, translation } from "../../lib/sketchTransform";
@@ -8888,16 +8889,6 @@ const SKETCH_PATTERNS: { value: SketchPatternKind; label: string }[] = [
 
 // ─── Sketch 3D ───────────────────────────────────────────────────────────────
 
-type Tool3d = "select" | "line" | "arc" | "spline" | "point";
-
-const TOOL3D: { id: Tool3d; label: string; prompt: string }[] = [
-  { id: "line", get label() { return tl("Línea"); }, get prompt() { return tl("Clic en el plano activo, en un punto o en un vértice del sólido; cada clic sigue la línea"); } },
-  { id: "arc", get label() { return tl("Arco"); }, get prompt() { return tl("Arco por tres puntos: comienzo, uno del medio y fin"); } },
-  { id: "spline", get label() { return tl("Spline"); }, get prompt() { return tl("Clic en cada punto de paso; «Terminar trazo» la crea"); } },
-  { id: "point", get label() { return tl("Punto"); }, get prompt() { return tl("Clic donde va el punto"); } },
-  { id: "select", get label() { return tl("Elegir"); }, get prompt() { return tl("Clic en puntos y curvas para restringirlos (Mayús suma)"); } },
-];
-
 const C3D_LABELS: Record<Constraint3d["type"], string> = {
   get coincident() { return tl("Coincidentes"); },
   get fixed() { return tl("Fijo"); },
@@ -8926,11 +8917,13 @@ const len3 = (a: P3) => Math.hypot(a[0], a[1], a[2]);
 const Sketch3dEditor: Component<{ store: CadStore; ui: CadUi; feature: Feature }> = (props) => {
   const ui = props.ui;
   const id = () => props.feature.id;
-  const [tool, setTool] = createSignal<Tool3d>("line");
-  const [planeKey, setPlaneKey] = createSignal<"xy" | "xz" | "yz">("xy");
-  const [offset, setOffset] = createSignal(0);
+  // Herramienta, plano y trazo viven en la UI: las barras del visor los cambian
+  const tool = ui.tool3d;
+  const planeKey = ui.plane3d;
+  const offset = ui.offset3d;
   // Puntos del trazo en curso (línea: el último; arco: comienzo y medio; spline: todos)
-  const [trace, setTrace] = createSignal<number[]>([]);
+  const trace = ui.trace3d;
+  const setTrace = ui.setTrace3d;
   const view = () => props.store.result()?.sketches3d?.find((v) => v.id === id());
   const draftSketch = (): Sketch3d | undefined => {
     const f = props.store.doc()?.features.find((x) => x.id === id());
@@ -8969,7 +8962,7 @@ const Sketch3dEditor: Component<{ store: CadStore; ui: CadUi; feature: Feature }
     s.next_id = n + 1;
     return n;
   };
-  /** El punto del clic: uno que ya está o uno nuevo (atado al vértice del sólido si cayó en uno) */
+  /** El punto del clic: uno que ya está o uno nuevo (atado al vértice del sólido o a la piel del modelo si cayó ahí) */
   const place = (s: Sketch3d, hit: Hit3d, spec: PointSpec | undefined): number => {
     if (hit.point !== undefined && s.points.some((p) => p.id === hit.point)) return hit.point;
     const pid = fresh(s);
@@ -8980,7 +8973,7 @@ const Sketch3dEditor: Component<{ store: CadStore; ui: CadUi; feature: Feature }
   /** Línea nueva; si va casi por un eje, queda paralela a él (como al dibujar en un plano) */
   const addLine = (s: Sketch3d, a: number, b: number) => {
     const lid = fresh(s);
-    s.entities.push({ id: lid, geometry: { type: "line", start: a, end: b } });
+    s.entities.push({ id: lid, geometry: { type: "line", start: a, end: b }, ...(ui.construction3d() ? { construction: true } : {}) });
     const [pa, pb] = [coords(s, a), coords(s, b)];
     if (!pa || !pb) return;
     const d = sub3(pb, pa);
@@ -8996,25 +8989,33 @@ const Sketch3dEditor: Component<{ store: CadStore; ui: CadUi; feature: Feature }
       ui.setSel3d((cur) => (e.shiftKey ? (cur.includes(target) ? cur.filter((x) => x !== target) : [...cur, target]) : cur.length === 1 && cur[0] === target ? [] : [target]));
       return;
     }
-    const spec = hit.vertex && hit.point === undefined ? await props.store.vertexSpec(hit.at).catch(() => undefined) : undefined;
+    const spec = hit.point !== undefined ? undefined : hit.vertex ? await props.store.vertexSpec(hit.at).catch(() => undefined) : hit.surface === "scan" ? await skinSpec(hit.at) : undefined;
     const tr = trace();
     let made = -1;
+    const cons = ui.construction3d() ? { construction: true } : {};
     // El cambio al borrador es inmediato (la vista previa llega después): el trazo sigue ya
     const pending = change((s) => {
       made = place(s, hit, spec);
       if (t === "line" && tr.length && tr[0] !== made) addLine(s, tr[0], made);
-      if (t === "arc" && tr.length === 2 && !tr.includes(made)) s.entities.push({ id: fresh(s), geometry: { type: "arc", start: tr[0], mid: tr[1], end: made } });
-      if (t === "point" && hit.point === undefined) s.entities.push({ id: fresh(s), geometry: { type: "point", point: made } });
+      if (t === "arc" && tr.length === 2 && !tr.includes(made)) s.entities.push({ id: fresh(s), geometry: { type: "arc", start: tr[0], mid: tr[1], end: made }, ...cons });
+      if (t === "point" && hit.point === undefined) s.entities.push({ id: fresh(s), geometry: { type: "point", point: made }, ...cons });
     });
     if (t === "line") setTrace([made]);
     else if (t === "arc") setTrace(tr.length === 2 ? [] : [...tr, made]);
     else if (t === "spline") setTrace([...tr, made]);
     await pending;
   };
+  /** Punto de la piel del modelo de referencia: queda atado a ella (sigue al escaneo si cambia) */
+  const skinSpec = async (at: P3): Promise<PointSpec | undefined> => {
+    const seeds = await invoke<(ScanSeed | null)[]>("cad_scan_seeds_near", { points: [at] }).catch(() => null);
+    const seed = seeds?.[0];
+    return seed ? { type: "scan", fit: { type: "point", seed }, point: seed.at } : undefined;
+  };
   /** Corta el trazo; una spline en curso se crea */
   const endTrace = () => {
     const tr = trace();
-    if (tool() === "spline" && tr.length >= 2) void change((s) => s.entities.push({ id: fresh(s), geometry: { type: "spline", points: tr } }));
+    const cons = ui.construction3d() ? { construction: true } : {};
+    if (tool() === "spline" && tr.length >= 2) void change((s) => s.entities.push({ id: fresh(s), geometry: { type: "spline", points: tr }, ...cons }));
     setTrace([]);
   };
   createEffect(
@@ -9024,15 +9025,19 @@ const Sketch3dEditor: Component<{ store: CadStore; ui: CadUi; feature: Feature }
     }),
   );
   // El visor dibuja con el plano activo; el comienzo del tramo, para la línea guía
-  createEffect(() => {
+  const arm = () => {
     const tr = trace();
     const from = tr.length && tool() !== "select" ? coords(sketch(), tr[tr.length - 1]) : undefined;
     const t = TOOL3D.find((x) => x.id === tool())!;
     ui.setPick({ kind: "sketch3d", prompt: t.prompt, owner: `${id()}:sketch3d`, feature: id(), plane: plane(), from, click: (h, e) => void onClick(h, e) });
-  });
+  };
+  createEffect(arm);
   onCleanup(() => {
     if (ui.pick().kind === "sketch3d") ui.setPick({ kind: "none" });
     ui.setSel3d([]);
+    ui.setTrace3d([]);
+    ui.setHover3d(undefined);
+    ui.setSketch3dApi(undefined);
   });
 
   const selPoints = () => ui.sel3d().filter((x) => sketch().points.some((p) => p.id === x));
@@ -9106,42 +9111,29 @@ const Sketch3dEditor: Component<{ store: CadStore; ui: CadUi; feature: Feature }
     return tl("Hay restricciones en conflicto (en rojo); lo demás se cumple");
   };
   const onePoint = () => (selPoints().length === 1 && selEntities().length === 0 ? sketch().points.find((p) => p.id === selPoints()[0]) : undefined);
+  const toggleConstruction = () => {
+    const ids = new Set(selEntities().map((e) => e.id));
+    if (!ids.size) return;
+    const on = !selEntities().every((e) => e.construction);
+    void change((s) => s.entities.forEach((e) => ids.has(e.id) && (e.construction = on)));
+  };
+  const setValue = (i: number, v: number) =>
+    void change((s) => {
+      const x = s.constraints[i];
+      if (x && "value" in x) x.value = v;
+      else if (x && "degrees" in x) x.degrees = v;
+    });
+  // Las barras y el visor usan lo mismo que el panel
+  ui.setSketch3dApi({ endTrace, removeSelected, setValue, toggleConstruction });
 
   return (
     <div class="space-y-2" data-sketch3d>
-      <div class="flex flex-wrap gap-1" role="radiogroup" aria-label={tl("Herramienta del sketch 3D")}>
-        <For each={TOOL3D}>
-          {(t) => (
-            <button
-              role="radio"
-              aria-checked={tool() === t.id}
-              class={clsx("px-2 py-0.5 rounded text-xs border", tool() === t.id ? "bg-accent/20 border-accent text-text" : "border-border text-text-muted hover:text-text")}
-              title={t.prompt}
-              onClick={() => setTool(t.id)}
-            >
-              {t.label}
-            </button>
-          )}
-        </For>
-      </div>
-      <Row label={tl("Plano activo")}>
-        <Select
-          options={(["xy", "xz", "yz"] as const).map((k) => ({ value: k, label: PLANE_LABELS[k] }))}
-          value={planeKey()}
-          onChange={(v) => setPlaneKey(v as "xy" | "xz" | "yz")}
-        />
-      </Row>
-      <Num label={tl("Desplazado")} suffix="mm" step={1} value={offset()} onCommit={setOffset} />
-      <div class="flex flex-wrap gap-1.5">
-        <Button size="sm" variant="ghost" disabled={trace().length === 0} onClick={endTrace}>
-          {tl("Terminar trazo")}
+      <p class="text-[11px] text-text-dim leading-relaxed">{tl("Dibuja con las herramientas de la barra de la izquierda; el plano activo y «Pegar a superficies» están arriba.")}</p>
+      <Show when={ui.pick().kind !== "sketch3d"}>
+        <Button size="sm" onClick={() => untrack(arm)}>
+          {tl("Dibujar en el visor")}
         </Button>
-        <Show when={ui.pick().kind !== "sketch3d"}>
-          <Button size="sm" onClick={() => setTool(tool())}>
-            {tl("Dibujar en el visor")}
-          </Button>
-        </Show>
-      </div>
+      </Show>
       <p class={clsx("text-xs", report()?.status === "well_constrained" ? "text-success" : report()?.status === "over_constrained" ? "text-error" : "text-text-muted")} data-sketch3d-status>
         {sketch().points.length} {tl("puntos ·")} {sketch().entities.length} {tl("curvas")}
         <Show when={statusText()}> · {statusText()}</Show>
@@ -9180,15 +9172,7 @@ const Sketch3dEditor: Component<{ store: CadStore; ui: CadUi; feature: Feature }
               )}
             </For>
             <Show when={selEntities().length > 0}>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => {
-                  const ids = new Set(selEntities().map((e) => e.id));
-                  const on = !selEntities().every((e) => e.construction);
-                  void change((s) => s.entities.forEach((e) => ids.has(e.id) && (e.construction = on)));
-                }}
-              >
+              <Button size="sm" variant="ghost" onClick={toggleConstruction}>
                 {tl("Construcción")}
               </Button>
             </Show>
@@ -9215,17 +9199,7 @@ const Sketch3dEditor: Component<{ store: CadStore; ui: CadUi; feature: Feature }
                   </button>
                   <Show when={value() !== undefined}>
                     <div class="w-20">
-                      <Num
-                        step={1}
-                        value={value()!}
-                        onCommit={(v) =>
-                          void change((s) => {
-                            const x = s.constraints[i()];
-                            if (x && "value" in x) x.value = v;
-                            else if (x && "degrees" in x) x.degrees = v;
-                          })
-                        }
-                      />
+                      <Num step={1} value={value()!} onCommit={(v) => setValue(i(), v)} />
                     </div>
                   </Show>
                   <IconButton size="sm" aria-label={tl("Quitar")} onClick={() => void change((s) => s.constraints.splice(i(), 1))}>
@@ -9238,7 +9212,7 @@ const Sketch3dEditor: Component<{ store: CadStore; ui: CadUi; feature: Feature }
         </div>
       </Show>
       <p class="text-[11px] text-text-dim leading-relaxed">
-        {tl("Clic en un vértice del sólido: el punto queda atado a él. Las líneas casi paralelas a un eje quedan paralelas. Sirve de camino para un Barrido (elegirlo como curva); un perfil en un plano que la cruce se ubica con «Perforar» en su sketch.")}
+        {tl("Clic sobre el modelo o en un vértice del sólido: el punto queda pegado ahí. Las líneas casi paralelas a un eje quedan paralelas. Sirve de camino para un Barrido (elegirlo como curva); un perfil en un plano que la cruce se ubica con «Perforar» en su sketch.")}
       </p>
     </div>
   );

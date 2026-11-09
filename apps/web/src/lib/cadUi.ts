@@ -204,12 +204,30 @@ export type PickMode =
   /** Sketch 3D: clic en un punto o una curva del sketch, un vértice del sólido o el plano activo; `from` es donde arranca lo que se dibuja */
   | { kind: "sketch3d"; prompt: string; owner?: string; feature: number; plane: Plane; from?: P3; click: (hit: Hit3d, e: PointerEvent) => void };
 
-/** Qué hay bajo un clic del sketch 3D: un punto suyo, una curva suya, un vértice del sólido o el plano activo */
+/** Qué hay bajo un clic del sketch 3D: un punto suyo, una curva suya, un vértice del sólido, una superficie o el plano activo */
 export interface Hit3d {
   at: P3;
   point?: number;
   entity?: number;
   vertex?: boolean;
+  /** Cayó sobre una cara del sólido o sobre la piel del modelo de referencia (escaneo, STL) */
+  surface?: "face" | "scan";
+}
+
+/** Herramientas del sketch 3D */
+export type Tool3d = "select" | "line" | "arc" | "spline" | "point";
+export type Plane3dKey = "xy" | "xz" | "yz";
+
+/** Lo que el editor del sketch 3D deja hacer desde las barras y el visor */
+export interface Sketch3dApi {
+  /** Corta el trazo en curso (una spline se crea) */
+  endTrace: () => void;
+  /** Borra lo elegido */
+  removeSelected: () => void;
+  /** Cambia el valor de una cota (largo, distancia o ángulo) */
+  setValue: (index: number, value: number) => void;
+  /** Pasa lo elegido a construcción o de vuelta */
+  toggleConstruction: () => void;
 }
 
 export interface SketchSession {
@@ -471,6 +489,16 @@ export function createCadUi(store: CadStore) {
   // Sketch 3D: lo elegido (puntos y entidades) y dónde está el cursor
   const [sel3d, setSel3d] = createSignal<number[]>([]);
   const [cursor3d, setCursor3d] = createSignal<P3>();
+  // Sketch 3D: herramienta, plano activo, construcción, pegarse a las superficies,
+  // el trazo en curso, qué hay bajo el cursor y lo que el editor deja hacer
+  const [tool3d, setTool3d] = createSignal<Tool3d>("line");
+  const [plane3d, setPlane3d] = createSignal<Plane3dKey>("xy");
+  const [offset3d, setOffset3d] = createSignal(0);
+  const [construction3d, setConstruction3d] = createSignal(false);
+  const [snapSurface3d, setSnapSurface3d] = createSignal(true);
+  const [trace3d, setTrace3d] = createSignal<number[]>([]);
+  const [hover3d, setHover3d] = createSignal<{ hit: Hit3d; x: number; y: number }>();
+  const [sketch3dApi, setSketch3dApi] = createSignal<Sketch3dApi>();
   /** Spline con el peine de curvatura a la vista */
   const [combEntity, setCombEntity] = createSignal<number>();
   // Lo copiado con Ctrl+C: sobrevive a cerrar el sketch (para pegar en otro)
@@ -716,6 +744,22 @@ export function createCadUi(store: CadStore) {
     setSel3d,
     cursor3d,
     setCursor3d,
+    tool3d,
+    setTool3d,
+    plane3d,
+    setPlane3d,
+    offset3d,
+    setOffset3d,
+    construction3d,
+    setConstruction3d,
+    snapSurface3d,
+    setSnapSurface3d,
+    trace3d,
+    setTrace3d,
+    hover3d,
+    setHover3d,
+    sketch3dApi,
+    setSketch3dApi,
     showCenterOfMass,
     setShowCenterOfMass,
     pickFilter,

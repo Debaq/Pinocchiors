@@ -401,6 +401,16 @@ fn fit_scan_references(state: &AppState, doc: &Document) -> Option<Document> {
                         sf.close_plane = Some(p.plane);
                     }
                 }
+                // Puntos del sketch 3D pegados a la piel: siguen al escaneo
+                FeatureKind::Sketch3d { sketch } => {
+                    for c in sketch.constraints.iter_mut() {
+                        if let cad_model::sketch3d::Constraint3d::Attach { target: PointSpec::Scan { fit, point }, .. } = c
+                            && let Some(cad_scan::ScanGeom::Point(q)) = geom(fit)
+                        {
+                            *point = q;
+                        }
+                    }
+                }
                 // Curva suave con puntos tomados sobre la piel: cada uno sigue al escaneo
                 FeatureKind::Curve { def: cad_model::CurveDef::Points { points, .. } } => {
                     for p in points.iter_mut() {
@@ -562,6 +572,12 @@ fn scan_seed_of(doc: &Document, p: &PointSpec) -> Option<cad_model::ScanSeed> {
 }
 
 fn uses_scan(kind: &FeatureKind) -> bool {
+    if let FeatureKind::Sketch3d { sketch } = kind {
+        return sketch
+            .constraints
+            .iter()
+            .any(|c| matches!(c, cad_model::sketch3d::Constraint3d::Attach { target: PointSpec::Scan { .. }, .. }));
+    }
     if let FeatureKind::Curve { def: cad_model::CurveDef::Points { points, .. } } = kind {
         return points.iter().any(|p| matches!(p, PointSpec::Scan { .. }));
     }

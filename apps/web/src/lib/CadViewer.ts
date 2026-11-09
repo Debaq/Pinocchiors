@@ -2271,6 +2271,22 @@ export class CadViewer {
     return { triangle: hit.faceIndex, point: hit.point };
   }
 
+  /**
+   * Lo primero que toca el rayo del puntero: una cara del sólido o la piel del
+   * modelo de referencia (si está a la vista o es la pieza base). En mm del CAD
+   */
+  pickSurface(clientX: number, clientY: number): { kind: "face" | "scan"; at: P3 } | null {
+    this.setRay(clientX, clientY);
+    const face = this.body ? this.kept(this.raycaster.intersectObject(this.body)) : undefined;
+    const scanOn = this.scan && (this.scan.visible || this.scanPickHidden);
+    const skin = scanOn ? this.kept(this.raycaster.intersectObject(this.scan!)) : undefined;
+    // A la par (la pieza base coincide con el escaneo) cuenta como la piel
+    const radius = this.scan?.geometry.boundingSphere?.radius ?? 1;
+    if (skin && (!face || skin.distance <= face.distance + radius * 0.004)) return { kind: "scan", at: this.fromView(skin.point) };
+    if (face) return { kind: "face", at: this.fromView(face.point) };
+    return null;
+  }
+
   /** Punto del puntero sobre un plano del CAD, en coordenadas del sketch (mm) */
   planePoint(clientX: number, clientY: number, plane: Plane): P2 | null {
     this.setRay(clientX, clientY);

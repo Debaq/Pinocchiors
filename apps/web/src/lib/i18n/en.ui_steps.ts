@@ -2226,4 +2226,24 @@ export const en_ui_steps: Catalog = {
   "El modelo se ve de referencia. Para dibujar y sumar o grabar sobre él como en cualquier pieza, úsalo como pieza del diseño.": "The model is shown as a reference. To draw on it and add or engrave as on any part, use it as the design's part.",
   "Usar el modelo como pieza": "Use the model as the part",
   "El modelo es la pieza del diseño. Para dibujar sobre ella: «Sketch» y clic en la pieza. Después «Extruir» suma una capa que la sigue, rellena hasta ella o graba. Cilindros, conos y cajas se apoyan donde haces clic.": "The model is the design's part. To draw on it: «Sketch» and click on the part. Then «Extrude» adds a layer that follows it, fills up to it or engraves. Cylinders, cones and boxes rest where you click.",
+  // Sketch 3D: barras, anclaje a superficies y cotas en el visor
+  "Clic en puntos y curvas para elegirlos y restringirlos (Mayús suma)": "Click points and curves to select and constrain them (Shift adds)",
+  "Clic sobre lo que tienes delante (el modelo o el sólido), en un punto o en un vértice; en el vacío cae en el plano activo. Cada clic sigue la línea; Esc la corta":
+    "Click on what is in front of you (the model or the solid), on a point or on a vertex; in empty space it lands on the active plane. Each click continues the line; Esc ends it",
+  "Clic en cada punto de paso; Esc o Enter la termina": "Click each point it passes through; Esc or Enter finishes it",
+  "Sobre la cara": "On the face",
+  "Plano {p}": "Plane {p}",
+  "con algo elegido lo pasa a construcción o de vuelta; sin nada elegido, lo que se dibuja sale de construcción":
+    "with something selected it toggles construction; with nothing selected, what you draw comes out as construction",
+  "Pegarse a lo que está delante: las caras del sólido y la piel del modelo (escaneo, STL). Apagado, el clic cae siempre en el plano activo":
+    "Snap to what is in front: the faces of the solid and the skin of the model (scan, STL). Off, clicks always land on the active plane",
+  "Pegar a superficies": "Snap to surfaces",
+  "Distancia del plano activo al origen": "Distance from the active plane to the origin",
+  "Corta lo que se está dibujando (Esc); una spline se crea": "Ends what is being drawn (Esc); a spline gets created",
+  "Cerrar el sketch 3D": "Close the 3D sketch",
+  "Clic para cambiar la medida": "Click to change the value",
+  "Dibuja con las herramientas de la barra de la izquierda; el plano activo y «Pegar a superficies» están arriba.":
+    "Draw with the tools on the left bar; the active plane and «Snap to surfaces» are at the top.",
+  "Clic sobre el modelo o en un vértice del sólido: el punto queda pegado ahí. Las líneas casi paralelas a un eje quedan paralelas. Sirve de camino para un Barrido (elegirlo como curva); un perfil en un plano que la cruce se ubica con «Perforar» en su sketch.":
+    "Click on the model or on a vertex of the solid: the point sticks there. Lines nearly parallel to an axis become parallel. It works as a path for a Sweep (pick it as the curve); a profile on a plane crossing it is placed with «Pierce» in its sketch.",
 };
