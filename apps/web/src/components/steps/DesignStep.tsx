@@ -73,7 +73,6 @@ import {
   type MoldOptions,
   type ReconstructProposal,
   type AxisDef,
-  type Connector,
   type Mate,
   type MateKind,
   type Relation,
@@ -152,6 +151,7 @@ import { tBackend } from "../../lib/i18nBackend";
 import { changeDesignTabs } from "../layout/DesignTabs";
 import { instanceStudio, nestableAssemblies, splitTabFeature, tabFeature } from "../../lib/designTabs";
 import { jointKey, jointsOf } from "../../lib/assemblyDrag";
+import { ExplodeSection, FastenSection, GroupsSection, HealthSection, InstanceExtras, MateEditor, MotionSection, badgeClass, mateBadges, newMate as startNewMate, resolvedOf } from "../design/AssemblyParts";
 import { planetFeatures, planetaryAssembly, ringFeature, type PlanetaryPlan } from "../../lib/planetary";
 
 export interface DesignStepProps {
@@ -183,19 +183,51 @@ const RelationAdder: Component<{ mates: Mate[]; onAdd: (r: Relation) => void }> 
   const [second, setSecond] = createSignal("");
   const [amount, setAmount] = createSignal(-1);
   const [phase, setPhase] = createSignal(0);
-  const kinds = (): [MateKind[], MateKind[]] =>
-    type() === "gear" ? [["revolute"], ["revolute"]] : type() === "rack_pinion" ? [["revolute"], ["slider"]] : [["cylindrical"], []];
+  // Leva: subida a mitad de vuelta (sube y baja una vez por vuelta)
+  const [lift, setLift] = createSignal(5);
+  const kinds = (): [MateKind[], MateKind[]] => {
+    switch (type()) {
+      case "gear":
+      case "belt":
+        return [["revolute", "cylindrical"], ["revolute", "cylindrical"]];
+      case "rack_pinion":
+        return [["revolute", "cylindrical"], ["slider", "cylindrical"]];
+      case "linear":
+        return [["slider", "cylindrical"], ["slider", "cylindrical"]];
+      case "cam":
+        return [["revolute", "cylindrical"], ["slider", "cylindrical"]];
+      default:
+        return [["cylindrical"], []];
+    }
+  };
   const options = (ks: MateKind[]) => props.mates.filter((m) => ks.includes(m.kind)).map((m) => ({ value: String(m.id), label: m.name }));
-  const valid = () => !!first() && (type() === "screw" || (!!second() && second() !== first())) && amount() !== 0;
+  const valid = () => !!first() && (type() === "screw" || (!!second() && second() !== first())) && (type() === "cam" || amount() !== 0);
   const add = () => {
     const [a, b] = [Number(first()), Number(second())];
     const t = type();
     props.onAdd(
       t === "gear" ? { type: "gear", a, b, ratio: amount(), phase: phase() }
       : t === "rack_pinion" ? { type: "rack_pinion", revolute: a, slider: b, per_turn: amount(), phase: phase() }
+      : t === "linear" ? { type: "linear", a, b, ratio: amount(), phase: phase() }
+      : t === "belt" ? { type: "belt", a, b, ratio: amount(), phase: phase() }
+      : t === "cam" ? { type: "cam", revolute: a, slider: b, lift: [[0, 0], [180, lift()]], phase: phase() }
       : { type: "screw", cylindrical: a, pitch: amount(), phase: phase() }
     );
     setOpen(false);
+  };
+  const amountLabel = () => {
+    switch (type()) {
+      case "gear":
+        return tl("Razón (− si giran al revés)");
+      case "rack_pinion":
+        return tl("mm por vuelta");
+      case "linear":
+        return tl("Razón (− si van al revés)");
+      case "belt":
+        return tl("Razón (radio 1 / radio 2)");
+      default:
+        return tl("Paso");
+    }
   };
   return (
     <Show when={open()} fallback={<Button size="sm" disabled={props.mates.length < 1} onClick={() => setOpen(true)}>{tl("Agregar acoplamiento")}</Button>}>
@@ -205,6 +237,9 @@ const RelationAdder: Component<{ mates: Mate[]; onAdd: (r: Relation) => void }> 
             { value: "gear", label: tl("Engranes (giro ↔ giro)") },
             { value: "rack_pinion", label: tl("Piñón y cremallera (giro ↔ deslizamiento)") },
             { value: "screw", label: tl("Tornillo (giro ↔ avance)") },
+            { value: "linear", label: tl("Lineal (deslizamiento ↔ deslizamiento)") },
+            { value: "belt", label: tl("Correa con poleas (giran para el mismo lado)") },
+            { value: "cam", label: tl("Leva (giro → seguidor que sube y baja)") },
           ]}
           value={type()}
           onChange={(v) => { setType(v as Relation["type"]); setFirst(""); setSecond(""); setAmount(v === "gear" ? -1 : 1); }}
@@ -213,12 +248,9 @@ const RelationAdder: Component<{ mates: Mate[]; onAdd: (r: Relation) => void }> 
         <Show when={type() !== "screw"}>
           <Select options={[{ value: "", label: tl("Otra unión…") }, ...options(kinds()[1])]} value={second()} onChange={setSecond} />
         </Show>
-        <Num
-          label={type() === "gear" ? tl("Razón (− si giran al revés)") : type() === "rack_pinion" ? tl("mm por vuelta") : tl("Paso")}
-          value={amount()}
-          step={type() === "gear" ? 0.1 : 1}
-          onCommit={setAmount}
-        />
+        <Show when={type() !== "cam"} fallback={<Num label={tl("Sube (mm) a media vuelta")} value={lift()} onCommit={setLift} />}>
+          <Num label={amountLabel()} value={amount()} step={type() === "gear" ? 0.1 : 1} onCommit={setAmount} />
+        </Show>
         <Num label={tl("Fase")} value={phase()} onCommit={setPhase} />
         <div class="flex gap-1.5">
           <Button size="sm" disabled={!valid()} onClick={add}>{tl("Agregar")}</Button>
@@ -8039,7 +8071,7 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
   const sol = () => store.result()?.assembly?.solution;
   const [part, setPart] = createSignal<string>("");
   const [kind, setKind] = createSignal<MateKind>("revolute");
-  const [picking, setPicking] = createSignal<"" | "a" | "b">("");
+  const [picking, setPicking] = createSignal<"" | "a" | "b" | "c">("");
   const [hits, setHits] = createSignal<[number, number, number][] | null>(null);
   const [gaps, setGaps] = createSignal<[number, number, number][] | null>(null);
   const [gapError, setGapError] = createSignal("");
@@ -8061,24 +8093,9 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
   /** Otra configuración: el ensamble trae esa variante de la pieza (y la instancia, su número nuevo) */
   const setConfiguration = (id: number, name: string) =>
     void Promise.resolve(store.editAssembly((a) => (a.instances.find((i) => i.id === id)!.configuration = name || undefined))).then(() => store.loadActive());
-  // Animación: la unión que se recorre, de dónde a dónde y cuántos cuadros
-  const movable = () => (asm()?.mates ?? []).filter((m) => m.kind === "revolute" || m.kind === "slider" || m.kind === "cylindrical" || m.kind === "pin_slot");
-  const [animMate, setAnimMate] = createSignal<number>();
-  const [animFrom, setAnimFrom] = createSignal(0);
-  const [animTo, setAnimTo] = createSignal(90);
-  const [animFrames, setAnimFrames] = createSignal(30);
-  const exportAnimation = async () => {
-    const m = movable().find((x) => x.id === (animMate() ?? movable()[0]?.id));
-    if (!m) return;
-    const path = await save({ filters: [{ name: "GLB", extensions: ["glb"] }], defaultPath: "ensamble_animado.glb" });
-    if (!path) return;
-    try {
-      const bytes = await store.exportAssemblyAnimation(path, m.id, m.kind === "slider" ? "distance" : "angle", animFrom(), animTo(), animFrames());
-      props.ui.setMessage(tl("Exportado ({kb} KB)", { kb: Math.max(1, Math.round(bytes / 1024)) }));
-    } catch (e) {
-      props.ui.setMessage(String(e));
-    }
-  };
+  // Unión en edición (nueva o existente) con su vista previa
+  const [editing, setEditing] = createSignal<{ id: number; isNew: boolean }>();
+  void resolvedOf;
 
   // En una pestaña de ensamble, también los otros ensambles (rígidos, como una pieza) que no la llevan a ella
   const isSub = (p: PartView) => store.tabs().tabs.some((t) => t.kind === "assembly" && t.id === splitTabFeature(p.id.feature)[0]);
@@ -8131,39 +8148,11 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
     });
   };
 
-  /** Dos clics: la cara de una instancia y la de otra; con eso, la relación */
-  const newMate = () => {
-    let first: Connector | null = null;
-    const pick = (step: "a" | "b") => {
-      setPicking(step);
-      props.ui.setPick({
-        kind: "asm_face",
-        prompt: step === "a" ? tl("Clic en la cara de la primera pieza (plana o cilíndrica)") : tl("Clic en la cara de la segunda pieza"),
-        done: async (face) => {
-          try {
-            const c = await store.assemblyConnector(face);
-            if (step === "a") {
-              first = c;
-              return pick("b");
-            }
-            setPicking("");
-            if (!first || first.instance === c.instance) return props.ui.setMessage(tl("Las dos caras tienen que ser de instancias distintas"));
-            const a = first;
-            void store.editAssembly((x) => {
-              const id = x.next_id || 1;
-              // Caras planas enfrentadas: normales opuestas
-              const facing = a.z[0] * c.z[0] + a.z[1] * c.z[1] + a.z[2] * c.z[2] < 0;
-              x.mates.push({ id, name: `${MATE_LABELS[kind()]} ${x.mates.length + 1}`, kind: kind(), a, b: c, flip: kind() === "planar" || kind() === "fastened" ? facing : false });
-              x.next_id = id + 1;
-            });
-          } catch (e) {
-            setPicking("");
-            props.ui.setMessage(String(e));
-          }
-        },
-      });
-    };
-    pick("a");
+  /** Dos clics: el punto de unión de una pieza y el de otra; la unión queda en edición con vista previa */
+  const newMate = async () => {
+    setEditing(undefined);
+    const id = await startNewMate(store, props.ui, kind(), (st) => setPicking(st as "" | "a" | "b" | "c"));
+    if (id !== null) setEditing({ id, isNew: true });
   };
 
   const removeInstance = (id: number) =>
@@ -8229,6 +8218,10 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
                 <Show when={orphan()}>
                   <p class="text-[11px] text-error">{tl("Su pieza ya no está (se borró en su diseño o se borró su pestaña): no se dibuja ni se mueve.")}</p>
                 </Show>
+                <InstanceExtras store={store} ui={props.ui} inst={inst} parts={parts().filter((p) => !isSub(p))} isSub={parts().some((p) => samePart(p.id, inst.part) && isSub(p))} />
+                <Show when={sol()?.instance_dof?.find(([id]) => id === inst.id)}>
+                  {(d) => <p class="text-[11px] text-text-dim">{d()[1] === 1 ? tl("Se mueve: 1 grado libre") : tl("Se mueve: {n} grados libres", { n: d()[1] })}</p>}
+                </Show>
                 <Show when={asm() && jointsOf(asm()!, inst.id).length > 1}>
                   {(_) => {
                     const joints = () => jointsOf(asm()!, inst.id);
@@ -8273,49 +8266,50 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
           }}
         </For>
       </Section>
+      <Section title={tl("Grupos")}>
+        <GroupsSection store={store} ui={props.ui} />
+      </Section>
       <Section title={tl("Animación")}>
-        <Show when={movable().length > 0} fallback={<p class="text-[11px] text-text-dim">{tl("Hace falta una bisagra, deslizante, cilíndrica o pasador en ranura para animar.")}</p>}>
-          <Select
-            options={movable().map((m) => ({ value: String(m.id), label: m.name || MATE_LABELS[m.kind] }))}
-            value={String(animMate() ?? movable()[0].id)}
-            onChange={(v) => setAnimMate(+v)}
-          />
-          <div class="flex gap-1.5">
-            <Num label={tl("Desde")} value={animFrom()} onCommit={setAnimFrom} />
-            <Num label={tl("Hasta")} value={animTo()} onCommit={setAnimTo} />
-          </div>
-          <Num label={tl("Cuadros")} value={animFrames()} step={1} min={2} onCommit={(v) => setAnimFrames(Math.max(2, Math.round(v)))} />
-          <Button size="sm" fullWidth onClick={exportAnimation}>
-            {tl("Exportar GLB animado")}
-          </Button>
-          <p class="text-[11px] text-text-dim">{tl("Bisagras: grados; deslizantes: mm. Cada pieza es un nodo que se mueve cuadro a cuadro.")}</p>
-        </Show>
+        <MotionSection store={store} ui={props.ui} />
       </Section>
       <Section title={tl("Vista explosionada")}>
-        <div class="flex items-center gap-2 text-[11px]">
-          <Slider value={props.ui.assemblyExplode()} min={0} max={2} step={0.05} onChange={(v) => props.ui.setAssemblyExplode(v)} />
-          <span class="w-10 text-right font-mono">{Math.round(props.ui.assemblyExplode() * 100)}%</span>
-        </div>
-        <p class="text-[11px] text-text-dim">{tl("Aleja las piezas del centro para ver cómo se arma. Solo en pantalla: no cambia el ensamble ni lo que se exporta.")}</p>
+        <ExplodeSection store={store} ui={props.ui} />
+      </Section>
+      <Section title={tl("Tornillos")}>
+        <FastenSection store={store} ui={props.ui} />
       </Section>
       <Section title={tl("Relaciones")}>
         <div class="flex gap-1.5">
           <div class="flex-1">
             <Select options={(Object.keys(MATE_LABELS) as MateKind[]).map((k) => ({ value: k, label: MATE_LABELS[k] }))} value={kind()} onChange={(v) => setKind(v as MateKind)} />
           </div>
-          <Button size="sm" disabled={(asm()?.instances.length ?? 0) < 2 || !!picking()} onClick={newMate}>
-            {picking() === "a" ? tl("Cara 1…") : picking() === "b" ? tl("Cara 2…") : tl("Agregar")}
+          <Button size="sm" disabled={(asm()?.instances.length ?? 0) < 2 || !!picking()} onClick={() => void newMate()}>
+            {picking() === "a" ? tl("Cara 1…") : picking() === "b" ? tl("Cara 2…") : picking() === "c" ? tl("Otra cara…") : tl("Agregar")}
           </Button>
         </div>
+        <Show when={editing()}>
+          {(e) => (
+            <For each={[e().id]}>
+              {(id) => <MateEditor store={store} ui={props.ui} mateId={id} isNew={e().isNew} onClose={() => setEditing(undefined)} />}
+            </For>
+          )}
+        </Show>
+        <HealthSection store={store} ui={props.ui} />
         <For each={asm()?.mates ?? []} fallback={<p class="text-[11px] text-text-dim">{tl("Agregar: elegir el tipo y hacer clic en una cara de cada pieza")}</p>}>
           {(m) => {
             const set = (f: (x: Mate) => void) => void store.editAssembly((a) => f(a.mates.find((x) => x.id === m.id)!));
             return (
-              <div class="space-y-1 rounded border border-border p-1.5 text-xs" data-mate={m.id}>
+              <div
+                class={clsx("space-y-1 rounded border p-1.5 text-xs", mateBadges(store, m).some((b) => b.tone === "error") ? "border-error/60" : "border-border", editing()?.id === m.id && "hidden")}
+                data-mate={m.id}
+                onMouseEnter={() => !editing() && props.ui.setAsmHoverMate(m.id)}
+                onMouseLeave={() => !editing() && props.ui.setAsmHoverMate(undefined)}
+              >
                 <div class="flex items-center gap-1.5">
-                  <span class="flex-1 truncate text-text" title={`${instName(m.a.instance)} ↔ ${instName(m.b.instance)}`}>
+                  <button type="button" class="flex-1 truncate text-left text-text" title={tl("Clic para editar")} onClick={() => setEditing({ id: m.id, isNew: false })}>
                     {m.name}
-                  </span>
+                  </button>
+                  <For each={mateBadges(store, m)}>{(b) => <span class={badgeClass(b.tone)}>{b.text}</span>}</For>
                   <Checkbox small label={tl("Invertir")} checked={m.flip} onChange={(c) => set((x) => (x.flip = c))} />
                   <IconButton aria-label={tl("Quitar {name}", { name: m.name })} size="sm" variant="ghost" onClick={() => void store.editAssembly((a) => (a.mates = a.mates.filter((x) => x.id !== m.id)))}>
                     <Icons.Trash size={11} />
@@ -8388,7 +8382,13 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
                   ? tl("{a} ↔ {b}: razón {ratio}", { a: mateName(r.a), b: mateName(r.b), ratio: fmt(r.ratio, 4) })
                   : r.type === "rack_pinion"
                     ? tl("{a} ↔ {b}: {mm} mm por vuelta", { a: mateName(r.revolute), b: mateName(r.slider), mm: fmt(Math.abs(r.per_turn), 3) })
-                    : tl("{a}: paso {mm} mm", { a: mateName(r.cylindrical), mm: fmt(r.pitch, 3) });
+                    : r.type === "screw"
+                      ? tl("{a}: paso {mm} mm", { a: mateName(r.cylindrical), mm: fmt(r.pitch, 3) })
+                      : r.type === "linear"
+                        ? tl("{a} ↔ {b}: lineal × {ratio}", { a: mateName(r.a), b: mateName(r.b), ratio: fmt(r.ratio, 3) })
+                        : r.type === "belt"
+                          ? tl("{a} ↔ {b}: correa × {ratio}", { a: mateName(r.a), b: mateName(r.b), ratio: fmt(r.ratio, 3) })
+                          : tl("{a} → {b}: leva de {n} puntos", { a: mateName(r.revolute), b: mateName(r.slider), n: r.lift.length });
               return (
                 <div class="flex items-center gap-1.5 rounded border border-border px-1.5 py-1 text-xs" data-relation={i()}>
                   <span class="flex-1 truncate" title={text()}>{text()}</span>

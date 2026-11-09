@@ -21,6 +21,8 @@ export interface DrawingSheet {
   projection: Projection;
   /** Escala fija; sin ella, la normalizada más grande con la que todo entra */
   scale?: number | null;
+  /** Ensamble: las piezas corridas con todos los pasos de su explosión (vista explosionada) */
+  exploded?: boolean;
   /** Líneas ocultas y tangentes */
   hiddenLines: boolean;
   smooth: boolean;

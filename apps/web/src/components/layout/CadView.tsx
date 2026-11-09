@@ -1,5 +1,6 @@
 import { Component, For, type JSX, Index, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
 import { createPersisted } from "../../lib/ui-state";
+import { themeHex } from "../../lib/theme";
 import { tBackend } from "../../lib/i18nBackend";
 import { invoke } from "@tauri-apps/api/core";
 import { clsx } from "clsx";
@@ -9,7 +10,8 @@ import type { CameraPose } from "../../lib/cameraRig";
 import { parse as parseFont, type Font } from "opentype.js";
 import { layoutText, type Contour } from "../../lib/sketchText";
 import { dragJointOf, dragPlane, mateAxis, measuredAngle, measuredDistance, nextAngle, nextDistance, turned } from "../../lib/assemblyDrag";
-import { fitReport, CONSTRAINT_LABELS, editsAsSketch, geometryPoints, type Report3d, type Sketch3d, type Plane, addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, curvePolyline, constraintValue, hasDiameterTwin, swapDiameter, isReference, isLoosePoint, isSolidPoint, removeLoosePoint, leavingDirection, placeSnap, tangentArc, type CadStore, designMass, dragByHandle, flipByHandle, handleField, handleValue, partColor, partHidden, samePart, hasScanPiece, explodeAssemblyMesh, type AssemblyRange, type CadMesh, type FeatureHandle, type FeatureKind, type MeasureItem, type Measurement, type P2, type P3, type ScanOutline, type Sketch, type SketchConstraint } from "../../lib/cad";
+import { connectorWorld, explodeOffsets, moveAssemblyMesh, poseDeltas, poseOf, solutionPoses, type Pose3 } from "../../lib/assemblyTools";
+import { fitReport, CONSTRAINT_LABELS, editsAsSketch, geometryPoints, type Report3d, type Sketch3d, type Plane, addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, curvePolyline, constraintValue, hasDiameterTwin, swapDiameter, isReference, isLoosePoint, isSolidPoint, removeLoosePoint, leavingDirection, placeSnap, tangentArc, type CadStore, designMass, dragByHandle, flipByHandle, handleField, handleValue, partColor, partHidden, samePart, hasScanPiece, explodeAssemblyMesh, resolvedAssembly, type AssemblyRange, type CadMesh, type FeatureHandle, type FeatureKind, type MeasureItem, type Measurement, type P2, type P3, type ScanOutline, type Sketch, type SketchConstraint } from "../../lib/cad";
 import { infer, solidRefs, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
 import { angleView, applyFrame, clipCenter, invertFrame, measureConstraint, rotation, scaling, selectedEntities, splitEntityAt, transformSelection, translation, type Frame, type Xform } from "../../lib/sketchTransform";
 import { mergeDuplicate, rejoinSplit, sameEntities, trimByStroke, trimRemoved } from "../../lib/sketchEdit";
@@ -935,17 +937,112 @@ export const CadView: Component<CadViewProps> = (props) => {
     }),
   );
   createEffect(
-    on([asmBase, () => ui.assemblyExplode()], ([base, explode]) => {
+    on([asmBase, () => ui.assemblyExplode(), () => ui.asmExplodeAt(), () => ui.asmFrame(), () => ui.asmClashes(), () => store.result()?.assembly?.solution], ([base, explode, explodeAt, frame, clashes, sol]) => {
       if (!base || !viewer || !ui.assemblyMode()) return;
-      viewer.setBody(base.mesh && explodeAssemblyMesh(base.mesh, base.ranges, explode));
       const doc = untrack(() => store.doc());
+      const asm = doc?.assembly;
+      // Pasos de la explosión guardada y cuadro de la animación: se mueven las piezas en la malla
+      const moves = new Map<number, Pose3>();
+      if (frame && sol) for (const [id, p] of poseDeltas(sol.poses, frame)) moves.set(id, p);
+      const steps = asm?.explode ?? [];
+      const offsets = steps.length ? explodeOffsets(steps, explodeAt) : new Map<number, P3>();
+      for (const [id, v] of offsets) {
+        const m = moves.get(id);
+        moves.set(id, m ? { r: m.r, t: [m.t[0] + v[0], m.t[1] + v[1], m.t[2] + v[2]] } : poseOf(v, [0, 0, 0]));
+      }
+      let mesh = base.mesh && (moves.size ? moveAssemblyMesh(base.mesh, base.ranges, moves, viewer.mmPerUnit) : base.mesh);
+      if (mesh && !steps.length) mesh = explodeAssemblyMesh(mesh, base.ranges, explode);
+      viewer.setBody(mesh);
       const parts = untrack(() => store.result()?.parts ?? []);
+      const red = new Set((clashes ?? []).flatMap(([a, b]) => [a, b]));
+      // Uniones que no se cumplen: sus piezas en ámbar
+      const failing = new Set((sol?.mate_errors ?? []).flatMap(([m]) => {
+        const mate = asm?.mates.find((x) => x.id === m);
+        return mate ? [mate.a.instance, mate.b.instance] : [];
+      }));
       viewer.setParts(
         base.ranges.map(([id, a, b, e0, e1]) => {
-          const inst = doc?.assembly?.instances.find((i) => i.id === id);
+          const inst = asm?.instances.find((i) => i.id === id);
           const k = parts.findIndex((p) => inst && samePart(p.id, inst.part));
-          return { faces: [a, b] as [number, number], edges: [e0 ?? 0, e1 ?? 0] as [number, number], color: parseInt((k >= 0 ? partColor(doc, parts[k], k) : "#9aa4b8").slice(1), 16), hidden: false };
+          const own = inst?.color ?? (k >= 0 ? partColor(doc, parts[k], k) : "#9aa4b8");
+          const color = red.has(id) ? themeHex("error") : failing.has(id) ? themeHex("warning") : parseInt(own.slice(1), 16);
+          return { faces: [a, b] as [number, number], edges: [e0 ?? 0, e1 ?? 0] as [number, number], color, hidden: !!inst?.hidden };
         }),
+      );
+    }),
+  );
+  ui.setViewerEye(() => viewer?.eye().at);
+  onCleanup(() => ui.setViewerEye(undefined));
+  // Choques revisados solos (EN7): al cambiar el ensamble (soltar un arrastre, mover un ángulo),
+  // en segundo plano y un rato después, para no frenar lo que se está haciendo
+  let clashTimer: ReturnType<typeof setTimeout> | undefined;
+  let clashSeq = 0;
+  const checkClashesSoon = (delay = 700) => {
+    clearTimeout(clashTimer);
+    const n = ++clashSeq;
+    clashTimer = setTimeout(() => {
+      const asm = store.doc()?.assembly;
+      if (!ui.assemblyMode() || !asm || asm.instances.filter((i) => !i.suppressed).length < 2 || partDrag) return;
+      void store.assemblyInterference().then(
+        (hits) => n === clashSeq && ui.setAsmClashes(hits),
+        () => n === clashSeq && ui.setAsmClashes(null),
+      );
+    }, delay);
+  };
+  createEffect(
+    on([() => ui.assemblyMode(), () => store.result()?.assembly?.version], ([on_]) => {
+      if (!on_) {
+        clearTimeout(clashTimer);
+        return ui.setAsmClashes(null);
+      }
+      checkClashesSoon();
+    }),
+  );
+  onCleanup(() => clearTimeout(clashTimer));
+  /** Conectores a dibujar: los de la unión bajo el mouse (o en edición) y los que se están eligiendo */
+  const triadList = () => {
+    if (!ui.assemblyMode()) return [];
+    const asm = store.doc()?.assembly;
+    const view = store.result()?.assembly;
+    if (!asm || !view) return [];
+    const poses = solutionPoses(view.solution.poses);
+    const out: { origin: P3; z: P3; x: P3; color?: "accent" | "warning" | "error" | "success" }[] = [];
+    const hover = ui.asmHoverMate();
+    const mate = hover !== undefined ? resolvedAssembly(asm, view).mates.find((m) => m.id === hover) : undefined;
+    const lost = new Set((view.lost ?? []).filter((l) => l.mate === hover).map((l) => l.instance));
+    if (mate)
+      for (const c of [mate.a, mate.b, ...(mate.c ? [mate.c] : [])]) {
+        const p = poses.get(c.instance);
+        if (p) out.push({ ...connectorWorld(c, p), color: lost.has(c.instance) ? "error" : "accent" });
+      }
+    for (const c of ui.asmConnectors()) {
+      const p = poses.get(c.instance);
+      if (p) out.push({ ...connectorWorld(c, p), color: "success" });
+    }
+    return out;
+  };
+  createEffect(() => {
+    const list = triadList();
+    if (!ui.assemblyMode()) return viewer?.setTriads([]);
+    const asm = store.doc()?.assembly;
+    const sol = store.result()?.assembly?.solution;
+    const offsets = asm?.explode?.length ? explodeOffsets(asm.explode, ui.asmExplodeAt()) : new Map<number, P3>();
+    const poses = sol ? solutionPoses(sol.poses) : new Map<number, Pose3>();
+    viewer?.setTriads(list, [...offsets].filter(([, v]) => Math.hypot(...v) > 1e-6).flatMap(([id, v]) => {
+      const at = poses.get(id)?.t;
+      return at ? [[at, [at[0] + v[0], at[1] + v[1], at[2] + v[2]]] as [P3, P3]] : [];
+    }));
+  });
+  // Unión bajo el mouse en el panel: sus caras resaltadas
+  const [mateFaces, setMateFaces] = createSignal<{ faces: number[]; edges: number[] }>({ faces: [], edges: [] });
+  let mateSeq = 0;
+  createEffect(
+    on([() => ui.asmHoverMate(), () => store.result()?.assembly?.version], ([mate]) => {
+      const n = ++mateSeq;
+      if (mate === undefined || !ui.assemblyMode()) return setMateFaces({ faces: [], edges: [] });
+      void store.assemblyMateFaces(mate).then(
+        (r) => n === mateSeq && setMateFaces(r),
+        () => n === mateSeq && setMateFaces({ faces: [], edges: [] }),
       );
     }),
   );
@@ -975,14 +1072,18 @@ export const CadView: Component<CadViewProps> = (props) => {
     const picks = ui.picks();
     const faces = [...h.faces, ...picks.flatMap((p) => (p.kind === "face" ? [p.face] : []))];
     const edges = [...h.edges, ...picks.flatMap((p) => (p.kind === "edge" ? [p.edge] : []))];
-    // Ensamble: las instancias elegidas, enteras (todas sus caras y aristas)
+    // Ensamble: las instancias elegidas, enteras (todas sus caras y aristas); las que todavía se
+    // mueven si se pidió verlas; y las caras de la unión bajo el mouse
     if (ui.assemblyMode()) {
-      const chosen = ui.asmPicked();
+      const chosen = [...ui.asmPicked()];
+      if (ui.asmShowMoving()) chosen.push(...(store.result()?.assembly?.solution.instance_dof ?? []).map(([id]) => id));
       for (const [id, a, b, e0, e1] of asmBase()?.ranges ?? []) {
         if (!chosen.includes(id)) continue;
         for (let f = a; f < b; f++) faces.push(f);
         for (let k = e0 ?? 0; k < (e1 ?? 0); k++) edges.push(k);
       }
+      faces.push(...mateFaces().faces);
+      edges.push(...mateFaces().edges);
     }
     viewer?.setHighlight(faces, edges);
   });
@@ -1139,6 +1240,8 @@ export const CadView: Component<CadViewProps> = (props) => {
   let partDrag:
     | { mate: number; sign: 1 | -1; mode: "turn"; plane: Plane; from: [number, number]; start: number; started: boolean; busy: boolean; latest?: number }
     | { mate: number; sign: 1 | -1; mode: "slide"; line: { origin: P3; dir: P3 }; from: number; start: number; started: boolean; busy: boolean; latest?: number }
+    /** Arrastre general (EN6): la pieza sigue al puntero sobre el plano de la pantalla, con el solver */
+    | { mode: "free"; instance: number; grab: P3; plane: Plane; x: number; y: number; started: boolean; busy: boolean; latest?: P3 }
     | undefined;
   let handleDrag: { id: number; h: FeatureHandle; index: number; x: number; y: number; moved: boolean; canDrag: boolean; base: number; from?: number } | undefined;
   const [dragAt, setDragAt] = createSignal<{ index: number; h: FeatureHandle; t: number; base: number }>();
@@ -2584,7 +2687,10 @@ export const CadView: Component<CadViewProps> = (props) => {
       case "face":
       case "faces":
       case "asm_face":
+      case "asm_faces":
         return { faces: true };
+      case "asm_point":
+        return { faces: true, edges: true, vertices: true };
       case "edges":
         // En vivo también las caras (una cara suma todas sus aristas)
         return mode.live ? { edges: true, faces: true } : { edges: true };
@@ -2754,6 +2860,17 @@ export const CadView: Component<CadViewProps> = (props) => {
         if (hit?.kind !== "face") return;
         ui.setPick({ kind: "none" });
         mode.done(hit.face);
+      } else if (mode.kind === "asm_point") {
+        // Cara, arista (su centro si es redonda; con Alt, el punto medio) o vértice
+        const hit = viewer.pick(e.clientX, e.clientY, { faces: true, edges: true, vertices: true });
+        if (!hit) return;
+        const at = hit.kind === "face" ? { face: hit.face } : hit.kind === "edge" ? { edge: hit.edge, center: !e.altKey } : hit.kind === "vertex" ? { vertex: hit.at } : undefined;
+        if (!at) return;
+        ui.setPick({ kind: "none" });
+        mode.done(at);
+      } else if (mode.kind === "asm_faces") {
+        const hit = viewer.pick(e.clientX, e.clientY, { faces: true });
+        if (hit?.kind === "face") mode.toggle(hit.face);
       } else if (mode.kind === "place") {
         // Sobre la pieza escaneada: un plano apoyado ahí (zona plana o tangente) y el sketch en él
         const onPiece = scanPiece() ? viewer.pickScanSurface(e.clientX, e.clientY) : null;
@@ -2830,12 +2947,26 @@ export const CadView: Component<CadViewProps> = (props) => {
     const hit = viewer?.pick(e.clientX, e.clientY, { faces: true });
     if (hit?.kind !== "face") return false;
     const instance = asmFaceRanges.find((r) => hit.face >= r[1] && hit.face < r[2])?.[0];
-    const asm = store.doc()?.assembly;
+    const doc = store.doc()?.assembly;
     const poses = store.result()?.assembly?.solution.poses;
-    if (instance === undefined || !asm || !poses) return false;
+    if (instance === undefined || !doc || !poses) return false;
+    // Con los conectores como quedaron (siguen a sus caras)
+    const asm = resolvedAssembly(doc, store.result()?.assembly);
     const joint = dragJointOf(asm, instance, ui.dragJoints()[instance]);
     const axis = joint && mateAxis(joint.mate, poses);
-    if (!joint || !axis) return false;
+    if (!joint || !axis) {
+      // Sin bisagra ni deslizante: arrastre general con el solver (salvo las fijas)
+      const inst = asm.instances.find((i) => i.id === instance);
+      if (!inst || inst.fixed || !viewer) return false;
+      const grab = viewer.fromView(hit.point);
+      const eye = viewer.eye();
+      const helper: P3 = Math.abs(eye.dir[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
+      const xd: P3 = [eye.dir[1] * helper[2] - eye.dir[2] * helper[1], eye.dir[2] * helper[0] - eye.dir[0] * helper[2], eye.dir[0] * helper[1] - eye.dir[1] * helper[0]];
+      const l = Math.hypot(...xd) || 1;
+      partDrag = { mode: "free", instance, grab, plane: { origin: grab, normal: eye.dir, x_dir: [xd[0] / l, xd[1] / l, xd[2] / l] }, x: e.clientX, y: e.clientY, started: false, busy: false };
+      container.setPointerCapture(e.pointerId);
+      return true;
+    }
     if (joint.mode === "slide") {
       // Deslizar: el puntero se lee como la distancia sobre el eje de la unión
       const from = viewer!.lineParam(e.clientX, e.clientY, axis.origin, axis.z);
@@ -2854,6 +2985,17 @@ export const CadView: Component<CadViewProps> = (props) => {
   const movePartDrag = (e: PointerEvent) => {
     const d = partDrag;
     if (!d || !viewer) return;
+    if (d.mode === "free") {
+      if (!d.started && Math.hypot(e.clientX - d.x, e.clientY - d.y) < 4) return;
+      const p = viewer.planePoint3(e.clientX, e.clientY, d.plane);
+      if (!p) return;
+      // Pasos de 1 mm (con Mayús, libre)
+      const step = e.shiftKey ? 0 : 1;
+      const snap = (v: number, k: number) => (step ? d.grab[k] + Math.round((v - d.grab[k]) / step) * step : v);
+      d.latest = [snap(p[0], 0), snap(p[1], 1), snap(p[2], 2)];
+      void pumpPartDrag();
+      return;
+    }
     if (d.mode === "slide") {
       const t = viewer.lineParam(e.clientX, e.clientY, d.line.origin, d.line.dir);
       if (t === null) return;
@@ -2874,6 +3016,33 @@ export const CadView: Component<CadViewProps> = (props) => {
   const pumpPartDrag = async () => {
     const d = partDrag;
     if (!d || d.busy || d.latest === undefined) return;
+    if (d.mode === "free") {
+      const target = d.latest;
+      d.latest = undefined;
+      d.busy = true;
+      const join = d.started;
+      d.started = true;
+      try {
+        const poses = await store.assemblyDrag(d.instance, d.grab, target);
+        await store.editAssembly((a) => {
+          for (const [id, p, r] of poses) {
+            const i = a.instances.find((x) => x.id === id);
+            if (i && !i.fixed) {
+              i.position = p;
+              i.rotation = r;
+            }
+          }
+        }, join);
+        // El punto agarrado quedó donde el solver lo dejó: el próximo tirón sale de ahí
+        d.grab = target;
+      } catch (err) {
+        ui.setMessage(tBackend(String(err)));
+      } finally {
+        d.busy = false;
+      }
+      if (partDrag === d) void pumpPartDrag();
+      return;
+    }
     const value = d.latest;
     d.latest = undefined;
     d.busy = true;
@@ -2899,7 +3068,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       container.setPointerCapture(e.pointerId);
       return sketchClick(e);
     }
-    if (ui.assemblyMode() && viewer && startPartDrag(e)) return;
+    if (ui.assemblyMode() && viewer && ui.pick().kind === "none" && startPartDrag(e)) return;
     const handle = handleOf();
     const index = handle && viewer ? viewer.handleHit(e.clientX, e.clientY) : -1;
     if (handle && index >= 0) {
@@ -3335,7 +3504,11 @@ export const CadView: Component<CadViewProps> = (props) => {
       return;
     }
     if (partDrag) {
+      const d = partDrag;
       partDrag = undefined;
+      // Un clic sin arrastrar elige la pieza, como en el resto del ensamble
+      if (!d.started) void pickClick(e);
+      else void checkClashesSoon();
       return;
     }
     dragging = undefined;

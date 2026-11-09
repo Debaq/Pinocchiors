@@ -305,6 +305,8 @@ export class CadViewer {
   private bodyVertices: THREE.Vector3[] = [];
   /** Vértices elegidos y la línea de la distancia medida */
   private marks = new THREE.Group();
+  /** Ensamble: conectores (ejes chicos) y recorridos de la explosión */
+  private triads = new THREE.Group();
   /** Vista de corte: plano (en el visor) que deja ver lo de su lado positivo, y la tapa */
   private section: THREE.Plane | null = null;
   private sectionGroup = new THREE.Group();
@@ -369,6 +371,7 @@ export class CadViewer {
     this.scene.add(this.refsGroup);
     this.marks.renderOrder = 6;
     this.scene.add(this.marks);
+    this.scene.add(this.triads);
     this.scene.add(this.sectionGroup);
     this.buildPlanes();
     this.applyTheme();
@@ -1006,6 +1009,61 @@ export class CadViewer {
       const ends = new THREE.Points(g.clone(), new THREE.PointsMaterial({ color: themeHex("cyan"), size: 7, sizeAttenuation: false, depthTest: false }));
       ends.renderOrder = 6;
       this.marks.add(line, ends);
+    }
+    this.requestRender();
+  }
+
+  /**
+   * Ensamble (mm, Z arriba): conectores como ejes chicos (X rojo, Y verde, Z azul, de un tamaño
+   * fijo en pantalla al dibujarlos) con un punto en el origen del color pedido, y líneas de
+   * recorrido punteadas (explosión)
+   */
+  setTriads(list: { origin: P3; z: P3; x: P3; color?: "accent" | "warning" | "error" | "success" }[], trails: [P3, P3][] = []) {
+    for (const o of [...this.triads.children]) {
+      this.triads.remove(o);
+      const m = o as THREE.Points | THREE.LineSegments;
+      m.geometry.dispose();
+      (m.material as THREE.Material).dispose();
+    }
+    const size = this.pixelSizeMm() * 42;
+    if (list.length) {
+      const pts: number[] = [];
+      const cols: number[] = [];
+      for (const t of list) {
+        const z = t.z;
+        const x = t.x;
+        const y: P3 = [z[1] * x[2] - z[2] * x[1], z[2] * x[0] - z[0] * x[2], z[0] * x[1] - z[1] * x[0]];
+        const o = this.toView(t.origin);
+        for (const [d, key] of [[x, "axis-x"], [y, "axis-y"], [z, "axis-z"]] as [P3, "axis-x" | "axis-y" | "axis-z"][]) {
+          const end = this.toView([t.origin[0] + d[0] * size, t.origin[1] + d[1] * size, t.origin[2] + d[2] * size]);
+          pts.push(o.x, o.y, o.z, end.x, end.y, end.z);
+          const k = new THREE.Color(themeHex(key));
+          cols.push(k.r, k.g, k.b, k.r, k.g, k.b);
+        }
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
+      g.setAttribute("color", new THREE.Float32BufferAttribute(cols, 3));
+      const lines = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ vertexColors: true, depthTest: false }));
+      lines.renderOrder = 8;
+      this.triads.add(lines);
+      for (const color of ["accent", "warning", "error", "success"] as const) {
+        const own = list.filter((t) => (t.color ?? "accent") === color);
+        if (!own.length) continue;
+        const dots = new THREE.Points(
+          new THREE.BufferGeometry().setFromPoints(own.map((t) => this.toView(t.origin))),
+          new THREE.PointsMaterial({ color: themeHex(color), size: 9, sizeAttenuation: false, depthTest: false }),
+        );
+        dots.renderOrder = 8;
+        this.triads.add(dots);
+      }
+    }
+    if (trails.length) {
+      const g = new THREE.BufferGeometry().setFromPoints(trails.flatMap(([a, b]) => [this.toView(a), this.toView(b)]));
+      const line = new THREE.LineSegments(g, new THREE.LineDashedMaterial({ color: themeHex("cyan"), dashSize: size / this.mmPerUnit / 4, gapSize: size / this.mmPerUnit / 6, depthTest: false }));
+      line.computeLineDistances();
+      line.renderOrder = 7;
+      this.triads.add(line);
     }
     this.requestRender();
   }
@@ -2378,6 +2436,15 @@ export class CadViewer {
   }
 
   /** Punto del puntero sobre un plano del CAD, en coordenadas del mundo (mm) */
+  /** Dónde está la cámara (mm del CAD) y hacia dónde mira (unitario) */
+  eye(): { at: P3; dir: P3 } {
+    const at = this.fromView(this.camera.position);
+    const t = this.fromView(this.controls.target);
+    const d: P3 = [t[0] - at[0], t[1] - at[1], t[2] - at[2]];
+    const l = Math.hypot(...d) || 1;
+    return { at, dir: [d[0] / l, d[1] / l, d[2] / l] };
+  }
+
   planePoint3(clientX: number, clientY: number, plane: Plane): P3 | null {
     const p = this.planePoint(clientX, clientY, plane);
     return p ? planeToWorld(plane, p) : null;

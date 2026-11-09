@@ -59,7 +59,7 @@ import {
   type SketchConstraint,
   type SolveReport,
   editsAsSketch,
-  type PartId, type ScanOutline } from "./cad";
+  type PartId, type ScanOutline, type Connector } from "./cad";
 
 /** Operaciones que el panel de Diseñar ofrece al menú del visor (usan lo elegido) */
 /** Aviso de curvas ligadas al modelo; "what" es de dónde vienen (frase completa por origen, no se arma por partes) */
@@ -201,6 +201,13 @@ export type PickMode =
   | { kind: "plane_point"; prompt: string; plane: Plane; done: (at: P3) => void }
   /** Una cara de la malla del ensamble (su índice) */
   | { kind: "asm_face"; prompt: string; done: (face: number) => void }
+  /**
+   * Un punto de unión en el ensamble (EN2): una cara, una arista (con `center`, su centro si es
+   * redonda: Alt elige el punto medio) o un vértice (mm del mundo)
+   */
+  | { kind: "asm_point"; prompt: string; done: (at: { face?: number; edge?: number; vertex?: P3; center?: boolean }) => void }
+  /** Caras de la malla del ensamble, varias (Enter o el botón terminan) */
+  | { kind: "asm_faces"; prompt: string; toggle: (face: number) => void }
   /** Sketch 3D: clic en un punto o una curva del sketch, un vértice del sólido o el plano activo; `from` es donde arranca lo que se dibuja */
   | { kind: "sketch3d"; prompt: string; owner?: string; feature: number; plane: Plane; from?: P3; click: (hit: Hit3d, e: PointerEvent) => void };
 
@@ -433,6 +440,20 @@ export function createCadUi(store: CadStore) {
   const [assemblyMode, setAssemblyMode] = createSignal(false);
   // Ensamble: vista explosionada (0 = armado; 1 = cada pieza al doble de lejos del centro)
   const [assemblyExplode, setAssemblyExplode] = createSignal(0);
+  // Ensamble: hasta qué paso de la explosión guardada se ve (0 = armado; 1,5 = el primero y medio segundo)
+  const [asmExplodeAt, setAsmExplodeAt] = createSignal(0);
+  // Ensamble: la unión bajo el mouse o en edición en el panel (sus caras y conectores resaltados)
+  const [asmHoverMate, setAsmHoverMate] = createSignal<number>();
+  // Ensamble: conectores a dibujar aparte (los que se eligen al armar una unión), en coordenadas de su pieza
+  const [asmConnectors, setAsmConnectors] = createSignal<Connector[]>([]);
+  // Ensamble: choques revisados solos (EN7): [instancia, instancia, mm³]; null = sin revisar
+  const [asmClashes, setAsmClashes] = createSignal<[number, number, number][] | null>(null);
+  // Ensamble: poses de un cuadro de la animación que se reproduce (null = el ensamble como está)
+  const [asmFrame, setAsmFrame] = createSignal<[number, P3, P3][] | null>(null);
+  // Ensamble: resaltar las piezas que todavía se mueven
+  const [asmShowMoving, setAsmShowMoving] = createSignal(false);
+  // Dónde está la cámara (mm): lo pone el visor (los tornillos van con la cabeza de ese lado)
+  let viewerEye: (() => P3 | undefined) | undefined;
   // Ensamble: instancias elegidas en el visor, la lista o el Outliner (el clic elige la pieza entera)
   const [asmPicked, setAsmPicked] = createSignal<number[]>([]);
   // Ensamble: por cuál unión se mueve cada pieza al arrastrarla (instancia → clave de `jointKey`)
@@ -802,6 +823,23 @@ export function createCadUi(store: CadStore) {
     setAssemblyMode,
     assemblyExplode,
     setAssemblyExplode,
+    asmExplodeAt,
+    setAsmExplodeAt,
+    asmHoverMate,
+    setAsmHoverMate,
+    asmConnectors,
+    setAsmConnectors,
+    asmClashes,
+    setAsmClashes,
+    asmFrame,
+    setAsmFrame,
+    asmShowMoving,
+    setAsmShowMoving,
+    /** El visor dice dónde está la cámara */
+    setViewerEye(f: (() => P3 | undefined) | undefined) {
+      viewerEye = f;
+    },
+    viewerEye: () => viewerEye?.(),
     asmPicked,
     setAsmPicked,
     /** Elige una instancia (con `add`, la suma o la quita de lo elegido) */

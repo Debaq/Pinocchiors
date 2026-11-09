@@ -1449,11 +1449,51 @@ export interface Configuration {
 
 // ─── Ensamble ─────────────────────────────────────────────────────────────
 
+/**
+ * Quita lo que apunta a cosas que ya no están (como `Assembly::prune`): uniones de instancias
+ * borradas, acoplamientos de uniones borradas, grupos de menos de dos, patrones sin original y
+ * pasos de animación o explosión colgando
+ */
+export function pruneAssembly(a: Assembly) {
+  const ids = new Set(a.instances.map((i) => i.id));
+  a.mates = a.mates.filter((m) => ids.has(m.a.instance) && ids.has(m.b.instance) && (!m.c || ids.has(m.c.instance)));
+  const mates = new Set(a.mates.map((m) => m.id));
+  const used = (r: Relation): number[] =>
+    r.type === "gear"
+      ? [r.a, r.b, ...(r.carrier != null ? [r.carrier] : [])]
+      : r.type === "rack_pinion" || r.type === "cam"
+        ? [r.revolute, r.slider]
+        : r.type === "screw"
+          ? [r.cylindrical]
+          : [r.a, r.b];
+  if (a.relations) a.relations = a.relations.filter((r) => used(r).every((m) => mates.has(m)));
+  if (a.groups) a.groups = a.groups.map((g) => ({ ...g, members: g.members.filter((m) => ids.has(m)) })).filter((g) => g.members.length > 1);
+  if (a.patterns)
+    a.patterns = a.patterns
+      .filter((p) => ids.has(p.source) && (p.kind.type !== "points" || ids.has(p.kind.reference)))
+      .map((p) => {
+        const keep = p.copies.map((c) => ids.has(c));
+        const kind = p.kind.type === "points" ? { ...p.kind, offsets: p.kind.offsets.filter((_, k) => keep[k]) } : p.kind;
+        return { ...p, kind, copies: p.copies.filter((c) => ids.has(c)) };
+      })
+      .filter((p) => p.copies.length > 0);
+  if (a.motion) a.motion = a.motion.filter((s) => mates.has(s.mate));
+  if (a.explode) a.explode = a.explode.map((s) => ({ ...s, instances: s.instances.filter((i) => ids.has(i)) })).filter((s) => s.instances.length > 0);
+}
+
 export interface Assembly {
   instances: AsmInstance[];
   mates: Mate[];
-  /** Acoplamientos entre uniones (engranes, piñón-cremallera, tornillo) */
+  /** Acoplamientos entre uniones (engranes, piñón-cremallera, tornillo, lineal, correa, leva) */
   relations?: Relation[];
+  /** Piezas que se mueven juntas sin uniones */
+  groups?: AsmGroup[];
+  /** Copias que siguen a su original (fila, círculo, agujeros) */
+  patterns?: AsmPattern[];
+  /** Pasos de la animación */
+  motion?: MotionStep[];
+  /** Pasos de la vista explosionada */
+  explode?: ExplodeStep[];
   next_id: number;
 }
 
@@ -1461,7 +1501,10 @@ export interface Assembly {
 export type Relation =
   | { type: "gear"; a: number; b: number; ratio: number; phase?: number; carrier?: number; carrier_ratio?: number }
   | { type: "rack_pinion"; revolute: number; slider: number; per_turn: number; phase?: number }
-  | { type: "screw"; cylindrical: number; pitch: number; phase?: number };
+  | { type: "screw"; cylindrical: number; pitch: number; phase?: number }
+  | { type: "linear"; a: number; b: number; ratio: number; phase?: number }
+  | { type: "belt"; a: number; b: number; ratio: number; phase?: number }
+  | { type: "cam"; revolute: number; slider: number; lift: [number, number][]; phase?: number };
 
 /** Una pieza puesta en el ensamble: posición (mm) y giro como vector (eje × ángulo en rad) */
 export interface AsmInstance {
@@ -1475,7 +1518,56 @@ export interface AsmInstance {
   position: P3;
   rotation: P3;
   fixed: boolean;
+  /** Se resuelve pero no se dibuja */
+  hidden?: boolean;
+  /** Como si no estuviera */
+  suppressed?: boolean;
+  /** Color propio en el ensamble ("#rrggbb") */
+  color?: string | null;
+  /** Reflejada en el plano por su origen con esta normal (coordenadas de la pieza) */
+  mirror?: P3 | null;
+  /** Subensamble flexible: sus uniones entran al solver de arriba */
+  flexible?: boolean;
 }
+
+export interface AsmGroup {
+  id: number;
+  name: string;
+  members: number[];
+}
+
+export type AsmPatternKind =
+  | { type: "linear"; dir: P3; step: number }
+  | { type: "circular"; origin: P3; axis: P3; angle: number }
+  | { type: "points"; reference: number; offsets: P3[] };
+
+export interface AsmPattern {
+  id: number;
+  source: number;
+  kind: AsmPatternKind;
+  copies: number[];
+}
+
+export interface MotionStep {
+  mate: number;
+  var: "angle" | "distance";
+  from: number;
+  to: number;
+  seconds: number;
+}
+
+export interface ExplodeStep {
+  instances: number[];
+  dir: P3;
+  distance: number;
+}
+
+/** De qué cara, borde o vértice sale un conector (así sigue a la pieza) */
+export type ConnectorRef =
+  | { type: "face"; face: FaceRef }
+  | { type: "edge_center"; edge: EdgeRef }
+  | { type: "edge_mid"; edge: EdgeRef }
+  | { type: "vertex"; point: P3; normal?: P3 };
 
 /** Sistema de coordenadas sobre una instancia, en coordenadas de su pieza */
 export interface Connector {
@@ -1483,9 +1575,18 @@ export interface Connector {
   origin: P3;
   z: P3;
   x: P3;
+  /** Radio de la cara cilíndrica o del borde redondo (unión tangente) */
+  radius?: number;
+  at?: ConnectorRef | null;
+  /** Corrimiento a lo largo de Z (mm) */
+  offset?: number;
+  /** Giro de X alrededor de Z (°) */
+  spin?: number;
+  /** Z al revés */
+  reverse?: boolean;
 }
 
-export type MateKind = "fastened" | "revolute" | "slider" | "cylindrical" | "planar" | "spherical" | "parallel" | "pin_slot";
+export type MateKind = "fastened" | "revolute" | "slider" | "cylindrical" | "planar" | "spherical" | "parallel" | "pin_slot" | "tangent" | "width" | "angle";
 
 export const MATE_LABELS: Record<MateKind, string> = {
   get fastened() { return tr("Fija"); },
@@ -1496,6 +1597,9 @@ export const MATE_LABELS: Record<MateKind, string> = {
   get spherical() { return tr("Rótula (gira en todo)"); },
   get parallel() { return tr("Paralela (ejes paralelos)"); },
   get pin_slot() { return tr("Pasador en ranura"); },
+  get tangent() { return tr("Tangente (cilindro contra plano o cilindro)"); },
+  get width() { return tr("Centrada entre dos caras"); },
+  get angle() { return tr("Ángulo entre caras"); },
 };
 
 export interface Mate {
@@ -1504,16 +1608,53 @@ export interface Mate {
   kind: MateKind;
   a: Connector;
   b: Connector;
+  /** Segunda cara de A (centrada) */
+  c?: Connector | null;
   flip: boolean;
-  /** Ángulo impuesto (grados) en bisagras y cilíndricas */
+  /** Ángulo impuesto (grados) en bisagras y cilíndricas; el ángulo de la unión «ángulo» */
   angle?: number | null;
-  /** Distancia impuesta (mm) en deslizantes y cilíndricas */
+  /** Distancia impuesta (mm) en deslizantes y cilíndricas; separación en planas y pegadas */
   distance?: number | null;
+  /** Topes del ángulo (°) */
+  angle_limits?: [number, number] | null;
+  /** Topes de la distancia (mm) */
+  distance_limits?: [number, number] | null;
+  suppressed?: boolean;
+}
+
+export interface AssemblySolutionView {
+  poses: [number, P3, P3][];
+  residual: number;
+  converged: boolean;
+  dof: number;
+  /** Uniones que no se cumplen: [unión, desvío] */
+  mate_errors?: [number, number][];
+  /** Uniones que no agregan nada */
+  redundant?: number[];
+  /** Instancias que todavía se mueven: [instancia, grados libres] */
+  instance_dof?: [number, number][];
 }
 
 export interface AssemblyView {
-  solution: { poses: [number, P3, P3][]; residual: number; converged: boolean; dof: number };
+  solution: AssemblySolutionView;
   version: number;
+  /** Conectores de cada unión rehechos desde sus caras */
+  connectors?: { id: number; a: Connector; b: Connector; c?: Connector }[];
+  /** Conectores cuya cara, borde o vértice ya no está */
+  lost?: { mate: number; instance: number; message: string }[];
+}
+
+/** El ensamble con los conectores como los rehízo el backend (siguen a sus caras) */
+export function resolvedAssembly(asm: Assembly, view: AssemblyView | null | undefined): Assembly {
+  const list = view?.connectors;
+  if (!list?.length) return asm;
+  return {
+    ...asm,
+    mates: asm.mates.map((m) => {
+      const r = list.find((x) => x.id === m.id);
+      return r ? { ...m, a: r.a, b: r.b, c: r.c ?? m.c } : m;
+    }),
+  };
 }
 
 /** Pieza: la operación que la creó y su número dentro de ella */
@@ -5468,8 +5609,22 @@ export function createCadStore() {
 
     // ─── Ensamble ─────────────────────────────────────────────────────
     /** La unión recorrida de `from` a `to` (° o mm) como GLB animado, una pose por cuadro */
-    exportAssemblyAnimation: (path: string, mate: number, v: "angle" | "distance", from: number, to: number, frames = 30, fps = 30) =>
-      invoke<number>("cad_export_assembly_animation", { path, mate, var: v, from, to, frames, fps }),
+    exportAssemblyAnimation: (path: string, mate: number, v: "angle" | "distance", from: number, to: number, frames = 30, fps = 30, steps: MotionStep[] | null = null) =>
+      invoke<number>("cad_export_assembly_animation", { path, mate, var: v, from, to, frames, fps, steps }),
+    /** Cuadros de la animación por pasos: las poses de cada instancia en cada cuadro */
+    assemblySweep: (steps: MotionStep[], fps = 30) => invoke<[number, P3, P3][][]>("cad_assembly_sweep", { steps, fps }),
+    /** Primer cuadro del recorrido de una unión en que algo choca: [cuadro, valor, instancia, instancia, mm³] */
+    assemblyFirstClash: (mate: number, v: "angle" | "distance", from: number, to: number, frames = 24) =>
+      invoke<[number, number, number, number, number] | null>("cad_assembly_first_clash", { mate, var: v, from, to, frames }),
+    /** Conector ligado sobre una cara, arista (su centro si es redonda y `center`) o vértice (mm) del ensamble */
+    assemblyConnectorAt: (at: { face?: number; edge?: number; vertex?: P3; center?: boolean }) => invoke<Connector>("cad_assembly_connector_at", { at }),
+    /** Caras y aristas de la malla del ensamble donde están los conectores de una unión */
+    assemblyMateFaces: (mate: number) => invoke<{ faces: number[]; edges: number[] }>("cad_assembly_mate_faces", { mate }),
+    /** Arrastre general: la pieza va hacia `target` (mm) agarrada de `grab` (mm, en el mundo) respetando sus uniones */
+    assemblyDrag: (instance: number, grab: P3, target: P3) => invoke<[number, P3, P3][]>("cad_assembly_drag", { instance, grab, target }),
+    /** Corrimientos de los otros agujeros como el que sostiene a la instancia (en coordenadas de la pieza agujereada) */
+    assemblyHolePattern: (instance: number) => invoke<{ reference: number; offsets: P3[] }>("cad_assembly_hole_pattern", { instance }),
+
     /** Malla del ensamble armado (el backend la guarda; la explosión la hace `explodeAssemblyMesh`) */
     assemblyMesh: async () => decodeCadMesh(await invoke<ArrayBuffer>("cad_assembly_mesh", { explode: 0 })),
     assemblyFaces: () => invoke<AssemblyRange[]>("cad_assembly_faces"),
@@ -5507,11 +5662,33 @@ export function createCadStore() {
       });
     },
 
+    /**
+     * Tornillos en los agujeros elegidos (caras de la malla del ensamble): de la medida y el
+     * largo justos, con arandela y tuerca si se piden, ya unidos (EN9). Van a la pestaña
+     * «Piezas compradas»; la cabeza, del lado de `eye` (la cámara, mm). Devuelve los avisos
+     */
+    async fasten(faces: number[], nut: boolean, washer: boolean, eye?: P3) {
+      if (draft()) await acceptDraft();
+      await lastSend;
+      const r = await invoke<{ instances: AsmInstance[]; mates: Mate[]; next_id: number; tabs: CadTabs; notes: string[] }>("cad_assembly_fasten", { faces, nut, washer, eye: eye ?? null });
+      setTabs(r.tabs);
+      await commit((d) => {
+        const a = d.assembly ?? { instances: [], mates: [], next_id: 1 };
+        a.instances.push(...r.instances);
+        a.mates.push(...r.mates);
+        a.next_id = Math.max(a.next_id || 1, r.next_id);
+        d.assembly = a;
+      });
+      return { added: r.instances.length, notes: r.notes };
+    },
+
     /** Cambia el ensamble (deshacible); lo crea si no hay */
     editAssembly(mutate: (a: Assembly) => void, join = false) {
       return commit((d) => {
         const a = d.assembly ?? { instances: [], mates: [], next_id: 1 };
         mutate(a);
+        // Sin uniones ni acoplamientos colgando de lo que se borró (EN0)
+        pruneAssembly(a);
         d.assembly = a;
       }, join);
     },

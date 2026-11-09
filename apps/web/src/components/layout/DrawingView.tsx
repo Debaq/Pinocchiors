@@ -176,10 +176,10 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
   const [info, setInfo] = createSignal<{ min: P3; max: P3; items: { instance: number; center: P3 }[] }>();
   let infoSeq = 0;
   createEffect(
-    on([() => store.result()?.version, inAssembly], ([, asm]) => {
+    on([() => store.result()?.version, inAssembly, () => !!d()?.exploded, () => store.result()?.assembly?.version], ([, asm, exploded]) => {
       const n = ++infoSeq;
       if (!asm) return setInfo(undefined);
-      invoke<{ min: P3; max: P3; items: { instance: number; center: P3 }[] }>("cad_drawing_info").then(
+      invoke<{ min: P3; max: P3; items: { instance: number; center: P3 }[] }>("cad_drawing_info", { exploded }).then(
         (i) => n === infoSeq && setInfo(i),
         () => n === infoSeq && setInfo(undefined),
       );
@@ -241,7 +241,7 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
   type ViewImage = { href: string; min: P2; max: P2 } | null;
   let viewCache: { version: unknown; map: Map<string, { res: ViewResult; img?: ViewImage }> } = { version: undefined, map: new Map() };
   createEffect(
-    on([() => store.result()?.version, requests, sectionOn, sectionY], async ([version]) => {
+    on([() => store.result()?.version, requests, sectionOn, sectionY, () => !!d()?.exploded], async ([version]) => {
       const asked = JSON.parse(requests()) as { name: string; eye: P3; xdir: P3; cut: CutPrism[]; shaded: boolean }[];
       const names = asked.map((x) => x.name);
       const n = ++seq;
@@ -255,13 +255,14 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
           name === "front" && sectionOn() ? { eye, xdir, cut, shaded, section: { origin: [0, at, 0], normal: [0, 1, 0] } } : { eye, xdir, cut, shaded },
         );
         // El ensamble (instancias movidas) cuenta aparte de la huella de los diseños
-        const key = `${version}:${store.result()?.assembly?.version ?? ""}`;
+        const exploded = inAssembly() && !!d()?.exploded;
+        const key = `${version}:${store.result()?.assembly?.version ?? ""}:${exploded}`;
         if (viewCache.version !== key) viewCache = { version: key, map: new Map() };
         const cache = viewCache.map;
         const keys = specs.map((spec) => JSON.stringify(spec));
         const missing = keys.flatMap((key, i) => (cache.has(key) ? [] : [i]));
         if (missing.length) {
-          const got = await invoke<ViewResult[]>("cad_drawing", { views: missing.map((i) => specs[i]) });
+          const got = await invoke<ViewResult[]>("cad_drawing", { views: missing.map((i) => specs[i]), exploded });
           missing.forEach((i, j) => cache.set(keys[i], { res: got[j] }));
           // Las más viejas se sueltan (mover un corte deja muchas que ya no se usan)
           for (const key of cache.keys()) {
@@ -1234,6 +1235,7 @@ const ElementWindow: Component<{
             <div class="flex flex-wrap gap-x-3">
               {check(t("Ocultas"), props.sheet.hiddenLines, (v) => props.update((s) => (s.hiddenLines = v)))}
               {check(t("Tangentes"), props.sheet.smooth, (v) => props.update((s) => (s.smooth = v)))}
+              <Show when={props.assembly}>{check(t("Explosionada"), !!props.sheet.exploded, (v) => props.update((s) => (s.exploded = v)))}</Show>
             </div>
             <Show when={props.gearList.length > 0 || missingGears().length > 0}>
               <div class="space-y-0.5" aria-label={t("Engranes en el plano")}>

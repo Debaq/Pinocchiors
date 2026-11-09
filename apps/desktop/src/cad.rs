@@ -2961,15 +2961,15 @@ pub struct DrawingLine {
 
 /// Líneas de cada vista del diseño guardado (líneas ocultas exactas), en mm.
 #[tauri::command]
-pub async fn cad_drawing(app: AppHandle, views: Vec<DrawingViewSpec>) -> Result<Vec<DrawingViewResult>, String> {
-    in_background(app, move |state| drawing_impl(state, &views)).await
+pub async fn cad_drawing(app: AppHandle, views: Vec<DrawingViewSpec>, exploded: Option<bool>) -> Result<Vec<DrawingViewResult>, String> {
+    in_background(app, move |state| drawing_impl(state, &views, exploded.unwrap_or(false))).await
 }
 
 /// Lo que muestra un plano: el sólido entero y cada pieza con el índice de la suya en `parts`
 /// del recálculo (para rayarla según su material). En un ensamble, las instancias en su lugar.
-fn drawing_shapes(state: &AppState) -> Result<(cad_model::Shape, Vec<(u32, cad_model::Shape)>), String> {
+fn drawing_shapes(state: &AppState, exploded: bool) -> Result<(cad_model::Shape, Vec<(u32, cad_model::Shape)>), String> {
     if state.cad_in_assembly() {
-        let (asm, shapes) = assembly_shapes(state)?;
+        let (asm, shapes) = drawn_assembly_shapes(state, exploded)?;
         let cache = state.cad_cache.lock().unwrap();
         let parts = &cache.as_ref().ok_or("El ensamble todavía no tiene piezas")?.eval.parts;
         let pieces: Vec<(u32, cad_model::Shape)> = shapes
@@ -3011,18 +3011,34 @@ pub struct DrawingItem {
 }
 
 #[tauri::command]
-pub async fn cad_drawing_info(app: AppHandle) -> Result<DrawingInfo, String> {
-    in_background(app, drawing_info_impl).await
+pub async fn cad_drawing_info(app: AppHandle, exploded: Option<bool>) -> Result<DrawingInfo, String> {
+    in_background(app, move |state| drawing_info_impl(state, exploded.unwrap_or(false))).await
 }
 
-fn drawing_info_impl(state: &AppState) -> Result<DrawingInfo, String> {
+/// Lo que se dibuja de un ensamble en el plano: sin las ocultas y, con `exploded`, con todos los
+/// pasos de su explosión (EN11)
+fn drawn_assembly_shapes(state: &AppState, exploded: bool) -> Result<(cad_model::Assembly, Vec<(u32, cad_model::Shape)>), String> {
+    let (asm, shapes) = assembly_shapes(state)?;
+    let offsets = if exploded { cad_model::assembly::explode_offsets(&asm, asm.explode.len() as f64) } else { Vec::new() };
+    let shapes = shapes
+        .into_iter()
+        .filter(|(id, _)| !asm.instances.iter().any(|i| i.id == *id && i.hidden))
+        .map(|(id, s)| match offsets.iter().find(|o| o.0 == id) {
+            Some((_, v)) => s.translate(*v).map(|t| (id, t)).map_err(|e| e.to_string()),
+            None => Ok((id, s)),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((asm, shapes))
+}
+
+fn drawing_info_impl(state: &AppState, exploded: bool) -> Result<DrawingInfo, String> {
     require_occt()?;
     if !state.cad_in_assembly() {
-        let (body, _) = drawing_shapes(state)?;
+        let (body, _) = drawing_shapes(state, false)?;
         let (min, max) = body.bounds().map_err(|e| e.to_string())?;
         return Ok(DrawingInfo { min, max, items: Vec::new() });
     }
-    let (_, shapes) = assembly_shapes(state)?;
+    let (_, shapes) = drawn_assembly_shapes(state, exploded)?;
     let (mut min, mut max) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
     let mut items = Vec::new();
     for (instance, s) in shapes {
@@ -3040,11 +3056,11 @@ fn drawing_info_impl(state: &AppState) -> Result<DrawingInfo, String> {
     Ok(DrawingInfo { min, max, items })
 }
 
-fn drawing_impl(state: &AppState, views: &[DrawingViewSpec]) -> Result<Vec<DrawingViewResult>, String> {
+fn drawing_impl(state: &AppState, views: &[DrawingViewSpec], exploded: bool) -> Result<Vec<DrawingViewResult>, String> {
     use rayon::prelude::*;
     require_occt()?;
     // Con varias piezas, el rayado sale pieza por pieza (cada una con el suyo, según su material)
-    let (body, pieces) = drawing_shapes(state)?;
+    let (body, pieces) = drawing_shapes(state, exploded)?;
     let m = body.mass().map_err(|e| e.to_string())?;
     let size = (0..3).map(|k| m.bbox_max[k] - m.bbox_min[k]).fold(0.0, f64::max).max(1.0);
     // Cada vista en su hilo con OCCT 8 (manejo de errores por hilo). Cada una con
@@ -4583,8 +4599,8 @@ pub mod bridge {
             "cad_assembly_suggest" => ok(assembly_suggest_impl(state)?),
             "cad_part_interference" => ok(part_interference_impl(state, arg::<Option<f64>>(args, "min_gap")?)?),
             "cad_assembly_gear_warnings" => ok(assembly_gear_warnings_impl(state)?),
-            "cad_drawing_info" => ok(drawing_info_impl(state)?),
-            "cad_drawing" => ok(drawing_impl(state, &arg::<Vec<DrawingViewSpec>>(args, "views")?)?),
+            "cad_drawing_info" => ok(drawing_info_impl(state, arg::<Option<bool>>(args, "exploded")?.unwrap_or(false))?),
+            "cad_drawing" => ok(drawing_impl(state, &arg::<Vec<DrawingViewSpec>>(args, "views")?, arg::<Option<bool>>(args, "exploded")?.unwrap_or(false))?),
             "cad_write_pdf" => {
                 let (path, svg): (String, String) = (arg(args, "path")?, arg(args, "svg")?);
                 let bytes = svg_to_pdf(&svg)?;
