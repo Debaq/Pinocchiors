@@ -3093,7 +3093,8 @@ CadShape* cad_grid_face(const double* grid, int32_t rows, int32_t cols, double t
         else
             ap.Interpolate(pts);
         if (!ap.IsDone()) throw Standard_Failure("la grilla no da una superficie");
-        Handle(Geom_Surface) surf = ap.Surface();
+        // Inicialización directa: el GCC 11 del CI no convierte handle<derivada> a handle<base> con =
+        Handle(Geom_Surface) surf(ap.Surface());
         // Borde: segmentos rectos; sus curvas sobre la superficie las agrega ShapeFix
         BRepBuilderAPI_MakePolygon poly;
         for (int32_t k = 0; k < nb; k++) poly.Add(pnt(boundary + 3 * k));

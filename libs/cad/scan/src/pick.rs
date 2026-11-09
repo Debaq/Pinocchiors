@@ -282,12 +282,17 @@ pub fn boundary_loops(mesh: &ScanMesh, faces: &[u32]) -> Vec<Vec<P3>> {
             e.2 += 1;
         }
     }
-    // Aristas de borde con su sentido original (a → b)
-    let mut next: HashMap<u32, Vec<u32>> = HashMap::new();
+    // Aristas de borde con su sentido original (a → b). Ordenadas: recorrer el
+    // HashMap da otro orden en cada ejecución (otro punto de arranque y otras
+    // ramas en los vértices compartidos: el borde de una zona cambiaba)
+    let mut next: std::collections::BTreeMap<u32, Vec<u32>> = std::collections::BTreeMap::new();
     for &(a, b, n) in count.values() {
         if n == 1 {
             next.entry(a).or_default().push(b);
         }
+    }
+    for v in next.values_mut() {
+        v.sort_unstable();
     }
     let mut loops = Vec::new();
     while let Some((&start, _)) = next.iter().find(|(_, v)| !v.is_empty()) {

@@ -78,6 +78,13 @@ impl ScanMesh {
                 }
             }
         }
+        // En orden: `edge_faces` es un HashMap (orden distinto en cada ejecución) y
+        // el orden de los vecinos decide el recorrido de las zonas y qué puntos
+        // se muestrean para ajustar (un plano sobre un cráneo salía ~1° distinto
+        // cada vez que se abría la app)
+        for a in &mut adjacency {
+            a.sort_unstable();
+        }
         ScanMesh { vertices: welded, triangles, face_normals, face_areas, face_centroids, adjacency, bbox_min, bbox_max }
     }
 

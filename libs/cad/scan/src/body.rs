@@ -319,7 +319,8 @@ fn close_open_edges(vertices: &mut Vec<P3>, triangles: &mut Vec<[u32; 3]>) {
             *directed.entry((t[k], t[(k + 1) % 3])).or_default() += 1;
         }
     }
-    let mut next: HashMap<u32, u32> = HashMap::new();
+    // Ordenado: cada agujero se recorre desde el mismo vértice en cada ejecución
+    let mut next: std::collections::BTreeMap<u32, u32> = std::collections::BTreeMap::new();
     for (&(a, b), _) in directed.iter().filter(|((a, b), _)| !directed.contains_key(&(*b, *a))) {
         // El agujero se recorre b → a para que las caras nuevas miren afuera
         next.insert(b, a);

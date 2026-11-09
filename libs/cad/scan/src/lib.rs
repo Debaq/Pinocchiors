@@ -296,7 +296,8 @@ pub fn detect_all(mesh: &ScanMesh, opts: &DetectOptions) -> Vec<Detection> {
             }
         }
         // Lo que sobra entre los planos (un redondeo, un chaflán curvo): cada tramo conexo se ajusta aparte
-        let mut left: std::collections::HashSet<u32> = faces.iter().copied().filter(|f| !taken.contains(f)).collect();
+        // Ordenado: el mismo tramo primero en cada ejecución
+        let mut left: std::collections::BTreeSet<u32> = faces.iter().copied().filter(|f| !taken.contains(f)).collect();
         while let Some(&start) = left.iter().next() {
             let mut group = vec![start];
             left.remove(&start);

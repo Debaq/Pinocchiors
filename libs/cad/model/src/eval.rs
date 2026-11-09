@@ -691,6 +691,97 @@ fn until_sheet(prism: &Shape, sheet: &Shape, start: P3, cap: P3) -> R<Shape> {
     }
 }
 
+/// La malla cerrada de un escaneo preparado (los mismos avisos que `scan_solid`).
+fn scan_data(mesh: Option<&ScanBodyMesh>) -> R<crate::mesh_bool::MeshData> {
+    let mesh = mesh.ok_or("no hay un escaneo elegido")?;
+    if let Some(e) = &mesh.error {
+        return Err(format!("no se pudo preparar el escaneo: {e}"));
+    }
+    if mesh.data.1.is_empty() {
+        return Err("no hay un escaneo elegido".into());
+    }
+    Ok(mesh.data.clone())
+}
+
+fn mesh_bounds(v: &[P3]) -> (P3, P3) {
+    v.iter().fold(([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]), |(lo, hi), p| ([0, 1, 2].map(|k| lo[k].min(p[k])), [0, 1, 2].map(|k| hi[k].max(p[k]))))
+}
+
+/// Varias mallas cerradas (pedazos sueltos) en una.
+fn merge_meshes(pieces: &[crate::mesh_bool::MeshData]) -> crate::mesh_bool::MeshData {
+    let mut v = Vec::new();
+    let mut t = Vec::new();
+    for p in pieces {
+        let base = v.len() as u32;
+        v.extend_from_slice(&p.0);
+        t.extend(p.1.iter().map(|tri| tri.map(|i| i + base)));
+    }
+    std::sync::Arc::new((v, t))
+}
+
+fn translate_mesh(m: &crate::mesh_bool::MeshData, by: P3) -> crate::mesh_bool::MeshData {
+    std::sync::Arc::new((m.0.iter().map(|p| add(*p, by)).collect(), m.1.clone()))
+}
+
+/// El punto de la malla más lejos a lo largo de `n` desde `origin`.
+fn mesh_tip(m: &crate::mesh_bool::MeshData, origin: P3, n: P3) -> f64 {
+    m.0.iter().map(|p| dot(sub(*p, origin), n)).fold(f64::NEG_INFINITY, f64::max)
+}
+
+/// ¿Tiene la malla vértices en el plano (`origin`, `n`)? (la tapa donde arranca el prisma)
+fn mesh_starts(m: &crate::mesh_bool::MeshData, origin: P3, n: P3, tol: f64) -> bool {
+    m.0.iter().any(|p| dot(sub(*p, origin), n).abs() < tol)
+}
+
+/// Como `keep_seen`, con mallas: los pedazos que se ven primero desde `from` hacia `dir`.
+fn mesh_keep_seen(pieces: Vec<crate::mesh_bool::MeshData>, from: &[P3], dir: P3) -> R<crate::mesh_bool::MeshData> {
+    if pieces.is_empty() {
+        return Err("no quedó nada: ¿las regiones caen sobre la piel?".into());
+    }
+    let rays: Vec<MeshRay> = pieces.iter().map(|p| MeshRay::new(&p.0, &p.1)).collect();
+    let mut keep = vec![false; pieces.len()];
+    for p in from {
+        if let Some((k, _)) = rays.iter().enumerate().filter_map(|(k, m)| m.hit(*p, dir).map(|t| (k, t))).min_by(|a, b| a.1.total_cmp(&b.1)) {
+            keep[k] = true;
+        }
+    }
+    let kept: Vec<_> = pieces.into_iter().zip(keep).filter(|(_, k)| *k).map(|(m, _)| m).collect();
+    if kept.is_empty() {
+        return Err("desde el sketch no se ve la piel".into());
+    }
+    Ok(merge_meshes(&kept))
+}
+
+/// Como `keep_starting`, con mallas: los pedazos que arrancan en el plano del sketch.
+fn mesh_keep_starting(pieces: Vec<crate::mesh_bool::MeshData>, origin: P3, n: P3, size: f64) -> R<crate::mesh_bool::MeshData> {
+    let kept: Vec<_> = pieces.into_iter().filter(|m| mesh_starts(m, origin, n, size * 1e-6)).collect();
+    if kept.is_empty() {
+        return Err("el plano del sketch no queda adentro del material".into());
+    }
+    Ok(merge_meshes(&kept))
+}
+
+/// Como `until_scan`, con mallas: el prisma menos el escaneo, los pedazos que
+/// arrancan en el plano del perfil; error si alguno no encuentra el escaneo.
+fn mesh_until_scan(prism: &Shape, scan: &crate::mesh_bool::MeshData, origin: P3, n: P3, cap: P3) -> R<crate::mesh_bool::MeshData> {
+    let (lo, hi) = prism.bounds().map_err(err)?;
+    let size = norm(sub(hi, lo)).max(1.0);
+    let pmesh = crate::mesh_bool::shape_mesh(prism)?;
+    // El fin del prisma por sus vértices (con la caja, en un plano inclinado,
+    // quedaba más lejos que cualquier punta y el «no encuentra el escaneo» no salía)
+    let far = mesh_tip(&pmesh, origin, n).max(0.0);
+    let rest = crate::mesh_bool::boolean(&pmesh, std::slice::from_ref(scan), crate::mesh_bool::MeshOp::Difference)?;
+    let kept: Vec<_> = rest.into_iter().filter(|m| mesh_starts(m, origin, cap, size * 1e-6)).collect();
+    // Lo que no encuentra el escaneo sigue hasta el final del prisma
+    if kept.iter().any(|m| mesh_tip(m, origin, n) > far - size * 1e-6) {
+        return Err("parte del perfil no queda frente al escaneo: no tiene hasta dónde llegar".into());
+    }
+    if kept.is_empty() {
+        return Err("el perfil empieza dentro del escaneo".into());
+    }
+    Ok(merge_meshes(&kept))
+}
+
 /// `cap`: la normal de la tapa donde arranca (la de `n` salvo con dirección propia).
 fn until_scan(prism: &Shape, scan: &Shape, origin: P3, n: P3, cap: P3) -> R<Shape> {
     let reach = prism.mass().map_err(err)?;
@@ -2334,7 +2425,7 @@ impl Ctx<'_> {
     }
 
     /// Relieve o grabado de las regiones de un sketch sobre la piel del escaneo.
-    fn relief(&self, id: FeatureId, r: &Relief) -> R<Tagged> {
+    fn relief(&self, id: FeatureId, r: &Relief) -> R<(Tagged, Option<crate::mesh_bool::MeshData>)> {
         if r.height <= 0.0 && r.mode != ReliefMode::FlatTop {
             return Err("la altura tiene que ser mayor que cero".into());
         }
@@ -2344,22 +2435,29 @@ impl Ctx<'_> {
             ReliefTarget::Body => false,
             ReliefTarget::Auto => r.mesh.as_ref().is_some_and(|m| m.error.is_none() && !m.data.1.is_empty()),
         };
-        let skin = if use_scan {
-            scan_solid(r.mesh.as_ref())?
+        // Sobre un escaneo todo va por su malla (rayos con BVH y booleanas de
+        // mallas): el escaneo como sólido OCCT (una cara por triángulo) tardaba
+        // segundos en armarse y sus booleanas de 5 a 17 s, y fallaban de a ratos.
+        // El sólido solo hace falta para envolver.
+        let scan_mesh = if use_scan { Some(scan_data(r.mesh.as_ref())?) } else { None };
+        let skin: Option<Shape> = if use_scan {
+            if matches!(r.map, ReliefMap::Wrap { .. }) { Some(scan_solid(r.mesh.as_ref())?) } else { None }
         } else {
             // Sin sólido y con un escaneo que no se pudo preparar: el motivo del escaneo
             // (p. ej. «tiene fallas: repáralo»), no un «no hay escaneo» que confunde
             let scan_error = r.mesh.as_ref().and_then(|m| m.error.clone());
-            self.body()
-                .map_err(|_| scan_error.unwrap_or_else(|| "no hay escaneo ni sólido sobre el que poner el relieve".to_string()))?
-                .clone()
+            Some(
+                self.body()
+                    .map_err(|_| scan_error.unwrap_or_else(|| "no hay escaneo ni sólido sobre el que poner el relieve".to_string()))?
+                    .clone(),
+            )
         };
         // Para envolver sobre el sólido: su teselado hace de malla
         let body_mesh;
         let raw: Option<(&[P3], &[[u32; 3]])> = if use_scan {
             r.skin.as_ref().map(|m| (m.data.0.as_slice(), m.data.1.as_slice()))
         } else if matches!(r.map, ReliefMap::Wrap { .. }) {
-            let t = skin.tessellate(self.diag() * 2e-4, 0.1).map_err(err)?;
+            let t = skin.as_ref().ok_or("falta el sólido")?.tessellate(self.diag() * 2e-4, 0.1).map_err(err)?;
             // Las caras se teselan por separado: vértices soldados para que el trozo cruce aristas
             body_mesh = weld_mesh(&t.positions, &t.triangles, self.diag() * 1e-6);
             Some((body_mesh.0.as_slice(), body_mesh.1.as_slice()))
@@ -2368,8 +2466,8 @@ impl Ctx<'_> {
         };
         // Rayos contra la piel por su malla (la del escaneo tal cual llega, o el teselado del sólido)
         let rays = match r.mesh.as_ref().filter(|_| use_scan) {
-            Some(m) => MeshRay::new(m.data.0.clone(), m.data.1.clone()),
-            None => MeshRay::of_shape(&skin)?,
+            Some(m) => MeshRay::of_scan(m),
+            None => std::sync::Arc::new(MeshRay::of_shape(skin.as_ref().ok_or("falta el sólido")?)?),
         };
         let (mut faces, _, mut samples) = self.profile(r.sketch, &r.regions)?;
         let s = self.ev.sketches.get(&r.sketch).ok_or("el sketch no está calculado")?;
@@ -2399,7 +2497,7 @@ impl Ctx<'_> {
         let mut wrapped_regions: Option<Vec<Region>> = None;
         if let ReliefMap::Wrap { anchor, angle } = &r.map {
             let (verts, tris) = raw.ok_or("falta el escaneo para envolver (¿hay un escaneo elegido?)")?;
-            let (loops, stretch) = wrap_regions(&regions, &plane, d, &skin, verts, tris, anchor.as_ref().map(|a| a.at), *angle)?;
+            let (loops, stretch) = wrap_regions(&regions, &plane, d, skin.as_ref().ok_or("falta el escaneo para envolver")?, verts, tris, anchor.as_ref().map(|a| a.at), *angle)?;
             faces = loops
                 .iter()
                 .map(|(outer, holes)| {
@@ -2430,8 +2528,15 @@ impl Ctx<'_> {
             world = probes.iter().map(|p| plane.to_world(*p)).chain(samples.iter().copied()).collect();
             wrapped_note = Some(format!(" · envuelto: estira {:.1} %", (stretch - 1.0).max(0.0) * 100.0).replace('.', ","));
         }
-        let m = skin.mass().map_err(err)?;
-        let corners = (0..8).map(|k| [0, 1, 2].map(|a| if k >> a & 1 == 0 { m.bbox_min[a] } else { m.bbox_max[a] }));
+        let (bmin, bmax) = match (&scan_mesh, &skin) {
+            (Some(mm), _) => mesh_bounds(&mm.0),
+            (None, Some(sk)) => {
+                let m = sk.mass().map_err(err)?;
+                (m.bbox_min, m.bbox_max)
+            }
+            (None, None) => return Err("no hay escaneo ni sólido sobre el que poner el relieve".into()),
+        };
+        let corners = (0..8).map(|k| [0, 1, 2].map(|a| if k >> a & 1 == 0 { bmin[a] } else { bmax[a] }));
         let reach = corners.map(|c| dot(sub(c, plane.origin), d).abs()).fold(0.0, f64::max) * 1.1 + r.height.abs() + 1.0;
         // Prisma de las regiones desde `a` a lo largo de `d`, de largo `l`
         let prism = |a: f64, l: f64| -> R<Shape> {
@@ -2467,54 +2572,85 @@ impl Ctx<'_> {
             }
             None => r.mode,
         };
-        let shape = match (mode, r.inward) {
-            // Pareja: la carcasa de la altura, bajo las regiones, lo primero que se ve
-            (ReliefMode::Even, inward) => {
-                // La carcasa: la que pone la app (escaneo) o el sólido corrido la altura
-                let band = if use_scan {
-                    scan_solid(r.shell.as_ref())?
-                } else if inward {
-                    skin.cut(&solid_offset(&skin, -h)?).map_err(err)?
-                } else {
-                    solid_offset(&skin, h)?.cut(&skin).map_err(err)?
-                };
-                let cut = band.intersect(&prism(-reach, 2.0 * reach)?).map_err(err)?;
-                keep_seen(cut, &world, d)?
+        let (shape, mesh) = if let Some(scan) = &scan_mesh {
+            let size = norm(sub(bmax, bmin)).max(1.0);
+            let pmesh = |a: f64, l: f64| -> R<crate::mesh_bool::MeshData> { crate::mesh_bool::shape_mesh(&prism(a, l)?) };
+            use crate::mesh_bool::{MeshOp, boolean};
+            let mesh = match (mode, r.inward) {
+                (ReliefMode::Even, _) => {
+                    let band = scan_data(r.shell.as_ref())?;
+                    mesh_keep_seen(boolean(&band, &[pmesh(-reach, 2.0 * reach)?], MeshOp::Intersection)?, &world, d)?
+                }
+                (ReliefMode::FlatTop, false) => mesh_until_scan(&prism(0.0, reach)?, scan, plane.origin, d, n)?,
+                (ReliefMode::FlatTop, true) => mesh_keep_starting(boolean(&pmesh(0.0, reach)?, std::slice::from_ref(scan), MeshOp::Intersection)?, plane.origin, n, size)?,
+                (ReliefMode::FlatAuto, false) => {
+                    let top = near - h;
+                    mesh_until_scan(&prism(top, reach)?, scan, add(plane.origin, scale(d, top)), d, n)?
+                }
+                (ReliefMode::FlatAuto, true) => mesh_keep_seen(boolean(&pmesh(0.0, far + h)?, std::slice::from_ref(scan), MeshOp::Intersection)?, &world, d)?,
+                (ReliefMode::Along, inward) => {
+                    let piece = merge_meshes(&boolean(scan, &[pmesh(-reach, 2.0 * reach)?], MeshOp::Intersection)?);
+                    let moved = translate_mesh(&piece, scale(d, if inward { h } else { -h }));
+                    let cut = if inward { boolean(&piece, &[moved], MeshOp::Difference)? } else { boolean(&moved, &[piece], MeshOp::Difference)? };
+                    mesh_keep_seen(cut, &world, d)?
+                }
+            };
+            if crate::mesh_bool::mass(&mesh).volume.abs() < 1e-9 {
+                return Err("no quedó nada: ¿las regiones caen sobre la piel?".into());
             }
-            // Tope plano en el plano del sketch: de ahí hasta la piel
-            (ReliefMode::FlatTop, false) => until_scan(&prism(0.0, reach)?, &skin, plane.origin, d, n)?,
-            // Fondo plano en el plano del sketch (adentro del material): de ahí a la piel
-            (ReliefMode::FlatTop, true) => {
-                let cut = prism(0.0, reach)?.intersect(&skin).map_err(err)?;
-                keep_starting(cut, plane.origin, n)?
+            (crate::mesh_bool::to_shape(&mesh)?, Some(mesh))
+        } else {
+            let skin = skin.as_ref().ok_or("falta el sólido")?;
+            let shape = match (mode, r.inward) {
+                // Pareja: la carcasa de la altura, bajo las regiones, lo primero que se ve
+                (ReliefMode::Even, inward) => {
+                    // La carcasa: la que pone la app (escaneo) o el sólido corrido la altura
+                    let band = if use_scan {
+                        scan_solid(r.shell.as_ref())?
+                    } else if inward {
+                        skin.cut(&solid_offset(&skin, -h)?).map_err(err)?
+                    } else {
+                        solid_offset(&skin, h)?.cut(&skin).map_err(err)?
+                    };
+                    let cut = band.intersect(&prism(-reach, 2.0 * reach)?).map_err(err)?;
+                    keep_seen(cut, &world, d)?
+                }
+                // Tope plano en el plano del sketch: de ahí hasta la piel
+                (ReliefMode::FlatTop, false) => until_scan(&prism(0.0, reach)?, &skin, plane.origin, d, n)?,
+                // Fondo plano en el plano del sketch (adentro del material): de ahí a la piel
+                (ReliefMode::FlatTop, true) => {
+                    let cut = prism(0.0, reach)?.intersect(&skin).map_err(err)?;
+                    keep_starting(cut, plane.origin, n)?
+                }
+                // Tope a `h` del punto más alto
+                (ReliefMode::FlatAuto, false) => {
+                    let top = near - h;
+                    until_scan(&prism(top, reach)?, &skin, add(plane.origin, scale(d, top)), d, n)?
+                }
+                // Fondo a `h` del punto más hondo
+                (ReliefMode::FlatAuto, true) => {
+                    let cut = prism(0.0, far + h)?.intersect(&skin).map_err(err)?;
+                    keep_seen(cut, &world, d)?
+                }
+                // La piel corrida `h` a lo largo de `d` (hacia el sketch o hacia adentro): solo el
+                // trozo bajo las regiones (la piel entera contra su copia corrida, casi paralelas,
+                // tardaba muchísimo). Las paredes del prisma van a lo largo de `d`: al correrlo
+                // quedan en el mismo lugar
+                (ReliefMode::Along, inward) => {
+                    let column = prism(-reach, 2.0 * reach)?;
+                    let piece = skin.intersect(&column).map_err(err)?;
+                    let moved = piece.translate(scale(d, if inward { h } else { -h })).map_err(err)?;
+                    let cut = if inward { piece.cut(&moved) } else { moved.cut(&piece) }.map_err(err)?;
+                    keep_seen(cut, &world, d)?
+                }
+            };
+            if shape.mass().map(|m| m.volume.abs() < 1e-9).unwrap_or(true) {
+                return Err("no quedó nada: ¿las regiones caen sobre la piel?".into());
             }
-            // Tope a `h` del punto más alto
-            (ReliefMode::FlatAuto, false) => {
-                let top = near - h;
-                until_scan(&prism(top, reach)?, &skin, add(plane.origin, scale(d, top)), d, n)?
-            }
-            // Fondo a `h` del punto más hondo
-            (ReliefMode::FlatAuto, true) => {
-                let cut = prism(0.0, far + h)?.intersect(&skin).map_err(err)?;
-                keep_seen(cut, &world, d)?
-            }
-            // La piel corrida `h` a lo largo de `d` (hacia el sketch o hacia adentro): solo el
-            // trozo bajo las regiones (la piel entera contra su copia corrida, casi paralelas,
-            // tardaba muchísimo). Las paredes del prisma van a lo largo de `d`: al correrlo
-            // quedan en el mismo lugar
-            (ReliefMode::Along, inward) => {
-                let column = prism(-reach, 2.0 * reach)?;
-                let piece = skin.intersect(&column).map_err(err)?;
-                let moved = piece.translate(scale(d, if inward { h } else { -h })).map_err(err)?;
-                let cut = if inward { piece.cut(&moved) } else { moved.cut(&piece) }.map_err(err)?;
-                keep_seen(cut, &world, d)?
-            }
+            (shape, None)
         };
-        if shape.mass().map(|m| m.volume.abs() < 1e-9).unwrap_or(true) {
-            return Err("no quedó nada: ¿las regiones caen sobre la piel?".into());
-        }
         let tags = (0..shape.face_count()).map(|k| vec![tag(id, format!("cara:{k}"))]).collect();
-        Ok(Tagged { shape, tags })
+        Ok((Tagged { shape, tags }, mesh))
     }
 
     /// Las medidas de las regiones en el plano y sobre la piel (lo que se ve
@@ -3116,9 +3252,13 @@ impl Ctx<'_> {
                 self.apply_mesh(f.id, tool, mesh, b.op)
             }
             FeatureKind::Relief(r) => {
-                let tool = self.relief(f.id, r)?;
+                let (tool, mesh) = self.relief(f.id, r)?;
                 self.ev.tools.insert(f.id, (tool.clone(), r.op));
-                self.apply(f.id, tool, r.op)
+                // Sobre un escaneo sale de booleanas de mallas: sigue como malla
+                match mesh {
+                    Some(m) => self.apply_mesh(f.id, tool, Some(m), r.op),
+                    None => self.apply(f.id, tool, r.op),
+                }
             }
             FeatureKind::ScanSurface(sf) => {
                 if sf.boundary.len() < 6 {
@@ -6261,51 +6401,51 @@ fn solid_offset(shape: &Shape, d: f64) -> R<Shape> {
 
 /// Rayos contra una malla de triángulos, sin OpenCASCADE: con miles de caras
 /// cada `Shape::ray_hit` cuesta décimas de segundo y el relieve tira cientos.
+/// Rayos contra una malla, con un árbol de cajas (BVH): cada rayo prueba solo
+/// los triángulos de su zona (antes, todos: con un cráneo de cientos de miles
+/// de triángulos y cientos de rayos, segundos en cada recálculo).
 struct MeshRay {
-    verts: Vec<P3>,
-    tris: Vec<[u32; 3]>,
+    bvh: pinocchio_spatial::Bvh,
 }
 
 impl MeshRay {
-    fn new(verts: Vec<P3>, tris: Vec<[u32; 3]>) -> Self {
-        MeshRay { verts, tris }
+    fn new(verts: &[P3], tris: &[[u32; 3]]) -> Self {
+        let v = |i: u32| {
+            let p = verts[i as usize];
+            pinocchio_math::Vector3::new(p[0], p[1], p[2])
+        };
+        let triangles = tris.iter().map(|t| pinocchio_spatial::Triangle::new(v(t[0]), v(t[1]), v(t[2]))).collect();
+        MeshRay { bvh: pinocchio_spatial::Bvh::build(triangles) }
     }
 
     /// El teselado de un sólido (fino según su tamaño)
     fn of_shape(shape: &Shape) -> R<Self> {
         let size = shape.mass().map(|m| norm(sub(m.bbox_max, m.bbox_min))).unwrap_or(1.0).max(1.0);
         let t = shape.tessellate(size * 2e-4, 0.1).map_err(err)?;
-        Ok(MeshRay::new(t.positions, t.triangles))
+        Ok(MeshRay::new(&t.positions, &t.triangles))
+    }
+
+    /// Los rayos de la malla de un escaneo, armados una vez por huella (el
+    /// escaneo no cambia entre recálculos)
+    fn of_scan(mesh: &ScanBodyMesh) -> std::sync::Arc<Self> {
+        static CACHE: std::sync::Mutex<Vec<(u64, usize, std::sync::Arc<MeshRay>)>> = std::sync::Mutex::new(Vec::new());
+        let key = (mesh.hash, mesh.data.1.len());
+        if let Some((_, _, r)) = CACHE.lock().unwrap().iter().find(|(h, n, _)| (*h, *n) == key) {
+            return r.clone();
+        }
+        let r = std::sync::Arc::new(MeshRay::new(&mesh.data.0, &mesh.data.1));
+        let mut cache = CACHE.lock().unwrap();
+        cache.push((key.0, key.1, r.clone()));
+        if cache.len() > 4 {
+            cache.remove(0);
+        }
+        r
     }
 
     /// Distancia al primer triángulo a lo largo de `dir` (unitario), o `None`
     fn hit(&self, o: P3, dir: P3) -> Option<f64> {
-        let mut best = f64::INFINITY;
-        for t in &self.tris {
-            let [a, b, c] = t.map(|v| self.verts[v as usize]);
-            let (e1, e2) = (sub(b, a), sub(c, a));
-            let p = cross(dir, e2);
-            let det = dot(e1, p);
-            if det.abs() < 1e-14 {
-                continue;
-            }
-            let inv = 1.0 / det;
-            let s = sub(o, a);
-            let u = dot(s, p) * inv;
-            if !(-1e-9..=1.0 + 1e-9).contains(&u) {
-                continue;
-            }
-            let q = cross(s, e1);
-            let v = dot(dir, q) * inv;
-            if v < -1e-9 || u + v > 1.0 + 1e-9 {
-                continue;
-            }
-            let d = dot(e2, q) * inv;
-            if d > 1e-9 && d < best {
-                best = d;
-            }
-        }
-        best.is_finite().then_some(best)
+        let v = |p: P3| pinocchio_math::Vector3::new(p[0], p[1], p[2]);
+        self.bvh.ray_distance(&v(o), &v(dir), 1e-9, f64::INFINITY)
     }
 }
 

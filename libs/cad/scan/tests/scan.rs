@@ -973,3 +973,18 @@ fn scan_free_surface_grid_follows_a_smooth_skin() {
     let v = ev.body.unwrap().mass().unwrap().volume;
     assert!((v - 60.0 * 40.0 * 2.0).abs() < 60.0 * 40.0 * 2.0 * 0.03, "volumen {v}");
 }
+
+/// El mismo escaneo da siempre el mismo cuerpo (si no, un relieve sobre él sale
+/// distinto cada vez que se abre la app).
+#[test]
+fn prepare_body_is_deterministic() {
+    if !occt::available() {
+        return;
+    }
+    let t = Shape::sphere([0.0; 3], 20.0).unwrap().tessellate(0.02, 0.05).unwrap();
+    let opts = BodyOptions { faces: 20000, offset: 0.0, thickness: 0.0 };
+    let a = prepare_body(&t.positions, &t.triangles, &opts).unwrap();
+    let b = prepare_body(&t.positions, &t.triangles, &opts).unwrap();
+    assert_eq!((a.vertices.len(), a.triangles.len()), (b.vertices.len(), b.triangles.len()));
+    assert!(a.vertices == b.vertices && a.triangles == b.triangles, "mismos vértices y triángulos");
+}
