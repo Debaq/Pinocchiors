@@ -1644,6 +1644,12 @@ export interface AssemblyView {
   lost?: { mate: number; instance: number; message: string }[];
 }
 
+/**
+ * Desde acá, los números de instancias, uniones y grupos son de un subensamble flexible abierto
+ * en este ensamble (EN13): se ven y se mueven, pero no se guardan ni se editan aquí
+ */
+export const INLINE_BASE = 1 << 20;
+
 /** El ensamble con los conectores como los rehízo el backend (siguen a sus caras) */
 export function resolvedAssembly(asm: Assembly, view: AssemblyView | null | undefined): Assembly {
   const list = view?.connectors;

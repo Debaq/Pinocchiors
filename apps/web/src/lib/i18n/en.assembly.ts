@@ -114,4 +114,5 @@ export const en_assembly: Record<string, string> = {
   "paso {n}: {e}": "step {n}: {e}",
   "La animación es demasiado larga (más de 2400 cuadros)": "The animation is too long (over 2400 frames)",
   "La unión ya no existe": "The mate no longer exists",
+  "{n} piezas de subensambles flexibles se mueven aquí (se editan en su pestaña)": "{n} parts of flexible subassemblies move here (edit them in their tab)",
 };

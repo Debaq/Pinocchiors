@@ -183,7 +183,15 @@ pub struct Instance {
     /// Subensamble flexible: sus uniones entran al solver de este ensamble (sin esto, rígido).
     #[serde(default, skip_serializing_if = "is_false")]
     pub flexible: bool,
+    /// Lleva un subensamble flexible abierto en este ensamble: no se dibuja (se dibujan sus
+    /// piezas). Lo pone `Tabs::flat_assembly`; no se guarda.
+    #[serde(skip)]
+    pub carrier: bool,
 }
+
+/// Desde acá, los números de instancias, uniones y grupos son de un subensamble flexible abierto
+/// en el ensamble de arriba (ver `Tabs::flat_assembly`): no se guardan.
+pub const INLINE_BASE: u32 = 1 << 20;
 
 impl Instance {
     /// Lleva un punto de la pieza a la pieza reflejada (si es espejo).
@@ -1420,7 +1428,7 @@ pub fn instance_shapes(ev: &Evaluation, asm: &Assembly, sol: &AssemblySolution) 
     sol.poses
         .iter()
         .filter_map(|(id, p, r)| {
-            let inst = asm.instances.iter().find(|i| i.id == *id && !i.suppressed)?;
+            let inst = asm.instances.iter().find(|i| i.id == *id && !i.suppressed && !i.carrier)?;
             let part = ev.parts.iter().find(|x| x.id == inst.part)?;
             let shape = match inst.mirror {
                 Some(n) if norm(n) > 1e-12 => part.shape.mirror([0.0; 3], normalize(n)).ok()?,

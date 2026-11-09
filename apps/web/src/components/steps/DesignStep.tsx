@@ -151,6 +151,7 @@ import { tBackend } from "../../lib/i18nBackend";
 import { changeDesignTabs } from "../layout/DesignTabs";
 import { instanceStudio, nestableAssemblies, splitTabFeature, tabFeature } from "../../lib/designTabs";
 import { jointKey, jointsOf } from "../../lib/assemblyDrag";
+import { INLINE_BASE } from "../../lib/cad";
 import { ExplodeSection, FastenSection, GroupsSection, HealthSection, InstanceExtras, MateEditor, MotionSection, badgeClass, mateBadges, newMate as startNewMate, resolvedOf } from "../design/AssemblyParts";
 import { planetFeatures, planetaryAssembly, ringFeature, type PlanetaryPlan } from "../../lib/planetary";
 
@@ -8176,7 +8177,12 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
             {tl("Insertar")}
           </Button>
         </div>
-        <For each={asm()?.instances ?? []} fallback={<p class="text-[11px] text-text-dim">{tl("Insertar piezas del diseño para ensamblarlas")}</p>}>
+        <Show when={(asm()?.instances ?? []).some((i) => i.id >= INLINE_BASE)}>
+          <p class="text-[11px] text-text-dim">
+            {tl("{n} piezas de subensambles flexibles se mueven aquí (se editan en su pestaña)", { n: (asm()?.instances ?? []).filter((i) => i.id >= INLINE_BASE).length })}
+          </p>
+        </Show>
+        <For each={(asm()?.instances ?? []).filter((i) => i.id < INLINE_BASE)} fallback={<p class="text-[11px] text-text-dim">{tl("Insertar piezas del diseño para ensamblarlas")}</p>}>
           {(inst) => {
             // Su pieza ya no está (se borró en su diseño, o se borró la pestaña): no se dibuja
             const orphan = () => !!store.result() && !parts().some((p) => samePart(p.id, inst.part));
@@ -8295,7 +8301,7 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
           )}
         </Show>
         <HealthSection store={store} ui={props.ui} />
-        <For each={asm()?.mates ?? []} fallback={<p class="text-[11px] text-text-dim">{tl("Agregar: elegir el tipo y hacer clic en una cara de cada pieza")}</p>}>
+        <For each={(asm()?.mates ?? []).filter((m) => m.id < INLINE_BASE)} fallback={<p class="text-[11px] text-text-dim">{tl("Agregar: elegir el tipo y hacer clic en una cara de cada pieza")}</p>}>
           {(m) => {
             const set = (f: (x: Mate) => void) => void store.editAssembly((a) => f(a.mates.find((x) => x.id === m.id)!));
             return (

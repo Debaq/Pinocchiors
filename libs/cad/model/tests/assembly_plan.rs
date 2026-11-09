@@ -467,3 +467,64 @@ fn en12_step_con_arbol() {
     assert!((m.volume - 3000.0).abs() < 1e-6, "{}", m.volume);
     assert!((m.bbox_max[0] - 60.0).abs() < 1e-6);
 }
+
+#[test]
+fn en13_subensamble_flexible() {
+    let mut doc = Document::new();
+    let f = doc.add(FeatureKind::Primitive(Primitive {
+        shape: PrimitiveShape::Box { dx: 10.0, dy: 10.0, dz: 10.0, centered: false, centered_z: false },
+        origin: [0.0; 3],
+        z: [0.0, 0.0, 1.0],
+        x: [1.0, 0.0, 0.0],
+        op: BodyOp::New,
+        link: None,
+        on: None,
+    }));
+    let mut tabs = Tabs::from_legacy(Some(doc));
+    let part = PartId { feature: f, index: 0 };
+    let z = [0.0, 0.0, 1.0];
+    // Subensamble: base fija y un carro que desliza en Z sobre ella
+    let sub = tabs.add_assembly(Some("Sub".into()));
+    let sub_asm = Assembly {
+        instances: vec![Instance { part, ..inst(1, [0.0; 3], true) }, Instance { part, ..inst(2, [0.0, 0.0, 10.0], false) }],
+        mates: vec![mate(3, MateKind::Slider, conn(1, [0.0; 3], z), conn(2, [0.0; 3], z))],
+        next_id: 4,
+        ..Default::default()
+    };
+    if let TabKind::Assembly { assembly, .. } = &mut tabs.get_mut(sub).unwrap().kind {
+        *assembly = sub_asm;
+    }
+    // Arriba: una pieza fija y el subensamble flexible, pegado a ella
+    let top = tabs.add_assembly(Some("Top".into()));
+    let top_asm = Assembly {
+        instances: vec![
+            Instance { part, ..inst(1, [0.0; 3], true) },
+            Instance { studio: sub, part: SUBASSEMBLY_PART, flexible: true, ..inst(2, [100.0, 0.0, 0.0], false) },
+        ],
+        mates: vec![mate(3, MateKind::Fastened, conn(1, [50.0, 0.0, 0.0], z), conn(2, [0.0; 3], z))],
+        next_id: 4,
+        ..Default::default()
+    };
+    if let TabKind::Assembly { assembly, .. } = &mut tabs.get_mut(top).unwrap().kind {
+        *assembly = top_asm;
+    }
+    let flat = tabs.flat_assembly(top).unwrap();
+    // Las dos piezas del subensamble y su deslizante entran arriba
+    let inlined: Vec<&Instance> = flat.instances.iter().filter(|i| i.id >= assembly::INLINE_BASE).collect();
+    assert_eq!(inlined.len(), 2);
+    assert!(flat.instances.iter().any(|i| i.id == 2 && i.carrier));
+    assert!(flat.mates.iter().any(|m| m.id >= assembly::INLINE_BASE && m.kind == MateKind::Slider));
+    let sol = solve(&flat);
+    assert!(sol.converged, "{}", sol.residual);
+    // Queda el deslizante de adentro como grado libre de arriba
+    assert_eq!(sol.dof, 1);
+    // La base del subensamble viaja con él: queda en x = 50
+    let base = inlined.iter().find(|i| i.name.ends_with("I1")).unwrap();
+    assert_relative_eq!(pose(&sol, base.id)[0][3], 50.0, epsilon = 1e-6);
+    // Guardar no mete lo abierto en la pestaña de arriba
+    tabs.set_flat_assembly(top, flat).unwrap();
+    let TabKind::Assembly { assembly, .. } = &tabs.get(top).unwrap().kind else { unreachable!() };
+    assert_eq!(assembly.instances.len(), 2);
+    assert_eq!(assembly.mates.len(), 1);
+    assert!(assembly.groups.is_empty());
+}

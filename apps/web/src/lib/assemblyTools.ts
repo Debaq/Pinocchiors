@@ -1,6 +1,6 @@
 // Ensamble (PLAN_ENSAMBLE): poses rígidas, conectores en el mundo, explosión por pasos y piezas
 // movidas dentro de la malla armada (animación y explosión sin volver a teselar). Todo puro.
-import type { Assembly, AssemblyRange, CadMesh, Connector, ExplodeStep, P3 } from "./cad";
+import { INLINE_BASE, type Assembly, type AssemblyRange, type CadMesh, type Connector, type ExplodeStep, type P3 } from "./cad.ts";
 import { rotationMatrix } from "./assemblyDrag.ts";
 
 /** Pose rígida: giro (por filas) y traslación, en mm con Z arriba */
@@ -167,7 +167,7 @@ export function rotateInstance(position: P3, rotation: P3, axis: P3, deg: number
 /** Copias de un patrón: los ids nuevos y su nombre */
 export function patternCopies(asm: Assembly, source: number, count: number): { id: number; name: string }[] {
   const src = asm.instances.find((i) => i.id === source);
-  let next = Math.max(asm.next_id || 1, ...asm.instances.map((i) => i.id + 1), ...asm.mates.map((m) => m.id + 1));
+  let next = freshId(asm);
   const out: { id: number; name: string }[] = [];
   for (let k = 0; k < count; k++) out.push({ id: next++, name: `${src?.name ?? "#" + source} (${k + 2})` });
   return out;
@@ -175,12 +175,14 @@ export function patternCopies(asm: Assembly, source: number, count: number): { i
 
 /** Un id libre en el ensamble (instancias, uniones, grupos y patrones comparten numeración) */
 export function freshId(asm: Assembly): number {
+  // Los de los subensambles flexibles abiertos (≥ INLINE_BASE) no cuentan: no se guardan
+  const own = (id: number) => (id < INLINE_BASE ? id + 1 : 1);
   return Math.max(
-    asm.next_id || 1,
-    ...asm.instances.map((i) => i.id + 1),
-    ...asm.mates.map((m) => m.id + 1),
-    ...(asm.groups ?? []).map((g) => g.id + 1),
-    ...(asm.patterns ?? []).map((p) => p.id + 1),
+    Math.min(asm.next_id || 1, INLINE_BASE - 1),
+    ...asm.instances.map((i) => own(i.id)),
+    ...asm.mates.map((m) => own(m.id)),
+    ...(asm.groups ?? []).map((g) => own(g.id)),
+    ...(asm.patterns ?? []).map((p) => own(p.id)),
   );
 }
 

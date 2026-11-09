@@ -351,7 +351,7 @@ import { CadView } from "./components/layout/CadView";
 import { DesignTabs, changeDesignTabs } from "./components/layout/DesignTabs";
 import { instanceStudio, neighborTab } from "./lib/designTabs";
 import { DesignStep, FeatureTree } from "./components/steps/DesignStep";
-import { createCadStore, insertScanPiece, partColor, partHidden, PLANE_LABELS, type Fabrication, type PartId } from "./lib/cad";
+import { createCadStore, insertScanPiece, INLINE_BASE, partColor, partHidden, PLANE_LABELS, type Fabrication, type PartId } from "./lib/cad";
 import { createCadUi } from "./lib/cadUi";
 import { createDesignActions } from "./lib/designActions";
 import { LibraryPanel as MakerLibraryPanel } from "./components/design/LibraryPanel";
@@ -2115,7 +2115,7 @@ export const App: Component = () => {
     if (cad.activeTab()?.kind !== "assembly") return [];
     const doc = cad.doc();
     const parts = cad.result()?.parts ?? [];
-    return (doc?.assembly?.instances ?? []).flatMap((inst): ObjectRow[] => {
+    return (doc?.assembly?.instances ?? []).filter((inst) => inst.id < INLINE_BASE).flatMap((inst): ObjectRow[] => {
       const i = parts.findIndex((p) => partKey(p.id) === partKey(inst.part));
       const view = parts[i];
       if (!view?.purchased) return [];

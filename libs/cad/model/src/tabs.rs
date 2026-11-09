@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::assembly::Assembly;
+use crate::assembly::{Assembly, INLINE_BASE};
 use crate::document::{Document, Parameter, PartProps};
 use crate::eval::Evaluation;
 use crate::feature::{Derived, DerivedSource, FeatureId, FeatureKind, PartId};
@@ -45,6 +45,12 @@ fn tab_part(tab: TabId, p: PartId) -> PartId {
 /// La pieza que es un subensamble entero, en su pestaña (una instancia con
 /// `studio` = el ensamble y esta pieza lo pone adentro de otro, rígido).
 pub const SUBASSEMBLY_PART: PartId = PartId { feature: FeatureId(0), index: 0 };
+
+fn bump(next: &mut u32) -> u32 {
+    let n = *next;
+    *next += 1;
+    n
+}
 
 /// Junta los recálculos de varias pestañas en uno: sus piezas y engranes con
 /// los números de [`tab_feature`] (lo que el ensamble lee de un recálculo).
@@ -407,14 +413,25 @@ impl Tabs {
     /// (rígidos): los de sus instancias, salvo él mismo y los que lo llevan a él
     /// (un ciclo: esas instancias quedan sin pieza).
     pub fn subassemblies(&self, asm: TabId) -> Vec<TabId> {
-        let Some(TabKind::Assembly { assembly, .. }) = self.get(asm).map(|t| &t.kind) else { return Vec::new() };
         let mut out = Vec::new();
+        self.subassemblies_in(asm, asm, &mut out, 0);
+        out
+    }
+
+    /// Los de `asm` y, por cada subensamble flexible, también los que van adentro de él (sus
+    /// piezas se dibujan sueltas en `root`)
+    fn subassemblies_in(&self, root: TabId, asm: TabId, out: &mut Vec<TabId>, depth: usize) {
+        let Some(TabKind::Assembly { assembly, .. }) = self.get(asm).map(|t| &t.kind) else { return };
         for i in &assembly.instances {
-            if i.studio != asm && !out.contains(&i.studio) && self.is_assembly(i.studio) && !self.contains_assembly(i.studio, asm) {
-                out.push(i.studio);
+            if i.studio != root && i.studio != asm && self.is_assembly(i.studio) && !self.contains_assembly(i.studio, root) {
+                if !out.contains(&i.studio) {
+                    out.push(i.studio);
+                }
+                if i.flexible && depth < 4 {
+                    self.subassemblies_in(root, i.studio, out, depth + 1);
+                }
             }
         }
-        out
     }
 
     /// El subensamble `sub` como pieza rígida de quien lo lleva: sus instancias
@@ -477,11 +494,141 @@ impl Tabs {
             };
             inst.part = tab_part(tab, inst.part);
         }
+        // Subensambles flexibles (EN13): sus piezas y uniones entran a este ensamble
+        let mut next = INLINE_BASE;
+        let carriers: Vec<usize> = (0..flat.instances.len())
+            .filter(|&k| {
+                let i = &flat.instances[k];
+                i.flexible && !i.suppressed && i.studio != id && self.is_assembly(i.studio) && !self.contains_assembly(i.studio, id) && split_tab_feature(i.part.feature).1 == SUBASSEMBLY_PART.feature
+            })
+            .collect();
+        for k in carriers {
+            flat.instances[k].carrier = true;
+            let carrier = flat.instances[k].clone();
+            self.inline_sub(&mut flat, &carrier, &mut next, 0);
+        }
         Some(flat)
+    }
+
+    /// Abre el subensamble de `carrier` en `flat`: sus instancias (las fijas, pegadas a
+    /// `carrier` en un grupo; las libres, sueltas) con sus uniones y acoplamientos, con números
+    /// desde `next` (≥ `INLINE_BASE`). Las configuraciones de adentro van con la de base.
+    fn inline_sub(&self, flat: &mut Assembly, carrier: &crate::assembly::Instance, next: &mut u32, depth: usize) {
+        use crate::assembly::{InstanceGroup, Pose};
+        let Some(TabKind::Assembly { assembly: sub, .. }) = self.get(carrier.studio).map(|t| &t.kind) else { return };
+        let place = Pose::new(carrier.position, carrier.rotation);
+        let mut map: Vec<(u32, u32)> = Vec::new();
+        let anchor = if sub.instances.iter().any(|i| i.fixed && !i.suppressed) { None } else { sub.instances.iter().find(|i| !i.suppressed).map(|i| i.id) };
+        let mut members = vec![carrier.id];
+        for si in sub.instances.iter().filter(|i| !i.suppressed) {
+            let nid = bump(next);
+            map.push((si.id, nid));
+            let p = place.compose(&Pose::new(si.position, si.rotation));
+            let mut ni = si.clone();
+            ni.id = nid;
+            ni.name = format!("{} › {}", carrier.name, si.name);
+            ni.part = tab_part(si.studio, si.part);
+            ni.configuration = None;
+            ni.position = p.t;
+            ni.rotation = p.rotation_vector();
+            ni.hidden = si.hidden || carrier.hidden;
+            if si.fixed || Some(si.id) == anchor {
+                members.push(nid);
+            }
+            ni.fixed = false;
+            // Un subensamble flexible adentro de otro también se abre
+            let nested = si.flexible && depth < 3 && self.is_assembly(si.studio) && si.part == SUBASSEMBLY_PART;
+            ni.carrier = nested;
+            flat.instances.push(ni.clone());
+            if nested {
+                self.inline_sub(flat, &ni, next, depth + 1);
+            }
+        }
+        let id_of = |old: u32| map.iter().find(|m| m.0 == old).map(|m| m.1);
+        let mut mate_map: Vec<(u32, u32)> = Vec::new();
+        for m in &sub.mates {
+            let (Some(a), Some(b)) = (id_of(m.a.instance), id_of(m.b.instance)) else { continue };
+            let c = match &m.c {
+                Some(c) => match id_of(c.instance) {
+                    Some(x) => Some(crate::assembly::Connector { instance: x, ..c.clone() }),
+                    None => continue,
+                },
+                None => None,
+            };
+            let mut nm = m.clone();
+            nm.id = bump(next);
+            mate_map.push((m.id, nm.id));
+            nm.a.instance = a;
+            nm.b.instance = b;
+            nm.c = c;
+            flat.mates.push(nm);
+        }
+        let mate_of = |old: u32| mate_map.iter().find(|m| m.0 == old).map(|m| m.1);
+        for r in &sub.relations {
+            let mut nr = r.clone();
+            let ok = match &mut nr {
+                crate::assembly::Relation::Gear { a, b, carrier, .. } => {
+                    let c = match carrier {
+                        Some(c) => mate_of(*c).map(Some),
+                        None => Some(None),
+                    };
+                    match (mate_of(*a), mate_of(*b), c) {
+                        (Some(x), Some(y), Some(z)) => {
+                            (*a, *b, *carrier) = (x, y, z);
+                            true
+                        }
+                        _ => false,
+                    }
+                }
+                crate::assembly::Relation::RackPinion { revolute: a, slider: b, .. }
+                | crate::assembly::Relation::Cam { revolute: a, slider: b, .. }
+                | crate::assembly::Relation::Linear { a, b, .. }
+                | crate::assembly::Relation::Belt { a, b, .. } => match (mate_of(*a), mate_of(*b)) {
+                    (Some(x), Some(y)) => {
+                        (*a, *b) = (x, y);
+                        true
+                    }
+                    _ => false,
+                },
+                crate::assembly::Relation::Screw { cylindrical, .. } => match mate_of(*cylindrical) {
+                    Some(x) => {
+                        *cylindrical = x;
+                        true
+                    }
+                    None => false,
+                },
+            };
+            if ok {
+                flat.relations.push(nr);
+            }
+        }
+        for g in &sub.groups {
+            let ms: Vec<u32> = g.members.iter().filter_map(|m| id_of(*m)).collect();
+            if ms.len() > 1 {
+                flat.groups.push(InstanceGroup { id: bump(next), name: g.name.clone(), members: ms });
+            }
+        }
+        // Lo fijo del subensamble va pegado a quien lo lleva (que mueven las uniones de arriba)
+        if members.len() > 1 {
+            flat.groups.push(InstanceGroup { id: bump(next), name: carrier.name.clone(), members });
+        }
     }
 
     /// Guarda en la pestaña `id` un ensamble armado con [`flat_assembly`](Self::flat_assembly).
     pub fn set_flat_assembly(&mut self, id: TabId, mut flat: Assembly) -> Result<(), String> {
+        // Lo de los subensambles flexibles abiertos no se guarda: sale de su pestaña
+        use crate::assembly::INLINE_BASE;
+        flat.instances.retain(|i| i.id < INLINE_BASE);
+        flat.mates.retain(|m| m.id < INLINE_BASE && m.connectors().all(|c| c.instance < INLINE_BASE));
+        flat.groups.retain(|g| g.id < INLINE_BASE);
+        for g in &mut flat.groups {
+            g.members.retain(|m| *m < INLINE_BASE);
+        }
+        flat.patterns.retain(|p| p.id < INLINE_BASE && p.source < INLINE_BASE);
+        flat.prune();
+        for i in &mut flat.instances {
+            i.carrier = false;
+        }
         for inst in &mut flat.instances {
             let (tab, feature) = split_tab_feature(inst.part.feature);
             // Una variante: la pestaña es la que la instancia ya traía
