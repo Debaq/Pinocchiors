@@ -14,7 +14,7 @@
 set -euo pipefail
 
 PREFIX="${1:-$PWD/occt-static}"
-VERSION="${2:-7.9.3}"
+VERSION="${2:-8.0.1}"
 TAG="V${VERSION//./_}"
 WORK="${OCCT_WORK_DIR:-$PWD/occt-work}"
 JOBS="${JOBS:-$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)}"

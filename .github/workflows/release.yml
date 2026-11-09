@@ -67,7 +67,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  OCCT_VERSION: "7.9.3"
+  OCCT_VERSION: "8.0.1"
 
 jobs:
   # ───────────────────────────────────────────────────────────────────────────
