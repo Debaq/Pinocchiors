@@ -1714,7 +1714,7 @@ mod tests {
         use cad_model::{Assembly, Connector, Instance, Mate, MateKind, PartId, Relation};
         let [a, b] = [0, 1].map(|i| PartId { feature: doc.features[i].id, index: 0 });
         let inst = |id, part, name: &str, position, fixed| Instance { id, studio: 0, configuration: None, part, name: name.into(), position, rotation: [0.0; 3], fixed, ..Default::default() };
-        let con = |instance, origin| Connector { instance, origin, z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0] };
+        let con = |instance, origin| Connector { instance, origin, z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], ..Default::default() };
         let mate = |id, name: &str, kind, a, b| Mate { id, name: name.into(), kind, a, b, flip: false, angle: None, distance: None, ..Default::default() };
         Assembly {
             instances: vec![
@@ -1730,6 +1730,7 @@ mod tests {
             ],
             relations: vec![Relation::Gear { a: 1, b: 2, ratio: -2.0, phase: 0.0, carrier: None, carrier_ratio: 0.0 }],
             next_id: 5,
+            ..Default::default()
         }
     }
 

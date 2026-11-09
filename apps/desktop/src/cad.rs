@@ -5473,7 +5473,7 @@ mod tests {
         assert_eq!(volumes, [6000.0, 24000.0]);
         assert_ne!(r.parts[0].id, r.parts[1].id, "la misma operación de dos pestañas: piezas distintas");
         // Insertar las dos como lo hace la interfaz (con los ids que vio) y guardar
-        let inst = |id, part, x: f64| cad_model::Instance { id, studio: 0, configuration: None, part, name: format!("I{id}"), position: [x, 0.0, 0.0], rotation: [0.0; 3], fixed: id == 1 };
+        let inst = |id, part, x: f64| cad_model::Instance { id, studio: 0, configuration: None, part, name: format!("I{id}"), position: [x, 0.0, 0.0], rotation: [0.0; 3], fixed: id == 1, ..Default::default() };
         let mut doc = state.cad_doc().unwrap();
         doc.assembly = Some(cad_model::Assembly { instances: vec![inst(1, r.parts[0].id, 0.0), inst(2, r.parts[1].id, 50.0)], next_id: 3, ..Default::default() });
         let saved = set_document_impl(&state, doc).unwrap();
@@ -5515,7 +5515,7 @@ mod tests {
         let sub = tabs.add_assembly(Some("Bisagra".into()));
         let top = tabs.add_assembly(Some("Puerta".into()));
         let box_part = cad_model::PartId { feature: tabs.design(0).unwrap().features[0].id, index: 0 };
-        let inst = |id, studio, part, x: f64| cad_model::Instance { id, studio, configuration: None, part, name: format!("I{id}"), position: [x, 0.0, 0.0], rotation: [0.0; 3], fixed: id == 1 };
+        let inst = |id, studio, part, x: f64| cad_model::Instance { id, studio, configuration: None, part, name: format!("I{id}"), position: [x, 0.0, 0.0], rotation: [0.0; 3], fixed: id == 1, ..Default::default() };
         let set = |tabs: &mut Tabs, id, list| {
             let cad_model::TabKind::Assembly { assembly, .. } = &mut tabs.get_mut(id).unwrap().kind else { panic!() };
             assembly.instances = list;
@@ -5529,7 +5529,7 @@ mod tests {
         assert_eq!(sub_view.volume.round(), 12000.0);
         let (_, shapes) = assembly_shapes(&state).unwrap();
         assert_eq!(shapes.iter().map(|(_, s)| s.mass().unwrap().volume).sum::<f64>().round(), 2.0 * 12000.0 + 6000.0);
-        let info = drawing_info_impl(&state).unwrap();
+        let info = drawing_info_impl(&state, false).unwrap();
         assert!((info.max[0] - 310.0).abs() < 1e-6 && (info.min[0]).abs() < 1e-6, "{:?}", info.max);
         // Mover algo adentro del subensamble cambia al que lo lleva
         let before = r.version;
@@ -5540,8 +5540,8 @@ mod tests {
         }
         let r = evaluate(&state).unwrap();
         assert_ne!(r.version, before);
-        assert!((drawing_info_impl(&state).unwrap().max[0] - 310.0).abs() < 1e-6);
-        assert!((drawing_info_impl(&state).unwrap().items.iter().find(|i| i.instance == 2).unwrap().center[0] - (100.0 + 25.0)).abs() < 1e-6, "centro del subensamble corrido");
+        assert!((drawing_info_impl(&state, false).unwrap().max[0] - 310.0).abs() < 1e-6);
+        assert!((drawing_info_impl(&state, false).unwrap().items.iter().find(|i| i.instance == 2).unwrap().center[0] - (100.0 + 25.0)).abs() < 1e-6, "centro del subensamble corrido");
         // Ciclo: la bisagra lleva a la puerta; la puerta ya no puede llevarla (queda sin pieza)
         {
             let mut tabs = state.cad_tabs.lock().unwrap();
@@ -5604,7 +5604,7 @@ mod tests {
         let asm = tabs.add_assembly(None);
         state.set_cad_tabs(tabs);
         let r = evaluate(&state).unwrap();
-        let inst = |id, part, x: f64| cad_model::Instance { id, studio: 0, configuration: None, part, name: format!("I{id}"), position: [x, 0.0, 0.0], rotation: [0.0; 3], fixed: true };
+        let inst = |id, part, x: f64| cad_model::Instance { id, studio: 0, configuration: None, part, name: format!("I{id}"), position: [x, 0.0, 0.0], rotation: [0.0; 3], fixed: true, ..Default::default() };
         let mut doc = state.cad_doc().unwrap();
         doc.assembly = Some(cad_model::Assembly { instances: vec![inst(1, r.parts[0].id, 0.0), inst(2, r.parts[1].id, 50.0), inst(3, r.parts[1].id, 100.0)], next_id: 4, ..Default::default() });
         set_document_impl(&state, doc).unwrap();
@@ -5646,7 +5646,7 @@ mod tests {
         state.set_cad_tabs(tabs);
         let r = evaluate(&state).unwrap();
         let part = r.parts[0].id;
-        let inst = |id, cfg: Option<&str>, x: f64| cad_model::Instance { id, studio: 0, configuration: cfg.map(Into::into), part, name: format!("I{id}"), position: [x, 0.0, 0.0], rotation: [0.0; 3], fixed: true };
+        let inst = |id, cfg: Option<&str>, x: f64| cad_model::Instance { id, studio: 0, configuration: cfg.map(Into::into), part, name: format!("I{id}"), position: [x, 0.0, 0.0], rotation: [0.0; 3], fixed: true, ..Default::default() };
         let mut doc = state.cad_doc().unwrap();
         doc.assembly = Some(cad_model::Assembly { instances: vec![inst(1, None, 0.0), inst(2, Some("Larga"), 50.0)], next_id: 3, ..Default::default() });
         set_document_impl(&state, doc).unwrap();
@@ -5674,21 +5674,21 @@ mod tests {
         let asm = tabs.add_assembly(None);
         state.set_cad_tabs(tabs);
         let r = evaluate(&state).unwrap();
-        let inst = |id, part, x: f64| cad_model::Instance { id, studio: 0, configuration: None, part, name: format!("I{id}"), position: [x, 0.0, 0.0], rotation: [0.0; 3], fixed: true };
+        let inst = |id, part, x: f64| cad_model::Instance { id, studio: 0, configuration: None, part, name: format!("I{id}"), position: [x, 0.0, 0.0], rotation: [0.0; 3], fixed: true, ..Default::default() };
         let mut doc = state.cad_doc().unwrap();
         doc.assembly = Some(cad_model::Assembly { instances: vec![inst(1, r.parts[0].id, 0.0), inst(2, r.parts[1].id, 50.0)], next_id: 3, ..Default::default() });
         let sheets = serde_json::json!({ "sheets": [{ "id": 1, "name": "Plano 1", "bom": true }], "next_id": 2 });
         doc.drawing = Some(sheets.clone());
         set_document_impl(&state, doc).unwrap();
         // Caja y centros de las instancias en su lugar
-        let info = drawing_info_impl(&state).unwrap();
+        let info = drawing_info_impl(&state, false).unwrap();
         assert!((info.min[0] - 0.0).abs() < 1e-6 && (info.max[0] - 90.0).abs() < 1e-6, "{:?} {:?}", info.min, info.max);
         let mut centers: Vec<(u32, f64)> = info.items.iter().map(|i| (i.instance, i.center[0])).collect();
         centers.sort_by_key(|c| c.0);
         assert_eq!(centers, [(1, 5.0), (2, 70.0)]);
         // La vista de frente va de una punta del ensamble a la otra; el corte se raya por pieza
         let front = DrawingViewSpec { eye: [0.0, -1.0, 0.0], xdir: [1.0, 0.0, 0.0], section: Some(DrawingSection { origin: [0.0, 10.0, 0.0], normal: [0.0, 1.0, 0.0] }), cut: vec![], shaded: false };
-        let v = drawing_impl(&state, std::slice::from_ref(&front)).unwrap().remove(0);
+        let v = drawing_impl(&state, std::slice::from_ref(&front), false).unwrap().remove(0);
         let xs = v.lines.iter().flat_map(|l| l.points.iter().map(|p| p[0]));
         let (lo, hi) = xs.fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), x| (a.min(x), b.max(x)));
         assert!(lo.abs() < 1e-3 && (hi - 90.0).abs() < 1e-3, "{lo} {hi}");
@@ -5703,9 +5703,9 @@ mod tests {
             DrawingViewSpec { eye: [1.0, 0.0, 0.0], xdir: [0.0, 1.0, 0.0], section: None, cut: vec![], shaded: false },
             DrawingViewSpec { eye: [1.0, -1.0, 1.0], xdir: [1.0, 1.0, 0.0], section: None, cut: vec![], shaded: false },
         ];
-        let all = drawing_impl(&state, &views).unwrap();
+        let all = drawing_impl(&state, &views, false).unwrap();
         for (v, got) in views.iter().zip(&all) {
-            let one = drawing_impl(&state, std::slice::from_ref(v)).unwrap().remove(0);
+            let one = drawing_impl(&state, std::slice::from_ref(v), false).unwrap().remove(0);
             let sum = |r: &DrawingViewResult| r.lines.iter().map(|l| l.points.len()).sum::<usize>();
             assert_eq!((got.lines.len(), sum(got), got.hatch.len(), got.hatch_part.clone()), (one.lines.len(), sum(&one), one.hatch.len(), one.hatch_part.clone()));
             assert_eq!(got.mesh.as_ref().map(|m| m.indices.len()), one.mesh.as_ref().map(|m| m.indices.len()));
