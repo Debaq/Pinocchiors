@@ -88,6 +88,14 @@ con las mismas herramientas:
   3. Imágenes más chicas por defecto: `view` 800×600 ≈ 600 tokens; 640×480 la mitad.
   4. No mandar el resultado dos veces (texto y `structuredContent`) a clientes que le
      pasan los dos al modelo.
+- ✅ 2026-11-09 **Resumir y limpiar el chat**: botón «Resumir» (y `/resumir` o
+  `/compact`) y «Resumir sola» al pasar de 50/100/200 mil tokens (por defecto 100 mil),
+  antes del próximo mensaje. Claude Code: `/compact` en la misma sesión (avisa antes y
+  después: `compact_boundary`). Proveedores por API (`agent.rs`): el mismo modelo
+  escribe un resumen de la transcripción que reemplaza a la historia; además, antes de
+  cada paso se acortan los resultados de herramientas viejos (quedan enteros los 6
+  últimos) y las imágenes ya vistas. El pie del chat muestra cuánto ocupa la
+  conversación.
 
 ### Próximo (orden propuesto, 2026-10-25)
 

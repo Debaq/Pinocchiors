@@ -10,7 +10,7 @@
 //! clave; el archivo solo lo lee el usuario).
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -21,6 +21,26 @@ use super::chat::Image;
 
 /// Vueltas máximas de herramientas por mensaje (una pieza compleja usa decenas)
 const MAX_STEPS: usize = 60;
+
+/// Resultados de herramientas que quedan enteros (los más nuevos); los
+/// anteriores se acortan para no pagarlos en cada paso
+const KEEP_RESULTS: usize = 6;
+/// Largo al que se acorta un resultado viejo (caracteres)
+const OLD_RESULT_CHARS: usize = 400;
+/// Largo máximo de la transcripción que se manda a resumir (caracteres)
+const MAX_TRANSCRIPT: usize = 120_000;
+
+/// Pedido de resumen (la conversación va aparte, como transcripción)
+const SUMMARY_PROMPT: &str = "You summarize a conversation between a user and the assistant of the Pinocchio 3D app \
+so the assistant can continue it without the full history. Write the summary for the assistant, in the user's \
+language, short and concrete: what the user wants (goals, preferences, measurements), what was built and where \
+(tab names and ids, part, feature and parameter names, saved versions), decisions taken, problems found and how \
+they were solved, and what is still pending or was just asked. Leave out greetings, tool chatter and anything \
+that no longer matters. Plain text with short bullet points, at most about 400 words.";
+
+/// Cómo empieza el mensaje que reemplaza a la conversación resumida
+const SUMMARY_HEADER: &str = "Summary of our conversation so far (the earlier messages were replaced by it to save \
+context; the current state of the work is in the app — check with `status` or `cad_design` if needed):";
 
 /// Lo que se le dice al modelo (además de las instrucciones del conector)
 const SYSTEM: &str = "You are the assistant of the chat panel inside the Pinocchio 3D app. The user is looking at the \
@@ -181,6 +201,8 @@ pub struct Agent {
     stop: Arc<AtomicBool>,
     /// El conector de esta conversación (guarda la pestaña en la que trabaja la IA)
     server: Mutex<Option<Arc<super::server::Server>>>,
+    /// Tokens del último pedido (lo que ocupa la conversación, con las herramientas)
+    context: AtomicU64,
 }
 
 impl Agent {
@@ -195,11 +217,12 @@ impl Agent {
     pub fn reset(&self) {
         self.stop();
         self.history.lock().unwrap().clear();
+        self.context.store(0, Ordering::SeqCst);
         *self.server.lock().unwrap() = None;
     }
 
-    /// Manda un mensaje; las partes de la respuesta salen por `emit` como las de Claude Code
-    pub fn send(self: &Arc<Self>, provider_id: &str, message: &str, images: &[Image], emit: impl Fn(Value) + Send + 'static) -> Result<(), String> {
+    /// Empieza un turno con el proveedor `provider_id` (falla si hay otro en curso)
+    fn begin(&self, provider_id: &str) -> Result<Provider, String> {
         if self.busy.swap(true, Ordering::SeqCst) {
             return Err("Todavía está respondiendo el mensaje anterior".into());
         }
@@ -208,6 +231,66 @@ impl Agent {
             return Err("Ese proveedor ya no está: elígelo de nuevo en el chat".into());
         };
         self.stop.store(false, Ordering::SeqCst);
+        Ok(p)
+    }
+
+    /// Resume la conversación ahora (botón «Resumir» o `/resumir`)
+    pub fn compact_now(self: &Arc<Self>, provider_id: &str, emit: impl Fn(Value) + Send + 'static) -> Result<(), String> {
+        let p = self.begin(provider_id)?;
+        let agent = self.clone();
+        std::thread::spawn(move || {
+            emit(json!({ "kind": "start", "model": p.model }));
+            emit(json!({ "kind": "compacting", "auto": false }));
+            let ok = agent.compact(&p, &emit, false);
+            emit(json!({ "kind": "done", "ok": ok, "quiet": true }));
+            agent.busy.store(false, Ordering::SeqCst);
+        });
+        Ok(())
+    }
+
+    /// Reemplaza la historia por un resumen hecho por el mismo modelo; `true` si se pudo
+    fn compact(&self, p: &Provider, emit: &impl Fn(Value), auto: bool) -> bool {
+        let history = self.history.lock().unwrap().clone();
+        let before = self.context.load(Ordering::SeqCst);
+        if history.len() < 3 {
+            emit(json!({ "kind": "compacted", "ok": true, "auto": auto, "skipped": true }));
+            return true;
+        }
+        let ask = json!({ "model": p.model, "messages": [
+            { "role": "system", "content": SUMMARY_PROMPT },
+            { "role": "user", "content": transcript(&history) },
+        ] });
+        match post(p, &ask) {
+            Ok(v) => {
+                let summary = v["choices"][0]["message"]["content"].as_str().unwrap_or("").trim().to_string();
+                if summary.is_empty() {
+                    emit(json!({ "kind": "compacted", "ok": false, "auto": auto, "error": format!("{} no devolvió el resumen", p.name) }));
+                    return false;
+                }
+                let u = &v["usage"];
+                let cached = u["prompt_cache_hit_tokens"].as_u64().or(u["prompt_tokens_details"]["cached_tokens"].as_u64()).unwrap_or(0);
+                *self.history.lock().unwrap() = vec![
+                    json!({ "role": "user", "content": format!("{SUMMARY_HEADER}\n\n{summary}") }),
+                    json!({ "role": "assistant", "content": "Understood. I will continue from this summary." }),
+                ];
+                self.context.store(0, Ordering::SeqCst);
+                emit(json!({
+                    "kind": "compacted", "ok": true, "auto": auto, "before": before, "after": summary.chars().count() / 4, "summary": summary,
+                    "tokens": { "input": u["prompt_tokens"].as_u64().unwrap_or(0).saturating_sub(cached), "cache_read": cached, "cache_write": 0, "output": u["completion_tokens"].as_u64().unwrap_or(0) },
+                }));
+                true
+            }
+            Err(e) => {
+                emit(json!({ "kind": "compacted", "ok": false, "auto": auto, "error": e }));
+                false
+            }
+        }
+    }
+
+    /// Manda un mensaje; las partes de la respuesta salen por `emit` como las de Claude Code.
+    /// `compact_at`: si la conversación ya ocupa más tokens, antes se resume sola
+    pub fn send(self: &Arc<Self>, provider_id: &str, message: &str, images: &[Image], compact_at: Option<u64>, emit: impl Fn(Value) + Send + 'static) -> Result<(), String> {
+        let p = self.begin(provider_id)?;
         // El mensaje del usuario, con sus imágenes si el modelo las ve
         let user = if images.is_empty() {
             json!({ "role": "user", "content": message })
@@ -218,9 +301,14 @@ impl Agent {
         } else {
             json!({ "role": "user", "content": format!("{message}\n\n(The user attached {} image(s), but this model cannot see images.)", images.len()) })
         };
-        self.history.lock().unwrap().push(user);
         let agent = self.clone();
         std::thread::spawn(move || {
+            // Muy larga: primero se resume (si no se puede, sigue igual)
+            if compact_at.is_some_and(|limit| limit > 0 && agent.context.load(Ordering::SeqCst) > limit) {
+                emit(json!({ "kind": "compacting", "auto": true }));
+                agent.compact(&p, &emit, true);
+            }
+            agent.history.lock().unwrap().push(user);
             let outcome = agent.run(&p, &emit);
             if let Err(e) = outcome {
                 emit(json!({ "kind": "done", "ok": false, "error": e }));
@@ -242,10 +330,19 @@ impl Agent {
                 return Err("Se detuvo".into());
             }
             let mut messages = vec![json!({ "role": "system", "content": format!("{SYSTEM}\n\n{}", super::guide::INSTRUCTIONS) })];
-            messages.extend(self.history.lock().unwrap().iter().cloned());
+            {
+                // Lo viejo se acorta antes de cada paso: resultados largos e imágenes que ya se vieron
+                let mut history = self.history.lock().unwrap();
+                prune(&mut history);
+                messages.extend(history.iter().cloned());
+            }
             let v = post(p, &json!({ "model": p.model, "messages": messages, "tools": tools, "tool_choice": "auto" }))?;
             let u = &v["usage"];
             let cached = u["prompt_cache_hit_tokens"].as_u64().or(u["prompt_tokens_details"]["cached_tokens"].as_u64()).unwrap_or(0);
+            if let Some(n) = u["prompt_tokens"].as_u64() {
+                self.context.store(n, Ordering::SeqCst);
+                emit(json!({ "kind": "context", "tokens": n }));
+            }
             tokens_cache += cached;
             tokens_in += u["prompt_tokens"].as_u64().unwrap_or(0).saturating_sub(cached);
             tokens_out += u["completion_tokens"].as_u64().unwrap_or(0);
@@ -316,6 +413,66 @@ impl Agent {
         }
         Err(format!("Se cortó tras {MAX_STEPS} pasos de herramientas sin terminar"))
     }
+}
+
+/// Acorta lo viejo de la historia: los resultados de herramientas salvo los
+/// `KEEP_RESULTS` últimos, y las imágenes salvo las del último mensaje que
+/// tiene (el modelo ya las vio y contestó sobre ellas)
+fn prune(history: &mut [Value]) {
+    let tools: Vec<usize> = history.iter().enumerate().filter(|(_, m)| m["role"] == "tool").map(|(i, _)| i).collect();
+    for &i in tools.iter().rev().skip(KEEP_RESULTS) {
+        if let Some(text) = history[i]["content"].as_str()
+            && text.chars().count() > OLD_RESULT_CHARS
+        {
+            let short: String = text.chars().take(OLD_RESULT_CHARS).collect();
+            history[i]["content"] = json!(format!("{short}\n… [older result shortened to save context]"));
+        }
+    }
+    let has_image = |m: &Value| m["content"].as_array().is_some_and(|parts| parts.iter().any(|c| c["type"] == "image_url"));
+    let with_images: Vec<usize> = history.iter().enumerate().filter(|(_, m)| has_image(m)).map(|(i, _)| i).collect();
+    for &i in with_images.iter().rev().skip(1) {
+        if let Some(parts) = history[i]["content"].as_array_mut() {
+            for c in parts.iter_mut().filter(|c| c["type"] == "image_url") {
+                *c = json!({ "type": "text", "text": "[image removed to save context]" });
+            }
+        }
+    }
+}
+
+/// La historia como texto para resumirla (sin imágenes; resultados y
+/// argumentos acortados; si es muy larga, el principio y el final)
+fn transcript(history: &[Value]) -> String {
+    let cut = |s: &str, n: usize| if s.chars().count() > n { format!("{}…", s.chars().take(n).collect::<String>()) } else { s.to_string() };
+    let text_of = |c: &Value| match c {
+        Value::String(s) => s.clone(),
+        Value::Array(parts) => parts.iter().map(|p| if p["type"] == "image_url" { "[image]".to_string() } else { p["text"].as_str().unwrap_or("").to_string() }).collect::<Vec<_>>().join(" "),
+        _ => String::new(),
+    };
+    let mut lines = Vec::new();
+    for m in history {
+        match m["role"].as_str() {
+            Some("user") => lines.push(format!("User: {}", text_of(&m["content"]))),
+            Some("assistant") => {
+                let said = text_of(&m["content"]);
+                if !said.trim().is_empty() {
+                    lines.push(format!("Assistant: {said}"));
+                }
+                for c in m["tool_calls"].as_array().into_iter().flatten() {
+                    lines.push(format!("Assistant called {}({})", c["function"]["name"].as_str().unwrap_or("?"), cut(c["function"]["arguments"].as_str().unwrap_or(""), 300)));
+                }
+            }
+            Some("tool") => lines.push(format!("Tool result: {}", cut(&text_of(&m["content"]), 300))),
+            _ => {}
+        }
+    }
+    let all = lines.join("\n");
+    let n = all.chars().count();
+    if n <= MAX_TRANSCRIPT {
+        return all;
+    }
+    let head: String = all.chars().take(MAX_TRANSCRIPT / 6).collect();
+    let tail: String = all.chars().skip(n - MAX_TRANSCRIPT * 5 / 6).collect();
+    format!("{head}\n[… middle of the conversation left out …]\n{tail}")
 }
 
 // ─── Comandos de la ventana ─────────────────────────────────────────────────
@@ -398,7 +555,7 @@ mod tests {
 
         let agent = Arc::new(Agent::default());
         let (tx, rx) = std::sync::mpsc::channel();
-        agent.send(&id, "haz una caja", &[], move |m| tx.send(m).unwrap()).unwrap();
+        agent.send(&id, "haz una caja", &[], None, move |m| tx.send(m).unwrap()).unwrap();
         let mut events = Vec::new();
         while let Ok(m) = rx.recv_timeout(Duration::from_secs(60)) {
             let done = m["kind"] == "done";
@@ -407,6 +564,7 @@ mod tests {
                 break;
             }
         }
+        events.retain(|e| e["kind"] != "context");
         let kinds: Vec<&str> = events.iter().map(|e| e["kind"].as_str().unwrap()).collect();
         assert_eq!(kinds, ["start", "text", "tool", "result", "text", "done"], "{events:?}");
         assert_eq!(events[3]["error"], false, "{}", events[3]);
@@ -432,6 +590,91 @@ mod tests {
         let p = Provider { id: "x".into(), name: "DeepSeek".into(), base_url: "https://api.deepseek.com".into(), api_key: "sk-falsa".into(), model: "deepseek-chat".into(), vision: false };
         let e = post(&p, &json!({ "model": p.model, "messages": [{ "role": "user", "content": "hi" }] })).unwrap_err();
         assert!(e.contains("401"), "{e}");
+    }
+
+    /// Servidor falso que contesta siempre lo mismo (y guarda lo que le piden)
+    fn fixed_api(reply: Value) -> (String, Arc<Mutex<Vec<Value>>>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://127.0.0.1:{}/v1", listener.local_addr().unwrap().port());
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let log = seen.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut len = 0;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        len = v.trim().parse().unwrap_or(0);
+                    }
+                }
+                let mut body = vec![0; len];
+                reader.read_exact(&mut body).unwrap();
+                log.lock().unwrap().push(serde_json::from_slice::<Value>(&body).unwrap());
+                let text = reply.to_string();
+                let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}", text.len());
+            }
+        });
+        (url, seen)
+    }
+
+    #[test]
+    fn old_results_and_seen_images_are_trimmed() {
+        let long = "x".repeat(2000);
+        let img = |n: u32| json!({ "role": "user", "content": [{ "type": "text", "text": format!("imagen {n}") }, { "type": "image_url", "image_url": { "url": "data:image/png;base64,AAAA" } }] });
+        let mut h = vec![img(1)];
+        for k in 0..(KEEP_RESULTS + 2) {
+            h.push(json!({ "role": "tool", "tool_call_id": format!("c{k}"), "content": long }));
+        }
+        h.push(img(2));
+        prune(&mut h);
+        let tools: Vec<&Value> = h.iter().filter(|m| m["role"] == "tool").collect();
+        // Los dos más viejos, acortados; los últimos, enteros
+        assert!(tools[0]["content"].as_str().unwrap().len() < 500 && tools[0]["content"].as_str().unwrap().contains("shortened"));
+        assert!(tools[1]["content"].as_str().unwrap().len() < 500);
+        assert!(tools[2..].iter().all(|t| t["content"].as_str().unwrap().len() == 2000));
+        // La imagen vieja sale; la última queda
+        assert_eq!(h[0]["content"][1]["type"], "text");
+        assert_eq!(h.last().unwrap()["content"][1]["type"], "image_url");
+        // Otra vez no cambia nada
+        let again = h.clone();
+        prune(&mut h);
+        assert_eq!(h, again);
+    }
+
+    #[test]
+    fn compacting_replaces_the_history_with_a_summary() {
+        let (url, seen) = fixed_api(json!({ "choices": [{ "message": { "role": "assistant", "content": "- Caja de 10×20×30 en la pestaña «Diseño 1»" } }], "usage": { "prompt_tokens": 900, "completion_tokens": 30 } }));
+        let p = Provider { id: "f".into(), name: "Falso".into(), base_url: url, api_key: String::new(), model: "falso-1".into(), vision: false };
+        let agent = Agent::default();
+        agent.context.store(50_000, Ordering::SeqCst);
+        *agent.history.lock().unwrap() = vec![
+            json!({ "role": "user", "content": "haz una caja" }),
+            json!({ "role": "assistant", "content": "Hago la caja.", "tool_calls": [{ "id": "c1", "type": "function", "function": { "name": "cad_primitive", "arguments": "{\"shape\":\"box\"}" } }] }),
+            json!({ "role": "tool", "tool_call_id": "c1", "content": "Added box" }),
+            json!({ "role": "assistant", "content": "Listo" }),
+        ];
+        let events = Mutex::new(Vec::new());
+        assert!(agent.compact(&p, &|m| events.lock().unwrap().push(m), true));
+        let h = agent.history.lock().unwrap().clone();
+        assert_eq!(h.len(), 2);
+        assert!(h[0]["content"].as_str().unwrap().contains("Caja de 10×20×30"), "{h:?}");
+        assert_eq!(h[1]["role"], "assistant");
+        assert_eq!(agent.context.load(Ordering::SeqCst), 0);
+        let ev = events.into_inner().unwrap();
+        assert_eq!(ev[0]["kind"], "compacted");
+        assert_eq!(ev[0]["ok"], true);
+        assert_eq!(ev[0]["before"], 50_000);
+        assert_eq!(ev[0]["tokens"]["output"], 30);
+        // Al modelo le llega la transcripción, sin herramientas
+        let ask = &seen.lock().unwrap()[0];
+        assert!(ask.get("tools").is_none());
+        let text = ask["messages"][1]["content"].as_str().unwrap();
+        assert!(text.contains("User: haz una caja") && text.contains("called cad_primitive") && text.contains("Tool result: Added box"), "{text}");
     }
 
     #[test]

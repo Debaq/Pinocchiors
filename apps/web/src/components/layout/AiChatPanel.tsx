@@ -49,6 +49,8 @@ interface Saved {
   entries: Entry[];
   session: string | null;
   totals: Totals;
+  /** Tokens que ocupa la conversación (los del último paso del modelo) */
+  context?: number;
 }
 const SAVED_KEY = "pinocchio.ui.chat.conversation";
 const loadSaved = (): Saved => {
@@ -64,6 +66,7 @@ const saved = loadSaved();
 const [entries, setEntries] = createSignal<Entry[]>(saved.entries);
 const [session, setSession] = createSignal<string | null>(saved.session);
 const [totals, setTotals] = createSignal<Totals>(saved.totals);
+const [context, setContext] = createSignal(saved.context ?? 0);
 const [busy, setBusy] = createSignal(false);
 /** Guarda la conversación (sin las imágenes, que pesan; quedan las últimas 300 entradas) */
 const persist = () => {
@@ -72,7 +75,7 @@ const persist = () => {
       .filter((e) => e.kind !== "image")
       .map((e) => (e.kind === "user" && e.images ? { kind: "user" as const, text: e.text + (e.images.length ? ` [${e.images.length} 🖼]` : "") } : e))
       .slice(-300);
-    localStorage.setItem(SAVED_KEY, JSON.stringify({ entries: kept, session: session(), totals: totals() }));
+    localStorage.setItem(SAVED_KEY, JSON.stringify({ entries: kept, session: session(), totals: totals(), context: context() }));
   } catch {
     // Sin almacenamiento: se pierde al cerrar
   }
@@ -80,6 +83,14 @@ const persist = () => {
 /** Modelo y esfuerzo de Claude Code ("" = los suyos por defecto); se recuerdan */
 const [model, setModel] = createPersisted("chat.model", "");
 const [effort, setEffort] = createPersisted("chat.effort", "");
+/** Con más tokens que esto la conversación se resume sola antes del próximo mensaje ("0" = nunca) */
+const [compactAt, setCompactAt] = createPersisted("chat.compactAt", "100000");
+const COMPACT_OPTIONS = () => [
+  { value: "50000", label: t("Al pasar de 50 mil tokens") },
+  { value: "100000", label: t("Al pasar de 100 mil tokens") },
+  { value: "200000", label: t("Al pasar de 200 mil tokens") },
+  { value: "0", label: t("Nunca (solo con el botón)") },
+];
 /** Quién responde: "claude" (Claude Code) o el id de un proveedor con API */
 const [engine, setEngine] = createPersisted("chat.engine", "claude");
 const [providers, setProviders] = createSignal<ProviderView[]>([]);
@@ -172,10 +183,45 @@ const choiceLabel = () => {
   return [model() ? m?.label : "Claude Code", effort() ? e?.label.replace(/ \(.*\)$/, "") : ""].filter(Boolean).join(" · ");
 };
 
+/** Suma a los totales lo que costó un paso (tokens y dinero) */
+function addTotals(tokens: unknown, costValue: unknown) {
+  const tk = (tokens ?? {}) as Partial<Record<"input" | "cache_read" | "cache_write" | "output", number>>;
+  const cost = typeof costValue === "number" ? costValue : 0;
+  setTotals((s) => ({
+    input: s.input + (tk.input ?? 0),
+    cacheRead: s.cacheRead + (tk.cache_read ?? 0),
+    cacheWrite: s.cacheWrite + (tk.cache_write ?? 0),
+    output: s.output + (tk.output ?? 0),
+    cost: s.cost + cost,
+  }));
+  return { tk, cost };
+}
+
 /** Mensajes de Claude Code (`mcp::chat::translate`) → entradas del chat */
 function onEvent(m: { kind: string; [k: string]: unknown }) {
   const add = (e: Entry) => setEntries((list) => [...list, e]);
   switch (m.kind) {
+    case "context":
+      if (typeof m.tokens === "number") setContext(m.tokens);
+      return;
+    case "compacting":
+      return add({ kind: "info", text: m.auto ? t("La conversación está larga: la resumo antes de seguir…") : t("Resumiendo la conversación…") });
+    case "compacted": {
+      if (m.skipped) return add({ kind: "info", text: t("Todavía es corta: no hace falta resumirla") });
+      if (!m.ok) return add({ kind: "error", text: tBackend(String(m.error ?? t("No se pudo resumir la conversación"))) });
+      addTotals(m.tokens, m.cost);
+      const before = typeof m.before === "number" ? m.before : 0;
+      const after = typeof m.after === "number" ? m.after : 0;
+      setContext(after);
+      add({
+        kind: "info",
+        text: before
+          ? t("Conversación resumida: de ≈ {a} a ≈ {b} tokens. Sigue igual, desde el resumen.", { a: kTokens(before), b: kTokens(after) })
+          : t("Conversación resumida. Sigue igual, desde el resumen."),
+      });
+      persist();
+      return;
+    }
     case "start":
       answering = typeof m.model === "string" ? m.model : "";
       if (typeof m.session === "string") setSession(m.session);
@@ -196,16 +242,10 @@ function onEvent(m: { kind: string; [k: string]: unknown }) {
       setEntries((list) => list.map((e) => (e.kind === "tool" && e.state === "running" ? { ...e, state: m.ok ? "ok" : "error" } : e)));
       if (!m.ok && m.error) add({ kind: "error", text: tBackend(String(m.error)) });
       if (typeof m.session === "string") setSession(m.session);
+      // Fin de «Resumir»: ya se avisó con `compacted`
+      if (m.quiet) return persist();
       {
-        const tk = (m.tokens ?? {}) as Partial<Record<"input" | "cache_read" | "cache_write" | "output", number>>;
-        const cost = typeof m.cost === "number" ? m.cost : 0;
-        setTotals((s) => ({
-          input: s.input + (tk.input ?? 0),
-          cacheRead: s.cacheRead + (tk.cache_read ?? 0),
-          cacheWrite: s.cacheWrite + (tk.cache_write ?? 0),
-          output: s.output + (tk.output ?? 0),
-          cost: s.cost + cost,
-        }));
+        const { tk, cost } = addTotals(m.tokens, m.cost);
         const used = (tk.input ?? 0) + (tk.cache_read ?? 0) + (tk.cache_write ?? 0);
         const parts = [answering, used ? t("{n} de entrada · {m} de salida", { n: kTokens(used), m: kTokens(tk.output ?? 0) }) : "", cost ? `USD ${cost.toFixed(3)}` : ""].filter(Boolean);
         if (parts.length) add({ kind: "info", text: parts.join(" · ") });
@@ -312,6 +352,11 @@ export const AiChatPanel: Component<{
       setDraft("");
       return reset();
     }
+    // /compact (o /resumir) resume la conversación para que ocupe menos
+    if (/^\/(compact|resumir)$/i.test(text)) {
+      setDraft("");
+      return compact();
+    }
     const images = attached();
     setDraft("");
     setAttached([]);
@@ -321,8 +366,29 @@ export const AiChatPanel: Component<{
     setBusy(true);
     scroll();
     try {
-      await invoke("ai_chat_send", { message: text, images, engine: engine(), model: model() || null, effort: effort() || null, session: engine() === "claude" ? session() : null });
+      await invoke("ai_chat_send", {
+        message: text,
+        images,
+        engine: engine(),
+        model: model() || null,
+        effort: effort() || null,
+        session: engine() === "claude" ? session() : null,
+        compactAt: Number(compactAt()) || null,
+      });
       void refreshLive();
+    } catch (e) {
+      setBusy(false);
+      setEntries((l) => [...l, { kind: "error", text: tBackend(String(e)) }]);
+    }
+  };
+
+  /** Resume la conversación ahora: la IA sigue desde el resumen y cada mensaje cuesta menos */
+  const compact = async () => {
+    if (busy() || entries().length === 0) return;
+    setBusy(true);
+    scroll();
+    try {
+      await invoke("ai_chat_compact", { engine: engine(), model: model() || null, effort: effort() || null, session: engine() === "claude" ? session() : null });
     } catch (e) {
       setBusy(false);
       setEntries((l) => [...l, { kind: "error", text: tBackend(String(e)) }]);
@@ -333,6 +399,7 @@ export const AiChatPanel: Component<{
     void invoke("ai_chat_reset");
     setEntries([]);
     setSession(null);
+    setContext(0);
     setTotals(NO_TOTALS);
     setBusy(false);
     persist();
@@ -364,6 +431,16 @@ export const AiChatPanel: Component<{
         </button>
         <IconButton variant="ghost" size="sm" aria-label={t("Guardar la conversación")} title={t("Guardar la conversación")} onClick={() => void saveConversation().catch((e) => setNote(tBackend(String(e))))} disabled={entries().length === 0}>
           <Icons.FloppyDisk size={14} />
+        </IconButton>
+        <IconButton
+          variant="ghost"
+          size="sm"
+          aria-label={t("Resumir la conversación")}
+          title={t("Resumir la conversación para que ocupe menos: la IA sigue desde el resumen y cada mensaje cuesta menos (también /resumir)")}
+          onClick={() => void compact()}
+          disabled={busy() || entries().length === 0}
+        >
+          <Icons.CornersIn size={14} />
         </IconButton>
         <IconButton variant="ghost" size="sm" aria-label={t("Limpiar el chat")} title={t("Limpiar el chat y empezar una conversación nueva (también /clear)")} onClick={reset} disabled={busy() || entries().length === 0}>
           <Icons.Trash size={14} />
@@ -401,6 +478,12 @@ export const AiChatPanel: Component<{
               {t("Más esfuerzo piensa más antes de actuar: mejor para piezas complejas, más lento y gasta más de tu cuota. Vale desde el próximo mensaje.")}
             </p>
           </Show>
+          <div class="col-span-2">
+            <Select label={t("Resumir sola")} options={COMPACT_OPTIONS()} value={compactAt()} onChange={setCompactAt} />
+            <p class="mt-1 text-[11px] text-text-muted leading-relaxed">
+              {t("Cuando la conversación crece, la IA la resume antes del próximo mensaje: recuerda lo importante y gasta menos. Los resultados viejos y las imágenes ya vistas se acortan solos.")}
+            </p>
+          </div>
           <Show when={providers().length === 0}>
             <p class="col-span-2 text-[11px] text-text-dim leading-relaxed">
               {t("¿DeepSeek, OpenAI u Ollama? Agrégalos en Configuración ▸ Conector para IA ▸ Proveedores para el chat.")}
@@ -487,7 +570,7 @@ export const AiChatPanel: Component<{
         </Show>
       </div>
 
-      <Show when={totals().input + totals().cacheRead + totals().output > 0}>
+      <Show when={totals().input + totals().cacheRead + totals().output > 0 || context() > 0}>
         <div
           class="px-3 py-1 border-t border-border text-[10.5px] text-text-dim flex gap-1.5 flex-wrap"
           title={t("Tokens de esta conversación: entrada nueva {a}, leída de la caché {b}, escrita en la caché {c}; salida {d}", {
@@ -497,6 +580,14 @@ export const AiChatPanel: Component<{
             d: kTokens(totals().output),
           })}
         >
+          <Show when={context() > 0}>
+            <span
+              classList={{ "text-warning": Number(compactAt()) > 0 && context() > Number(compactAt()) }}
+              title={t("Lo que ocupa la conversación ahora: se manda entera con cada mensaje")}
+            >
+              {t("Ocupa ≈ {n}", { n: kTokens(context()) })} ·
+            </span>
+          </Show>
           <span>{t("Conversación")}:</span>
           <span>≈ {kTokens(totals().input + totals().cacheRead + totals().cacheWrite)} {t("de entrada")}</span>
           <span>· {kTokens(totals().output)} {t("de salida")}</span>

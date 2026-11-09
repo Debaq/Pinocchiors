@@ -9,8 +9,9 @@
 //! usuario. Las herramientas permitidas son solo las de Pinocchio.
 
 use std::io::{BufRead, BufReader, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
@@ -66,6 +67,12 @@ pub struct Chat {
     child: Mutex<Option<Child>>,
     /// Sesión de Claude Code de la conversación (para continuarla)
     session: Mutex<Option<String>>,
+    /// Hay un turno en curso (puede ser resumir y después el mensaje)
+    running: AtomicBool,
+    /// Se pidió detener (no sigue con el mensaje después de resumir)
+    stopped: AtomicBool,
+    /// Tokens que ocupa la conversación (los del último paso del modelo)
+    context: AtomicU64,
 }
 
 /// Dónde está `claude` (los programas de escritorio no siempre heredan el PATH de la terminal)
@@ -96,7 +103,17 @@ pub fn translate(event: &Value) -> Vec<Value> {
     let mut out = Vec::new();
     match event["type"].as_str() {
         Some("system") if event["subtype"] == "init" => out.push(json!({ "kind": "start", "session": event["session_id"], "model": event["model"] })),
+        // Claude Code resumió la conversación (por `/compact` o solo, al llenarse)
+        Some("system") if event["subtype"] == "compact_boundary" => {
+            out.push(json!({ "kind": "compacted", "ok": true, "auto": event["compact_metadata"]["trigger"] != "manual", "before": event["compact_metadata"]["pre_tokens"], "after": event["compact_metadata"]["post_tokens"] }))
+        }
         Some("assistant") => {
+            // Lo que ocupa la conversación: todo lo que entró en este paso del modelo
+            let u = &event["message"]["usage"];
+            if u.is_object() {
+                let n = |k: &str| u[k].as_u64().unwrap_or(0);
+                out.push(json!({ "kind": "context", "tokens": n("input_tokens") + n("cache_read_input_tokens") + n("cache_creation_input_tokens") }));
+            }
             for c in event["message"]["content"].as_array().into_iter().flatten() {
                 match c["type"].as_str() {
                     Some("text") if !c["text"].as_str().unwrap_or("").trim().is_empty() => out.push(json!({ "kind": "text", "text": c["text"] })),
@@ -151,20 +168,83 @@ pub fn translate(event: &Value) -> Vec<Value> {
 
 impl Chat {
     pub fn busy(&self) -> bool {
-        self.child.lock().unwrap().as_mut().is_some_and(|c| c.try_wait().ok().flatten().is_none())
+        self.running.load(Ordering::SeqCst)
+    }
+
+    /// Empieza un turno: dónde está `claude` y la carpeta de trabajo
+    fn begin(&self) -> Result<(PathBuf, PathBuf), String> {
+        if self.running.swap(true, Ordering::SeqCst) {
+            return Err("Todavía está respondiendo el mensaje anterior".into());
+        }
+        self.stopped.store(false, Ordering::SeqCst);
+        let found = find_claude()
+            .ok_or_else(|| "No se encontró Claude Code (`claude`). Instálalo desde claude.com/claude-code e inicia sesión una vez en la terminal.".to_string())
+            .and_then(|claude| Ok((claude, workdir()?)));
+        if found.is_err() {
+            self.running.store(false, Ordering::SeqCst);
+        }
+        found
     }
 
     /// Manda un mensaje (texto e imágenes); la respuesta llega por `emit` a
-    /// medida que sale. `model` y `effort`: los de Claude Code (`None` = los suyos)
-    pub fn send(self: &Arc<Self>, message: &str, images: &[Image], model: Option<&str>, effort: Option<&str>, emit: impl Fn(Value) + Send + 'static) -> Result<(), String> {
-        if self.busy() {
-            return Err("Todavía está respondiendo el mensaje anterior".into());
+    /// medida que sale. `model` y `effort`: los de Claude Code (`None` = los suyos).
+    /// `compact_at`: si la conversación ya ocupa más tokens, antes se resume (`/compact`)
+    pub fn send(self: &Arc<Self>, message: &str, images: &[Image], model: Option<&str>, effort: Option<&str>, compact_at: Option<u64>, emit: impl Fn(Value) + Send + 'static) -> Result<(), String> {
+        let (claude, dir) = self.begin()?;
+        let mut content = vec![json!({ "type": "text", "text": message })];
+        content.extend(images.iter().map(|i| json!({ "type": "image", "source": { "type": "base64", "media_type": i.mime, "data": i.data } })));
+        let (model, effort) = (model.map(str::to_string), effort.map(str::to_string));
+        let chat = self.clone();
+        std::thread::spawn(move || {
+            let (model, effort) = (model.as_deref(), effort.as_deref());
+            let long = compact_at.is_some_and(|limit| limit > 0 && chat.context.load(Ordering::SeqCst) > limit);
+            if long && chat.session.lock().unwrap().is_some() {
+                emit(json!({ "kind": "compacting", "auto": true }));
+                chat.turn(&claude, &dir, json!("/compact"), model, effort, Some(true), &emit);
+            }
+            if chat.stopped.load(Ordering::SeqCst) {
+                emit(json!({ "kind": "done", "ok": false, "error": "Se detuvo" }));
+            } else {
+                chat.turn(&claude, &dir, json!(content), model, effort, None, &emit);
+            }
+            chat.running.store(false, Ordering::SeqCst);
+        });
+        Ok(())
+    }
+
+    /// Resume la conversación ahora (botón «Resumir» o `/resumir`)
+    pub fn compact_now(self: &Arc<Self>, model: Option<&str>, effort: Option<&str>, emit: impl Fn(Value) + Send + 'static) -> Result<(), String> {
+        if self.session.lock().unwrap().is_none() {
+            return Err("Todavía no hay conversación que resumir".into());
         }
-        let claude = find_claude().ok_or("No se encontró Claude Code (`claude`). Instálalo desde claude.com/claude-code e inicia sesión una vez en la terminal.")?;
-        let dir = workdir()?;
-        let mut cmd = Command::new(&claude);
+        let (claude, dir) = self.begin()?;
+        let (model, effort) = (model.map(str::to_string), effort.map(str::to_string));
+        let chat = self.clone();
+        std::thread::spawn(move || {
+            emit(json!({ "kind": "compacting", "auto": false }));
+            let ok = chat.turn(&claude, &dir, json!("/compact"), model.as_deref(), effort.as_deref(), Some(false), &emit);
+            emit(json!({ "kind": "done", "ok": ok, "quiet": true }));
+            chat.running.store(false, Ordering::SeqCst);
+        });
+        Ok(())
+    }
+
+    /// Un turno de Claude Code con `content` (bloques del mensaje, o el texto de
+    /// un comando como `/compact`). Con `compact` (= si fue automático) es
+    /// resumir: lo de adentro no se muestra y su fin sale como `compacted`.
+    /// Devuelve si terminó bien
+    #[allow(clippy::too_many_arguments)]
+    fn turn(&self, claude: &Path, dir: &Path, content: Value, model: Option<&str>, effort: Option<&str>, compact: Option<bool>, emit: &impl Fn(Value)) -> bool {
+        let fail = |message: String| {
+            emit(match compact {
+                Some(auto) => json!({ "kind": "compacted", "ok": false, "auto": auto, "error": message }),
+                None => json!({ "kind": "done", "ok": false, "error": message }),
+            });
+            false
+        };
+        let mut cmd = Command::new(claude);
         // El mensaje va por la entrada en JSON (así lleva imágenes sin tocar archivos)
-        cmd.current_dir(&dir)
+        cmd.current_dir(dir)
             .arg("-p")
             .args(["--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--strict-mcp-config", "--setting-sources", "project"])
             .arg("--mcp-config")
@@ -184,49 +264,80 @@ impl Chat {
         if let Some(e) = effort.filter(|e| EFFORTS.contains(e)) {
             cmd.args(["--effort", e]);
         }
-        let mut child = cmd.spawn().map_err(|e| format!("No se pudo abrir Claude Code: {e}"))?;
-        let mut content = vec![json!({ "type": "text", "text": message })];
-        content.extend(images.iter().map(|i| json!({ "type": "image", "source": { "type": "base64", "media_type": i.mime, "data": i.data } })));
+        let mut child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => return fail(format!("No se pudo abrir Claude Code: {e}")),
+        };
         let line = json!({ "type": "user", "message": { "role": "user", "content": content } });
-        if let Some(mut stdin) = child.stdin.take() {
-            writeln!(stdin, "{line}").map_err(|e| format!("No se pudo hablar con Claude Code: {e}"))?;
+        if let Some(mut stdin) = child.stdin.take()
+            && let Err(e) = writeln!(stdin, "{line}")
+        {
+            let _ = child.kill();
+            return fail(format!("No se pudo hablar con Claude Code: {e}"));
         }
-        let stdout = child.stdout.take().ok_or("sin salida")?;
-        let mut stderr = child.stderr.take().ok_or("sin salida de errores")?;
+        let (Some(stdout), Some(mut stderr)) = (child.stdout.take(), child.stderr.take()) else {
+            let _ = child.kill();
+            return fail("Claude Code no tiene salida".into());
+        };
         *self.child.lock().unwrap() = Some(child);
-        let chat = self.clone();
-        std::thread::spawn(move || {
-            let mut finished = false;
-            for line in BufReader::new(stdout).lines() {
-                let Ok(line) = line else { break };
-                let Ok(event) = serde_json::from_str::<Value>(&line) else { continue };
-                for msg in translate(&event) {
-                    if (msg["kind"] == "start" || msg["kind"] == "done")
-                        && let Some(s) = msg["session"].as_str()
-                    {
-                        *chat.session.lock().unwrap() = Some(s.to_string());
+        // Lo que ocupaba antes y después de resumir (lo dice Claude Code)
+        let (mut before, mut after) = (json!(self.context.load(Ordering::SeqCst)), Value::Null);
+        let (mut finished, mut ok) = (false, false);
+        for line in BufReader::new(stdout).lines() {
+            let Ok(line) = line else { break };
+            let Ok(event) = serde_json::from_str::<Value>(&line) else { continue };
+            for msg in translate(&event) {
+                let kind = msg["kind"].as_str().unwrap_or("");
+                if (kind == "start" || kind == "done")
+                    && let Some(s) = msg["session"].as_str()
+                {
+                    *self.session.lock().unwrap() = Some(s.to_string());
+                }
+                if kind == "context" {
+                    self.context.store(msg["tokens"].as_u64().unwrap_or(0), Ordering::SeqCst);
+                }
+                if kind == "compacted" {
+                    // Claude Code resumió (pedido o solo): lo que sigue ocupa poco
+                    self.context.store(msg["after"].as_u64().unwrap_or(0), Ordering::SeqCst);
+                    if !msg["before"].is_null() {
+                        before = msg["before"].clone();
                     }
-                    finished |= msg["kind"] == "done";
-                    emit(msg);
+                    after = msg["after"].clone();
+                }
+                if kind == "done" {
+                    finished = true;
+                    ok = msg["ok"] == true;
+                }
+                match compact {
+                    // Resumiendo: solo se avisa el final, con lo que costó
+                    Some(auto) if kind == "done" => {
+                        let mut out = json!({ "kind": "compacted", "ok": ok, "auto": auto, "before": before, "after": after, "tokens": msg["tokens"], "cost": msg["cost"] });
+                        if !ok {
+                            out["error"] = json!("Claude Code no pudo resumir la conversación");
+                        }
+                        emit(out);
+                    }
+                    Some(_) => {}
+                    None => emit(msg),
                 }
             }
-            let mut err = String::new();
-            let _ = stderr.read_to_string(&mut err);
-            let code = chat.child.lock().unwrap().take().and_then(|mut c| c.wait().ok());
-            if !finished {
-                let why = err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").to_string();
-                let message = match code {
-                    Some(c) if c.success() => "Claude Code terminó sin respuesta".to_string(),
-                    _ if why.is_empty() => "Se detuvo".to_string(),
-                    _ => why,
-                };
-                emit(json!({ "kind": "done", "ok": false, "error": message }));
-            }
-        });
-        Ok(())
+        }
+        let mut err = String::new();
+        let _ = stderr.read_to_string(&mut err);
+        let code = self.child.lock().unwrap().take().and_then(|mut c| c.wait().ok());
+        if finished {
+            return ok;
+        }
+        let why = err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").to_string();
+        fail(match code {
+            Some(c) if c.success() => "Claude Code terminó sin respuesta".to_string(),
+            _ if why.is_empty() => "Se detuvo".to_string(),
+            _ => why,
+        })
     }
 
     pub fn stop(&self) {
+        self.stopped.store(true, Ordering::SeqCst);
         if let Some(c) = self.child.lock().unwrap().as_mut() {
             let _ = c.kill();
         }
@@ -235,6 +346,7 @@ impl Chat {
     pub fn reset(&self) {
         self.stop();
         *self.session.lock().unwrap() = None;
+        self.context.store(0, Ordering::SeqCst);
     }
 }
 
@@ -268,6 +380,7 @@ pub fn ai_chat_send(
     model: Option<String>,
     effort: Option<String>,
     session: Option<String>,
+    compact_at: Option<u64>,
 ) -> Result<(), String> {
     let images = images.unwrap_or_default();
     if images.iter().any(|i| !IMAGE_TYPES.iter().any(|t| t.1 == i.mime)) {
@@ -277,7 +390,7 @@ pub fn ai_chat_send(
     // Un proveedor con API (DeepSeek, OpenAI…): el agente de la app
     if let Some(id) = engine.filter(|e| e != "claude") {
         let handle = app.clone();
-        return agent.send(&id, &message, &images, move |msg| {
+        return agent.send(&id, &message, &images, compact_at, move |msg| {
             use tauri::Emitter;
             let _ = handle.emit(EV_CHAT, msg);
         });
@@ -287,10 +400,35 @@ pub fn ai_chat_send(
         chat.session.lock().unwrap().get_or_insert(s);
     }
     let handle = app.clone();
-    chat.send(&message, &images, model.as_deref(), effort.as_deref(), move |msg| {
+    chat.send(&message, &images, model.as_deref(), effort.as_deref(), compact_at, move |msg| {
         use tauri::Emitter;
         let _ = handle.emit(EV_CHAT, msg);
     })
+}
+
+/// Resume la conversación ahora para que ocupe menos (el próximo mensaje sigue desde el resumen)
+#[tauri::command]
+pub fn ai_chat_compact(
+    app: tauri::AppHandle,
+    chat: tauri::State<'_, Arc<Chat>>,
+    agent: tauri::State<'_, Arc<super::agent::Agent>>,
+    engine: Option<String>,
+    model: Option<String>,
+    effort: Option<String>,
+    session: Option<String>,
+) -> Result<(), String> {
+    let handle = app.clone();
+    let emit = move |msg| {
+        use tauri::Emitter;
+        let _ = handle.emit(EV_CHAT, msg);
+    };
+    if let Some(id) = engine.filter(|e| e != "claude") {
+        return agent.compact_now(&id, emit);
+    }
+    if let Some(s) = session.filter(|s| s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')) {
+        chat.session.lock().unwrap().get_or_insert(s);
+    }
+    chat.compact_now(model.as_deref(), effort.as_deref(), emit)
 }
 
 /// Una imagen del disco para adjuntarla a un mensaje
@@ -315,6 +453,16 @@ pub fn ai_chat_reset(chat: tauri::State<'_, Arc<Chat>>, agent: tauri::State<'_, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn context_and_compaction_events() {
+        let step = json!({ "type": "assistant", "message": { "content": [], "usage": { "input_tokens": 5, "cache_read_input_tokens": 30_000, "cache_creation_input_tokens": 1_000 } } });
+        assert_eq!(translate(&step), vec![json!({ "kind": "context", "tokens": 31_005 })]);
+        let boundary = json!({ "type": "system", "subtype": "compact_boundary", "compact_metadata": { "trigger": "manual", "pre_tokens": 18756, "post_tokens": 3506 } });
+        assert_eq!(translate(&boundary), vec![json!({ "kind": "compacted", "ok": true, "auto": false, "before": 18756, "after": 3506 })]);
+        let auto = json!({ "type": "system", "subtype": "compact_boundary", "compact_metadata": { "trigger": "auto", "pre_tokens": 150_000 } });
+        assert_eq!(translate(&auto)[0]["auto"], true);
+    }
 
     #[test]
     fn claude_code_events_become_chat_messages() {

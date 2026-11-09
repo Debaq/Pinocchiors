@@ -146,6 +146,7 @@ pub fn run() {
             mcp::agent::ai_provider_delete,
             mcp::agent::ai_provider_test,
             mcp::chat::ai_chat_reset,
+            mcp::chat::ai_chat_compact,
             commands::remove_object,
             commands::remove_scene_node,
             commands::set_scene_node_transform,
