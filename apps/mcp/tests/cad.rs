@@ -428,3 +428,45 @@ fn edit_a_sketch_and_use_the_model() {
     let (text, _, err) = call(&s, "sketch_use", json!({ "sketch": "Arriba" }));
     assert!(err && text.contains("nothing to use"), "{text}");
 }
+
+/// Versiones como ramas: guardar, probar otra idea, comparar y volver
+#[test]
+fn versions_as_branches() {
+    if !cad_model::occt::available() {
+        return;
+    }
+    let s = server();
+    let (_, data) = ok(&s, "cad_primitive", json!({ "shape": "box", "dimensions": [20, 20, 10] }));
+    let base = volume(&data);
+    let (text, _) = ok(&s, "cad_version", json!({ "action": "save", "name": "caja", "note": "antes del agujero" }));
+    assert!(text.contains("version 1 \"caja\""), "{text}");
+    // El mismo nombre no se repite
+    let (text, _, err) = call(&s, "cad_version", json!({ "action": "save", "name": "caja" }));
+    assert!(err && text.contains("already"), "{text}");
+
+    // Otra idea: un agujero que corta
+    let (_, data) = ok(&s, "cad_primitive", json!({ "shape": "cylinder", "diameter": 6, "height": 30, "origin": [0, 0, -5], "op": "cut" }));
+    assert!(volume(&data) < base);
+    let (text, data) = ok(&s, "cad_versions", json!({ "compare": "caja" }));
+    assert!(text.contains("added operation"), "{text}");
+    assert!(data["removed_volume"].as_f64().unwrap() > 1.0, "{text}");
+    let (text, _) = ok(&s, "cad_versions", json!({}));
+    assert!(text.contains("1. \"caja\"") && text.contains("antes del agujero"), "{text}");
+
+    // No sirvió: se vuelve a la caja y la versión sigue ahí
+    let (text, data) = ok(&s, "cad_version", json!({ "action": "restore", "version": 1 }));
+    assert!(text.contains("back to version 1"), "{text}");
+    assert!((volume(&data) - base).abs() < 1e-6, "{text}");
+    let (text, _) = ok(&s, "cad_versions", json!({}));
+    assert!(text.contains("same as now"), "{text}");
+
+    // Deshacer vuelve a la idea del agujero
+    ok(&s, "undo", json!({}));
+    let (_, data) = ok(&s, "cad_design", json!({}));
+    assert!(volume(&data) < base);
+
+    let (text, _) = ok(&s, "cad_version", json!({ "action": "delete", "version": "caja" }));
+    assert!(text.contains("Deleted"), "{text}");
+    let (text, _, err) = call(&s, "cad_versions", json!({ "compare": 1 }));
+    assert!(err && text.contains("no saved versions"), "{text}");
+}

@@ -21,6 +21,7 @@ mod project;
 mod sketch;
 mod sketch_edit;
 mod slice;
+mod versions;
 mod view;
 
 /// Una herramienta
@@ -83,6 +84,7 @@ pub fn all() -> Vec<&'static Tool> {
     list.extend(sketch::TOOLS);
     list.extend(sketch_edit::TOOLS);
     list.extend(features::TOOLS);
+    list.extend(versions::TOOLS);
     list.extend(assembly::TOOLS);
     list.extend(drawing::TOOLS);
     list.extend(mesh::TOOLS);

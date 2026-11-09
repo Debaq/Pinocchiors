@@ -68,6 +68,7 @@ args = ["--mcp"]
 | `cad_fillet` / `cad_chamfer` / `cad_shell` | Redondeo, chaflán, vaciado |
 | `cad_add_feature` / `cad_edit_feature` / `cad_delete_feature` | Cualquier operación en JSON |
 | `cad_parameters` | Parámetros y fórmulas |
+| `cad_versions` / `cad_version` | Versiones del diseño (ramas): listar y comparar; guardar, volver, borrar |
 | `cad_export` | STEP, STL, 3MF, OBJ, PLY, GLB |
 | `asm_insert` / `asm_mate` / `asm_instance` / `asm_mate_edit` | Ensambles: poner piezas, unirlas, moverlas |
 | `asm_relation` | Engranes, piñón-cremallera y tornillo entre uniones |

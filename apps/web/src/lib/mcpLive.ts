@@ -59,6 +59,8 @@ export function aiLabel(tool: string): string {
     cad_edit_feature: () => t("Cambiando una operación"),
     cad_delete_feature: () => t("Borrando una operación"),
     cad_parameters: () => t("Cambiando parámetros"),
+    cad_version: () => t("Trabajando con versiones del diseño"),
+    cad_versions: () => t("Mirando las versiones del diseño"),
     cad_export: () => t("Exportando"),
     asm_insert: () => t("Poniendo piezas en el ensamble"),
     asm_mate: () => t("Uniendo piezas"),

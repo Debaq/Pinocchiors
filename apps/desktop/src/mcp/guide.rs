@@ -75,6 +75,10 @@ A design tab is a list of operations computed in order. Typical part:
 - Face and edge numbers change after every change: list them again with `cad_geometry` before picking.
 - `cad_geometry` `facing` filters planar faces by direction, e.g. \"+Z\" for top faces.
 - Parameters (`cad_parameters`) make designs editable: `width = 40`, then formulas bind fields to them.
+- Versions are branches: before trying an alternative (another shape, a risky fillet, thinner walls) \
+`cad_version` {\"action\": \"save\", \"name\": \"...\"}; afterwards `cad_versions` {\"compare\": ...} shows the added/removed \
+volume and the changed operations, and `cad_version` `restore` goes back if the idea did not work. Save a version of a good result before the \
+next big change; the user sees them in the Versions section.
 - Anything without its own tool: `cad_add_feature` with the JSON from `help` topic `features`.
 - Edit an operation with `cad_edit_feature` (see its JSON with `cad_design` {\"detail\": true}); delete with \
 `cad_delete_feature`.",
