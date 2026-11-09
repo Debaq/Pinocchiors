@@ -109,6 +109,7 @@ export const en_panels2: Catalog = {
   "Corta la malla donde se atraviesa a sí misma y borra la superficie que queda dentro de otro cuerpo. También borra las piezas internas puestas a propósito (por ejemplo, ojos dentro de una cabeza).":
     "Cuts the mesh where it passes through itself and deletes the surface left inside another body. It also deletes inner parts placed on purpose (for example, eyes inside a head).",
   "Unir cuerpos solapados": "Merge overlapping bodies",
+  "Solo quedan cruces: activa «Unir cuerpos solapados» para corregirlos.": "Only crossings are left: turn on «Merge overlapping bodies» to fix them.",
   "Relleno suave (sigue la curvatura)": "Smooth fill (follows curvature)",
   "Tamaño máx. de agujero": "Max hole size",
   "sin límite": "no limit",

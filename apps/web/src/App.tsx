@@ -445,6 +445,8 @@ interface TauriRepairResult extends RepairResult {
   new_diagnostics: MeshDiagnostics;
   /** Había rig y pasó a la malla reparada */
   rig_kept: boolean;
+  /** La malla cambió; si no, quedó tal cual y no hay paso que deshacer */
+  changed: boolean;
 }
 
 // Print3D types
@@ -7045,12 +7047,20 @@ export const App: Component = () => {
             max_hole_edges: opts.maxHoleEdges,
             refine_fill: opts.refineFill,
             resolve_intersections: opts.resolveIntersections,
+            // El resultado se revisa igual que «Analizar»
+            check_self_intersections: repairAnalysisConfig().checkSelfIntersections,
           },
         }));
-        done(t("Reparar malla"));
-
         setRepairResult(result);
         setDiagnostics(result.new_diagnostics);
+        if (!result.changed) {
+          // Sin `done`: no queda un paso «Reparar» vacío en el historial ni en el outliner
+          setIsProcessing(false);
+          setStatusMessage(t("No había nada que reparar con estas opciones"));
+          return;
+        }
+        done(t("Reparar malla"));
+
         setCanUndoRepair(true);
         // Deshacer el desplegado de antes descartaría la reparación
         setCanUndoUnwrap(false);

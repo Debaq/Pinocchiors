@@ -3700,6 +3700,9 @@ pub struct RepairConfigInput {
     pub refine_fill: Option<bool>,
     /// Unir cuerpos solapados (cortar por las auto-intersecciones)
     pub resolve_intersections: Option<bool>,
+    /// Contar los cruces al revisar el resultado (lo mismo que pide «Analizar»)
+    #[serde(default)]
+    pub check_self_intersections: Option<bool>,
 }
 
 impl RepairConfigInput {
@@ -3735,6 +3738,8 @@ pub struct RepairResultInfo {
     pub new_diagnostics: MeshDiagnosticsInfo,
     /// Había rig y pasó a la malla reparada (mismo esqueleto, pesos trasladados)
     pub rig_kept: bool,
+    /// La malla cambió. Si no, quedó tal cual y no hay nada que deshacer
+    pub changed: bool,
 }
 
 /// Malla restaurada al deshacer la reparación
@@ -3861,27 +3866,56 @@ pub(crate) fn repair_mesh_impl(state: &AppState, config: &RepairConfigInput, on_
     })
     .map_err(|e| format!("Error en reparación: {e}"))?;
     report(on_progress, "analyze", 92, "Analizando resultado...");
-    // Siempre contar los cruces: sin eso, dos cuerpos que se atraviesan salían
-    // como «sana» (el panel avisa y sugiere «Unir cuerpos solapados»)
-    let analysis = RepairAnalysisConfig { check_self_intersections: true, ..RepairAnalysisConfig::default() };
-    let mut diagnostics = pinocchio_repair::analyze(&mesh, &analysis);
+    // El resultado se revisa igual que con «Analizar»: si contara cruces que el
+    // análisis no cuenta, «Reparar» diría «requiere reparación» y «Analizar»
+    // «sana», y volver a reparar no arreglaría nada (sin unir cuerpos)
+    let analysis = RepairAnalysisConfig {
+        check_self_intersections: config.check_self_intersections.unwrap_or(false) || repair_config.resolve_intersections,
+        ..RepairAnalysisConfig::default()
+    };
+    // Solo para decidir el reintento: si quedó cerrada y cuántas piezas tiene
+    let shape = pinocchio_repair::analyze(&mesh, &RepairAnalysisConfig::default());
     let mut summary = summary;
     // Una sola pieza que no quedó cerrada: casi siempre son cruces de la malla
     // consigo misma (un escaneo con zonas finas). Se reintenta desde la original
     // uniéndolos; con varias piezas no, porque borraría las internas puestas a
     // propósito (ojos dentro de una cabeza). Se queda con el que salga cerrado.
-    if !diagnostics.is_closed && diagnostics.connected_components == 1 && !repair_config.resolve_intersections {
+    if !shape.is_closed && shape.connected_components == 1 && !repair_config.resolve_intersections {
         report(on_progress, "repair", 70, "No quedó cerrada: uniendo los cruces...");
         let mut retry = original_mesh.clone();
         let config = pinocchio_repair::RepairConfig { resolve_intersections: true, ..repair_config.clone() };
         if let Ok(s2) = pinocchio_repair::repair_all(&mut retry, &config) {
-            let d2 = pinocchio_repair::analyze(&retry, &RepairAnalysisConfig { check_self_intersections: true, ..RepairAnalysisConfig::default() });
-            if d2.is_closed {
+            if pinocchio_repair::analyze(&retry, &RepairAnalysisConfig::default()).is_closed {
                 mesh = retry;
-                diagnostics = d2;
                 summary = s2;
             }
         }
+    }
+
+    // Nada que cambiar con estas opciones: la malla queda tal cual, sin copia
+    // para deshacer (el frontend no deja un paso «Reparar» vacío en el historial)
+    let changed = summary.any_repairs()
+        || mesh.num_vertices() != original_mesh.num_vertices()
+        || mesh.num_faces() != original_mesh.num_faces();
+    if !changed {
+        let diagnostics = analyze_scene_mesh(&original_mesh, &original_scene, &analysis);
+        let (num_vertices, num_faces, has_normals, has_uvs) = calculate_scene_stats(&original_scene);
+        let new_mesh_info = MeshInfo {
+            num_vertices,
+            num_faces,
+            num_meshes: original_scene.meshes.len(),
+            has_normals,
+            has_uvs,
+            has_materials: !original_scene.materials.is_empty(),
+            bounding_box: calculate_scene_bounds(&original_scene),
+            format: "REPAIRED".to_string(),
+            rig: None,
+            textures: Vec::new(),
+            textures_skipped: Vec::new(),
+        };
+        let new_diagnostics = diagnostics_to_info(&diagnostics);
+        *state.diagnostics.lock().unwrap() = Some(diagnostics);
+        return Ok(RepairResultInfo { summary, new_mesh_info, new_diagnostics, rig_kept: false, changed: false });
     }
 
     // Reconstruir Scene desde la malla reparada (la topología cambió), con la
@@ -3914,10 +3948,16 @@ pub(crate) fn repair_mesh_impl(state: &AppState, config: &RepairConfigInput, on_
     *state.mesh_before_unwrap.lock().unwrap() = None;
     *state.scene_before_unwrap.lock().unwrap() = None;
 
+    // Lo que diría «Analizar» sobre la malla que quedó (con sus costuras de piel)
+    let diagnostics = {
+        let mesh = state.mesh.lock().unwrap();
+        let scene = state.scene.lock().unwrap();
+        analyze_scene_mesh(mesh.as_ref().expect("recién guardada"), scene.as_ref().expect("recién guardada"), &analysis)
+    };
     let new_diagnostics = diagnostics_to_info(&diagnostics);
     *state.diagnostics.lock().unwrap() = Some(diagnostics);
 
-    Ok(RepairResultInfo { summary, new_mesh_info, new_diagnostics, rig_kept })
+    Ok(RepairResultInfo { summary, new_mesh_info, new_diagnostics, rig_kept, changed: true })
 }
 
 /// Deshace la reparación restaurando backups
@@ -5533,5 +5573,75 @@ mod render_image_tests {
             Some("/home/nick/Mi carpeta/modeloñ.png")
         );
         assert_eq!(decode_uri_component("%zz"), None);
+    }
+}
+
+#[cfg(test)]
+mod repair_loop_tests {
+    use super::*;
+
+    /// Dos cubos cerrados que se atraviesan (como un STL de dos cuerpos solapados)
+    fn crossing_cubes() -> (Mesh, Scene) {
+        let mut pos = Vec::new();
+        let mut tris = Vec::new();
+        for o in [0.0, 0.5] {
+            let b = pos.len();
+            for z in [0.0, 1.0] {
+                for y in [0.0, 1.0] {
+                    for x in [0.0, 1.0] {
+                        pos.push(Vector3::new(x + o, y + o, z + o));
+                    }
+                }
+            }
+            let quads = [[0, 2, 3, 1], [4, 5, 7, 6], [0, 1, 5, 4], [2, 6, 7, 3], [0, 4, 6, 2], [1, 3, 7, 5]];
+            for q in quads {
+                tris.push([b + q[0], b + q[1], b + q[2]]);
+                tris.push([b + q[0], b + q[2], b + q[3]]);
+            }
+        }
+        let mesh = Mesh::from_triangles(&pos, &tris);
+        let scene = mesh_to_scene(&mesh, "cubos", None);
+        (scene_to_pinocchio_mesh(&scene).unwrap(), scene)
+    }
+
+    fn config(resolve: bool) -> RepairConfigInput {
+        RepairConfigInput {
+            merge_duplicates: Some(true),
+            remove_degenerates: Some(true),
+            fix_normals: Some(true),
+            fix_non_manifold: Some(true),
+            orient_outward: Some(true),
+            remove_small_components: Some(false),
+            fill_holes: Some(true),
+            max_hole_edges: Some(0),
+            refine_fill: Some(true),
+            resolve_intersections: Some(resolve),
+            check_self_intersections: Some(false),
+        }
+    }
+
+    /// «Reparar» y «Analizar» dicen lo mismo, y reparar sin cambios no deja copia para deshacer
+    #[test]
+    fn repair_without_changes_matches_analyze_and_keeps_mesh() {
+        let state = AppState::new();
+        let (mesh, scene) = crossing_cubes();
+        *state.mesh.lock().unwrap() = Some(mesh);
+        *state.scene.lock().unwrap() = Some(scene);
+        let analyze = RepairAnalysisConfigInput { check_self_intersections: Some(false) };
+        assert!(!analyze_mesh_impl(&state, &analyze).unwrap().needs_repair);
+
+        for _ in 0..2 {
+            let r = repair_mesh_impl(&state, &config(false), &Channel::new(|_| Ok(()))).unwrap();
+            assert!(!r.changed, "no había nada que reparar");
+            assert!(!r.new_diagnostics.needs_repair, "no pide reparar lo que «Analizar» da por sano");
+            assert!(state.mesh_before_repair.lock().unwrap().is_none(), "sin copia para deshacer");
+            assert!(!analyze_mesh_impl(&state, &analyze).unwrap().needs_repair);
+        }
+
+        // Pidiendo contar cruces, ambos los ven
+        let r = repair_mesh_impl(&state, &RepairConfigInput { check_self_intersections: Some(true), ..config(false) }, &Channel::new(|_| Ok(()))).unwrap();
+        assert!(r.new_diagnostics.diagnostics.self_intersections > 0);
+        let a = analyze_mesh_impl(&state, &RepairAnalysisConfigInput { check_self_intersections: Some(true) }).unwrap();
+        assert_eq!(a.diagnostics.self_intersections, r.new_diagnostics.diagnostics.self_intersections);
     }
 }

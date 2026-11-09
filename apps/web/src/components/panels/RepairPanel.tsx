@@ -118,6 +118,24 @@ export const RepairPanel: Component<RepairPanelProps> = (props) => {
     ];
   };
 
+  /** Lo único que queda son cruces y «Unir cuerpos solapados» está apagado: reparar no cambiaría nada */
+  const onlyCrossings = () => {
+    const x = d();
+    if (!x || x.self_intersections === 0 || props.repairOptions.resolveIntersections) return false;
+    return !(
+      x.duplicate_vertices > 0 ||
+      x.unreferenced_vertices > 0 ||
+      x.invalid_faces > 0 ||
+      x.duplicate_faces > 0 ||
+      x.degenerate_faces > 0 ||
+      x.non_manifold_edges > 0 ||
+      x.non_manifold_vertices > 0 ||
+      !x.normals_consistent ||
+      x.normals_outward === false ||
+      x.boundary_loops > 0
+    );
+  };
+
   const yesNo = (value: boolean) => (
     <span class={value ? "text-green" : "text-red"}>{value ? t("Sí") : t("No")}</span>
   );
@@ -318,9 +336,12 @@ export const RepairPanel: Component<RepairPanelProps> = (props) => {
             </div>
           </Show>
 
+          <Show when={onlyCrossings()}>
+            <p class="text-[11px] text-yellow">{t("Solo quedan cruces: activa «Unir cuerpos solapados» para corregirlos.")}</p>
+          </Show>
           <Button
             onClick={props.onRepair}
-            disabled={!props.canRepair || props.isProcessing}
+            disabled={!props.canRepair || props.isProcessing || onlyCrossings()}
             loading={props.isProcessing}
             variant="primary"
             fullWidth

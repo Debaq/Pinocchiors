@@ -341,6 +341,7 @@ export const en_app: Catalog = {
   "Retopologia completada: {vertices} vertices, {quads} quads{uv}{rig}": "Retopology complete: {vertices} vertices, {quads} quads{uv}{rig}",
   "Analizando malla...": "Analyzing mesh...",
   "Malla saludable - no requiere reparación": "Healthy mesh - no repair needed",
+  "No había nada que reparar con estas opciones": "There was nothing to repair with these options",
   "Análisis completado - se encontraron problemas": "Analysis complete - problems found",
   "Reparando malla...": "Repairing mesh...",
   "Reparar malla": "Repair mesh",
