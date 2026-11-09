@@ -433,6 +433,8 @@ export function createCadUi(store: CadStore) {
   const [assemblyMode, setAssemblyMode] = createSignal(false);
   // Ensamble: vista explosionada (0 = armado; 1 = cada pieza al doble de lejos del centro)
   const [assemblyExplode, setAssemblyExplode] = createSignal(0);
+  // Ensamble: instancias elegidas en el visor, la lista o el Outliner (el clic elige la pieza entera)
+  const [asmPicked, setAsmPicked] = createSignal<number[]>([]);
   // Ensamble: por cuál unión se mueve cada pieza al arrastrarla (instancia → clave de `jointKey`)
   const [dragJoints, setDragJoints] = createSignal<Record<number, string>>({});
   // Plano 2D abierto sobre el visor: cuál y lo elegido en él (con su ventana de propiedades)
@@ -800,6 +802,14 @@ export function createCadUi(store: CadStore) {
     setAssemblyMode,
     assemblyExplode,
     setAssemblyExplode,
+    asmPicked,
+    setAsmPicked,
+    /** Elige una instancia (con `add`, la suma o la quita de lo elegido) */
+    asmPick(id: number, add = false) {
+      const now = asmPicked();
+      if (add) setAsmPicked(now.includes(id) ? now.filter((x) => x !== id) : [...now, id]);
+      else setAsmPicked(now.length === 1 && now[0] === id ? [] : [id]);
+    },
     dragJoints,
     setDragJoints,
     deviation,

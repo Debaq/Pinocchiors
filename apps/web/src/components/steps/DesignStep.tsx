@@ -8192,9 +8192,21 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
             // Su pieza ya no está (se borró en su diseño, o se borró la pestaña): no se dibuja
             const orphan = () => !!store.result() && !parts().some((p) => samePart(p.id, inst.part));
             return (
-              <div class={clsx("space-y-1 rounded border p-1.5", orphan() ? "border-error/70 bg-error/5" : "border-border")} data-instance={inst.id} data-orphan={orphan() || undefined}>
+              <div
+                class={clsx("space-y-1 rounded border p-1.5", orphan() ? "border-error/70 bg-error/5" : props.ui.asmPicked().includes(inst.id) ? "border-accent bg-accent/5" : "border-border")}
+                data-instance={inst.id}
+                data-orphan={orphan() || undefined}
+                data-picked={props.ui.asmPicked().includes(inst.id) || undefined}
+              >
                 <div class="flex items-center gap-1.5 text-xs">
-                  <span class={clsx("flex-1 truncate", orphan() ? "text-error" : "text-text")}>{inst.name}</span>
+                  {/* Clic en el nombre: la elige (Mayús o Ctrl suma), como en el visor */}
+                  <button
+                    type="button"
+                    class={clsx("flex-1 truncate text-left", orphan() ? "text-error" : props.ui.asmPicked().includes(inst.id) ? "text-accent font-medium" : "text-text")}
+                    onClick={(e) => props.ui.asmPick(inst.id, e.shiftKey || e.ctrlKey || e.metaKey)}
+                  >
+                    {inst.name}
+                  </button>
                   <Checkbox
                     small
                     label={tl("Fija")}

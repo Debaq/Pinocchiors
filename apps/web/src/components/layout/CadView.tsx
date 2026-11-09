@@ -949,6 +949,13 @@ export const CadView: Component<CadViewProps> = (props) => {
       );
     }),
   );
+  // Lo elegido del ensamble se suelta al salir de él y pierde las instancias que ya no están
+  createEffect(() => {
+    const ids = ui.assemblyMode() ? (store.doc()?.assembly?.instances ?? []).map((i) => i.id) : [];
+    const now = untrack(ui.asmPicked);
+    const kept = now.filter((id) => ids.includes(id));
+    if (kept.length !== now.length) ui.setAsmPicked(kept);
+  });
   // Operación bajo el mouse en el árbol: su sketch o sus caras en ámbar
   let hoverSeq = 0;
   createEffect(() => {
@@ -968,6 +975,15 @@ export const CadView: Component<CadViewProps> = (props) => {
     const picks = ui.picks();
     const faces = [...h.faces, ...picks.flatMap((p) => (p.kind === "face" ? [p.face] : []))];
     const edges = [...h.edges, ...picks.flatMap((p) => (p.kind === "edge" ? [p.edge] : []))];
+    // Ensamble: las instancias elegidas, enteras (todas sus caras y aristas)
+    if (ui.assemblyMode()) {
+      const chosen = ui.asmPicked();
+      for (const [id, a, b, e0, e1] of asmBase()?.ranges ?? []) {
+        if (!chosen.includes(id)) continue;
+        for (let f = a; f < b; f++) faces.push(f);
+        for (let k = e0 ?? 0; k < (e1 ?? 0); k++) edges.push(k);
+      }
+    }
     viewer?.setHighlight(faces, edges);
   });
   createEffect(() => {
@@ -2563,7 +2579,8 @@ export const CadView: Component<CadViewProps> = (props) => {
     const mode = ui.pick();
     switch (mode.kind) {
       case "none":
-        return FILTER_WANT[ui.pickFilter()];
+        // Ensamble: se eligen piezas enteras (por sus caras), no aristas ni vértices
+        return ui.assemblyMode() ? { faces: true } : FILTER_WANT[ui.pickFilter()];
       case "face":
       case "faces":
       case "asm_face":
@@ -2771,6 +2788,15 @@ export const CadView: Component<CadViewProps> = (props) => {
           ui.setPick({ kind: "none" });
           mode.done({ type: "face", face });
         }
+      } else if (ui.assemblyMode()) {
+        // Ensamble sin herramienta: el clic elige la instancia entera (Mayús o Ctrl suma)
+        const hit = viewer.pick(e.clientX, e.clientY, { faces: true });
+        const additive = e.shiftKey || e.ctrlKey || e.metaKey;
+        const instance = hit?.kind === "face" ? asmFaceRanges.find((r) => hit.face >= r[1] && hit.face < r[2])?.[0] : undefined;
+        if (instance === undefined) {
+          if (!additive) ui.setAsmPicked([]);
+        } else ui.asmPick(instance, additive);
+        ui.setMessage(undefined);
       } else {
         // Sin herramienta: elegir caras, aristas, regiones de sketches y planos
         // (Mayús o Ctrl suma a la selección), como en Onshape
@@ -2895,7 +2921,7 @@ export const CadView: Component<CadViewProps> = (props) => {
     }
     // Arrastrar desde cualquier lado elige por caja (como la herramienta de selección de
     // Blender); si no se arrastra queda el clic
-    if (ui.pick().kind === "none") boxStart = { x: e.clientX, y: e.clientY, additive: e.shiftKey || e.ctrlKey || e.metaKey, before: ui.picks() };
+    if (ui.pick().kind === "none" && !ui.assemblyMode()) boxStart = { x: e.clientX, y: e.clientY, additive: e.shiftKey || e.ctrlKey || e.metaKey, before: ui.picks() };
     void pickClick(e);
   };
 
@@ -3499,6 +3525,19 @@ export const CadView: Component<CadViewProps> = (props) => {
     if (!ui.session() && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && ui.pick().kind === "none" && (e.key.toLowerCase() === "f" || e.key === ".")) {
       // Acercar a lo elegido (sin nada, a todo)
       frameSelection();
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    // Ensamble: Supr quita las instancias elegidas (con sus relaciones); Esc las suelta
+    if (!ui.session() && ui.assemblyMode() && ui.asmPicked().length && !e.ctrlKey && !e.metaKey && !e.altKey && (e.key === "Delete" || e.key === "Escape")) {
+      const chosen = ui.asmPicked();
+      ui.setAsmPicked([]);
+      if (e.key === "Delete")
+        void store.editAssembly((a) => {
+          a.instances = a.instances.filter((i) => !chosen.includes(i.id));
+          a.mates = a.mates.filter((m) => !chosen.includes(m.a.instance) && !chosen.includes(m.b.instance));
+        });
       e.preventDefault();
       e.stopPropagation();
       return;

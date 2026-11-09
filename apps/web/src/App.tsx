@@ -349,7 +349,7 @@ import type { PreviewView } from "./components/layout/ViewportHeader";
 import { ScanEditor, type ScanEditorTab, type ScanMeshSettings } from "./components/layout/ScanEditor";
 import { CadView } from "./components/layout/CadView";
 import { DesignTabs, changeDesignTabs } from "./components/layout/DesignTabs";
-import { neighborTab } from "./lib/designTabs";
+import { instanceStudio, neighborTab } from "./lib/designTabs";
 import { DesignStep, FeatureTree } from "./components/steps/DesignStep";
 import { createCadStore, insertScanPiece, partColor, partHidden, PLANE_LABELS, type Fabrication, type PartId } from "./lib/cad";
 import { createCadUi } from "./lib/cadUi";
@@ -2106,6 +2106,41 @@ export const App: Component = () => {
     });
   };
 
+  /**
+   * En un ensamble, las piezas compradas (motores, placas, imanes de la
+   * biblioteca) no son objetos: cada instancia suya va en su propia fila
+   * (`inst-<n>`) para verla y quitarla del ensamble
+   */
+  const purchasedRows = (): ObjectRow[] => {
+    if (cad.activeTab()?.kind !== "assembly") return [];
+    const doc = cad.doc();
+    const parts = cad.result()?.parts ?? [];
+    return (doc?.assembly?.instances ?? []).flatMap((inst): ObjectRow[] => {
+      const i = parts.findIndex((p) => partKey(p.id) === partKey(inst.part));
+      const view = parts[i];
+      if (!view?.purchased) return [];
+      const tab = cad.tabs().tabs.find((x) => x.id === instanceStudio(inst));
+      return [{
+        id: `inst-${inst.id}`,
+        type: "part",
+        label: inst.name,
+        tab: tab && { id: tab.id, name: tBackend(tab.name) },
+        active: false,
+        selected: cadUi.asmPicked().includes(inst.id),
+        visible: true,
+        readonly: true,
+        deletable: true,
+        color: partColor(doc, view, i),
+        hint: t("Pieza comprada: no se fabrica"),
+      }];
+    });
+  };
+  /** `inst-<n>` → instancia del ensamble */
+  const instanceOfNode = (nodeId: string): number | undefined => {
+    const m = /^inst-(\d+)$/.exec(nodeId);
+    return m ? Number(m[1]) : undefined;
+  };
+
   /** `obj-<n>` → objeto */
   const objectOfNode = (nodeId: string): SceneObject | undefined => {
     const m = /^obj-(\d+)$/.exec(nodeId);
@@ -2530,7 +2565,7 @@ export const App: Component = () => {
     selectedNode: selectedFileNode(),
     quadObjects: quadObjectRows(),
     cad: cadOutline(),
-    objects: objectRows(),
+    objects: [...objectRows(), ...purchasedRows()],
     drawings: cad.doc() ? drawingTree(drawingSheets(cad.doc()), cadUi.drawingOpen() ? cadUi.activeDrawing() : undefined, cadUi.drawingSel()) : undefined,
   });
 
@@ -8500,6 +8535,17 @@ export const App: Component = () => {
       }
       return;
     }
+    // Instancia comprada del ensamble: sale con sus relaciones (deshacible)
+    const instance = instanceOfNode(nodeId);
+    if (instance !== undefined) {
+      const name = cad.doc()?.assembly?.instances.find((i) => i.id === instance)?.name ?? "";
+      void cad.editAssembly((a) => {
+        a.instances = a.instances.filter((i) => i.id !== instance);
+        a.mates = a.mates.filter((m) => m.a.instance !== instance && m.b.instance !== instance);
+      });
+      setStatusMessage(t("{name} borrado", { name }));
+      return;
+    }
     // Lo del diseño se deshace con el historial del propio diseño
     const feature = cadFeatureOfNode(nodeId);
     if (feature !== undefined) {
@@ -9427,6 +9473,9 @@ export const App: Component = () => {
       cadUi.openDrawing(dn.drawing, dn.element);
       return;
     }
+    // Instancia comprada del ensamble: se elige como en el visor
+    const instance = instanceOfNode(nodeId);
+    if (instance !== undefined) return cadUi.asmPick(instance, add);
     // Lo del diseño se elige en Diseñar
     const plane = nodeId.startsWith("plane-") ? (nodeId.slice(6) as "xy" | "xz" | "yz") : undefined;
     const feature = cadFeatureOfNode(nodeId);
