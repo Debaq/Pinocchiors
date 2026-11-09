@@ -58,6 +58,7 @@ pub fn merge_evaluations<'a>(evals: impl IntoIterator<Item = (TabId, &'a Evaluat
     let mut out = Evaluation::default();
     for (tab, ev) in evals {
         out.parts.extend(ev.parts.iter().map(|p| crate::eval::Part { id: tab_part(tab, p.id), ..p.clone() }));
+        out.context.extend(ev.context.iter().map(|p| tab_part(tab, *p)));
         out.gears.extend(ev.gears.iter().map(|g| {
             let mut g = g.clone();
             g.feature = tab_feature(tab, g.feature);

@@ -114,5 +114,12 @@ export const en_assembly: Record<string, string> = {
   "paso {n}: {e}": "step {n}: {e}",
   "La animación es demasiado larga (más de 2400 cuadros)": "The animation is too long (over 2400 frames)",
   "La unión ya no existe": "The mate no longer exists",
+  "Girar 90°": "Rotate 90°",
+  "Editar en contexto": "Edit in context",
+  "Abre el diseño de esta pieza con las otras del ensamble en su lugar, solo de referencia: se dibuja sobre sus caras y las sigue si cambian": "Opens this part's design with the other assembly parts in place, as reference only: sketch on their faces and follow them when they change",
+  "En contexto: {n} piezas de referencia": "In context: {n} reference parts",
+  "Editar en contexto se hace desde una pestaña de ensamble": "Edit in context is done from an assembly tab",
+  "Solo se edita en contexto una pieza de un diseño (no un subensamble)": "Only a part of a design can be edited in context (not a subassembly)",
+  "La instancia no está en el ensamble": "The instance isn't in the assembly",
   "{n} piezas de subensambles flexibles se mueven aquí (se editan en su pestaña)": "{n} parts of flexible subassemblies move here (edit them in their tab)",
 };

@@ -371,6 +371,7 @@ pub fn run() {
             cad::cad_assembly_drag,
             cad::cad_assembly_hole_pattern,
             cad::cad_assembly_fasten,
+            cad::cad_assembly_in_context,
             cad::cad_assembly_sweep,
             cad::cad_assembly_first_clash,
             cad::cad_assembly_interference,

@@ -20,7 +20,7 @@ fn legacy_doc() -> Document {
     doc.parameters.push(Parameter { name: "largo".into(), expr: "10".into() });
     let part = PartId { feature: doc.features[0].id, index: 0 };
     doc.assembly = Some(Assembly {
-        instances: vec![Instance { id: 1, studio: 0, configuration: None, part, name: "Caja".into(), position: [1.0, 2.0, 3.0], rotation: [0.0, 0.1, 0.0], fixed: true }],
+        instances: vec![Instance { id: 1, studio: 0, configuration: None, part, name: "Caja".into(), position: [1.0, 2.0, 3.0], rotation: [0.0, 0.1, 0.0], fixed: true, ..Default::default() }],
         next_id: 2,
         ..Default::default()
     });
@@ -175,7 +175,7 @@ fn flat_assembly_roundtrip() {
     let b = tabs.add_design(None);
     let asm = tabs.add_assembly(None);
     let part = |studio, f| (studio, PartId { feature: FeatureId(f), index: 1 });
-    let inst = |id, (studio, part)| Instance { id, studio, configuration: None, part, name: format!("I{id}"), position: [0.0; 3], rotation: [0.0; 3], fixed: id == 1 };
+    let inst = |id, (studio, part)| Instance { id, studio, configuration: None, part, name: format!("I{id}"), position: [0.0; 3], rotation: [0.0; 3], fixed: id == 1, ..Default::default() };
     let assembly = Assembly { instances: vec![inst(1, part(0, 3)), inst(2, part(b, 3))], next_id: 3, ..Default::default() };
     let TabKind::Assembly { assembly: stored, .. } = &mut tabs.get_mut(asm).unwrap().kind else { panic!() };
     *stored = assembly.clone();
@@ -222,7 +222,7 @@ fn merged_evaluation_keeps_parts_apart() {
 }
 
 fn derived(studio: TabId, op: BodyOp) -> FeatureKind {
-    FeatureKind::Derived(Derived { studio, parts: vec![], configuration: None, op, source: Default::default() })
+    FeatureKind::Derived(Derived { studio, parts: vec![], configuration: None, op, placement: None, context: None, source: Default::default() })
 }
 
 /// Recalcula la pestaña `tab` con sus piezas derivadas llenas
@@ -357,7 +357,7 @@ fn instances_in_other_configurations_are_variants() {
     let b = tabs.add_design(None);
     let asm = tabs.add_assembly(None);
     let part = PartId { feature: FeatureId(0), index: 0 };
-    let inst = |id, studio, cfg: Option<&str>| Instance { id, studio, configuration: cfg.map(Into::into), part, name: format!("I{id}"), position: [0.0; 3], rotation: [0.0; 3], fixed: false };
+    let inst = |id, studio, cfg: Option<&str>| Instance { id, studio, configuration: cfg.map(Into::into), part, name: format!("I{id}"), position: [0.0; 3], rotation: [0.0; 3], fixed: false, ..Default::default() };
     let assembly = Assembly { instances: vec![inst(1, 0, None), inst(2, 0, Some("Larga")), inst(3, b, Some("X")), inst(4, 0, Some("Larga"))], next_id: 5, ..Default::default() };
     let TabKind::Assembly { assembly: stored, .. } = &mut tabs.get_mut(asm).unwrap().kind else { panic!() };
     *stored = assembly.clone();
@@ -396,7 +396,7 @@ fn subassemblies_skip_cycles() {
     let a = tabs.add_assembly(Some("A".into()));
     let b = tabs.add_assembly(Some("B".into()));
     let c = tabs.add_assembly(Some("C".into()));
-    let inst = |id, studio| Instance { id, studio, configuration: None, part: SUBASSEMBLY_PART, name: format!("I{id}"), position: [0.0; 3], rotation: [0.0; 3], fixed: false };
+    let inst = |id, studio| Instance { id, studio, configuration: None, part: SUBASSEMBLY_PART, name: format!("I{id}"), position: [0.0; 3], rotation: [0.0; 3], fixed: false, ..Default::default() };
     let set = |tabs: &mut Tabs, id, list: Vec<Instance>| {
         let TabKind::Assembly { assembly, .. } = &mut tabs.get_mut(id).unwrap().kind else { panic!() };
         assembly.instances = list;
@@ -415,4 +415,45 @@ fn subassemblies_skip_cycles() {
     assert!(tabs.subassemblies(a).is_empty());
     assert!(tabs.subassemblies(b).is_empty());
     assert_eq!(tabs.users(a), [b]);
+}
+
+#[test]
+fn contexto_de_ensamble_solo_de_referencia() {
+    if !occt::available() {
+        return;
+    }
+    // Pestaña 0: la caja (10 de ancho). Pestaña 1: la tapa, con la caja de contexto corrida 50 mm
+    let mut tabs = Tabs::from_legacy(Some(box_doc(10.0)));
+    let lid = tabs.add(TabKind::Design { document: Box::new(Document::new()) }, Some("Tapa".into()));
+    let at: [[f64; 4]; 3] = [[1.0, 0.0, 0.0, 50.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]];
+    tabs.design_mut(lid).unwrap().add(FeatureKind::Derived(Derived {
+        studio: 0,
+        parts: vec![],
+        configuration: None,
+        op: BodyOp::Join,
+        placement: Some(at),
+        context: Some(ContextRef { assembly: 9, instance: 2 }),
+        source: Default::default(),
+    }));
+    // Un bloque que la toca y se une: no se junta con la de contexto
+    tabs.design_mut(lid).unwrap().add(FeatureKind::Primitive(Primitive {
+        shape: PrimitiveShape::Box { dx: 5.0, dy: 5.0, dz: 5.0, centered: false, centered_z: false },
+        origin: [55.0, 0.0, 0.0],
+        z: [0.0, 0.0, 1.0],
+        x: [1.0, 0.0, 0.0],
+        op: BodyOp::Join,
+        link: None,
+        on: None,
+    }));
+    let ev = eval_tab(&tabs, lid);
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    assert_eq!(ev.parts.len(), 2, "la de contexto y el bloque, separados");
+    assert_eq!(ev.context, vec![ev.parts[0].id]);
+    let (lo, _) = ev.parts[0].shape.bounds().unwrap();
+    assert!((lo[0] - 50.0).abs() < 1e-6, "en su lugar: {lo:?}");
+    // Si la caja cambia, la de contexto la sigue
+    *tabs.design_mut(0).unwrap() = box_doc(30.0);
+    let ev = eval_tab(&tabs, lid);
+    let (_, hi) = ev.parts[0].shape.bounds().unwrap();
+    assert!((hi[0] - 80.0).abs() < 1e-6, "{hi:?}");
 }

@@ -220,14 +220,14 @@ pub struct InstanceGroup {
 pub struct InstancePattern {
     pub id: u32,
     pub source: u32,
-    pub kind: PatternKind,
+    pub kind: InstancePatternKind,
     /// Instancias copia, en orden (la primera es la 2.ª de la fila).
     pub copies: Vec<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum PatternKind {
+pub enum InstancePatternKind {
     /// En fila a lo largo de `dir` (en coordenadas de la pieza original), cada `step` mm.
     Linear { dir: P3, step: f64 },
     /// En círculo alrededor del eje (origen y dirección en coordenadas de la pieza original), cada `angle` °.
@@ -420,9 +420,9 @@ impl Assembly {
             g.members.retain(|m| ids.contains(m));
         }
         self.groups.retain(|g| g.members.len() > 1);
-        self.patterns.retain(|p| ids.contains(&p.source) && !matches!(&p.kind, PatternKind::Points { reference, .. } if !ids.contains(reference)));
+        self.patterns.retain(|p| ids.contains(&p.source) && !matches!(&p.kind, InstancePatternKind::Points { reference, .. } if !ids.contains(reference)));
         for p in &mut self.patterns {
-            if let PatternKind::Points { offsets, .. } = &mut p.kind {
+            if let InstancePatternKind::Points { offsets, .. } = &mut p.kind {
                 // Copia borrada: su punto también
                 let keep: Vec<bool> = p.copies.iter().map(|c| ids.contains(c)).collect();
                 let mut k = 0;
@@ -1075,9 +1075,9 @@ pub fn solve(asm: &Assembly) -> AssemblySolution {
         for (k, &copy) in p.copies.iter().enumerate() {
             let n = (k + 1) as f64;
             let d = match &p.kind {
-                PatternKind::Linear { dir, step } => Derive::Rel { leader: p.source, rel: Pose::translation(scale(normalize(*dir), step * n)) },
-                PatternKind::Circular { origin, axis, angle } => Derive::Rel { leader: p.source, rel: Pose::about(*origin, *axis, (angle * n).to_radians()) },
-                PatternKind::Points { reference, offsets } => match offsets.get(k) {
+                InstancePatternKind::Linear { dir, step } => Derive::Rel { leader: p.source, rel: Pose::translation(scale(normalize(*dir), step * n)) },
+                InstancePatternKind::Circular { origin, axis, angle } => Derive::Rel { leader: p.source, rel: Pose::about(*origin, *axis, (angle * n).to_radians()) },
+                InstancePatternKind::Points { reference, offsets } => match offsets.get(k) {
                     Some(o) => Derive::Holes { source: p.source, reference: *reference, offset: *o },
                     None => continue,
                 },

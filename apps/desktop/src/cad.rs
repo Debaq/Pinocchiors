@@ -287,6 +287,9 @@ pub struct PartView {
     /// Se compra (pieza de la biblioteca o marcada): no se fabrica
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub purchased: bool,
+    /// De contexto de un ensamble (EN14): solo de referencia, no se fabrica ni se exporta
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub context: bool,
 }
 
 fn inherit_from(doc: &Document, eval: &cad_model::Evaluation, id: cad_model::PartId) -> Option<cad_model::PartId> {
@@ -1990,6 +1993,103 @@ fn add_purchased_shape(tabs: &mut Tabs, shape: cad_model::PrimitiveShape, name: 
     Ok((studio, cad_model::PartId { feature: cad_model::tab_feature(studio, feature), index: 0 }))
 }
 
+/// Lo que dejó «Editar en contexto» (EN14): la pestaña del diseño de la pieza y cuántas piezas
+/// de contexto se agregaron o se pusieron al día.
+#[derive(Serialize)]
+pub struct InContext {
+    pub tab: TabId,
+    pub added: usize,
+    pub updated: usize,
+}
+
+/// Lleva al diseño de la instancia las otras piezas del ensamble como piezas de contexto
+/// (derivadas, en su lugar visto desde esa pieza y solo de referencia): así se diseña la tapa
+/// tomando las medidas de la caja, y la tapa sigue a la caja si la caja cambia. Volver a
+/// llamarlo pone al día dónde están (si se movieron en el ensamble).
+#[tauri::command]
+pub async fn cad_assembly_in_context(app: AppHandle, instance: u32) -> Result<InContext, String> {
+    in_background(app, move |state| assembly_in_context_impl(state, instance)).await
+}
+
+fn assembly_in_context_impl(state: &AppState, instance: u32) -> Result<InContext, String> {
+    use cad_model::{ContextRef, Derived, VARIANT_BASE};
+    if !state.cad_in_assembly() {
+        return Err("Editar en contexto se hace desde una pestaña de ensamble".into());
+    }
+    let doc = state.cad_doc().ok_or("No hay un diseño abierto")?;
+    let asm = doc.assembly.ok_or("El diseño no tiene ensamble")?;
+    let (asm, sol) = {
+        let cache = state.cad_cache.lock().unwrap();
+        let ev = &cache.as_ref().ok_or("El ensamble todavía no tiene piezas")?.eval;
+        let (a, sol, _) = cad_model::assembly_refs::solve_with(ev, &asm);
+        (a, sol)
+    };
+    let pose = |id: u32| sol.poses.iter().find(|p| p.0 == id).map(|p| cad_model::assembly::Pose::new(p.1, p.2));
+    // Pestaña de diseño de una instancia (una variante es la de su diseño) y su pieza en ella
+    let origin = |i: &cad_model::Instance| {
+        let (tab, local) = cad_model::split_tab_feature(i.part.feature);
+        let tab = if tab >= VARIANT_BASE { i.studio } else { tab };
+        (tab, cad_model::PartId { feature: local, index: i.part.index })
+    };
+    let x = asm.instances.iter().find(|i| i.id == instance).ok_or("La instancia ya no existe")?;
+    let (xtab, _) = origin(x);
+    let px = pose(instance).ok_or("La instancia no está en el ensamble")?;
+    let mut tabs = state.cad_tabs.lock().unwrap();
+    let asm_tab = tabs.active;
+    if !tabs.get(xtab).is_some_and(|t| t.kind.is_design()) {
+        return Err("Solo se edita en contexto una pieza de un diseño (no un subensamble)".into());
+    }
+    let mut wanted = Vec::new();
+    for y in asm.instances.iter().filter(|i| i.id != instance && !i.suppressed && !i.carrier && i.id < cad_model::assembly::INLINE_BASE && i.mirror.is_none()) {
+        let (ytab, part) = origin(y);
+        if ytab == xtab || !tabs.get(ytab).is_some_and(|t| t.kind.is_design()) {
+            continue;
+        }
+        let Some(py) = pose(y.id) else { continue };
+        let rel = px.inverse().compose(&py);
+        let placement: [[f64; 4]; 3] = [0, 1, 2].map(|r| [rel.r[r][0], rel.r[r][1], rel.r[r][2], rel.t[r]]);
+        wanted.push((y.id, y.name.clone(), ytab, part, y.configuration.clone(), placement));
+    }
+    let design = tabs.design_mut(xtab).ok_or("Esa pestaña ya no está")?;
+    let (mut added, mut updated) = (0, 0);
+    // Las de instancias que ya no están en el ensamble se van
+    design.features.retain(|f| match &f.kind {
+        FeatureKind::Derived(d) => d.context.is_none_or(|c| c.assembly != asm_tab || wanted.iter().any(|w| w.0 == c.instance)),
+        _ => true,
+    });
+    for (id, name, ytab, part, configuration, placement) in wanted {
+        let found = design.features.iter_mut().find(|f| matches!(&f.kind, FeatureKind::Derived(d) if d.context == Some(ContextRef { assembly: asm_tab, instance: id })));
+        match found {
+            Some(f) => {
+                if let FeatureKind::Derived(d) = &mut f.kind {
+                    d.studio = ytab;
+                    d.parts = vec![part];
+                    d.configuration = configuration;
+                    d.placement = Some(placement);
+                }
+                f.name = format!("Contexto: {name}");
+                updated += 1;
+            }
+            None => {
+                let fid = design.add(FeatureKind::Derived(Derived {
+                    studio: ytab,
+                    parts: vec![part],
+                    configuration,
+                    op: BodyOp::New,
+                    placement: Some(placement),
+                    context: Some(ContextRef { assembly: asm_tab, instance: id }),
+                    source: Default::default(),
+                }));
+                if let Some(f) = design.get_mut(fid) {
+                    f.name = format!("Contexto: {name}");
+                }
+                added += 1;
+            }
+        }
+    }
+    Ok(InContext { tab: xtab, added, updated })
+}
+
 /// Pares de instancias que se pisan y cuánto volumen comparten (mm³).
 #[tauri::command]
 pub async fn cad_assembly_interference(app: AppHandle) -> Result<Vec<(u32, u32, f64)>, String> {
@@ -2895,6 +2995,7 @@ fn part_views(doc: &Document, eval: &cad_model::Evaluation, masses: &[Option<cad
                 surface: eval.parts.get(i).is_some_and(|p| p.is_surface()),
                 inherit: if doc.parts.iter().any(|p| p.part == id) { None } else { inherit_from(doc, eval, id) },
                 purchased: doc.is_purchased(id),
+                context: eval.context.contains(&id),
             }
         })
         .collect()
@@ -3430,6 +3531,7 @@ fn tab_export_items(state: &AppState, tab: TabId) -> Result<Vec<(cad_model::Shap
     Ok(ev
         .parts
         .iter()
+        .filter(|x| !ev.context.contains(&x.id))
         .map(|x| {
             let color = doc.parts.iter().find(|q| q.part == x.id).and_then(|q| q.color.as_deref()).and_then(hex_rgb);
             (x.shape.clone(), part_name(&doc, x.id, numbers.get(&x.id).copied().unwrap_or(0)), color)
@@ -3656,7 +3758,7 @@ fn export_impl(state: &AppState, path: &str, format: &str, part: Option<cad_mode
         .parts
         .iter()
         .enumerate()
-        .filter(|(_, x)| part.is_none_or(|id| id == x.id))
+        .filter(|(_, x)| part.is_none_or(|id| id == x.id) && !ev.context.contains(&x.id))
         .map(|(i, x)| {
             let name = if several || part.is_some() { part_name(doc, x.id, i + 1) } else { "Diseño".to_string() };
             let color = doc.parts.iter().find(|q| q.part == x.id).and_then(|q| q.color.as_deref()).and_then(hex_rgb);
@@ -4692,6 +4794,7 @@ pub mod bridge {
             "cad_assembly_faces" => ok(assembly_faces_impl(state)?),
             "cad_assembly_connector" => ok(assembly_connector_impl(state, AsmPoint { face: Some(arg(args, "face")?), ..Default::default() })?),
             "cad_assembly_connector_at" => ok(assembly_connector_impl(state, arg(args, "at")?)?),
+            "cad_assembly_in_context" => ok(assembly_in_context_impl(state, arg(args, "instance")?)?),
             "cad_assembly_mate_faces" => ok(assembly_mate_faces_impl(state, arg(args, "mate")?)?),
             "cad_assembly_drag" => ok(assembly_drag_impl(state, arg(args, "instance")?, arg(args, "grab")?, arg(args, "target")?)?),
             "cad_assembly_hole_pattern" => ok(assembly_hole_pattern_impl(state, arg(args, "instance")?)?),
@@ -5328,7 +5431,7 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        let derived = |studio| FeatureKind::Derived(cad_model::Derived { studio, parts: vec![], configuration: None, op: BodyOp::Cut, source: Default::default() });
+        let derived = |studio| FeatureKind::Derived(cad_model::Derived { studio, parts: vec![], configuration: None, op: BodyOp::Cut, placement: None, context: None, source: Default::default() });
         state.with_cad_doc(|d| d.add(derived(0))).unwrap();
         let r = evaluate(&state).unwrap();
         assert!(r.status.iter().all(|s| matches!(s.state, cad_model::FeatureState::Ok)), "{:?}", r.status);

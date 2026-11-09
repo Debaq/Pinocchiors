@@ -216,6 +216,8 @@ pub struct Evaluation {
     pub face_tags: Vec<Vec<FaceTag>>,
     /// Piezas, en el orden en que se crearon.
     pub parts: Vec<Part>,
+    /// Piezas de contexto de un ensamble (solo de referencia, EN14).
+    pub context: Vec<PartId>,
     pub status: Vec<FeatureStatus>,
     pub sketches: HashMap<FeatureId, SketchResult>,
     pub sketches3d: HashMap<FeatureId, Sketch3dResult>,
@@ -1035,7 +1037,7 @@ impl Ctx<'_> {
             .parts
             .iter()
             .enumerate()
-            .filter(|(_, p)| !p.is_surface())
+            .filter(|(_, p)| !p.is_surface() && !self.ev.context.contains(&p.id))
             .filter(|(_, p)| {
                 let Ok((pmin, pmax)) = p.shape.bounds() else { return false };
                 let apart = (0..3).any(|k| pmin[k] > tmax[k] + tol || tmin[k] > pmax[k] + tol);
@@ -3214,14 +3216,23 @@ impl Ctx<'_> {
                 let tools: Vec<Tagged> = src
                     .parts
                     .iter()
-                    .map(|(_, shape, tags)| Tagged {
-                        shape: shape.clone(),
-                        tags: tags.iter().map(|ts| ts.iter().map(|t| tag(f.id, format!("{}/{}", t.feature.0, t.name))).collect()).collect(),
+                    .map(|(_, shape, tags)| {
+                        let shape = match d.placement {
+                            Some(m) => shape.transform(m).map_err(err)?,
+                            None => shape.clone(),
+                        };
+                        Ok(Tagged { shape, tags: tags.iter().map(|ts| ts.iter().map(|t| tag(f.id, format!("{}/{}", t.feature.0, t.name))).collect()).collect() })
                     })
-                    .collect();
-                if d.op == BodyOp::New {
+                    .collect::<R<_>>()?;
+                // De contexto: aparte, solo para referencia
+                if d.op == BodyOp::New || d.context.is_some() {
                     for t in tools {
                         self.new_part(f.id, t);
+                        if d.context.is_some()
+                            && let Some(p) = self.ev.parts.last()
+                        {
+                            self.ev.context.push(p.id);
+                        }
                     }
                     self.sync();
                     return Ok(());

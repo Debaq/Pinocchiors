@@ -8106,7 +8106,7 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
     return nestableAssemblies(tabs, active).flatMap((id) => tabs.filter((t) => t.id === id));
   };
   const choices = () => [
-    ...parts().filter((p) => !isSub(p)).map((p) => ({ value: partKey(p), label: p.name })),
+    ...parts().filter((p) => !isSub(p) && !p.context).map((p) => ({ value: partKey(p), label: p.name })),
     ...nestable().map((t) => ({ value: `sub:${t.id}`, label: tl("Ensamble «{name}»", { name: tBackend(t.name) }) })),
   ];
   const insert = () => {

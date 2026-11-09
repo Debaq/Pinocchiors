@@ -2503,7 +2503,7 @@ export const App: Component = () => {
     const r = cad.result();
     if (!r || cad.draft() || cad.tabs().tabs.find((x) => x.id === cad.resultTab())?.kind === "assembly") return;
     // Las compradas (motores, placas, imanes de la biblioteca) no se fabrican: no son objetos
-    setObjects((list) => syncCadObjects(list, r.parts.filter((p) => !p.purchased).map((p) => ({ id: p.id, name: p.name })), cad.resultTab()));
+    setObjects((list) => syncCadObjects(list, r.parts.filter((p) => !p.purchased && !p.context).map((p) => ({ id: p.id, name: p.name })), cad.resultTab()));
   };
   createEffect(syncDesignObjects);
 

@@ -1019,10 +1019,25 @@ pub struct Derived {
     /// Piezas aparte salvo que se elija unir, restar o intersectar.
     #[serde(default = "derived_op")]
     pub op: BodyOp,
+    /// Dónde quedan (matriz 3×4 rígida aplicada a las piezas traídas): en contexto, la pose de
+    /// la otra pieza vista desde la que se diseña (PLAN_ENSAMBLE EN14).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placement: Option<[[f64; 4]; 3]>,
+    /// Piezas de contexto de un ensamble: solo de referencia (se ven translúcidas, se usan sus
+    /// caras y aristas, pero no se juntan con nada ni se exportan ni se fabrican).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<ContextRef>,
     /// Las piezas del original ya calculadas. No se guarda: la llena
     /// `Tabs::fill_derived` antes de cada recálculo.
     #[serde(skip)]
     pub source: DerivedSource,
+}
+
+/// De qué instancia de qué ensamble sale una pieza de contexto.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContextRef {
+    pub assembly: crate::tabs::TabId,
+    pub instance: u32,
 }
 
 fn derived_op() -> BodyOp {

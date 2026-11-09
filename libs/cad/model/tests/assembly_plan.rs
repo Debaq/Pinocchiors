@@ -313,7 +313,7 @@ fn en8_patrones_grupos_espejo_y_suprimidas() {
     for id in 3..6 {
         asm.instances.push(inst(id, [0.0; 3], false));
     }
-    asm.patterns.push(InstancePattern { id: 9, source: 2, kind: PatternKind::Linear { dir: [1.0, 0.0, 0.0], step: 15.0 }, copies: vec![3, 4, 5] });
+    asm.patterns.push(InstancePattern { id: 9, source: 2, kind: InstancePatternKind::Linear { dir: [1.0, 0.0, 0.0], step: 15.0 }, copies: vec![3, 4, 5] });
     let sol = solve(&asm);
     assert!(sol.converged);
     for (k, id) in [3, 4, 5].iter().enumerate() {
@@ -324,7 +324,7 @@ fn en8_patrones_grupos_espejo_y_suprimidas() {
     // En círculo: 4 copias cada 90° alrededor de Z por (10, 0, 0) de la original
     let mut asm = pair(MateKind::Fastened);
     asm.instances.push(inst(3, [0.0; 3], false));
-    asm.patterns.push(InstancePattern { id: 9, source: 2, kind: PatternKind::Circular { origin: [10.0, 0.0, 0.0], axis: [0.0, 0.0, 1.0], angle: 90.0 }, copies: vec![3] });
+    asm.patterns.push(InstancePattern { id: 9, source: 2, kind: InstancePatternKind::Circular { origin: [10.0, 0.0, 0.0], axis: [0.0, 0.0, 1.0], angle: 90.0 }, copies: vec![3] });
     let sol = solve(&asm);
     let o = apply(pose(&sol, 3), [0.0; 3]);
     assert_relative_eq!(o[0], 10.0, epsilon = 1e-6);
@@ -332,7 +332,7 @@ fn en8_patrones_grupos_espejo_y_suprimidas() {
     // Sobre agujeros de A: corrimientos en las coordenadas de A
     let mut asm = pair(MateKind::Fastened);
     asm.instances.push(inst(3, [0.0; 3], false));
-    asm.patterns.push(InstancePattern { id: 9, source: 2, kind: PatternKind::Points { reference: 1, offsets: vec![[0.0, 20.0, 0.0]] }, copies: vec![3] });
+    asm.patterns.push(InstancePattern { id: 9, source: 2, kind: InstancePatternKind::Points { reference: 1, offsets: vec![[0.0, 20.0, 0.0]] }, copies: vec![3] });
     let sol = solve(&asm);
     let o = apply(pose(&sol, 3), [0.0; 3]);
     assert_relative_eq!(o[1], 20.0, epsilon = 1e-6);

@@ -25,94 +25,88 @@ explosionada radial en pantalla, lista de materiales, plano 2D con globos, GLB a
 
 ## Fases (en el orden en que conviene hacerlas)
 
-### EN0 — Limpieza chica ❌
-- Al quitar una instancia o una unión, quitar también los acoplamientos (`relations`) que
-  apuntan a uniones que ya no existen (hoy quedan colgando en la lista).
-- Prueba en Rust: borrar unión → `relations` sin referencias muertas (helper `Assembly::prune`).
+Todas hechas el 2026-11-09 («dale con PLAN_ENSAMBLE completo»). Probado con `cargo test`
+(`libs/cad/model/tests/assembly_plan.rs`, 13 pruebas, más `tabs.rs`) y pruebas de node
+(`apps/web/e2e/assemblyTools.test.mjs`); **falta probarlo en la app real**.
 
-### EN1 — Uniones ligadas a la pieza ❌ (lo más importante)
-Hoy `Connector` guarda origen/Z/X fijos en coordenadas de la pieza: si la pieza cambia, la
-unión queda en el aire.
-- `Connector.at: Option<ConnectorRef>`: de qué sale (`FaceCenter(FaceRef)`, `FaceAxis(FaceRef)`,
-  `EdgeCenter(EdgeRef)` para bordes redondos, `EdgeMid(EdgeRef)`, `Vertex(P3 + etiquetas)`),
-  más `offset` (mm a lo largo de Z) y `spin` (giro de X alrededor de Z, °).
-- Al recalcular, resolver cada conector contra la pieza de su instancia (como `resolve_face`
-  pero sobre `Part.shape` y sus etiquetas) y recalcular origen/Z/X. Los guardados quedan como
-  respaldo: si la referencia se pierde, la unión usa el respaldo y sale como «perdida» (aviso,
-  igual que las operaciones con referencias perdidas).
-- Proyectos viejos: conectores sin `at` siguen igual (serde default).
-- Pruebas: cambiar el largo de una caja → la bisagra sigue en su cara; borrar la cara → aviso.
+### EN0 — Limpieza chica ✅
+- `Assembly::prune` (Rust) y `pruneAssembly` (TS, en cada `editAssembly`): uniones de instancias
+  borradas, acoplamientos de uniones borradas, grupos, patrones y pasos colgando.
 
-### EN2 — Elegir bien el punto de unión ❌
-- Elegir también aristas (centro de un borde redondo, punto medio de una recta) y vértices,
-  no solo caras planas/cilíndricas.
-- Girar el conector (botones 90° y ángulo libre) y voltearlo; separarlo (offset).
-- Ver el conector en el visor (pequeños ejes) al elegir y al pasar el mouse por una unión.
-- Vista previa de la unión antes de aceptar (la pieza B se mueve en vivo).
+### EN1 — Uniones ligadas a la pieza ✅
+- `Connector.at: Option<ConnectorRef>` (`Face`, `EdgeCenter`, `EdgeMid`, `Vertex`) + `offset`,
+  `spin`, `reverse`, `radius`. `assembly_refs::prepared/solve_with` rehace los conectores contra la
+  pieza de su instancia (por etiquetas y, si no, por geometría) antes de cada resolución; lo
+  guardado queda de respaldo y `AssemblyView.lost` avisa. `AssemblyView.connectors` lleva los
+  rehechos al front (arrastre y dibujo con `resolvedAssembly`). Proyectos viejos: sin `at`, igual.
 
-### EN3 — Editar una unión ❌
-- Cambiar el tipo, volver a elegir la cara de A o de B, renombrar.
-- Clic en una unión del panel → resalta las dos caras y sus conectores en el visor.
+### EN2 — Elegir bien el punto de unión ✅
+- PickMode `asm_point`: cara, arista (centro si es redonda; Alt = punto medio) o vértice;
+  `cad_assembly_connector_at`. Girar ±90°/libre, voltear, separar (`adjustConnector`: los de antes
+  sin `at` lo llevan puesto). Conectores dibujados (`CadViewer.setTriads`). Vista previa: la unión
+  se agrega enseguida y queda en el editor (la pieza B se mueve); «Cancelar» la saca.
 
-### EN4 — Uniones y opciones que faltan ❌
-- Separación en plana y pegada (dos caras a N mm) y ángulo entre caras.
-- Tangente (cilindro contra plano / cilindro contra cilindro).
-- Centrar entre dos caras («ancho»).
-- Topes mínimo/máximo en bisagras, deslizantes y cilíndricas (desigualdad: término que solo
-  pesa al pasarse; el arrastre y la animación se detienen en el tope).
-- Acoplamientos nuevos: lineal entre dos deslizantes, correa con poleas (usar `belts.rs`),
-  leva sencilla (seguidor sobre un perfil).
+### EN3 — Editar una unión ✅
+- `MateEditor` (components/design/AssemblyParts.tsx): tipo, volver a elegir cada lado, nombre.
+  Al pasar el mouse por una unión: sus caras resaltadas (`cad_assembly_mate_faces`) y sus conectores.
 
-### EN5 — Que diga qué falla, y que aguante muchas piezas ❌
-- Desvío por unión: cuál no se cumple (en rojo en el panel y en el visor).
-- Uniones que sobran (no agregan nada) o que se contradicen.
-- Grados libres pieza por pieza (las que todavía se mueven, resaltadas).
-- Rendimiento: resolver por grupos de piezas conectadas por separado; jacobiano analítico en
-  vez de numérico. Meta: 100 piezas con 150 uniones en menos de 100 ms (banco en pruebas).
+### EN4 — Uniones y opciones que faltan ✅
+- Separación en plana y pegada (`distance`), `Angle`, `Tangent` (radios de los conectores),
+  `Width` (tercer conector `c`). Topes `angle_limits`/`distance_limits` (fila que solo pesa al
+  pasarse; lo impuesto y `sweep` se quedan en el tope). Acoplamientos `Linear`, `Belt`, `Cam`
+  (perfil por tramos, `cam_lift`). La correa se arma a mano con la razón de radios (no lee `belts.rs`).
 
-### EN6 — Mover piezas con el mouse ❌
-- Manija para mover/girar una pieza libre (o con plana, rótula, paralela), con pasos de
-  ajuste.
-- Arrastre general con el solver: la pieza sigue al mouse respetando sus uniones (la pose
-  pedida entra como objetivo blando), no solo por una bisagra o un deslizante.
+### EN5 — Que diga qué falla, y que aguante muchas piezas ✅
+- `AssemblySolution.mate_errors`, `redundant`, `instance_dof`; marcas en la lista, piezas de
+  uniones que fallan en ámbar, «Resaltar las que se mueven». Solver por grupos de piezas
+  conectadas y jacobiano **por bloques** (numérico, solo re-evalúa las uniones de cada pieza; no
+  analítico). Banco: 100 piezas / 150 uniones en 10 ms (release).
 
-### EN7 — Choques en vivo ❌
-- Choques revisados solos al soltar un arrastre o mover un ángulo (en segundo plano), marcados
-  en rojo en el visor, no solo como texto.
-- En el recorrido de una unión: el primer cuadro en que algo choca.
+### EN6 — Mover piezas con el mouse ✅
+- Arrastre general con el solver (`assembly::drag`: rótula fantasma y después se resuelve sin ella)
+  para piezas sin bisagra/deslizante, en el plano de la pantalla, pasos de 1 mm (Mayús: libre).
+  Girar 90° por eje del mundo en la tarjeta de la instancia. No hay manija 3D tipo gizmo.
 
-### EN8 — Manejo de piezas ❌
-- Repetir una instancia en fila o en círculo, y siguiendo un patrón de agujeros del diseño.
-- Espejo de una instancia.
-- Reemplazar una pieza por otra conservando las uniones cuyas caras se encuentran.
-- Ocultar y suprimir una instancia; color propio en el ensamble.
-- Grupos (varias piezas que se mueven juntas sin uniones).
+### EN7 — Choques en vivo ✅
+- Al cambiar el ensamble (soltar un arrastre, mover un ángulo) se revisan solos en segundo
+  plano (700 ms después): piezas que chocan en rojo. Primer choque de un recorrido:
+  `first_clash` / `cad_assembly_first_clash` («¿Choca en el recorrido?» en cada paso).
 
-### EN9 — Tornillos que se ponen solos ❌
-- Elegir uno o varios agujeros → tornillo de la biblioteca del diámetro y largo justos, con
-  arandela y tuerca si hace falta, ya unidos (cilíndrica + plana) en cada agujero.
-- Sale en la lista de materiales (pestaña «Piezas compradas»).
+### EN8 — Manejo de piezas ✅
+- `Assembly.patterns` (fila, círculo, sobre los otros agujeros iguales con `hole_offsets`): las
+  copias siguen al original en el solver. `Instance.mirror` (+ «Copia en espejo»), `hidden`,
+  `suppressed`, `color`, `Assembly.groups`. Reemplazar = cambiar la pieza; las uniones se
+  rehacen por geometría y las que no se encuentran salen como perdidas («Quitar las uniones perdidas»).
 
-### EN10 — Animación dentro de la app ❌
-- Reproducir el recorrido en el visor (play/pausa, barra de tiempo).
-- Varias uniones en pasos (primero abre la tapa, después gira la manija); exportar el GLB
-  desde esos pasos.
+### EN9 — Tornillos que se ponen solos ✅
+- `cad_assembly_fasten`: por cada agujero, tornillo Allen ISO de la medida (`size_for_hole`) y el
+  largo normal justo, arandela y tuerca opcionales, en «Piezas compradas», cabeza del lado de la
+  cámara, unidos con bisagras ligadas a la cara del agujero.
 
-### EN11 — Explosionada por pasos ❌
-- Pasos guardados: qué piezas, en qué dirección y cuánto; líneas de recorrido.
-- Llevarla al plano 2D (vista explosionada con globos) y exportarla.
+### EN10 — Animación dentro de la app ✅
+- `Assembly.motion` (pasos), `sweep_steps`, `cad_assembly_sweep`; en el visor `moveAssemblyMesh`
+  mueve cada pieza en la malla (play/pausa, barra de tiempo). GLB desde los pasos.
 
-### EN12 — STEP con estructura ❌
-- STEP de ensamble con árbol: cada pieza una vez y sus copias como ubicaciones, subensambles
-  anidados, nombres y colores (otros programas lo abren como ensamble, no como piezas sueltas).
+### EN11 — Explosionada por pasos ✅
+- `Assembly.explode` (instancias, dirección, distancia), deslizador por pasos con recorridos
+  punteados; hoja del plano 2D «Explosionada» (`cad_drawing(exploded)`: globos y vistas corridos).
 
-### EN13 — Subensambles que se mueven ❌
-- Opción por instancia de subensamble: «flexible» (sus uniones entran al solver de arriba) o
-  rígido como hoy.
+### EN12 — STEP con estructura ✅
+- `cad_write_step_assembly` (XCAF: cada pieza una vez, componentes con ubicación, subensambles
+  anidados, nombres y colores); `StepTree` en la app para la pestaña de ensamble y el ensamble del
+  diseño. Con compensación de impresora sigue pieza por pieza.
 
-### EN14 — Diseñar dentro del ensamble ❌
-- Crear o editar una pieza desde el ensamble usando caras de otras instancias como referencia
-  (la tapa toma las medidas de la caja); la referencia sigue a la otra pieza al cambiarla.
+### EN13 — Subensambles que se mueven ✅
+- `Instance.flexible`: `Tabs::flat_assembly` abre el subensamble (números desde `INLINE_BASE`,
+  no se guardan; `set_flat_assembly` los quita): lo fijo de adentro va en un grupo con la instancia
+  (`carrier`, no se dibuja) y lo libre entra al solver. Las configuraciones de adentro van con la
+  de base; lo de adentro se edita en su pestaña.
+
+### EN14 — Diseñar dentro del ensamble ✅
+- «Editar en contexto»: `cad_assembly_in_context` agrega al diseño de la pieza un `Derived` por
+  cada otra instancia con `placement` (su pose vista desde la pieza) y `context` (solo de
+  referencia: `Evaluation.context`, no se juntan, no se exportan, no son objetos, se ven grises).
+  La geometría sigue al original sola; la posición se pone al día volviendo a apretar el botón.
 
 ## Notas para trabajar
 - Textos nuevos de la interfaz con `tl()` y su traducción en el catálogo `en.<zona>.ts`.

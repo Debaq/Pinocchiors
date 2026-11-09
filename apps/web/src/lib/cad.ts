@@ -1698,6 +1698,8 @@ export interface PartView {
   inherit?: PartId;
   /** Se compra (pieza de la biblioteca o marcada): no se fabrica ni se manda a imprimir */
   purchased?: boolean;
+  /** De contexto de un ensamble: solo de referencia (no se fabrica, no se exporta, no se ensambla) */
+  context?: boolean;
 }
 
 /** Piezas que reemplazó una operación (un corte que las partió o una unión): se ven tachadas */
@@ -1721,6 +1723,8 @@ export const PART_COLORS = ["#9aa4b8", "#8fb98b", "#c48b9f", "#7fa7c9", "#6f9e86
 
 /** Color de la pieza `i`: el elegido o uno de la paleta */
 export function partColor(doc: CadDocument | null | undefined, p: PartView, i: number): string {
+  // Las de contexto de un ensamble, en gris claro: son solo de referencia
+  if (p.context) return "#c3c9d4";
   return partEntry(doc, p)?.color ?? PART_COLORS[i % PART_COLORS.length];
 }
 
@@ -5686,6 +5690,18 @@ export function createCadStore() {
         d.assembly = a;
       });
       return { added: r.instances.length, notes: r.notes };
+    },
+
+    /**
+     * Editar en contexto (EN14): lleva al diseño de la instancia las otras piezas del ensamble,
+     * en su lugar y solo de referencia, y abre ese diseño
+     */
+    async editInContext(instance: number) {
+      if (draft()) await acceptDraft();
+      await lastSend;
+      const r = await invoke<{ tab: number; added: number; updated: number }>("cad_assembly_in_context", { instance });
+      await store.changeTabs("cad_tab_activate", { id: r.tab });
+      return r;
     },
 
     /** Cambia el ensamble (deshacible); lo crea si no hay */

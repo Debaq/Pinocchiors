@@ -11,7 +11,7 @@ import { t as tl } from "../../lib/i18n";
 import { tBackend } from "../../lib/i18nBackend";
 import type { CadUi } from "../../lib/cadUi";
 import { MATE_LABELS, resolvedAssembly, samePart, type AsmInstance, type Assembly, type CadStore, type Connector, type Mate, type MateKind, type MotionStep, type P3, type PartView } from "../../lib/cad";
-import { adjustConnector, freshId, patternCopies } from "../../lib/assemblyTools";
+import { adjustConnector, freshId, patternCopies, rotateInstance } from "../../lib/assemblyTools";
 
 // ─── Controles chicos ─────────────────────────────────────────────────────
 
@@ -455,6 +455,19 @@ export const InstanceExtras: Component<{ store: CadStore; ui: CadUi; inst: AsmIn
       <Show when={copyOf()}>
         <p class="text-[11px] text-text-dim">{tl("Copia de un patrón: sigue a su original")}</p>
       </Show>
+      <Show when={!props.inst.fixed && !copyOf()}>
+        {/* Girar en pasos de 90° alrededor de los ejes del mundo (por su origen) */}
+        <div class="flex items-center gap-1 text-[11px]">
+          <span class="text-text-muted">{tl("Girar 90°")}</span>
+          <For each={["x", "y", "z"]}>
+            {(k) => (
+              <Button size="sm" variant="ghost" onClick={() => edit((i) => (i.rotation = rotateInstance(i.position, i.rotation, AXES[k], 90)))}>
+                {k.toUpperCase()}
+              </Button>
+            )}
+          </For>
+        </div>
+      </Show>
       <Show when={open()}>
         <div class="space-y-1.5 rounded border border-border/70 p-1.5">
           <div class="flex items-center gap-1">
@@ -541,6 +554,21 @@ export const InstanceExtras: Component<{ store: CadStore; ui: CadUi; inst: AsmIn
               </div>
             </div>
           </Show>
+          <Show when={!props.isSub && props.store.activeTab()?.kind === "assembly"}>
+            <Tooltip content={tl("Abre el diseño de esta pieza con las otras del ensamble en su lugar, solo de referencia: se dibuja sobre sus caras y las sigue si cambian")}>
+              <Button
+                size="sm"
+                onClick={() =>
+                  void props.store.editInContext(props.inst.id).then(
+                    (r) => props.ui.setMessage(tl("En contexto: {n} piezas de referencia", { n: r.added + r.updated })),
+                    (e) => props.ui.setMessage(tBackend(String(e))),
+                  )
+                }
+              >
+                {tl("Editar en contexto")}
+              </Button>
+            </Tooltip>
+          </Show>
           <Show when={props.isSub}>
             <Checkbox small label={tl("Subensamble flexible (sus piezas se mueven aquí)")} checked={!!props.inst.flexible} onChange={(v) => edit((i) => (i.flexible = v || undefined))} />
           </Show>
@@ -599,7 +627,8 @@ export const FastenSection: Component<{ store: CadStore; ui: CadUi }> = (props) 
   const [washer, setWasher] = createSignal(true);
   const [busy, setBusy] = createSignal(false);
   const picking = () => props.ui.pick().kind === "asm_faces";
-  createEffect(on(faces, (f) => props.ui.setHighlight({ faces: f, edges: [] })));
+  // Los agujeros elegidos, resaltados (solo mientras se eligen: no se pisa otro resaltado)
+  createEffect(on(faces, (f) => props.ui.setHighlight({ faces: f, edges: [] }), { defer: true }));
   // Al cambiar el ensamble (se pusieron los tornillos), la numeración de caras ya no vale
   createEffect(on(() => props.store.result()?.assembly?.version, () => setFaces([]), { defer: true }));
   onCleanup(() => {
