@@ -9,7 +9,7 @@ fn occt() -> bool {
 }
 
 fn inst(id: u32, position: P3, fixed: bool) -> Instance {
-    Instance { id, studio: 0, configuration: None, part: PartId { feature: FeatureId(0), index: 0 }, name: format!("I{id}"), position, rotation: [0.3, -0.2, 0.5], fixed }
+    Instance { id, studio: 0, configuration: None, part: PartId { feature: FeatureId(0), index: 0 }, name: format!("I{id}"), position, rotation: [0.3, -0.2, 0.5], fixed, ..Default::default() }
 }
 
 /// Arriba de A (cubo de 10 desde el origen) y abajo de B, enfrentados.
@@ -21,11 +21,12 @@ fn stack(kind: MateKind) -> Assembly {
         id: 1,
         name: String::new(),
         kind,
-        a: Connector { instance: 1, origin: [5.0, 5.0, 10.0], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0] },
-        b: Connector { instance: 2, origin: [5.0, 5.0, 0.0], z: [0.0, 0.0, -1.0], x: [1.0, 0.0, 0.0] },
+        a: Connector { instance: 1, origin: [5.0, 5.0, 10.0], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], ..Default::default() },
+        b: Connector { instance: 2, origin: [5.0, 5.0, 0.0], z: [0.0, 0.0, -1.0], x: [1.0, 0.0, 0.0], ..Default::default() },
         flip: true,
         angle: None,
         distance: None,
+        ..Default::default()
     };
     Assembly { instances: vec![a, b], mates: vec![mate], next_id: 3, ..Default::default() }
 }

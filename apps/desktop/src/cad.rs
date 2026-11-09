@@ -243,6 +243,19 @@ pub struct AssemblyView {
     pub solution: cad_model::AssemblySolution,
     /// Cambia con el ensamble o el diseño: el visor vuelve a pedir su malla
     pub version: u64,
+    /// Conectores de cada unión rehechos desde sus caras (PLAN_ENSAMBLE EN1)
+    pub connectors: Vec<MateConnectors>,
+    /// Conectores cuya cara, borde o vértice ya no está
+    pub lost: Vec<cad_model::assembly_refs::LostConnector>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MateConnectors {
+    pub id: u32,
+    pub a: cad_model::Connector,
+    pub b: cad_model::Connector,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub c: Option<cad_model::Connector>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -916,7 +929,10 @@ fn evaluate_doc(state: &AppState, doc: &Document) -> Result<CadResult, String> {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         hash.hash(&mut h);
         serde_json::to_string(a).unwrap_or_default().hash(&mut h);
-        AssemblyView { solution: cad_model::assembly::solve(a), version: h.finish() }
+        let (ready, solution, lost) = cad_model::assembly_refs::solve_with(eval, a);
+        // Los conectores como quedaron (siguen a sus caras): el visor arrastra y dibuja con estos
+        let connectors = ready.mates.iter().map(|m| MateConnectors { id: m.id, a: m.a.clone(), b: m.b.clone(), c: m.c.clone() }).collect();
+        AssemblyView { solution, version: h.finish(), connectors, lost }
     });
     let mut references: Vec<RefView> = eval.references.iter().map(|(id, g)| RefView { id: *id, geom: g.clone(), how: eval.ref_kinds.get(id).cloned() }).collect();
     references.sort_by_key(|r| doc.index_of(r.id));
@@ -1518,7 +1534,7 @@ fn assembly_shapes(state: &AppState) -> Result<(cad_model::Assembly, Vec<(u32, c
     ensure_committed(state)?;
     let cache = state.cad_cache.lock().unwrap();
     let ev = &cache.as_ref().ok_or("El diseño todavía no tiene un sólido")?.eval;
-    let sol = cad_model::assembly::solve(&asm);
+    let (asm, sol, _) = cad_model::assembly_refs::solve_with(ev, &asm);
     let shapes = cad_model::assembly::instance_shapes(ev, &asm, &sol);
     Ok((asm, shapes))
 }
@@ -1628,38 +1644,81 @@ fn assembly_faces_impl(state: &AppState) -> Result<Vec<[u32; 5]>, String> {
 
 /// Conector sobre la cara `face` de la malla del ensamble, en coordenadas de
 /// su pieza: centro y normal de una cara plana, o un punto del eje y el eje de
-/// una cilíndrica o cónica.
+/// una cilíndrica o cónica. Queda ligado a la cara (la sigue si cambia la pieza).
 #[tauri::command]
 pub async fn cad_assembly_connector(app: AppHandle, face: usize) -> Result<cad_model::Connector, String> {
-    in_background(app, move |state| assembly_connector_impl(state, face)).await
+    in_background(app, move |state| assembly_connector_impl(state, AsmPoint { face: Some(face), ..Default::default() })).await
 }
 
-fn assembly_connector_impl(state: &AppState, face: usize) -> Result<cad_model::Connector, String> {
+/// Dónde se eligió el punto de la unión en la malla del ensamble: una cara, una arista (su
+/// centro si es redonda y `center`, si no su punto medio) o un vértice (en mm del mundo).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct AsmPoint {
+    #[serde(default)]
+    pub face: Option<usize>,
+    #[serde(default)]
+    pub edge: Option<usize>,
+    #[serde(default)]
+    pub vertex: Option<[f64; 3]>,
+    #[serde(default)]
+    pub center: bool,
+}
+
+/// Conector ligado sobre una cara, arista o vértice del ensamble (PLAN_ENSAMBLE EN2).
+#[tauri::command]
+pub async fn cad_assembly_connector_at(app: AppHandle, at: AsmPoint) -> Result<cad_model::Connector, String> {
+    in_background(app, move |state| assembly_connector_impl(state, at)).await
+}
+
+fn assembly_connector_impl(state: &AppState, at: AsmPoint) -> Result<cad_model::Connector, String> {
+    use cad_model::assembly_refs as refs;
     let ranges = assembly_faces_impl(state)?;
-    let [id, start, ..] = *ranges.iter().find(|r| (r[1] as usize..r[2] as usize).contains(&face)).ok_or("Esa cara no es de ninguna instancia")?;
     let doc = state.cad_doc().ok_or("No hay un diseño abierto")?;
     let asm = doc.assembly.ok_or("El diseño no tiene ensamble")?;
-    let inst = asm.instances.iter().find(|i| i.id == id).ok_or("La instancia ya no existe")?;
     let cache = state.cad_cache.lock().unwrap();
     let ev = &cache.as_ref().ok_or("El diseño todavía no tiene un sólido")?.eval;
-    let part = ev.parts.iter().find(|p| p.id == inst.part).ok_or("La pieza ya no existe")?;
-    let info = part.shape.face_info(face - start as usize).map_err(|e| e.to_string())?;
-    let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-    let (origin, z) = match info.axis {
-        Some(ax) if info.surface != cad_model::occt::SurfaceKind::Plane => {
-            // El punto del eje a la altura del centro de la cara
-            let d = ax.dir;
-            let t = dot([info.center[0] - ax.origin[0], info.center[1] - ax.origin[1], info.center[2] - ax.origin[2]], d);
-            ([ax.origin[0] + d[0] * t, ax.origin[1] + d[1] * t, ax.origin[2] + d[2] * t], d)
-        }
-        _ => (info.center, info.normal),
+    let part_of = |id: u32| -> Result<&cad_model::Part, String> {
+        let inst = asm.instances.iter().find(|i| i.id == id).ok_or("La instancia ya no existe")?;
+        ev.parts.iter().find(|p| p.id == inst.part).ok_or_else(|| "La pieza ya no existe".to_string())
     };
-    // X: cualquier perpendicular a Z (la de X del mundo si se puede)
-    let helper = if z[0].abs() < 0.9 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] };
-    let k = dot(helper, z);
-    let x = [helper[0] - z[0] * k, helper[1] - z[1] * k, helper[2] - z[2] * k];
-    let l = dot(x, x).sqrt();
-    Ok(cad_model::Connector { instance: id, origin, z, x: [x[0] / l, x[1] / l, x[2] / l] })
+    if let Some(face) = at.face {
+        let [id, start, ..] = *ranges.iter().find(|r| (r[1] as usize..r[2] as usize).contains(&face)).ok_or("Esa cara no es de ninguna instancia")?;
+        let part = part_of(id)?;
+        let r = refs::part_face_ref(part, face - start as usize).ok_or("No se pudo leer esa cara")?;
+        return refs::connector_at(part, id, cad_model::ConnectorRef::Face { face: r });
+    }
+    if let Some(edge) = at.edge {
+        let [id, _, _, start, _] = *ranges.iter().find(|r| (r[3] as usize..r[4] as usize).contains(&edge)).ok_or("Esa arista no es de ninguna instancia")?;
+        let part = part_of(id)?;
+        let local = edge - start as usize;
+        let r = refs::part_edge_ref(part, local).ok_or("No se pudo leer esa arista")?;
+        let round = part.shape.edge_info(local).map_err(|e| e.to_string())?.circle.is_some();
+        let kind = if at.center && round { cad_model::ConnectorRef::EdgeCenter { edge: r } } else { cad_model::ConnectorRef::EdgeMid { edge: r } };
+        return refs::connector_at(part, id, kind);
+    }
+    if let Some(p) = at.vertex {
+        // De qué instancia es: la que tiene un vértice más cerca de ese punto
+        let (_, sol, _) = refs::solve_with(ev, &asm);
+        let mut best: Option<(f64, u32, [f64; 3])> = None;
+        for (id, pos, rot) in &sol.poses {
+            let Ok(part) = part_of(*id) else { continue };
+            let inst = asm.instances.iter().find(|i| i.id == *id).unwrap();
+            if inst.suppressed {
+                continue;
+            }
+            let local = cad_model::assembly::Pose::new(*pos, *rot).inverse().apply(p);
+            let local = inst.mirror_point(local);
+            for v in part.shape.vertices().unwrap_or_default() {
+                let d = ((v[0] - local[0]).powi(2) + (v[1] - local[1]).powi(2) + (v[2] - local[2]).powi(2)).sqrt();
+                if best.is_none_or(|b| d < b.0) {
+                    best = Some((d, *id, v));
+                }
+            }
+        }
+        let (_, id, v) = best.ok_or("Ese punto no es de ninguna instancia")?;
+        return refs::connector_at(part_of(id)?, id, cad_model::ConnectorRef::Vertex { point: v, normal: [0.0, 0.0, 1.0] });
+    }
+    Err("Elegir una cara, una arista o un vértice".into())
 }
 
 /// Pares de instancias que se pisan y cuánto volumen comparten (mm³).
@@ -1759,7 +1818,7 @@ fn assembly_suggest_impl(state: &AppState) -> Result<Vec<cad_model::Relation>, S
     ensure_committed(state)?;
     let cache = state.cad_cache.lock().unwrap();
     let ev = &cache.as_ref().ok_or("El diseño todavía no tiene un sólido")?.eval;
-    let sol = cad_model::assembly::solve(&asm);
+    let (asm, sol, _) = cad_model::assembly_refs::solve_with(ev, &asm);
     Ok(cad_model::assembly::suggest_gear_relations(ev, &asm, &sol))
 }
 
@@ -1775,7 +1834,7 @@ fn assembly_gear_warnings_impl(state: &AppState) -> Result<Vec<String>, String> 
     ensure_committed(state)?;
     let cache = state.cad_cache.lock().unwrap();
     let ev = &cache.as_ref().ok_or("El diseño todavía no tiene un sólido")?.eval;
-    let sol = cad_model::assembly::solve(&asm);
+    let (asm, sol, _) = cad_model::assembly_refs::solve_with(ev, &asm);
     Ok(cad_model::assembly::gear_axis_warnings(ev, &asm, &sol))
 }
 
@@ -3075,8 +3134,8 @@ fn tab_export_items(state: &AppState, tab: TabId) -> Result<Vec<(cad_model::Shap
         let (designs, merged) = merged_assembly(state, tab, 0);
         let tabs = state.cad_tabs.lock().unwrap();
         let doc = tabs.assembly_document(tab, &assembly_part_names(&tabs, &designs, &merged)).ok_or("Esa pestaña ya no está")?;
-        let asm = doc.assembly.clone().unwrap_or_default();
-        let shapes = cad_model::assembly::instance_shapes(&merged, &asm, &cad_model::assembly::solve(&asm));
+        let (asm, sol, _) = cad_model::assembly_refs::solve_with(&merged, &doc.assembly.clone().unwrap_or_default());
+        let shapes = cad_model::assembly::instance_shapes(&merged, &asm, &sol);
         return assembly_items_of(&doc, &asm, shapes);
     }
     let doc = state.cad_tabs.lock().unwrap().design(tab).cloned().ok_or("Esa pestaña ya no está")?;
@@ -3185,8 +3244,7 @@ fn export_impl(state: &AppState, path: &str, format: &str, part: Option<cad_mode
 
     if assembly {
         // El ensamble: cada instancia en su lugar, con su nombre
-        let asm = doc.assembly.clone().ok_or("El diseño no tiene ensamble")?;
-        let sol = cad_model::assembly::solve(&asm);
+        let (asm, sol, _) = cad_model::assembly_refs::solve_with(ev, doc.assembly.as_ref().ok_or("El diseño no tiene ensamble")?);
         let shapes = cad_model::assembly::instance_shapes(ev, &asm, &sol);
         let items: Vec<_> = assembly_items_of(doc, &asm, shapes)?
             .into_iter()
@@ -3379,19 +3437,77 @@ pub async fn cad_export_assembly_animation(
     to: f64,
     frames: Option<usize>,
     fps: Option<f64>,
+    steps: Option<Vec<cad_model::MotionStep>>,
 ) -> Result<u64, String> {
     require_occt()?;
-    in_background(app, move |state| export_assembly_animation_impl(state, &path, mate, var, from, to, frames.unwrap_or(30), fps.unwrap_or(30.0))).await
+    in_background(app, move |state| export_assembly_animation_impl(state, &path, mate, var, from, to, frames.unwrap_or(30), fps.unwrap_or(30.0), steps)).await
+}
+
+/// Los cuadros de una animación: los pasos dados (o los del ensamble) a `fps`, o una unión de
+/// `from` a `to` en `frames` cuadros.
+#[allow(clippy::too_many_arguments)]
+fn animation_frames(ev: &cad_model::Evaluation, asm: &cad_model::Assembly, mate: u32, var: cad_model::assembly::SweepVar, from: f64, to: f64, frames: usize, fps: f64, steps: Option<Vec<cad_model::MotionStep>>) -> Result<(cad_model::Assembly, Vec<cad_model::AssemblySolution>), String> {
+    let (asm, _) = cad_model::assembly_refs::prepared(ev, asm);
+    let steps = steps.filter(|s| !s.is_empty());
+    let sweep = match steps {
+        Some(steps) => cad_model::assembly::sweep_steps(&asm, &steps, fps.clamp(1.0, 120.0))?,
+        None => cad_model::assembly::sweep(&asm, mate, var, from, to, frames.clamp(2, 600))?,
+    };
+    if sweep.len() > 2400 {
+        return Err("La animación es demasiado larga (más de 2400 cuadros)".into());
+    }
+    Ok((asm, sweep))
+}
+
+/// Cuadros de la animación para reproducirla en el visor: las poses de cada cuadro.
+#[tauri::command]
+pub async fn cad_assembly_sweep(app: AppHandle, steps: Vec<cad_model::MotionStep>, fps: Option<f64>) -> Result<Vec<Vec<(u32, [f64; 3], [f64; 3])>>, String> {
+    in_background(app, move |state| assembly_sweep_impl(state, steps, fps)).await
+}
+
+type FramePoses = Vec<Vec<(u32, [f64; 3], [f64; 3])>>;
+
+fn assembly_sweep_impl(state: &AppState, steps: Vec<cad_model::MotionStep>, fps: Option<f64>) -> Result<FramePoses, String> {
+    {
+        let doc = state.cad_doc().ok_or("No hay un diseño abierto")?;
+        let asm = doc.assembly.clone().ok_or("El diseño no tiene ensamble")?;
+        ensure_committed(state)?;
+        let cache = state.cad_cache.lock().unwrap();
+        let ev = &cache.as_ref().ok_or("El diseño todavía no tiene un sólido")?.eval;
+        let (_, frames) = animation_frames(ev, &asm, 0, cad_model::assembly::SweepVar::Angle, 0.0, 0.0, 2, fps.unwrap_or(30.0), Some(steps))?;
+        Ok(frames.into_iter().map(|f| f.poses).collect())
+    }
+}
+
+/// Primer cuadro del recorrido de una unión en que dos piezas chocan (PLAN_ENSAMBLE EN7):
+/// (cuadro, valor de la unión, instancia, instancia, volumen en mm³), o nada si no chocan.
+#[tauri::command]
+pub async fn cad_assembly_first_clash(app: AppHandle, mate: u32, var: cad_model::assembly::SweepVar, from: f64, to: f64, frames: Option<usize>) -> Result<Option<(usize, f64, u32, u32, f64)>, String> {
+    in_background(app, move |state| assembly_first_clash_impl(state, mate, var, from, to, frames)).await
+}
+
+type Clash = Option<(usize, f64, u32, u32, f64)>;
+
+fn assembly_first_clash_impl(state: &AppState, mate: u32, var: cad_model::assembly::SweepVar, from: f64, to: f64, frames: Option<usize>) -> Result<Clash, String> {
+    {
+        let doc = state.cad_doc().ok_or("No hay un diseño abierto")?;
+        let asm = doc.assembly.clone().ok_or("El diseño no tiene ensamble")?;
+        ensure_committed(state)?;
+        let cache = state.cad_cache.lock().unwrap();
+        let ev = &cache.as_ref().ok_or("El diseño todavía no tiene un sólido")?.eval;
+        let (asm, _) = cad_model::assembly_refs::prepared(ev, &asm);
+        cad_model::assembly::first_clash(ev, &asm, mate, var, from, to, frames.unwrap_or(24).clamp(2, 240))
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
-fn export_assembly_animation_impl(state: &AppState, path: &str, mate: u32, var: cad_model::assembly::SweepVar, from: f64, to: f64, frames: usize, fps: f64) -> Result<u64, String> {
+fn export_assembly_animation_impl(state: &AppState, path: &str, mate: u32, var: cad_model::assembly::SweepVar, from: f64, to: f64, frames: usize, fps: f64, steps: Option<Vec<cad_model::MotionStep>>) -> Result<u64, String> {
     let doc = state.cad_doc().ok_or("No hay un diseño abierto")?;
     let asm = doc.assembly.clone().ok_or("El diseño no tiene ensamble")?;
     ensure_committed(state)?;
     let cache = state.cad_cache.lock().unwrap();
     let ev = &cache.as_ref().ok_or("El diseño todavía no tiene un sólido")?.eval;
-    let sweep = cad_model::assembly::sweep(&asm, mate, var, from, to, frames.clamp(2, 600))?;
+    let (asm, sweep) = animation_frames(ev, &asm, mate, var, from, to, frames, fps, steps.clone())?;
     let shapes = cad_model::assembly::instance_shapes(ev, &asm, &sweep[0]);
     let ids: Vec<u32> = shapes.iter().map(|(id, _)| *id).collect();
     let items = assembly_items_of(&doc, &asm, shapes)?;
@@ -3417,7 +3533,11 @@ fn export_assembly_animation_impl(state: &AppState, path: &str, mate: u32, var: 
         channels.push(AnimChannel { node, interpolation: Interpolation::Linear, times: times.clone(), values: KeyframeValues::Translation(moves) });
         channels.push(AnimChannel { node, interpolation: Interpolation::Linear, times: times.clone(), values: KeyframeValues::Rotation(turns) });
     }
-    let name = asm.mates.iter().find(|m| m.id == mate).map(|m| m.name.clone()).filter(|n| !n.is_empty()).unwrap_or_else(|| "Unión".into());
+    let name = if steps.as_ref().is_some_and(|s| !s.is_empty()) {
+        "Pasos".to_string()
+    } else {
+        asm.mates.iter().find(|m| m.id == mate).map(|m| m.name.clone()).filter(|n| !n.is_empty()).unwrap_or_else(|| "Unión".into())
+    };
     scene.animations.push(Animation { name, channels });
     let p = std::path::Path::new(path);
     export_scene(&scene, p, "glb")?;
@@ -4181,7 +4301,10 @@ pub mod bridge {
             "cad_deviation" => deviation_impl(state, arg(args, "tolerance")?).map(Reply::Bytes),
             "cad_assembly_mesh" => assembly_mesh_impl(state, arg::<Option<f64>>(args, "explode")?.unwrap_or(0.0)).map(Reply::Bytes),
             "cad_assembly_faces" => ok(assembly_faces_impl(state)?),
-            "cad_assembly_connector" => ok(assembly_connector_impl(state, arg(args, "face")?)?),
+            "cad_assembly_connector" => ok(assembly_connector_impl(state, AsmPoint { face: Some(arg(args, "face")?), ..Default::default() })?),
+            "cad_assembly_connector_at" => ok(assembly_connector_impl(state, arg(args, "at")?)?),
+            "cad_assembly_sweep" => ok(assembly_sweep_impl(state, arg(args, "steps")?, arg(args, "fps")?)?),
+            "cad_assembly_first_clash" => ok(assembly_first_clash_impl(state, arg(args, "mate")?, arg(args, "var")?, arg(args, "from")?, arg(args, "to")?, arg(args, "frames")?)?),
             "cad_assembly_interference" => ok(assembly_interference_impl(state)?),
             "cad_assembly_clearance" => ok(assembly_clearance_impl(state, arg::<Option<f64>>(args, "min_gap")?)?),
             "cad_assembly_suggest" => ok(assembly_suggest_impl(state)?),
@@ -4237,6 +4360,7 @@ pub mod bridge {
                 arg(args, "to")?,
                 arg::<Option<usize>>(args, "frames")?.unwrap_or(30),
                 arg::<Option<f64>>(args, "fps")?.unwrap_or(30.0),
+                arg(args, "steps")?,
             )?),
             "cad_eval_expr" => ok(eval_expr_impl(state, &arg::<String>(args, "expr")?, arg(args, "parameters")?)?),
             "cad_variables" => ok(variables_view(state)),

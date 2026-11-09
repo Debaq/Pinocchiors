@@ -422,7 +422,8 @@ impl Tabs {
     /// compuesto. `None` si no tiene instancias que dibujar.
     pub fn subassembly_part(&self, sub: TabId, sub_eval: &Evaluation) -> Option<crate::eval::Part> {
         let flat = self.flat_assembly(sub)?;
-        let shapes: Vec<crate::Shape> = crate::assembly::instance_shapes(sub_eval, &flat, &crate::assembly::solve(&flat)).into_iter().map(|(_, s)| s).collect();
+        let (flat, sol, _) = crate::assembly_refs::solve_with(sub_eval, &flat);
+        let shapes: Vec<crate::Shape> = crate::assembly::instance_shapes(sub_eval, &flat, &sol).into_iter().map(|(_, s)| s).collect();
         let shape = match shapes.len() {
             0 => return None,
             1 => shapes[0].clone(),

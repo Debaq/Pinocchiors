@@ -114,6 +114,9 @@ fn kind_name(k: MateKind) -> &'static str {
         MateKind::Spherical => "spherical",
         MateKind::Parallel => "parallel",
         MateKind::PinSlot => "pin_slot",
+        MateKind::Tangent => "tangent",
+        MateKind::Width => "width",
+        MateKind::Angle => "angle",
     }
 }
 
@@ -337,6 +340,7 @@ fn insert(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
                     position: at,
                     rotation: rot,
                     fixed,
+                    ..Default::default()
                 });
                 created.push(json!({ "instance": id, "name": name }));
             }
@@ -406,11 +410,12 @@ fn mate(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
         id,
         name: name.clone(),
         kind,
-        a: ca,
-        b: cb,
+        a: ca.clone(),
+        b: cb.clone(),
         flip: arg_bool(args, "flip").unwrap_or(false),
         angle: args.get("angle").and_then(Value::as_f64),
         distance: args.get("distance").and_then(Value::as_f64),
+        ..Default::default()
     });
     let result = apply(ctx, &a)?;
     let (text, ok) = solution_text(&result);
@@ -567,6 +572,9 @@ fn relation_text(r: &Relation) -> String {
         ),
         Relation::RackPinion { revolute, slider, per_turn, .. } => format!("rack and pinion: mate {slider} slides {} mm per turn of mate {revolute}", num(*per_turn)),
         Relation::Screw { cylindrical, pitch, .. } => format!("screw: mate {cylindrical} advances {} mm per turn", num(*pitch)),
+        Relation::Linear { a, b, ratio, .. } => format!("linear: mate {b} slides {} × mate {a}", num(*ratio)),
+        Relation::Belt { a, b, ratio, .. } => format!("belt: mate {b} turns {} × mate {a} (same direction)", num(*ratio)),
+        Relation::Cam { revolute, slider, lift, .. } => format!("cam: mate {slider} follows a {}-point lift profile of mate {revolute}", lift.len()),
     }
 }
 

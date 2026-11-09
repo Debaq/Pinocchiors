@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::geom::{P2, P3, Plane};
 use crate::sketch::Sketch;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct FeatureId(pub u32);
 
@@ -425,7 +425,7 @@ pub enum Motion {
 
 /// Pieza del diseño: la operación que la creó y el número de pieza dentro de
 /// ella (una unión que junta piezas conserva el de la primera).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct PartId {
     pub feature: FeatureId,
     pub index: u32,

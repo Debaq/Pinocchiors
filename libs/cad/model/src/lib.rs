@@ -9,6 +9,7 @@
 //! Unidades: mm y grados. Ejes: Z arriba.
 
 pub mod assembly;
+pub mod assembly_refs;
 pub mod belts;
 pub mod document;
 pub mod eval;
@@ -34,7 +35,7 @@ pub mod tabs;
 pub mod threads;
 
 pub use cad_occt::{self as occt, Shape};
-pub use assembly::{Assembly, AssemblySolution, Connector, Instance, Mate, MateKind, Relation};
+pub use assembly::{Assembly, AssemblySolution, Connector, ConnectorRef, ExplodeStep, Instance, InstanceGroup, InstancePattern, Mate, MateKind, MotionStep, PatternKind, Relation, SweepVar};
 pub use document::{Configuration, Document, Fabrication, Folder, Material, NamedVersion, PartProps, ModelError, Parameter, Resolution, ResolvedValue};
 pub use eval::{Sketch3dResult, EvalCache, Evaluation, FeatureState, FlatRecord, FeatureStatus, Handle, HandleKind, MissingRef, Part, RefGeom, Replaced, SketchResult};
 pub use feature::*;
