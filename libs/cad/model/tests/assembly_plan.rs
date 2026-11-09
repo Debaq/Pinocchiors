@@ -380,3 +380,61 @@ fn en10_en11_pasos_de_animacion_y_explosion() {
     let off = explode_offsets(&asm, 1.5);
     assert_eq!(off, vec![(2, [5.0, 0.0, 30.0]), (3, [5.0, 0.0, 0.0])]);
 }
+
+#[test]
+fn en6_arrastre_respeta_la_bisagra() {
+    // B gira en la bisagra (Z por el origen); se tira de un punto de B hacia +Y: gira, no se suelta
+    let mut asm = pair(MateKind::Revolute);
+    asm.instances[1].position = [0.0, 0.0, 10.0];
+    asm.instances[1].rotation = [std::f64::consts::PI, 0.0, 0.0];
+    let sol0 = solve(&asm);
+    let grab = apply(pose(&sol0, 2), [10.0, 0.0, 0.0]);
+    let target = [0.0, 10.0, grab[2]];
+    let sol = assembly::drag(&asm, 2, grab, target);
+    assert!(sol.converged);
+    let p = apply(pose(&sol, 2), [10.0, 0.0, 0.0]);
+    assert_relative_eq!(p[0], 0.0, epsilon = 1e-4);
+    assert_relative_eq!(p[1], 10.0, epsilon = 1e-4);
+    // El eje de la bisagra no se movió
+    assert_relative_eq!(apply(pose(&sol, 2), [0.0; 3])[2], 10.0, epsilon = 1e-6);
+    // Pieza suelta: va justo adonde se la lleva
+    let mut asm = pair(MateKind::Revolute);
+    asm.mates.clear();
+    let sol = assembly::drag(&asm, 2, [20.0, 3.0, 7.0], [25.0, 3.0, 7.0]);
+    assert_relative_eq!(apply(pose(&sol, 2), [0.0; 3])[0], 25.0, epsilon = 1e-6);
+}
+
+#[test]
+fn en8_otros_agujeros_iguales() {
+    if !occt::available() {
+        return;
+    }
+    // Placa con tres agujeros de radio 1.5 en x = 10, 30, 50
+    let mut doc = Document::new();
+    let prim = |shape, origin| FeatureKind::Primitive(Primitive { shape, origin, z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op: BodyOp::New, link: None, on: None });
+    doc.add(prim(PrimitiveShape::Box { dx: 60.0, dy: 20.0, dz: 5.0, centered: false, centered_z: false }, [0.0; 3]));
+    for x in [10.0, 30.0, 50.0] {
+        let FeatureKind::Primitive(mut p) = prim(PrimitiveShape::Cylinder { radius: 1.5, height: 20.0 }, [x, 10.0, -5.0]) else { unreachable!() };
+        p.op = BodyOp::Cut;
+        doc.add(FeatureKind::Primitive(p));
+    }
+    let ev = doc.evaluate();
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    let part = &ev.parts[0];
+    let hole = (0..part.shape.face_count())
+        .find(|&f| part.shape.face_info(f).is_ok_and(|i| i.surface == occt::SurfaceKind::Cylinder && i.axis.is_some_and(|a| (a.origin[0] - 10.0).abs() < 1e-6)))
+        .unwrap();
+    let a = connector_at(part, 1, ConnectorRef::Face { face: part_face_ref(part, hole).unwrap() }).unwrap();
+    assert_relative_eq!(a.radius, 1.5, epsilon = 1e-9);
+    let asm = Assembly {
+        instances: vec![Instance { part: part.id, ..inst(1, [0.0; 3], true) }, inst(2, [0.0; 3], false)],
+        mates: vec![mate(1, MateKind::Revolute, a, conn(2, [0.0; 3], [0.0, 0.0, 1.0]))],
+        next_id: 3,
+        ..Default::default()
+    };
+    let (holder, offsets) = assembly_refs::hole_offsets(&ev, &asm, 2).unwrap();
+    assert_eq!(holder, 1);
+    assert_eq!(offsets.len(), 2, "{offsets:?}");
+    assert_relative_eq!(offsets[0][0], 20.0, epsilon = 1e-6);
+    assert_relative_eq!(offsets[1][0], 40.0, epsilon = 1e-6);
+}

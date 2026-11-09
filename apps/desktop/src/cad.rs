@@ -1721,6 +1721,275 @@ fn assembly_connector_impl(state: &AppState, at: AsmPoint) -> Result<cad_model::
     Err("Elegir una cara, una arista o un vértice".into())
 }
 
+/// Caras y aristas de la malla del ensamble donde están los conectores de una unión (para
+/// resaltarlas al pasar por ella en la lista, EN3).
+#[derive(Serialize)]
+pub struct MateFaces {
+    pub faces: Vec<usize>,
+    pub edges: Vec<usize>,
+}
+
+#[tauri::command]
+pub async fn cad_assembly_mate_faces(app: AppHandle, mate: u32) -> Result<MateFaces, String> {
+    in_background(app, move |state| assembly_mate_faces_impl(state, mate)).await
+}
+
+fn assembly_mate_faces_impl(state: &AppState, mate: u32) -> Result<MateFaces, String> {
+    use cad_model::assembly_refs as refs;
+    let ranges = assembly_faces_impl(state)?;
+    let doc = state.cad_doc().ok_or("No hay un diseño abierto")?;
+    let asm = doc.assembly.ok_or("El diseño no tiene ensamble")?;
+    let m = asm.mates.iter().find(|m| m.id == mate).ok_or("La unión ya no existe")?;
+    let cache = state.cad_cache.lock().unwrap();
+    let ev = &cache.as_ref().ok_or("El diseño todavía no tiene un sólido")?.eval;
+    let mut out = MateFaces { faces: Vec::new(), edges: Vec::new() };
+    for c in m.connectors() {
+        let Some(r) = ranges.iter().find(|r| r[0] == c.instance) else { continue };
+        let Some(part) = refs::instance_part(ev, &asm, c.instance) else { continue };
+        match &c.at {
+            Some(cad_model::ConnectorRef::Face { face }) => {
+                if let Ok(f) = refs::resolve_face(part, face) {
+                    out.faces.push(r[1] as usize + f);
+                }
+            }
+            Some(cad_model::ConnectorRef::EdgeCenter { edge } | cad_model::ConnectorRef::EdgeMid { edge }) => {
+                if let Ok(e) = refs::resolve_edge(part, edge) {
+                    out.edges.push(r[3] as usize + e);
+                }
+            }
+            // Sin referencia (uniones de antes) o un vértice: la cara más cercana al origen
+            _ => {
+                if let Some((f, _)) = part.shape.closest_face(c.origin, Some(c.z), 0.5).or_else(|| part.shape.closest_face(c.origin, None, -1.0)) {
+                    out.faces.push(r[1] as usize + f);
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Arrastre general de una pieza con el solver (EN6): las poses que quedan con la pieza
+/// agarrada de `grab` llevada hacia `target` (mm del mundo), cumpliendo sus uniones.
+#[tauri::command]
+pub async fn cad_assembly_drag(app: AppHandle, instance: u32, grab: [f64; 3], target: [f64; 3]) -> Result<Vec<(u32, [f64; 3], [f64; 3])>, String> {
+    in_background(app, move |state| assembly_drag_impl(state, instance, grab, target)).await
+}
+
+fn assembly_drag_impl(state: &AppState, instance: u32, grab: [f64; 3], target: [f64; 3]) -> Result<Vec<(u32, [f64; 3], [f64; 3])>, String> {
+    let doc = state.cad_doc().ok_or("No hay un diseño abierto")?;
+    let asm = doc.assembly.ok_or("El diseño no tiene ensamble")?;
+    let cache = state.cad_cache.lock().unwrap();
+    let ready = match cache.as_ref() {
+        Some(c) => cad_model::assembly_refs::prepared(&c.eval, &asm).0,
+        None => asm,
+    };
+    Ok(cad_model::assembly::drag(&ready, instance, grab, target).poses)
+}
+
+/// Corrimientos de los otros agujeros iguales al que sostiene a la instancia (EN8).
+#[derive(Serialize)]
+pub struct HolePattern {
+    pub reference: u32,
+    pub offsets: Vec<[f64; 3]>,
+}
+
+#[tauri::command]
+pub async fn cad_assembly_hole_pattern(app: AppHandle, instance: u32) -> Result<HolePattern, String> {
+    in_background(app, move |state| assembly_hole_pattern_impl(state, instance)).await
+}
+
+fn assembly_hole_pattern_impl(state: &AppState, instance: u32) -> Result<HolePattern, String> {
+    let doc = state.cad_doc().ok_or("No hay un diseño abierto")?;
+    let asm = doc.assembly.ok_or("El diseño no tiene ensamble")?;
+    let cache = state.cad_cache.lock().unwrap();
+    let ev = &cache.as_ref().ok_or("El diseño todavía no tiene un sólido")?.eval;
+    let (reference, offsets) = cad_model::assembly_refs::hole_offsets(ev, &asm, instance)?;
+    Ok(HolePattern { reference, offsets })
+}
+
+/// Tornillos puestos solos (EN9): lo que hay que agregar al ensamble.
+#[derive(Serialize)]
+pub struct Fastened {
+    pub instances: Vec<cad_model::Instance>,
+    pub mates: Vec<cad_model::Mate>,
+    pub next_id: u32,
+    pub tabs: TabsView,
+    pub notes: Vec<String>,
+}
+
+/// Largos normales de tornillos métricos (mm)
+const BOLT_LENGTHS: [f64; 24] = [4.0, 5.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0, 25.0, 30.0, 35.0, 40.0, 45.0, 50.0, 55.0, 60.0, 65.0, 70.0, 80.0, 90.0, 100.0];
+
+/// En cada agujero elegido (caras cilíndricas de la malla del ensamble) un tornillo de la
+/// medida y el largo justos, con arandela y tuerca si se piden, ya unidos al agujero. La
+/// cabeza va del lado más cerca de `eye` (la cámara, en mm).
+#[tauri::command]
+pub async fn cad_assembly_fasten(app: AppHandle, faces: Vec<usize>, nut: bool, washer: bool, eye: Option<[f64; 3]>) -> Result<Fastened, String> {
+    in_background(app, move |state| assembly_fasten_impl(state, faces, nut, washer, eye)).await
+}
+
+fn assembly_fasten_impl(state: &AppState, faces: Vec<usize>, nut: bool, washer: bool, eye: Option<[f64; 3]>) -> Result<Fastened, String> {
+    use cad_model::assembly_refs as refs;
+    use cad_model::geom::{add, dot, normalize, scale, sub};
+    let ranges = assembly_faces_impl(state)?;
+    let doc = state.cad_doc().ok_or("No hay un diseño abierto")?;
+    let asm = doc.assembly.clone().ok_or("El diseño no tiene ensamble")?;
+    // Lo que hace falta de cada agujero: instancia, referencia de la cara, eje y largo
+    struct Hole {
+        instance: u32,
+        face: cad_model::FaceRef,
+        base_z: [f64; 3],
+        outward: [f64; 3],
+        /// Del origen del conector de la cara a la boca (hacia afuera) y a la salida (hacia adentro)
+        up: f64,
+        down: f64,
+        depth: f64,
+        diameter: f64,
+        at: [f64; 3],
+    }
+    let mut holes = Vec::new();
+    let mut notes = Vec::new();
+    {
+        let cache = state.cad_cache.lock().unwrap();
+        let ev = &cache.as_ref().ok_or("El diseño todavía no tiene un sólido")?.eval;
+        let (_, sol, _) = refs::solve_with(ev, &asm);
+        for face in faces {
+            let Some(&[id, start, ..]) = ranges.iter().find(|r| (r[1] as usize..r[2] as usize).contains(&face)) else { continue };
+            let Some(part) = refs::instance_part(ev, &asm, id) else { continue };
+            let local = face - start as usize;
+            let info = part.shape.face_info(local).map_err(|e| e.to_string())?;
+            if info.surface != cad_model::occt::SurfaceKind::Cylinder {
+                notes.push("una cara elegida no es un agujero (cilíndrica): se saltó".into());
+                continue;
+            }
+            let (origin, z, _, radius) = refs::face_frame(part, local)?;
+            // Largo del agujero: lo que ocupa la cara a lo largo del eje
+            let (lo, hi) = match part.shape.face_shape(local) {
+                Ok(f) => f.bounds().unwrap_or(([0.0; 3], [0.0; 3])),
+                Err(_) => ([0.0; 3], [0.0; 3]),
+            };
+            let corners: Vec<[f64; 3]> = (0..8).map(|k| [if k & 1 == 0 { lo[0] } else { hi[0] }, if k & 2 == 0 { lo[1] } else { hi[1] }, if k & 4 == 0 { lo[2] } else { hi[2] }]).collect();
+            let ts: Vec<f64> = corners.iter().map(|c| dot(sub(*c, origin), z)).collect();
+            let (t0, t1) = (ts.iter().cloned().fold(f64::MAX, f64::min), ts.iter().cloned().fold(f64::MIN, f64::max));
+            let half = ((t1 - t0) / 2.0).max(0.1);
+            let center = add(origin, scale(z, (t0 + t1) / 2.0));
+            // La boca del lado de la cámara
+            let pose = sol.poses.iter().find(|p| p.0 == id).map(|p| cad_model::assembly::Pose::new(p.1, p.2)).unwrap_or(cad_model::assembly::Pose::IDENTITY);
+            let world_z = pose.turn(z);
+            let world_c = pose.apply(center);
+            let outward = match eye {
+                Some(e) if dot(sub(e, world_c), world_z) < 0.0 => scale(z, -1.0),
+                _ => z,
+            };
+            let fref = refs::part_face_ref(part, local).ok_or("No se pudo leer el agujero")?;
+            let outward = normalize(outward);
+            // El centro de la cara puede no estar en el medio del agujero
+            let shift = dot(sub(center, origin), outward);
+            holes.push(Hole { instance: id, face: fref, base_z: z, outward, up: half + shift, down: half - shift, depth: 2.0 * half, diameter: 2.0 * radius, at: pose.apply(add(center, scale(outward, half))) });
+        }
+    }
+    if holes.is_empty() {
+        return Err("Elegir uno o más agujeros (sus caras cilíndricas)".into());
+    }
+    let mut next = asm.next_id.max(asm.instances.iter().map(|i| i.id + 1).max().unwrap_or(1)).max(asm.mates.iter().map(|m| m.id + 1).max().unwrap_or(1));
+    let mut instances = Vec::new();
+    let mut mates = Vec::new();
+    let mut tabs = state.cad_tabs.lock().unwrap();
+    for h in &holes {
+        let size = cad_model::standard::size_for_hole(h.diameter);
+        let grip = h.depth + if washer { size.washer_h * if nut { 2.0 } else { 1.0 } } else { 0.0 };
+        let need = if nut { grip + size.nut_m + 2.0 * size.pitch } else { grip };
+        let length = if nut {
+            BOLT_LENGTHS.iter().copied().find(|l| *l >= need - 1e-6).unwrap_or(need.ceil())
+        } else {
+            BOLT_LENGTHS.iter().copied().rev().find(|l| *l <= need + 1e-6).unwrap_or(BOLT_LENGTHS[0])
+        };
+        let mut add_part = |shape: cad_model::PrimitiveShape, name: String, color: &str| -> Result<cad_model::PartId, String> {
+            let (_, part) = add_purchased_shape(&mut tabs, shape, &name, color)?;
+            Ok(part)
+        };
+        // Conector del agujero: su eje, en la boca (o en la salida), mirando hacia afuera (o adentro)
+        let hole_conn = |shift: f64, out: bool| {
+            let sign = dot(h.outward, h.base_z).signum();
+            let along = if out { h.up + shift } else { -(h.down + shift) };
+            cad_model::Connector {
+                instance: h.instance,
+                at: Some(cad_model::ConnectorRef::Face { face: h.face.clone() }),
+                offset: along * sign,
+                reverse: (sign < 0.0) == out,
+                ..Default::default()
+            }
+        };
+        let base = |instance: u32| cad_model::Connector { instance, origin: [0.0; 3], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], ..Default::default() };
+        let mut place = |part: cad_model::PartId, name: String, conn: cad_model::Connector, instances: &mut Vec<cad_model::Instance>, mates: &mut Vec<cad_model::Mate>| {
+            let id = next;
+            next += 1;
+            instances.push(cad_model::Instance { id, studio: cad_model::split_tab_feature(part.feature).0, part, name: name.clone(), position: h.at, ..Default::default() });
+            let mid = next;
+            next += 1;
+            mates.push(cad_model::Mate { id: mid, name: format!("{name} en su agujero"), kind: cad_model::MateKind::Revolute, a: conn, b: base(id), ..Default::default() });
+        };
+        let wh = if washer { size.washer_h } else { 0.0 };
+        let bolt_name = format!("Tornillo Allen {}×{}", size.name, length);
+        let bolt = add_part(cad_model::PrimitiveShape::Bolt { size: size.name.into(), length, head: cad_model::BoltHead::Socket, modeled: false }, bolt_name.clone(), "#8a8f98")?;
+        place(bolt, bolt_name, hole_conn(wh, true), &mut instances, &mut mates);
+        if washer {
+            let name = format!("Arandela {}", size.name);
+            let w = add_part(cad_model::PrimitiveShape::Washer { size: size.name.into() }, name.clone(), "#b8bcc4")?;
+            place(w, name.clone(), hole_conn(0.0, true), &mut instances, &mut mates);
+            if nut {
+                place(w, name, hole_conn(0.0, false), &mut instances, &mut mates);
+            }
+        }
+        if nut {
+            let name = format!("Tuerca {}", size.name);
+            let n = add_part(cad_model::PrimitiveShape::Nut { size: size.name.into(), modeled: false }, name.clone(), "#9aa0a8")?;
+            place(n, name, hole_conn(wh, false), &mut instances, &mut mates);
+        }
+        if !nut && h.depth > length + 1e-6 {
+            notes.push(format!("{} de {length} mm en un agujero de {:.1} mm: queda corto para pasar (roscado en la pieza)", size.name, h.depth));
+        }
+    }
+    // Nombres repetidos: con su número
+    for k in 0..instances.len() {
+        let n = instances[..k].iter().chain(asm.instances.iter()).filter(|i| i.name == instances[k].name || i.name.starts_with(&format!("{} (", instances[k].name))).count();
+        if n > 0 {
+            instances[k].name = format!("{} ({})", instances[k].name, n + 1);
+        }
+    }
+    Ok(Fastened { instances, mates, next_id: next, tabs: tabs_view(&tabs), notes })
+}
+
+/// Una forma estándar en la pestaña «Piezas compradas» (una igual se reusa): su pestaña y la
+/// pieza con el número de todas las pestañas.
+fn add_purchased_shape(tabs: &mut Tabs, shape: cad_model::PrimitiveShape, name: &str, color: &str) -> Result<(TabId, cad_model::PartId), String> {
+    let studio = match tabs.tabs.iter().find(|t| t.name == PURCHASED_TAB && t.kind.is_design()) {
+        Some(t) => t.id,
+        None => {
+            let active = tabs.active;
+            let id = tabs.add_design(Some(PURCHASED_TAB.into()));
+            tabs.active = active;
+            id
+        }
+    };
+    let doc = tabs.design_mut(studio).ok_or("No se pudo crear la pestaña de piezas compradas")?;
+    let same = doc.features.iter().find(|f| matches!(&f.kind, FeatureKind::Primitive(p) if p.shape == shape && p.op == BodyOp::New)).map(|f| f.id);
+    let feature = match same {
+        Some(id) => id,
+        None => {
+            let k = doc.features.len() as f64;
+            let id = doc.add(FeatureKind::Primitive(cad_model::Primitive { shape, origin: [k * 120.0, 0.0, 0.0], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op: BodyOp::New, link: None, on: None }));
+            if let Some(f) = doc.get_mut(id) {
+                f.name = name.to_string();
+            }
+            let pid = cad_model::PartId { feature: id, index: 0 };
+            doc.parts.push(cad_model::PartProps { part: pid, name: None, color: Some(color.to_string()), hidden: false, material: None, purchased: Some(true) });
+            id
+        }
+    };
+    Ok((studio, cad_model::PartId { feature: cad_model::tab_feature(studio, feature), index: 0 }))
+}
+
 /// Pares de instancias que se pisan y cuánto volumen comparten (mm³).
 #[tauri::command]
 pub async fn cad_assembly_interference(app: AppHandle) -> Result<Vec<(u32, u32, f64)>, String> {
@@ -4303,6 +4572,10 @@ pub mod bridge {
             "cad_assembly_faces" => ok(assembly_faces_impl(state)?),
             "cad_assembly_connector" => ok(assembly_connector_impl(state, AsmPoint { face: Some(arg(args, "face")?), ..Default::default() })?),
             "cad_assembly_connector_at" => ok(assembly_connector_impl(state, arg(args, "at")?)?),
+            "cad_assembly_mate_faces" => ok(assembly_mate_faces_impl(state, arg(args, "mate")?)?),
+            "cad_assembly_drag" => ok(assembly_drag_impl(state, arg(args, "instance")?, arg(args, "grab")?, arg(args, "target")?)?),
+            "cad_assembly_hole_pattern" => ok(assembly_hole_pattern_impl(state, arg(args, "instance")?)?),
+            "cad_assembly_fasten" => ok(assembly_fasten_impl(state, arg(args, "faces")?, arg(args, "nut")?, arg(args, "washer")?, arg(args, "eye")?)?),
             "cad_assembly_sweep" => ok(assembly_sweep_impl(state, arg(args, "steps")?, arg(args, "fps")?)?),
             "cad_assembly_first_clash" => ok(assembly_first_clash_impl(state, arg(args, "mate")?, arg(args, "var")?, arg(args, "from")?, arg(args, "to")?, arg(args, "frames")?)?),
             "cad_assembly_interference" => ok(assembly_interference_impl(state)?),

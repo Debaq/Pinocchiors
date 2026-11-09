@@ -230,3 +230,61 @@ pub fn solve_with(ev: &Evaluation, asm: &Assembly) -> (Assembly, crate::assembly
     let sol = crate::assembly::solve(&a);
     (a, sol, lost)
 }
+
+/// Agujeros como el que sostiene a `instance` en la otra pieza de su unión (mismo radio y eje
+/// paralelo): la instancia agujereada y los corrimientos desde el agujero usado hasta cada uno de
+/// los otros, en coordenadas de esa pieza (para repetir la instancia sobre ellos, EN8).
+pub fn hole_offsets(ev: &Evaluation, asm: &Assembly, instance: u32) -> Result<(u32, Vec<P3>), String> {
+    let (ready, _) = prepared(ev, asm);
+    let (holder, c) = ready
+        .mates
+        .iter()
+        .filter(|m| !m.suppressed)
+        .find_map(|m| {
+            if m.b.instance == instance && m.a.radius > 0.0 {
+                Some((m.a.instance, m.a.clone()))
+            } else if m.a.instance == instance && m.b.radius > 0.0 {
+                Some((m.b.instance, m.b.clone()))
+            } else {
+                None
+            }
+        })
+        .ok_or("la pieza no está unida a un agujero (una unión sobre una cara cilíndrica o un borde redondo)")?;
+    let part = instance_part(ev, &ready, holder).ok_or("la pieza agujereada ya no existe")?;
+    let z = normalize(c.z);
+    let tol = (c.radius * 1e-3).max(1e-4);
+    let mut out: Vec<P3> = Vec::new();
+    let mut push = |p: P3| {
+        // El corrimiento, a la misma altura que el agujero usado
+        let d = sub(p, c.origin);
+        let d = sub(d, scale(z, dot(d, z)));
+        if norm(d) > 1e-3 && !out.iter().any(|o| norm(sub(*o, d)) < 1e-3) {
+            out.push(d);
+        }
+    };
+    for f in 0..part.shape.face_count() {
+        let Ok(info) = part.shape.face_info(f) else { continue };
+        if info.surface != SurfaceKind::Cylinder || info.radius.is_none_or(|r| (r - c.radius).abs() > tol) {
+            continue;
+        }
+        let Some(ax) = info.axis else { continue };
+        if dot(normalize(ax.dir), z).abs() < 0.999 {
+            continue;
+        }
+        push(ax.origin);
+    }
+    for e in 0..part.shape.edge_count() {
+        let Ok(info) = part.shape.edge_info(e) else { continue };
+        let Some((center, axis, r)) = info.circle else { continue };
+        if (r - c.radius).abs() > tol || dot(normalize(axis), z).abs() < 0.999 {
+            continue;
+        }
+        push(center);
+    }
+    if out.is_empty() {
+        return Err("la pieza agujereada no tiene otros agujeros iguales".into());
+    }
+    // De cerca a lejos
+    out.sort_by(|a, b| norm(*a).total_cmp(&norm(*b)));
+    Ok((holder, out))
+}

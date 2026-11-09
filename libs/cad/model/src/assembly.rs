@@ -1287,6 +1287,50 @@ fn nullspace(j: &DMatrix<f64>, n: usize) -> DMatrix<f64> {
     out
 }
 
+/// Arrastre general (EN6): la instancia va hacia `target` agarrada del punto `grab` (los dos en
+/// mm del mundo), respetando sus uniones. Primero se tira de ella con una rótula fantasma hasta
+/// el punto pedido (el solver reparte entre esa y las uniones) y después se resuelve sin la
+/// fantasma desde ahí, así lo que queda cumple todas las uniones y está lo más cerca posible.
+pub fn drag(asm: &Assembly, instance: u32, grab: P3, target: P3) -> AssemblySolution {
+    const PHANTOM: u32 = u32::MAX;
+    let mut cur = asm.clone();
+    // Sin ninguna fija, la primera queda quieta (como en `solve`): la fantasma no la suelta
+    if !cur.instances.iter().any(|i| i.fixed && !i.suppressed)
+        && let Some(first) = cur.instances.iter_mut().find(|i| !i.suppressed)
+    {
+        first.fixed = true;
+    }
+    let start = solve(&cur);
+    for (id, p, r) in &start.poses {
+        if let Some(i) = cur.instances.iter_mut().find(|i| i.id == *id) {
+            i.position = *p;
+            i.rotation = *r;
+        }
+    }
+    let Some(pose) = start.poses.iter().find(|p| p.0 == instance).map(|p| Pose::new(p.1, p.2)) else { return start };
+    let local = pose.inverse().apply(grab);
+    let mut pulled = cur.clone();
+    pulled.instances.push(Instance { id: PHANTOM, fixed: true, ..Default::default() });
+    pulled.mates.push(Mate {
+        id: PHANTOM,
+        kind: MateKind::Spherical,
+        a: Connector { instance: PHANTOM, origin: target, z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], ..Default::default() },
+        b: Connector { instance, origin: local, z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], ..Default::default() },
+        ..Default::default()
+    });
+    let mid = solve(&pulled);
+    for (id, p, r) in &mid.poses {
+        if let Some(i) = cur.instances.iter_mut().find(|i| i.id == *id) {
+            i.position = *p;
+            i.rotation = *r;
+        }
+    }
+    let mut sol = solve(&cur);
+    // Las poses de las que el arrastre fijó por su cuenta siguen siendo las del ensamble
+    sol.poses.retain(|p| p.0 != PHANTOM);
+    sol
+}
+
 /// Qué se recorre de una unión al animarla.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
