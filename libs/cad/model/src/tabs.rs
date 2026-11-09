@@ -533,6 +533,7 @@ impl Tabs {
             ni.position = p.t;
             ni.rotation = p.rotation_vector();
             ni.hidden = si.hidden || carrier.hidden;
+            ni.ghost = si.ghost || carrier.ghost;
             if si.fixed || Some(si.id) == anchor {
                 members.push(nid);
             }

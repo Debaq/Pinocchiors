@@ -84,6 +84,8 @@ export interface ContextPanelProps {
   onHoverNode?: (nodeId: string | null) => void;
   onAddNode?: (groupId: string) => void;
   onFabricateNode?: (nodeId: string) => void;
+  /** Botón de translúcida de las piezas del ensamble */
+  onToggleGhost?: (nodeId: string) => void;
 
   // Pestaña de información
   stats?: SceneStats;
@@ -264,6 +266,7 @@ export const ContextPanel: Component<ContextPanelProps> = (props) => {
                 onHoverNode={props.onHoverNode}
                 onAddNode={props.onAddNode}
                 onFabricateNode={props.onFabricateNode}
+                onToggleGhost={props.onToggleGhost}
               />
             </Show>
           </div>

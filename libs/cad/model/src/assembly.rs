@@ -171,6 +171,9 @@ pub struct Instance {
     /// Oculta: se resuelve pero no se dibuja.
     #[serde(default, skip_serializing_if = "is_false")]
     pub hidden: bool,
+    /// Translúcida: se dibuja transparente y no se elige (para ver y tocar lo de atrás).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub ghost: bool,
     /// Suprimida: como si no estuviera (ni se resuelve, ni sus uniones, ni se exporta).
     #[serde(default, skip_serializing_if = "is_false")]
     pub suppressed: bool,

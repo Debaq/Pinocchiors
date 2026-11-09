@@ -430,6 +430,16 @@ export const InstanceExtras: Component<{ store: CadStore; ui: CadUi; inst: AsmIn
         >
           {props.inst.hidden ? <Icons.EyeSlash size={11} /> : <Icons.Eye size={11} />}
         </IconButton>
+        <IconButton
+          aria-label={props.inst.ghost ? tl("Volver a verla sólida") : tl("Verla translúcida (se ve y se toca lo de atrás)")}
+          aria-pressed={!!props.inst.ghost}
+          size="sm"
+          variant="ghost"
+          active={!!props.inst.ghost}
+          onClick={() => edit((i) => (i.ghost = !i.ghost || undefined))}
+        >
+          <Icons.XRay size={11} />
+        </IconButton>
         <Checkbox small label={tl("Suprimir")} checked={!!props.inst.suppressed} onChange={(v) => edit((i) => (i.suppressed = v || undefined))} />
         <Tooltip content={tl("Color propio en el ensamble")}>
           <input

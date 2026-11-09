@@ -26,6 +26,8 @@ export interface PartStyle {
   edges: [number, number];
   color: number;
   hidden: boolean;
+  /** Translúcida: se ve transparente, sin aristas, y no se elige (lo de atrás sí) */
+  ghost?: boolean;
   /** Superficie sin espesor: se ve de los dos lados */
   surface?: boolean;
 }
@@ -254,6 +256,8 @@ export class CadViewer {
   private frame = 0;
 
   private body?: THREE.Mesh;
+  /** Las piezas translúcidas (comparte los vértices y colores de `body`; no se elige) */
+  private bodyGhost?: THREE.Mesh;
   /** Modelo oculto (dibujando un sketch con «ocultar el modelo») */
   private bodyHidden = false;
   private bodyEdges?: THREE.LineSegments;
@@ -671,6 +675,12 @@ export class CadViewer {
       (this.body.material as THREE.Material).dispose();
       this.body = undefined;
     }
+    if (this.bodyGhost) {
+      this.scene.remove(this.bodyGhost);
+      this.bodyGhost.geometry.dispose();
+      (this.bodyGhost.material as THREE.Material).dispose();
+      this.bodyGhost = undefined;
+    }
     if (this.bodyEdges) {
       this.scene.remove(this.bodyEdges);
       this.bodyEdges.geometry.dispose();
@@ -681,16 +691,23 @@ export class CadViewer {
     const data = this.bodyData;
     this.hiddenFaces = new Set();
     const hiddenEdges = (this.hiddenEdges = new Set<number>());
+    // Las translúcidas tampoco se eligen ni muestran aristas: se dibujan aparte
+    const ghostFaces = new Set<number>();
     for (const p of this.partStyles) {
-      if (!p.hidden) continue;
-      for (let f = p.faces[0]; f < p.faces[1]; f++) this.hiddenFaces.add(f);
+      if (!p.hidden && !p.ghost) continue;
+      for (let f = p.faces[0]; f < p.faces[1]; f++) {
+        this.hiddenFaces.add(f);
+        if (!p.hidden) ghostFaces.add(f);
+      }
       for (let e = p.edges[0]; e < p.edges[1]; e++) hiddenEdges.add(e);
     }
     if (data) {
       // Triángulos de las caras visibles (y de qué cara es cada uno, para elegir)
       const idx: number[] = [];
       const triFace: number[] = [];
+      const ghostIdx: number[] = [];
       for (let t = 0; t < data.triangleFace.length; t++) {
+        if (ghostFaces.has(data.triangleFace[t])) ghostIdx.push(data.indices[t * 3], data.indices[t * 3 + 1], data.indices[t * 3 + 2]);
         if (this.hiddenFaces.has(data.triangleFace[t])) continue;
         idx.push(data.indices[t * 3], data.indices[t * 3 + 1], data.indices[t * 3 + 2]);
         triFace.push(data.triangleFace[t]);
@@ -715,6 +732,19 @@ export class CadViewer {
       this.body = new THREE.Mesh(g, m);
       this.body.renderOrder = 1;
       this.scene.add(this.body);
+      if (ghostIdx.length) {
+        // Mismos vértices y colores (los pinta `paintBody`); transparente y sin tapar lo de atrás
+        const gg = new THREE.BufferGeometry();
+        for (const name of ["position", "normal", "color"]) gg.setAttribute(name, g.getAttribute(name));
+        gg.setIndex(new THREE.BufferAttribute(Uint32Array.from(ghostIdx), 1));
+        gg.computeBoundingSphere();
+        this.bodyGhost = new THREE.Mesh(
+          gg,
+          new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.1, roughness: 0.55, transparent: true, opacity: 0.22, depthWrite: false, side: THREE.DoubleSide }),
+        );
+        this.bodyGhost.renderOrder = 4;
+        this.scene.add(this.bodyGhost);
+      }
 
       // Vértices: extremos de las aristas visibles, sin repetir
       const ends: THREE.Vector3[] = [];
@@ -766,7 +796,7 @@ export class CadViewer {
   }
 
   private applyBodyHidden() {
-    for (const o of [this.body, this.bodyEdges, this.sectionGroup]) if (o) o.visible = !this.bodyHidden;
+    for (const o of [this.body, this.bodyGhost, this.bodyEdges, this.sectionGroup]) if (o) o.visible = !this.bodyHidden;
   }
 
   /**
@@ -2095,7 +2125,7 @@ export class CadViewer {
 
   private applySection() {
     const planes = this.section ? [this.section] : [];
-    for (const o of [this.body, this.bodyEdges]) if (o) (o.material as THREE.Material).clippingPlanes = planes;
+    for (const o of [this.body, this.bodyGhost, this.bodyEdges]) if (o) (o.material as THREE.Material).clippingPlanes = planes;
     for (const group of [this.tool, this.compare])
       group?.traverse((o) => {
         if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments) (o.material as THREE.Material).clippingPlanes = planes;

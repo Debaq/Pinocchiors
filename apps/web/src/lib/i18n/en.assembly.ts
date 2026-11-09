@@ -122,4 +122,6 @@ export const en_assembly: Record<string, string> = {
   "Solo se edita en contexto una pieza de un diseño (no un subensamble)": "Only a part of a design can be edited in context (not a subassembly)",
   "La instancia no está en el ensamble": "The instance isn't in the assembly",
   "{n} piezas de subensambles flexibles se mueven aquí (se editan en su pestaña)": "{n} parts of flexible subassemblies move here (edit them in their tab)",
+  "Volver a verla sólida": "Show it solid again",
+  "Verla translúcida (se ve y se toca lo de atrás)": "See it translucent (you can see and pick what's behind)",
 };

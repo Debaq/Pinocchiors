@@ -39,6 +39,8 @@ export interface SceneNode {
   addHint?: string;
   /** Botón de imprimir: lleva la pieza a Fabricar */
   fabricable?: boolean;
+  /** Botón de translúcida (piezas del ensamble): `true` si lo está */
+  ghost?: boolean;
 }
 
 /** Elemento del CAD ya armado por App (ids `plane-xy`, `cad-<id>`, `part-<op>-<n>`…) */

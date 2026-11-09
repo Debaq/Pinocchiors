@@ -2023,6 +2023,8 @@ export const App: Component = () => {
         const tab = cad.tabs().tabs.find((x) => x.id === studioOf(o));
         // De otra pestaña que sigue: se ve tal cual (su pieza no está en el recálculo de esta)
         const other = otherTab(o);
+        // En un ensamble no: cada pieza puesta tiene su propia fila (`instanceRows`)
+        if (other && inDesign() && cad.activeTab()?.kind === "assembly") return [];
         if (other) {
           return [{
             id: `obj-${o.id}`,
@@ -2107,32 +2109,33 @@ export const App: Component = () => {
   };
 
   /**
-   * En un ensamble, las piezas compradas (motores, placas, imanes de la
-   * biblioteca) no son objetos: cada instancia suya va en su propia fila
-   * (`inst-<n>`) para verla y quitarla del ensamble
+   * En un ensamble, cada pieza puesta va en su propia fila (`inst-<n>`): clic
+   * la elige como en el visor, el ojo la oculta, el de rayos X la deja
+   * translúcida y la papelera la saca del ensamble. Las compradas (motores,
+   * placas, imanes de la biblioteca) salen igual.
    */
-  const purchasedRows = (): ObjectRow[] => {
-    if (cad.activeTab()?.kind !== "assembly") return [];
+  const instanceRows = (): ObjectRow[] => {
+    if (!inDesign() || cad.activeTab()?.kind !== "assembly") return [];
     const doc = cad.doc();
     const parts = cad.result()?.parts ?? [];
-    return (doc?.assembly?.instances ?? []).filter((inst) => inst.id < INLINE_BASE).flatMap((inst): ObjectRow[] => {
+    return (doc?.assembly?.instances ?? []).filter((inst) => inst.id < INLINE_BASE).map((inst): ObjectRow => {
       const i = parts.findIndex((p) => partKey(p.id) === partKey(inst.part));
       const view = parts[i];
-      if (!view?.purchased) return [];
       const tab = cad.tabs().tabs.find((x) => x.id === instanceStudio(inst));
-      return [{
+      return {
         id: `inst-${inst.id}`,
         type: "part",
         label: inst.name,
         tab: tab && { id: tab.id, name: tBackend(tab.name) },
         active: false,
         selected: cadUi.asmPicked().includes(inst.id),
-        visible: true,
-        readonly: true,
+        visible: !inst.hidden,
+        ghost: !!inst.ghost,
         deletable: true,
-        color: partColor(doc, view, i),
-        hint: t("Pieza comprada: no se fabrica"),
-      }];
+        muted: !!inst.suppressed,
+        color: inst.color ?? (view ? partColor(doc, view, i) : undefined),
+        hint: inst.suppressed ? t("Suprimida") : view?.purchased ? t("Pieza comprada: no se fabrica") : undefined,
+      };
     });
   };
   /** `inst-<n>` → instancia del ensamble */
@@ -2565,7 +2568,7 @@ export const App: Component = () => {
     selectedNode: selectedFileNode(),
     quadObjects: quadObjectRows(),
     cad: cadOutline(),
-    objects: [...objectRows(), ...purchasedRows()],
+    objects: [...objectRows(), ...instanceRows()],
     drawings: cad.doc() ? drawingTree(drawingSheets(cad.doc()), cadUi.drawingOpen() ? cadUi.activeDrawing() : undefined, cadUi.drawingSel()) : undefined,
   });
 
@@ -8437,7 +8440,25 @@ export const App: Component = () => {
   // OUTLINER HANDLERS
   // ═══════════════════════════════════════════════════════════════════════════
 
+  /** Pieza del ensamble translúcida o sólida (se guarda con el ensamble; deshacible) */
+  const handleToggleGhost = (nodeId: string) => {
+    const instance = instanceOfNode(nodeId);
+    if (instance === undefined) return;
+    void cad.editAssembly((a) => {
+      const inst = a.instances.find((i) => i.id === instance);
+      if (inst) inst.ghost = !inst.ghost || undefined;
+    });
+  };
+
   const handleToggleVisibility = (nodeId: string) => {
+    const instance = instanceOfNode(nodeId);
+    if (instance !== undefined) {
+      void cad.editAssembly((a) => {
+        const inst = a.instances.find((i) => i.id === instance);
+        if (inst) inst.hidden = !inst.hidden || undefined;
+      });
+      return;
+    }
     const dn = drawingNode(nodeId);
     if (dn) {
       const el = dn.element;
@@ -10319,6 +10340,7 @@ export const App: Component = () => {
             }}
             onAddNode={handleAddNode}
             onFabricateNode={(id) => void handleFabricateNode(id)}
+            onToggleGhost={handleToggleGhost}
             history={history}
             stats={{
               fileName: fileName(),

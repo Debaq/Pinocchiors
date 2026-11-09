@@ -19,6 +19,8 @@ export interface SceneOutlinerProps {
   onAddNode?: (groupId: string) => void;
   /** Botón de imprimir de una pieza (`fabricable`): la lleva a Fabricar */
   onFabricateNode?: (nodeId: string) => void;
+  /** Botón de translúcida de una pieza del ensamble (`ghost` definido) */
+  onToggleGhost?: (nodeId: string) => void;
 }
 
 const nodeIcon = (type: SceneNode["type"]) => {
@@ -61,6 +63,7 @@ const OutlinerNode: Component<{
   onHoverNode?: (nodeId: string | null) => void;
   onAddNode?: (groupId: string) => void;
   onFabricateNode?: (nodeId: string) => void;
+  onToggleGhost?: (nodeId: string) => void;
   isExpanded: (node: SceneNode) => boolean;
   onToggleExpanded: (node: SceneNode) => void;
 }> = (props) => {
@@ -188,6 +191,22 @@ const OutlinerNode: Component<{
           </button>
         </Show>
 
+        {/* Translúcida (piezas del ensamble): siempre a la vista si lo está */}
+        <Show when={props.node.ghost !== undefined && props.onToggleGhost}>
+          <button
+            class={clsx(
+              "w-4 h-4 flex items-center justify-center transition-opacity",
+              props.node.ghost ? "text-accent" : "opacity-0 group-hover:opacity-100 text-text-muted hover:text-text"
+            )}
+            title={props.node.ghost ? t("Volver a verla sólida") : t("Verla translúcida (se ve y se toca lo de atrás)")}
+            aria-label={props.node.ghost ? t("Volver a verla sólida") : t("Verla translúcida (se ve y se toca lo de atrás)")}
+            aria-pressed={props.node.ghost}
+            onClick={(e) => { e.stopPropagation(); props.onToggleGhost?.(props.node.id); }}
+          >
+            <Icons.XRay size={12} />
+          </button>
+        </Show>
+
         {/* Visibility toggle: las capas ocultas lo muestran siempre */}
         <Show when={!props.node.readonly}>
           <button
@@ -224,6 +243,7 @@ const OutlinerNode: Component<{
               onHoverNode={props.onHoverNode}
               onAddNode={props.onAddNode}
               onFabricateNode={props.onFabricateNode}
+              onToggleGhost={props.onToggleGhost}
               isExpanded={props.isExpanded}
               onToggleExpanded={props.onToggleExpanded}
             />
@@ -303,6 +323,7 @@ export const SceneOutliner: Component<SceneOutlinerProps> = (props) => {
             onHoverNode={props.onHoverNode}
             onAddNode={props.onAddNode}
             onFabricateNode={props.onFabricateNode}
+            onToggleGhost={props.onToggleGhost}
             isExpanded={expandedNow}
             onToggleExpanded={onToggleExpanded}
           />

@@ -966,7 +966,7 @@ export const CadView: Component<CadViewProps> = (props) => {
           const k = parts.findIndex((p) => inst && samePart(p.id, inst.part));
           const own = inst?.color ?? (k >= 0 ? partColor(doc, parts[k], k) : "#9aa4b8");
           const color = red.has(id) ? themeHex("error") : failing.has(id) ? themeHex("warning") : parseInt(own.slice(1), 16);
-          return { faces: [a, b] as [number, number], edges: [e0 ?? 0, e1 ?? 0] as [number, number], color, hidden: !!inst?.hidden };
+          return { faces: [a, b] as [number, number], edges: [e0 ?? 0, e1 ?? 0] as [number, number], color, hidden: !!inst?.hidden, ghost: !!inst?.ghost };
         }),
       );
     }),

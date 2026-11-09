@@ -1520,6 +1520,8 @@ export interface AsmInstance {
   fixed: boolean;
   /** Se resuelve pero no se dibuja */
   hidden?: boolean;
+  /** Translúcida: se ve transparente y no se elige (para ver y tocar lo de atrás) */
+  ghost?: boolean;
   /** Como si no estuviera */
   suppressed?: boolean;
   /** Color propio en el ensamble ("#rrggbb") */
