@@ -11,6 +11,7 @@ int32_t cad_available(void) { return 0; }
 const char* cad_occt_version(void) { return ""; }
 void cad_shape_free(CadShape* s) { (void)s; }
 CadShape* cad_shape_clone(const CadShape* s) { (void)s; FAIL_PTR; }
+CadShape* cad_shape_deep_copy(const CadShape* s) { (void)s; FAIL_PTR; }
 int32_t cad_shape_kind(const CadShape* s) { (void)s; FAIL_INT; }
 int32_t cad_shape_is_valid(const CadShape* s) { (void)s; FAIL_INT; }
 CadShape* cad_make_face(const int32_t* k, const int32_t* c, const double* d, const int32_t* l, int32_t n) { (void)k; (void)c; (void)d; (void)l; (void)n; FAIL_PTR; }
@@ -80,12 +81,13 @@ int32_t cad_count_solids(const CadShape* s) { (void)s; FAIL_INT; }
 double cad_ray_hit(const CadShape* s, const double* o, const double* d) { (void)s; (void)o; (void)d; return -1.0; }
 int32_t cad_wire_sample(const CadShape* w, int32_t n, double* p, double* t) { (void)w; (void)n; (void)p; (void)t; FAIL_INT; }
 CadShape* cad_make_helix(const double* o, const double* d, double r, double p, double t, int32_t l) { (void)o; (void)d; (void)r; (void)p; (void)t; (void)l; FAIL_PTR; }
+CadShape* cad_make_helix_parts(const double* o, const double* d, const double* x, const double* di, const double* p, const double* t, int32_t n, int32_t l) { (void)o; (void)d; (void)x; (void)di; (void)p; (void)t; (void)n; (void)l; FAIL_PTR; }
 CadShape* cad_make_thread(const double* o, const double* d, const double* x, double a, double b, double p, double l, int32_t h, int32_t c) { (void)o; (void)d; (void)x; (void)a; (void)b; (void)p; (void)l; (void)h; (void)c; FAIL_PTR; }
 CadShape* cad_make_thread_trapezoid(const double* o, const double* d, const double* x, double a, double b, double lead, int32_t n, double hi, double ho, double l, int32_t h) { (void)o; (void)d; (void)x; (void)a; (void)b; (void)lead; (void)n; (void)hi; (void)ho; (void)l; (void)h; FAIL_PTR; }
 CadShape* cad_thicken(const CadShape* f, double t) { (void)f; (void)t; FAIL_PTR; }
 CadShape* cad_offset_shape(const CadShape* s, double d) { (void)s; (void)d; FAIL_PTR; }
 CadShape* cad_fill(const CadShape* const* e, const CadShape* const* f, int32_t n, const double* p, int32_t np) { (void)e; (void)f; (void)n; (void)p; (void)np; FAIL_PTR; }
-CadShape* cad_grid_face(const double* g, int32_t r, int32_t c, int32_t s, const double* b, int32_t nb) { (void)g; (void)r; (void)c; (void)s; (void)b; (void)nb; FAIL_PTR; }
+CadShape* cad_grid_face(const double* g, int32_t r, int32_t c, double t, const double* b, int32_t nb) { (void)g; (void)r; (void)c; (void)t; (void)b; (void)nb; FAIL_PTR; }
 CadShape* cad_sew(const CadShape* const* s, int32_t n, double t, int32_t solid) { (void)s; (void)n; (void)t; (void)solid; FAIL_PTR; }
 CadShape* cad_split_by(const CadShape* s, const CadShape* const* t, int32_t n) { (void)s; (void)t; (void)n; FAIL_PTR; }
 CadShape* cad_draft_prism(const CadShape* f, double h, double a) { (void)f; (void)h; (void)a; FAIL_PTR; }

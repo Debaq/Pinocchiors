@@ -915,19 +915,20 @@ pub struct ScanSurface {
     pub interior: Vec<P3>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub close_plane: Option<Plane>,
-    /// Red de puntos de la piel: si está, la superficie va por la red (Gordon en
-    /// OCCT 8) recortada por el borde, en vez del relleno por `interior`
+    /// Grilla de puntos de la piel: si está, la superficie es una B-spline por
+    /// la grilla recortada por el borde, en vez del relleno por `interior`
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grid: Option<ScanGrid>,
 }
 
-/// Grilla `rows × cols` de puntos de la piel (fila a fila): las curvas de la
-/// superficie van cada `step` filas y columnas.
+/// Grilla `rows × cols` de puntos de la piel (fila a fila). La superficie pasa
+/// por ellos (`tol` 0) o a menos de `tol` mm (no copia el ruido del escaneo).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ScanGrid {
     pub rows: usize,
     pub cols: usize,
-    pub step: usize,
+    #[serde(default)]
+    pub tol: f64,
     pub points: Vec<P3>,
 }
 
@@ -1217,7 +1218,10 @@ pub enum FeatureKind {
     Hole(Hole),
     /// Curva helicoidal de referencia (camino de resortes y roscas). Con
     /// `radius2`, cónica (el radio pasa de `radius` a `radius2`); con `flat`,
-    /// espiral plana de Arquímedes (sin avance: `pitch` no cuenta).
+    /// espiral plana de Arquímedes (sin avance: `pitch` no cuenta). Con
+    /// `pitch2`, paso variable (de `pitch` a `pitch2`); con `end_turns`,
+    /// extremos cerrados de resorte: esas vueltas en cada punta con paso
+    /// `end_pitch`, además de las `turns` activas.
     Helix {
         axis: AxisSpec,
         radius: f64,
@@ -1229,6 +1233,12 @@ pub enum FeatureKind {
         radius2: Option<f64>,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         flat: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pitch2: Option<f64>,
+        #[serde(default, skip_serializing_if = "is_zero")]
+        end_turns: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        end_pitch: Option<f64>,
     },
     /// Mueve caras a lo largo de su normal (afuera suma, adentro resta); las curvas se
     /// corren por su normal en cada punto (un agujero se achica o se agranda).

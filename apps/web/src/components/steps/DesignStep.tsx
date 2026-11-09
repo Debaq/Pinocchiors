@@ -4787,11 +4787,41 @@ export const FeatureEditor: Component<{
                   {field(tl("Radio final"), "kind.radius2", k().radius2 ?? k().radius, (x, v) => x.type === "helix" && (x.radius2 = v), "mm")}
                 </Show>
                 <Show when={!k().flat}>
-                  {field(tl("Paso"), "kind.pitch", k().pitch, (x, v) => x.type === "helix" && (x.pitch = v), "mm")}
+                  {field(k().pitch2 != null ? tl("Paso inicial") : tl("Paso"), "kind.pitch", k().pitch, (x, v) => x.type === "helix" && (x.pitch = v), "mm")}
+                  <Checkbox
+                    small
+                    label={tl("Paso variable")}
+                    checked={k().pitch2 != null}
+                    onChange={(c) => update((x) => x.type === "helix" && (x.pitch2 = c ? x.pitch * 2 : null))}
+                  />
+                  <Show when={k().pitch2 != null}>
+                    {field(tl("Paso final"), "kind.pitch2", k().pitch2 ?? k().pitch, (x, v) => x.type === "helix" && (x.pitch2 = v), "mm")}
+                  </Show>
                 </Show>
-                {field(tl("Vueltas"), "kind.turns", k().turns, (x, v) => x.type === "helix" && (x.turns = v))}
+                {field((k().end_turns ?? 0) > 0 ? tl("Vueltas activas") : tl("Vueltas"), "kind.turns", k().turns, (x, v) => x.type === "helix" && (x.turns = v))}
+                <Show when={!k().flat}>
+                  <Checkbox
+                    small
+                    label={tl("Extremos cerrados (resorte de compresión)")}
+                    checked={(k().end_turns ?? 0) > 0}
+                    onChange={(c) =>
+                      update((x) => {
+                        if (x.type !== "helix") return;
+                        x.end_turns = c ? 1 : undefined;
+                        x.end_pitch = c ? (x.end_pitch ?? x.pitch / 4) : undefined;
+                      })
+                    }
+                  />
+                  <Show when={(k().end_turns ?? 0) > 0}>
+                    {field(tl("Vueltas de cada extremo"), "kind.end_turns", k().end_turns ?? 1, (x, v) => x.type === "helix" && (x.end_turns = v))}
+                    {field(tl("Paso de los extremos"), "kind.end_pitch", k().end_pitch ?? k().pitch / 4, (x, v) => x.type === "helix" && (x.end_pitch = v), "mm")}
+                  </Show>
+                </Show>
                 <Checkbox small label={tl("A izquierdas")} checked={k().left} onChange={(c) => update((x) => x.type === "helix" && (x.left = c))} />
                 <p class="text-[11px] text-text-dim">{tl("Para un resorte: un círculo en un plano que pase por el eje, en el arranque de la hélice, y un Barrido con la hélice como camino.")}</p>
+                <Show when={(k().end_turns ?? 0) > 0}>
+                  <p class="text-[11px] text-text-dim">{tl("Extremos cerrados: usar como paso de los extremos el grosor del alambre, así las vueltas de las puntas quedan apoyadas.")}</p>
+                </Show>
               </>
             )}
           </Match>

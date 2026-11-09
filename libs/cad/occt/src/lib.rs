@@ -909,6 +909,19 @@ impl Shape {
         wrap(unsafe { ffi::cad_make_helix(axis.origin.as_ptr(), axis.dir.as_ptr(), radius, pitch, turns, left as i32) })
     }
 
+    /// Hélice por tramos (OCCT 8, TKHelix): el tramo `i` tiene `turns[i]`
+    /// vueltas de paso `pitches[i]` y su diámetro pasa de `diams[i]` a
+    /// `diams[i + 1]`: resortes cónicos, de paso variable o con extremos
+    /// cerrados. Arranca en `origin + r·x`. Error con OCCT anterior a la 8.
+    pub fn helix_parts(axis: Axis, x: P3, diams: &[f64], pitches: &[f64], turns: &[f64], left: bool) -> Result<Shape> {
+        if pitches.len() != turns.len() || diams.len() != turns.len() + 1 {
+            return Err(Error("hélice por tramos: hacen falta n pasos, n vueltas y n + 1 diámetros".into()));
+        }
+        wrap(unsafe {
+            ffi::cad_make_helix_parts(axis.origin.as_ptr(), axis.dir.as_ptr(), x.as_ptr(), diams.as_ptr(), pitches.as_ptr(), turns.as_ptr(), turns.len() as i32, left as i32)
+        })
+    }
+
     /// Macho roscado: núcleo de `r_minor` más el filete ISO de 60° hasta
     /// `r_major`, de `length` desde el origen del marco a lo largo de su Z
     /// (puntas planas). La cresta pasa por `origin + r·x`: la X del marco es
@@ -949,6 +962,13 @@ impl Shape {
         wrap(unsafe { ffi::cad_offset_shape(self.ptr(), distance) })
     }
 
+    /// Copia con su propia topología y geometría (sin la triangulación): la
+    /// forma no es `Sync` (teselar escribe en ella), así que para trabajar en
+    /// paralelo cada hilo lleva su copia.
+    pub fn deep_copy(&self) -> Result<Shape> {
+        wrap(unsafe { ffi::cad_shape_deep_copy(self.ptr()) })
+    }
+
     /// Superficie que llena un borde cerrado: cada arista con su cara vecina
     /// (tangente a ella) o sola (solo pasa por el borde); y por los puntos.
     pub fn fill(boundary: &[(Shape, Option<Shape>)], points: &[P3]) -> Result<Shape> {
@@ -958,17 +978,16 @@ impl Shape {
         wrap(unsafe { ffi::cad_fill(edges.as_ptr(), faces.as_ptr(), edges.len() as i32, pts.as_ptr(), points.len() as i32) })
     }
 
-    /// Superficie por una red de puntos `rows × cols` (fila a fila) recortada
-    /// por el borde cerrado. Con OCCT 8 es una superficie de Gordon por las
-    /// curvas de cada `step` filas y columnas (cada una por todos los puntos de
-    /// su fila o columna); antes, una B-spline por la grilla.
-    pub fn grid_face(grid: &[P3], rows: usize, cols: usize, step: usize, boundary: &[P3]) -> Result<Shape> {
+    /// Superficie por una grilla de puntos `rows × cols` (fila a fila)
+    /// recortada por el borde cerrado: B-spline que pasa por los puntos
+    /// (`tol <= 0`) o a menos de `tol` de ellos.
+    pub fn grid_face(grid: &[P3], rows: usize, cols: usize, tol: f64, boundary: &[P3]) -> Result<Shape> {
         if grid.len() != rows * cols {
-            return Err(Error("superficie por red: la grilla no tiene rows × cols puntos".into()));
+            return Err(Error("superficie por grilla: no tiene rows × cols puntos".into()));
         }
         let g: Vec<f64> = grid.iter().flatten().copied().collect();
         let b: Vec<f64> = boundary.iter().flatten().copied().collect();
-        wrap(unsafe { ffi::cad_grid_face(g.as_ptr(), rows as i32, cols as i32, step as i32, b.as_ptr(), boundary.len() as i32) })
+        wrap(unsafe { ffi::cad_grid_face(g.as_ptr(), rows as i32, cols as i32, tol, b.as_ptr(), boundary.len() as i32) })
     }
 
     /// Parte la forma con las herramientas (caras, superficies o sólidos); el

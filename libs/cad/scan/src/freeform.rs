@@ -16,7 +16,7 @@ pub struct FreeZone {
     /// Puntos de la zona, de a lo sumo `max_interior`, para que la superficie los siga
     pub interior: Vec<P3>,
     pub faces: Vec<u32>,
-    /// Red de puntos de la piel, si la superficie por red se pega más al
+    /// Grilla de puntos de la piel, si la superficie por grilla se pega más al
     /// escaneo que el relleno (ver `fit_surface`)
     pub grid: Option<ScanGrid>,
 }
@@ -57,8 +57,8 @@ impl ScanMesh {
 
 impl FreeZone {
     /// Elige la superficie que más se pega al escaneo: el relleno de OpenCASCADE
-    /// por puntos de adentro o la red de curvas de la piel (`skin_grid`, Gordon
-    /// con OCCT 8). Para el relleno, los puntos de adentro que mejor lo ajustan:
+    /// por puntos de adentro o la B-spline por una grilla de la piel
+    /// (`skin_grid`) recortada por el borde. Para el relleno, los puntos de adentro que mejor lo ajustan:
     /// con demasiados o muy pocos puntos la cara sale inválida o se aparta del
     /// escaneo, así que prueba varias cantidades (puntos más
     /// lejanos entre sí) y se queda con la válida de menor desviación. Devuelve
@@ -115,13 +115,18 @@ impl FreeZone {
                 best = Some((rms, count));
             }
         }
-        // Superficie por una red de curvas de la piel (Gordon con OCCT 8),
-        // recortada por el borde: se queda si se aparta menos que el relleno
+        // B-spline por una grilla de la piel, recortada por el borde: que pase
+        // por los puntos o, más densa, que los aproxime (sin copiar el ruido)
         self.grid = None;
         let mut best_grid: Option<(f64, ScanGrid)> = None;
-        for curves in [4usize, 6] {
-            let Some(grid) = self.skin_grid(mesh, curves, 4) else { break };
-            let Ok(face) = Shape::grid_face(&grid.points, grid.rows, grid.cols, grid.step, &self.boundary) else { continue };
+        let diag = mesh.diagonal();
+        for (n, tol) in [(13usize, 0.0), (21, 0.0), (31, diag * 2e-4)] {
+            let Some(mut grid) = self.skin_grid(mesh, n) else { break };
+            grid.tol = tol;
+            let Ok(face) = Shape::grid_face(&grid.points, grid.rows, grid.cols, grid.tol, &self.boundary) else { continue };
+            if !face.is_valid() {
+                continue;
+            }
             let Some(rms) = deviation(&face) else { continue };
             if best_grid.as_ref().is_none_or(|(b, _)| rms < *b) {
                 best_grid = Some((rms, grid));
@@ -145,12 +150,14 @@ impl FreeZone {
         }
     }
 
-    /// Grilla de puntos de la piel sobre el rectángulo que cubre el borde, en
-    /// el plano medio de la zona: `curves` curvas por lado, `per` tramos entre
-    /// curvas. Cada punto es donde la recta perpendicular al plano toca la zona;
+    /// Grilla de `size × size` puntos de la piel sobre el rectángulo que cubre el
+    /// borde, en el plano medio de la zona (`tol` 0). Cada punto es donde la recta perpendicular al plano toca la zona;
     /// los que caen fuera (esquinas del rectángulo) siguen suave a los vecinos.
     /// `None` si la zona se dobla sobre sí (no es una altura sobre el plano).
-    pub fn skin_grid(&self, mesh: &ScanMesh, curves: usize, per: usize) -> Option<ScanGrid> {
+    pub fn skin_grid(&self, mesh: &ScanMesh, size: usize) -> Option<ScanGrid> {
+        if size < 2 {
+            return None;
+        }
         let tri = |f: u32| mesh.triangles[f as usize].map(|v| mesh.vertices[v as usize]);
         // Normal media (por área) y que ninguna cara mire de costado
         let mut n = [0.0; 3];
@@ -209,7 +216,7 @@ impl FreeZone {
                 (t, b)
             })
             .collect();
-        let (rows, cols) = ((curves - 1) * per + 1, (curves - 1) * per + 1);
+        let (rows, cols) = (size, size);
         let mut h: Vec<Option<f64>> = vec![None; rows * cols];
         for r in 0..rows {
             for k in 0..cols {
@@ -233,32 +240,38 @@ impl FreeZone {
                 }
             }
         }
-        let known = h.iter().filter(|x| x.is_some()).count();
-        if known < rows * cols / 3 {
+        if h.iter().filter(|x| x.is_some()).count() < rows * cols / 3 {
             return None;
         }
-        // Los de afuera: promedio de los vecinos hasta que se asienta (armónica)
-        let mean = h.iter().flatten().sum::<f64>() / known as f64;
-        let fixed: Vec<bool> = h.iter().map(|x| x.is_some()).collect();
-        let mut z: Vec<f64> = h.iter().map(|x| x.unwrap_or(mean)).collect();
-        for _ in 0..400 {
-            for r in 0..rows {
-                for k in 0..cols {
-                    let i = r * cols + k;
-                    if fixed[i] {
-                        continue;
-                    }
-                    let mut s = 0.0;
-                    let mut m = 0.0;
-                    for (dr, dk) in [(-1i64, 0i64), (1, 0), (0, -1), (0, 1)] {
-                        let (rr, kk) = (r as i64 + dr, k as i64 + dk);
-                        if rr >= 0 && kk >= 0 && (rr as usize) < rows && (kk as usize) < cols {
-                            s += z[rr as usize * cols + kk as usize];
-                            m += 1.0;
-                        }
-                    }
-                    z[i] = s / m;
+        // Los de afuera (esquinas del rectángulo, fuera del borde): sobre el
+        // plano tangente del triángulo de la zona más cercano, así siguen la
+        // pendiente de la piel en el borde (promediar con los vecinos la
+        // aplanaba justo donde la zona suele ser más empinada)
+        let centers: Vec<([f64; 2], P3, P3)> = self
+            .faces
+            .iter()
+            .filter(|&&f| mesh.face_areas[f as usize] > 1e-12)
+            .map(|&f| {
+                let c = mesh.face_centroids[f as usize];
+                (uv(c), c, mesh.face_normals[f as usize])
+            })
+            .collect();
+        let mut z = vec![0.0; rows * cols];
+        for r in 0..rows {
+            for k in 0..cols {
+                let i = r * cols + k;
+                if let Some(v) = h[i] {
+                    z[i] = v;
+                    continue;
                 }
+                let q = [lo[0] + (hi[0] - lo[0]) * k as f64 / (cols - 1) as f64, lo[1] + (hi[1] - lo[1]) * r as f64 / (rows - 1) as f64];
+                let o = add(c, add(scale(u, q[0]), scale(v, q[1])));
+                let (_, p, m) = centers.iter().min_by(|a, b| {
+                    let da = (a.0[0] - q[0]).powi(2) + (a.0[1] - q[1]).powi(2);
+                    let db = (b.0[0] - q[0]).powi(2) + (b.0[1] - q[1]).powi(2);
+                    da.total_cmp(&db)
+                })?;
+                z[i] = dot(sub(*p, o), *m) / dot(n, *m);
             }
         }
         let points = (0..rows * cols)
@@ -268,7 +281,7 @@ impl FreeZone {
                 add(c, add(add(scale(u, q[0]), scale(v, q[1])), scale(n, z[i])))
             })
             .collect();
-        Some(ScanGrid { rows, cols, step: per, points })
+        Some(ScanGrid { rows, cols, tol: 0.0, points })
     }
 }
 

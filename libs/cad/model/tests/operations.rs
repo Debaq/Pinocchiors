@@ -319,7 +319,7 @@ fn conical_helix_and_flat_spiral() {
     let radial = |p: &P3| (p[0] * p[0] + p[1] * p[1]).sqrt();
     // Cónica: de radio 10 a 5 en 2 vueltas de paso 4 (sube 8)
     let mut doc = Document::new();
-    let h = doc.add(FeatureKind::Helix { axis: AxisSpec::Z, radius: 10.0, pitch: 4.0, turns: 2.0, left: false, radius2: Some(5.0), flat: false });
+    let h = doc.add(FeatureKind::Helix { axis: AxisSpec::Z, radius: 10.0, pitch: 4.0, turns: 2.0, left: false, radius2: Some(5.0), flat: false, pitch2: None, end_turns: 0.0, end_pitch: None });
     let pts = curve_points(&doc, h);
     let top = pts.iter().copied().max_by(|a, b| a[2].total_cmp(&b[2])).unwrap();
     let bottom = pts.iter().copied().min_by(|a, b| a[2].total_cmp(&b[2])).unwrap();
@@ -329,7 +329,7 @@ fn conical_helix_and_flat_spiral() {
     assert!(doc.get(h).unwrap().kind.label() == "Hélice");
 
     // Espiral plana: de radio 2 a 10 en 3 vueltas, toda en z = 0
-    doc.get_mut(h).unwrap().kind = FeatureKind::Helix { axis: AxisSpec::Z, radius: 2.0, pitch: 4.0, turns: 3.0, left: false, radius2: Some(10.0), flat: true };
+    doc.get_mut(h).unwrap().kind = FeatureKind::Helix { axis: AxisSpec::Z, radius: 2.0, pitch: 4.0, turns: 3.0, left: false, radius2: Some(10.0), flat: true, pitch2: None, end_turns: 0.0, end_pitch: None };
     let pts = curve_points(&doc, h);
     assert!(pts.iter().all(|p| p[2].abs() < 1e-6));
     let rmax = pts.iter().map(radial).fold(0.0, f64::max);
@@ -338,7 +338,57 @@ fn conical_helix_and_flat_spiral() {
     assert_relative_eq!(rmin, 2.0, epsilon = 0.05);
     assert_eq!(doc.get(h).unwrap().kind.label(), "Espiral");
     // Plana con un solo radio: error
-    doc.get_mut(h).unwrap().kind = FeatureKind::Helix { axis: AxisSpec::Z, radius: 2.0, pitch: 4.0, turns: 3.0, left: false, radius2: None, flat: true };
+    doc.get_mut(h).unwrap().kind = FeatureKind::Helix { axis: AxisSpec::Z, radius: 2.0, pitch: 4.0, turns: 3.0, left: false, radius2: None, flat: true, pitch2: None, end_turns: 0.0, end_pitch: None };
+    assert!(!doc.evaluate().errors().is_empty());
+}
+
+/// Resortes (TKHelix con OCCT 8, spline antes): extremos cerrados, paso
+/// variable y a izquierdas; la altura total es la suma de cada tramo.
+#[test]
+fn springs_closed_ends_and_variable_pitch() {
+    if !occt() {
+        return;
+    }
+    let radial = |p: &P3| (p[0] * p[0] + p[1] * p[1]).sqrt();
+    let spring = |left: bool, radius2: Option<f64>, pitch2: Option<f64>, end_turns: f64| FeatureKind::Helix {
+        axis: AxisSpec::Z,
+        radius: 10.0,
+        pitch: 4.0,
+        turns: 3.0,
+        left,
+        radius2,
+        flat: false,
+        pitch2,
+        end_turns,
+        end_pitch: Some(1.0),
+    };
+    let top = |pts: &[P3]| pts.iter().map(|p| p[2]).fold(f64::MIN, f64::max);
+    let mut doc = Document::new();
+    // Extremos cerrados: 1 vuelta de paso 1 en cada punta + 3 de paso 4 → 14 de alto
+    let h = doc.add(spring(false, None, None, 1.0));
+    let pts = curve_points(&doc, h);
+    assert_relative_eq!(top(&pts), 14.0, epsilon = 1e-2);
+    assert!(pts.iter().all(|p| (radial(p) - 10.0).abs() < 0.02), "radio constante");
+    // A cuarto de vuelta (z = 0,25) está a 90°: +Y a derechas, −Y a izquierdas
+    let quarter = |pts: &[P3]| *pts.iter().min_by(|a, b| (a[2] - 0.25).abs().total_cmp(&(b[2] - 0.25).abs())).unwrap();
+    assert!(quarter(&pts)[1] > 9.0, "a derechas: {:?}", quarter(&pts));
+    doc.get_mut(h).unwrap().kind = spring(true, None, None, 1.0);
+    let pts = curve_points(&doc, h);
+    assert!(quarter(&pts)[1] < -9.0, "a izquierdas: {:?}", quarter(&pts));
+    assert_relative_eq!(top(&pts), 14.0, epsilon = 1e-2);
+    // Paso variable de 4 a 8 en 3 vueltas: sube (4 + 8) / 2 · 3 = 18
+    doc.get_mut(h).unwrap().kind = spring(false, None, Some(8.0), 0.0);
+    assert_relative_eq!(top(&curve_points(&doc, h)), 18.0, epsilon = 1e-2);
+    // Cónico con extremos cerrados: de radio 10 abajo a 5 arriba
+    doc.get_mut(h).unwrap().kind = spring(false, Some(5.0), None, 1.0);
+    let pts = curve_points(&doc, h);
+    let hi = pts.iter().copied().max_by(|a, b| a[2].total_cmp(&b[2])).unwrap();
+    let lo = pts.iter().copied().min_by(|a, b| a[2].total_cmp(&b[2])).unwrap();
+    assert_relative_eq!(radial(&hi), 5.0, epsilon = 0.05);
+    assert_relative_eq!(radial(&lo), 10.0, epsilon = 0.05);
+    assert!(doc.evaluate().errors().is_empty());
+    // Paso de los extremos 0: error claro
+    doc.get_mut(h).unwrap().kind = FeatureKind::Helix { axis: AxisSpec::Z, radius: 10.0, pitch: 4.0, turns: 3.0, left: false, radius2: None, flat: false, pitch2: None, end_turns: 1.0, end_pitch: Some(0.0) };
     assert!(!doc.evaluate().errors().is_empty());
 }
 

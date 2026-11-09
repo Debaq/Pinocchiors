@@ -102,7 +102,7 @@ la release recién al final, con todo verde acá.
 - 2026-11-08: plan escrito (notas de 8.0.0, 8.0.0p1 y 8.0.1 leídas y cruzadas
   con la app).
 - 2026-11-08 (rama `occt8`): O1, O2 y O3 hechos en el PC. Detalle abajo.
-- 2026-11-08: O5.1 (Gordon) empezado en la rama `occt8-gordon`; falla una prueba (ver abajo). O4 sin hacer.
+- 2026-11-08: O5 hecho (superficie por grilla, resortes, planos y piezas en paralelo). Falta O4.
 
 ## Resultados (2026-11-08)
 
@@ -172,28 +172,46 @@ el zoom, instancias en ensambles. Lo nuestro que OCCT no tiene: croquis con
 restricciones, render de fotos (GTAO, WebGPU), visor de mallas con rig y
 animación, escaneo y resina.
 
-### O5 en curso: Gordon (rama `occt8-gordon`, sin terminar)
+### O5 — lo nuevo, aprovechado (2026-11-08)
 
-- `cad_grid_face` (puente): superficie por una red de puntos de la piel
-  (Gordon con OCCT 8, B-spline por la grilla antes de la 8) recortada por el
-  borde (polilínea, curvas sobre la superficie con `ShapeFix`).
-- `FreeZone::skin_grid` (cad-scan): grilla sobre el plano medio de la zona;
-  cada punto es donde la recta perpendicular toca la zona; las esquinas fuera
-  de la zona siguen suave a los vecinos; `None` si la zona se dobla.
-  `fit_surface` se queda con la red si se aparta menos que el relleno.
-- `ScanSurface.grid` (modelo, opcional) y la app lo pasa desde la caché de
-  zonas.
-- **Falla**: `scan_free_surface_closes_into_a_solid` da el sólido cerrado con
-  7 % menos de volumen (15 067 contra 16 264 mm³) y la prueba tarda 26 s.
-  Revisar: el recorte por el borde (¿la cara queda chica o del lado de
-  afuera?) y el costo de probar dos redes.
+1. **Superficie libre del escaneo por grilla** (no Gordon). Gordon con curvas
+   por las filas y columnas de una grilla de la piel salía inflado (280×280
+   polos de grado 9 con el parámetro de cuerda; 87×87 con uniforme) y lento:
+   en un casquete de esfera, 4 s y 0,2 mm de desvío, contra 1 ms y 0,0004 mm de
+   una B-spline por la grilla (`GeomAPI_PointsToBSplineSurface`). Gordon es para
+   redes de curvas, no para grillas de puntos. Quedó:
+   - `cad_grid_face` / `Shape::grid_face`: B-spline por la grilla (que pase por
+     los puntos o a menos de `tol`), recortada por el borde.
+   - `FreeZone::skin_grid`: grilla sobre el plano medio de la zona; cada punto,
+     donde la perpendicular toca la zona; los de afuera, sobre el plano
+     tangente del triángulo más cercano (promediar vecinos aplanaba el borde).
+   - `fit_surface` prueba grillas de 13, 21 y 31 y se queda con lo que menos
+     se aparta del escaneo (grilla o relleno). En una piel suave de 60×40:
+     grilla 0,008 mm lejos del borde; el mejor relleno tenía un pico de 91 mm.
+     En zonas muy empinadas en el borde (casquete hasta 75°) gana el relleno.
+   - Anda igual con 7.9 (no usa nada de la 8). `ScanSurface.grid` opcional.
+2. **Resortes con TKHelix**: `cad_make_helix_parts` / `Shape::helix_parts`
+   (tramos con su paso y vueltas, diámetro lineal entre tramos). La hélice del
+   diseño suma `pitch2` (paso variable) y `end_turns` + `end_pitch` (extremos
+   cerrados de resorte de compresión); la cónica pasa a TKHelix. Con 7.9 (sin
+   TKHelix), spline por puntos. UI (Diseñar → Hélice) y guía del conector IA.
+   `build.rs` enlaza TKHelix si está.
+3. **Planos 2D en paralelo** (`drawing_impl`): con OCCT 8 cada vista en su
+   hilo con su copia (`Shape::deep_copy`: teselar escribe en la forma). Mismas
+   líneas que de a una. 4 vistas: pieza 44 → 36 ms, placa 10×10 471 → 301 ms
+   (la isométrica manda).
+4. **Piezas en paralelo**: masa y caja de cada pieza (`parts_mass`, copias
+   livianas: solo lee) y malla de cada pieza para el visor
+   (`parts_tessellation`, copias profundas). Solo con OCCT 8.
+5. Arreglo de pruebas: `scan_mold_*` y `extrude_up_to_the_scan_*` usaban la
+   misma huella (7) en la caché de sólidos del escaneo: al correr juntas, una
+   usaba el escaneo de la otra holgura (fallaba de a ratos).
+
+Sin hacer: redondeos independientes en paralelo y STEP en paralelo (rinde
+poco frente a lo que cuesta; ver PLAN_ROBUSTEZ para redondeos).
 
 ### Qué sigue
 
 - O4 (release con la 8): `OCCT_VERSION: "8.0.1"` en `release.yml` y
   `android.yml`. Falta probar la compilación de la 8 en Windows (MSVC) y
-  Android en CI. Sin hacer todavía: master tenía la app compilada fallando
-  (2026-11-08) y eso va primero.
-- O5, por lo que más rinde: (1) Gordon para la superficie libre del escaneo,
-  (2) resortes cónicos y de paso variable con `TKHelix`, (3) planos 2D y piezas
-  en paralelo. Regiones del sketch con booleanas 2D de OCCT: evaluar aparte.
+  Android en CI. Es lo último (pedido del usuario).

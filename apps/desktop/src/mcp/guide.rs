@@ -214,7 +214,11 @@ pub const FEATURE_EXAMPLES: &[(&str, &str, &str)] = &[
     ("plane", "reference plane: offset, angle, midplane, three points", r#"{"type":"plane","def":{"type":"offset","base":{"type":"xy"},"distance":25}}"#),
     ("axis", "reference axis", r#"{"type":"axis","def":{"type":"two_points","a":{"type":"at","point":[0,0,0]},"b":{"type":"at","point":[0,0,10]}}}"#),
     ("point", "reference point", r#"{"type":"point","def":{"type":"at","point":[10,0,5]}}"#),
-    ("helix", "helical curve (path for springs and threads)", r#"{"type":"helix","axis":{"type":"z"},"radius":10,"pitch":3,"turns":5}"#),
+    (
+        "helix",
+        "helical curve (path for springs and threads). Optional: `radius2` conical, `pitch2` variable pitch (from `pitch` to `pitch2`), `end_turns` + `end_pitch` closed ends of a compression spring (end turns at each end, use the wire thickness as `end_pitch`; `turns` are the active ones), `flat` flat spiral",
+        r#"{"type":"helix","axis":{"type":"z"},"radius":10,"pitch":3,"turns":5}"#,
+    ),
     ("sweep", "move a profile sketch along a path sketch (or a helix: path {type: curve, feature: id})", r#"{"type":"sweep","sketch":2,"path":{"type":"sketch","sketch":1,"entities":[]}}"#),
     ("loft", "blend between profile sketches on different planes", r#"{"type":"loft","sections":[{"sketch":0},{"sketch":2}]}"#),
 ];

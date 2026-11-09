@@ -2,6 +2,8 @@
 
 #define _USE_MATH_DEFINES  // M_PI en MSVC
 #include "cad_occt.h"
+#include <chrono>
+#include <Geom_BSplineSurface.hxx>
 
 #include <HLRBRep_Algo.hxx>
 #include <HLRBRep_HLRToShape.hxx>
@@ -131,7 +133,7 @@
 #include <Standard_Version.hxx>
 #include <GeomAPI_PointsToBSplineSurface.hxx>
 #if OCC_VERSION_HEX >= 0x080000
-#include <GeomFill_Gordon.hxx>
+#include <HelixBRep_BuilderHelix.hxx>
 #endif
 #include <TColgp_HArray1OfPnt.hxx>
 #include <TopExp.hxx>
@@ -529,6 +531,15 @@ CadShape* cad_shape_clone(const CadShape* s) { return s ? new CadShape{s->s} : n
 int32_t cad_shape_kind(const CadShape* s) {
     if (!s || s->s.IsNull()) return 0;
     return static_cast<int32_t>(s->s.ShapeType()) + 1;
+}
+
+// Copia con su propia topología y geometría (sin la triangulación): para usar
+// la forma en otro hilo, porque teselar escribe en la forma
+CadShape* cad_shape_deep_copy(const CadShape* s) {
+    return guard("copiar forma", (CadShape*)nullptr, [&] {
+        BRepBuilderAPI_Copy copy(s->s, Standard_True, Standard_False);
+        return wrap(copy.Shape());
+    });
 }
 
 int32_t cad_shape_is_valid(const CadShape* s) {
@@ -2816,6 +2827,50 @@ CadShape* cad_make_helix(const double* origin, const double* dir, double radius,
     });
 }
 
+// Hélice por tramos (TKHelix, OCCT 8): tramo i con paso pitches[i] y turns[i]
+// vueltas; el diámetro pasa lineal de diams[i] a diams[i+1] (resortes cónicos,
+// de paso variable y con extremos cerrados). Arranca en origin + r·X.
+CadShape* cad_make_helix_parts(const double* origin, const double* dir, const double* xdir, const double* diams,
+                               const double* pitches, const double* turns, int32_t n, int32_t left) {
+    return guard("hélice por tramos", (CadShape*)nullptr, [&]() -> CadShape* {
+#if OCC_VERSION_HEX >= 0x080000
+        if (n < 1) throw Standard_Failure("la hélice no tiene tramos");
+        for (int32_t i = 0; i < n; i++)
+            if (!(pitches[i] > 0 && turns[i] > 0)) throw Standard_Failure("cada tramo necesita paso y vueltas positivos");
+        for (int32_t i = 0; i <= n; i++)
+            if (!(diams[i] > 0)) throw Standard_Failure("los radios tienen que ser mayores que cero");
+        gp_Dir z(dir[0], dir[1], dir[2]);
+        gp_Vec xv(xdir[0], xdir[1], xdir[2]);
+        xv -= gp_Vec(z) * xv.Dot(gp_Vec(z));
+        if (xv.Magnitude() < 1e-9) throw Standard_Failure("la X de la hélice no puede ser paralela al eje");
+        gp_Ax3 ax(pnt(origin), z, gp_Dir(xv));
+        // Sistema indirecto: gira al revés (a izquierdas)
+        if (left) ax.YReverse();
+        NCollection_Array1<double> d(1, n + 1), p(1, n), t(1, n);
+        for (int32_t i = 0; i <= n; i++) d(i + 1) = diams[i];
+        for (int32_t i = 0; i < n; i++) {
+            p(i + 1) = pitches[i];
+            t(i + 1) = turns[i];
+        }
+        HelixBRep_BuilderHelix b;
+        b.SetParameters(ax, d, p, t);
+        b.Perform();
+        if (b.ErrorStatus() != 0)
+            throw Standard_Failure(("la hélice no se pudo armar (TKHelix, error " + std::to_string(b.ErrorStatus()) + ")").c_str());
+        TopoDS_Shape w = b.Shape();
+        if (w.ShapeType() != TopAbs_WIRE) {
+            BRepBuilderAPI_MakeWire mw;
+            for (TopExp_Explorer ex(w, TopAbs_EDGE); ex.More(); ex.Next()) mw.Add(TopoDS::Edge(ex.Current()));
+            w = mw.Wire();
+        }
+        return wrap(w);
+#else
+        (void)origin; (void)dir; (void)xdir; (void)diams; (void)pitches; (void)turns; (void)n; (void)left;
+        throw Standard_Failure("la hélice por tramos necesita OpenCASCADE 8");
+#endif
+    });
+}
+
 // Filete de perfil trapecial (semiancho `hw_in` en r_minor y `hw_out` en r_major, medidos a lo largo
 // del eje), de `starts` entradas con avance `lead` por vuelta (el paso entre filetes es lead/starts)
 static CadShape* thread_impl(const double* origin, const double* dir, const double* xdir, double r_minor, double r_major,
@@ -3019,52 +3074,26 @@ CadShape* cad_fill(const CadShape* const* edges, const CadShape* const* faces, i
     });
 }
 
-// Superficie por una red de puntos de la piel (rows × cols, fila a fila),
-// recortada por el borde cerrado (polilínea). Con OCCT 8, Gordon: perfiles y
-// guías interpolados cada `step` filas/columnas, cada curva por todos los puntos
-// de su fila o columna. Antes de la 8, B-spline por la grilla.
-CadShape* cad_grid_face(const double* grid, int32_t rows, int32_t cols, int32_t step, const double* boundary,
-                        int32_t nb) {
-    return guard("superficie por red", (CadShape*)nullptr, [&] {
-        if (rows < 2 || cols < 2 || step < 1 || (rows - 1) % step || (cols - 1) % step)
-            throw Standard_Failure("la red de puntos no es una grilla");
+// Superficie por una grilla de puntos de la piel (rows × cols, fila a fila),
+// recortada por el borde cerrado (polilínea). B-spline que pasa por los puntos
+// (tol <= 0) o los aproxima a menos de `tol` (no copia el ruido del escaneo).
+// Se probó Gordon (OCCT 8) con curvas por las filas y columnas: en un casquete
+// de esfera, 4 s y 0,2 mm de desvío contra 1 ms y 0,0004 mm de la B-spline
+// (Gordon es para redes de curvas, no para grillas de puntos).
+CadShape* cad_grid_face(const double* grid, int32_t rows, int32_t cols, double tol, const double* boundary, int32_t nb) {
+    return guard("superficie por grilla", (CadShape*)nullptr, [&] {
+        if (rows < 2 || cols < 2) throw Standard_Failure("la grilla tiene menos de 2×2 puntos");
         if (nb < 3) throw Standard_Failure("el borde tiene menos de 3 puntos");
-        auto at = [&](int r, int c) { return pnt(grid + 3 * ((size_t)r * cols + c)); };
-        Handle(Geom_Surface) surf;
-#if OCC_VERSION_HEX >= 0x080000
-        {
-            auto curve = [&](bool row, int k) -> Handle(Geom_Curve) {
-                int n = row ? cols : rows;
-                Handle(TColgp_HArray1OfPnt) a = new TColgp_HArray1OfPnt(1, n);
-                for (int i = 0; i < n; i++) a->SetValue(i + 1, row ? at(k, i) : at(i, k));
-                GeomAPI_Interpolate in(a, Standard_False, 1e-7);
-                in.Perform();
-                if (!in.IsDone()) throw Standard_Failure("una curva de la red no se pudo interpolar");
-                return in.Curve();
-            };
-            int np = (rows - 1) / step + 1, ng = (cols - 1) / step + 1;
-            NCollection_Array1<Handle(Geom_Curve)> prof(1, np), guid(1, ng);
-            for (int i = 0; i < np; i++) prof(i + 1) = curve(true, i * step);
-            for (int j = 0; j < ng; j++) guid(j + 1) = curve(false, j * step);
-            GeomFill_Gordon g;
-            g.Init(prof, guid, 1e-4);
-            g.Perform();
-            if (!g.IsDone()) {
-                g.SetApproximationMode(GeomFill_Gordon::ApproximationMode::AllowApproximateFallback);
-                g.Perform();
-            }
-            if (g.IsDone()) surf = g.Surface();
-        }
-#endif
-        if (surf.IsNull()) {
-            TColgp_Array2OfPnt pts(1, rows, 1, cols);
-            for (int r = 0; r < rows; r++)
-                for (int c = 0; c < cols; c++) pts(r + 1, c + 1) = at(r, c);
-            GeomAPI_PointsToBSplineSurface ap;
+        TColgp_Array2OfPnt pts(1, rows, 1, cols);
+        for (int r = 0; r < rows; r++)
+            for (int c = 0; c < cols; c++) pts(r + 1, c + 1) = pnt(grid + 3 * ((size_t)r * cols + c));
+        GeomAPI_PointsToBSplineSurface ap;
+        if (tol > 0)
+            ap.Init(pts, 3, 8, GeomAbs_C2, tol);
+        else
             ap.Interpolate(pts);
-            if (!ap.IsDone()) throw Standard_Failure("la red no da una superficie");
-            surf = ap.Surface();
-        }
+        if (!ap.IsDone()) throw Standard_Failure("la grilla no da una superficie");
+        Handle(Geom_Surface) surf = ap.Surface();
         // Borde: segmentos rectos; sus curvas sobre la superficie las agrega ShapeFix
         BRepBuilderAPI_MakePolygon poly;
         for (int32_t k = 0; k < nb; k++) poly.Add(pnt(boundary + 3 * k));

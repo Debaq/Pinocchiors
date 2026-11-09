@@ -3131,9 +3131,9 @@ impl Ctx<'_> {
                     Shape::wire(&lines).map_err(err)
                 };
                 let wire = ring(&sf.boundary)?;
-                // Por la red de la piel (Gordon) si la hay; si falla, el relleno
+                // Por la grilla de la piel si la hay; si falla, el relleno
                 let face = match &sf.grid {
-                    Some(g) => Shape::grid_face(&g.points, g.rows, g.cols, g.step, &sf.boundary).or_else(|_| Shape::fill(&[(wire.clone(), None)], &sf.interior)),
+                    Some(g) => Shape::grid_face(&g.points, g.rows, g.cols, g.tol, &sf.boundary).or_else(|_| Shape::fill(&[(wire.clone(), None)], &sf.interior)),
                     None => Shape::fill(&[(wire.clone(), None)], &sf.interior),
                 }
                 .map_err(err)?;
@@ -3455,37 +3455,47 @@ impl Ctx<'_> {
                 self.ev.tools.insert(f.id, (tool.clone(), sw.op));
                 self.apply(f.id, tool, sw.op)
             }
-            FeatureKind::Helix { axis, radius, pitch, turns, left, radius2, flat } => {
+            FeatureKind::Helix { axis, radius, pitch, turns, left, radius2, flat, pitch2, end_turns, end_pitch } => {
                 let ax = self.axis("axis", axis)?;
                 let ax = Axis { origin: ax.origin, dir: normalize(ax.dir) };
                 let r2 = radius2.unwrap_or(*radius);
-                let wire = if *flat || (r2 - radius).abs() > 1e-9 {
-                    // Cónica o espiral plana: spline por puntos de la curva (32 por vuelta)
+                let wire = if *flat {
+                    // Espiral plana: spline por puntos de la curva (32 por vuelta)
                     if *turns <= 0.0 {
                         return Err("las vueltas tienen que ser más que cero".into());
                     }
                     if *radius < 0.0 || r2 < 0.0 || radius.max(r2) <= 0.0 {
                         return Err("los radios no pueden ser negativos (y uno tiene que ser mayor que cero)".into());
                     }
-                    if *flat && (r2 - radius).abs() < 1e-9 {
+                    if (r2 - radius).abs() < 1e-9 {
                         return Err("la espiral plana necesita dos radios distintos".into());
                     }
-                    let x = default_x(ax.dir);
-                    let y = cross(ax.dir, x);
-                    let n = ((turns * 32.0).ceil() as usize).max(16);
-                    let hand = if *left { -1.0 } else { 1.0 };
-                    let points: Vec<P3> = (0..=n)
-                        .map(|k| {
-                            let t = k as f64 / n as f64;
-                            let a = hand * 2.0 * std::f64::consts::PI * turns * t;
-                            let r = radius + (r2 - radius) * t;
-                            let h = if *flat { 0.0 } else { pitch * turns * t };
-                            add(add(ax.origin, scale(ax.dir, h)), add(scale(x, r * a.cos()), scale(y, r * a.sin())))
-                        })
-                        .collect();
-                    Shape::wire(&[Curve::Spline(points)]).map_err(err)?
+                    helix_spline(ax, &[(*turns, 0.0)], *radius, r2, *left).map_err(err)?
                 } else {
-                    Shape::helix(ax, *radius, *pitch, *turns, *left).map_err(err)?
+                    let parts = helix_parts(*pitch, *turns, *pitch2, *end_turns, *end_pitch)?;
+                    if parts.len() == 1 && (r2 - radius).abs() < 1e-9 {
+                        // Hélice simple: exacta, recta sobre el cilindro
+                        Shape::helix(ax, *radius, *pitch, *turns, *left).map_err(err)?
+                    } else {
+                        if *radius < 0.0 || r2 < 0.0 || radius.max(r2) <= 0.0 {
+                            return Err("los radios no pueden ser negativos (y uno tiene que ser mayor que cero)".into());
+                        }
+                        // Cónica, de paso variable o con extremos cerrados: por tramos
+                        // con TKHelix (OCCT 8); sin ella (o con un radio 0), spline por puntos
+                        let total: f64 = parts.iter().map(|p| p.0).sum();
+                        let mut diams = vec![2.0 * radius];
+                        let mut done = 0.0;
+                        for (t, _) in &parts {
+                            done += t;
+                            diams.push(2.0 * (radius + (r2 - radius) * done / total));
+                        }
+                        let pitches: Vec<f64> = parts.iter().map(|p| p.1).collect();
+                        let ts: Vec<f64> = parts.iter().map(|p| p.0).collect();
+                        match Shape::helix_parts(ax, default_x(ax.dir), &diams, &pitches, &ts, *left) {
+                            Ok(w) => w,
+                            Err(_) => helix_spline(ax, &parts, *radius, r2, *left).map_err(err)?,
+                        }
+                    }
                 };
                 // Polilínea para el visor: la del teselado del alambre mismo
                 let points: Vec<P3> = wire.tessellate(0.05, 0.1).map_err(err)?.edges.concat();
@@ -7275,4 +7285,68 @@ fn dimension_geom(m: &DimensionKind, point: &dyn Fn(&str, &PointSpec) -> R<P3>) 
             mm(norm(sub(b, a)), vec![vec![a, b]], mid(a, b))
         }
     })
+}
+
+/// Tramos (vueltas, paso) de una hélice: extremos cerrados (`end_turns` con
+/// `end_pitch`, por defecto un cuarto del paso) y en el medio las `turns`
+/// activas; con `pitch2`, el paso cambia vuelta a vuelta de `pitch` a `pitch2`.
+fn helix_parts(pitch: f64, turns: f64, pitch2: Option<f64>, end_turns: f64, end_pitch: Option<f64>) -> R<Vec<(f64, f64)>> {
+    if turns <= 0.0 {
+        return Err("las vueltas tienen que ser más que cero".into());
+    }
+    if pitch <= 0.0 || pitch2.is_some_and(|p| p <= 0.0) {
+        return Err("el paso tiene que ser mayor que cero".into());
+    }
+    if end_turns < 0.0 {
+        return Err("las vueltas de los extremos no pueden ser negativas".into());
+    }
+    let end_pitch = end_pitch.unwrap_or(pitch * 0.25);
+    if end_turns > 0.0 && end_pitch <= 0.0 {
+        return Err("el paso de los extremos tiene que ser mayor que cero".into());
+    }
+    let mut parts = Vec::new();
+    if end_turns > 0.0 {
+        parts.push((end_turns, end_pitch));
+    }
+    match pitch2 {
+        Some(p2) if (p2 - pitch).abs() > 1e-9 => {
+            // Una vuelta por tramo, con el paso de su mitad
+            let mut done = 0.0;
+            while done < turns - 1e-9 {
+                let t = (turns - done).min(1.0);
+                parts.push((t, pitch + (p2 - pitch) * (done + t / 2.0) / turns));
+                done += t;
+            }
+        }
+        _ => parts.push((turns, pitch)),
+    }
+    if end_turns > 0.0 {
+        parts.push((end_turns, end_pitch));
+    }
+    Ok(parts)
+}
+
+/// Hélice (o espiral, con paso 0) por tramos como spline por puntos (32 por
+/// vuelta): el radio pasa lineal de `r1` a `r2` y la altura sube con el paso de
+/// cada tramo. Para cuando no hay TKHelix (OCCT anterior a la 8).
+fn helix_spline(ax: Axis, parts: &[(f64, f64)], r1: f64, r2: f64, left: bool) -> cad_occt::Result<Shape> {
+    let x = default_x(ax.dir);
+    let y = cross(ax.dir, x);
+    let hand = if left { -1.0 } else { 1.0 };
+    let total: f64 = parts.iter().map(|p| p.0).sum();
+    let mut points: Vec<P3> = Vec::new();
+    let (mut done, mut h) = (0.0, 0.0);
+    for (k, (t, pitch)) in parts.iter().enumerate() {
+        let n = ((t * 32.0).ceil() as usize).max(4);
+        for i in usize::from(k > 0)..=n {
+            let s = done + t * i as f64 / n as f64;
+            let a = hand * 2.0 * std::f64::consts::PI * s;
+            let r = r1 + (r2 - r1) * s / total;
+            let z = h + pitch * (s - done);
+            points.push(add(add(ax.origin, scale(ax.dir, z)), add(scale(x, r * a.cos()), scale(y, r * a.sin()))));
+        }
+        done += t;
+        h += pitch * t;
+    }
+    Shape::wire(&[Curve::Spline(points)])
 }

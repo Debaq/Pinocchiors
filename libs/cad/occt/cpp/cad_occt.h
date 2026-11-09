@@ -27,6 +27,8 @@ const char* cad_occt_version(void);
 
 void cad_shape_free(CadShape* s);
 CadShape* cad_shape_clone(const CadShape* s);
+// Copia propia (topología y geometría, sin la triangulación): para otro hilo.
+CadShape* cad_shape_deep_copy(const CadShape* s);
 // 0 nulo, 1 compound, 2 compsolid, 3 solid, 4 shell, 5 face, 6 wire, 7 edge, 8 vertex.
 int32_t cad_shape_kind(const CadShape* s);
 int32_t cad_shape_is_valid(const CadShape* s);
@@ -233,6 +235,11 @@ CadShape* cad_offset_face(const CadShape* face, double distance);
 // Hélice como alambre: eje (origen y dirección), radio, paso, vueltas; `left` = a izquierdas.
 CadShape* cad_make_helix(const double* origin, const double* dir, double radius, double pitch, double turns,
                          int32_t left);
+// Hélice por tramos (OCCT 8, TKHelix): n tramos de paso pitches[i] y turns[i]
+// vueltas; el diámetro pasa de diams[i] a diams[i+1] (n+1 valores). Con OCCT
+// anterior falla con un mensaje.
+CadShape* cad_make_helix_parts(const double* origin, const double* dir, const double* xdir, const double* diams,
+                               const double* pitches, const double* turns, int32_t n, int32_t left);
 // Engrosa una cara (o un conjunto de caras) hasta un sólido de espesor `thickness`
 // (hacia su normal; negativo = hacia atrás).
 /** Macho roscado: núcleo de radio menor + filete ISO (60°) de `length` desde `origin` hacia `dir`;
@@ -248,10 +255,9 @@ CadShape* cad_offset_shape(const CadShape* s, double distance);
    tangente a esa cara a lo largo de la arista i) y pasa por los puntos. */
 CadShape* cad_fill(const CadShape* const* edges, const CadShape* const* faces, int32_t n, const double* points,
                    int32_t n_points);
-// Superficie por una red de puntos (rows × cols, fila a fila) recortada por un
-// borde cerrado de nb puntos. OCCT 8: Gordon con curvas cada `step` filas/columnas.
-CadShape* cad_grid_face(const double* grid, int32_t rows, int32_t cols, int32_t step, const double* boundary,
-                        int32_t nb);
+// Superficie por una grilla de puntos (rows × cols, fila a fila) recortada por
+// un borde cerrado de nb puntos: pasa por los puntos (tol <= 0) o a menos de tol.
+CadShape* cad_grid_face(const double* grid, int32_t rows, int32_t cols, double tol, const double* boundary, int32_t nb);
 /* Une superficies por sus bordes; con `solid`, cada concha cerrada se vuelve sólido. */
 CadShape* cad_sew(const CadShape* const* shapes, int32_t n, double tolerance, int32_t solid);
 /* Parte `s` con las herramientas (caras, superficies o sólidos): todos los pedazos. */

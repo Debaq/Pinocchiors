@@ -556,7 +556,9 @@ fn scan_mold_makes_two_halves_with_keys_and_sprue() {
     let scan = ScanMesh::new(&t.positions, &t.triangles);
     let gap = 0.3;
     let body = prepare_body(&scan.vertices, &scan.triangles, &BodyOptions { faces: 20000, offset: gap, thickness: 0.0 }).unwrap();
-    let mesh = ScanBodyMesh { hash: 7, data: std::sync::Arc::new((body.vertices, body.triangles)), error: None };
+    // Huella propia: `scan_solid` guarda los sólidos por huella (con la 7 de
+    // la extrusión, una de las dos usaba el escaneo de la otra holgura)
+    let mesh = ScanBodyMesh { hash: 8, data: std::sync::Arc::new((body.vertices, body.triangles)), error: None };
     let wall = 6.0;
     let options = MoldOptions { axis: 2, at: 0.5, wall, gap, keys: true, sprue: 2.0 };
     let mut doc = Document::new();
@@ -904,4 +906,70 @@ fn scan_free_surface_closes_into_a_solid() {
     let expected = PI * r2 * zb + PI * h / 6.0 * (3.0 * r2 + h * h);
     let v = ev.body.unwrap().mass().unwrap().volume;
     assert_relative_eq!(v, expected, max_relative = 0.04);
+}
+
+
+/// Piel suave de 60×40 (z = 3·sin(x/8)·cos(y/10)): la superficie por grilla
+/// sigue la piel mejor que el relleno, y `fit_surface` la elige.
+#[test]
+fn scan_free_surface_grid_follows_a_smooth_skin() {
+    if !occt::available() {
+        return;
+    }
+    let skin = |x: f64, y: f64| 3.0 * (x / 8.0).sin() * (y / 10.0).cos();
+    let (nx, ny) = (120usize, 80usize);
+    let mut pts = Vec::new();
+    for j in 0..=ny {
+        for i in 0..=nx {
+            let (x, y) = (60.0 * i as f64 / nx as f64, 40.0 * j as f64 / ny as f64);
+            pts.push([x, y, skin(x, y)]);
+        }
+    }
+    let mut tris = Vec::new();
+    for j in 0..ny as u32 {
+        for i in 0..nx as u32 {
+            let a = j * (nx as u32 + 1) + i;
+            let b = a + 1;
+            let c = a + nx as u32 + 1;
+            tris.push([a, b, c + 1]);
+            tris.push([a, c + 1, c]);
+        }
+    }
+    let scan = ScanMesh::new(&pts, &tris);
+    let seed = (tris.len() / 2) as u32;
+    let mut zone = scan.free_zone(seed, 25.0, 150).expect("zona con borde");
+    let off = |f: &Shape| -> f64 {
+        let t = f.tessellate(0.05, 0.2).unwrap();
+        // Lejos del borde: ahí manda la polilínea del borde (tramos rectos de
+        // ~5 mm sobre la piel curva: 0,15 mm de flecha), igual para los dos
+        t.positions.iter().filter(|p| p[0] > 3.0 && p[0] < 57.0 && p[1] > 3.0 && p[1] < 37.0).map(|p| (p[2] - skin(p[0], p[1])).abs()).fold(0.0, f64::max)
+    };
+    let n = zone.boundary.len();
+    let lines: Vec<occt::Curve> = (0..n).map(|k| occt::Curve::Line(zone.boundary[k], zone.boundary[(k + 1) % n])).collect();
+    let wire = Shape::wire(&lines).unwrap();
+    let rms = zone.fit_surface(&scan).expect("una superficie válida");
+    // El mejor relleno (sus puntos quedan en `interior`) contra la grilla elegida
+    let fill = Shape::fill(&[(wire, None)], &zone.interior).unwrap();
+    let grid = zone.grid.clone().expect("la grilla le gana al relleno");
+    let face = Shape::grid_face(&grid.points, grid.rows, grid.cols, grid.tol, &zone.boundary).unwrap();
+    let (df, dg) = (off(&fill), off(&face));
+    println!("rms {rms:.4}; desvío máx: relleno {df:.3} mm, grilla {:?} {dg:.3} mm", (grid.rows, grid.tol));
+    assert!(dg < df / 3.0 && dg < 0.1, "grilla {dg} contra relleno {df}");
+    // Y como pieza: la superficie del diseño es la de la grilla
+    let mut doc = Document::new();
+    doc.add(FeatureKind::ScanSurface(ScanSurface {
+        seed: scan.seed(seed, scan.face_centroids[seed as usize]).unwrap(),
+        angle: 25.0,
+        thickness: 2.0,
+        close: None,
+        op: BodyOp::New,
+        boundary: zone.boundary.clone(),
+        interior: zone.interior.clone(),
+        close_plane: None,
+        grid: zone.grid.clone(),
+    }));
+    let ev = doc.evaluate();
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    let v = ev.body.unwrap().mass().unwrap().volume;
+    assert!((v - 60.0 * 40.0 * 2.0).abs() < 60.0 * 40.0 * 2.0 * 0.03, "volumen {v}");
 }

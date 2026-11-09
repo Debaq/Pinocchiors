@@ -186,6 +186,20 @@ fn main() {
         }
         Ok(format!("líneas={n}"))
     });
+    // Como la app con OCCT 8 (apps/desktop/src/cad.rs, drawing_impl): cada vista
+    // en su hilo con su copia de la pieza (antes de la 8 no es seguro entre hilos)
+    for (nombre, placa) in [("pieza", 0usize), ("placa 10x10", 10)] {
+        caso(&format!("plano 2D: HLR 4 vistas en 4 hilos ({nombre})"), move || {
+            let p = if placa == 0 { pieza()? } else { placa_perforada(placa)? };
+            let copias = vistas().into_iter().map(|v| Ok((p.deep_copy().map_err(e)?, v))).collect::<Result<Vec<_>, String>>()?;
+            let hs: Vec<_> = copias.into_iter().map(|(c, (eye, x))| std::thread::spawn(move || c.hlr(eye, x, 0.05).map(|l| l.len()))).collect();
+            let mut n = 0;
+            for h in hs {
+                n += h.join().map_err(|_| "hilo caído".to_string())?.map_err(e)?;
+            }
+            Ok(format!("líneas={n}"))
+        });
+    }
     caso("malla vista pieza (fina)", || {
         let p = pieza()?;
         let t = p.tessellate(0.01, 0.1).map_err(e)?;

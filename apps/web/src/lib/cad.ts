@@ -1104,8 +1104,24 @@ export type FeatureKind =
       orient?: SweepOrient;
     }
   /** Hélice de referencia (camino de resortes y roscas) */
-  /** `radius2`: cónica (el radio pasa de `radius` a `radius2`); `flat`: espiral plana (sin avance) */
-  | { type: "helix"; axis: AxisSpec; radius: number; pitch: number; turns: number; left: boolean; radius2?: number | null; flat?: boolean }
+  /**
+   * `radius2`: cónica (el radio pasa de `radius` a `radius2`); `flat`: espiral plana (sin avance);
+   * `pitch2`: paso variable (de `pitch` a `pitch2`); `end_turns`/`end_pitch`: extremos cerrados de
+   * un resorte (esas vueltas, en cada punta, con ese paso; además de `turns`)
+   */
+  | {
+      type: "helix";
+      axis: AxisSpec;
+      radius: number;
+      pitch: number;
+      turns: number;
+      left: boolean;
+      radius2?: number | null;
+      flat?: boolean;
+      pitch2?: number | null;
+      end_turns?: number;
+      end_pitch?: number | null;
+    }
   /** Las regiones cerradas de un sketch como superficie plana */
   | { type: "surface_planar"; sketch: number; regions: RegionSelection }
   /** Copia desfasada de superficies (o de la piel de sólidos), como pieza nueva */

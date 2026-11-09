@@ -347,6 +347,42 @@ static void malla_a_solido() {
     }
 }
 
+// --- 5. Superficie por red (cad_grid_face) sobre un casquete de esfera ---
+static void red() {
+    std::printf("\n== Superficie por grilla: casquete r=20, grilla en [-14,14]², borde círculo r=13 ==\n");
+    auto zs = [](double x, double y) { return std::sqrt(400 - x * x - y * y); };
+    std::vector<double> border;
+    for (int k = 0; k < 40; k++) {
+        double a = 2 * M_PI * k / 40, x = 13 * std::cos(a), y = 13 * std::sin(a);
+        border.insert(border.end(), {x, y, zs(x, y)});
+    }
+    for (int curves : {4, 6, 8}) {
+        int n = (curves - 1) * 4 + 1;
+        std::vector<double> g;
+        for (int r = 0; r < n; r++)
+            for (int c = 0; c < n; c++) {
+                double x = -14 + 28.0 * c / (n - 1), y = -14 + 28.0 * r / (n - 1);
+                g.insert(g.end(), {x, y, zs(x, y)});
+            }
+        TIMED(t, CadShape* f = cad_grid_face(g.data(), n, n, 0, border.data(), 40));
+        if (!f) { std::printf("red %d: ERROR %s\n", curves, cad_last_error()); continue; }
+        TopoDS_Face face = TopoDS::Face(TopExp_Explorer(f->s, TopAbs_FACE).Current());
+        Handle(Geom_Surface) S = BRep_Tool::Surface(face);
+        double mx = 0;
+        for (int i = 0; i <= 20; i++)
+            for (int j = 0; j <= 20; j++) {
+                double x = -9 + 18.0 * i / 20, y = -9 + 18.0 * j / 20;
+                GeomAPI_ProjectPointOnSurf pr(gp_Pnt(x, y, zs(x, y)), S);
+                if (pr.NbPoints()) mx = std::max(mx, pr.LowerDistance());
+            }
+        GProp_GProps gp;
+        BRepGProp::SurfaceProperties(f->s, gp);
+        double h = 20 - std::sqrt(400 - 169.0);
+        std::printf("grilla %d (%dx%d): %8.1f ms  desvío máx %.5f mm  área %.2f (exacta %.2f)  válida %d\n", curves, n, n, t, mx,
+                    gp.Mass(), 2 * M_PI * 20 * h, BRepCheck_Analyzer(f->s).IsValid());
+    }
+}
+
 int main(int argc, char** argv) {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     std::printf("OpenCASCADE %s\n", cad_occt_version());
@@ -355,5 +391,6 @@ int main(int argc, char** argv) {
     if (only.empty() || only == "helice") helice();
     if (only.empty() || only == "hlr") hlr();
     if (only.empty() || only == "malla") malla_a_solido();
+    if (only == "red") red();
     return fails ? 1 : 0;
 }

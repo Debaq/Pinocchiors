@@ -127,6 +127,10 @@ fn main() {
     }
     let kind = if static_link { "static" } else { "dylib" };
     let new_step = has_lib(&dirs, "TKDESTEP");
+    // Hélices por tramos (OCCT 8): antes que lo que usa (TKGeomAlgo, TKTopAlgo…)
+    if has_lib(&dirs, "TKHelix") {
+        println!("cargo:rustc-link-lib={kind}=TKHelix");
+    }
     for tk in TOOLKITS {
         if !new_step && (*tk == "TKDESTEP" || *tk == "TKDE") {
             for old in TOOLKITS_OLD_STEP {

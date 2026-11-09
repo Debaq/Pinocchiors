@@ -749,3 +749,26 @@ fn closed_mesh_becomes_solid_without_sewing() {
     let cut = cube(20.0).boolean(&solid, BooleanOp::Cut).unwrap();
     assert_relative_eq!(cut.mass().unwrap().volume, 7000.0, epsilon = 1e-6);
 }
+
+/// Con OCCT 8, la hélice por tramos sale de TKHelix: resorte de extremos
+/// cerrados (1 vuelta de paso 1 + 3 de paso 4 + 1 de paso 1, radio 10) con la
+/// altura de la suma y el largo de cada tramo. Antes de la 8, error claro.
+#[test]
+fn helix_parts_with_tkhelix() {
+    if !available() {
+        return;
+    }
+    let ax = Axis { origin: [0.0; 3], dir: [0.0, 0.0, 1.0] };
+    let r = Shape::helix_parts(ax, [1.0, 0.0, 0.0], &[20.0; 4], &[1.0, 4.0, 1.0], &[1.0, 3.0, 1.0], false);
+    if !occt_version().starts_with('8') {
+        assert!(r.is_err());
+        return;
+    }
+    let w = r.expect("TKHelix");
+    let len: f64 = w.edges().unwrap().iter().map(|e| e.length).sum();
+    let turn = |p: f64| (2.0 * PI * 10.0f64).hypot(p);
+    assert_relative_eq!(len, 2.0 * turn(1.0) + 3.0 * turn(4.0), max_relative = 1e-4);
+    let t = w.tessellate(0.01, 0.05).unwrap();
+    let top = t.edges.concat().iter().map(|p| p[2]).fold(f64::MIN, f64::max);
+    assert_relative_eq!(top, 14.0, epsilon = 1e-3);
+}

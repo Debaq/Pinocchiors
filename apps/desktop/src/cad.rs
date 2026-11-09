@@ -70,21 +70,39 @@ fn measures(eval: &cad_model::Evaluation) -> Measures {
             axes: m.axes,
         })
     });
-    Measures { body, parts: eval.parts.iter().map(|p| p.shape.mass().ok()).collect() }
+    Measures { body, parts: parts_mass(eval) }
+}
+
+/// ¿Se puede usar OCCT desde varios hilos? Con la 8 el manejo de errores es por hilo.
+fn occt_parallel() -> bool {
+    cad_model::occt::occt_version().starts_with('8')
+}
+
+/// Masa y caja de cada pieza (de su malla si la tiene). Con OCCT 8, en
+/// paralelo: la masa solo lee la forma (copias livianas, sin teselar).
+fn parts_mass(eval: &cad_model::Evaluation) -> Vec<Option<cad_model::occt::MassInfo>> {
+    use rayon::prelude::*;
+    let one = |p: &cad_model::Part| match &p.mesh {
+        Some(m) => Some(cad_model::mesh_bool::mass(m)),
+        None => p.shape.mass().ok(),
+    };
+    if eval.parts.len() < 2 || !occt_parallel() {
+        return eval.parts.iter().map(one).collect();
+    }
+    let jobs: Vec<(cad_model::Shape, Option<cad_model::mesh_bool::MeshData>)> = eval.parts.iter().map(|p| (p.shape.clone(), p.mesh.clone())).collect();
+    jobs.into_par_iter()
+        .map(|(shape, mesh)| match mesh {
+            Some(m) => Some(cad_model::mesh_bool::mass(&m)),
+            None => shape.mass().ok(),
+        })
+        .collect()
 }
 
 /// Medidas con piezas de malla (libs/cad/PLAN_MALLAS.md): su masa sale de los
 /// triángulos y no se validan con OCCT (son cerradas por construcción). Con un
 /// hueso de 163 000 caras OCCT tardaba 18 s en la masa y 50 s en validar.
 fn mesh_measures(eval: &cad_model::Evaluation) -> Measures {
-    let parts: Vec<Option<cad_model::occt::MassInfo>> = eval
-        .parts
-        .iter()
-        .map(|p| match &p.mesh {
-            Some(m) => Some(cad_model::mesh_bool::mass(m)),
-            None => p.shape.mass().ok(),
-        })
-        .collect();
+    let parts = parts_mass(eval);
     let body = eval.body.as_ref().and_then(|b| {
         let all: Vec<_> = parts.iter().flatten().copied().collect();
         let m = cad_model::mesh_bool::combine_mass(&all)?;
@@ -1720,33 +1738,48 @@ fn mesh_tessellation(m: &cad_model::mesh_bool::MeshData) -> cad_model::occt::Tes
 /// teselarla tardaba 14 s con 163 000 caras), las demás con OCCT. Mismos
 /// números de cara y arista que el cuerpo entero (las piezas van en orden).
 fn parts_tessellation(eval: &cad_model::Evaluation) -> Result<cad_model::occt::Tessellation, String> {
-    let mut out = cad_model::occt::Tessellation::default();
-    let mut face_offset = 0u32;
-    for p in &eval.parts {
-        let faces = p.shape.face_count();
-        let base = out.positions.len() as u32;
-        let own = p.mesh.as_ref().filter(|m| m.1.len() == faces && cad_model::mesh_bool::components(m) == 1);
-        match own {
-            Some(m) => {
-                let t = mesh_tessellation(m);
-                out.positions.extend(t.positions);
-                out.normals.extend(t.normals);
-                out.triangles.extend(t.triangles.iter().map(|tri| tri.map(|i| i + base)));
-                out.triangle_face.extend(t.triangle_face.iter().map(|f| f + face_offset));
-                // Sus aristas son las de los triángulos: no se dibujan
-                out.edges.extend(std::iter::repeat_n(Vec::new(), p.shape.edge_count()));
-            }
+    use rayon::prelude::*;
+    // Cada pieza: su malla propia (si la tiene y calza cara por cara) o el teselado de OCCT
+    let one = |shape: &cad_model::Shape, mesh: Option<&cad_model::mesh_bool::MeshData>| -> Result<(cad_model::occt::Tessellation, bool), String> {
+        let faces = shape.face_count();
+        match mesh.filter(|m| m.1.len() == faces && cad_model::mesh_bool::components(m) == 1) {
+            Some(m) => Ok((mesh_tessellation(m), true)),
             None => {
-                let mut t = p.shape.tessellate(VIEW_DEFLECTION, VIEW_ANGLE).map_err(|e| e.to_string())?;
-                hide_facet_edges(&p.shape, &mut t);
-                out.positions.extend(t.positions);
-                out.normals.extend(t.normals);
-                out.triangles.extend(t.triangles.iter().map(|tri| tri.map(|i| i + base)));
-                out.triangle_face.extend(t.triangle_face.iter().map(|f| f + face_offset));
-                out.edges.extend(t.edges);
+                let mut t = shape.tessellate(VIEW_DEFLECTION, VIEW_ANGLE).map_err(|e| e.to_string())?;
+                hide_facet_edges(shape, &mut t);
+                Ok((t, false))
             }
         }
-        face_offset += faces as u32;
+    };
+    // Con OCCT 8 en paralelo, cada pieza con su copia (teselar escribe en la
+    // forma y dos piezas pueden compartir caras, p. ej. las de un patrón)
+    let done: Vec<(cad_model::occt::Tessellation, bool)> = if eval.parts.len() > 1 && occt_parallel() {
+        let jobs = eval
+            .parts
+            .iter()
+            .map(|p| Ok((if p.mesh.is_some() { p.shape.clone() } else { p.shape.deep_copy()? }, p.mesh.clone())))
+            .collect::<Result<Vec<_>, cad_model::occt::Error>>()
+            .map_err(|e| e.to_string())?;
+        jobs.into_par_iter().map(|(shape, mesh)| one(&shape, mesh.as_ref())).collect::<Result<_, _>>()?
+    } else {
+        eval.parts.iter().map(|p| one(&p.shape, p.mesh.as_ref())).collect::<Result<_, _>>()?
+    };
+    // Unidas en orden: mismos números de cara y arista que el cuerpo entero
+    let mut out = cad_model::occt::Tessellation::default();
+    let mut face_offset = 0u32;
+    for (p, (t, own)) in eval.parts.iter().zip(done) {
+        let base = out.positions.len() as u32;
+        out.positions.extend(t.positions);
+        out.normals.extend(t.normals);
+        out.triangles.extend(t.triangles.iter().map(|tri| tri.map(|i| i + base)));
+        out.triangle_face.extend(t.triangle_face.iter().map(|f| f + face_offset));
+        if own {
+            // Sus aristas son las de los triángulos: no se dibujan
+            out.edges.extend(std::iter::repeat_n(Vec::new(), p.shape.edge_count()));
+        } else {
+            out.edges.extend(t.edges);
+        }
+        face_offset += p.shape.face_count() as u32;
     }
     Ok(out)
 }
@@ -2584,80 +2617,94 @@ fn drawing_info_impl(state: &AppState) -> Result<DrawingInfo, String> {
 }
 
 fn drawing_impl(state: &AppState, views: &[DrawingViewSpec]) -> Result<Vec<DrawingViewResult>, String> {
+    use rayon::prelude::*;
     require_occt()?;
     // Con varias piezas, el rayado sale pieza por pieza (cada una con el suyo, según su material)
     let (body, pieces) = drawing_shapes(state)?;
-    let body = &body;
     let m = body.mass().map_err(|e| e.to_string())?;
     let size = (0..3).map(|k| m.bbox_max[k] - m.bbox_min[k]).fold(0.0, f64::max).max(1.0);
-    views
-        .iter()
-        .map(|v| {
-            // Corte: la mitad del lado de la normal; sus caras sobre el plano se rayan
-            let mut planes: Vec<([f64; 3], [f64; 3])> = Vec::new();
-            let mut cut = match &v.section {
-                Some(s) => {
-                    planes.push((s.origin, s.normal));
-                    Some(body.split_keep(s.origin, s.normal).map_err(|e| e.to_string())?)
-                }
-                None => None,
-            };
-            // Prismas que quitan material (unidos): sus caras laterales y tapas son planos de corte
-            if !v.cut.is_empty() {
-                let tools = v
-                    .cut
-                    .iter()
-                    .map(|p| {
-                        planes.extend(prism_planes(p));
-                        cad_model::Shape::polygon(&p.points).and_then(|f| f.prism(p.dir))
-                    })
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(|e| e.to_string())?;
-                let tool = if tools.len() == 1 { tools.into_iter().next().unwrap() } else { cad_model::Shape::fuse_all(&tools).map_err(|e| e.to_string())? };
-                let from = cut.as_ref().unwrap_or(body);
-                cut = Some(from.cut(&tool).map_err(|e| format!("No se pudo cortar la vista: {e}"))?);
-            }
-            let shape = cut.as_ref().unwrap_or(body);
-            let (mut hatch, mesh) = match &cut {
-                Some(c) => {
-                    let (h, m) = section_hatch(c, &planes, v, size);
-                    (h, if v.shaded { Some(m) } else { None })
-                }
-                None => (Vec::new(), if v.shaded { shaded_mesh(shape, size) } else { None }),
-            };
-            // Varias piezas: el mismo corte en cada una, para saber de cuál es cada triángulo
-            let mut hatch_part = Vec::new();
-            if cut.is_some() && pieces.len() > 1 {
-                let mut per = Vec::new();
-                for (i, shape) in &pieces {
-                    let Ok(Some(c)) = cut_shape(shape, v) else { continue };
-                    let (h, _) = section_hatch(&c, &planes, v, size);
-                    hatch_part.extend(std::iter::repeat_n(*i, h.len()));
-                    per.extend(h);
-                }
-                if per.is_empty() {
-                    hatch_part.clear();
-                } else {
-                    hatch = per;
-                }
-            }
-            let lines = shape.hlr(v.eye, v.xdir, size * 2e-4).map_err(|e| e.to_string())?;
-            let lines = lines
-                .into_iter()
-                .map(|l| DrawingLine {
-                    kind: match l.kind {
-                        cad_model::occt::HlrKind::Visible => "visible",
-                        cad_model::occt::HlrKind::VisibleOutline => "outline",
-                        cad_model::occt::HlrKind::Hidden => "hidden",
-                        cad_model::occt::HlrKind::HiddenOutline => "hidden_outline",
-                        cad_model::occt::HlrKind::Smooth => "smooth",
-                    },
-                    points: l.points,
-                })
-                .collect();
-            Ok(DrawingViewResult { lines, hatch, hatch_part, mesh })
+    // Cada vista en su hilo con OCCT 8 (manejo de errores por hilo). Cada una con
+    // su copia de la pieza: teselar escribe en la forma y no se comparte entre hilos
+    if views.len() > 1 && cad_model::occt::occt_version().starts_with('8') {
+        let copies = views
+            .iter()
+            .map(|_| {
+                let b = body.deep_copy()?;
+                let p = pieces.iter().map(|(i, s)| Ok((*i, s.deep_copy()?))).collect::<Result<Vec<_>, cad_model::occt::Error>>()?;
+                Ok((b, p))
+            })
+            .collect::<Result<Vec<_>, cad_model::occt::Error>>()
+            .map_err(|e| e.to_string())?;
+        return copies.into_par_iter().zip(views.par_iter()).map(|((b, p), v)| drawing_view(&b, &p, v, size)).collect();
+    }
+    views.iter().map(|v| drawing_view(&body, &pieces, v, size)).collect()
+}
+
+/// Una vista del plano: líneas vistas y ocultas (HLR), rayado del corte y malla sombreada.
+fn drawing_view(body: &cad_model::Shape, pieces: &[(u32, cad_model::Shape)], v: &DrawingViewSpec, size: f64) -> Result<DrawingViewResult, String> {
+    // Corte: la mitad del lado de la normal; sus caras sobre el plano se rayan
+    let mut planes: Vec<([f64; 3], [f64; 3])> = Vec::new();
+    let mut cut = match &v.section {
+        Some(s) => {
+            planes.push((s.origin, s.normal));
+            Some(body.split_keep(s.origin, s.normal).map_err(|e| e.to_string())?)
+        }
+        None => None,
+    };
+    // Prismas que quitan material (unidos): sus caras laterales y tapas son planos de corte
+    if !v.cut.is_empty() {
+        let tools = v
+            .cut
+            .iter()
+            .map(|p| {
+                planes.extend(prism_planes(p));
+                cad_model::Shape::polygon(&p.points).and_then(|f| f.prism(p.dir))
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        let tool = if tools.len() == 1 { tools.into_iter().next().unwrap() } else { cad_model::Shape::fuse_all(&tools).map_err(|e| e.to_string())? };
+        let from = cut.as_ref().unwrap_or(body);
+        cut = Some(from.cut(&tool).map_err(|e| format!("No se pudo cortar la vista: {e}"))?);
+    }
+    let shape = cut.as_ref().unwrap_or(body);
+    let (mut hatch, mesh) = match &cut {
+        Some(c) => {
+            let (h, m) = section_hatch(c, &planes, v, size);
+            (h, if v.shaded { Some(m) } else { None })
+        }
+        None => (Vec::new(), if v.shaded { shaded_mesh(shape, size) } else { None }),
+    };
+    // Varias piezas: el mismo corte en cada una, para saber de cuál es cada triángulo
+    let mut hatch_part = Vec::new();
+    if cut.is_some() && pieces.len() > 1 {
+        let mut per = Vec::new();
+        for (i, shape) in pieces {
+            let Ok(Some(c)) = cut_shape(shape, v) else { continue };
+            let (h, _) = section_hatch(&c, &planes, v, size);
+            hatch_part.extend(std::iter::repeat_n(*i, h.len()));
+            per.extend(h);
+        }
+        if per.is_empty() {
+            hatch_part.clear();
+        } else {
+            hatch = per;
+        }
+    }
+    let lines = shape.hlr(v.eye, v.xdir, size * 2e-4).map_err(|e| e.to_string())?;
+    let lines = lines
+        .into_iter()
+        .map(|l| DrawingLine {
+            kind: match l.kind {
+                cad_model::occt::HlrKind::Visible => "visible",
+                cad_model::occt::HlrKind::VisibleOutline => "outline",
+                cad_model::occt::HlrKind::Hidden => "hidden",
+                cad_model::occt::HlrKind::HiddenOutline => "hidden_outline",
+                cad_model::occt::HlrKind::Smooth => "smooth",
+            },
+            points: l.points,
         })
-        .collect()
+        .collect();
+    Ok(DrawingViewResult { lines, hatch, hatch_part, mesh })
 }
 
 /// Una pieza cortada como la vista (el plano del corte y los prismas); `None` si no lleva corte.
@@ -4919,13 +4966,28 @@ mod tests {
         assert_eq!(centers, [(1, 5.0), (2, 70.0)]);
         // La vista de frente va de una punta del ensamble a la otra; el corte se raya por pieza
         let front = DrawingViewSpec { eye: [0.0, -1.0, 0.0], xdir: [1.0, 0.0, 0.0], section: Some(DrawingSection { origin: [0.0, 10.0, 0.0], normal: [0.0, 1.0, 0.0] }), cut: vec![], shaded: false };
-        let v = drawing_impl(&state, &[front]).unwrap().remove(0);
+        let v = drawing_impl(&state, std::slice::from_ref(&front)).unwrap().remove(0);
         let xs = v.lines.iter().flat_map(|l| l.points.iter().map(|p| p[0]));
         let (lo, hi) = xs.fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), x| (a.min(x), b.max(x)));
         assert!(lo.abs() < 1e-3 && (hi - 90.0).abs() < 1e-3, "{lo} {hi}");
         let mut which = v.hatch_part.clone();
         which.dedup();
         assert_eq!(which, [0, 1], "cada instancia con la pieza de la que viene");
+        // Varias vistas a la vez (en paralelo con OCCT 8, cada una con su copia):
+        // lo mismo que de a una
+        let views = [
+            DrawingViewSpec { cut: vec![], ..front.clone() },
+            DrawingViewSpec { eye: [0.0, 0.0, 1.0], xdir: [1.0, 0.0, 0.0], section: None, cut: vec![], shaded: true },
+            DrawingViewSpec { eye: [1.0, 0.0, 0.0], xdir: [0.0, 1.0, 0.0], section: None, cut: vec![], shaded: false },
+            DrawingViewSpec { eye: [1.0, -1.0, 1.0], xdir: [1.0, 1.0, 0.0], section: None, cut: vec![], shaded: false },
+        ];
+        let all = drawing_impl(&state, &views).unwrap();
+        for (v, got) in views.iter().zip(&all) {
+            let one = drawing_impl(&state, std::slice::from_ref(v)).unwrap().remove(0);
+            let sum = |r: &DrawingViewResult| r.lines.iter().map(|l| l.points.len()).sum::<usize>();
+            assert_eq!((got.lines.len(), sum(got), got.hatch.len(), got.hatch_part.clone()), (one.lines.len(), sum(&one), one.hatch.len(), one.hatch_part.clone()));
+            assert_eq!(got.mesh.as_ref().map(|m| m.indices.len()), one.mesh.as_ref().map(|m| m.indices.len()));
+        }
         // El plano queda en la pestaña y vuelve al volver a ella
         change_tabs(&state, |t| t.activate(0)).unwrap();
         assert!(state.cad_doc().unwrap().drawing.is_none());
