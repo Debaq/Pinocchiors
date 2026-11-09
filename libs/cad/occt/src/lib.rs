@@ -303,6 +303,13 @@ pub enum CurveKind {
     Other,
 }
 
+/// Qué va en un componente de un STEP de ensamble: una pieza o un subensamble (su número).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepComponent {
+    Part(usize),
+    Assembly(usize),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FaceInfo {
     pub surface: SurfaceKind,
@@ -1220,6 +1227,43 @@ impl Shape {
         let colors: Vec<f64> = parts.iter().flat_map(|(_, _, c)| c.unwrap_or([-1.0; 3])).collect();
         take_bytes(|out, len| unsafe {
             ffi::cad_write_step_parts(shapes.as_ptr(), name_ptrs.as_ptr(), colors.as_ptr(), parts.len() as i32, out, len)
+        })
+    }
+
+    /// STEP de ensamble con árbol (otros programas lo abren como ensamble): cada pieza una vez
+    /// (forma en sus coordenadas, nombre y color), los ensambles por nombre (el primero es la
+    /// raíz) y sus componentes: (ensamble, `Component`, matriz 3×4 rígida, nombre).
+    pub fn assembly_to_step(parts: &[(&Shape, &str, Option<[f64; 3]>)], assemblies: &[&str], components: &[(usize, StepComponent, [[f64; 4]; 3], &str)]) -> Result<Vec<u8>> {
+        let cstr = |n: &str| std::ffi::CString::new(n.replace('\0', "")).unwrap_or_default();
+        let names: Vec<std::ffi::CString> = parts.iter().map(|(_, n, _)| cstr(n)).collect();
+        let name_ptrs: Vec<*const std::ffi::c_char> = names.iter().map(|n| n.as_ptr()).collect();
+        let shapes: Vec<*const ffi::CadShape> = parts.iter().map(|(s, _, _)| s.ptr()).collect();
+        let colors: Vec<f64> = parts.iter().flat_map(|(_, _, c)| c.unwrap_or([-1.0; 3])).collect();
+        let asm_names: Vec<std::ffi::CString> = assemblies.iter().map(|n| cstr(n)).collect();
+        let asm_ptrs: Vec<*const std::ffi::c_char> = asm_names.iter().map(|n| n.as_ptr()).collect();
+        let comp_names: Vec<std::ffi::CString> = components.iter().map(|c| cstr(c.3)).collect();
+        let comp_ptrs: Vec<*const std::ffi::c_char> = comp_names.iter().map(|n| n.as_ptr()).collect();
+        let parent: Vec<i32> = components.iter().map(|c| c.0 as i32).collect();
+        let kind: Vec<i32> = components.iter().map(|c| matches!(c.1, StepComponent::Assembly(_)) as i32).collect();
+        let reference: Vec<i32> = components.iter().map(|c| match c.1 { StepComponent::Part(i) | StepComponent::Assembly(i) => i as i32 }).collect();
+        let matrix: Vec<f64> = components.iter().flat_map(|c| c.2.iter().flat_map(|r| r.iter().copied()).collect::<Vec<_>>()).collect();
+        take_bytes(|out, len| unsafe {
+            ffi::cad_write_step_assembly(
+                shapes.as_ptr(),
+                name_ptrs.as_ptr(),
+                colors.as_ptr(),
+                parts.len() as i32,
+                asm_ptrs.as_ptr(),
+                assemblies.len() as i32,
+                parent.as_ptr(),
+                kind.as_ptr(),
+                reference.as_ptr(),
+                matrix.as_ptr(),
+                comp_ptrs.as_ptr(),
+                components.len() as i32,
+                out,
+                len,
+            )
         })
     }
 

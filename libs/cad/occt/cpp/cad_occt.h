@@ -224,6 +224,15 @@ double cad_min_distance(const CadShape* a, const CadShape* b, double* pa, double
 int32_t cad_write_step_parts(const CadShape* const* shapes, const char* const* names, const double* colors,
                              int32_t n, uint8_t** out, size_t* len);
 
+// STEP de ensamble con árbol: piezas (cada una una vez, en sus coordenadas, con nombre y color),
+// ensambles (el 0 es la raíz) y componentes: en el ensamble `comp_parent[i]` va la pieza
+// (`comp_kind` 0) o el subensamble (1) número `comp_ref[i]`, ubicado con la matriz 3×4 rígida
+// `comp_matrix[12 i ..]` (por filas) y con su nombre.
+int32_t cad_write_step_assembly(const CadShape* const* shapes, const char* const* names, const double* colors, int32_t n_parts,
+                                const char* const* asm_names, int32_t n_asm, const int32_t* comp_parent, const int32_t* comp_kind,
+                                const int32_t* comp_ref, const double* comp_matrix, const char* const* comp_names, int32_t n_comp,
+                                uint8_t** out, size_t* len);
+
 // Primer cruce de la semirrecta origen + t·dir (t > 0) con las caras de la forma; −1 si no hay.
 double cad_ray_hit(const CadShape* s, const double* origin, const double* dir);
 // Prisma de una cara plana hacia su normal, con las paredes inclinadas `angle` (rad;

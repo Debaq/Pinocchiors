@@ -196,6 +196,23 @@ unsafe extern "C" {
     pub fn cad_split_by(s: *const CadShape, tools: *const *const CadShape, n: i32) -> *mut CadShape;
     pub fn cad_draft_prism(face: *const CadShape, height: f64, angle: f64) -> *mut CadShape;
     pub fn cad_offset_face(face: *const CadShape, distance: f64) -> *mut CadShape;
+    #[allow(clippy::too_many_arguments)]
+    pub fn cad_write_step_assembly(
+        shapes: *const *const CadShape,
+        names: *const *const std::ffi::c_char,
+        colors: *const f64,
+        n_parts: i32,
+        asm_names: *const *const std::ffi::c_char,
+        n_asm: i32,
+        comp_parent: *const i32,
+        comp_kind: *const i32,
+        comp_ref: *const i32,
+        comp_matrix: *const f64,
+        comp_names: *const *const std::ffi::c_char,
+        n_comp: i32,
+        out: *mut *mut u8,
+        len: *mut usize,
+    ) -> i32;
     pub fn cad_write_step_parts(
         shapes: *const *const CadShape,
         names: *const *const std::ffi::c_char,

@@ -438,3 +438,32 @@ fn en8_otros_agujeros_iguales() {
     assert_relative_eq!(offsets[0][0], 20.0, epsilon = 1e-6);
     assert_relative_eq!(offsets[1][0], 40.0, epsilon = 1e-6);
 }
+
+#[test]
+fn en12_step_con_arbol() {
+    if !occt::available() {
+        return;
+    }
+    let ev = box_doc(10.0).evaluate();
+    let shape = &ev.parts[0].shape;
+    let id = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]];
+    let moved = |x: f64| [[1.0, 0.0, 0.0, x], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]];
+    // Raíz con dos copias de la caja y un subensamble que lleva otra
+    let comps = vec![
+        (0, occt::StepComponent::Part(0), id, "Caja 1"),
+        (0, occt::StepComponent::Part(0), moved(20.0), "Caja 2"),
+        (0, occt::StepComponent::Assembly(1), moved(50.0), "Sub 1"),
+        (1, occt::StepComponent::Part(0), id, "Caja 3"),
+    ];
+    let bytes = Shape::assembly_to_step(&[(shape, "Caja", Some([1.0, 0.0, 0.0]))], &["Ensamble", "Sub"], &comps).unwrap();
+    let text = String::from_utf8_lossy(&bytes);
+    // Cada uso de una pieza o subensamble es un NEXT_ASSEMBLY_USAGE_OCCURRENCE; la caja se define una vez
+    assert_eq!(text.matches("NEXT_ASSEMBLY_USAGE_OCCURRENCE").count(), 4, "{text}");
+    assert_eq!(text.matches("MANIFOLD_SOLID_BREP").count(), 1);
+    assert!(text.contains("'Caja'") && text.contains("'Sub'") && text.contains("'Ensamble'"));
+    // Leído de vuelta: las tres cajas en su lugar
+    let back = Shape::from_step(&bytes).unwrap();
+    let m = back.mass().unwrap();
+    assert!((m.volume - 3000.0).abs() < 1e-6, "{}", m.volume);
+    assert!((m.bbox_max[0] - 60.0).abs() < 1e-6);
+}

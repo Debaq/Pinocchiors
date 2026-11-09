@@ -3547,6 +3547,58 @@ int32_t cad_write_step_parts(const CadShape* const* shapes, const char* const* n
     });
 }
 
+int32_t cad_write_step_assembly(const CadShape* const* shapes, const char* const* names, const double* colors, int32_t n_parts,
+                                const char* const* asm_names, int32_t n_asm, const int32_t* comp_parent, const int32_t* comp_kind,
+                                const int32_t* comp_ref, const double* comp_matrix, const char* const* comp_names, int32_t n_comp,
+                                uint8_t** out, size_t* len) {
+    quiet_messages();
+    return guard("escribir STEP del ensamble", 0, [&] {
+        if (n_asm < 1) throw Standard_Failure("el ensamble no tiene raíz");
+        Handle(XCAFApp_Application) app = XCAFApp_Application::GetApplication();
+        Handle(TDocStd_Document) doc;
+        app->NewDocument("MDTV-XCAF", doc);
+        Handle(XCAFDoc_ShapeTool) st = XCAFDoc_DocumentTool::ShapeTool(doc->Main());
+        Handle(XCAFDoc_ColorTool) ct = XCAFDoc_DocumentTool::ColorTool(doc->Main());
+        std::vector<TDF_Label> parts(n_parts), asms(n_asm);
+        for (int i = 0; i < n_parts; i++) {
+            parts[i] = st->AddShape(shapes[i]->s, Standard_False);
+            TDataStd_Name::Set(parts[i], TCollection_ExtendedString(names[i], Standard_True));
+            const double* c = colors + 3 * i;
+            if (c[0] >= 0) ct->SetColor(parts[i], Quantity_Color(c[0], c[1], c[2], Quantity_TOC_sRGB), XCAFDoc_ColorGen);
+        }
+        for (int a = 0; a < n_asm; a++) {
+            asms[a] = st->NewShape();
+            TDataStd_Name::Set(asms[a], TCollection_ExtendedString(asm_names[a], Standard_True));
+        }
+        for (int i = 0; i < n_comp; i++) {
+            const int parent = comp_parent[i], ref = comp_ref[i];
+            if (parent < 0 || parent >= n_asm) throw Standard_Failure("componente con un ensamble que no existe");
+            TDF_Label target;
+            if (comp_kind[i] == 0) {
+                if (ref < 0 || ref >= n_parts) throw Standard_Failure("componente con una pieza que no existe");
+                target = parts[ref];
+            } else {
+                if (ref < 0 || ref >= n_asm || ref == parent) throw Standard_Failure("componente con un subensamble que no existe");
+                target = asms[ref];
+            }
+            const double* m = comp_matrix + 12 * i;
+            gp_Trsf t;
+            t.SetValues(m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11]);
+            TDF_Label c = st->AddComponent(asms[parent], target, TopLoc_Location(t));
+            if (!c.IsNull()) TDataStd_Name::Set(c, TCollection_ExtendedString(comp_names[i], Standard_True));
+        }
+        st->UpdateAssemblies();
+        STEPCAFControl_Writer w;
+        w.SetNameMode(Standard_True);
+        w.SetColorMode(Standard_True);
+        if (!w.Transfer(doc, STEPControl_AsIs)) throw Standard_Failure("no se pudo traducir el ensamble a STEP");
+        std::ostringstream os;
+        if (w.WriteStream(os) != IFSelect_RetDone) throw Standard_Failure("no se pudo escribir STEP");
+        app->Close(doc);
+        return give_bytes(os.str(), out, len);
+    });
+}
+
 int32_t cad_hlr(const CadShape* s, const double* eye, const double* xdir, double deflection, uint8_t** out, size_t* len) {
     return guard("proyectar vista", 0, [&] {
         gp_Ax2 cs(gp::Origin(), gp_Dir(eye[0], eye[1], eye[2]), gp_Dir(xdir[0], xdir[1], xdir[2]));

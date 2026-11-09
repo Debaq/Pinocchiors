@@ -3445,7 +3445,102 @@ pub async fn cad_export_tabs(app: AppHandle, path: String, format: String, tab: 
     in_background(app, move |state| export_tabs_impl(state, &path, &format, tab)).await
 }
 
+/// Árbol de un STEP de ensamble (PLAN_ENSAMBLE EN12): cada pieza una vez, sus copias como
+/// ubicaciones y los subensambles anidados, con nombres y colores.
+#[derive(Default)]
+struct StepTree {
+    parts: Vec<(cad_model::Shape, String, Option<[f64; 3]>)>,
+    keys: Vec<(cad_model::PartId, Option<[i64; 3]>)>,
+    asms: Vec<String>,
+    comps: Vec<(usize, cad_model::occt::StepComponent, [[f64; 4]; 3], String)>,
+    subs: Vec<(TabId, usize)>,
+}
+
+impl StepTree {
+    /// Agrega un ensamble (sus instancias en su lugar) y devuelve su número
+    fn level(&mut self, state: &AppState, doc: &Document, asm: &cad_model::Assembly, ev: &cad_model::Evaluation, name: String, depth: usize) -> Result<usize, String> {
+        use cad_model::occt::StepComponent;
+        let idx = self.asms.len();
+        self.asms.push(name);
+        let (asm, sol, _) = cad_model::assembly_refs::solve_with(ev, asm);
+        for inst in asm.instances.iter().filter(|i| !i.suppressed) {
+            let Some((_, pos, rot)) = sol.poses.iter().find(|p| p.0 == inst.id) else { continue };
+            let m = cad_model::assembly::instance_matrix(*pos, *rot);
+            let (tab, local) = cad_model::split_tab_feature(inst.part.feature);
+            let sub = {
+                let tabs = state.cad_tabs.lock().unwrap();
+                let is_sub = tabs.get(tab).is_some_and(|t| !t.kind.is_design()) && local == cad_model::SUBASSEMBLY_PART.feature && inst.part.index == cad_model::SUBASSEMBLY_PART.index;
+                is_sub.then(|| tabs.get(tab).map(|t| t.name.clone()).unwrap_or_default())
+            };
+            if let Some(sub_name) = sub.filter(|_| depth < MAX_NESTING) {
+                let child = match self.subs.iter().find(|s| s.0 == tab) {
+                    Some(s) => s.1,
+                    None => {
+                        let (designs, merged) = merged_assembly(state, tab, depth + 1);
+                        let doc2 = {
+                            let tabs = state.cad_tabs.lock().unwrap();
+                            tabs.assembly_document(tab, &assembly_part_names(&tabs, &designs, &merged)).ok_or("Esa pestaña ya no está")?
+                        };
+                        let a2 = doc2.assembly.clone().unwrap_or_default();
+                        let i = self.level(state, &doc2, &a2, &merged, sub_name, depth + 1)?;
+                        self.subs.push((tab, i));
+                        i
+                    }
+                };
+                self.comps.push((idx, StepComponent::Assembly(child), m, inst.name.clone()));
+                continue;
+            }
+            let Some(part) = ev.parts.iter().find(|p| p.id == inst.part) else { continue };
+            let mirror = inst.mirror.map(|n| n.map(|v| (v * 1e6).round() as i64));
+            let k = match self.keys.iter().position(|key| *key == (inst.part, mirror)) {
+                Some(k) => k,
+                None => {
+                    let shape = match inst.mirror {
+                        Some(n) => part.shape.mirror([0.0; 3], n).map_err(|e| e.to_string())?,
+                        None => part.shape.clone(),
+                    };
+                    let props = doc.parts.iter().find(|q| q.part == inst.part);
+                    let name = props.and_then(|q| q.name.clone()).unwrap_or_else(|| inst.name.clone());
+                    let color = props.and_then(|q| q.color.as_deref()).and_then(hex_rgb);
+                    self.parts.push((shape, name, color));
+                    self.keys.push((inst.part, mirror));
+                    self.parts.len() - 1
+                }
+            };
+            self.comps.push((idx, StepComponent::Part(k), m, inst.name.clone()));
+        }
+        Ok(idx)
+    }
+
+    fn write(&self) -> Result<Vec<u8>, String> {
+        if self.comps.is_empty() {
+            return Err("El ensamble no tiene instancias".into());
+        }
+        let parts: Vec<_> = self.parts.iter().map(|(s, n, c)| (s, n.as_str(), *c)).collect();
+        let asms: Vec<&str> = self.asms.iter().map(String::as_str).collect();
+        let comps: Vec<_> = self.comps.iter().map(|(a, c, m, n)| (*a, *c, *m, n.as_str())).collect();
+        cad_model::Shape::assembly_to_step(&parts, &asms, &comps).map_err(|e| e.to_string())
+    }
+}
+
 fn export_tabs_impl(state: &AppState, path: &str, format: &str, tab: Option<TabId>) -> Result<u64, String> {
+    // Un ensamble en STEP: con su árbol
+    if matches!(format, "step" | "stp")
+        && let Some(t) = tab
+        && state.cad_tabs.lock().unwrap().get(t).is_some_and(|x| !x.kind.is_design())
+    {
+        let (designs, merged) = merged_assembly(state, t, 0);
+        let (doc, name) = {
+            let tabs = state.cad_tabs.lock().unwrap();
+            let doc = tabs.assembly_document(t, &assembly_part_names(&tabs, &designs, &merged)).ok_or("Esa pestaña ya no está")?;
+            (doc, tabs.get(t).map(|x| x.name.clone()).unwrap_or_default())
+        };
+        let mut tree = StepTree::default();
+        tree.level(state, &doc, &doc.assembly.clone().unwrap_or_default(), &merged, name, 0)?;
+        let bytes = tree.write()?;
+        std::fs::write(path, &bytes).map_err(|e| format!("No se pudo escribir {path}: {e}"))?;
+        return Ok(bytes.len() as u64);
+    }
     let items = match tab {
         Some(t) => tab_export_items(state, t)?,
         None => {
@@ -3536,8 +3631,17 @@ fn export_impl(state: &AppState, path: &str, format: &str, part: Option<cad_mode
             .map(|(s, n, c)| fit(&s).map(|s| (s, n, c)))
             .collect::<Result<_, _>>()?;
         if step {
-            let list: Vec<_> = items.iter().map(|(s, n, c)| (s, n.as_str(), *c)).collect();
-            let bytes = cad_model::Shape::parts_to_step(&list).map_err(|e| e.to_string())?;
+            // STEP con árbol (cada pieza una vez y sus copias como ubicaciones); con la compensación
+            // de la impresora (escala sin forma rígida) va pieza por pieza como antes
+            let bytes = if shrink.is_none() {
+                let mut tree = StepTree::default();
+                let root = state.cad_tabs.lock().unwrap().active_tab().map(|t| t.name.clone()).unwrap_or_else(|| "Ensamble".into());
+                tree.level(state, doc, doc.assembly.as_ref().ok_or("El diseño no tiene ensamble")?, ev, root, 0)?;
+                tree.write()?
+            } else {
+                let list: Vec<_> = items.iter().map(|(s, n, c)| (s, n.as_str(), *c)).collect();
+                cad_model::Shape::parts_to_step(&list).map_err(|e| e.to_string())?
+            };
             std::fs::write(p, &bytes).map_err(|e| format!("No se pudo escribir {path}: {e}"))?;
         } else {
             let scene = shapes_scene(&items.iter().map(|(s, n, _)| (s, n.clone())).collect::<Vec<_>>())?;

@@ -93,6 +93,7 @@ CadShape* cad_split_by(const CadShape* s, const CadShape* const* t, int32_t n) {
 CadShape* cad_draft_prism(const CadShape* f, double h, double a) { (void)f; (void)h; (void)a; FAIL_PTR; }
 CadShape* cad_offset_face(const CadShape* f, double d) { (void)f; (void)d; FAIL_PTR; }
 int32_t cad_write_step_parts(const CadShape* const* s, const char* const* nm, const double* c, int32_t n, uint8_t** o, size_t* l) { (void)s; (void)nm; (void)c; (void)n; (void)o; (void)l; FAIL_INT; }
+int32_t cad_write_step_assembly(const CadShape* const* s, const char* const* nm, const double* c, int32_t np, const char* const* an, int32_t na, const int32_t* cp, const int32_t* ck, const int32_t* cr, const double* cm, const char* const* cn, int32_t nc, uint8_t** o, size_t* l) { (void)s; (void)nm; (void)c; (void)np; (void)an; (void)na; (void)cp; (void)ck; (void)cr; (void)cm; (void)cn; (void)nc; (void)o; (void)l; FAIL_INT; }
 int32_t cad_face_indices_in(const CadShape* p, const CadShape* c, int32_t* o) { (void)p; (void)c; (void)o; FAIL_INT; }
 int32_t cad_vertex_point(const CadShape* s, int32_t i, double* o) { (void)s; (void)i; (void)o; FAIL_INT; }
 CadShape* cad_make_vertex(const double* p) { (void)p; FAIL_PTR; }
