@@ -445,6 +445,7 @@ export const en_print: Catalog = {
   "Enviar e imprimir": "Send and print",
   "Solo enviar": "Send only",
   "Subir el gcode sin empezar a imprimir": "Upload the gcode without starting the print",
+  "Mandar el gcode a una impresora por la red": "Send the G-code to a printer over the network",
   // Mensajes del backend (moonraker.rs)
   "Falta la dirección de la impresora": "The printer address is missing",
   "Dirección de impresora no válida: {address}": "Invalid printer address: {address}",

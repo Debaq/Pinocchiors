@@ -2,7 +2,7 @@ import { JSX, ParentComponent, splitProps } from "solid-js";
 import { clsx } from "clsx";
 import { Tooltip } from "./Tooltip";
 
-export type ButtonVariant = "default" | "primary" | "ghost" | "danger";
+export type ButtonVariant = "default" | "primary" | "ghost" | "danger" | "send" | "sendSoft";
 export type ButtonSize = "sm" | "md" | "lg";
 
 export interface ButtonProps extends JSX.ButtonHTMLAttributes<HTMLButtonElement> {
@@ -36,6 +36,17 @@ const variantClasses: Record<ButtonVariant, string> = {
     bg-red/20 border-red/50 text-red
     hover:bg-red/30 hover:border-red
     active:bg-red/40
+  `,
+  // Mandar a la impresora: siempre amarillo, en todos los temas
+  send: `
+    bg-yellow border-yellow text-bg
+    hover:brightness-110
+    active:brightness-95
+  `,
+  sendSoft: `
+    bg-yellow/15 border-yellow/60 text-yellow
+    hover:bg-yellow/25 hover:border-yellow
+    active:bg-yellow/35
   `,
 };
 

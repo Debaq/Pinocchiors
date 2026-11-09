@@ -603,6 +603,12 @@ export const SlicerSection: Component<{
               </section>
               <section class="space-y-1.5">
                 <h4 class="text-xs font-semibold uppercase tracking-wider text-text-muted">{t("Mandar por la red")}</h4>
+                {/* Enviar el último laminado a la impresora elegida (sin impresoras, se agregan aquí mismo, abajo) */}
+                <Show when={result() && netPrinters().length > 0}>
+                  <div class="max-w-[420px] pb-1">
+                    <SendToPrinter slicedModel={slicedModel()} />
+                  </div>
+                </Show>
                 <PrinterTab confirm={props.confirm} />
               </section>
             </div>
@@ -658,6 +664,9 @@ export const SlicerSection: Component<{
                   <Button onClick={saveGcode} fullWidth size="sm" icon={<Icons.Download size={14} />}>
                     {t("Guardar gcode")}
                   </Button>
+                  <Button onClick={() => props.onTab("printer")} fullWidth size="sm" variant="send" icon={<Icons.Printer size={14} />} title={t("Mandar el gcode a una impresora por la red")}>
+                    {t("Enviar")}
+                  </Button>
                 </Show>
               </div>
             }
@@ -676,6 +685,12 @@ export const SlicerSection: Component<{
             <p class="text-[11px] text-red">{error()}</p>
           </Show>
           <p class="text-[10px] text-text-dim">{t("Motor de OrcaSlicer {v}", { v: info()?.orca_version ?? "" })}</p>
+        </footer>
+      </Show>
+      {/* En la pestaña Impresora, enviar también queda siempre a mano abajo */}
+      <Show when={props.tab === "printer" && result() && netPrinters().length > 0}>
+        <footer class="shrink-0 border-t border-border px-3 py-2">
+          <SendToPrinter slicedModel={slicedModel()} />
         </footer>
       </Show>
     </div>

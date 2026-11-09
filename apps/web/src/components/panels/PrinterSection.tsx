@@ -257,13 +257,13 @@ export const SendToPrinter: Component<{
               onClick={() => send(true)}
               disabled={busy() || !name().trim() || mismatch() || (needsSlot() && !slot())}
               size="sm"
-              variant="primary"
+              variant="send"
               icon={<Icons.Printer size={14} />}
               class="flex-1"
             >
               {busy() ? t("Enviando...") : t("Enviar e imprimir")}
             </Button>
-            <Button onClick={() => send(false)} disabled={busy() || !name().trim() || mismatch()} size="sm" variant="ghost" title={t("Subir el gcode sin empezar a imprimir")}>
+            <Button onClick={() => send(false)} disabled={busy() || !name().trim() || mismatch()} size="sm" variant="sendSoft" title={t("Subir el gcode sin empezar a imprimir")}>
               {t("Solo enviar")}
             </Button>
           </div>
