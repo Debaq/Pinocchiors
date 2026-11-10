@@ -11,8 +11,8 @@ import { parse as parseFont, type Font } from "opentype.js";
 import { layoutText, type Contour } from "../../lib/sketchText";
 import { dragJointOf, dragPlane, mateAxis, measuredAngle, measuredDistance, nextAngle, nextDistance, turned } from "../../lib/assemblyDrag";
 import { connectorWorld, explodeOffsets, moveAssemblyMesh, poseDeltas, poseOf, solutionPoses, type Pose3 } from "../../lib/assemblyTools";
-import { fitReport, CONSTRAINT_LABELS, editsAsSketch, geometryPoints, type Report3d, type Sketch3d, type Plane, addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, curvePolyline, constraintValue, hasDiameterTwin, swapDiameter, isReference, isLoosePoint, isSolidPoint, removeLoosePoint, leavingDirection, placeSnap, tangentArc, type CadStore, designMass, dragByHandle, flipByHandle, handleField, handleValue, partColor, partHidden, samePart, hasScanPiece, explodeAssemblyMesh, resolvedAssembly, type AssemblyRange, type CadMesh, type FeatureHandle, type FeatureKind, type MeasureItem, type Measurement, type P2, type P3, type ScanOutline, type Sketch, type SketchConstraint } from "../../lib/cad";
-import { infer, solidRefs, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
+import { fitReport, CONSTRAINT_LABELS, editsAsSketch, geometryPoints, type Report3d, type Sketch3d, type Plane, addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, curvePolyline, constraintValue, hasDiameterTwin, swapDiameter, isReference, isLoosePoint, isSolidPoint, removeLoosePoint, freeCurveLine, leavingDirection, placeSnap, tangentArc, type CadStore, designMass, dragByHandle, flipByHandle, handleField, handleValue, partColor, partHidden, samePart, hasScanPiece, explodeAssemblyMesh, resolvedAssembly, type AssemblyRange, type CadMesh, type FeatureHandle, type FeatureKind, type MeasureItem, type Measurement, type P2, type P3, type ScanOutline, type Sketch, type SketchConstraint } from "../../lib/cad";
+import { infer, solidRefs, SNAP_GLYPHS, type AnchorSrc, type AwakePoint, type Snap, type SnapKind } from "../../lib/sketchSnap";
 import { angleView, applyFrame, clipCenter, invertFrame, measureConstraint, rotation, scaling, selectedEntities, splitEntityAt, transformSelection, translation, type Frame, type Xform } from "../../lib/sketchTransform";
 import { mergeDuplicate, rejoinSplit, sameEntities, trimByStroke, trimRemoved } from "../../lib/sketchEdit";
 import { describeEntity, spreadCandidates } from "../../lib/sketchClarify";
@@ -578,6 +578,8 @@ export const CadView: Component<CadViewProps> = (props) => {
     if (viewer) viewer.scanPickHidden = on_;
   });
   let dragging: number | undefined;
+  /** Último anclaje bajo el punto que se arrastra: al soltar queda pegado ahí */
+  let dragHit: Snap | undefined;
   // Arrastre de una curva entera (una línea se corre; un círculo cambia de radio)
   let entityDrag: { id: number; start: P2; from: Sketch; moved: boolean } | undefined;
   // Lazo libre (Ctrl+arrastrar en vacío con Elegir): sus puntos en pantalla
@@ -1632,6 +1634,8 @@ export const CadView: Component<CadViewProps> = (props) => {
     if (!plane || !viewer) return undefined;
     const s = viewer.mmPerUnit;
     const edges: P3[][] = [];
+    // De dónde sale cada polilínea: la arista del sólido o la entidad del otro sketch (para ligar el punto)
+    const sources: (AnchorSrc | undefined)[] = [];
     let start = 0;
     for (const end of m?.edgeEnds ?? []) {
       const poly: P3[] = [];
@@ -1639,6 +1643,7 @@ export const CadView: Component<CadViewProps> = (props) => {
         const [x, y, z] = m!.edgePoints.subarray(i * 3, i * 3 + 3);
         poly.push([x * s, -z * s, y * s]);
       }
+      sources.push({ edge: edges.length });
       edges.push(poly);
       start = end;
     }
@@ -1648,22 +1653,62 @@ export const CadView: Component<CadViewProps> = (props) => {
       const at = new Map(outline.sketch.points.map((p) => [p.id, [p.x, p.y] as P2]));
       for (const e of outline.sketch.entities) {
         const pts = entityPolyline(e.geometry, at);
-        if (pts && pts.length >= 2) edges.push(pts.map((p) => planeToWorld(plane, p)));
+        if (pts && pts.length >= 2) {
+          sources.push(undefined);
+          edges.push(pts.map((p) => planeToWorld(plane, p)));
+        }
       }
     }
     // También lo dibujado en los otros sketches visibles (anclajes fijos: el otro no cambia)
     const editing = ui.session()?.feature;
     const hidden = ui.hiddenSketches();
+    // Solo se liga a un sketch anterior en el historial (uno posterior todavía no está al recalcular)
+    const order = new Map((store.doc()?.features ?? []).map((f, i) => [f.id, i]));
+    const before = (id: number) => editing !== undefined && (order.get(id) ?? Infinity) < (order.get(editing) ?? -Infinity);
     for (const v of store.result()?.sketches ?? []) {
       if (v.id === editing || hidden.includes(v.id)) continue;
       const at = new Map(v.sketch.points.map((p) => [p.id, [p.x, p.y] as P2]));
       for (const e of v.sketch.entities) {
         const pts = entityPolyline(e.geometry, at);
-        if (pts && pts.length >= 2) edges.push(pts.map((p) => planeToWorld(v.plane, p)));
+        if (pts && pts.length >= 2) {
+          sources.push(before(v.id) ? { sketch: v.id, entity: e.id } : undefined);
+          edges.push(pts.map((p) => planeToWorld(v.plane, p)));
+        }
       }
     }
-    return solidRefs(edges, plane);
+    return solidRefs(edges, plane, sources);
   });
+
+  /**
+   * Punto del anclaje (`placeSnap`); si es del sólido o de otro sketch, después
+   * se liga a eso de verdad (para que siga sus cambios)
+   */
+  const place = (sk: Sketch, snap: Snap, from?: P2) => {
+    const id = placeSnap(sk, snap, from);
+    if (snap.src) setTimeout(() => void ui.linkAnchor(id, snap), 0);
+    return id;
+  };
+
+  // Splines, elipses y B-splines del sketch en curso como polilíneas (sobre la curva y cruces)
+  const freeCurves = createMemo(() => {
+    const s = ui.session();
+    if (!s) return [];
+    const sk = withoutLayers(s.sketch, false);
+    return sk.entities.flatMap((e) => {
+      const poly = freeCurveLine(sk, e.geometry);
+      return poly && poly.length >= 2 ? [{ id: e.id, poly }] : [];
+    });
+  });
+
+  /** Puntos despiertos: por donde pasó el cursor hace poco (los últimos 5); solo ellos dan guías */
+  let awake: AwakePoint[] = [];
+  const wake = (hit: Snap) => {
+    const ok = hit.kind === "point" || hit.kind === "center" || hit.kind === "origin" || hit.kind === "midpoint";
+    if (!ok || (dragging !== undefined && hit.id === dragging)) return;
+    const same = (a: AwakePoint) => (hit.id !== undefined ? a.id === hit.id : a.id === undefined && Math.hypot(a.p[0] - hit.p[0], a.p[1] - hit.p[1]) < 1e-9);
+    awake = [...awake.filter((a) => !same(a)), { id: hit.id, p: hit.p }].slice(-5);
+  };
+  createEffect(on(() => [ui.tool(), ui.session()?.feature], () => (awake = []), { defer: true }));
 
   /**
    * Posición del cursor sobre el plano con su anclaje (punto, origen, medio,
@@ -1685,6 +1730,8 @@ export const CadView: Component<CadViewProps> = (props) => {
       from,
       angleStep: as.angleStep,
       solid: solid(),
+      curves: freeCurves(),
+      awake,
       // Un rectángulo alineado con su primera esquina (o su centro) tendría ancho o alto cero
       noAlign: ui.tool() === "rect" || ui.tool() === "rect_center" ? anchor().flatMap((a) => (a.id !== undefined ? [a.id] : [])) : [],
     });
@@ -1698,7 +1745,7 @@ export const CadView: Component<CadViewProps> = (props) => {
     setAnchor([]);
     if (an.length < 2) return;
     ui.change((sk) => {
-      const points = an.map((a) => placeSnap(sk, a));
+      const points = an.map((a) => place(sk, a));
       ui.addEntity(sk, { type: "spline", points, closed });
     });
   };
@@ -1709,7 +1756,7 @@ export const CadView: Component<CadViewProps> = (props) => {
     setAnchor([]);
     if (an.length < (closed ? 3 : 2)) return;
     ui.change((sk) => {
-      const poles = an.map((a) => placeSnap(sk, a));
+      const poles = an.map((a) => place(sk, a));
       const degree = Math.max(1, Math.min(Math.round(bsplineDegree()), poles.length - 1));
       ui.addEntity(sk, { type: "bspline", poles, degree, ...(closed ? { closed: true } : {}) });
     });
@@ -1925,7 +1972,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       if (!arc) return ui.setMessage(tr("En línea recta no hay arco: mover el punto hacia un costado"));
       ui.setMessage(undefined);
       ui.change((sk) => {
-        const end = placeSnap(sk, hit);
+        const end = place(sk, hit);
         if (end === ch.last) return;
         const center = ui.addPoint(sk, arc.center);
         const id = ui.addEntity(sk, arc.ccw ? { type: "arc", center, start: ch.last, end } : { type: "arc", center, start: end, end: ch.last });
@@ -1946,7 +1993,7 @@ export const CadView: Component<CadViewProps> = (props) => {
         const prev = ch ? sk.points.find((q) => q.id === ch.last) : undefined;
         const known = new Set(sk.entities.map((x) => x.id));
         // Desde el punto anterior: si el tramo va encima de una línea, no la parte
-        const id = placeSnap(sk, hit, prev && [prev.x, prev.y]);
+        const id = place(sk, hit, prev && [prev.x, prev.y]);
         // La línea que este clic partió (sus dos tramos)
         const rest = sk.entities.find((x) => !known.has(x.id) && x.geometry.type === "line");
         const base = rest && sk.entities.find((x) => known.has(x.id) && x.geometry.type === "line" && (x.geometry.start === id || x.geometry.end === id));
@@ -1980,8 +2027,8 @@ export const CadView: Component<CadViewProps> = (props) => {
       if (an.length === 0) return setAnchor([hit]);
       if (dist(an[0].p, hit.p) > 1e-9)
         ui.change((sk) => {
-          const a = placeSnap(sk, an[0]);
-          const b = placeSnap(sk, hit);
+          const a = place(sk, an[0]);
+          const b = place(sk, hit);
           if (a === b) return;
           // Una sola línea central por sketch: la anterior queda como construcción común
           for (const e of sk.entities) delete e.axis;
@@ -1997,7 +2044,7 @@ export const CadView: Component<CadViewProps> = (props) => {
     if (t === "line_mid") {
       const ch = chain();
       ui.change((sk) => {
-        const id = placeSnap(sk, hit);
+        const id = place(sk, hit);
         // Primer clic: el centro (queda como punto del sketch)
         if (!ch) return void setChain({ first: id, last: id, lastSnapped: false });
         if (id === ch.last) return;
@@ -2021,8 +2068,8 @@ export const CadView: Component<CadViewProps> = (props) => {
       if (Math.abs(A.p[0] - B.p[0]) > 1e-9 && Math.abs(A.p[1] - B.p[1]) > 1e-9)
         ui.change((sk) => {
           // Las esquinas elegidas usan sus anclajes; las otras dos son nuevas
-          const pa = placeSnap(sk, A);
-          const pb = placeSnap(sk, B);
+          const pa = place(sk, A);
+          const pb = place(sk, B);
           const pc = addPoint(sk, [B.p[0], A.p[1]]);
           const pd = addPoint(sk, [A.p[0], B.p[1]]);
           const l = [
@@ -2049,9 +2096,9 @@ export const CadView: Component<CadViewProps> = (props) => {
       const [dx, dy] = [K.p[0] - C.p[0], K.p[1] - C.p[1]];
       if (Math.abs(dx) > 1e-9 && Math.abs(dy) > 1e-9)
         ui.change((sk) => {
-          const c = placeSnap(sk, C);
+          const c = place(sk, C);
           // Esquinas en orden: la del clic y las otras tres reflejadas en el centro
-          const p0 = placeSnap(sk, K);
+          const p0 = place(sk, K);
           const p1 = addPoint(sk, [C.p[0] - dx, C.p[1] + dy]);
           const p2 = addPoint(sk, [C.p[0] - dx, C.p[1] - dy]);
           const p3 = addPoint(sk, [C.p[0] + dx, C.p[1] - dy]);
@@ -2115,7 +2162,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       setAnchor([]);
       if (dist(an[0].p, hit.p) < 1e-9) return;
       ui.change((sk) => {
-        const id = ui.addEntity(sk, { type: "line", start: placeSnap(sk, an[0]), end: placeSnap(sk, hit) });
+        const id = ui.addEntity(sk, { type: "line", start: place(sk, an[0]), end: place(sk, hit) });
         const e = sk.entities.find((x) => x.id === id)!;
         e.construction = true;
         e.infinite = true;
@@ -2129,7 +2176,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       setAnchor([]);
       if (Math.abs((B.p[0] - A.p[0]) * (hit.p[1] - B.p[1]) - (B.p[1] - A.p[1]) * (hit.p[0] - B.p[0])) < 1e-9) return ui.setMessage(tr("Las tres esquinas están en línea"));
       ui.change((sk) => {
-        const [a, b, c] = [placeSnap(sk, A), placeSnap(sk, B), placeSnap(sk, hit)];
+        const [a, b, c] = [place(sk, A), place(sk, B), place(sk, hit)];
         addParallelogram(sk, a, b, c);
       });
       return;
@@ -2145,8 +2192,8 @@ export const CadView: Component<CadViewProps> = (props) => {
       setAnchor([]);
       ui.setMessage(undefined);
       ui.change((sk) => {
-        const center = placeSnap(sk, C);
-        const major = placeSnap(sk, M);
+        const center = place(sk, C);
+        const major = place(sk, M);
         const mi = addPoint(sk, minor);
         const start = addPoint(sk, onEllipse(C.p, M.p, minor, S.p));
         const end = addPoint(sk, onEllipse(C.p, M.p, minor, hit.p));
@@ -2163,7 +2210,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       setAnchor([]);
       const rho = t === "parabola" ? 0.5 : Math.min(0.99, Math.max(0.01, conicRho()));
       ui.change((sk) => {
-        const [a, b, apex] = [placeSnap(sk, A), placeSnap(sk, B), placeSnap(sk, hit)];
+        const [a, b, apex] = [place(sk, A), place(sk, B), place(sk, hit)];
         ui.addEntity(sk, { type: "bspline", poles: [a, apex, b], degree: 2, weights: [1, rhoWeight(rho), 1] });
       });
       return;
@@ -2181,8 +2228,8 @@ export const CadView: Component<CadViewProps> = (props) => {
         const center = ui.addPoint(sk, arc.c);
         // Los arcos van antihorarios: si pasa por el otro lado, del fin al comienzo
         const [first, last] = arc.sweep > 0 ? [S, E] : [E, S];
-        const start = placeSnap(sk, first);
-        const end = placeSnap(sk, last);
+        const start = place(sk, first);
+        const end = place(sk, last);
         const r = addArcSlot(sk, center, start, end, w);
         if (typeof r === "string") return void (msg = r);
         dims.push(dim(sk, { type: "radius", entity: r.capStart, value: round(w) }));
@@ -2206,8 +2253,8 @@ export const CadView: Component<CadViewProps> = (props) => {
       if (!n) return ui.setMessage(tr("La elipse necesita ancho: mover el punto hacia un costado del eje"));
       ui.setMessage(undefined);
       ui.change((sk) => {
-        const center = placeSnap(sk, C);
-        const major = placeSnap(sk, M);
+        const center = place(sk, C);
+        const major = place(sk, M);
         const minor = addPoint(sk, n);
         ui.addEntity(sk, { type: "ellipse", center, major, minor });
         if (C.id === undefined || M.id === undefined) dims.push(dim(sk, { type: "distance", a: center, b: major, value: round(dist(C.p, M.p)) }));
@@ -2224,8 +2271,8 @@ export const CadView: Component<CadViewProps> = (props) => {
       if (!arc) return ui.setMessage(tr("Los tres puntos están en línea: mover el tercero hacia un costado"));
       ui.setMessage(undefined);
       ui.change((sk) => {
-        const a = placeSnap(sk, A);
-        const b = placeSnap(sk, B);
+        const a = place(sk, A);
+        const b = place(sk, B);
         const center = addPoint(sk, arc.c);
         // Los arcos van antihorarios: si pasa por el otro lado, de b a a
         const id = ui.addEntity(sk, arc.sweep > 0 ? { type: "arc", center, start: a, end: b } : { type: "arc", center, start: b, end: a });
@@ -2236,7 +2283,7 @@ export const CadView: Component<CadViewProps> = (props) => {
     }
     if (t === "point") {
       ui.change((sk) => {
-        const id = placeSnap(sk, hit);
+        const id = place(sk, hit);
         if (!sk.entities.some((e) => e.geometry.type === "point" && e.geometry.point === id)) ui.addEntity(sk, { type: "point", point: id });
       });
       return;
@@ -2298,8 +2345,8 @@ export const CadView: Component<CadViewProps> = (props) => {
       if (!r) return ui.setMessage(tr("El tercer punto da el ancho: moverlo hacia un costado del primer lado"));
       ui.setMessage(undefined);
       ui.change((sk) => {
-        const pa = placeSnap(sk, A);
-        const pb = placeSnap(sk, B);
+        const pa = place(sk, A);
+        const pb = place(sk, B);
         const l = addRect3(sk, pa, pb, r[2], r[3]);
         if (A.id === undefined || B.id === undefined) dims.push(dim(sk, { type: "length", line: l[0], value: round(dist(A.p, B.p)) }));
         dims.push(dim(sk, { type: "length", line: l[1], value: round(dist(r[1], r[2])) }));
@@ -2316,8 +2363,8 @@ export const CadView: Component<CadViewProps> = (props) => {
       const len = dist(a, B.p);
       if (r > 1e-9 && len > 1e-9)
         ui.change((sk) => {
-          const cm = placeSnap(sk, M);
-          const cb = placeSnap(sk, B);
+          const cm = place(sk, M);
+          const cb = place(sk, B);
           const ca = ui.addPoint(sk, a);
           // Eje de construcción con el centro en el medio
           const axis = ui.addEntity(sk, { type: "line", start: ca, end: cb });
@@ -2341,8 +2388,8 @@ export const CadView: Component<CadViewProps> = (props) => {
       if (R < 1e-9 || w < 1e-9) return setAnchor([]);
       let msg: string | undefined;
       ui.change((sk) => {
-        const center = placeSnap(sk, C);
-        const start = placeSnap(sk, S);
+        const center = place(sk, C);
+        const start = place(sk, S);
         // El fin solo se pega a un punto que ya estaba (el resto queda en el radio)
         const end = E.id !== undefined && E.id !== start && E.id !== center && sk.points.some((q) => q.id === E.id) ? E.id : ui.addPoint(sk, b);
         const r = addArcSlot(sk, center, start, end, w);
@@ -2360,7 +2407,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       const r = dist(an[0].p, hit.p);
       if (r > 1e-9)
         ui.change((sk) => {
-          const center = placeSnap(sk, an[0]);
+          const center = place(sk, an[0]);
           // Por un punto que ya estaba: el círculo pasa por él, sin cota
           const through = hit.id !== undefined && hit.id !== center ? hit.id : undefined;
           const c = ui.addEntity(sk, { type: "circle", center, radius: through !== undefined ? r : round(r) });
@@ -2492,7 +2539,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       if (!arc) return ui.setMessage(tr("En línea recta no hay arco: mover el punto hacia un costado"));
       let next: { point: number; dir: P2; entity: number } | undefined;
       ui.change((sk) => {
-        const end = placeSnap(sk, hit);
+        const end = place(sk, hit);
         const center = ui.addPoint(sk, arc.center);
         const id = ui.addEntity(sk, arc.ccw ? { type: "arc", center, start: from.point, end } : { type: "arc", center, start: end, end: from.point });
         sk.constraints.push({ type: "tangent", a: from.entity, b: id });
@@ -2533,7 +2580,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       const r = dist(an[0].p, hit.p);
       if (r > 1e-9 && polygonCircumscribed())
         ui.change((sk) => {
-          const center = placeSnap(sk, an[0]);
+          const center = place(sk, an[0]);
           const { circle, lines } = addCircumscribedPolygon(sk, center, hit.p, n);
           // Sobre un punto que ya estaba: el medio del primer lado queda ahí
           if (hit.id !== undefined && hit.id !== center) sk.constraints.push({ type: "midpoint", point: hit.id, line: lines[0] });
@@ -2541,11 +2588,11 @@ export const CadView: Component<CadViewProps> = (props) => {
         });
       else if (r > 1e-9)
         ui.change((sk) => {
-          const center = placeSnap(sk, an[0]);
+          const center = place(sk, an[0]);
           const circle = ui.addEntity(sk, { type: "circle", center, radius: r });
           sk.entities.find((e) => e.id === circle)!.construction = true;
           // El primer vértice es el del clic (con su anclaje)
-          const pts = polygonPoints(an[0].p, hit.p, n).map((p, i) => (i === 0 ? placeSnap(sk, hit) : ui.addPoint(sk, p)));
+          const pts = polygonPoints(an[0].p, hit.p, n).map((p, i) => (i === 0 ? place(sk, hit) : ui.addPoint(sk, p)));
           const lines = pts.map((p, i) => ui.addEntity(sk, { type: "line", start: p, end: pts[(i + 1) % n] }));
           pts.forEach((p) => sk.constraints.push({ type: "point_on_circle", point: p, circle }));
           for (let i = 1; i < n; i++) sk.constraints.push({ type: "equal", a: lines[0], b: lines[i] });
@@ -2562,8 +2609,8 @@ export const CadView: Component<CadViewProps> = (props) => {
       const len = dist(a, b);
       if (r > 1e-9 && len > 1e-9)
         ui.change((sk) => {
-          const ca = placeSnap(sk, an[0]);
-          const cb = placeSnap(sk, an[1]);
+          const ca = place(sk, an[0]);
+          const cb = place(sk, an[1]);
           const { arcA } = addSlot(sk, ca, cb, r);
           if (an[0].id === undefined || an[1].id === undefined) dims.push(dim(sk, { type: "distance", a: ca, b: cb, value: round(len) }));
           dims.push(dim(sk, { type: "radius", entity: arcA, value: round(r) }));
@@ -2581,8 +2628,8 @@ export const CadView: Component<CadViewProps> = (props) => {
       const b: P2 = [c[0] + r * Math.cos(ang), c[1] + r * Math.sin(ang)];
       if (r > 1e-9)
         ui.change((sk) => {
-          const center = placeSnap(sk, C);
-          const start = placeSnap(sk, A);
+          const center = place(sk, C);
+          const start = place(sk, A);
           // El fin solo se pega a un punto que ya estaba (el resto queda en el radio)
           const end = hit.id !== undefined && hit.id !== start && hit.id !== center ? hit.id : ui.addPoint(sk, b);
           const id = ui.addEntity(sk, { type: "arc", center, start, end });
@@ -3216,8 +3263,10 @@ export const CadView: Component<CadViewProps> = (props) => {
     if (!s) return;
     const hit = snapped(e);
     setCursor(hit?.p);
+    if (hit) wake(hit);
     const drawing = !["select", "trim", "extend"].includes(ui.tool());
-    if (hit && drawing && hit.kind !== "free") {
+    // Arrastrando un punto también se ve dónde quedará pegado
+    if (hit && (drawing || (dragging !== undefined && (e.buttons & 1) === 1)) && hit.kind !== "free") {
       const rect = container.getBoundingClientRect();
       setSnapView({
         kind: hit.kind,
@@ -3227,11 +3276,13 @@ export const CadView: Component<CadViewProps> = (props) => {
         y: e.clientY - rect.top,
         guides: hit.guides ?? [],
         // Lo que origina el anclaje se resalta (la línea paralela, el arco tangente...)
-        refs: [hit.direction?.entity, hit.align?.h, hit.align?.v].filter((x): x is number => x !== undefined),
+        refs: [hit.direction?.entity, hit.align?.h, hit.align?.v, ...(hit.kind === "extension" || hit.kind === "guide_cross" || hit.kind === "guide_tangent" || hit.kind === "guide_radial" ? [hit.entity, ...(hit.ext ?? [])] : [])].filter((x): x is number => x !== undefined),
       });
     } else setSnapView(undefined);
     if (dragging !== undefined && hit && (e.buttons & 1) === 1) {
       void ui.drag(dragging, viewer!.planePoint(e.clientX, e.clientY, s.plane) ?? hit.p);
+      // Al soltar queda pegado a esto (Mayús: libre)
+      dragHit = hit.kind !== "free" ? hit : undefined;
     }
     if (entityDrag && (e.buttons & 1) === 1) {
       const at = viewer!.planePoint(e.clientX, e.clientY, s.plane);
@@ -3475,6 +3526,7 @@ export const CadView: Component<CadViewProps> = (props) => {
     }
     if (dragging !== undefined || entityDrag) {
       dragging = undefined;
+      dragHit = undefined;
       entityDrag = undefined;
       ui.endDrag();
       had = true;
@@ -3511,9 +3563,11 @@ export const CadView: Component<CadViewProps> = (props) => {
       else void checkClashesSoon();
       return;
     }
+    const dropped = dragging !== undefined && dragHit ? { point: dragging, snap: dragHit } : undefined;
+    dragHit = undefined;
     dragging = undefined;
     entityDrag = undefined;
-    ui.endDrag();
+    ui.endDrag(dropped);
     if (trimStroke()) return finishTrim();
     if (lasso()) return finishLasso();
     if (handleDrag) {

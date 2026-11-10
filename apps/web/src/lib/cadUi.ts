@@ -12,6 +12,7 @@ import { clipCenter, extractClip, insertClip, transformSelection, translation, t
 import type { BasePlane } from "./CadViewer";
 import { updateDrawing, type DrawingElement } from "./drawingDoc";
 import { polylineOf } from "./sketchCheck";
+import type { Snap } from "./sketchSnap";
 import type { Placed } from "./drawing";
 import { nearestViewLine, projectViewLine, sheetOwners, type SheetLink } from "./sheetRefs";
 import {
@@ -59,7 +60,7 @@ import {
   type SketchConstraint,
   type SolveReport,
   editsAsSketch,
-  type PartId, type ScanOutline, type Connector } from "./cad";
+  type PartId, type ScanOutline, type Connector, attachDropped, linkAnchor } from "./cad";
 
 /** Operaciones que el panel de Diseñar ofrece al menú del visor (usan lo elegido) */
 /** Aviso de curvas ligadas al modelo; "what" es de dónde vienen (frase completa por origen, no se arma por partes) */
@@ -1120,11 +1121,27 @@ export function createCadUi(store: CadStore) {
       }
     },
     /** Termina un arrastre: el próximo empieza un paso nuevo, y lo libre se recalcula entero */
-    endDrag() {
+    /**
+     * Fin del arrastre. Con `drop`, el punto arrastrado se suelta sobre ese
+     * anclaje y queda pegado ahí (cuando terminó el último paso del arrastre)
+     */
+    endDrag(drop?: { point: number; snap: Snap }) {
       dragSaved = false;
       void (async () => {
         // Después del último pedido del arrastre
         while (solving) await new Promise((r) => setTimeout(r, 16));
+        if (drop) {
+          dragLive = undefined;
+          let added = 0;
+          const s0 = session();
+          if (s0 && attachDropped(clone(s0.sketch), drop.point, drop.snap) > 0) {
+            ui.change((sk) => void (added = attachDropped(sk, drop.point, drop.snap)));
+            if (added > 0) {
+              if (drop.snap.src) void ui.linkAnchor(drop.point, drop.snap);
+              return;
+            }
+          }
+        }
         const s = session();
         // Arrastre por pasos: faltan las regiones (sketches grandes) y el diagnóstico completo
         const live = dragLive !== undefined;
@@ -1360,6 +1377,38 @@ export function createCadUi(store: CadStore) {
       } catch (e) {
         return tBackend(String(e));
       }
+    },
+
+    /**
+     * El punto `point`, anclado a `snap` (vértice, medio, centro o arista del
+     * sólido, o lo de otro sketch), pasa a estar ligado a eso de verdad: si el
+     * sólido o el otro sketch cambian, el punto los sigue. Si no se puede
+     * (arista de punta, el ancla se deshizo), queda fijo como estaba.
+     */
+    async linkAnchor(point: number, snap: Snap) {
+      const src = snap.src;
+      const s = session();
+      if (!src || !s || s.sheet) return;
+      let curve: Projected;
+      let link: Omit<SketchUse, "entity">;
+      try {
+        if ("edge" in src) {
+          const { ref, ...c } = await store.projectEdge(src.edge, s.plane);
+          curve = c as Projected;
+          link = { edge: ref };
+        } else {
+          const hit = (await store.projectSketch(src.sketch, s.plane)).find((x) => x.entity === src.entity);
+          if (!hit) return;
+          const { entity: _, ...c } = hit;
+          curve = c as Projected;
+          link = { source: { type: "sketch", feature: src.sketch, entity: src.entity } };
+        }
+      } catch {
+        return;
+      }
+      const now = session();
+      if (!now || now.feature !== s.feature || !linkAnchor(clone(now.sketch), point, snap, curve, link)) return;
+      ui.change((sk) => void linkAnchor(sk, point, snap, curve, link));
     },
 
     /** Trae todas las entidades de un sketch anterior, ligadas a las suyas */

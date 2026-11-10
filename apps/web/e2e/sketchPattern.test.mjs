@@ -175,3 +175,17 @@ test("de relleno: demasiadas copias", () => {
   const c = circle(s, 1, 1, 0.1);
   assert.match(fillPattern(s, [c], square(1000), 1, false, 0), /separación/);
 });
+
+test("patrón en una spline: guías sobre la curva a cuerdas iguales y copias atadas", () => {
+  const s = { points: [], entities: [], constraints: [] };
+  const ids = [[0, 0], [20, 10], [40, 0]].map((p) => addPoint(s, p));
+  const path = addEntity(s, { type: "spline", points: ids, closed: false });
+  const c = addEntity(s, { type: "circle", center: addPoint(s, [0, 0]), radius: 2 });
+  assert.equal(curvePattern(s, [path, c], 4, path), undefined);
+  const on = s.constraints.filter((k) => k.type === "point_on_curve" && k.curve === path);
+  assert.equal(on.length, 2, "las dos guías del medio (las puntas son de la spline)");
+  const chord = (id) => s.entities.some((e) => e.id === id && e.construction && e.geometry.type === "line");
+  assert.equal(s.constraints.filter((k) => k.type === "equal" && chord(k.a) && chord(k.b)).length, 2, "3 cuerdas: 2 iguales a la primera");
+  assert.ok(s.constraints.filter((k) => k.type === "equal_offset").length >= 3, "cada copia sigue a su guía");
+  assert.ok(s.constraints.some((k) => k.type === "equal_offset" && k.a1 === ids[0] && k.a2 === ids[2]), "la última va a la punta");
+});

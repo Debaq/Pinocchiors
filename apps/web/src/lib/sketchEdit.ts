@@ -537,7 +537,7 @@ export type OffsetCaps = "open" | "round" | "line";
 export function offsetChain(s: Sketch, ids: number[], d: number, opts: { both?: boolean; caps?: OffsetCaps; dim?: boolean } = {}): { entities: number[] } | string {
   // Una spline o una elipse sola: su equidistante es otra curva libre
   const only = ids.length === 1 ? s.entities.find((e) => e.id === ids[0]) : undefined;
-  if (only && FREE_CURVES.has(only.geometry.type)) return offsetFreeCurve(s, only.id, d, opts.both);
+  if (only && FREE_CURVES.has(only.geometry.type)) return offsetFreeCurve(s, only.id, d, opts.both, opts.dim !== false);
   const order = orderChain(s, ids);
   if (typeof order === "string") return order;
   if (!(Math.abs(d) > 0)) return tr("La distancia no puede ser cero");
@@ -661,11 +661,13 @@ const FREE_CURVES = new Set(["spline", "ellipse", "ellipse_arc", "bspline"]);
 /**
  * Equidistante de una spline, elipse o B-spline: la curva muestreada, corrida
  * `d` a la izquierda del recorrido, pasa a una
- * spline por puntos repartidos a lo largo. Queda libre (no hay cota que la
- * ate a la original). `both`: a los dos lados. Si la distancia da vuelta la
- * curva (mayor que su radio de curvatura de ese lado), no se hace.
+ * spline por puntos repartidos a lo largo. Con `dim` (lo normal) queda atada
+ * a la original por una cota de equidistante: cada punto suyo a esa distancia
+ * de la curva (si la original cambia, la copia la sigue; la cota la mueve
+ * entera). `both`: a los dos lados. Si la distancia da vuelta la curva (mayor
+ * que su radio de curvatura de ese lado), no se hace.
  */
-export function offsetFreeCurve(s: Sketch, id: number, d: number, both = false): { entities: number[] } | string {
+export function offsetFreeCurve(s: Sketch, id: number, d: number, both = false, dim = true): { entities: number[] } | string {
   const e = s.entities.find((x) => x.id === id);
   if (!e || !FREE_CURVES.has(e.geometry.type)) return tr("Elegir una spline o una elipse");
   if (!(Math.abs(d) > 0) || !Number.isFinite(d)) return tr("La distancia no puede ser cero");
@@ -709,6 +711,7 @@ export function offsetFreeCurve(s: Sketch, id: number, d: number, both = false):
     inheritMarks(s, e, copy);
     made.push(copy);
   }
+  if (dim) s.constraints.push({ type: "offset", pairs: made.map((c) => [id, c] as [number, number]), value: +Math.abs(d).toFixed(6) });
   return { entities: made };
 }
 

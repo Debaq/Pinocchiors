@@ -6,6 +6,18 @@ import { geometryPoints, type Sketch, type SketchConstraint, type SketchEntity }
 import { angleBetweenEntities, hasAngleDirection, measureConstraint } from "./sketchTransform";
 import { t as tr, tx } from "./i18n.ts";
 
+/** Puntas de una curva abierta (línea, arco, arco de elipse, spline o B-spline) */
+function endsOf(e: SketchEntity): number[] {
+  const g = e.geometry;
+  if (g.type === "line" || g.type === "arc" || g.type === "ellipse_arc") return [g.start, g.end];
+  if (g.type === "spline" && !g.closed) return [g.points[0], g.points[g.points.length - 1]];
+  if (g.type === "bspline" && !g.closed) return [g.poles[0], g.poles[g.poles.length - 1]];
+  return [];
+}
+
+/** Dos curvas con una punta en común */
+const sharesEnd = (a: SketchEntity, b: SketchEntity) => endsOf(a).some((p) => endsOf(b).includes(p));
+
 export interface ConstraintSuggestion {
   label: string;
   make: () => SketchConstraint | SketchConstraint[];
@@ -130,9 +142,9 @@ export function constraintSuggestions(sk: Sketch, selection: number[], free?: nu
         out.push({ label: tr("Ángulo suplementario"), make: () => ({ ...other, degrees: measure(other) }) });
       }
     }
-    // Cadena de líneas, arcos y círculos: su largo total
+    // Cadena de curvas (líneas, arcos, círculos, splines, elipses): su largo total
     const E = selEntities().map((e) => e!);
-    const chain = E.filter((e) => ["line", "arc", "circle"].includes(e.geometry.type));
+    const chain = E.filter((e) => e.geometry.type !== "point");
     if (chain.length >= 2 && chain.length === E.length && P.length === 0) {
       const c: SketchConstraint = { type: "curve_length", entities: chain.map((e) => e.id), value: 0 };
       out.push({ label: tr("Largo total"), make: () => ({ ...c, value: measure(c) }) });
@@ -154,8 +166,29 @@ export function constraintSuggestions(sk: Sketch, selection: number[], free?: nu
       if (axis !== undefined && pairE.length === 2 && pairE[0].geometry.type === pairE[1].geometry.type)
         out.push({ label: tr("Simétricas (eje: la última línea)"), make: () => ({ type: "symmetric_entities", a: pairE[0].id, b: pairE[1].id, line: axis }) });
     }
+    // Dos elipses: los mismos semiejes; dos curvas abiertas que no son dos líneas ni dos arcos: el mismo largo
+    const ellipseLike = (e: SketchEntity) => e.geometry.type === "ellipse" || e.geometry.type === "ellipse_arc";
+    const openCurve = (e: SketchEntity) =>
+      ["line", "arc", "ellipse_arc"].includes(e.geometry.type) || ((e.geometry.type === "spline" || e.geometry.type === "bspline") && !e.geometry.closed);
+    if (E.length === 2 && P.length === 0) {
+      if (E.every(ellipseLike)) out.push({ label: tr("Misma elipse"), make: () => ({ type: "equal", a: E[0].id, b: E[1].id }) });
+      else if (E.every(openCurve) && L.length < 2 && C.length < 2)
+        out.push({ label: tr("Mismo largo"), make: () => ({ type: "equal", a: E[0].id, b: E[1].id }) });
+      // Una línea tangente a una elipse
+      const el = E.find(ellipseLike);
+      if (el && L.length === 1) out.push({ label: tr("Tangente"), make: () => ({ type: "tangent", a: L[0], b: el.id }) });
+    }
     // Con una spline (por polos o abierta por puntos): tangencia y curvatura igual (G2) en el extremo común
     const splineEnd = (e: SketchEntity) => e.geometry.type === "bspline" || (e.geometry.type === "spline" && !e.geometry.closed);
+    // Un arco de elipse y una spline o un arco que salen de su punta: tangentes en la unión
+    if (
+      E.length === 2 &&
+      P.length === 0 &&
+      E.some((e) => e.geometry.type === "ellipse_arc") &&
+      E.some((e) => splineEnd(e) || e.geometry.type === "arc") &&
+      sharesEnd(E[0], E[1])
+    )
+      out.push({ label: tr("Tangentes en la unión"), make: () => ({ type: "tangent", a: E[0].id, b: E[1].id }) });
     if (E.length === 2 && P.length === 0 && E.some(splineEnd) && E.every((e) => splineEnd(e) || ["line", "arc"].includes(e.geometry.type))) {
       out.push({ label: tr("Tangentes en la unión"), make: () => ({ type: "tangent", a: E[0].id, b: E[1].id }) });
       out.push({ label: tr("Curvatura igual (G2)"), make: () => ({ type: "curvature", a: E[0].id, b: E[1].id }) });

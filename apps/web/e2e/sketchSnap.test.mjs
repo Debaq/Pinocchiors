@@ -304,3 +304,132 @@ test("ángulos fijos: la línea salta a múltiplos del paso", () => {
   assert.equal(d.kind, "angle");
   assert.equal(d.angle, 315);
 });
+
+/** sample() más un punto suelto (id 20) y una segunda línea vertical (45,10)-(45,20) */
+function withGuides(extra = []) {
+  const s = sample();
+  s.points.push(...extra, { id: 21, x: 45, y: 10 }, { id: 22, x: 45, y: 20 });
+  s.entities.push({ id: 13, geometry: { type: "line", start: 21, end: 22 } });
+  return s;
+}
+
+test("despiertos: solo ellos dan alineación; sin la opción, todos los puntos", () => {
+  const s = sample();
+  // Sin la opción: todo igual que siempre (el origen está a la altura)
+  assert.equal(infer(s, [100, 0.2], 1).kind, "aligned");
+  // Con la lista vacía: ningún punto despierto, nada que alinear
+  assert.equal(infer(s, [100, 0.2], 1, { awake: [] }).kind, "free");
+  // Con el origen despierto: alineado con él (y con nadie más)
+  const a = infer(s, [100, 0.2], 1, { awake: [{ id: 0, p: [0, 0] }] });
+  assert.equal(a.kind, "aligned");
+  assert.equal(a.align.h, 0);
+  near(a.p, [100, 0]);
+  // Un punto medio despierto (sin id) también da guía, pero sin punto al que atarse
+  const m = infer(s, [25.2, 30], 1, { awake: [{ p: [25, 0] }] });
+  assert.equal(m.kind, "aligned");
+  assert.equal(m.align.v, undefined);
+  near(m.p, [25, 30]);
+  assert.equal(m.guides.length, 1);
+});
+
+test("prolongación: más allá de las puntas, con tope; sobre el segmento sigue siendo on_line", () => {
+  const s = sample();
+  // La línea 10 va de (20, 0) (punto 1) a (30, 0) (punto 2): sus puntas despiertas
+  const both = [{ id: 1, p: [20, 0] }, { id: 2, p: [30, 0] }];
+  // Sin ninguna punta despierta: no se prolonga
+  assert.notEqual(infer(s, [35, 0.3], 1, { awake: [] }).kind, "extension");
+  // Despierta solo la del otro lado: tampoco por este
+  assert.notEqual(infer(s, [35, 0.3], 1, { awake: [both[0]] }).kind, "extension");
+  const r = infer(s, [35, 0.3], 1, { awake: [both[1]] });
+  assert.equal(r.kind, "extension");
+  assert.equal(r.entity, 10);
+  near(r.p, [35, 0]);
+  assert.deepEqual(r.guides, [[[30, 0], [35, 0]]]);
+  // Del otro lado, desde la punta más cercana
+  const l = infer(s, [15, -0.3], 1, { awake: [both[0]] });
+  assert.equal(l.kind, "extension");
+  assert.deepEqual(l.guides, [[[20, 0], [15, 0]]]);
+  // Sobre el segmento: on_line
+  assert.equal(infer(s, [23, 0.2], 1, { awake: both }).kind, "on_line");
+  // Muy lejos (más de 5 veces el largo): no se prolonga (queda la alineación con la punta despierta)
+  assert.notEqual(infer(s, [95, 0.2], 1, { awake: [both[1]] }).kind, "extension");
+  // Sin la opción `awake` no hay prolongaciones
+  assert.notEqual(infer(s, [35, 0.3], 1).kind, "extension");
+  // La línea de un punto que se arrastra no se prolonga
+  assert.notEqual(infer(s, [35, 0.3], 1, { awake: both, exclude: [2] }).kind, "extension");
+});
+
+test("cruce de una guía vertical con un círculo", () => {
+  const s = sample();
+  s.points.push({ id: 20, x: 52, y: -10 });
+  const y = 50 + Math.sqrt(21);
+  const r = infer(s, [52.2, y - 0.2], 1, { awake: [{ id: 20, p: [52, -10] }] });
+  assert.equal(r.kind, "guide_cross");
+  assert.equal(r.entity, 11);
+  assert.deepEqual(r.align, { v: 20 });
+  near(r.p, [52, y]);
+  // Sin despiertos, no hay guía
+  assert.notEqual(infer(s, [52.2, y - 0.2], 1, { awake: [] }).kind, "guide_cross");
+});
+
+test("cruce de una guía horizontal con una curva libre", () => {
+  const s = sample();
+  s.points.push({ id: 20, x: 0, y: 70 });
+  // Polilínea vertical en x = 60
+  const curves = [{ id: 30, poly: [[60, 60], [60, 80]] }];
+  const r = infer(s, [60.2, 70.2], 1, { awake: [{ id: 20, p: [0, 70] }], curves });
+  assert.equal(r.kind, "guide_cross");
+  assert.equal(r.entity, 30);
+  assert.deepEqual(r.align, { h: 20 });
+  near(r.p, [60, 70]);
+});
+
+test("cruce de una guía con una prolongación, y de dos prolongaciones", () => {
+  const s = withGuides([{ id: 20, x: 40, y: -10 }]);
+  // Vertical del despierto × prolongación de la línea 10 (y = 0, x > 30)
+  const a = infer(s, [40.3, 0.2], 1, { awake: [{ id: 20, p: [40, -10] }, { id: 2, p: [30, 0] }] });
+  assert.equal(a.kind, "guide_cross");
+  assert.deepEqual(a.ext, [10]);
+  assert.deepEqual(a.align, { v: 20 });
+  assert.equal(a.entity, undefined);
+  near(a.p, [40, 0]);
+  // Prolongación de 10 × prolongación de la vertical 13 (x = 45, hacia abajo)
+  // (la horizontal de la punta despierta coincide con la prolongación de 10: vale cualquiera de las dos)
+  const b = infer(s, [45.2, 0.3], 1, { awake: [{ id: 2, p: [30, 0] }, { id: 21, p: [45, 10] }] });
+  assert.equal(b.kind, "guide_cross");
+  assert.ok(b.ext.includes(13), "sobre la prolongación de 13");
+  assert.ok(b.ext.includes(10) || b.align?.h === 2, "y a la altura de la línea 10");
+  near(b.p, [45, 0]);
+  assert.equal(b.guides.length, 2);
+});
+
+/** Arco de (3,4) a (-4,3) alrededor del origen (r = 5), que no es horizontal ni vertical en sus puntas */
+function tilted() {
+  return {
+    origin: 0,
+    points: [{ id: 0, x: 0, y: 0 }, { id: 1, x: 3, y: 4 }, { id: 2, x: -4, y: 3 }, { id: 3, x: 20, y: 7 }],
+    entities: [{ id: 1, geometry: { type: "arc", center: 0, start: 1, end: 2 } }],
+    constraints: [],
+  };
+}
+
+test("guías del arco: radial y tangente desde una punta despierta", () => {
+  const s = tilted();
+  const awake = [{ id: 1, p: [3, 4] }];
+  // Cursor a 0.2 de la guía, a lo largo de ella la posición se conserva
+  const rad = infer(s, [6.16, 7.88], 1, { awake }); // (6,8) corrido 0.2 en perpendicular (0.8,-0.6)·0.2
+  assert.equal(rad.kind, "guide_radial");
+  assert.equal(rad.entity, 1);
+  near(rad.p, [6, 8]);
+  const tan = infer(s, [-0.88, 7.16], 1, { awake }); // (-1,7) corrido 0.2 en perpendicular (0.6,0.8)·0.2
+  assert.equal(tan.kind, "guide_tangent");
+  near(tan.p, [-1, 7]);
+  assert.deepEqual(tan.guides, [[[3, 4], tan.p]]);
+  // Si la punta no está despierta, no hay guías
+  assert.equal(infer(s, [6.16, 7.88], 1, { awake: [] }).kind, "free");
+  // Guía del arco × horizontal de otro punto despierto
+  const c = infer(s, [-1.2, 7.1], 1, { awake: [...awake, { id: 3, p: [20, 7] }] });
+  assert.equal(c.kind, "guide_cross");
+  assert.deepEqual(c.align, { h: 3 });
+  near(c.p, [-1, 7]);
+});

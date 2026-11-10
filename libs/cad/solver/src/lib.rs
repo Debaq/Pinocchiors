@@ -19,7 +19,7 @@ pub mod system;
 pub mod types;
 
 pub use bspline::BSpline;
-pub use constraint::{BSplineRef, Constraint, CurveEnd, CurvePart, closest_on_spline};
+pub use constraint::{BSplineRef, Constraint, CurveEnd, CurvePart, FreeCurve, closest_on_spline, ellipse_length, spline_length};
 pub use diagnostics::{DiagnosticResult, DiagnosticStatus, Nullspace, diagnose, nullspace, points_dof};
 pub use error::{Result, SolverError};
 pub use fitting::{FitResult, PrimitiveParams, PrimitiveType};

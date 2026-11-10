@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use cad_solver::{BSplineRef, Constraint, ConstraintSystem, CurveEnd, CurvePart, Point2, SolveStatus};
+use cad_solver::{BSplineRef, Constraint, ConstraintSystem, CurveEnd, CurvePart, FreeCurve, Point2, SolveStatus};
 use serde::{Deserialize, Serialize};
 
 use crate::geom::{P2, dist2};
@@ -1395,8 +1395,41 @@ impl Sketch {
                 Ok(u[0].hypot(u[1]) * sweep)
             }
             Geometry::Circle { radius, .. } => Ok(std::f64::consts::TAU * radius),
-            // Curvas sin fórmula: por muestras
-            Geometry::BSpline { .. } | Geometry::EllipseArc { .. } | Geometry::Ellipse { .. } | Geometry::Spline { .. } => {
+            // Splines y elipses: con la misma cuenta del solver (la cota mide lo que impone)
+            Geometry::Spline { ref points, closed, start_handle, end_handle, ref handles } => {
+                let v = |id: u32| self.point(id).map(|p| nalgebra::Vector2::new(p[0], p[1]));
+                let pts: Vec<_> = points.iter().map(|&p| v(p)).collect::<Result<_, _>>()?;
+                let n = pts.len();
+                let mut dirs = vec![None; n];
+                let mut set = |i: usize, h: u32| -> Result<(), SketchError> {
+                    if i < n {
+                        dirs[i] = Some(v(h)? - pts[i]);
+                    }
+                    Ok(())
+                };
+                if !closed {
+                    if let Some(h) = start_handle {
+                        set(0, h)?;
+                    }
+                    if let Some(h) = end_handle {
+                        set(n.saturating_sub(1), h)?;
+                    }
+                }
+                for &[i, h] in handles {
+                    set(i as usize, h)?;
+                }
+                Ok(cad_solver::spline_length(&pts, closed, &dirs))
+            }
+            Geometry::Ellipse { center, major, minor } => {
+                let v = |id: u32| self.point(id).map(|p| nalgebra::Vector2::new(p[0], p[1]));
+                Ok(cad_solver::ellipse_length(v(center)?, v(major)?, v(minor)?, None))
+            }
+            Geometry::EllipseArc { center, major, minor, start, end } => {
+                let v = |id: u32| self.point(id).map(|p| nalgebra::Vector2::new(p[0], p[1]));
+                Ok(cad_solver::ellipse_length(v(center)?, v(major)?, v(minor)?, Some((v(start)?, v(end)?))))
+            }
+            // B-splines: por muestras
+            Geometry::BSpline { .. } => {
                 let pts = crate::regions::sample_entity(self, id)?;
                 Ok(pts.windows(2).map(|w| dist2(w[0], w[1])).sum())
             }
@@ -1418,8 +1451,68 @@ impl Sketch {
         }
     }
 
+    /// Una curva abierta como tramo para medir su largo: línea, arco, spline
+    /// abierta, B-spline abierta o arco de elipse; `None` si es cerrada o no es curva.
+    fn open_part(
+        &self,
+        id: u32,
+        g: &Geometry,
+        ix: &impl Fn(u32) -> Result<usize, SketchError>,
+        bspline_ref: &impl Fn(u32) -> Result<BSplineRef, SketchError>,
+    ) -> Result<Option<CurvePart>, SketchError> {
+        Ok(match g {
+            Geometry::Line { start, end } => Some(CurvePart::Segment { a: ix(*start)?, b: ix(*end)? }),
+            Geometry::Arc { center, start, end } => Some(CurvePart::Arc { center: ix(*center)?, start: ix(*start)?, end: ix(*end)? }),
+            Geometry::EllipseArc { center, major, minor, start, end } => {
+                Some(CurvePart::EllipseArc { center: ix(*center)?, major: ix(*major)?, minor: ix(*minor)?, start: ix(*start)?, end: ix(*end)? })
+            }
+            Geometry::Spline { closed: false, .. } | Geometry::BSpline { closed: false, .. } => self.free_curve(id, ix, bspline_ref)?.map(CurvePart::Free),
+            _ => None,
+        })
+    }
+
+    /// La entidad como curva libre del solver (spline, elipse, arco de elipse o
+    /// B-spline); `None` si es otra cosa.
+    fn free_curve(
+        &self,
+        id: u32,
+        ix: &impl Fn(u32) -> Result<usize, SketchError>,
+        bspline_ref: &impl Fn(u32) -> Result<BSplineRef, SketchError>,
+    ) -> Result<Option<FreeCurve>, SketchError> {
+        // Un punto (el centro de una esquina redondeada) no es una curva
+        let Ok(e) = self.entity(id) else { return Ok(None) };
+        Ok(match &e.geometry {
+            Geometry::Spline { points, closed, start_handle, end_handle, handles } => {
+                let n = points.len();
+                let mut hs: Vec<(usize, usize)> = Vec::new();
+                if !*closed {
+                    hs.extend(start_handle.map(ix).transpose()?.map(|h| (0, h)));
+                    hs.extend(end_handle.map(ix).transpose()?.map(|h| (n.saturating_sub(1), h)));
+                }
+                for [i, h] in handles {
+                    hs.push((*i as usize, ix(*h)?));
+                }
+                Some(FreeCurve::Spline { points: points.iter().map(|&p| ix(p)).collect::<Result<_, _>>()?, closed: *closed, handles: hs })
+            }
+            Geometry::Ellipse { center, major, minor } | Geometry::EllipseArc { center, major, minor, .. } => {
+                Some(FreeCurve::Ellipse { center: ix(*center)?, major: ix(*major)?, minor: ix(*minor)? })
+            }
+            Geometry::BSpline { .. } => Some(FreeCurve::BSpline(bspline_ref(id)?)),
+            _ => None,
+        })
+    }
+
     /// Distancia actual de un par de la equidistante (`[original, copia]`).
     fn offset_gap(&self, [from, to]: [u32; 2]) -> Result<f64, SketchError> {
+        // De una curva libre: del primer punto de la copia a la original (por muestras)
+        if self.entity(from).is_ok_and(|e| matches!(e.geometry, Geometry::Spline { .. } | Geometry::Ellipse { .. } | Geometry::EllipseArc { .. } | Geometry::BSpline { .. })) {
+            let Geometry::Spline { points, .. } = &self.entity(to)?.geometry else {
+                return Err(SketchError::Unsupported("equidistante de una curva libre: la copia tiene que ser una spline por puntos".into()));
+            };
+            let q = self.point(*points.first().ok_or(SketchError::Unsupported("spline sin puntos".into()))?)?;
+            let pts = crate::regions::sample_entity(self, from)?;
+            return Ok(pts.windows(2).map(|w| seg_dist(q, w[0], w[1])).fold(f64::INFINITY, f64::min));
+        }
         match (self.dim_target(from)?, self.dim_target(to)?) {
             (Target::Line(s, e), Target::Line(q, _)) => {
                 let (s, e, q) = (self.point(s)?, self.point(e)?, self.point(q)?);
@@ -1564,6 +1657,10 @@ impl Sketch {
                         // Los dos polos vecinos alineados con la punta
                         vec![Constraint::PointOnLine { p_idx: nb2, line_p1: nb, line_p2: tp }]
                     }
+                    // La dirección de la punta, tangente a la elipse en el punto común
+                    Geometry::EllipseArc { center, major, minor, .. } => {
+                        vec![Constraint::TangentEllipseAt { center: ix(*center)?, major: ix(*major)?, minor: ix(*minor)?, at: s, d1: tp, d2: nb, normal: false }]
+                    }
                     _ => return Err(SketchError::Unsupported("tangencia de una spline con esa curva".into())),
                 })
             };
@@ -1650,7 +1747,19 @@ impl Sketch {
                     let ((c1, r1), (c2, r2)) = (round(a)?, round(b)?);
                     vec![Constraint::EqualLength { l1_p1: c1, l1_p2: r1, l2_p1: c2, l2_p2: r2 }]
                 }
-                _ => return Err(SketchError::Unsupported("igualdad entre entidades de distinto tipo".into())),
+                // Elipses (o arcos de elipse): los mismos semiejes
+                (
+                    Geometry::Ellipse { center: c1, major: a1, minor: b1 } | Geometry::EllipseArc { center: c1, major: a1, minor: b1, .. },
+                    Geometry::Ellipse { center: c2, major: a2, minor: b2 } | Geometry::EllipseArc { center: c2, major: a2, minor: b2, .. },
+                ) => vec![
+                    Constraint::EqualLength { l1_p1: ix(*c1)?, l1_p2: ix(*a1)?, l2_p1: ix(*c2)?, l2_p2: ix(*a2)? },
+                    Constraint::EqualLength { l1_p1: ix(*c1)?, l1_p2: ix(*b1)?, l2_p1: ix(*c2)?, l2_p2: ix(*b2)? },
+                ],
+                // Curvas abiertas (líneas, arcos, splines, arcos de elipse): el mismo largo
+                (ga, gb) => match (self.open_part(a, ga, &ix, &bspline_ref)?, self.open_part(b, gb, &ix, &bspline_ref)?) {
+                    (Some(pa), Some(pb)) => vec![Constraint::EqualCurveLength { a: vec![pa], b: vec![pb] }],
+                    _ => return Err(SketchError::Unsupported("igual: dos líneas, círculos o elipses, o dos curvas abiertas (del mismo largo)".into())),
+                },
             },
             S::Tangent { a, b } if bspline_tangent(a, b)?.is_some() => bspline_tangent(a, b)?.unwrap_or_default(),
             S::Curvature { a, b } => {
@@ -1702,6 +1811,31 @@ impl Sketch {
                         SketchError::Unsupported("arcos tangentes sin un extremo en común".into())
                     })?;
                     return Ok(vec![Constraint::PointOnLine { p_idx: ix(*c2)?, line_p1: ix(*c1)?, line_p2: ix(*shared)? }]);
+                }
+                // Con una elipse: recta tangente (en cualquier punto), o arco que la toca en una punta común
+                {
+                    let (ga, gb) = (&self.entity(a)?.geometry, &self.entity(b)?.geometry);
+                    let ellipse = |g: &Geometry| match g {
+                        Geometry::Ellipse { center, major, minor } | Geometry::EllipseArc { center, major, minor, .. } => Some((*center, *major, *minor)),
+                        _ => None,
+                    };
+                    let (e, other, oid) = match (ellipse(ga), ellipse(gb)) {
+                        (Some(e), None) => (Some(e), gb, b),
+                        (None, Some(e)) => (Some(e), ga, a),
+                        (Some(_), Some(_)) => return Err(SketchError::Unsupported("tangencia entre dos elipses".into())),
+                        (None, None) => (None, ga, a),
+                    };
+                    if let Some((c, ma, mi)) = e {
+                        let (c, ma, mi) = (ix(c)?, ix(ma)?, ix(mi)?);
+                        return Ok(match other {
+                            Geometry::Line { start, end } => vec![Constraint::TangentLineEllipse { l1: ix(*start)?, l2: ix(*end)?, center: c, major: ma, minor: mi }],
+                            Geometry::Arc { center, .. } => {
+                                let shared = shared_end(a, b).map_err(|_| SketchError::Unsupported("un arco tangente a una elipse necesita una punta común con un arco de elipse".into()))?;
+                                vec![Constraint::TangentEllipseAt { center: c, major: ma, minor: mi, at: ix(shared)?, d1: ix(*center)?, d2: ix(shared)?, normal: true }]
+                            }
+                            _ => return Err(SketchError::WrongKind(oid, "una línea, un arco o una spline")),
+                        });
+                    }
                 }
                 let (l, other) = match (&self.entity(a)?.geometry, &self.entity(b)?.geometry) {
                     (Geometry::Line { .. }, _) => (a, b),
@@ -1810,7 +1944,13 @@ impl Sketch {
                             let (center, rim) = round(e)?;
                             CurvePart::Circle { center, rim }
                         }
-                        _ => return Err(SketchError::WrongKind(e, "una línea, un arco o un círculo")),
+                        Geometry::EllipseArc { center, major, minor, start, end } => {
+                            CurvePart::EllipseArc { center: ix(center)?, major: ix(major)?, minor: ix(minor)?, start: ix(start)?, end: ix(end)? }
+                        }
+                        _ => match self.free_curve(e, &ix, &bspline_ref)? {
+                            Some(c) => CurvePart::Free(c),
+                            None => return Err(SketchError::WrongKind(e, "una curva")),
+                        },
                     });
                 }
                 vec![Constraint::CurveLength { parts, length: value }]
@@ -1831,6 +1971,17 @@ impl Sketch {
             S::Offset { ref pairs, value, .. } => {
                 let mut out = Vec::new();
                 for &[from, to] in pairs {
+                    // Equidistante de una spline, elipse o B-spline: cada punto de la copia (una
+                    // spline por puntos) a esa distancia de la original
+                    if let Some(curve) = self.free_curve(from, &ix, &bspline_ref)? {
+                        let Geometry::Spline { points, .. } = &self.entity(to)?.geometry else {
+                            return Err(SketchError::Unsupported("equidistante de una curva libre: la copia tiene que ser una spline por puntos".into()));
+                        };
+                        for &q in points {
+                            out.push(Constraint::PointCurveDistance { p_idx: ix(q)?, curve: curve.clone(), distance: value });
+                        }
+                        continue;
+                    }
                     out.push(match (self.dim_target(from)?, self.dim_target(to)?) {
                         (Target::Line(s, e), Target::Line(q, _)) => {
                             Constraint::DistancePointLine { p_idx: ix(q)?, line_p1: ix(s)?, line_p2: ix(e)?, distance: value }
@@ -1953,4 +2104,12 @@ enum Target {
     Line(u32, u32),
     /// Entidad (círculo o arco) y su centro
     Round(u32, u32),
+}
+
+/// Distancia de `p` al segmento `a`–`b`.
+fn seg_dist(p: P2, a: P2, b: P2) -> f64 {
+    let d = [b[0] - a[0], b[1] - a[1]];
+    let l2 = d[0] * d[0] + d[1] * d[1];
+    let t = if l2 > 0.0 { (((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1]) / l2).clamp(0.0, 1.0) } else { 0.0 };
+    (p[0] - a[0] - t * d[0]).hypot(p[1] - a[1] - t * d[1])
 }

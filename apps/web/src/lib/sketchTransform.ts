@@ -2,7 +2,7 @@
 // portapapeles para copiar y pegar (dentro de un sketch o entre sketches).
 // Funciones puras sobre `Sketch`: se prueban con node (e2e/sketchTransform.test.mjs).
 
-import { addEntity, addPoint, type AngleEnd, constraintIds, geometryPoints, inheritMarks, mapConstraintIds, mapGeometry, splitLineAt, type Geometry, type P2, type Sketch, type SketchConstraint, type SketchEntity, type SketchText } from "./cad.ts";
+import { addEntity, addPoint, type AngleEnd, constraintIds, freeCurveLine, geometryPoints, inheritMarks, mapConstraintIds, mapGeometry, splitLineAt, type Geometry, type P2, type Sketch, type SketchConstraint, type SketchEntity, type SketchText } from "./cad.ts";
 import { t as tr } from "./i18n.ts";
 
 /** Lleva un punto del plano del sketch a otro lugar */
@@ -139,6 +139,14 @@ function radiusOf(s: Sketch, id: number): number | undefined {
     return c && a ? len(sub(a, c)) : undefined;
   }
   return undefined;
+}
+
+/** Distancia de `p` al segmento `a`–`b` */
+function toSegment(p: P2, a: P2, b: P2): number {
+  const d = sub(b, a);
+  const l2 = d[0] * d[0] + d[1] * d[1];
+  const t = l2 > 0 ? Math.max(0, Math.min(1, ((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1]) / l2)) : 0;
+  return len(sub(p, [a[0] + t * d[0], a[1] + t * d[1]]));
 }
 
 function lineOf(s: Sketch, id: number): [P2, P2] | undefined {
@@ -347,6 +355,9 @@ export function curveLength(s: Sketch, id: number): number | undefined {
     if (sweep <= 0) sweep += 2 * Math.PI;
     return len(u) * sweep;
   }
+  // Splines, elipses y arcos de elipse: por su polilínea
+  const pl = g && freeCurveLine(s, g);
+  if (pl && pl.length >= 2) return pl.slice(1).reduce((t, p, i) => t + len(sub(p, pl[i])), 0);
   return undefined;
 }
 
@@ -402,6 +413,14 @@ export function measureConstraint(s: Sketch, c: SketchConstraint): number | unde
       const [from, to] = c.pairs[0] ?? [];
       const [lf, lt] = [lineOf(s, from), lineOf(s, to)];
       if (lf && lt) return toLine(lt[0], lf);
+      // De una spline o elipse: del primer punto de la copia a la curva original
+      const gf = s.entities.find((e) => e.id === from)?.geometry;
+      const gt = s.entities.find((e) => e.id === to)?.geometry;
+      const pl = gf && freeCurveLine(s, gf);
+      if (pl && pl.length >= 2 && gt?.type === "spline") {
+        const q = pos(s, gt.points[0]);
+        return q && Math.min(...pl.slice(1).map((b, i) => toSegment(q, pl[i], b)));
+      }
       const rt = radiusOf(s, to);
       if (rt === undefined) return undefined;
       const rf = radiusOf(s, from);

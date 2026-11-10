@@ -3477,8 +3477,9 @@ function alongPolyline(poly: P2[], count: number, closed: boolean): { at: P2; di
  * Patrón en curva: `count` en total repartidos de punta a punta de la
  * entidad `path` (en un círculo o curva cerrada, en la vuelta). Cada copia se
  * traslada lo que avanza el camino desde su comienzo; con `rotate` además
- * gira con él. En líneas, arcos y círculos las copias quedan atadas al
- * camino; en splines y elipses quedan donde caen.
+ * gira con él. Las copias quedan atadas al camino (en splines y elipses, por
+ * guías sobre la curva a cuerdas iguales), salvo girando con una spline o
+ * elipse: ahí el giro no se puede atar y quedan donde caen.
  */
 export function curvePattern(s: Sketch, ids: number[], count: number, path: number, rotate = false): string | undefined {
   const g = s.entities.find((e) => e.id === path)?.geometry;
@@ -3549,12 +3550,34 @@ export function curvePattern(s: Sketch, ids: number[], count: number, path: numb
     }
     return undefined;
   }
-  // Spline o elipse: sin restricción "sobre la curva", las copias guardan la forma y nada más
-  const closed = g.type === "ellipse" || (g.type === "spline" && g.closed);
+  // Spline, elipse o B-spline: guías sobre el camino (punto sobre la curva) separadas por cuerdas
+  // iguales, que siguen a la curva si cambia; sin girar, cada copia sigue a su guía. Girando con
+  // el camino, el giro no se puede atar (no hay restricción de tangente en medio de la curva): las
+  // copias quedan donde caen
+  const closed = g.type === "ellipse" || ((g.type === "spline" || g.type === "bspline") && !!g.closed);
   const stops = alongPolyline(polylineOf(s, g), count, closed);
   if (stops.length < 2) return tr("El camino no tiene largo");
   const [S, d0] = [stops[0].at, stops[0].dir];
-  for (const { at, dir } of stops.slice(1)) {
+  // Las puntas del camino (o donde empieza su recorrido, si es cerrado) son puntos suyos
+  const first = g.type === "spline" ? g.points[0] : g.type === "ellipse" ? g.major : g.type === "ellipse_arc" ? g.start : undefined;
+  const last = g.type === "spline" && !g.closed ? g.points[g.points.length - 1] : g.type === "ellipse_arc" ? g.end : undefined;
+  const guides = rotate
+    ? []
+    : stops.map(({ at }, k) => {
+        if (k === 0 && first !== undefined) return first;
+        if (k === count - 1 && !closed && last !== undefined) return last;
+        const q = guidePoint(s, at);
+        s.constraints.push({ type: "point_on_curve", point: q, curve: path });
+        return q;
+      });
+  if (!rotate) {
+    // Cuerdas iguales entre guías seguidas (en un camino cerrado, también la que vuelve al comienzo)
+    const chords: number[] = [];
+    for (let k = 1; k < guides.length; k++) chords.push(construction(s, addEntity(s, { type: "line", start: guides[k - 1], end: guides[k] })));
+    if (closed && guides.length > 2) chords.push(construction(s, addEntity(s, { type: "line", start: guides[guides.length - 1], end: guides[0] })));
+    for (const c of chords.slice(1)) s.constraints.push({ type: "equal", a: chords[0], b: c });
+  }
+  stops.slice(1).forEach(({ at, dir }, i) => {
     const a = rotate ? dir - d0 : 0;
     const next = placeCopy(
       s,
@@ -3565,8 +3588,8 @@ export function curvePattern(s: Sketch, ids: number[], count: number, path: numb
         return [at[0] + x * Math.cos(a) - y * Math.sin(a), at[1] + x * Math.sin(a) + y * Math.cos(a)];
       }),
     );
-    if (!rotate) keepShape(s, pts, lead, next);
-  }
+    if (!rotate) for (const p of pts) s.constraints.push({ type: "equal_offset", a1: guides[0], a2: guides[i + 1], b1: p, b2: next.get(p)! });
+  });
   return undefined;
 }
 
@@ -4155,7 +4178,9 @@ export const isSolidPoint = (snap: Snap) => snap.kind === "solid_vertex" || snap
  * tangente) la pone la herramienta Línea, que crea la línea.
  * Sobre una línea: la parte (así cierra regiones). Sobre una curva: punto en
  * círculo. Vértice, centro o medio del sólido: fijo en esa posición (no sigue
- * al sólido si cambia). Sobre una arista del sólido: solo la posición.
+ * al sólido si cambia). Sobre una arista recta del sólido: sobre una línea de
+ * construcción fija en sus extremos (se desliza a lo largo de la arista, no se
+ * sale de ella); sobre una arista curva: fijo ahí.
  * `from`: de dónde viene el tramo que se dibuja; si va a lo largo de la línea
  * (encima de ella), no la parte: el punto queda en su medio o sobre ella.
  */
@@ -4174,7 +4199,24 @@ export function placeSnap(s: Sketch, snap: Snap, from?: P2): number {
   const id = addPoint(s, snap.p);
   if (snap.align?.h !== undefined) s.constraints.push({ type: "horizontal_points", a: snap.align.h, b: id });
   if (snap.align?.v !== undefined) s.constraints.push({ type: "vertical_points", a: snap.align.v, b: id });
-  if (isSolidPoint(snap)) s.constraints.push({ type: "fixed", point: id, x: snap.p[0], y: snap.p[1] });
+  if (isSolidPoint(snap) || snap.kind === "on_edge") {
+    solidAnchor(s, id, snap);
+    return id;
+  }
+  // Guías del arco (tangente, radial): no hay restricción de punto que las exprese, queda libre sobre la guía
+  if (snap.kind === "guide_tangent" || snap.kind === "guide_radial") return id;
+  // Prolongación y cruce de guías: sobre la recta de cada línea prolongada (sin partirla)
+  // y, en el cruce con geometría, sobre ella (la línea sí se parte como en un cruce normal)
+  if (snap.kind === "extension" || snap.kind === "guide_cross") {
+    for (const l of snap.kind === "extension" ? [snap.entity] : snap.ext ?? []) if (l !== undefined) s.constraints.push({ type: "point_on_line", point: id, line: l });
+    if (snap.kind === "guide_cross" && snap.entity !== undefined && !(snap.ext ?? []).includes(snap.entity)) {
+      const g = s.entities.find((x) => x.id === snap.entity)?.geometry;
+      if (g?.type === "line") stickTo(s, id, { entity: snap.entity, kind: "line" });
+      else if (g?.type === "circle" || g?.type === "arc") s.constraints.push({ type: "point_on_circle", point: id, circle: snap.entity });
+      else if (g) s.constraints.push({ type: "point_on_curve", point: id, curve: snap.entity });
+    }
+    return id;
+  }
   const e = snap.entity;
   if (e === undefined) return id;
   if (snap.kind === "midpoint" && along(e)) {
@@ -4207,14 +4249,168 @@ export function placeSnap(s: Sketch, snap: Snap, from?: P2): number {
     for (const c of [e, snap.other]) {
       const g = s.entities.find((x) => x.id === c)?.geometry;
       if (c !== undefined && along(c)) s.constraints.push({ type: "point_on_line", point: id, line: c });
-      else if (c !== undefined && g) stickTo(s, id, { entity: c, kind: g.type === "line" ? "line" : "circle" });
+      else if (c !== undefined && g) stickTo(s, id, { entity: c, kind: g.type === "line" ? "line" : g.type === "circle" || g.type === "arc" ? "circle" : "curve" });
     }
     return id;
   }
   if (snap.kind === "on_line" && along(e)) s.constraints.push({ type: "point_on_line", point: id, line: e });
   else if (snap.kind === "on_line") stickTo(s, id, { entity: e, kind: "line" });
   else if (snap.kind === "on_circle") s.constraints.push({ type: "point_on_circle", point: id, circle: e });
+  else if (snap.kind === "on_curve") s.constraints.push({ type: "point_on_curve", point: id, curve: e });
   return id;
+}
+
+/**
+ * Ancla el punto a lo del sólido (o de otro sketch) que marca el anclaje:
+ * vértice, medio o centro, fijo ahí; sobre una arista recta, sobre una guía
+ * de construcción; sobre una curva, fijo ahí. `linkAnchor` (en la interfaz)
+ * después lo liga a la arista de verdad, para que siga los cambios.
+ */
+export function solidAnchor(s: Sketch, id: number, snap: Snap) {
+  if (snap.kind === "on_edge" && snap.edgeLine) s.constraints.push({ type: "point_on_line", point: id, line: edgeGuide(s, snap.edgeLine) });
+  else s.constraints.push({ type: "fixed", point: id, x: snap.p[0], y: snap.p[1] });
+}
+
+/**
+ * Liga un punto anclado al sólido (o a otro sketch) a lo de verdad, para que
+ * siga los cambios: trae `curve` (la arista o entidad proyectada, ligada con
+ * `link`) como curva de construcción, o usa la que ya estaba ligada a lo
+ * mismo, y cambia el ancla provisoria (fijo, o sobre la guía) por la relación
+ * con ella: coincidente con su punta o su centro, en su medio, o sobre ella.
+ * Si el ancla provisoria ya no está (se deshizo, se borró), no hace nada.
+ */
+export function linkAnchor(s: Sketch, point: number, snap: Snap, curve: Projected, link: Omit<SketchUse, "entity">): boolean {
+  if (!s.points.some((x) => x.id === point)) return false;
+  const tol = 1e-6 * Math.max(1, Math.hypot(snap.p[0], snap.p[1]));
+  const at = (c: SketchConstraint) => c.type === "fixed" && c.point === point && Math.abs(c.x - snap.p[0]) <= tol && Math.abs(c.y - snap.p[1]) <= tol;
+  const guideOf = (c: SketchConstraint) =>
+    c.type === "point_on_line" && c.point === point && !!snap.edgeLine && isEdgeGuide(s, c.line, snap.edgeLine) ? c.line : undefined;
+  const k = s.constraints.findIndex((c) => at(c) || guideOf(c) !== undefined);
+  if (k < 0) return false;
+  // Qué relación sale con esa curva (antes de traerla: si no hay ninguna, queda como está)
+  const kind = snap.kind;
+  const ok =
+    kind === "solid_vertex" ? curve.kind !== "circle" && curve.kind !== "ellipse" :
+    kind === "solid_center" ? curve.kind === "circle" || curve.kind === "arc" || curve.kind === "ellipse" :
+    kind === "solid_midpoint" ? curve.kind === "line" :
+    kind === "on_edge" ? curve.kind !== "point" : false;
+  if (!ok) return false;
+  const same = (u: SketchUse) => JSON.stringify(u.edge ?? null) === JSON.stringify(link.edge ?? null) && JSON.stringify(u.source ?? null) === JSON.stringify(link.source ?? null);
+  const reused = (s.uses ?? []).find((u) => same(u) && s.entities.some((e) => e.id === u.entity))?.entity;
+  const entity = reused ?? addProjected(s, [curve], () => link)[0];
+  const e = s.entities.find((x) => x.id === entity)!;
+  if (reused === undefined) e.construction = true;
+  const g = e.geometry;
+  const guide = guideOf(s.constraints[k]);
+  s.constraints.splice(k, 1);
+  if (kind === "solid_vertex") {
+    const ends = g.type === "point" ? [g.point] : g.type === "spline" ? [g.points[0], g.points[g.points.length - 1]] : geometryPoints(g).filter((id) => !("center" in g) || id !== g.center);
+    const near = ends.reduce((best, id) => (dist2(pointOf(s, id), snap.p) < dist2(pointOf(s, best), snap.p) ? id : best), ends[0]);
+    s.constraints.push({ type: "coincident", a: point, b: near });
+  } else if (kind === "solid_center" && "center" in g) s.constraints.push({ type: "coincident", a: point, b: g.center });
+  else if (kind === "solid_midpoint") s.constraints.push({ type: "midpoint", point, line: entity });
+  else if (g.type === "line") s.constraints.push({ type: "point_on_line", point, line: entity });
+  else if (g.type === "circle" || g.type === "arc") s.constraints.push({ type: "point_on_circle", point, circle: entity });
+  else s.constraints.push({ type: "point_on_curve", point, curve: entity });
+  // La guía provisoria sin nadie más encima se va
+  if (guide !== undefined && !s.constraints.some((c) => c.type === "point_on_line" && c.line === guide)) {
+    const gg = s.entities.find((x) => x.id === guide)?.geometry;
+    if (gg?.type === "line") {
+      const ends = [gg.start, gg.end];
+      s.entities = s.entities.filter((x) => x.id !== guide);
+      s.constraints = s.constraints.filter((c) => !(c.type === "fixed" && ends.includes(c.point)));
+      s.points = s.points.filter((x) => !ends.includes(x.id) || s.entities.some((y) => geometryPoints(y.geometry).includes(x.id)));
+    }
+  }
+  return true;
+}
+
+const dist2 = (a: P2, b: P2) => (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2;
+
+/** La línea `id` es la guía de construcción de esa arista recta (extremos fijos ahí) */
+function isEdgeGuide(s: Sketch, id: number, [a, b]: [P2, P2]): boolean {
+  const g = s.entities.find((x) => x.id === id && x.construction)?.geometry;
+  if (g?.type !== "line") return false;
+  const tol = 1e-6 * Math.max(1, Math.hypot(a[0], a[1]), Math.hypot(b[0], b[1]));
+  const fixedAt = (pid: number, p: P2) => s.constraints.some((c) => c.type === "fixed" && c.point === pid && Math.abs(c.x - p[0]) <= tol && Math.abs(c.y - p[1]) <= tol);
+  return (fixedAt(g.start, a) && fixedAt(g.end, b)) || (fixedAt(g.start, b) && fixedAt(g.end, a));
+}
+
+/** Anclajes que pegan un punto arrastrado al soltarlo (los de dirección o alineación no) */
+const DROP_KINDS = new Set<Snap["kind"]>(["point", "origin", "center", "midpoint", "quadrant", "intersection", "on_line", "on_circle", "on_curve", "solid_vertex", "solid_center", "solid_midpoint", "on_edge", "extension", "guide_cross"]);
+
+/**
+ * Un punto que ya existía se arrastró y se soltó sobre un anclaje: queda ahí
+ * y pegado como si se hubiera dibujado así (coincidente con el punto, sobre
+ * la línea o la curva, en su medio, en el cruce, anclado al sólido). No se
+ * pega a lo que ya es suyo (su propia línea o curva). Devuelve cuántas
+ * restricciones agregó.
+ */
+export function attachDropped(s: Sketch, point: number, snap: Snap): number {
+  const q = s.points.find((x) => x.id === point);
+  if (!q || !DROP_KINDS.has(snap.kind) || snap.id === point) return 0;
+  const before = s.constraints.length;
+  const owns = (eid: number | undefined) => {
+    const g = eid === undefined ? undefined : s.entities.find((x) => x.id === eid)?.geometry;
+    return !g || geometryPoints(g).includes(point);
+  };
+  // Cruce de guías: todo o nada (si parte de lo suyo, no se pega a medias)
+  if (snap.kind === "guide_cross") {
+    const lines = [...(snap.ext ?? []), ...(snap.entity !== undefined ? [snap.entity] : [])];
+    if (lines.some((l) => owns(l)) || snap.align?.h === point || snap.align?.v === point) return 0;
+    if (snap.align?.h !== undefined) s.constraints.push({ type: "horizontal_points", a: snap.align.h, b: point });
+    if (snap.align?.v !== undefined) s.constraints.push({ type: "vertical_points", a: snap.align.v, b: point });
+  }
+  const on = (eid: number | undefined) => {
+    if (owns(eid)) return;
+    const g = s.entities.find((x) => x.id === eid)!.geometry;
+    if (g.type === "line") s.constraints.push({ type: "point_on_line", point, line: eid! });
+    else if (g.type === "circle" || g.type === "arc") s.constraints.push({ type: "point_on_circle", point, circle: eid! });
+    else s.constraints.push({ type: "point_on_curve", point, curve: eid! });
+  };
+  if (snap.id !== undefined && s.points.some((x) => x.id === snap.id)) {
+    const other = snap.id;
+    // Los dos extremos de una misma curva: juntarlos la aplastaría
+    const same = s.entities.some((e) => {
+      const ids = geometryPoints(e.geometry);
+      return ids.includes(point) && ids.includes(other);
+    });
+    const already = s.constraints.some((c) => c.type === "coincident" && ((c.a === point && c.b === other) || (c.a === other && c.b === point)));
+    if (!same && !already) s.constraints.push({ type: "coincident", a: point, b: other });
+  } else if (isSolidPoint(snap) || snap.kind === "on_edge") solidAnchor(s, point, snap);
+  else if (snap.kind === "midpoint") {
+    if (!owns(snap.entity)) s.constraints.push({ type: "midpoint", point, line: snap.entity! });
+  } else if (snap.kind === "quadrant") {
+    const g = s.entities.find((x) => x.id === snap.entity)?.geometry;
+    if (!owns(snap.entity) && (g?.type === "circle" || g?.type === "arc")) {
+      s.constraints.push({ type: "point_on_circle", point, circle: snap.entity! });
+      s.constraints.push({ type: (snap.quadrant ?? 0) % 2 === 0 ? "horizontal_points" : "vertical_points", a: g.center, b: point });
+    }
+  } else if (snap.kind === "intersection") {
+    on(snap.entity);
+    on(snap.other);
+  } else if (snap.kind === "guide_cross") {
+    for (const l of snap.ext ?? []) on(l);
+    if (!(snap.ext ?? []).includes(snap.entity ?? -1)) on(snap.entity);
+  } else on(snap.entity);
+  const added = s.constraints.length - before;
+  if (added > 0) [q.x, q.y] = snap.p;
+  return added;
+}
+
+/**
+ * Línea de construcción sobre una arista recta del sólido (extremos fijos):
+ * la que ya está para esa arista o una nueva. Así varios puntos sobre la misma
+ * arista comparten una sola guía.
+ */
+function edgeGuide(s: Sketch, [a, b]: [P2, P2]): number {
+  const old = s.entities.find((x) => isEdgeGuide(s, x.id, [a, b]));
+  if (old) return old.id;
+  const [pa, pb] = [addPoint(s, a), addPoint(s, b)];
+  s.constraints.push({ type: "fixed", point: pa, x: a[0], y: a[1] }, { type: "fixed", point: pb, x: b[0], y: b[1] });
+  const line = addEntity(s, { type: "line", start: pa, end: pb });
+  s.entities.find((x) => x.id === line)!.construction = true;
+  return line;
 }
 
 /**
@@ -4223,7 +4419,7 @@ export function placeSnap(s: Sketch, snap: Snap, from?: P2): number {
  * tramo que de verdad contiene el punto.
  */
 /** Polilínea de una spline (por puntos o por polos) o una elipse (entera o arco); nada para lo demás */
-function freeCurveLine(s: Sketch, g: Geometry): P2[] | undefined {
+export function freeCurveLine(s: Sketch, g: Geometry): P2[] | undefined {
   const at = (id: number): P2 | undefined => {
     const q = s.points.find((x) => x.id === id);
     return q && [q.x, q.y];
