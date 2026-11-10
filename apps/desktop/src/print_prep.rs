@@ -57,6 +57,32 @@ pub(crate) fn sources(state: &AppState) -> Result<Vec<(String, Mesh)>, String> {
     Ok(vec![("modelo".to_string(), to_print_space(mesh, k))])
 }
 
+/// Lo que va a la placa: el activo (o sus piezas) o, con `input.objects`, todos esos objetos,
+/// cada uno con sus piezas si lo dividieron
+pub(crate) fn plate_sources(state: &AppState, input: &PlateInput) -> Result<Vec<(String, Mesh)>, String> {
+    if input.objects.is_empty() {
+        return sources(state);
+    }
+    let active = state.objects.lock().unwrap().active;
+    let mut out = Vec::new();
+    for o in &input.objects {
+        let list = if active == Some(o.id) {
+            sources(state)?
+        } else {
+            match crate::project::stored_print_meshes(state, o.id) {
+                Some(r) => r?,
+                None => match (o.part, o.studio) {
+                    (Some(part), studio) => vec![("modelo".to_string(), crate::cad::part_print_mesh(state, part, studio.unwrap_or(0))?)],
+                    _ => return Err(format!("«{}» todavía no tiene malla", o.name)),
+                },
+            }
+        };
+        let single = list.len() == 1;
+        out.extend(list.into_iter().map(|(label, mesh)| (if single { o.name.clone() } else { format!("{} {label}", o.name) }, mesh)));
+    }
+    Ok(out)
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // PERFILES
 // ═══════════════════════════════════════════════════════════════════════════
@@ -424,6 +450,22 @@ pub struct PlateInput {
     #[serde(default)]
     pub compensate: bool,
     pub path: String,
+    /// Varios objetos de la escena a la misma placa (elegidos con Ctrl o Mayús en el Outliner);
+    /// vacío: solo el activo
+    #[serde(default)]
+    pub objects: Vec<PlateObject>,
+}
+
+/// Un objeto que va a la placa
+#[derive(Debug, Clone, Deserialize)]
+pub struct PlateObject {
+    pub id: u64,
+    pub name: String,
+    /// Si es una pieza del diseño: con qué armar su malla si nunca se abrió fuera de Diseñar
+    #[serde(default)]
+    pub part: Option<cad_model::PartId>,
+    #[serde(default)]
+    pub studio: Option<cad_model::TabId>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -601,7 +643,7 @@ pub async fn preview_print_plates(app: AppHandle, input: PlateInput) -> Result<P
 pub(crate) fn preview_print_plates_impl(state: &AppState, mut input: PlateInput) -> Result<PlatePreview, String> {
     // El vaciado no cambia la huella: se omite para que la vista sea rápida
     input.hollow_wall = None;
-    let plan = plan_plates(sources(state)?, &input)?;
+    let plan = plan_plates(plate_sources(state, &input)?, &input)?;
     let plates = plan
         .plates
         .iter()
@@ -655,7 +697,7 @@ pub async fn preview_print_plate_view(app: AppHandle, input: PlateInput, plate: 
 
 pub(crate) fn plate_view(state: &AppState, mut input: PlateInput, plate: usize) -> Result<Vec<u8>, String> {
     input.hollow_wall = None;
-    let plan = plan_plates(sources(state)?, &input)?;
+    let plan = plan_plates(plate_sources(state, &input)?, &input)?;
     let chosen = plan.plates.get(plate).ok_or("Esa placa no existe")?;
     let mut scene = converter_scene::Scene { meters_per_unit: 0.001, y_up: true, ..Default::default() };
     let mut add = |mesh: &Mesh, name: &str, color: [f32; 4], index: usize| {
@@ -683,7 +725,7 @@ pub async fn export_print_plates(app: AppHandle, input: PlateInput) -> Result<Pl
 }
 
 pub(crate) fn export_print_plates_impl(state: &AppState, input: PlateInput) -> Result<PlateInfo, String> {
-    let list = sources(state)?;
+    let list = plate_sources(state, &input)?;
     let pieces = list.len();
     let plan = plan_plates(list, &input)?;
     if plan.plates.is_empty() {
@@ -724,6 +766,7 @@ mod tests {
             vent: false,
             compensate: false,
             path: "x.stl".into(),
+            objects: Vec::new(),
         }
     }
 
@@ -743,6 +786,32 @@ mod tests {
         // La altura (Y) del cubo de 1 m pasa a Z, en mm × 10
         let bb = p3d::compute_bounding_box(&z);
         assert!((bb.dimensions()[2] - 10.0).abs() < 1e-9);
+    }
+
+    /// Varios objetos elegidos van juntos a la placa: el activo y los guardados, con su nombre
+    #[test]
+    fn varios_objetos_van_a_la_misma_placa() {
+        let state = AppState::new();
+        *state.mesh.lock().unwrap() = Some(cube(10.0));
+        crate::project::adopt_impl(&state, 1);
+        crate::project::activate_impl(&state, 2).unwrap();
+        *state.mesh.lock().unwrap() = Some(cube(20.0));
+        let mut inp = input(2.0);
+        let object = |id: u64, name: &str| PlateObject { id, name: name.into(), part: None, studio: None };
+        inp.objects = vec![object(1, "chica"), object(2, "grande")];
+        let list = plate_sources(&state, &inp).unwrap();
+        let names: Vec<&str> = list.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, ["chica", "grande"]);
+        let size = |m: &Mesh| p3d::compute_bounding_box(m).dimensions()[0];
+        assert!((size(&list[0].1) - 10.0).abs() < 1e-9 && (size(&list[1].1) - 20.0).abs() < 1e-9);
+        let plan = plan_plates(list, &inp).unwrap();
+        assert_eq!(plan.plates.iter().map(|p| p.meshes.len()).sum::<usize>(), 2);
+        // Uno sin malla ni pieza del diseño: se dice cuál
+        inp.objects.push(object(9, "fantasma"));
+        assert!(plate_sources(&state, &inp).unwrap_err().contains("fantasma"));
+        // Sin objetos: solo el activo
+        inp.objects.clear();
+        assert_eq!(plate_sources(&state, &inp).unwrap().len(), 1);
     }
 
     #[test]

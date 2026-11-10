@@ -4,7 +4,7 @@
 //! Ver `libs/pinocchio/print3d/PLAN_SLA.md`.
 
 use crate::commands::{in_background, report, Progress};
-use crate::print_prep::{plan_plates, sources, PlateInput};
+use crate::print_prep::{plan_plates, plate_sources, PlateInput};
 use crate::state::AppState;
 use pinocchio_slicer::sla::{self, Layer, ResinPrinter, ResinSettings};
 use pinocchio_slicer::sla_calibration::{self, CalibrationRow};
@@ -228,7 +228,7 @@ pub(crate) fn resin_slice_impl(
     if RUNNING.swap(true, Ordering::SeqCst) {
         return Err("Ya hay un laminado en curso".into());
     }
-    let result = sources(state).and_then(|list| slice_plate(list, &input, plate, printer, settings, prepare, points, tilt, |stage, p, msg| report(on_progress, stage, p, msg)));
+    let result = plate_sources(state, &input).and_then(|list| slice_plate(list, &input, plate, printer, settings, prepare, points, tilt, |stage, p, msg| report(on_progress, stage, p, msg)));
     RUNNING.store(false, Ordering::SeqCst);
     result
 }
@@ -378,7 +378,7 @@ pub(crate) fn resin_tilts_impl(
     overhang_angle: Option<f32>,
 ) -> Result<Vec<Orientation>, String> {
     let pr = sla::printer(printer).ok_or_else(|| format!("No existe la impresora de resina «{printer}»"))?;
-    let (tris, _, _) = plate_triangles(sources(state)?, input, pr, &PrepareSettings::default(), plate)?;
+    let (tris, _, _) = plate_triangles(plate_sources(state, input)?, input, pr, &PrepareSettings::default(), plate)?;
     Ok(sla_orient::auto_orient(&tris, pr, layer_height, overhang_angle.unwrap_or(45.0), 5))
 }
 
@@ -527,6 +527,7 @@ mod tests {
             vent: false,
             compensate: false,
             path: String::new(),
+            objects: Vec::new(),
         }
     }
 

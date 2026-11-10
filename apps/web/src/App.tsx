@@ -349,7 +349,7 @@ import type { PreviewView } from "./components/layout/ViewportHeader";
 import { ScanEditor, type ScanEditorTab, type ScanMeshSettings } from "./components/layout/ScanEditor";
 import { CadView } from "./components/layout/CadView";
 import { DesignTabs, changeDesignTabs } from "./components/layout/DesignTabs";
-import { instanceStudio, neighborTab } from "./lib/designTabs";
+import { instanceStudio, neighborTab, splitTabFeature } from "./lib/designTabs";
 import { DesignStep, FeatureTree } from "./components/steps/DesignStep";
 import { createCadStore, insertScanPiece, INLINE_BASE, partColor, partHidden, PLANE_LABELS, type Fabrication, type PartId } from "./lib/cad";
 import { createCadUi } from "./lib/cadUi";
@@ -579,6 +579,16 @@ export const App: Component = () => {
     const list = objects();
     const ids = [activeObjectId(), ...extraObjects()].filter((id): id is number => id !== undefined);
     return ids.flatMap((id) => list.filter((o) => o.id === id));
+  };
+  /**
+   * Los que van juntos a la placa (laminar, ver la cama, exportar las placas):
+   * con dos o más elegidos, todos; si no, ninguno y va solo el activo. Una
+   * pieza del diseño lleva con qué armar su malla si nunca se abrió aquí.
+   */
+  const plateObjects = () => {
+    const list = selectedObjects();
+    if (list.length < 2) return [];
+    return list.map((o) => (isCadObject(o) ? { id: o.id, name: o.name, part: o.source.part, studio: studioOf(o) } : { id: o.id, name: o.name }));
   };
   if (import.meta.env.DEV)
     Object.assign(window, { __objects: objects, __activeObject: activeObjectId, __selectedObjects: () => selectedObjects().map((o) => o.id), __viewer: () => viewer() });
@@ -1985,6 +1995,21 @@ export const App: Component = () => {
     isCadObject(o) && studioOf(o) === cad.resultTab() ? cad.result()?.parts.find((p) => partKey(p.id) === partKey(o.source.part)) : undefined;
   /** La pestaña de la pieza, si es otra que la que se ve y todavía existe */
   const otherTab = (o: CadObject) => (studioOf(o) === cad.resultTab() ? undefined : cad.tabs().tabs.find((x) => x.id === studioOf(o)));
+  /**
+   * El objeto es de la pestaña abierta: cada pestaña tiene su Outliner y su
+   * escena propios, sin nada de las otras. Son suyas sus piezas y, en un
+   * ensamble, las piezas que tiene puestas; un modelo importado no es de
+   * ninguna pestaña y sale en todas.
+   */
+  const ownedByTab = (o: SceneObject) => {
+    if (!isCadObject(o)) return true;
+    const open = cad.tabs().active;
+    if (studioOf(o) === open) return true;
+    if (cad.activeTab()?.kind !== "assembly") return false;
+    return (cad.doc()?.assembly?.instances ?? []).some(
+      (inst) => !inst.suppressed && instanceStudio(inst) === studioOf(o) && splitTabFeature(inst.part.feature)[1] === o.source.part.feature && inst.part.index === o.source.part.index,
+    );
+  };
   /** Tachada: partida o unida en su pestaña (solo se sabe en la que se ve) */
   const replacedObject = (o: SceneObject | undefined) => isCadObject(o) && studioOf(o) === cad.resultTab() && !partView(o) ? replacedEntry(o.source.part) : undefined;
 
@@ -2005,6 +2030,8 @@ export const App: Component = () => {
     const parts = cad.result()?.parts ?? [];
     const active = activeObjectId();
     return objects().flatMap((o): ObjectRow[] => {
+      // Lo de otra pestaña no sale en el Outliner de esta
+      if (!ownedByTab(o)) return [];
       const isActive = o.id === active;
       // Lo hecho sobre la malla: del historial vivo (activo) o del guardado (los demás)
       const trail = isActive ? (history.current(), history.trail()) : savedTrail(o.history);
@@ -2470,7 +2497,8 @@ export const App: Component = () => {
     const hidden = hiddenGhosts();
     const extra = extraObjects();
     // `"model":false` en su interfaz: todavía no tiene malla
-    const list = objects().filter((o) => o.id !== active && o.ui && !o.ui.includes('"model":false') && !hidden.includes(o.id));
+    // Solo los de la pestaña abierta: lo de otras no se ve
+    const list = objects().filter((o) => o.id !== active && ownedByTab(o) && o.ui && !o.ui.includes('"model":false') && !hidden.includes(o.id));
     const request = ++ghostRequest;
     void (async () => {
       await switchingObject;
@@ -2499,6 +2527,16 @@ export const App: Component = () => {
   // Una pestaña de ensamble se ve y se edita como ensamble; una de diseño, como diseño
   const activeTabKey = createMemo(() => `${cad.tabs().active}:${cad.activeTab()?.kind}`);
   createEffect(on(activeTabKey, () => cadUi.setAssemblyMode(cad.activeTab()?.kind === "assembly")));
+  // Al cambiar de pestaña, lo elegido de otra deja de estar elegido (no se ve en esta)
+  createEffect(
+    on(activeTabKey, () => {
+      const list = objects();
+      setExtraObjects((ids) => {
+        const kept = ids.filter((id) => list.some((o) => o.id === id && ownedByTab(o)));
+        return kept.length === ids.length ? ids : kept;
+      });
+    })
+  );
 
   // Cada pieza del diseño es un objeto (solo con el diseño guardado, no con la vista previa de un
   // diálogo; las piezas que ve un ensamble son de sus diseños y ya tienen el suyo)
@@ -2517,11 +2555,13 @@ export const App: Component = () => {
       if (!needsMesh) return;
       untrack(() => {
         const active = activeObject();
-        if (active) return void activateObject(active.id, true);
+        // La activa sigue si es de la pestaña abierta; si es de otra, se elige una de esta
+        if (active && ownedByTab(active)) return void activateObject(active.id, true);
         const parts = cad.result()?.parts ?? [];
         const wanted = parts.find((p) => partKey(p.id) === cadUi.openPart()) ?? parts[0];
-        const target = wanted && objects().find((o) => isPartObject(o, cad.resultTab(), wanted.id));
+        const target = (wanted && objects().find((o) => isPartObject(o, cad.resultTab(), wanted.id))) ?? objects().find((o) => isCadObject(o) && ownedByTab(o));
         if (target) void activateObject(target.id, true);
+        else if (active) void activateObject(active.id, true);
       });
     })
   );
@@ -7859,7 +7899,7 @@ export const App: Component = () => {
     const material = prep.material ?? presets?.materials[0];
     if (!printer || !material) return undefined;
     const settings = prep.plate;
-    return { printer, material, format: settings.format, spacing: settings.spacing, orient: settings.orient, contour: settings.contour !== false, hollow_wall: null, compensate: settings.compensate !== false, path: "" };
+    return { printer, material, format: settings.format, spacing: settings.spacing, orient: settings.orient, contour: settings.contour !== false, hollow_wall: null, compensate: settings.compensate !== false, path: "", objects: plateObjects() };
   };
   createEffect(() => {
     const index = plateViewIndex();
@@ -8039,7 +8079,7 @@ export const App: Component = () => {
   };
 
   const handlePreviewPlates = async (printer: PrinterProfile, material: MaterialProfile, settings: PlateSettings) => {
-    const input = { printer, material, format: settings.format, spacing: settings.spacing, orient: settings.orient, contour: settings.contour !== false, hollow_wall: null, compensate: settings.compensate !== false, path: "" };
+    const input = { printer, material, format: settings.format, spacing: settings.spacing, orient: settings.orient, contour: settings.contour !== false, hollow_wall: null, compensate: settings.compensate !== false, path: "", objects: plateObjects() };
     const result = await printTask(t("Acomodando las piezas..."), () => invoke<PlatePreview>("preview_print_plates", { input }));
     if (result) setPlatePreview(result);
   };
@@ -8051,7 +8091,7 @@ export const App: Component = () => {
         filters: [{ name: settings.format.toUpperCase(), extensions: [settings.format] }],
       });
       if (!path) return;
-      const input = { printer, material, format: settings.format, spacing: settings.spacing, orient: settings.orient, contour: settings.contour !== false, hollow_wall: settings.hollowWall, drain: settings.drain, vent: settings.vent ?? false, compensate: settings.compensate !== false, path };
+      const input = { printer, material, format: settings.format, spacing: settings.spacing, orient: settings.orient, contour: settings.contour !== false, hollow_wall: settings.hollowWall, drain: settings.drain, vent: settings.vent ?? false, compensate: settings.compensate !== false, path, objects: plateObjects() };
       const result = await printTask(t("Preparando las placas..."), () => invoke<PlateResult>("export_print_plates", { input }));
       if (!result) return;
       setPlateResult(result);
@@ -9742,7 +9782,7 @@ export const App: Component = () => {
                 slicer={{
                   settings: printPrep().slicer ?? defaultSlicer,
                   onSettings: (slicer) => setPrintPrep({ ...printPrep(), slicer }),
-                  plateInput: () => prepPlateInput(printPrep(), printPresets()),
+                  plateInput: () => ({ ...prepPlateInput(printPrep(), printPresets()), objects: plateObjects() }),
                   plateCount: platePreview()?.plates.length,
                   disabled: isProcessing() || !meshLoaded(),
                   confirm: confirmAction,

@@ -77,6 +77,24 @@ interface Progress {
 /** Datos que necesita el acomodo de placas (igual que «Exportar para imprimir», sin ruta) */
 export type PlateInputArgs = Record<string, unknown>;
 
+/**
+ * Qué va a la cama: con varios objetos elegidos, sus nombres; si no, cómo
+ * sumar más (Ctrl o Mayús + clic en el Outliner)
+ */
+export const PlatePieces: Component<{ input: PlateInputArgs | undefined }> = (props) => {
+  const names = () => ((props.input?.objects as { name: string }[] | undefined) ?? []).map((o) => o.name);
+  return (
+    <Show
+      when={names().length > 1}
+      fallback={<p class="text-[10px] text-text-dim">{t("Para poner varias piezas en la cama: Ctrl o Mayús + clic sobre ellas en el Outliner.")}</p>}
+    >
+      <p class="text-[11px] text-text-muted" data-plate-pieces>
+        {t("En la cama ({n}): {names}", { n: names().length, names: names().join(", ") })}
+      </p>
+    </Show>
+  );
+};
+
 // ═══════════════════════════════════════════════════════════════════════════
 // AYUDAS
 // ═══════════════════════════════════════════════════════════════════════════
@@ -645,6 +663,7 @@ export const SlicerSection: Component<{
       </div>
       <Show when={info()?.available && props.tab !== "printer"}>
         <footer class="shrink-0 border-t border-border px-3 py-2 space-y-1.5">
+          <PlatePieces input={props.plateInput()} />
           <Show when={(props.plateCount ?? 1) > 1}>
             <Select
               label={t("Placa")}

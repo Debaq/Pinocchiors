@@ -3433,6 +3433,22 @@ fn tab_parts_scene(state: &AppState, tab: Option<TabId>, name: &str, only: Optio
     parts_scene_of(&doc, &eval, name, only)
 }
 
+/// Malla para imprimir de una pieza del diseño (Z arriba, mm), sin pasar por un objeto: para
+/// llevarla a la placa junto con otras aunque nunca se haya abierto fuera de Diseñar
+pub(crate) fn part_print_mesh(state: &AppState, part: cad_model::PartId, studio: TabId) -> Result<pinocchio_mesh::Mesh, String> {
+    require_occt()?;
+    let mut scene = tab_parts_scene(state, Some(studio), "Pieza", Some(part))?;
+    weld_scene(&mut scene);
+    let k = scene.meters_per_unit * 1000.0;
+    let mesh = crate::commands::scene_to_pinocchio_mesh(&scene)?;
+    Ok(crate::print_prep::to_print_space(&mesh, k))
+}
+
+/// La pieza está oculta en el diseño (el ojo del Outliner): no se exporta ni se fabrica
+fn part_hidden(doc: &Document, part: cad_model::PartId) -> bool {
+    doc.parts.iter().any(|q| q.part == part && q.hidden)
+}
+
 fn parts_scene_of(doc: &Document, eval: &cad_model::Evaluation, name: &str, only: Option<cad_model::PartId>) -> Result<Scene, String> {
     if eval.parts.is_empty() {
         return Err("El diseño todavía no tiene un sólido".into());
@@ -3445,7 +3461,7 @@ fn parts_scene_of(doc: &Document, eval: &cad_model::Evaluation, name: &str, only
         // Las compradas (motores, placas, imanes de la biblioteca) no se fabrican: solo si se piden
         .filter(|(_, p)| match only {
             Some(o) => o == p.id,
-            None => !doc.is_purchased(p.id),
+            None => !doc.is_purchased(p.id) && !eval.context.contains(&p.id) && !part_hidden(doc, p.id),
         })
         // Una pieza sola conserva el nombre del diseño
         .map(|(i, p)| (&p.shape, if several || only.is_some() { part_name(doc, p.id, i + 1) } else { name.to_string() }, p.mesh.as_ref()))
@@ -3501,7 +3517,8 @@ fn assembly_items_of(doc: &Document, asm: &cad_model::Assembly, shapes: Vec<(u32
     let items: Vec<_> = shapes
         .into_iter()
         .filter_map(|(id, shape)| {
-            let inst = asm.instances.iter().find(|i| i.id == id)?;
+            // Las ocultas en el ensamble no se exportan
+            let inst = asm.instances.iter().find(|i| i.id == id && !i.hidden)?;
             let color = doc.parts.iter().find(|q| q.part == inst.part).and_then(|q| q.color.as_deref()).and_then(hex_rgb);
             Some((shape, inst.name.clone(), color))
         })
@@ -3531,7 +3548,7 @@ fn tab_export_items(state: &AppState, tab: TabId) -> Result<Vec<(cad_model::Shap
     Ok(ev
         .parts
         .iter()
-        .filter(|x| !ev.context.contains(&x.id))
+        .filter(|x| !ev.context.contains(&x.id) && !part_hidden(&doc, x.id))
         .map(|x| {
             let color = doc.parts.iter().find(|q| q.part == x.id).and_then(|q| q.color.as_deref()).and_then(hex_rgb);
             (x.shape.clone(), part_name(&doc, x.id, numbers.get(&x.id).copied().unwrap_or(0)), color)
@@ -3565,7 +3582,7 @@ impl StepTree {
         let idx = self.asms.len();
         self.asms.push(name);
         let (asm, sol, _) = cad_model::assembly_refs::solve_with(ev, asm);
-        for inst in asm.instances.iter().filter(|i| !i.suppressed) {
+        for inst in asm.instances.iter().filter(|i| !i.suppressed && !i.hidden) {
             let Some((_, pos, rot)) = sol.poses.iter().find(|p| p.0 == inst.id) else { continue };
             let m = cad_model::assembly::instance_matrix(*pos, *rot);
             let (tab, local) = cad_model::split_tab_feature(inst.part.feature);
@@ -3758,7 +3775,8 @@ fn export_impl(state: &AppState, path: &str, format: &str, part: Option<cad_mode
         .parts
         .iter()
         .enumerate()
-        .filter(|(_, x)| part.is_none_or(|id| id == x.id) && !ev.context.contains(&x.id))
+        // Las ocultas no salen, salvo que se pida justo esa
+        .filter(|(_, x)| part.map_or(!part_hidden(doc, x.id), |id| id == x.id) && !ev.context.contains(&x.id))
         .map(|(i, x)| {
             let name = if several || part.is_some() { part_name(doc, x.id, i + 1) } else { "Diseño".to_string() };
             let color = doc.parts.iter().find(|q| q.part == x.id).and_then(|q| q.color.as_deref()).and_then(hex_rgb);
@@ -5835,5 +5853,9 @@ mod library_tests {
         // Marcada a mano como fabricada, sale
         doc.parts.push(cad_model::PartProps { part: cad_model::PartId { feature: placa, index: 0 }, name: None, color: None, hidden: false, material: None, purchased: Some(false) });
         assert_eq!(parts_scene_of(&doc, &eval, "x", None).unwrap().meshes.len(), 2);
+        // Oculta con el ojo: no sale, salvo que se pida esa pieza
+        doc.parts.last_mut().unwrap().hidden = true;
+        assert_eq!(parts_scene_of(&doc, &eval, "x", None).unwrap().meshes.len(), 1);
+        assert_eq!(parts_scene_of(&doc, &eval, "x", Some(cad_model::PartId { feature: placa, index: 0 })).unwrap().meshes.len(), 1);
     }
 }

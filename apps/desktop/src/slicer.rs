@@ -3,7 +3,7 @@
 //! Ver `libs/slicer` y `libs/pinocchio/print3d/PLAN_SLICER.md`.
 
 use crate::commands::{in_background, report, Progress};
-use crate::print_prep::{plan_plates, sources, Plate, PlateInput, PlatePlan};
+use crate::print_prep::{plan_plates, plate_sources, Plate, PlateInput, PlatePlan};
 use crate::state::AppState;
 use pinocchio_mesh::Mesh;
 use pinocchio_slicer as slicer;
@@ -260,7 +260,7 @@ pub(crate) fn slice_plate_impl(
     let result = (|| {
         let config = slicer::build_config(&settings).map_err(|e| e.to_string())?;
         report(on_progress, "plates", 2, "Acomodando las piezas...");
-        let plan = slicing_plan(sources(state)?, &input, &config)?;
+        let plan = slicing_plan(plate_sources(state, &input)?, &input, &config)?;
         let plates = plan.plates.len();
         let chosen = plan.plates.get(plate).ok_or("Esa placa no existe")?;
         let parts = plate_parts(chosen);
@@ -465,6 +465,7 @@ mod tests {
             vent: false,
             compensate: false,
             path: String::new(),
+            objects: Vec::new(),
         };
         let k1 = slicer::index().printers.iter().find(|p| p.model == "Creality K1").unwrap();
         let settings = slicer::SliceSettings { printer: k1.name.clone(), process: k1.default_process.clone(), filament: k1.default_filament.clone(), overrides: Default::default() };
@@ -508,6 +509,7 @@ mod tests {
             vent: false,
             compensate: false,
             path: String::new(),
+            objects: Vec::new(),
         };
         let mut config = Map::new();
         config.insert("brim_type".into(), "auto_brim".into());
@@ -557,6 +559,7 @@ mod tests {
                     vent: false,
                     compensate: false,
                     path: String::new(),
+                    objects: Vec::new(),
                 };
                 let config = slicer::build_config(&settings).map_err(|e| e.to_string())?;
                 let plan = slicing_plan(vec![(name.clone(), mesh)], &input, &config)?;

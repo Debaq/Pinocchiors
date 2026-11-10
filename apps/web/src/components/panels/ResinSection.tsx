@@ -37,7 +37,7 @@ const turnLabel = (turn: ResinTurn) =>
     .join(" · ");
 import { PrinterPicture } from "./PrinterSection";
 import { resinCxdlp, setResinCxdlp, type CxdlpOptions } from "../../lib/settings";
-import type { PlateInputArgs, SlicerTab } from "./SlicerSection";
+import { PlatePieces, type PlateInputArgs, type SlicerTab } from "./SlicerSection";
 
 interface Progress {
   stage: string;
@@ -966,6 +966,7 @@ export const ResinSection: Component<{
       </div>
       <Show when={info() && props.tab !== "printer"}>
         <footer class="shrink-0 border-t border-border px-3 py-2 space-y-1.5">
+          <PlatePieces input={props.plateInput()} />
           <Show when={(props.plateCount ?? 1) > 1}>
             <Select
               label={t("Placa")}

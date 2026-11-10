@@ -1087,6 +1087,28 @@ fn object_scene(state: &AppState, id: u64) -> Result<Scene, String> {
     project.scene.ok_or_else(|| "Un objeto elegido no tiene malla".to_string())
 }
 
+/// Lo que imprime un objeto guardado (no el activo), en Z arriba y mm: sus piezas si lo
+/// dividieron, si no su malla. `None` si no tiene casillero (una pieza del diseño que nunca se
+/// abrió fuera de Diseñar).
+pub(crate) fn stored_print_meshes(state: &AppState, id: u64) -> Option<Result<Vec<(String, Mesh)>, String>> {
+    let bytes = {
+        let objects = state.objects.lock().unwrap();
+        objects.stored.iter().find(|o| o.id == id)?.state.clone()
+    };
+    Some((|| {
+        let project: ProjectState = rmp_serde::from_slice(&bytes).map_err(|e| format!("Objeto ilegible: {e}"))?;
+        let k = project.scene.as_ref().map_or(1.0, |s| s.meters_per_unit * 1000.0);
+        if let Some(pieces) = pieces_from(project.print3d_pieces)? {
+            return Ok(pieces.into_iter().map(|p| (p.label, crate::print_prep::to_print_space(&p.mesh, k))).collect());
+        }
+        let mesh = match project.mesh {
+            Some(m) => m.into_mesh()?,
+            None => crate::commands::scene_to_pinocchio_mesh(project.scene.as_ref().ok_or("Un objeto elegido no tiene malla")?)?,
+        };
+        Ok(vec![("modelo".to_string(), crate::print_prep::to_print_space(&mesh, k))])
+    })())
+}
+
 /// Huella de la escena de un objeto guardado (`None` si no está guardado: es
 /// el activo). Barata: no lo deserializa.
 pub(crate) fn stored_object_hash(state: &AppState, id: u64) -> Option<u64> {

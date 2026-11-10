@@ -211,6 +211,7 @@ mod tests {
                 vent: false,
                 compensate: false,
                 path: dir.join(format!("{name}.stl")).to_string_lossy().into_owned(),
+                objects: Vec::new(),
             },
             strategy: None,
             margin: None,

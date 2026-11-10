@@ -539,4 +539,7 @@ export const en_print: Catalog = {
   "No se encontró la zona de la piel en la pieza nueva: el diseño cambió justo ahí": "The skin zone wasn't found on the new part: the design changed right there",
   "la intensidad pintada es de otra malla: vuelve a pintarla": "the painted strength belongs to another mesh: paint it again",
   "Faltan valores de intensidad": "Strength values are missing",
+  "Para poner varias piezas en la cama: Ctrl o Mayús + clic sobre ellas en el Outliner.": "To put several parts on the bed: Ctrl or Shift + click them in the Outliner.",
+  "En la cama ({n}): {names}": "On the bed ({n}): {names}",
+  "«{name}» todavía no tiene malla": "“{name}” has no mesh yet",
 };
