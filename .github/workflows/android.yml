@@ -29,6 +29,12 @@ on:
         description: "Publicar el APK en una release (pre-release, sin tocar la última del escritorio)"
         type: boolean
         default: true
+  # Desde release.yml: solo el APK como artefacto; lo publica la release principal
+  workflow_call:
+    inputs:
+      publicar:
+        type: boolean
+        default: false
 
 permissions:
   contents: write

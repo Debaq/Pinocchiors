@@ -1,0 +1,104 @@
+# Publica en la release los archivos de UNA plataforma (artefacto `artifact`)
+# apenas esa plataforma termina, sin esperar a las otras. Lo llama release.yml
+# en cadena (Linux → Windows → Android → macOS) para que salgan en ese orden y
+# no se pisen al tocar latest.json; si una falla, las siguientes publican igual.
+#
+# La primera que llega crea la release (marcada como la más reciente); las
+# demás suben sus archivos a la misma. latest.json (actualizaciones de la app)
+# se arma sumando las plataformas que ya estaban publicadas más la nueva.
+
+name: Publicar plataforma
+
+on:
+  workflow_call:
+    inputs:
+      artifact:
+        description: "Artefacto con los archivos (desktop-linux, android-arm64...)"
+        type: string
+        required: true
+      tag:
+        type: string
+        required: true
+      semver:
+        type: string
+        required: true
+      updater:
+        description: "Sumar sus instaladores firmados a latest.json"
+        type: boolean
+        default: true
+
+jobs:
+  publish:
+    name: Publicar ${{ inputs.artifact }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact }}
+          path: dist
+
+      - name: latest.json (actualizaciones de la app)
+        if: inputs.updater
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          SEMVER: ${{ inputs.semver }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Lo que ya publicaron las plataformas anteriores de esta release
+          platforms='{}'
+          if gh release download "$TAG" -p latest.json -D "$RUNNER_TEMP/old" 2> /dev/null; then
+            platforms=$(jq '.platforms // {}' "$RUNNER_TEMP/old/latest.json")
+          fi
+          url="https://github.com/${REPO}/releases/download/${TAG}"
+          add() { # clave archivo
+            local f="Pinocchio-${TAG}-$2"
+            [[ -f "$f" && -f "$f.sig" ]] || return 0
+            platforms=$(jq --arg k "$1" --arg u "$url/$f" --arg s "$(cat "$f.sig")" '. + {($k): {url: $u, signature: $s}}' <<< "$platforms")
+          }
+          add linux-x86_64 linux-amd64.AppImage
+          add linux-x86_64-appimage linux-amd64.AppImage
+          add windows-x86_64 windows-x64-setup.exe
+          add windows-x86_64-nsis windows-x64-setup.exe
+          add windows-x86_64-msi windows-x64.msi
+          add darwin-aarch64 macos-arm64.app.tar.gz
+          add darwin-aarch64-app macos-arm64.app.tar.gz
+          # Novedades: los commits desde la release anterior (las muestra la app)
+          prev=$(git describe --tags --abbrev=0 --match 'pre.*' "${GITHUB_SHA}^" 2>/dev/null || true)
+          notes=$(git log --no-merges --format='- %s' ${prev:+"$prev.."}"$GITHUB_SHA" | head -n 40)
+          jq -n --arg v "$SEMVER" --arg n "**${TAG}**"$'\n\n'"$notes" --arg d "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson p "$platforms" \
+            '{version: $v, notes: $n, pub_date: $d, platforms: $p}' > latest.json
+          cat latest.json
+
+      # Las firmas ya quedaron dentro de latest.json
+      - name: Quitar las firmas sueltas
+        working-directory: dist
+        run: rm -f ./*.sig && ls -la
+
+      - name: Subir a la release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          elif [[ "${{ github.event_name }}" == workflow_dispatch ]]; then
+            # El tag lo crea GitHub con el token del workflow: no relanza ningún workflow
+            gh release create "$TAG" dist/* \
+              --target "$GITHUB_SHA" \
+              --title "$TAG" \
+              --latest \
+              --generate-notes
+          else
+            gh release create "$TAG" dist/* \
+              --verify-tag \
+              --title "$TAG" \
+              --latest \
+              --generate-notes
+          fi
+          echo "Publicado ${{ inputs.artifact }} en ${TAG}" >> "$GITHUB_STEP_SUMMARY"

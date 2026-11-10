@@ -9,8 +9,13 @@
 # También al subir un tag con el formato pre.<YYYY>.<MM>.<DD>.<sha7> (fecha del
 # commit en UTC), que es lo que hace ./scripts/release.sh [commit].
 #
-# plataformas: linux (por defecto), windows, macos, sus combinaciones
-# (linux-windows, linux-macos, windows-macos) o todas.
+# plataformas: linux (por defecto), windows, macos, android, sus combinaciones
+# (linux-windows, linux-macos, windows-macos) o todas (las cuatro).
+#
+# Cada plataforma compila por su cuenta (desktop-build.yml, android.yml) y se
+# publica apenas termina (release-publish.yml), en este orden: Linux, Windows,
+# Android, macOS. Si una falla, las demás se compilan y se publican igual. Los
+# tests del workspace corren en paralelo y no frenan la release.
 #
 # OpenCASCADE se compila mínimo y estático con scripts/build-occt.sh (solo
 # modelado y STEP, sin visualización ni X11) y queda en caché por versión,
@@ -51,7 +56,7 @@ on:
       plataformas:
         description: "Plataformas a compilar"
         type: choice
-        options: [linux, windows, macos, linux-windows, linux-macos, windows-macos, todas]
+        options: [linux, windows, macos, android, linux-windows, linux-macos, windows-macos, todas]
         default: linux
       cli:
         description: "También la CLI y el paquete WASM (quedan como artefactos del workflow, no en la release)"
@@ -78,7 +83,10 @@ jobs:
       tag: ${{ steps.tag.outputs.tag }}
       semver: ${{ steps.tag.outputs.semver }}
       cli: ${{ steps.matrix.outputs.cli }}
-      desktop: ${{ steps.matrix.outputs.desktop }}
+      linux: ${{ steps.matrix.outputs.linux }}
+      windows: ${{ steps.matrix.outputs.windows }}
+      macos: ${{ steps.matrix.outputs.macos }}
+      android: ${{ steps.matrix.outputs.android }}
     steps:
       - uses: actions/checkout@v5
 
@@ -110,28 +118,23 @@ jobs:
           PLATAFORMAS: ${{ github.event_name == 'workflow_dispatch' && inputs.plataformas || 'todas' }}
         run: |
           # "todas" o una lista con guiones (linux-macos, windows, ...)
-          [[ "$PLATAFORMAS" == todas ]] && PLATAFORMAS=linux-windows-macos
-          cli=(); desktop=()
-          if [[ "$PLATAFORMAS" == *linux* ]]; then
-            cli+=('{"os":"ubuntu-latest","target":"x86_64-unknown-linux-gnu"}')
-            desktop+=('{"os":"ubuntu-22.04","platform":"linux"}')
-          fi
-          if [[ "$PLATAFORMAS" == *windows* ]]; then
-            cli+=('{"os":"windows-latest","target":"x86_64-pc-windows-msvc"}')
-            desktop+=('{"os":"windows-latest","platform":"windows"}')
-          fi
+          [[ "$PLATAFORMAS" == todas ]] && PLATAFORMAS=linux-windows-macos-android
+          cli=()
+          for p in linux windows macos android; do
+            if [[ "$PLATAFORMAS" == *$p* ]]; then echo "$p=true" >> "$GITHUB_OUTPUT"; else echo "$p=false" >> "$GITHUB_OUTPUT"; fi
+          done
+          [[ "$PLATAFORMAS" == *linux* ]] && cli+=('{"os":"ubuntu-latest","target":"x86_64-unknown-linux-gnu"}')
+          [[ "$PLATAFORMAS" == *windows* ]] && cli+=('{"os":"windows-latest","target":"x86_64-pc-windows-msvc"}')
           if [[ "$PLATAFORMAS" == *macos* ]]; then
             cli+=('{"os":"macos-latest","target":"aarch64-apple-darwin"}')
             cli+=('{"os":"macos-latest","target":"x86_64-apple-darwin"}')
-            desktop+=('{"os":"macos-latest","platform":"macos"}')
           fi
           join() { local IFS=,; echo "[$*]"; }
           echo "cli=$(join "${cli[@]}")" >> "$GITHUB_OUTPUT"
-          echo "desktop=$(join "${desktop[@]}")" >> "$GITHUB_OUTPUT"
 
   # ───────────────────────────────────────────────────────────────────────────
-  # Todo el workspace con OCCT real (los tests del CAD no se saltan). Mismo
-  # sistema que el desktop de Linux, así este job deja OCCT en caché para él.
+  # Todo el workspace con OCCT real (los tests del CAD no se saltan). Corre en
+  # paralelo: informa, pero no frena la compilación ni la publicación.
   test:
     name: Tests (con CAD)
     # A mano se pueden saltar (input `tests`); con tag van siempre
@@ -182,170 +185,84 @@ jobs:
 
   # ───────────────────────────────────────────────────────────────────────────
   # Motor de laminado: en paralelo con los tests; casi siempre sale de caché
-  slicer:
-    name: Motor de laminado
+  # Motor de laminado y app de escritorio, cada plataforma por su lado: la que
+  # termina se publica sin esperar a las otras, y si una falla las demás siguen
+  slicer-linux:
+    name: Motor de laminado (linux)
     needs: [version]
+    if: needs.version.outputs.linux == 'true'
     uses: ./.github/workflows/slicer-engine.yml
     with:
-      plataformas: ${{ github.event_name == 'workflow_dispatch' && inputs.plataformas || 'todas' }}
+      plataformas: linux
 
-  # ───────────────────────────────────────────────────────────────────────────
-  desktop:
-    name: Desktop (${{ matrix.platform }})
-    needs: [version, test, slicer]
-    # Tests saltados no la frenan; fallidos, sí
-    if: ${{ !cancelled() && !failure() }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJSON(needs.version.outputs.desktop) }}
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v5
+  slicer-windows:
+    name: Motor de laminado (windows)
+    needs: [version]
+    if: needs.version.outputs.windows == 'true'
+    uses: ./.github/workflows/slicer-engine.yml
+    with:
+      plataformas: windows
 
-      - name: Dependencias del sistema (Linux)
-        if: matrix.platform == 'linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
-            librsvg2-dev patchelf file ninja-build
+  slicer-macos:
+    name: Motor de laminado (macos)
+    needs: [version]
+    if: needs.version.outputs.macos == 'true'
+    uses: ./.github/workflows/slicer-engine.yml
+    with:
+      plataformas: macos
 
-      - name: Entorno de MSVC (Windows)
-        if: matrix.platform == 'windows'
-        uses: ilammy/msvc-dev-cmd@v1
+  desktop-linux:
+    name: Linux
+    needs: [version, slicer-linux]
+    if: ${{ !cancelled() && needs.slicer-linux.result == 'success' }}
+    uses: ./.github/workflows/desktop-build.yml
+    secrets: inherit
+    with:
+      platform: linux
+      os: ubuntu-22.04
+      tag: ${{ needs.version.outputs.tag }}
+      semver: ${{ needs.version.outputs.semver }}
 
-      # En bash el link.exe de Git (coreutils) tapa al linker de MSVC.
-      - name: Quitar link.exe de Git (Windows)
-        if: matrix.platform == 'windows'
-        run: rm -f /usr/bin/link.exe
+  desktop-windows:
+    name: Windows
+    needs: [version, slicer-windows]
+    if: ${{ !cancelled() && needs.slicer-windows.result == 'success' }}
+    uses: ./.github/workflows/desktop-build.yml
+    secrets: inherit
+    with:
+      platform: windows
+      os: windows-latest
+      tag: ${{ needs.version.outputs.tag }}
+      semver: ${{ needs.version.outputs.semver }}
 
-      - name: OCCT en caché
-        id: occt-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: occt-static
-          key: occt-${{ env.OCCT_VERSION }}-${{ matrix.os }}-${{ hashFiles('scripts/build-occt.sh') }}
+  desktop-macos:
+    name: macOS
+    needs: [version, slicer-macos]
+    if: ${{ !cancelled() && needs.slicer-macos.result == 'success' }}
+    uses: ./.github/workflows/desktop-build.yml
+    secrets: inherit
+    with:
+      platform: macos
+      os: macos-latest
+      tag: ${{ needs.version.outputs.tag }}
+      semver: ${{ needs.version.outputs.semver }}
 
-      - name: Compilar OCCT estático
-        if: steps.occt-cache.outputs.cache-hit != 'true'
-        env:
-          CMAKE_GENERATOR: Ninja
-        run: |
-          if [[ "${{ matrix.platform }}" == macos ]]; then brew install ninja; fi
-          OCCT_WORK_DIR="$RUNNER_TEMP/occt" scripts/build-occt.sh "$PWD/occt-static" "$OCCT_VERSION"
-
-      - name: Guardar OCCT en caché
-        if: steps.occt-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: occt-static
-          key: ${{ steps.occt-cache.outputs.cache-primary-key }}
-
-      - name: Rutas de OCCT
-        run: |
-          # En Windows, ruta nativa (C:/...) y no la de MSYS (/c/...)
-          root=$PWD
-          if [[ "${{ matrix.platform }}" == windows ]]; then root=$(cygpath -m "$PWD"); fi
-          echo "OCCT_STATIC=1" >> "$GITHUB_ENV"
-          echo "CAD_REQUIRE_OCCT=1" >> "$GITHUB_ENV"
-          echo "OCCT_INCLUDE_DIR=$root/occt-static/include/opencascade" >> "$GITHUB_ENV"
-          echo "OCCT_LIB_DIR=$root/occt-static/lib" >> "$GITHUB_ENV"
-
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: desktop-cad-${{ matrix.platform }}
-
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: apps/web/package-lock.json
-
-      - name: Instalar frontend
-        working-directory: apps/web
-        run: npm ci
-
-      # Va dentro del ejecutable (ver PINOCCHIO_SLICER_EMBED en «Build Tauri»)
-      - name: Motor de laminado
-        uses: actions/download-artifact@v4
-        with:
-          name: slicer-engine-${{ matrix.platform }}
-          path: libs/slicer/bin
-
-      - name: Build Tauri
-        working-directory: apps/desktop
-        env:
-          # Firma de las actualizaciones (.sig junto a cada instalador)
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          # Con contraseña: la clave sin contraseña de `signer generate` no firma
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          SEMVER: ${{ needs.version.outputs.semver }}
-        run: |
-          # La versión y los artefactos de actualización solo acá: un build
-          # local no necesita la clave
-          config="{\"version\":\"${SEMVER}\",\"bundle\":{\"createUpdaterArtifacts\":true}}"
-          # El motor de laminado (la carpeta: en Windows lleva sus DLL) se embebe
-          # solo acá; un build local lo busca en libs/slicer/bin
-          bin="$GITHUB_WORKSPACE/libs/slicer/bin"
-          if [[ "${{ matrix.platform }}" == windows ]]; then bin=$(cygpath -m "$bin"); fi
-          export PINOCCHIO_SLICER_EMBED="$bin"
-          # Linux: sin .deb ni .rpm; el binario suelto se publica aparte.
-          if [[ "${{ matrix.platform }}" == linux ]]; then
-            node ../web/node_modules/@tauri-apps/cli/tauri.js build --bundles appimage --config "$config"
-          else
-            node ../web/node_modules/@tauri-apps/cli/tauri.js build --config "$config"
-          fi
-
-      - name: Renombrar instaladores
-        env:
-          TAG: ${{ needs.version.outputs.tag }}
-        run: |
-          mkdir -p dist
-          shopt -s nullglob
-          for f in target/release/bundle/*/*; do
-            case "$f" in
-              *.AppImage)      out="linux-amd64.AppImage" ;;
-              *.AppImage.sig)  out="linux-amd64.AppImage.sig" ;;
-              *.msi)           out="windows-x64.msi" ;;
-              *.msi.sig)       out="windows-x64.msi.sig" ;;
-              *-setup.exe)     out="windows-x64-setup.exe" ;;
-              *-setup.exe.sig) out="windows-x64-setup.exe.sig" ;;
-              *.dmg)           out="macos-arm64.dmg" ;;
-              *.app.tar.gz)    out="macos-arm64.app.tar.gz" ;;
-              *.app.tar.gz.sig) out="macos-arm64.app.tar.gz.sig" ;;
-              *)               continue ;;
-            esac
-            cp "$f" "dist/Pinocchio-${TAG}-${out}"
-          done
-          # Sin firma la app no se actualiza sola: que falle acá y no en los usuarios
-          if ! ls dist/*.sig > /dev/null 2>&1; then
-            echo "::error::No se firmaron los instaladores (¿falta el secreto TAURI_SIGNING_PRIVATE_KEY?)"
-            exit 1
-          fi
-          # Binario Linux suelto (requiere webkit2gtk-4.1 instalado en el sistema)
-          if [[ "${{ matrix.platform }}" == linux ]]; then
-            cp target/release/pinocchio-app "dist/Pinocchio-${TAG}-linux-x86_64"
-            chmod +x "dist/Pinocchio-${TAG}-linux-x86_64"
-          fi
-          ls -la dist
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: desktop-${{ matrix.platform }}
-          path: dist/*
-          if-no-files-found: error
+  android:
+    name: Android
+    needs: [version]
+    if: needs.version.outputs.android == 'true'
+    uses: ./.github/workflows/android.yml
+    secrets: inherit
+    with:
+      # El APK va a esta release (lo sube publish-android), no a una propia
+      publicar: false
 
   # ───────────────────────────────────────────────────────────────────────────
   cli:
     name: CLI (${{ matrix.target }})
-    needs: [version, test]
+    needs: [version]
     # Solo a mano y si se piden (input `cli`); no van a la release
-    if: ${{ !cancelled() && !failure() && github.event_name == 'workflow_dispatch' && inputs.cli }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.cli }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -390,9 +307,9 @@ jobs:
   # ───────────────────────────────────────────────────────────────────────────
   wasm:
     name: WASM
-    needs: [version, test]
+    needs: [version]
     # Solo a mano y si se piden (input `cli`); no van a la release
-    if: ${{ !cancelled() && !failure() && github.event_name == 'workflow_dispatch' && inputs.cli }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.cli }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -432,77 +349,47 @@ jobs:
           if-no-files-found: error
 
   # ───────────────────────────────────────────────────────────────────────────
-  release:
-    name: Publicar release
-    needs: [version, desktop, cli, wasm]
-    # CLI y WASM saltados no la frenan; que alguno falle, sí
-    if: ${{ !cancelled() && !failure() }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
+  # Publicación en cadena: Linux → Windows → Android → macOS. Cada una espera a
+  # la anterior (así salen en ese orden y no se pisan latest.json) pero publica
+  # aunque la anterior haya fallado o no se haya compilado.
+  publish-linux:
+    name: Publicar Linux
+    needs: [version, desktop-linux]
+    if: ${{ !cancelled() && needs.desktop-linux.result == 'success' }}
+    uses: ./.github/workflows/release-publish.yml
+    with:
+      artifact: desktop-linux
+      tag: ${{ needs.version.outputs.tag }}
+      semver: ${{ needs.version.outputs.semver }}
 
-      # Solo la app: el motor (slicer-engine) ya va dentro; CLI y WASM no se publican
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-          pattern: "desktop-*"
-          merge-multiple: true
+  publish-windows:
+    name: Publicar Windows
+    needs: [version, desktop-windows, publish-linux]
+    if: ${{ !cancelled() && needs.desktop-windows.result == 'success' }}
+    uses: ./.github/workflows/release-publish.yml
+    with:
+      artifact: desktop-windows
+      tag: ${{ needs.version.outputs.tag }}
+      semver: ${{ needs.version.outputs.semver }}
 
-      - name: latest.json (actualizaciones de la app)
-        working-directory: dist
-        env:
-          TAG: ${{ needs.version.outputs.tag }}
-          SEMVER: ${{ needs.version.outputs.semver }}
-          REPO: ${{ github.repository }}
-        run: |
-          # Solo las plataformas compiladas en esta release: las demás no
-          # encuentran la suya y siguen en su versión (sin error a la vista)
-          url="https://github.com/${REPO}/releases/download/${TAG}"
-          platforms='{}'
-          add() { # clave archivo
-            local f="Pinocchio-${TAG}-$2"
-            [[ -f "$f" && -f "$f.sig" ]] || return 0
-            platforms=$(jq --arg k "$1" --arg u "$url/$f" --arg s "$(cat "$f.sig")" '. + {($k): {url: $u, signature: $s}}' <<< "$platforms")
-          }
-          add linux-x86_64 linux-amd64.AppImage
-          add linux-x86_64-appimage linux-amd64.AppImage
-          add windows-x86_64 windows-x64-setup.exe
-          add windows-x86_64-nsis windows-x64-setup.exe
-          add windows-x86_64-msi windows-x64.msi
-          add darwin-aarch64 macos-arm64.app.tar.gz
-          add darwin-aarch64-app macos-arm64.app.tar.gz
-          # Novedades: los commits desde la release anterior (las muestra la app)
-          prev=$(git describe --tags --abbrev=0 --match 'pre.*' "${GITHUB_SHA}^" 2>/dev/null || true)
-          notes=$(git log --no-merges --format='- %s' ${prev:+"$prev.."}"$GITHUB_SHA" | head -n 40)
-          jq -n --arg v "$SEMVER" --arg n "**${TAG}**"$'\n\n'"$notes" --arg d "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson p "$platforms" \
-            '{version: $v, notes: $n, pub_date: $d, platforms: $p}' > latest.json
-          cat latest.json
+  publish-android:
+    name: Publicar Android
+    needs: [version, android, publish-windows]
+    if: ${{ !cancelled() && needs.android.result == 'success' }}
+    uses: ./.github/workflows/release-publish.yml
+    with:
+      artifact: android-arm64
+      tag: ${{ needs.version.outputs.tag }}
+      semver: ${{ needs.version.outputs.semver }}
+      # La app de Android no se actualiza sola: no va en latest.json
+      updater: false
 
-      # Las firmas ya quedaron dentro de latest.json
-      - name: Quitar las firmas sueltas
-        working-directory: dist
-        run: rm -f ./*.sig && ls -la
-
-      - name: Crear release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.version.outputs.tag }}
-        run: |
-          if gh release view "$TAG" > /dev/null 2>&1; then
-            gh release upload "$TAG" dist/* --clobber
-          elif [[ "${{ github.event_name }}" == workflow_dispatch ]]; then
-            # El tag lo crea GitHub con el token del workflow: no relanza este workflow
-            gh release create "$TAG" dist/* \
-              --target "$GITHUB_SHA" \
-              --title "$TAG" \
-              --latest \
-              --generate-notes
-          else
-            gh release create "$TAG" dist/* \
-              --verify-tag \
-              --title "$TAG" \
-              --latest \
-              --generate-notes
-          fi
+  publish-macos:
+    name: Publicar macOS
+    needs: [version, desktop-macos, publish-android]
+    if: ${{ !cancelled() && needs.desktop-macos.result == 'success' }}
+    uses: ./.github/workflows/release-publish.yml
+    with:
+      artifact: desktop-macos
+      tag: ${{ needs.version.outputs.tag }}
+      semver: ${{ needs.version.outputs.semver }}
