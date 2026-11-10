@@ -113,6 +113,17 @@ jobs:
         if: steps.bin.outputs.cache-hit != 'true' && matrix.platform == 'macos'
         run: brew install automake autoconf texinfo libtool ninja
 
+      # Con el SDK de Xcode 16.3 en adelante, la libpng que trae OpenCV ya no ve
+      # que <math.h> está incluida y busca <fp.h> (cabecera del Mac clásico que el
+      # SDK no tiene): una que solo incluye <math.h>, para todo lo que compila clang
+      - name: Cabecera fp.h (macOS)
+        if: steps.bin.outputs.cache-hit != 'true' && matrix.platform == 'macos'
+        run: |
+          shim="$RUNNER_TEMP/macos-shim"
+          mkdir -p "$shim"
+          printf '#include <math.h>\n' > "$shim/fp.h"
+          echo "CPATH=$shim" >> "$GITHUB_ENV"
+
       - name: Entorno de MSVC (Windows)
         if: steps.bin.outputs.cache-hit != 'true' && matrix.platform == 'windows'
         uses: ilammy/msvc-dev-cmd@v1
