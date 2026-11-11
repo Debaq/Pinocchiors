@@ -77,7 +77,17 @@ export class QuadViews {
     const { canvas } = view;
     canvas.addEventListener("wheel", (e) => {
       e.preventDefault();
+      const before = view.zoom;
       view.zoom = Math.min(200, Math.max(0.05, view.zoom * (e.deltaY < 0 ? 1.15 : 1 / 1.15)));
+      // El punto bajo el cursor queda quieto
+      const rect = canvas.getBoundingClientRect();
+      if (rect.height > 0) {
+        const radius = Math.max(this.bounds()?.radius ?? 1, 1e-6);
+        const perPixel = (z: number) => (2 * radius * 1.2) / z / rect.height;
+        const shrink = perPixel(before) - perPixel(view.zoom);
+        view.pan.x += (e.clientX - rect.left - rect.width / 2) * shrink;
+        view.pan.y -= (e.clientY - rect.top - rect.height / 2) * shrink;
+      }
       this.onChange();
     }, { passive: false });
     canvas.addEventListener("dblclick", () => this.lookFrom(view.dir.clone()));

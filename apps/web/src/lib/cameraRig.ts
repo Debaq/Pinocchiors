@@ -32,6 +32,8 @@ export class CameraRig {
     private onChange: () => void,
   ) {
     this.nav = new NavDrag(camera, controls, element, onChange);
+    // La rueda (y Ctrl + arrastrar) acerca hacia el punto bajo el cursor, no hacia el centro
+    controls.zoomToCursor = true;
   }
 
   /**
