@@ -8734,9 +8734,21 @@ export const App: Component = () => {
     if (unsavedTimer !== undefined) clearTimeout(unsavedTimer);
   });
 
+  /**
+   * Hay cambios sin guardar: Guardar (y seguir si se guardó), descartar o cancelar. `true` si se puede
+   * seguir. `handleSaveProject` está más abajo; se usa ya en la llamada, no al definir esto.
+   */
+  const askUnsaved = async (title: string, message: string, discardLabel: string) => {
+    const answer = await confirmChoices({ title, message, confirmLabel: discardLabel, altLabel: t("Guardar"), danger: true });
+    if (answer === null) return false;
+    if (!answer.__alt) return true;
+    await handleSaveProject();
+    // Si se canceló el diálogo de guardar o falló, todavía hay cambios: no se sigue
+    return !(await hasUnsavedWork());
+  };
   /** Pregunta antes de descartar el trabajo actual, solo si hay algo sin guardar */
   const confirmDiscard = async (title: string, message: string, confirmLabel: string) =>
-    !(await hasUnsavedWork()) || confirmAction({ title, message: t("{message} Hay cambios sin guardar: se pierden.", { message }), confirmLabel, danger: true });
+    !(await hasUnsavedWork()) || askUnsaved(title, t("{message} Hay cambios sin guardar.", { message }), confirmLabel);
   const [gridSettings, setGridSettings] = createPersisted<GridSettings>("settings.grid", { unit: "auto", modelUnit: "auto" });
   const [themeSetting, setThemeSetting] = createPersisted<ThemeSetting>("settings.theme", "dark");
   createEffect(() => applyTheme(themeSetting()));
@@ -9434,12 +9446,7 @@ export const App: Component = () => {
     try {
       unlistenClose = await getCurrentWindow().onCloseRequested(async (event) => {
         if (await hasUnsavedWork()) {
-          const ok = await confirmAction({
-            title: t("Cerrar Pinocchio"),
-            message: t("Hay cambios sin guardar: se pierden (queda la última copia de recuperación)."),
-            confirmLabel: t("Cerrar sin guardar"),
-            danger: true,
-          });
+          const ok = await askUnsaved(t("Cerrar Pinocchio"), t("Hay cambios sin guardar (si cierras sin guardar, queda la última copia de recuperación)."), t("Cerrar sin guardar"));
           if (!ok) event.preventDefault();
           return;
         }
@@ -9455,12 +9462,11 @@ export const App: Component = () => {
   // instalarla, lo mismo que al cerrar con cambios sin guardar
   setBeforeRestart(async () =>
     !(await hasUnsavedWork()) ||
-    confirmAction({
-      title: t("Reiniciar para actualizar"),
-      message: t("Hay cambios sin guardar: se pierden (queda la última copia de recuperación, que se ofrece al volver a abrir)."),
-      confirmLabel: t("Reiniciar sin guardar"),
-      danger: true,
-    }),
+    askUnsaved(
+      t("Reiniciar para actualizar"),
+      t("Hay cambios sin guardar (si reinicias sin guardar, queda la última copia de recuperación, que se ofrece al volver a abrir)."),
+      t("Reiniciar sin guardar"),
+    ),
   );
   onMount(() => {
     if (import.meta.env.DEV || IS_ANDROID || !updateSettings().check) return;

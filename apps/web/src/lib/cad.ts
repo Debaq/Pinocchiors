@@ -1336,6 +1336,10 @@ export interface Feature {
   kind: FeatureKind;
   /** Con qué piezas une, resta o interseca (vacío = las que toca) */
   scope?: PartId[];
+  /** Al restar, la herramienta no desaparece: queda además como pieza aparte */
+  keep_tool?: boolean;
+  /** Al restar, la herramienta se agranda (o achica, negativo) esta distancia solo para cortar */
+  tool_offset?: number;
 }
 
 /** Parámetro con nombre: `ancho = 40`, `alto = ancho / 2` */

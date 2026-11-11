@@ -1360,3 +1360,43 @@ fn translate_has_three_arrows_and_patterns_more_handles() {
     assert_relative_eq!(h.angle, 180.0);
     assert_relative_eq!(h.origin[0], 50.0, epsilon = 1e-6);
 }
+
+// ─── Restar conservando la herramienta ───
+
+#[test]
+fn subtracting_with_keep_tool_leaves_the_tool_as_its_own_part() {
+    if !occt() {
+        return;
+    }
+    let mut doc = Document::new();
+    doc.add(cube(0.0, 20.0, BodyOp::New));
+    // Una caja que corta la esquina: sin conservar, queda una sola pieza
+    let cutter = doc.add(cube(10.0, 20.0, BodyOp::Cut));
+    assert_eq!(eval_ok(&doc).parts.len(), 1);
+    // Conservándola, además queda ella misma
+    doc.get_mut(cutter).unwrap().keep_tool = true;
+    let ev = eval_ok(&doc);
+    assert_eq!(ev.parts.len(), 2, "el cuerpo cortado y la herramienta");
+    let mut volumes: Vec<f64> = ev.parts.iter().map(|p| p.shape.mass().unwrap().volume).collect();
+    volumes.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    assert_relative_eq!(volumes[0], 4000.0, max_relative = 1e-6); // el cuerpo, sin la parte cortada
+    assert_relative_eq!(volumes[1], 8000.0, max_relative = 1e-6); // la herramienta, entera
+}
+
+#[test]
+fn subtracting_with_an_offset_cuts_with_a_bigger_tool() {
+    if !occt() {
+        return;
+    }
+    let mut doc = Document::new();
+    doc.add(cube(0.0, 20.0, BodyOp::New));
+    let cutter = doc.add(cube(10.0, 20.0, BodyOp::Cut));
+    doc.get_mut(cutter).unwrap().tool_offset = 2.0;
+    doc.get_mut(cutter).unwrap().keep_tool = true;
+    let ev = eval_ok(&doc);
+    let mut volumes: Vec<f64> = ev.parts.iter().map(|p| p.shape.mass().unwrap().volume).collect();
+    volumes.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    // El cuerpo queda hasta x = 8 (10 menos la holgura); la herramienta conservada es la original
+    assert_relative_eq!(volumes[0], 8.0 * 20.0 * 20.0, max_relative = 1e-6);
+    assert_relative_eq!(volumes[1], 8000.0, max_relative = 1e-6);
+}

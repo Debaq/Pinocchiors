@@ -12,6 +12,8 @@ export interface ConfirmRequest {
   cancelLabel?: string;
   /** La acción descarta trabajo: el botón va en rojo */
   danger?: boolean;
+  /** Tercera salida (p. ej. «Guardar»): va como botón principal y devuelve `__alt: true` */
+  altLabel?: string;
   /** Casillas para elegir qué hacer (se devuelven al confirmar) */
   choices?: ConfirmChoice[];
 }
@@ -37,6 +39,9 @@ export const ConfirmDialog: Component<ConfirmDialogProps> = (props) => {
     Object.fromEntries((props.choices ?? []).map((c) => [c.id, c.checked]))
   );
   const confirm = () => props.onConfirm(checked());
+  const confirmAlt = () => props.onConfirm({ ...checked(), __alt: true });
+  // Con salida alternativa, Enter la elige (la que no pierde nada)
+  const enter = () => (props.altLabel ? confirmAlt() : confirm());
 
   onMount(() => {
     box?.querySelector<HTMLButtonElement>("[data-confirm]")?.focus();
@@ -49,7 +54,7 @@ export const ConfirmDialog: Component<ConfirmDialogProps> = (props) => {
       } else if (e.key === "Enter") {
         e.preventDefault();
         e.stopPropagation();
-        confirm();
+        enter();
       } else if (e.key !== "Tab") {
         e.stopPropagation();
       }
@@ -101,13 +106,18 @@ export const ConfirmDialog: Component<ConfirmDialogProps> = (props) => {
             {props.cancelLabel ?? t("Cancelar")}
           </Button>
           <Button
-            data-confirm
+            data-confirm={props.altLabel ? undefined : ""}
             size="sm"
             variant={props.danger ? "danger" : "primary"}
             onClick={confirm}
           >
             {props.confirmLabel ?? t("Continuar")}
           </Button>
+          <Show when={props.altLabel}>
+            <Button data-confirm size="sm" variant="primary" onClick={confirmAlt}>
+              {props.altLabel}
+            </Button>
+          </Show>
         </div>
       </div>
     </div>

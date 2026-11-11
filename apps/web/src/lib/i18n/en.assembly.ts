@@ -2,6 +2,13 @@
 // explosión por pasos, y los mensajes nuevos del backend del ensamble
 
 export const en_assembly: Record<string, string> = {
+  "Offset (holgura)": "Offset (clearance)",
+  "Corta con el objeto agrandado esta distancia (negativo: achicado); 0 = exacto": "Cuts with the object grown by this distance (negative: shrunk); 0 = exact",
+  "Conservar el objeto que resta": "Keep the object that subtracts",
+  "Además de hacer el corte, el objeto queda como pieza aparte": "Besides making the cut, the object stays as a separate part",
+  "{message} Hay cambios sin guardar.": "{message} There are unsaved changes.",
+  "Hay cambios sin guardar (si cierras sin guardar, queda la última copia de recuperación).": "There are unsaved changes (if you close without saving, the last recovery copy is kept).",
+  "Hay cambios sin guardar (si reinicias sin guardar, queda la última copia de recuperación, que se ofrece al volver a abrir).": "There are unsaved changes (if you restart without saving, the last recovery copy is kept and offered when you reopen).",
   "Modo construcción apagado": "Construction mode off",
   "Archivar (ocultar de la barra)": "Archive (hide from the bar)",
   "Desarchivar «{name}»": "Unarchive “{name}”",

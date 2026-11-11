@@ -6398,6 +6398,25 @@ export const FeatureEditor: Component<{
             onChange={(v) => void props.store.updateFeature(f().id, (x) => (x.scope = v.length ? v : undefined))}
           />
         </Show>
+        {/* Restando, el objeto que resta desaparece; a veces se quiere seguir viéndolo y usándolo */}
+        <Show when={"op" in f().kind && f().kind.type !== "boolean" && (f().kind as { op: BodyOp }).op === "cut"}>
+          <Checkbox
+            small
+            label={tl("Conservar el objeto que resta")}
+            checked={!!f().keep_tool}
+            onChange={(c) => void props.store.updateFeature(f().id, (x) => (x.keep_tool = c || undefined))}
+          />
+          <p class="text-[11px] text-text-dim">{tl("Además de hacer el corte, el objeto queda como pieza aparte")}</p>
+          <Row label={tl("Offset (holgura)")}>
+            <NumberInput
+              value={f().tool_offset ?? 0}
+              step={0.1}
+              suffix="mm"
+              onChange={(v) => void props.store.updateFeature(f().id, (x) => (x.tool_offset = v || undefined))}
+            />
+          </Row>
+          <p class="text-[11px] text-text-dim">{tl("Corta con el objeto agrandado esta distancia (negativo: achicado); 0 = exacto")}</p>
+        </Show>
         <p class="text-[11px] text-text-dim">{planeLabelFor(f())}</p>
       </div>
     </Section>

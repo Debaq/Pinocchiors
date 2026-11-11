@@ -2068,4 +2068,10 @@ pub struct Feature {
     /// agujeros, la más cercana a cada centro).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub scope: Vec<PartId>,
+    /// Al restar, la herramienta no desaparece: queda además como pieza aparte
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub keep_tool: bool,
+    /// Al restar, la herramienta se agranda (o achica, negativo) esta distancia solo para cortar: holgura
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub tool_offset: f64,
 }

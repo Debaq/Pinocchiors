@@ -416,6 +416,8 @@ fn fingerprint(prev: u64, f: &Feature, rolled_back: bool) -> u64 {
     rolled_back.hash(&mut h);
     serde_json::to_string(&f.kind).unwrap_or_default().hash(&mut h);
     serde_json::to_string(&f.scope).unwrap_or_default().hash(&mut h);
+    f.keep_tool.hash(&mut h);
+    f.tool_offset.to_bits().hash(&mut h);
     // Lo traído de otra pestaña no se guarda: cuenta su huella
     if let FeatureKind::Derived(d) = &f.kind {
         (d.source.hash, &d.source.error).hash(&mut h);
@@ -852,7 +854,12 @@ struct Ctx<'a> {
     missing: RefCell<Vec<MissingRef>>,
     warnings: RefCell<Vec<String>>,
     /// Alcance de la operación en curso (vacío = las piezas que toca).
-    scope: Vec<PartId>,    /// Piezas que la operación en curso eligió sola.
+    scope: Vec<PartId>,
+    /// La operación en curso conserva su herramienta al restar
+    keep_tool: bool,
+    /// Holgura de la herramienta al restar (mm)
+    tool_offset: f64,
+    /// Piezas que la operación en curso eligió sola.
     auto_scope: Vec<PartId>,
     /// Flechas de la operación en curso (las de la última herramienta calculada).
     handles: RefCell<Vec<Handle>>,
@@ -893,6 +900,8 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
         missing: RefCell::default(),
         warnings: RefCell::default(),
         scope: Vec::new(),
+        keep_tool: false,
+        tool_offset: 0.0,
         auto_scope: Vec::new(),
         handles: RefCell::default(),
         mesh_distance: Default::default(),
@@ -945,6 +954,8 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
         } else {
             ctx.ev.recomputed += 1;
             ctx.scope = f.scope.clone();
+            ctx.keep_tool = f.keep_tool;
+            ctx.tool_offset = f.tool_offset;
             let result = ctx.feature(f);
             let missing = ctx.missing.take();
             let warnings = ctx.warnings.take();
@@ -1142,6 +1153,25 @@ impl Ctx<'_> {
     /// de malla grande, la booleana va por triángulos (`mesh_bool`): con OCCT
     /// tardaba minutos.
     fn apply_mesh(&mut self, feature: FeatureId, tool: Tagged, tool_mesh: Option<crate::mesh_bool::MeshData>, op: BodyOp) -> R<()> {
+        // Restando con «conservar»: la herramienta queda además como pieza aparte
+        let kept = (self.keep_tool && op == BodyOp::Cut && !is_surface(&tool.shape)).then(|| (tool.clone(), tool_mesh.clone()));
+        // Con holgura, corta una herramienta más grande (la que se conserva es la original)
+        let (cutter, cutter_mesh) = if op == BodyOp::Cut && self.tool_offset != 0.0 && tool_mesh.is_none() && !is_surface(&tool.shape) {
+            let shape = solid_offset(&tool.shape, self.tool_offset)?;
+            let tags = vec![Vec::new(); shape.face_count()];
+            (Tagged { shape, tags }, None)
+        } else {
+            (tool, tool_mesh)
+        };
+        self.apply_mesh_inner(feature, cutter, cutter_mesh, op)?;
+        if let Some((t, m)) = kept {
+            self.new_mesh_part(feature, t, m);
+            self.sync();
+        }
+        Ok(())
+    }
+
+    fn apply_mesh_inner(&mut self, feature: FeatureId, tool: Tagged, tool_mesh: Option<crate::mesh_bool::MeshData>, op: BodyOp) -> R<()> {
         if self.ev.parts.is_empty() && matches!(op, BodyOp::Cut | BodyOp::Intersect) {
             return Err("no hay sólido que cortar".into());
         }
