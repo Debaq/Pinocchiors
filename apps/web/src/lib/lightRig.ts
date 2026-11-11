@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
-import { environmentFromScene, usingGpuRenderer } from "./gpuRenderer";
+import { environmentFromScene, isGpuRenderer } from "./gpuRenderer";
 
 /** Luces del visor (panel Luces); las mismas en todos los espacios */
 export interface LightSettings {
@@ -59,7 +59,7 @@ export class LightRig {
     camera.add(this.headLight, this.headLight.target);
     this.headLight.target.position.set(0, 0, -1);
     if (!camera.parent) scene.add(camera);
-    if (usingGpuRenderer()) {
+    if (isGpuRenderer(renderer)) {
       // El dibujador nuevo arranca asíncrono: los reflejos se arman cuando esté listo
       void environmentFromScene(renderer, new RoomEnvironment(), 0.04).then(
         (texture) => {

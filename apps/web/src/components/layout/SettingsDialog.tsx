@@ -400,7 +400,7 @@ export const SettingsDialog: Component<SettingsDialogProps> = (props) => {
                 <Hint>{t("Mientras animas, arrastras o giras la vista, el visor baja un poco la resolución para ir más fluido y la restaura al quedar quieto. Las capturas y los renders siempre salen a calidad completa.")}</Hint>
                 <Checkbox label={t("Aceleración GPU (experimental)")} checked={gpuAcceleration()} onChange={setGpuAcceleration} />
                 <Hint>
-                  {t("El visor 3D dibuja con WebGPU, más moderno y rápido con modelos pesados. Si el sistema no lo trae, usa el mismo dibujador sobre WebGL2. Mientras está encendida no se ven el halo de selección, el suavizado automático de piezas ni los cuaterniones duales al animar; los renders de imagen salen igual que siempre. El diseño CAD sigue como siempre.")}{" "}
+                  {t("El visor 3D dibuja con WebGPU, más moderno y rápido con modelos pesados. Si el sistema no lo trae, usa el mismo dibujador sobre WebGL2. Mientras está encendida no se ven el halo de selección, el suavizado automático de piezas ni los cuaterniones duales al animar; los renders de imagen salen igual que siempre.")}{" "}
                   <Show
                     when={gpuAcceleration() === usingGpuRenderer()}
                     fallback={
@@ -419,7 +419,7 @@ export const SettingsDialog: Component<SettingsDialogProps> = (props) => {
                           ? t("Ahora: WebGPU.")
                           : gpuStatus().backend === "webgl2"
                             ? t("Ahora: sin WebGPU en este sistema, sobre WebGL2.")
-                            : ""}
+                            : t("Encendida; se confirma al abrir un visor 3D.")}
                     </Show>
                   </Show>
                 </Hint>

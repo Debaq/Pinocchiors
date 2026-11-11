@@ -18,6 +18,7 @@ type GpuLines = typeof import("three/addons/lines/webgpu/LineSegments2.js");
 
 let gpu: GpuModule | null = null;
 let gpuLines: GpuLines | null = null;
+let gpuLine2: typeof import("three/addons/lines/webgpu/Line2.js") | null = null;
 const [backend, setBackend] = createSignal<"webgpu" | "webgl2" | null>(null);
 const [failure, setFailure] = createSignal<string | null>(null);
 
@@ -45,10 +46,11 @@ export async function startGpu(): Promise<void> {
     }
   }
   try {
-    [gpu, gpuLines] = await Promise.all([import("three/webgpu"), import("three/addons/lines/webgpu/LineSegments2.js")]);
+    [gpu, gpuLines, gpuLine2] = await Promise.all([import("three/webgpu"), import("three/addons/lines/webgpu/LineSegments2.js"), import("three/addons/lines/webgpu/Line2.js")]);
   } catch (e) {
     gpu = null;
     gpuLines = null;
+    gpuLine2 = null;
     setFailure(String(e));
     console.error("Aceleración GPU: no se pudo cargar el dibujador nuevo", e);
   }
@@ -56,6 +58,9 @@ export async function startGpu(): Promise<void> {
 
 /** El visor dibuja con el dibujador nuevo */
 export const usingGpuRenderer = (): boolean => gpu !== null;
+
+/** Este dibujador concreto es el nuevo (otros visores, como el de CAD, siguen en WebGL aunque la opción esté encendida) */
+export const isGpuRenderer = (renderer: object): boolean => (renderer as { isWebGPURenderer?: boolean }).isWebGPURenderer === true;
 
 /** Con qué dibuja el dibujador nuevo (cuando ya arrancó), o por qué no se pudo usar */
 export const gpuStatus = (): { backend: "webgpu" | "webgl2" | null; failure: string | null } => ({ backend: backend(), failure: failure() });
@@ -110,7 +115,7 @@ export const rendererReady = (renderer: THREE.WebGLRenderer): Promise<void> => r
 /** Mapa de entorno (reflejos) armado con el dibujador que corresponde; espera a que arranque */
 export async function environmentFromScene(renderer: THREE.WebGLRenderer, scene: THREE.Scene, sigma: number): Promise<THREE.Texture> {
   await rendererReady(renderer);
-  const pmrem = gpu ? new gpu.PMREMGenerator(renderer as unknown as InstanceType<GpuModule["WebGPURenderer"]>) : new THREE.PMREMGenerator(renderer);
+  const pmrem = gpu && isGpuRenderer(renderer) ? new gpu.PMREMGenerator(renderer as unknown as InstanceType<GpuModule["WebGPURenderer"]>) : new THREE.PMREMGenerator(renderer);
   const texture = pmrem.fromScene(scene, sigma).texture;
   pmrem.dispose();
   return texture;
@@ -143,4 +148,43 @@ export function thickLineSegments(
 ): THREE.Mesh {
   if (gpu && gpuLines) return new gpuLines.LineSegments2(geometry, material as never) as unknown as THREE.Mesh;
   return new WebGlLines(geometry, material as never);
+}
+
+type LineParams = ConstructorParameters<typeof import("three/addons/lines/LineMaterial.js").LineMaterial>[0];
+
+/**
+ * Para los visores que dibujan líneas gruesas con todas las opciones (color, punteado, transparencia,
+ * profundidad): el material del dibujador de ESE visor. `renderer` es el del visor (CAD sigue en WebGL)
+ */
+export function lineMaterialFor(renderer: object, params: NonNullable<LineParams>, WebGlMaterial: typeof import("three/addons/lines/LineMaterial.js").LineMaterial): import("three/addons/lines/LineMaterial.js").LineMaterial {
+  if (gpu && isGpuRenderer(renderer)) {
+    const { resolution: _resolution, ...rest } = params;
+    return new gpu.Line2NodeMaterial(rest as never) as unknown as import("three/addons/lines/LineMaterial.js").LineMaterial;
+  }
+  return new WebGlMaterial(params);
+}
+
+/** Polilínea gruesa (Line2) o segmentos gruesos (LineSegments2) de la clase que corresponde al visor */
+export function thickMeshFor(
+  renderer: object,
+  kind: "line" | "segments",
+  geometry: object,
+  material: object,
+  WebGl: { line: typeof import("three/addons/lines/Line2.js").Line2; segments: typeof import("three/addons/lines/LineSegments2.js").LineSegments2 },
+): import("three/addons/lines/LineSegments2.js").LineSegments2 {
+  if (gpu && gpuLines && gpuLine2 && isGpuRenderer(renderer)) {
+    const C = kind === "line" ? gpuLine2.Line2 : gpuLines.LineSegments2;
+    return new C(geometry as never, material as never) as unknown as import("three/addons/lines/LineSegments2.js").LineSegments2;
+  }
+  const C = kind === "line" ? WebGl.line : WebGl.segments;
+  return new C(geometry as never, material as never);
+}
+
+/** ¿Es un objeto de líneas gruesas, de cualquiera de los dos dibujadores? */
+export const isThickLines = (o: unknown): o is import("three/addons/lines/LineSegments2.js").LineSegments2 => (o as { isLineSegments2?: boolean })?.isLineSegments2 === true;
+
+/** Tamaño de la vista para el material de WebGL; el de nodos lo toma del dibujador */
+export function setLineResolution(material: object, w: number, h: number) {
+  const m = material as { resolution?: THREE.Vector2 };
+  if (m.resolution) m.resolution.set(w, h);
 }

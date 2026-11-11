@@ -6,6 +6,7 @@
 
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { createViewRenderer, isThickLines, lineMaterialFor, setLineResolution, thickMeshFor } from "./gpuRenderer";
 import { LineSegments2 } from "three/addons/lines/LineSegments2.js";
 import { LineSegmentsGeometry } from "three/addons/lines/LineSegmentsGeometry.js";
 import { LineMaterial } from "three/addons/lines/LineMaterial.js";
@@ -329,7 +330,7 @@ export class CadViewer {
   showScan = true;
 
   constructor(private container: HTMLElement) {
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, stencil: true });
+    this.renderer = createViewRenderer({ antialias: true, stencil: true, canvas: document.createElement("canvas") }, () => this.requestRender());
     this.renderer.localClippingEnabled = true;
     configureRenderer(this.renderer);
     container.appendChild(this.renderer.domElement);
@@ -364,7 +365,7 @@ export class CadViewer {
       { capture: true },
     );
 
-    this.lightRig = new LightRig(this.scene, this.camera, this.renderer);
+    this.lightRig = new LightRig(this.scene, this.camera, this.renderer, () => this.requestRender());
     this.lightRig.place(new THREE.Vector3(), this.gridExtent);
     this.scene.add(this.grid);
     this.scene.add(this.sketchGroup);
@@ -398,6 +399,11 @@ export class CadViewer {
     if (this.bodyEdges) (this.bodyEdges.material as THREE.LineBasicMaterial).color.set(themeHex("bg-darker"));
   }
 
+  /** Líneas gruesas del dibujador de este visor (WebGL, o el nuevo con la aceleración GPU) */
+  private lineMat = (params: ConstructorParameters<typeof LineMaterial>[0]) => lineMaterialFor(this.renderer, params ?? {}, LineMaterial);
+  private line2 = (g: LineGeometry, m: LineMaterial) => thickMeshFor(this.renderer, "line", g, m, { line: Line2, segments: LineSegments2 }) as unknown as Line2;
+  private segs2 = (g: LineSegmentsGeometry, m: LineMaterial) => thickMeshFor(this.renderer, "segments", g, m, { line: Line2, segments: LineSegments2 });
+
   private resize() {
     const w = this.container.clientWidth;
     const h = this.container.clientHeight;
@@ -405,8 +411,8 @@ export class CadViewer {
     this.renderer.setSize(w, h);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
-    if (this.preselectMark instanceof LineSegments2) this.preselectMark.material.resolution.set(w, h);
-    for (const o of [...this.sketchGroup.children, ...this.sketchPreviewGroup.children, ...this.sketchesGroup.children]) if (o instanceof LineSegments2) o.material.resolution.set(w, h);
+    if (isThickLines(this.preselectMark)) setLineResolution(this.preselectMark.material, w, h);
+    for (const o of [...this.sketchGroup.children, ...this.sketchPreviewGroup.children, ...this.sketchesGroup.children]) if (isThickLines(o)) setLineResolution(o.material, w, h);
     this.requestRender();
   }
 
@@ -1180,8 +1186,8 @@ export class CadViewer {
         if (e === pick.edge) for (let k = 0; k < 6; k++) segs.push(pos[i * 6 + k]);
       });
       const size = this.renderer.getSize(new THREE.Vector2());
-      const m = new LineMaterial({ color: themeHex("preselect"), linewidth: 3, resolution: size, depthTest: false });
-      this.preselectMark = new LineSegments2(new LineSegmentsGeometry().setPositions(segs), m);
+      const m = this.lineMat({ color: themeHex("preselect"), linewidth: 3, resolution: size, depthTest: false });
+      this.preselectMark = this.segs2(new LineSegmentsGeometry().setPositions(segs), m);
     }
     if (this.preselectMark) {
       this.preselectMark.renderOrder = 7;
@@ -1284,8 +1290,8 @@ export class CadViewer {
     if (!spec) return;
     const color = hex(spec.color ?? (spec.kind === "info" ? "cyan" : spec.kind));
     const lines = polylines.map((pts) => {
-      const m = new LineMaterial({ color, linewidth: 3, transparent: true, resolution: this.renderer.getSize(new THREE.Vector2()), depthTest: false });
-      const l = new Line2(new LineGeometry().setPositions(pts.flatMap((p) => w(p).toArray())), m);
+      const m = this.lineMat({ color, linewidth: 3, transparent: true, resolution: this.renderer.getSize(new THREE.Vector2()), depthTest: false });
+      const l = this.line2(new LineGeometry().setPositions(pts.flatMap((p) => w(p).toArray())), m);
       l.renderOrder = 10;
       this.sketchGroup.add(l);
       return m;
@@ -1341,11 +1347,11 @@ export class CadViewer {
       const lines = (pts: P2[], color: number, dashed = false, width = 1) => {
         if (pts.length < 2) return;
         const positions = pts.flatMap((q) => w(q).toArray());
-        const halo = new Line2(new LineGeometry().setPositions(positions), new LineMaterial({ color: halos, linewidth: Math.max(width, 2) + 2.5, resolution, depthTest: false, transparent: true }));
+        const halo = this.line2(new LineGeometry().setPositions(positions), this.lineMat({ color: halos, linewidth: Math.max(width, 2) + 2.5, resolution, depthTest: false, transparent: true }));
         halo.renderOrder = 6;
         this.sketchPreviewGroup.add(halo);
-        const m = new LineMaterial({ color, linewidth: width > 1 ? width : 2, resolution, depthTest: false, transparent: true, dashed, dashSize: 2 / this.mmPerUnit, gapSize: 1.5 / this.mmPerUnit });
-        const l = new Line2(new LineGeometry().setPositions(positions), m);
+        const m = this.lineMat({ color, linewidth: width > 1 ? width : 2, resolution, depthTest: false, transparent: true, dashed, dashSize: 2 / this.mmPerUnit, gapSize: 1.5 / this.mmPerUnit });
+        const l = this.line2(new LineGeometry().setPositions(positions), m);
         if (dashed) l.computeLineDistances();
         l.renderOrder = width > 1 ? 8 : 7;
         this.sketchPreviewGroup.add(l);
@@ -1486,7 +1492,7 @@ export class CadViewer {
         if (!b.pos.length) continue;
         const g = new LineSegmentsGeometry().setPositions(b.pos);
         if (!b.halo) g.setColors(b.col);
-        const m = new LineMaterial({
+        const m = this.lineMat({
           color: b.halo ? halos : 0xffffff,
           vertexColors: !b.halo,
           linewidth: b.width,
@@ -1496,7 +1502,7 @@ export class CadViewer {
           dashSize: 2 / this.mmPerUnit,
           gapSize: 1.5 / this.mmPerUnit,
         });
-        const l = new LineSegments2(g, m);
+        const l = this.segs2(g, m);
         if (b.dashed) l.computeLineDistances();
         l.renderOrder = b.order;
         this.sketchGroup.add(l);
@@ -1716,7 +1722,7 @@ export class CadViewer {
         const pts = entityPolyline(e.geometry, point);
         if (!pts) continue;
         // Contorno del color del visor: la línea clara no se veía sobre una cara clara del cuerpo
-        const halo = new Line2(new LineGeometry().setPositions(pts.flatMap((p) => w(p).toArray())), new LineMaterial({ color: themeHex("viewport"), linewidth: 3.5, resolution }));
+        const halo = this.line2(new LineGeometry().setPositions(pts.flatMap((p) => w(p).toArray())), this.lineMat({ color: themeHex("viewport"), linewidth: 3.5, resolution }));
         halo.renderOrder = 4;
         this.sketchesGroup.add(halo);
         const g = new THREE.BufferGeometry().setFromPoints(pts.map(w));
