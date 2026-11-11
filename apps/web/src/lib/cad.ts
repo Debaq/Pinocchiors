@@ -4288,8 +4288,9 @@ export function solidAnchor(s: Sketch, id: number, snap: Snap) {
  * con ella: coincidente con su punta o su centro, en su medio, o sobre ella.
  * Si el ancla provisoria ya no está (se deshizo, se borró), no hace nada.
  */
-export function linkAnchor(s: Sketch, point: number, snap: Snap, curve: Projected, link: Omit<SketchUse, "entity">): boolean {
+export function linkAnchor(s: Sketch, point: number, snap: Snap, curve: Projected, link: Omit<SketchUse, "entity">, removed?: number[]): boolean {
   if (!s.points.some((x) => x.id === point)) return false;
+  const before = s.constraints.slice();
   const tol = 1e-6 * Math.max(1, Math.hypot(snap.p[0], snap.p[1]));
   const at = (c: SketchConstraint) => c.type === "fixed" && c.point === point && Math.abs(c.x - snap.p[0]) <= tol && Math.abs(c.y - snap.p[1]) <= tol;
   const guideOf = (c: SketchConstraint) =>
@@ -4331,6 +4332,8 @@ export function linkAnchor(s: Sketch, point: number, snap: Snap, curve: Projecte
       s.points = s.points.filter((x) => !ends.includes(x.id) || s.entities.some((y) => geometryPoints(y.geometry).includes(x.id)));
     }
   }
+  // Índices (de antes) de lo que se quitó: quien guarda índices de restricciones (las cotas pedidas) se corre
+  if (removed) before.forEach((c, i) => !s.constraints.includes(c) && removed.push(i));
   return true;
 }
 

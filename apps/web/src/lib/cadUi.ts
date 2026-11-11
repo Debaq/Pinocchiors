@@ -524,6 +524,7 @@ export function createCadUi(store: CadStore) {
   const [hover3d, setHover3d] = createSignal<{ hit: Hit3d; x: number; y: number }>();
   const [sketch3dApi, setSketch3dApi] = createSignal<Sketch3dApi>();
   // Panel izquierdo de la biblioteca maker
+  const constraintsRemovedListeners: ((removed: number[]) => void)[] = [];
   const [libraryOpen, setLibraryOpen] = createSignal(false);
   // Panel izquierdo del ensamble (instancias, relaciones, movimiento, tornillos)
   const [asmEditorOpen, setAsmEditorOpen] = createSignal(false);
@@ -1415,7 +1416,17 @@ export function createCadUi(store: CadStore) {
       }
       const now = session();
       if (!now || now.feature !== s.feature || !linkAnchor(clone(now.sketch), point, snap, curve, link)) return;
-      ui.change((sk) => void linkAnchor(sk, point, snap, curve, link));
+      const removed: number[] = [];
+      ui.change((sk) => {
+        removed.length = 0;
+        void linkAnchor(sk, point, snap, curve, link, removed);
+      });
+      if (removed.length) for (const fn of constraintsRemovedListeners) fn(removed);
+    },
+    /** Quien guarda índices de restricciones se entera de las que se quitaron (índices de antes) */
+    onConstraintsRemoved(fn: (removed: number[]) => void) {
+      constraintsRemovedListeners.push(fn);
+      return () => void constraintsRemovedListeners.splice(constraintsRemovedListeners.indexOf(fn), 1);
     },
 
     /** Trae todas las entidades de un sketch anterior, ligadas a las suyas */

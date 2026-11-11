@@ -674,6 +674,18 @@ export const CadView: Component<CadViewProps> = (props) => {
   const ui = props.ui;
   const store = props.store;
 
+  // Al ligar un punto al sólido se quitan restricciones (de forma asíncrona): las cotas pedidas que venían
+  // después se corren de lugar; sin esto, lo que se escribe cae sobre otra cota y mueve lo que no es
+  onCleanup(
+    ui.onConstraintsRemoved((removed) => {
+      const gone = new Set(removed);
+      const shift = (i: number) => i - removed.filter((r) => r < i).length;
+      setDimQueue((q) => q.filter((i) => i < 0 || !gone.has(i)).map((i) => (i < 0 ? i : shift(i))));
+      const e = editingDim();
+      if (e !== undefined && e >= 0) setEditingDim(gone.has(e) ? undefined : shift(e));
+    }),
+  );
+
   /** Lo que impide cerrar regiones en el sketch en edición */
   const problems = createMemo(() => {
     const s = ui.session();
@@ -3814,7 +3826,12 @@ export const CadView: Component<CadViewProps> = (props) => {
       if (e.key === "Escape") {
         if (abortGesture()) ui.setMessage(undefined);
         else if (clarify()) closeClarify();
-        else if (!dropExtraDimension()) cancelStep();
+        else if (dropExtraDimension()) { /* quitó la cota que sobraba */ }
+        // Sin nada a medias, el modo construcción sale primero; el siguiente Esc sale de la herramienta
+        else if (ui.constructionMode() && !chain() && !anchor().length && !pendingCon() && !offsetFrom()) {
+          ui.setConstructionMode(false);
+          ui.setMessage(tr("Modo construcción apagado"));
+        } else cancelStep();
       } else if (e.key === "Tab" && cycle && ui.tool() === "select" && liveCycle()) {
         // Lo siguiente de lo encimado bajo el último clic
         cycle.i = (cycle.i + 1) % cycle.ids.length;
@@ -4848,10 +4865,15 @@ export const CadView: Component<CadViewProps> = (props) => {
             <input
               ref={(el) => {
                 dimInput = el;
-                setTimeout(() => {
-                  el.focus();
-                  el.select();
-                });
+                el.dataset.opened = String(Date.now());
+                // Un par de intentos: justo al pasar de la cota anterior algo puede quitarle el foco
+                for (const ms of [0, 60]) {
+                  setTimeout(() => {
+                    if (!el.isConnected || el.dataset.done) return;
+                    el.focus();
+                    el.select();
+                  }, ms);
+                }
               }}
               type="text"
               data-wheel-number=""
@@ -4895,6 +4917,12 @@ export const CadView: Component<CadViewProps> = (props) => {
               onBlur={async (e) => {
                 const input = e.currentTarget;
                 if (input.dataset.done) return;
+                // Recién abierta (al pasar de una cota a la siguiente con Enter) y sin que nadie haya tocado otra cosa:
+                // el foco se perdió solo, no se cancela la cola; se lo devolvemos
+                if (Date.now() - Number(input.dataset.opened ?? 0) < 300 && !e.relatedTarget && document.hasFocus()) {
+                  queueMicrotask(() => (input.focus(), input.select()));
+                  return;
+                }
                 // Clic en otro lado: lo escrito vale; si no se escribió, queda lo dibujado
                 const text = input.value.trim();
                 if (editingDim() === d().index && text && text !== String(input.defaultValue)) {

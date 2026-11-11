@@ -2,6 +2,7 @@
 // explosión por pasos, y los mensajes nuevos del backend del ensamble
 
 export const en_assembly: Record<string, string> = {
+  "Modo construcción apagado": "Construction mode off",
   "Archivar (ocultar de la barra)": "Archive (hide from the bar)",
   "Desarchivar «{name}»": "Unarchive “{name}”",
   "Borrar la pestaña (clic derecho: archivar)": "Delete the tab (right-click: archive)",

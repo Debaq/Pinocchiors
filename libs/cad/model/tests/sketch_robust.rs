@@ -196,3 +196,22 @@ fn unknown_constraint_and_geometry_still_load() {
     assert_eq!(back["constraints"][1]["type"], "unknown");
     assert_eq!(find_regions(&s).unwrap().len(), 1);
 }
+
+/// Una cota nueva que choca con lo ya cotado se queda sin cumplir y marcada: lo anterior no se mueve
+#[test]
+fn a_new_conflicting_dimension_does_not_move_what_was_already_dimensioned() {
+    let mut s = Sketch::new();
+    let l = s.line([0.0, 0.0], [32.0, 0.0]);
+    let (a, b) = ends(&s, l);
+    s.constrain(SketchConstraint::Fixed { point: a, x: 0.0, y: 0.0 });
+    s.constrain(SketchConstraint::Horizontal { line: l });
+    s.constrain(SketchConstraint::Length { line: l, value: 32.0, reference: false, opts: Default::default() });
+    s.solve().unwrap();
+    // La cota nueva (la última) pide otro largo para la misma línea
+    let new = s.constrain(SketchConstraint::Length { line: l, value: 5.0, reference: false, opts: Default::default() });
+    let r = s.solve().unwrap();
+    assert!(r.conflicting.contains(&new), "{:?}", r.conflicting);
+    assert_eq!(r.conflicting.len(), 1, "solo la nueva queda marcada: {:?}", r.conflicting);
+    let end = s.point(b).unwrap();
+    assert!((end[0] - 32.0).abs() < 1e-6, "la línea cotada no se movió: {end:?}");
+}

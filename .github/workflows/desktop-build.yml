@@ -41,11 +41,19 @@ jobs:
 
       - name: Dependencias del sistema (Linux)
         if: inputs.platform == 'linux'
+        # El espejo de Ubuntu a veces se cuelga (una hora a 18 kB/s): límite de tiempo y reintentos
+        timeout-minutes: 20
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
-            librsvg2-dev patchelf file ninja-build
+          for i in 1 2 3; do
+            if sudo timeout 240 apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 update \
+              && sudo timeout 480 apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 install -y \
+                libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+                librsvg2-dev patchelf file ninja-build; then
+              exit 0
+            fi
+            echo "apt falló (intento $i de 3)"; sleep 10
+          done
+          exit 1
 
       - name: Entorno de MSVC (Windows)
         if: inputs.platform == 'windows'

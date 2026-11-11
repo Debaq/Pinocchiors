@@ -1263,20 +1263,40 @@ impl Sketch {
                 let min: Vec<usize> = diag.minimal_conflict_set.iter().filter(|&&i| i >= implicit).map(|&i| origin[i - implicit]).collect();
                 if min.is_empty() { conflicting.clone() } else { min }
             };
-            let mut part = ConstraintSystem::new();
-            part.points = start;
-            for (i, c) in sys.constraints.iter().enumerate() {
-                if i < implicit || !culprits.contains(&origin[i - implicit]) {
-                    part.add_constraint(c.clone());
+            // Lo que se pone sin las restricciones `out` (el resto se cumple entero)
+            let without = |out: &[usize]| {
+                let mut part = ConstraintSystem::new();
+                part.points = start.clone();
+                for (i, c) in sys.constraints.iter().enumerate() {
+                    if i < implicit || !out.contains(&origin[i - implicit]) {
+                        part.add_constraint(c.clone());
+                    }
                 }
-            }
-            let r = match drag {
-                Some((p, t)) => cad_solver::solve_drag(&mut part, ix(p)?, Point2::new(t[0], t[1])),
-                None => cad_solver::solve(&mut part, &cad_solver::SolverParams::default()),
+                let r = match drag {
+                    Some((p, t)) => cad_solver::solve_drag(&mut part, ix(p)?, Point2::new(t[0], t[1])),
+                    None => cad_solver::solve(&mut part, &cad_solver::SolverParams::default()),
+                };
+                Ok::<_, SketchError>(r.ok().filter(|r| r.residual < 1e-6))
             };
-            if let Ok(r) = r
-                && r.residual < 1e-6
-            {
+            // Primero se sacrifica solo la más nueva (la última cota puesta, o la última restricción): lo
+            // anterior —cotas y puntos ya definidos— no se mueve para dar lugar a lo recién puesto.
+            // Si así no cierra, salen todas las que chocan.
+            let newest = culprits
+                .iter()
+                .chain(&conflicting)
+                .copied()
+                .filter(|&ci| self.constraints[ci].value().is_some() && !self.constraints[ci].is_reference())
+                .max()
+                .or_else(|| culprits.iter().chain(&conflicting).copied().max());
+            let single = match newest {
+                Some(n) if culprits.len() > 1 || conflicting.len() > 1 => without(&[n])?.map(|r| (n, r)),
+                _ => None,
+            };
+            if let Some((n, r)) = single {
+                self.write_back(&index, &rims, &r.points);
+                conflicting = vec![n];
+                partial = true;
+            } else if let Some(r) = without(&culprits)? {
                 self.write_back(&index, &rims, &r.points);
                 partial = true;
             }

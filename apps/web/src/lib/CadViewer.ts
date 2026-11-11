@@ -1908,9 +1908,13 @@ export class CadViewer {
     const n = this.dirToView(plane.normal);
     this.controls.target.copy(target);
     this.camera.position.copy(target).addScaledVector(n, dist);
-    // Que la "y" del sketch quede hacia arriba en pantalla
-    const x = this.dirToView(plane.x_dir);
-    this.camera.up.copy(new THREE.Vector3().crossVectors(n, x).normalize());
+    // Plano vertical (frente, lateral, caras de costado): Z queda hacia arriba en pantalla, sea cual sea
+    // la dirección que le tocó a la "y" del sketch. En uno horizontal (planta, tapas) arriba es la "y" del sketch.
+    if (Math.abs(n.y) < 0.9) this.camera.up.set(0, 1, 0);
+    else {
+      const x = this.dirToView(plane.x_dir);
+      this.camera.up.copy(new THREE.Vector3().crossVectors(n, x).normalize());
+    }
     this.camera.lookAt(target);
     this.controls.update();
     this.requestRender();
