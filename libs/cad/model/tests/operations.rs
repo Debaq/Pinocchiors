@@ -459,7 +459,7 @@ fn transform_aligns_a_face_to_a_plane() {
     doc.add(cube(0.0, 10.0, BodyOp::Join));
     let top = face_at(&doc, [5.0, 5.0, 10.0], [0.0, 0.0, 1.0]);
     // La cara de arriba contra el frente (normal −Y): la caja queda del lado −Y, apoyada en y = 0
-    let t = doc.add(FeatureKind::Transform { parts: vec![], motion: Motion::Align { face: top.clone(), to: PlaneSpec::Xz, flip: false }, copy: false });
+    let t = doc.add(FeatureKind::Transform { parts: vec![], motion: Motion::Align { face: top.clone(), to: PlaneSpec::Xz, flip: false, offset: 0.0, center: None }, copy: false });
     let (lo, hi, v) = bbox(&eval_ok(&doc));
     assert_relative_eq!(v, 1000.0, max_relative = 1e-9);
     for (a, b) in [(lo, [0.0, -10.0, 5.0]), (hi, [10.0, 0.0, 15.0])] {
@@ -468,10 +468,42 @@ fn transform_aligns_a_face_to_a_plane() {
         }
     }
     // Dada vuelta: del lado +Y
-    doc.get_mut(t).unwrap().kind = FeatureKind::Transform { parts: vec![], motion: Motion::Align { face: top, to: PlaneSpec::Xz, flip: true }, copy: false };
+    doc.get_mut(t).unwrap().kind = FeatureKind::Transform { parts: vec![], motion: Motion::Align { face: top, to: PlaneSpec::Xz, flip: true, offset: 0.0, center: None }, copy: false };
     let (lo, hi, _) = bbox(&eval_ok(&doc));
     assert_relative_eq!(lo[1], 0.0, epsilon = 1e-6);
     assert_relative_eq!(hi[1], 10.0, epsilon = 1e-6);
+}
+
+/// Alinear contra la cara de otra pieza, con separación y centrado
+#[test]
+fn align_face_to_face_with_offset_and_center() {
+    if !occt() {
+        return;
+    }
+    let mut doc = Document::new();
+    // Dos cubos de 10: A en x 0..10 y B (pieza aparte) en x 30..40
+    doc.add(cube(0.0, 10.0, BodyOp::New));
+    doc.add(cube(30.0, 10.0, BodyOp::New));
+    let bottom = face_at(&doc, [5.0, 5.0, 0.0], [0.0, 0.0, -1.0]);
+    let b_top = face_at(&doc, [35.0, 5.0, 10.0], [0.0, 0.0, 1.0]);
+    // La cara de abajo de A sobre la de arriba de B, a 2 mm, con su centro sobre el de B
+    doc.add(FeatureKind::Transform {
+        parts: vec![],
+        motion: Motion::Align {
+            face: bottom,
+            to: PlaneSpec::Face { face: b_top },
+            flip: false,
+            offset: 2.0,
+            center: Some(Box::new([PointSpec::At { point: [5.0, 5.0, 0.0] }, PointSpec::At { point: [35.0, 5.0, 10.0] }])),
+        },
+        copy: false,
+    });
+    let (lo, hi, _) = bbox(&eval_ok(&doc));
+    for (a, b) in [(lo, [30.0, 0.0, 0.0]), (hi, [40.0, 10.0, 22.0])] {
+        for k in 0..3 {
+            assert_relative_eq!(a[k], b[k], epsilon = 1e-6);
+        }
+    }
 }
 
 /// Primer índice de arista del cuerpo cuyo medio está cerca de `p`

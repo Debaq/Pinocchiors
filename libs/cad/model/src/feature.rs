@@ -420,6 +420,13 @@ pub enum Motion {
         to: PlaneSpec,
         #[serde(default)]
         flip: bool,
+        /// Separación entre la cara y el plano, a lo largo de la normal (mm; 0 = en contacto)
+        #[serde(default)]
+        offset: f64,
+        /// Centrado: un punto de la pieza (p. ej. el centro de su resalte) que queda sobre un
+        /// punto del destino (p. ej. el centro de un agujero), sin salirse del plano de contacto
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        center: Option<Box<[PointSpec; 2]>>,
     },
 }
 
@@ -1930,7 +1937,13 @@ impl FeatureKind {
                     Motion::Translate { .. } => {}
                     Motion::Rotate { axis, .. } => d.extend(axis_deps(axis)),
                     Motion::Points { from, to } => d.extend([point_deps(from), point_deps(to)].concat()),
-                    Motion::Align { to, .. } => d.extend(plane_deps(to)),
+                    Motion::Align { to, center, .. } => {
+                        d.extend(plane_deps(to));
+                        if let Some(c) = center {
+                            d.extend(point_deps(&c[0]));
+                            d.extend(point_deps(&c[1]));
+                        }
+                    }
                 }
                 d
             }

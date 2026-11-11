@@ -53,6 +53,8 @@ export const en_library: Record<string, string> = {
   "Motorreductor TT": "TT gearmotor",
   "Amarillo de doble eje (3–6 V); apoyado por la cara de los agujeros, un eje cruza la placa": "Yellow, dual shaft (3–6 V); rests on the face with the holes, one shaft goes through the plate",
   "Micro motorreductor N20": "N20 micro gearmotor",
+  "Motor 28BYJ-48": "28BYJ-48 motor",
+  "Paso a paso 5 V con reductor; apoyado por la cara de las orejas, el resalte (descentrado 8 mm) y el eje cruzan la placa": "5 V geared stepper; rests on the ear face, the boss (8 mm off-centre) and shaft go through the plate",
   "12×10 de caja metálica (Pololu); apoyado por la cara del eje, con dos M1.6": "12×10 metal gearbox (Pololu); rests on its shaft face, with two M1.6",
   "Perfil V-slot 2020": "V-slot 2020 profile",
   "Perfil V-slot 2040": "V-slot 2040 profile",

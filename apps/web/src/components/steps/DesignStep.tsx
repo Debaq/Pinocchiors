@@ -369,6 +369,21 @@ const CORNER_OPTIONS = [
 ];
 const AXIS_DIRS: Record<string, P3> = { x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] };
 
+/** Marco (Z y X de la pieza) → giros en grados sobre X, Y y Z del mundo (se aplican en ese orden) */
+function frameToEuler(z: P3, x: P3): P3 {
+  const y: P3 = [z[1] * x[2] - z[2] * x[1], z[2] * x[0] - z[0] * x[2], z[0] * x[1] - z[1] * x[0]];
+  const b = -Math.asin(Math.max(-1, Math.min(1, x[2])));
+  const deg = (r: number) => +((r * 180) / Math.PI).toFixed(4) + 0;
+  if (Math.abs(Math.cos(b)) > 1e-6) return [deg(Math.atan2(y[2], z[2])), deg(b), deg(Math.atan2(x[1], x[0]))];
+  return [0, deg(b), deg(Math.atan2(-y[0], y[1]))];
+}
+
+/** Al revés: los giros en grados → Z y X de la pieza */
+function eulerToFrame(a: number, b: number, c: number): { z: P3; x: P3 } {
+  const [ca, sa, cb, sb, cc, sc] = [a, b, c].flatMap((d) => [Math.cos((d * Math.PI) / 180), Math.sin((d * Math.PI) / 180)]);
+  return { x: [cb * cc, cb * sc, -sb], z: [ca * sb * cc + sa * sc, ca * sb * sc - sa * cc, ca * cb] };
+}
+
 const BLEND_SIDE_OPTIONS = [
   { value: "auto", get label() { return tl("Según la geometría"); } },
   { value: "convex", get label() { return tl("Canto (saca material)"); } },
@@ -1840,7 +1855,17 @@ export const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) =>
               const state = () => store.stateOf(f().id);
               const tone = createMemo(() => featureTone(f(), state()));
               const rolled = () => (rollback() !== null && i() >= rollback()!) || state()?.state === "rolled_back";
-              const sketchHidden = () => editsAsSketch(f().kind) && props.ui.hiddenSketches().includes(f().id);
+              // Piezas que esta operación creó: el ojo las esconde en el visor (sin recalcular);
+              // en las que no crean ninguna (cortes, redondeos…) y con Mayús, suprime la operación
+              const ownParts = () => (store.result()?.parts ?? []).filter((p) => p.id.feature === f().id && !p.context);
+              const opHidden = () => ownParts().length > 0 && ownParts().every((p) => partHidden(doc(), p));
+              const toggleEye = async (shift: boolean) => {
+                const own = ownParts();
+                if (shift || !own.length) return void store.updateFeature(f().id, (x) => (x.suppressed = !x.suppressed));
+                const hide = !opHidden();
+                for (const p of own) await store.setPartProps(p.id, { hidden: hide });
+              };
+              const sketchHidden = () => (editsAsSketch(f().kind) && props.ui.hiddenSketches().includes(f().id)) || opHidden();
               const folder = () => folderAt(i());
               // Plegada en su carpeta, o no coincide con el buscador del Outliner (que abre las carpetas)
               const hidden = () =>
@@ -1973,12 +1998,13 @@ export const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) =>
                         when={["sketch", "plane", "axis", "point", "frame"].includes(f().kind.type)}
                         fallback={
                           <IconButton
-                            aria-label={f().suppressed ? tl("Activar") : tl("Suprimir")}
+                            aria-label={f().suppressed ? tl("Activar") : opHidden() ? tl("Mostrar en el visor") : ownParts().length ? tl("Ocultar en el visor") : tl("Suprimir")}
+                            title={ownParts().length ? tl("Mayús + clic: suprimir la operación") : undefined}
                             size="sm"
                             variant="ghost"
-                            onClick={() => void store.updateFeature(f().id, (x) => (x.suppressed = !x.suppressed))}
+                            onClick={(e: MouseEvent) => void toggleEye(e.shiftKey)}
                           >
-                            {f().suppressed ? <Icons.EyeSlash size={12} /> : <Icons.Eye size={12} />}
+                            {f().suppressed || opHidden() ? <Icons.EyeSlash size={12} /> : <Icons.Eye size={12} />}
                           </IconButton>
                         }
                       >
@@ -3134,8 +3160,30 @@ export const FeatureEditor: Component<{
                       </For>
                     </div>
                   </div>
-                  {/* La esfera es igual hacia cualquier lado: sin eje */}
+                  {/* La esfera es igual hacia cualquier lado: sin eje ni giro */}
                   <Show when={k().shape.type !== "sphere"}>
+                  <div class="space-y-1">
+                    <span class="text-xs text-text-muted">{tl("Giro (°)")}</span>
+                    <div class="grid grid-cols-3 gap-1">
+                      <For each={["X", "Y", "Z"]}>
+                        {(axis, i) => (
+                          <NumberInput
+                            value={frameToEuler(k().z, k().x)[i()]}
+                            step={15}
+                            label={axis}
+                            onChange={(v) =>
+                              update((x) => {
+                                if (x.type !== "primitive") return;
+                                const e = frameToEuler(x.z, x.x);
+                                e[i()] = v;
+                                ({ z: x.z, x: x.x } = eulerToFrame(e[0], e[1], e[2]));
+                              })
+                            }
+                          />
+                        )}
+                      </For>
+                    </div>
+                  </div>
                   <Row label={tl("Eje")}>
                     <Select
                       options={["x", "y", "z"].map((a) => ({ value: a, label: a.toUpperCase() }))}
@@ -4150,7 +4198,7 @@ export const FeatureEditor: Component<{
                       { value: "translate", label: tl("Desplazar") },
                       { value: "rotate", label: tl("Girar") },
                       { value: "points", label: tl("De un punto a otro") },
-                      { value: "align", label: tl("Alinear una cara a un plano") },
+                      { value: "align", label: tl("Calzar una cara contra otra cara o un plano") },
                     ]}
                     value={alignPending() ? "align" : k().motion.type}
                     onChange={(v) => {
@@ -4199,6 +4247,44 @@ export const FeatureEditor: Component<{
                         checked={m().flip}
                         onChange={(c) => update((x) => x.type === "transform" && x.motion.type === "align" && (x.motion.flip = c))}
                       />
+                      {field(tl("Separación"), "kind.motion.offset", m().offset ?? 0, (x, v) => x.type === "transform" && x.motion.type === "align" && (x.motion.offset = v), "mm")}
+                      <Tooltip content={tl("Lleva un punto de la pieza (p. ej. el centro del resalte de un motor) sobre un punto del destino (p. ej. el centro de un agujero)")}>
+                        <Checkbox
+                          small
+                          label={tl("Centrar con un punto del destino")}
+                          checked={!!m().center}
+                          onChange={(c) =>
+                            update((x) => {
+                              if (x.type !== "transform" || x.motion.type !== "align") return;
+                              x.motion.center = c ? [{ type: "at", point: [0, 0, 0] }, { type: "at", point: [0, 0, 0] }] : null;
+                            })
+                          }
+                        />
+                      </Tooltip>
+                      <Show when={m().center}>
+                        {(c) => (
+                          <>
+                            <PointField
+                              store={props.store}
+                              ui={props.ui}
+                              owner={`${f().id}:centro-pieza`}
+                              label={tl("Punto de la pieza")}
+                              value={c()[0]}
+                              except={f().id}
+                              onChange={(p) => update((x) => x.type === "transform" && x.motion.type === "align" && x.motion.center && (x.motion.center[0] = p))}
+                            />
+                            <PointField
+                              store={props.store}
+                              ui={props.ui}
+                              owner={`${f().id}:centro-destino`}
+                              label={tl("Punto del destino")}
+                              value={c()[1]}
+                              except={f().id}
+                              onChange={(p) => update((x) => x.type === "transform" && x.motion.type === "align" && x.motion.center && (x.motion.center[1] = p))}
+                            />
+                          </>
+                        )}
+                      </Show>
                     </>
                   )}
                 </Show>

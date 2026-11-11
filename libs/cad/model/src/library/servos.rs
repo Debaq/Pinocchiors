@@ -130,6 +130,34 @@ fn n20_holes(l: &Local, p: &LibraryPart) -> R<Shape> {
     fuse(parts)
 }
 
+/// Motor paso a paso 28BYJ-48 (5 V, con reductor). Origen en el centro del cuerpo, sobre la cara
+/// de las orejas y del resalte; el cuerpo va en +Z y el resalte con el eje (descentrado 8 mm en Y)
+/// cruzan la placa en −Z. Medidas de las hojas de datos de Kiatronics/Elegoo (±0,3 mm).
+fn build_28byj(l: &Local, _p: &LibraryPart) -> R<Shape> {
+    let can = cyl(l, 0.0, 0.0, 0.0, 14.0, 19.0)?;
+    // Orejas de 42 de punta a punta, 7 de ancho y 0,8 de espesor, con agujeros de 4,2 a 35
+    let mut ears = bxc(l, 0.0, 0.0, 0.0, 42.0, 7.0, 0.8)?;
+    ears = ears.cut(&fuse(vec![cyl(l, -17.5, 0.0, -0.01, 2.1, 0.82)?, cyl(l, 17.5, 0.0, -0.01, 2.1, 0.82)?])?).map_err(super::e)?;
+    let boss = cyl(l, 0.0, 8.0, 0.01, 4.5, -1.51)?;
+    // Eje de 5 con dos planos a 3, de 10 mm desde la cara del cuerpo
+    let mut shaft = cyl(l, 0.0, 8.0, 0.01, 2.5, -10.01)?;
+    for sx in [-1.0, 1.0] {
+        shaft = shaft.cut(&bx(l, sx * 1.5, 8.0 - 3.0, -10.02, sx * 2.0, 6.0, 6.0)?).map_err(super::e)?;
+    }
+    fuse(vec![can, ears, boss, shaft])
+}
+
+/// Paso del resalte (con holgura) y los dos agujeros de las orejas, hacia −Z.
+fn holes_28byj(l: &Local, p: &LibraryPart) -> R<Shape> {
+    let c = clearance(p, 0.4);
+    let d = depth(p, 10.0);
+    fuse(vec![
+        cyl(l, 0.0, 8.0, 0.01, (9.0 + c) / 2.0, -d - 0.01)?,
+        cyl(l, -17.5, 0.0, 0.01, (4.0 + c) / 2.0, -d - 0.01)?,
+        cyl(l, 17.5, 0.0, 0.01, (4.0 + c) / 2.0, -d - 0.01)?,
+    ])
+}
+
 pub(crate) fn items() -> Vec<Item> {
     let none = variants(&[]);
     let servo_def = |id: &'static str, name: &'static str, desc: &'static str| def(id, Category::Motors, name, desc, none.clone(), None, "#2b5fa8", build_servo, Some(servo_holes), None);
@@ -139,6 +167,7 @@ pub(crate) fn items() -> Vec<Item> {
         servo_def("servo_mg996r", "Servo MG996R", "Servo estándar 40×20; orejas y agujeros de clones (±1,5 mm)"),
         servo_def("servo_ds3218", "Servo DS3218 (aprox.)", "Servo 40×20 de 20 kg; sin plano propio: medidas del DS3235, de la misma familia"),
         def("motor_tt", Category::Motors, "Motorreductor TT", "Amarillo de doble eje (3–6 V); apoyado por la cara de los agujeros, un eje cruza la placa", none.clone(), None, "#e6b422", build_tt, Some(tt_holes), None),
-        def("motor_n20", Category::Motors, "Micro motorreductor N20", "12×10 de caja metálica (Pololu); apoyado por la cara del eje, con dos M1.6", none, None, "#9aa0a8", build_n20, Some(n20_holes), None),
+        def("motor_n20", Category::Motors, "Micro motorreductor N20", "12×10 de caja metálica (Pololu); apoyado por la cara del eje, con dos M1.6", none.clone(), None, "#9aa0a8", build_n20, Some(n20_holes), None),
+        def("motor_28byj48", Category::Motors, "Motor 28BYJ-48", "Paso a paso 5 V con reductor; apoyado por la cara de las orejas, el resalte (descentrado 8 mm) y el eje cruzan la placa", none, None, "#b8bcc4", build_28byj, Some(holes_28byj), None),
     ]
 }

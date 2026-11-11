@@ -3597,6 +3597,23 @@ export const CadView: Component<CadViewProps> = (props) => {
     void openMenu(e.clientX, e.clientY);
   };
 
+  /**
+   * Doble clic en una pieza: abre «Mover pieza» con esa pieza (flechas para arrastrarla; ahí mismo
+   * se puede girar o calzar una de sus caras contra otra). Con una operación de movimiento ya
+   * puesta sobre esa pieza sola, abre esa en vez de apilar otra.
+   */
+  const onDblClick = (e: MouseEvent) => {
+    if (!viewer || ui.session() || ui.pick().kind !== "none" || ui.assemblyMode() || e.button !== 0) return;
+    const hit = viewer.pick(e.clientX, e.clientY, { faces: true });
+    if (hit?.kind !== "face") return;
+    const part = (store.result()?.parts ?? []).find((p) => p.faces[0] <= hit.face && hit.face < p.faces[1] && !p.context);
+    if (!part) return;
+    const mine = store.doc()?.features.find((f) => f.kind.type === "transform" && !f.kind.copy && f.kind.parts.length === 1 && samePart(f.kind.parts[0], part.id));
+    ui.clearPicks();
+    if (mine) return store.select(mine.id);
+    void store.addFeature({ type: "transform", parts: [part.id], motion: { type: "translate", vector: [10, 0, 0] }, copy: false });
+  };
+
   /** F: acercar a lo elegido (o a todo si no hay nada) */
   const frameSelection = () => {
     const picks = ui.picks();
@@ -4414,6 +4431,7 @@ export const CadView: Component<CadViewProps> = (props) => {
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
+        onDblClick={onDblClick}
         onPointerCancel={() => abortGesture()}
         onLostPointerCapture={() => abortGesture()}
         onPointerLeave={() => {

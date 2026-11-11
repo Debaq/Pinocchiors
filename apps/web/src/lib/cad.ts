@@ -280,7 +280,16 @@ export type Motion =
   | { type: "rotate"; axis: AxisSpec; angle: number }
   | { type: "points"; from: PointSpec; to: PointSpec }
   /** Una cara plana apoyada en un plano (normal contra normal; `flip`, a favor) */
-  | { type: "align"; face: FaceRef; to: PlaneSpec; flip: boolean };
+  | {
+      type: "align";
+      face: FaceRef;
+      to: PlaneSpec;
+      flip: boolean;
+      /** Separación a lo largo de la normal (mm; 0 = en contacto) */
+      offset?: number;
+      /** Centrado: [punto de la pieza, punto del destino] */
+      center?: [PointSpec, PointSpec] | null;
+    };
 
 export interface SketchPoint {
   id: number;
@@ -2877,7 +2886,7 @@ export function dependencies(kind: FeatureKind): number[] {
       return [...kind.features, ...plane(kind.plane)];
     case "transform": {
       const m = kind.motion;
-      const extra = m.type === "rotate" ? axis(m.axis) : m.type === "points" ? [...point(m.from), ...point(m.to)] : m.type === "align" ? plane(m.to) : [];
+      const extra = m.type === "rotate" ? axis(m.axis) : m.type === "points" ? [...point(m.from), ...point(m.to)] : m.type === "align" ? [...plane(m.to), ...(m.center ? [...point(m.center[0]), ...point(m.center[1])] : [])] : [];
       return [...kind.parts.map((p) => p.feature), ...extra];
     }
     case "boolean":

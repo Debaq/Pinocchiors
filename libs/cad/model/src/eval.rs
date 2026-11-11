@@ -3908,7 +3908,7 @@ impl Ctx<'_> {
                         let (a, b) = (self.point("a", from)?, self.point("b", to)?);
                         shift(sub(b, a))
                     }
-                    Motion::Align { face, to, flip } => {
+                    Motion::Align { face, to, flip, offset, center } => {
                         let i = self.face("face", face)?;
                         let info = self.body()?.face_info(i).map_err(err)?;
                         if info.surface != SurfaceKind::Plane {
@@ -3929,7 +3929,16 @@ impl Ctx<'_> {
                         };
                         let mut m = cad_occt::rotation_matrix(Axis { origin: info.point, dir: axis }, c.acos());
                         // Después, a lo largo de la normal del plano hasta apoyarla
-                        let v = scale(t, -dot(sub(info.point, target.origin), t));
+                        let mut v = scale(t, -dot(sub(info.point, target.origin), t) + *offset);
+                        // Centrado: lo que queda por mover dentro del plano de contacto
+                        if let Some(c) = center {
+                            let from = self.point("center", &c[0])?;
+                            let to_pt = self.point("center destino", &c[1])?;
+                            let moved = [0, 1, 2].map(|r| m[r][0] * from[0] + m[r][1] * from[1] + m[r][2] * from[2] + m[r][3] + v[r]);
+                            let mut d = sub(to_pt, moved);
+                            d = sub(d, scale(t, dot(d, t)));
+                            v = add(v, d);
+                        }
                         for k in 0..3 {
                             m[k][3] += v[k];
                         }
