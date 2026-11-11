@@ -100,7 +100,8 @@ pub async fn slice_plate(
 /// `settings` con los valores calibrados de la impresora y el filamento debajo de los cambios a mano
 pub(crate) fn with_calibration(mut settings: slicer::SliceSettings, target: Option<&crate::calibrations::CalTarget>) -> Result<slicer::SliceSettings, String> {
     let Some(target) = target.filter(|t| !t.printer_id.is_empty()) else { return Ok(settings) };
-    let target = crate::calibrations::CalTarget { filament: settings.filament.clone(), ..target.clone() };
+    // El filamento y la máquina (de ahí sale la boquilla) son los que se van a laminar, no los que traiga el destino
+    let target = crate::calibrations::CalTarget { filament: settings.filament.clone(), machine: if settings.printer.is_empty() { target.machine.clone() } else { settings.printer.clone() }, nozzle: None, ..target.clone() };
     let view = crate::calibrations::view(&target)?;
     if view.values.is_empty() {
         return Ok(settings);
@@ -111,6 +112,9 @@ pub(crate) fn with_calibration(mut settings: slicer::SliceSettings, target: Opti
     }
     Ok(settings)
 }
+
+/// El motor de laminado de esta versión no dibuja el patrón de pressure advance (la interfaz busca este texto)
+pub const PA_PATTERN_MISSING: &str = "El motor de laminado de esta versión no dibuja el patrón de pressure advance: usa la torre";
 
 /// Lo que se lamina en una prueba de calibración, además del resultado: cómo se lee
 #[derive(Serialize)]
@@ -182,6 +186,15 @@ pub(crate) fn slice_calibration_impl(
         }
     };
     let result = run_job(config, parts, calib, bed, 1, Vec::new(), on_progress)?;
+    // El patrón de pressure advance lo dibuja el motor; si esta versión del motor no lo hace, el gcode es solo la pieza
+    // base: no se ofrece para imprimir y se pide la torre (el asistente cambia solo)
+    if test == "pressure_advance_pattern" {
+        let drawn = LAST.lock().unwrap().as_ref().and_then(|l| std::fs::read_to_string(&l.gcode).ok()).is_some_and(|g| g.contains("pressure advance pattern"));
+        if !drawn {
+            *LAST.lock().unwrap() = None;
+            return Err(PA_PATTERN_MISSING.into());
+        }
+    }
     Ok(CalibrationSlice { result, reading, unit, start, end, step })
 }
 
@@ -527,6 +540,7 @@ mod tests {
             let summary = slicer::run(&job, &engine, |_| {}, &AtomicBool::new(false)).unwrap_or_else(|e| panic!("{}: {e}", p.name));
             let _ = std::fs::remove_dir_all(&job.work_dir);
             let want = (12.0 / layer).round() as i64;
+            eprintln!("{}: {} capas de {layer} mm", p.name, summary.layers);
             assert!((summary.layers as i64 - want).abs() <= 2, "{}: {} capas, esperaba ~{want}", p.name, summary.layers);
         }
     }

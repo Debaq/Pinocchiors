@@ -67,3 +67,21 @@ fn la_ad5x_tambien() {
     let Some((gcode, _)) = slice(CalibTest::Temperature, CalibRange { start: Some(220.0), end: Some(200.0), ..Default::default() }, "Flashforge AD5X 0.4 nozzle") else { return };
     assert!(gcode.contains("M104 S205"));
 }
+
+#[test]
+fn escuadra_de_ejes_lamina() {
+    let Some((gcode, s)) = slice(CalibTest::Skew, CalibRange::default(), K1) else { return };
+    // Marco de 1,2 mm y postes de 6 mm: 30 capas
+    assert!((28..=32).contains(&s.layers), "capas {}", s.layers);
+    assert!(gcode.contains("G1 X"), "sin extrusión");
+}
+
+/// El patrón de PA lo dibuja el motor (Orca). Con el motor que hay hoy en `libs/slicer/bin` el gcode sale con la pieza
+/// base y sin el patrón (ver `apps/desktop/src/slicer.rs`, `PA_PATTERN_MISSING`): aquí solo se comprueba que lamina y
+/// se avisa por pantalla si ya lo dibuja
+#[test]
+fn patron_de_pa_lamina() {
+    let Some((gcode, s)) = slice(CalibTest::PressureAdvancePattern, CalibRange::default(), K1) else { return };
+    assert!(s.layers >= 1 && !gcode.is_empty());
+    eprintln!("el motor dibuja el patrón de PA: {}", gcode.contains("pressure advance pattern"));
+}

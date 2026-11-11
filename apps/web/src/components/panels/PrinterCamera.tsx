@@ -88,6 +88,14 @@ export const PrinterCamera: Component<{
     }),
   );
 
+  /** Vuelve a pedir la lista de cámaras y reinicia el bucle de fotos */
+  const retry = () => {
+    setError(undefined);
+    setOn(false);
+    setTimeout(() => setOn(true), 0);
+    void refetch();
+  };
+
   const saveFrame = () => {
     const url = frame();
     if (!url) return;
@@ -100,22 +108,16 @@ export const PrinterCamera: Component<{
   return (
     <div>
       <div class="space-y-1.5">
-        <div class="flex items-center justify-between">
-          <span class="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-text-muted">
-            <Icons.Eye size={14} />
-            {t("Cámara")}
-          </span>
-          <Show when={camera()}>
-            <div class="flex items-center gap-2">
-              <Show when={on_() && fps() > 0}>
-                <span class="font-mono text-[10px] text-text-dim">{fps().toFixed(1)} fps</span>
-              </Show>
-              <button class="text-[11px] text-accent hover:underline" onClick={() => setOn(!on_())}>
-                {on_() ? t("Pausar") : t("Ver")}
-              </button>
-            </div>
-          </Show>
-        </div>
+        <Show when={camera()}>
+          <div class="flex items-center justify-end gap-2">
+            <Show when={on_() && fps() > 0}>
+              <span class="font-mono text-[10px] text-text-dim">{fps().toFixed(1)} fps</span>
+            </Show>
+            <button class="text-[11px] text-accent hover:underline" onClick={() => setOn(!on_())}>
+              {on_() ? t("Pausar") : t("Ver")}
+            </button>
+          </div>
+        </Show>
 
         <Show when={camera()}>
           <div class="relative overflow-hidden rounded border border-border bg-black" style={{ "aspect-ratio": "4 / 3" }}>
@@ -136,7 +138,12 @@ export const PrinterCamera: Component<{
             </Show>
           </div>
           <Show when={error()}>
-            <p class="text-[11px] text-warning">{error()}</p>
+            <p class="text-[11px] text-warning">
+              {t("No se pudo leer la cámara.")}{" "}
+              <button class="text-accent hover:underline" onClick={retry}>
+                {t("Reintentar")}
+              </button>
+            </p>
           </Show>
         </Show>
 

@@ -86,12 +86,12 @@ export type FabTab = "printer" | "review" | "size" | "pieces" | "joints" | "infi
 export const PRINT_TABS: { id: FabTab; label: string; icon: Component<{ size?: number }> }[] = [
   { id: "slice", label: "Laminar", icon: Icons.Stack },
   { id: "preview", label: "Vista previa", icon: Icons.Eye },
-  { id: "send", label: "Enviar", icon: Icons.Printer },
+  { id: "send", label: "Mis impresoras", icon: Icons.Printer },
 ];
 export const isPrintTab = (tab: FabTab | undefined) => tab === "slice" || tab === "preview" || tab === "send";
 
 export const FAB_TABS: { id: FabTab; label: string; icon: Component<{ size?: number }> }[] = [
-  { id: "printer", label: "Impresora", icon: Icons.Printer },
+  { id: "printer", label: "Máquina", icon: Icons.Printer },
   { id: "review", label: "Revisar", icon: Icons.MagnifyingGlass },
   { id: "size", label: "Tamaño", icon: Icons.ArrowsOut },
   { id: "pieces", label: "Piezas", icon: Icons.Scissors },
@@ -330,7 +330,7 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
         </Show>
       </Match>
       <Match when={props.tab === "printer"}>
-        <MachinePanel prep={prep()} onPatch={patch} presets={props.presets} printer={printer()} material={material()} onCalibrate={() => setCalibrating(true)} onTune={props.onTune} />
+        <MachinePanel prep={prep()} onPatch={patch} presets={props.presets} printer={printer()} material={material()} onCalibrate={() => setCalibrating(true)} onTune={props.onTune} onOpenPrinters={() => props.onOpenEditor?.("send")} />
       </Match>
       <Match when={!props.analysis}>{needsAnalysis()}</Match>
       <Match when={props.tab === "review"}>
@@ -687,7 +687,7 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
           type="button"
           onClick={() => props.onOpenEditor?.("printer")}
           class={`w-full space-y-1 rounded-md border p-2.5 text-left transition-colors ${props.editorTab === "printer" ? "border-orange bg-orange/10" : "border-border hover:border-orange/60"}`}
-          title={t("Abrir {name} en el panel de la izquierda", { name: t("Impresora") })}
+          title={t("Abrir {name} en el panel de la izquierda", { name: t("Máquina") })}
         >
           <div class="flex items-center gap-2">
             <PrinterPicture model={printer().name} size={44} />

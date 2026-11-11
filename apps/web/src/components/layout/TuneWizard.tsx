@@ -14,10 +14,13 @@ import {
   calTarget,
   fmtCal,
   fmtCalDate,
+  fmtNozzle,
   getCalibration,
   stepDate,
   stepDone,
   stepStale,
+  skewFactor,
+  type CalibTestId,
   type CalibrationDefaults,
   type CalibrationView,
   type Reading,
@@ -52,6 +55,9 @@ export interface ChatPicture {
 const CLEARANCES = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6];
 const BLOCK = { height: 20, depth: 30, holes: [4, 6, 8, 10] };
 
+/** Pasos cuyo resultado es de la impresora y no depende de la boquilla ni del filamento */
+const KEY_BY_PRINTER = new Set<string>(["shaper_frequency", "shaper_damping", "vfa", "cornering", "skew"]);
+
 const shortName = (name: string) => name.split("@")[0].trim();
 const errText = (e: unknown) => (typeof e === "string" ? tBackend(e) : String(e));
 const conn = (p: NetPrinter) => ({ kind: p.kind, address: p.address, apiKey: p.apiKey.trim() || null, checkCode: p.checkCode.trim() || null, serial: p.serial.trim() || null });
@@ -77,8 +83,23 @@ export const TuneWizard: Component<{
   const slicerPrinters = () => info()?.printers ?? [];
   /** Las impresoras de red que se pueden laminar (con perfil del laminador) */
   const printers = () => netPrinters().filter((n) => slicerPrinters().some((p) => p.model === n.model));
-  const machineOf = (n?: NetPrinter) =>
-    n ? (slicerPrinters().find((p) => p.name === props.machine && p.model === n.model) ?? slicerPrinters().find((p) => p.model === n.model)) : undefined;
+  /** Boquilla elegida en el asistente; si no, la del perfil con que se abrió, la que tiene la impresora o 0,4 */
+  const [nozzleChoice, setNozzleChoice] = createSignal<number>();
+  const machineOf = (n?: NetPrinter) => {
+    if (!n) return undefined;
+    const same = slicerPrinters().filter((p) => p.model === n.model);
+    const opened = same.find((p) => p.name === props.machine);
+    const want = nozzleChoice() ?? opened?.nozzle ?? n.nozzle ?? 0.4;
+    return same.find((p) => Math.abs(p.nozzle - want) < 0.005) ?? opened ?? same[0];
+  };
+  /** Boquillas que tiene el perfil del laminador para el modelo de la impresora elegida */
+  const nozzleOptions = () => {
+    const n = printer();
+    return slicerPrinters()
+      .filter((p) => n && p.model === n.model)
+      .map((p) => p.nozzle)
+      .sort((a, b) => a - b);
+  };
 
   const [printerId, setPrinterId] = createSignal<string>();
   const printer = () => printers().find((p) => p.id === printerId()) ?? printers().find((p) => machineOf(p)?.name === props.machine) ?? printers()[0];
@@ -115,6 +136,11 @@ export const TuneWizard: Component<{
   const [error, setError] = createSignal<string>();
   const [message, setMessage] = createSignal<string>();
   const [showAdvanced, setShowAdvanced] = createSignal(false);
+  /** Pressure advance: el patrón (por defecto) o la torre */
+  const [paMethod, setPaMethod] = createSignal<"pattern" | "tower">("pattern");
+  const testOf = (s: TuneStep): CalibTestId => (s.pattern && paMethod() === "pattern" ? s.pattern.test : s.test);
+  // Escuadra de ejes: lo que se midió con el calibre
+  const [skewMeasures, setSkewMeasures] = createSignal<[number | null, number | null, number | null]>([null, null, null]);
 
   // Lo que se elige al final
   const [pickValue, setPickValue] = createSignal<number>();
@@ -160,19 +186,41 @@ export const TuneWizard: Component<{
     setHeight(undefined);
   };
 
-  const openStep = async (s: TuneStep) => {
-    closeStep();
-    setStep(s);
-    setZTotal(values()["z_offset"]?.value ?? 0);
+  const loadDefaults = async (s: TuneStep) => {
     const st = settings();
     if (!st) return;
     try {
-      const d = await invoke<CalibrationDefaults>("calibration_defaults", { settings: st, calibration: target(), test: s.test, range: null });
+      const d = await invoke<CalibrationDefaults>("calibration_defaults", { settings: st, calibration: target(), test: testOf(s), range: null });
       setDefaults(d);
       setRange({ start: d.start, end: d.end, step: d.step });
     } catch (e) {
       setError(errText(e));
     }
+  };
+
+  const openStep = async (s: TuneStep) => {
+    closeStep();
+    setPaMethod("pattern");
+    setSkewMeasures([null, null, null]);
+    setStep(s);
+    setZTotal(values()["z_offset"]?.value ?? 0);
+    await loadDefaults(s);
+  };
+
+  /** Cambia entre el patrón y la torre de pressure advance */
+  const chooseMethod = async (m: "pattern" | "tower") => {
+    const s = step();
+    if (!s) return;
+    if (busy()) void invoke("slicer_cancel");
+    setPaMethod(m);
+    setSliced(undefined);
+    setDefaults(undefined);
+    setRange(undefined);
+    setPickValue(undefined);
+    setHeight(undefined);
+    setError(undefined);
+    setMessage(undefined);
+    await loadDefaults(s);
   };
 
   // Cambiar de impresora o filamento cierra el paso abierto
@@ -201,12 +249,21 @@ export const TuneWizard: Component<{
       const res = await invoke<CalibrationSlice>("slice_calibration", {
         settings: st,
         calibration: target(),
-        test: s.test,
+        test: testOf(s),
         range: s.range && r ? { start: r.start, end: r.end, step: r.step } : null,
         onProgress: channel,
       });
       setSliced(res);
     } catch (e) {
+      if (s.pattern && paMethod() === "pattern" && /patrón de pressure advance/.test(String(e))) {
+        // Este motor (o esta impresora) no dibuja el patrón: se sigue con la torre sin que el usuario tenga que hacer nada
+        setBusy(false);
+        setProgress(undefined);
+        await chooseMethod("tower");
+        setMessage(t("Esta impresora o este laminador todavía no dibuja el patrón de presión al extruir: sigo con la torre."));
+        await slice();
+        return;
+      }
       if (!/cancelad/i.test(String(e))) setError(errText(e));
     } finally {
       setBusy(false);
@@ -244,6 +301,14 @@ export const TuneWizard: Component<{
     if (h !== undefined) setPickValue(valueAtHeight(h));
   });
 
+  /** Factor de escuadra con lo medido (de borde a borde de los postes: se resta el diámetro del poste) */
+  const skewFromMeasures = () => {
+    const r = reading();
+    const pin = r?.kind === "skew" ? r.pin_mm : 6;
+    const [ac, bd, ad] = skewMeasures();
+    return ac === null || bd === null || ad === null ? undefined : skewFactor(ac - pin, bd - pin, ad - pin);
+  };
+
   /** Lo que se guarda: clave → valor */
   const toSave = createMemo((): Record<string, number> | undefined => {
     const s = step();
@@ -257,6 +322,10 @@ export const TuneWizard: Component<{
       }
       case "block":
         return undefined;
+      case "skew": {
+        const f = skewFromMeasures();
+        return f === undefined ? undefined : { skew_xy: Math.round(f * 1e6) / 1e6 };
+      }
       case "volumetric_speed": {
         const v = pickValue();
         // Un 10 % menos que donde empezó a fallar, para ir seguro
@@ -273,11 +342,11 @@ export const TuneWizard: Component<{
     }
   });
 
-  const store = async (entries: Record<string, number>, test: string) => {
+  const store = async (entries: Record<string, number>, test: string, note: string | null = null) => {
     const tgt = target();
     if (!tgt) return;
     for (const [key, value] of Object.entries(entries)) {
-      await invoke<CalibrationView>("calibration_save", { target: tgt, key, value, test, note: null });
+      await invoke<CalibrationView>("calibration_save", { target: tgt, key, value, test, note });
     }
     await refetch();
   };
@@ -306,8 +375,26 @@ export const TuneWizard: Component<{
         const entries = toSave();
         if (!entries) return;
         // Las K1 de fábrica y la AD5X guardan su propio Z: no se repite en el gcode
-        const test = s.test === "first_layer" && printer()?.kind !== "moonraker" ? "printer" : s.test;
-        await store(entries, test);
+        let test: string = s.test === "first_layer" && printer()?.kind !== "moonraker" ? "printer" : s.test;
+        let note: string | null = null;
+        if (s.test === "pressure_advance") test = testOf(s);
+        if (s.test === "skew") {
+          const [ac, bd, ad] = skewMeasures();
+          note = `AC ${ac} / BD ${bd} / AD ${ad} mm`;
+          if (canApplySkew()) {
+            // Sin [skew_correction] en el printer.cfg, Klipper no entiende SET_SKEW y la impresión no empieza
+            const ok = await props.confirm({
+              title: t("Aplicar la escuadra"),
+              message: t("Se aplica sola al empezar cada impresión (SET_SKEW). Antes revisa que el printer.cfg de {printer} tenga la sección [skew_correction]: sin ella, Klipper no entiende el comando y la impresión no empieza.", { printer: printer()?.name ?? "" }),
+              confirmLabel: t("Guardar y aplicar"),
+            });
+            if (!ok) return;
+          } else {
+            // K1 de fábrica o AD5X: no se puede tocar su configuración; queda anotado y no se aplica
+            test = "printer";
+          }
+        }
+        await store(entries, test, note);
         if (s.test === "clearance") props.onApplyProfiles?.({ fit_clearance: entries.fit_clearance });
       }
       closeStep();
@@ -317,6 +404,8 @@ export const TuneWizard: Component<{
   };
 
   // ── Primera capa en vivo ──
+  /** Se puede poner SET_SKEW en el gcode: Klipper al que se puede entrar (las K1 de fábrica y la AD5X no) */
+  const canApplySkew = () => printer()?.kind === "moonraker";
   const canAdjustZ = () => printer()?.kind === "moonraker" || printer()?.kind === "creality";
   const adjustZ = async (delta: number) => {
     const p = printer();
@@ -372,11 +461,12 @@ export const TuneWizard: Component<{
     const lines = [
       t("Estoy calibrando {printer} ({machine}) con el filamento «{filament}» en Pinocchio.", { printer: p.name, machine: machine()?.name ?? "", filament: filament() ?? "" }),
       t("Paso: {title}. {fixes}", { title: t(s.title), fixes: t(s.fixes) }),
-      t("Qué hay que mirar: {look}", { look: t(s.look) }),
+      t("Qué hay que mirar: {look}", { look: t(s.pattern && paMethod() === "pattern" ? s.pattern.look : s.look) }),
     ];
     if (r?.kind === "blocks") lines.push(t("Bloques de abajo hacia arriba: {list}.", { list: r.blocks.map((b) => `${fmtNumber(b.z0)}–${fmtNumber(b.z1)} mm = ${fmtNumber(b.value, { maximumFractionDigits: 4 })}`).join("; ") }));
     if (r?.kind === "pieces") lines.push(t("Piezas (marca → valor): {list}.", { list: r.pieces.map((x) => `${x.mark} → ${fmtNumber(x.value, { maximumFractionDigits: 3 })}`).join("; ") }));
     if (r?.kind === "height") lines.push(t("El valor va de {a} (abajo) a {b} (a {h} mm de alto), de a poco.", { a: fmtNumber(r.start), b: fmtNumber(r.end), h: fmtNumber(r.height_mm) }));
+    if (r?.kind === "numbers") lines.push(t("El patrón trae estos números impresos (valor de presión al extruir): {list}.", { list: r.values.map((v) => fmtNumber(v, { maximumFractionDigits: 4 })).join(", ") }));
     lines.push(t("Te adjunto una foto de cómo salió. Dime cuál es el mejor valor y por qué; si te parece bien, guárdalo con calibration_save para {printer}.", { printer: p.name }));
     // Si la impresora tiene cámara, va una foto
     const images: ChatPicture[] = [];
@@ -529,7 +619,7 @@ export const TuneWizard: Component<{
         </div>
 
         <div class="p-4 space-y-3 overflow-y-auto min-h-0 text-xs">
-          <Show when={printers().length > 0} fallback={<p class="text-text-muted leading-relaxed">{t("Primero agrega tu impresora en Imprimir → Impresora: la calibración se guarda para cada impresora.")}</p>}>
+          <Show when={printers().length > 0} fallback={<p class="text-text-muted leading-relaxed">{t("Primero agrega tu impresora en Imprimir → Mis impresoras: la calibración se guarda para cada impresora.")}</p>}>
             {/* ── Impresora y filamento ── */}
             <Show when={!step()}>
               <div class="grid grid-cols-2 gap-1.5">
@@ -555,9 +645,25 @@ export const TuneWizard: Component<{
                 value={filament()}
                 onChange={setFilamentName}
               />
+              <Show when={nozzleOptions().length > 1}>
+                <Select
+                  label={t("Boquilla")}
+                  options={nozzleOptions().map((n) => ({ value: String(n), label: fmtNozzle(n) }))}
+                  value={String(machine()?.nozzle ?? 0.4)}
+                  onChange={(v) => setNozzleChoice(Number(v))}
+                />
+              </Show>
               <p class="text-[10px] text-text-dim leading-relaxed">
-                {t("Sigue los pasos en orden: cada uno imprime una pieza de prueba chica y te pregunta cuál salió mejor. Lo que elijas se guarda para {printer} con este filamento y el laminador lo usa solo.", { printer: printer()?.name ?? "" })}
+                {t("Sigue los pasos en orden: cada uno imprime una pieza de prueba chica y te pregunta cuál salió mejor. Lo que elijas se guarda para {printer} con este filamento y la boquilla de {nozzle}, y el laminador lo usa solo.", { printer: printer()?.name ?? "", nozzle: fmtNozzle(machine()?.nozzle ?? 0.4) })}
               </p>
+              <p class="text-[10px] text-text-dim leading-relaxed">
+                {t("Cada boquilla se calibra aparte: lo que salió con una de 0,4 mm no sirve con una de 0,8 mm. Las vibraciones (input shaping), las marcas finas (VFA), las esquinas y la escuadra de ejes son de la impresora y valen con cualquier boquilla.")}
+              </p>
+              <Show when={(view()?.nozzles ?? []).some((n) => Math.abs(n - (machine()?.nozzle ?? 0.4)) > 0.005)}>
+                <p class="text-[10px] text-text-dim leading-relaxed">
+                  {t("Ya calibrada con otras boquillas: {list}.", { list: (view()?.nozzles ?? []).filter((n) => Math.abs(n - (machine()?.nozzle ?? 0.4)) > 0.005).map(fmtNozzle).join(", ") })}
+                </p>
+              </Show>
               <div class="space-y-1.5">
                 <For each={basic()}>{(s) => <StepRow s={s} />}</For>
               </div>
@@ -581,6 +687,11 @@ export const TuneWizard: Component<{
               {(s) => (
                 <div class="space-y-3">
                   <p class="text-text leading-relaxed">{t(s().fixes)}</p>
+                  <p class="text-[10px] text-text-dim">
+                    {KEY_BY_PRINTER.has(s().test)
+                      ? t("Este valor es de la impresora: vale con cualquier boquilla.")
+                      : t("Calibrando para la boquilla de {nozzle}: este valor no se usa con otra boquilla.", { nozzle: fmtNozzle(machine()?.nozzle ?? 0.4) })}
+                  </p>
 
                   {/* 1. Prueba */}
                   <div class="space-y-2 p-3 rounded-md bg-surface/30 border border-border">
@@ -598,6 +709,33 @@ export const TuneWizard: Component<{
                       <Button size="sm" variant="ghost" onClick={() => void autoShaper()} icon={<Icons.Lightning size={14} />}>
                         {t("Medir vibraciones (automático)")}
                       </Button>
+                    </Show>
+                    <Show when={s().pattern}>
+                      <div class="space-y-1">
+                        <div class="flex gap-1.5">
+                          <Button size="sm" variant={paMethod() === "pattern" ? "primary" : "ghost"} onClick={() => void chooseMethod("pattern")}>
+                            {t("Patrón (recomendado)")}
+                          </Button>
+                          <Button size="sm" variant={paMethod() === "tower" ? "primary" : "ghost"} onClick={() => void chooseMethod("tower")}>
+                            {t("Torre")}
+                          </Button>
+                        </div>
+                        <p class="text-[10px] text-text-dim leading-relaxed">
+                          {paMethod() === "pattern"
+                            ? t("El patrón imprime líneas con esquinas y un número en cada grupo: se elige el número que se ve mejor. Es más rápido y más fácil de leer que la torre.")
+                            : t("La torre sube de a poco el valor: se elige la altura donde las esquinas quedan mejor.")}
+                        </p>
+                      </div>
+                    </Show>
+                    <Show when={s().test === "skew"}>
+                      <p class="text-[10px] text-text-dim leading-relaxed">
+                        {t("Imprime la placa cuadrada con un poste redondo en cada esquina. Las esquinas se llaman como en Klipper: D es la de adelante a la izquierda (1 punto), A la de adelante a la derecha (2 puntos), C la de atrás a la izquierda (3 puntos) y B la de atrás a la derecha (4 puntos).")}
+                      </p>
+                      <Show when={!canApplySkew()}>
+                        <p class="text-[10px] text-warning leading-relaxed">
+                          {t("Esta impresora (K1 de fábrica o AD5X) no deja cambiar su configuración, así que la corrección no se puede aplicar al imprimir. Puedes medir y anotar el valor, pero lo que corrige la escuadra es la mecánica (correas y escuadra del marco).")}
+                        </p>
+                      </Show>
                     </Show>
                     <Show when={s().range && range()}>
                       {(r) => (
@@ -647,7 +785,7 @@ export const TuneWizard: Component<{
                   {/* 2. Elegir */}
                   <div class="space-y-2 p-3 rounded-md bg-surface/30 border border-border">
                     <p class="text-[11px] font-medium text-text">{t("2. ¿Cómo salió?")}</p>
-                    <p class="text-[10px] text-text-muted leading-relaxed">{t(s().look)}</p>
+                    <p class="text-[10px] text-text-muted leading-relaxed">{t(s().pattern && paMethod() === "pattern" ? s().pattern!.look : s().look)}</p>
                     <Switch>
                       <Match when={s().test === "first_layer"}>
                         <Show
@@ -698,6 +836,52 @@ export const TuneWizard: Component<{
                           </For>
                         </div>
                         <p class="text-[10px] text-text-dim">{t("Medidas externas (modelo: {x} × {y} × {z} mm)", { x: 5 + 4 + 5 + 6 + 5 + 8 + 5 + 10 + 5, y: BLOCK.depth, z: BLOCK.height })}</p>
+                      </Match>
+                      <Match when={s().test === "skew"}>
+                        <div class="grid grid-cols-3 gap-1.5">
+                          <For each={["AC", "BD", "AD"]}>
+                            {(name, i) => (
+                              <NumberInput
+                                label={name}
+                                value={skewMeasures()[i()] ?? undefined}
+                                onChange={(v) => setSkewMeasures((m) => m.map((x, k) => (k === i() ? v : x)) as [number | null, number | null, number | null])}
+                                min={10}
+                                max={400}
+                                step={0.01}
+                                suffix="mm"
+                              />
+                            )}
+                          </For>
+                        </div>
+                        <p class="text-[10px] text-text-dim leading-relaxed">
+                          {t("AC y BD son las diagonales (de borde exterior a borde exterior de los postes); AD es el lado de adelante. Los postes miden {pin} mm: se descuentan solos.", { pin: fmtNumber((reading() as Extract<Reading, { kind: "skew" }> | undefined)?.pin_mm ?? 6) })}
+                        </p>
+                        <Show when={skewMeasures().every((m) => m !== null) && skewFromMeasures() === undefined}>
+                          <p class="text-[10px] text-warning">{t("Esas medidas no forman un cuadrado: revisa AC, BD y AD.")}</p>
+                        </Show>
+                      </Match>
+                      <Match when={reading()?.kind === "numbers" && reading()}>
+                        {(r) => (
+                          <div class="space-y-1">
+                            <p class="text-[10px] text-text-dim">{t("¿Qué número se ve mejor?")}</p>
+                            <div class="grid grid-cols-6 gap-1">
+                              <For each={(r() as Extract<Reading, { kind: "numbers" }>).values}>
+                                {(v) => (
+                                  <button
+                                    type="button"
+                                    onClick={() => setPickValue(v)}
+                                    class={clsx(
+                                      "px-1 py-1 rounded border text-[10px] font-mono",
+                                      pickValue() === v ? "border-orange bg-orange/20 text-text" : "border-border bg-surface/30 text-text-muted hover:border-orange/50",
+                                    )}
+                                  >
+                                    {fmtNumber(v, { maximumFractionDigits: 4 })}
+                                  </button>
+                                )}
+                              </For>
+                            </div>
+                          </div>
+                        )}
                       </Match>
                       <Match when={reading()?.kind === "blocks" && reading()}>
                         {(r) => <BlocksPicker blocks={(r() as Extract<Reading, { kind: "blocks" }>).blocks} unit={unit()} />}

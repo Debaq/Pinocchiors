@@ -93,3 +93,10 @@ marcan «conviene repetir».
 - Lo nuestro: `libs/slicer/engine/main.cpp`, `libs/slicer/src/{settings,engine}.rs`,
   `libs/pinocchio/print3d/src/calibration.rs` (placa y bloque),
   `apps/web/src/components/layout/CalibrationWizard.tsx` (asistente de holguras de hoy).
+
+## 2026-11-11: por boquilla, escuadra, patrón y puesta a punto de la máquina
+
+- ✅ Calibraciones por boquilla (`calibrations.rs`: `NozzleCal`, migración de lo viejo a 0,4). Lo del filamento y z_offset/holguras van por diámetro; shaper, VFA, esquinas y escuadra son de la impresora.
+- ✅ Escuadra de ejes (skew): placa generada en `calib.rs`, 3 medidas → `SET_SKEW` en el gcode de inicio (Klipper con `[skew_correction]`). 🧪 Falta confirmar el signo con una impresora real.
+- 🟡 Pressure advance con patrón: la prueba y el paso del asistente existen, pero el motor no dibuja el patrón (en Orca lo agrega la GUI con `CalibPressureAdvancePattern::generate_custom_gcodes` sobre `model.plates_custom_gcodes`; hay que hacerlo en `engine/main.cpp` y recompilar el motor). Mientras tanto el asistente usa la torre.
+- ✅ Puesta a punto de la máquina (Klipper, `PrinterSetup.tsx` + `printer_setup_info/action`): PID con temperatura, revisión (finales de carrera, motores, calentadores, ventiladores), extrusor (rotation_distance con copia de printer.cfg), sonda (prueba del papel y precisión), tornillos, malla. 🧪 Nada probado con impresora real.

@@ -105,6 +105,36 @@ impl Printer {
         self.send(self.request(reqwest::Method::POST, path))
     }
 
+    /// Baja un archivo tal cual (texto), p. ej. `/server/files/config/printer.cfg`.
+    pub(crate) fn get_text(&self, path: &str) -> Result<String, String> {
+        let resp = self.request(reqwest::Method::GET, path).send().map_err(|e| self.connection_error(&e))?;
+        let status = resp.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+            return Err("La impresora pide una clave de API (Moonraker)".into());
+        }
+        if !status.is_success() {
+            return Err(format!("La impresora respondió: {status}"));
+        }
+        resp.text().map_err(|e| format!("No se pudo leer el archivo de la impresora: {e}"))
+    }
+
+    /// Sube un archivo a una raíz de Moonraker (por ejemplo «config»), reemplazando el que haya.
+    pub(crate) fn upload(&self, root: &str, filename: &str, bytes: &[u8]) -> Result<(), String> {
+        let boundary = format!("pinocchio{:016x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64));
+        let req = self
+            .request(reqwest::Method::POST, "/server/files/upload")
+            .header("Content-Type", format!("multipart/form-data; boundary={boundary}"))
+            .body(multipart_to(&boundary, root, filename, bytes, false));
+        let resp = req.send().map_err(|e| self.connection_error(&e))?;
+        let status = resp.status();
+        let body: Value = resp.json().unwrap_or(Value::Null);
+        if !status.is_success() {
+            let msg = body.pointer("/error/message").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| status.to_string());
+            return Err(format!("La impresora no aceptó el archivo: {msg}"));
+        }
+        Ok(())
+    }
+
     pub(crate) fn delete(&self, path: &str) -> Result<Value, String> {
         self.send(self.request(reqwest::Method::DELETE, path))
     }
@@ -172,11 +202,16 @@ pub struct SendResult {
 
 /// Cuerpo multipart/form-data para `/server/files/upload`.
 fn multipart(boundary: &str, filename: &str, gcode: &[u8], start: bool) -> Vec<u8> {
+    multipart_to(boundary, "gcodes", filename, gcode, start)
+}
+
+/// Igual, hacia otra raíz de archivos de Moonraker («config», «gcodes»…).
+fn multipart_to(boundary: &str, root: &str, filename: &str, gcode: &[u8], start: bool) -> Vec<u8> {
     let mut body = Vec::with_capacity(gcode.len() + 512);
     let field = |body: &mut Vec<u8>, name: &str, value: &str| {
         body.extend_from_slice(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n").as_bytes());
     };
-    field(&mut body, "root", "gcodes");
+    field(&mut body, "root", root);
     if start {
         field(&mut body, "print", "true");
     }

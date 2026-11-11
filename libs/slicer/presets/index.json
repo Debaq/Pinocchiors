@@ -105,6 +105,40 @@
    ]
   },
   {
+   "name": "Creality K1 (1.0 nozzle)",
+   "vendor": "Creality",
+   "tools": 1,
+   "bed": [
+    220.0,
+    220.0,
+    250.0
+   ],
+   "model": "Creality K1",
+   "nozzle": 1.0,
+   "default_process": "0.50mm Standard @Creality K1 (1.0 nozzle)",
+   "default_filament": "Creality HF Generic PLA",
+   "processes": [
+    "0.40mm Optimal @Creality K1 (1.0 nozzle)",
+    "0.50mm Standard @Creality K1 (1.0 nozzle)",
+    "0.60mm Draft @Creality K1 (1.0 nozzle)"
+   ],
+   "filaments": [
+    "Creality Generic ABS",
+    "Creality Generic ASA",
+    "Creality Generic PA-CF @K1-all",
+    "Creality Generic PC @K1-all",
+    "Creality Generic PETG",
+    "Creality Generic PLA",
+    "Creality Generic PLA High Speed @K1-all",
+    "Creality Generic PLA Matte @K1-all",
+    "Creality Generic PLA Silk @K1-all",
+    "Creality Generic PLA-CF @K1-all",
+    "Creality Generic TPU",
+    "Creality HF Generic PLA",
+    "Creality HF Generic Speed PLA"
+   ]
+  },
+  {
    "name": "Creality K1C 0.4 nozzle",
    "vendor": "Creality",
    "tools": 1,
@@ -270,6 +304,47 @@
    ]
   },
   {
+   "name": "Creality K1C 1.0 nozzle",
+   "vendor": "Creality",
+   "tools": 1,
+   "bed": [
+    220.0,
+    220.0,
+    250.0
+   ],
+   "model": "Creality K1C",
+   "nozzle": 1.0,
+   "default_process": "0.50mm Standard @Creality K1C 1.0 nozzle",
+   "default_filament": "Creality Generic PLA @K1-all",
+   "processes": [
+    "0.40mm Optimal @Creality K1C 1.0 nozzle",
+    "0.50mm Standard @Creality K1C 1.0 nozzle",
+    "0.60mm Draft @Creality K1C 1.0 nozzle"
+   ],
+   "filaments": [
+    "CR-PETG @K1C-all",
+    "CR-Silk @K1C-all",
+    "Creality Generic ABS @K1-all",
+    "Creality Generic ASA @K1-all",
+    "Creality Generic PA-CF @K1-all",
+    "Creality Generic PC @K1-all",
+    "Creality Generic PETG @K1-all",
+    "Creality Generic PLA @K1-all",
+    "Creality Generic PLA High Speed @K1-all",
+    "Creality Generic PLA Matte @K1-all",
+    "Creality Generic PLA Silk @K1-all",
+    "Creality Generic PLA-CF @K1-all",
+    "Creality Generic TPU @K1-all",
+    "Generic PLA-Silk @K1C-all",
+    "HP-TPU @K1C-all",
+    "Hyper ABS @K1C-all",
+    "Hyper Luminous @K1C-all",
+    "Hyper PETG @K1C-all",
+    "Hyper PLA @K1C-all",
+    "Soleyin Basic PETG @K1C-all"
+   ]
+  },
+  {
    "name": "Creality K1 Max (0.4 nozzle)",
    "vendor": "Creality",
    "tools": 1,
@@ -374,6 +449,40 @@
    ]
   },
   {
+   "name": "Creality K1 Max (1.0 nozzle)",
+   "vendor": "Creality",
+   "tools": 1,
+   "bed": [
+    300.0,
+    300.0,
+    300.0
+   ],
+   "model": "Creality K1 Max",
+   "nozzle": 1.0,
+   "default_process": "0.50mm Standard @Creality K1 Max (1.0 nozzle)",
+   "default_filament": "Creality HF Generic PLA",
+   "processes": [
+    "0.40mm Optimal @Creality K1 Max (1.0 nozzle)",
+    "0.50mm Standard @Creality K1 Max (1.0 nozzle)",
+    "0.60mm Draft @Creality K1 Max (1.0 nozzle)"
+   ],
+   "filaments": [
+    "Creality Generic ABS",
+    "Creality Generic ASA",
+    "Creality Generic PA-CF @K1-all",
+    "Creality Generic PC @K1-all",
+    "Creality Generic PETG",
+    "Creality Generic PLA",
+    "Creality Generic PLA High Speed @K1-all",
+    "Creality Generic PLA Matte @K1-all",
+    "Creality Generic PLA Silk @K1-all",
+    "Creality Generic PLA-CF @K1-all",
+    "Creality Generic TPU",
+    "Creality HF Generic PLA",
+    "Creality HF Generic Speed PLA"
+   ]
+  },
+  {
    "name": "Flashforge AD5X 0.4 nozzle",
    "vendor": "Flashforge",
    "tools": 4,
@@ -384,7 +493,7 @@
    ],
    "model": "Flashforge AD5X",
    "nozzle": 0.4,
-   "default_process": "0.16mm Standard @FF AD5X",
+   "default_process": "0.20mm Standard @FF AD5X",
    "default_filament": "Flashforge Generic PLA",
    "processes": [
     "0.16mm Standard @FF AD5X",
@@ -450,7 +559,7 @@
    ],
    "model": "Flashforge AD5X",
    "nozzle": 0.25,
-   "default_process": "0.10mm Standard @FF AD5X 0.25 nozzle",
+   "default_process": "0.12mm Standard @FF AD5X 0.25 nozzle",
    "default_filament": "Flashforge Generic HS PLA @FF AD5M 0.25 Nozzle",
    "processes": [
     "0.10mm Standard @FF AD5X 0.25 nozzle",
@@ -614,6 +723,72 @@
    ]
   },
   {
+   "name": "Flashforge AD5X 1.0 nozzle",
+   "vendor": "Flashforge",
+   "tools": 4,
+   "bed": [
+    220.0,
+    220.0,
+    220.0
+   ],
+   "model": "Flashforge AD5X",
+   "nozzle": 1.0,
+   "default_process": "0.50mm Standard @Flashforge AD5X 1.0 nozzle",
+   "default_filament": "Flashforge Generic PLA",
+   "processes": [
+    "0.30mm Fine @Flashforge AD5X 1.0 nozzle",
+    "0.50mm Standard @Flashforge AD5X 1.0 nozzle",
+    "0.70mm Draft @Flashforge AD5X 1.0 nozzle"
+   ],
+   "filaments": [
+    "Flashforge ABS Basic @FF AD5X 0.8 nozzle",
+    "Flashforge ASA Basic @FF AD5X 0.8 nozzle",
+    "Flashforge ASA-CF",
+    "Flashforge Generic ABS",
+    "Flashforge Generic ASA",
+    "Flashforge Generic HS PLA",
+    "Flashforge Generic PETG",
+    "Flashforge Generic PLA",
+    "Flashforge Generic PLA-Silk",
+    "Flashforge HS PETG @FF AD5X 0.8 nozzle",
+    "Flashforge HS PLA",
+    "Flashforge HS PLA @FF AD5X 0.8 nozzle",
+    "Flashforge PA12-CF",
+    "Flashforge PA6-CF",
+    "Flashforge PA66-CF",
+    "Flashforge PET-CF",
+    "Flashforge PETG Basic",
+    "Flashforge PETG Pro @FF AD5X 0.8 nozzle",
+    "Flashforge PETG Transparent @FF AD5X 0.8 nozzle",
+    "Flashforge PETG-CF",
+    "Flashforge PETG-CF @FF AD5X 0.8 nozzle",
+    "Flashforge PLA Basic @FF AD5X 0.8 nozzle",
+    "Flashforge PLA Color Change @FF AD5X 0.8 nozzle",
+    "Flashforge PLA Galaxy @FF AD5X 0.8 nozzle",
+    "Flashforge PLA Luminous @FF AD5X 0.8 nozzle",
+    "Flashforge PLA Matte @FF AD5X 0.8 nozzle",
+    "Flashforge PLA Metal @FF AD5X 0.8 nozzle",
+    "Flashforge PLA Pro @FF AD5X 0.8 nozzle",
+    "Flashforge PLA Silk @FF AD5X 0.8 nozzle",
+    "Flashforge PLA Sparkle @FF AD5X 0.8 nozzle",
+    "Flashforge PLA-CF",
+    "Flashforge PLA-CF @FF AD5X 0.8 nozzle",
+    "Flashforge PPA-CF",
+    "Flashforge PPA-GF",
+    "Flashforge PPS-CF",
+    "Flashforge TPU 95A",
+    "Flashforge TPU 95A @FF AD5X 0.8 nozzle",
+    "Generic TPU 85A @FF AD5X 0.8 nozzle",
+    "SUNLU PETG @FF AD5M 0.8 Nozzle",
+    "SUNLU PLA Marble @FF AD5M",
+    "SUNLU PLA Matte @FF AD5M",
+    "SUNLU PLA+ 2.0 @FF AD5M",
+    "SUNLU PLA+ @FF AD5M",
+    "SUNLU Silk PLA+ @FF AD5M",
+    "SUNLU Wood PLA @FF AD5M"
+   ]
+  },
+  {
    "name": "Creality CR-10 Max 0.4 nozzle",
    "vendor": "Creality",
    "tools": 1,
@@ -715,6 +890,34 @@
     "0.30mm Optimal @Creality CR-10 Max 0.8 nozzle",
     "0.40mm Standard @Creality CR-10 Max 0.8 nozzle",
     "0.48mm Draft @Creality CR-10 Max 0.8 nozzle"
+   ],
+   "filaments": [
+    "Creality Generic ABS",
+    "Creality Generic ASA",
+    "Creality Generic PA-CF",
+    "Creality Generic PETG",
+    "Creality Generic PLA",
+    "Creality Generic PLA-CF"
+   ]
+  },
+  {
+   "name": "Creality CR-10 Max 1.0 nozzle",
+   "vendor": "Creality",
+   "tools": 1,
+   "bed": [
+    450.0,
+    450.0,
+    470.0
+   ],
+   "model": "Creality CR-10 Max",
+   "nozzle": 1.0,
+   "default_process": "0.50mm Standard @Creality CR-10 Max 1.0 nozzle",
+   "default_filament": "Creality Generic PLA",
+   "processes": [
+    "0.30mm Fine @Creality CR-10 Max 1.0 nozzle",
+    "0.38mm Optimal @Creality CR-10 Max 1.0 nozzle",
+    "0.50mm Standard @Creality CR-10 Max 1.0 nozzle",
+    "0.60mm Draft @Creality CR-10 Max 1.0 nozzle"
    ],
    "filaments": [
     "Creality Generic ABS",

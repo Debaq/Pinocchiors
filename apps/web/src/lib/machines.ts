@@ -7,6 +7,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import { fmtNumber } from "./i18n";
+import { selectedNetPrinter } from "./settings";
 import type { SlicerInfo, SlicerPrinter } from "../components/panels/SlicerSection";
 
 export interface Machine {
@@ -155,10 +156,31 @@ export function withFilament(prep: PrepSettings, filament: string, materials: Ma
   return { ...prep, slicer: { ...(prep.slicer ?? { overrides: {} }), filament }, material: materialFor(materialTypeOf(filament), prep.material, materials) };
 }
 
-/** Si la impresora o el material de Fabricar no siguen a la máquina y el filamento, la versión corregida */
+/** La máquina (modelo y boquilla instalada) de la impresora de red elegida, si su modelo tiene perfil */
+export function machineOfNetPrinter(machines: Machine[]): Machine | undefined {
+  const p = selectedNetPrinter();
+  if (!p) return undefined;
+  const options = machines.filter((m) => m.model === p.model && m.kind === "fdm" && m.sliceable);
+  return options.find((m) => m.nozzle === (p.nozzle ?? 0.4)) ?? options.find((m) => m.nozzle === 0.4) ?? options[0];
+}
+
+/** Última impresora de red (con su boquilla) a la que ya se siguió: solo un cambio nuevo mueve la máquina de Fabricar */
+let lastNetKey: string | undefined;
+
+/**
+ * Si la impresora o el material de Fabricar no siguen a la máquina y el filamento, la versión corregida.
+ * Al elegir otra impresora de red (o cambiarle la boquilla) Fabricar pasa a su máquina; después se puede
+ * elegir otra a mano.
+ */
 export function syncedPrep(prep: PrepSettings, info: SlicerInfo | undefined, materials: MaterialProfile[]): PrepSettings | undefined {
-  const m = machineOf(prep, machinesFrom(info?.printers));
-  if (!m) return undefined;
+  const all = machinesFrom(info?.printers);
+  const net = machineOfNetPrinter(all);
+  const key = `${selectedNetPrinter()?.id ?? ""}|${net?.id ?? ""}`;
+  const original = prep;
+  if (lastNetKey !== undefined && key !== lastNetKey && net && prep.slicer?.printer !== net.id) prep = withMachine(prep, net);
+  lastNetKey = key;
+  const m = machineOf(prep, all);
+  if (!m) return prep === original ? undefined : prep;
   let next = prep;
   const p = prep.printer;
   if (!p || p.name !== m.model || p.build_volume.some((v, i) => Math.abs(v - m.bed[i]) > 1e-6) || prep.slicer?.printer !== m.id) next = withMachine(next, m);
@@ -166,9 +188,9 @@ export function syncedPrep(prep: PrepSettings, info: SlicerInfo | undefined, mat
   if (m.kind === "resin") {
     const resin = materials.find((x) => x.name === "Resina");
     if (resin && next.material?.name !== "Resina") next = { ...next, material: resin };
-    return next === prep ? undefined : next;
+    return next === original ? undefined : next;
   }
   const f = filamentOf(next, info?.printers.find((x) => x.name === m.id));
   if (f && next.material?.name !== materialTypeOf(f) && materials.some((x) => x.name === materialTypeOf(f))) next = withFilament(next, f, materials);
-  return next === prep ? undefined : next;
+  return next === original ? undefined : next;
 }

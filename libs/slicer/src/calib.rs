@@ -16,6 +16,9 @@ use crate::error::SlicerError;
 
 type Tri = [[f32; 3]; 3];
 
+/// Diámetro de los postes de la placa de escuadra (mm): las medidas con calibre van de borde a borde de dos postes
+pub const SKEW_PIN_MM: f64 = 6.0;
+
 /// Las pruebas
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -30,6 +33,8 @@ pub enum CalibTest {
     FlowFine,
     /// Torre de pressure advance: cambia cada milímetro
     PressureAdvance,
+    /// Patrón de pressure advance (el de Orca: líneas con esquinas, cada una con su valor; Klipper o Marlin)
+    PressureAdvancePattern,
     /// Torre de retracción: cambia cada milímetro
     Retraction,
     /// Velocidad volumétrica máxima: espiral cada vez más rápida
@@ -42,21 +47,25 @@ pub enum CalibTest {
     ShaperDamping,
     /// Esquinas (jerk / velocidad en las esquinas)
     Cornering,
+    /// Escuadra de ejes (skew): placa con marcas para medir las diagonales y un lado con el calibre
+    Skew,
 }
 
 impl CalibTest {
-    pub const ALL: [CalibTest; 11] = [
+    pub const ALL: [CalibTest; 13] = [
         CalibTest::FirstLayer,
         CalibTest::Temperature,
         CalibTest::FlowCoarse,
         CalibTest::FlowFine,
         CalibTest::PressureAdvance,
+        CalibTest::PressureAdvancePattern,
         CalibTest::Retraction,
         CalibTest::VolumetricSpeed,
         CalibTest::Vfa,
         CalibTest::ShaperFrequency,
         CalibTest::ShaperDamping,
         CalibTest::Cornering,
+        CalibTest::Skew,
     ];
 }
 
@@ -86,6 +95,10 @@ pub enum Reading {
     Height { height_mm: f64, start: f64, end: f64 },
     /// Se ajusta en vivo mientras imprime (primera capa)
     Live,
+    /// El patrón trae los números impresos: se elige el que se ve mejor
+    Numbers { values: Vec<f64> },
+    /// Escuadra de ejes: se miden las diagonales y un lado entre los bordes de los postes (mm)
+    Skew { side_mm: f64, pin_mm: f64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -223,6 +236,65 @@ fn cuboid(x0: f32, y0: f32, x1: f32, y1: f32, h: f32) -> Vec<Tri> {
     f.iter().map(|t| [v[t[0]], v[t[1]], v[t[2]]]).collect()
 }
 
+/// Un cilindro de eje Z (de `h` de alto, apoyado en Z = 0), con `n` lados
+fn cylinder(cx: f32, cy: f32, r: f32, h: f32, n: usize) -> Vec<Tri> {
+    let ring = |z: f32, k: usize| {
+        let a = std::f32::consts::TAU * k as f32 / n as f32;
+        [cx + r * a.cos(), cy + r * a.sin(), z]
+    };
+    let mut out = Vec::new();
+    for k in 0..n {
+        let (a0, a1, b0, b1) = (ring(0.0, k), ring(0.0, k + 1), ring(h, k), ring(h, k + 1));
+        out.push([a0, a1, b1]);
+        out.push([a0, b1, b0]);
+        out.push([[cx, cy, 0.0], a1, a0]);
+        out.push([[cx, cy, h], b0, b1]);
+    }
+    out
+}
+
+/// Placa de la escuadra de ejes: marco cuadrado bajo con un poste redondo en cada esquina y puntos que dicen cuál es
+/// cuál. Con las letras de Klipper (`SET_SKEW XY=AC,BD,AD`): D es la esquina de adelante a la izquierda (el origen), A la
+/// de adelante a la derecha (AD queda a lo largo de X), C la de atrás a la izquierda y B la de atrás a la derecha.
+/// Devuelve los triángulos y el lado entre centros de postes.
+fn skew_plate(side: f32, pin_d: f32) -> Vec<Tri> {
+    let (frame_w, frame_h, pin_h) = (4.0_f32, 1.2_f32, 6.0_f32);
+    let mut tris = Vec::new();
+    // Marco: cuatro tiras entre los centros de los postes (se cruzan en las esquinas)
+    let hw = frame_w * 0.5;
+    tris.extend(cuboid(-hw, -hw, side + hw, hw, frame_h));
+    tris.extend(cuboid(-hw, side - hw, side + hw, side + hw, frame_h));
+    tris.extend(cuboid(-hw, -hw, hw, side + hw, frame_h));
+    tris.extend(cuboid(side - hw, -hw, side + hw, side + hw, frame_h));
+    // Postes
+    for (x, y) in [(0.0, 0.0), (side, 0.0), (0.0, side), (side, side)] {
+        tris.extend(cylinder(x, y, pin_d * 0.5, pin_h, 24));
+    }
+    // Puntos sobre el marco, junto a cada poste: D uno, A dos, C tres, B cuatro
+    let dots = |n: usize, x: f32, y: f32, dx: f32, dy: f32| (0..n).flat_map(move |i| cylinder(x + dx * (i as f32 + 1.0), y + dy * (i as f32 + 1.0), 0.8, frame_h + 0.6, 10)).collect::<Vec<_>>();
+    let gap = pin_d * 0.5 + 3.0;
+    tris.extend(dots(1, gap - 3.0, 0.0, 3.0, 0.0)); // D (0,0)
+    tris.extend(dots(2, side - gap + 3.0, 0.0, -3.0, 0.0)); // A (side,0)
+    tris.extend(dots(3, gap - 3.0, side, 3.0, 0.0)); // C (0,side)
+    tris.extend(dots(4, side - gap + 3.0, side, -3.0, 0.0)); // B (side,side)
+    tris
+}
+
+/// Factor de escuadra como Klipper (`SET_SKEW XY=ac,bd,ad`, `calc_skew_factor` de `skew_correction.py`): las dos
+/// diagonales y el lado AD, entre centros. Positivo si el ángulo de la esquina D es mayor que 90°
+pub fn skew_factor(ac: f64, bd: f64, ad: f64) -> Option<f64> {
+    let inner = 2.0 * ac * ac + 2.0 * bd * bd - 4.0 * ad * ad;
+    if !(ac > 0.0 && bd > 0.0 && ad > 0.0 && inner > 0.0) {
+        return None;
+    }
+    let side = inner.sqrt() / 2.0;
+    let cos = (ac * ac - side * side - ad * ad) / (2.0 * side * ad);
+    if !cos.is_finite() || cos.abs() > 1.0 {
+        return None;
+    }
+    Some((std::f64::consts::FRAC_PI_2 - cos.acos()).tan())
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // CONFIGURACIÓN
 // ═══════════════════════════════════════════════════════════════════════════
@@ -345,6 +417,13 @@ pub fn default_range(test: CalibTest, config: &Map<String, Value>) -> (f64, f64,
                 (0.0, 0.1, 0.002)
             }
         }
+        CalibTest::PressureAdvancePattern => {
+            if has("TPU") || has("TPE") {
+                (0.0, 0.2, 0.01)
+            } else {
+                (0.0, 0.08, 0.005)
+            }
+        }
         CalibTest::Retraction => {
             if has("TPU") || has("TPE") {
                 (0.0, 1.0, 0.1)
@@ -363,7 +442,7 @@ pub fn default_range(test: CalibTest, config: &Map<String, Value>) -> (f64, f64,
         CalibTest::ShaperFrequency => (15.0, 110.0, 0.0),
         CalibTest::ShaperDamping => (0.0, 0.2, 0.0),
         CalibTest::Cornering => (1.0, 15.0, 0.0),
-        CalibTest::FlowCoarse | CalibTest::FlowFine | CalibTest::FirstLayer => (0.0, 0.0, 0.0),
+        CalibTest::FlowCoarse | CalibTest::FlowFine | CalibTest::FirstLayer | CalibTest::Skew => (0.0, 0.0, 0.0),
     }
 }
 
@@ -544,6 +623,56 @@ pub fn prepare(test: CalibTest, range: &CalibRange, base: &Map<String, Value>) -
             let n = height as usize;
             let blocks = (0..n).map(|i| Block { value: start + step * i as f64, z0: i as f64, z1: (i + 1) as f64 }).collect();
             (parts, Reading::Blocks { blocks }, "")
+        }
+
+
+        // ── Patrón de PA (Orca: `Calib_PA_Pattern`): una pieza baja que le da la zona al patrón; el motor dibuja las
+        //    líneas con esquinas y los números, cada una con su valor de PA ──
+        CalibTest::PressureAdvancePattern => {
+            need(step > 0.0 && end > start && start >= 0.0, "el pressure advance va de menor a mayor, con un paso positivo")?;
+            need(klipper || text(base, "gcode_flavor").as_deref() == Some("marlin2") || text(base, "gcode_flavor").as_deref() == Some("reprapfirmware"), "el patrón de pressure advance necesita Klipper o Marlin 2; usa la torre")?;
+            let count = ((end - start) / step).round() as usize + 1;
+            need(count <= 60, "el patrón admite hasta 60 valores: sube el paso o acorta el rango")?;
+            let (lo, hi) = bed;
+            let (w, d) = ((hi[0] - lo[0]) as f32, (hi[1] - lo[1]) as f32);
+            // Zona del patrón: cuanto cabe en la cama sin pasar de 140 × 80
+            let (sx, sy) = ((w - 20.0).clamp(40.0, 140.0), (d - 20.0).clamp(40.0, 80.0));
+            let parts = vec![cuboid(-sx * 0.5, -sy * 0.5, sx * 0.5, sy * 0.5, 0.8)];
+            let layer = 0.2;
+            Edit(&mut config)
+                .set("layer_height", fmt(layer))
+                .set("initial_layer_print_height", fmt(layer))
+                .set("alternate_extra_wall", "0")
+                .set("wall_loops", "3")
+                .set("top_shell_layers", "0")
+                .set("bottom_shell_layers", "1")
+                .set("sparse_infill_density", "0%")
+                .set("seam_slope_type", "none")
+                .set("brim_type", "no_brim")
+                .set("max_volumetric_extrusion_rate_slope", "0")
+                .list("slow_down_layer_time", "1")
+                .list("enable_pressure_advance", "1")
+                .list("adaptive_pressure_advance", "0");
+            // Orca imprime un patrón por cada par velocidad × aceleración (y sin pares no dibuja nada): aquí uno solo, a la
+            // velocidad y aceleración con que se imprime de verdad (la velocidad, sin pasar del flujo máximo del filamento)
+            let line = num_rel(base, "line_width", nozzle).filter(|w| *w > 0.0).unwrap_or(nozzle * 1.125);
+            let max_vol = num(base, "filament_max_volumetric_speed").unwrap_or(15.0);
+            let speed = num(base, "outer_wall_speed").unwrap_or(100.0).min(max_vol / mm3_per_mm(line, layer)).clamp(20.0, 300.0).floor();
+            let accel = num(base, "outer_wall_acceleration").filter(|a| *a > 0.0).or_else(|| num(base, "default_acceleration")).unwrap_or(2000.0).clamp(300.0, 20000.0);
+            calib = Calib { mode: "pa_pattern".into(), start, end, step, speeds: vec![speed], accelerations: vec![accel], ..calib };
+            let values = (0..count).map(|i| start + step * i as f64).collect();
+            (parts, Reading::Numbers { values }, "")
+        }
+
+        // ── Escuadra de ejes: placa con cuatro postes; se miden las diagonales y un lado ──
+        CalibTest::Skew => {
+            let (lo, hi) = bed;
+            let small = ((hi[0] - lo[0]).min(hi[1] - lo[1]) * 0.6).clamp(40.0, 120.0);
+            let side = (small / 10.0).floor() * 10.0;
+            let pin = SKEW_PIN_MM;
+            let parts = vec![skew_plate(side as f32, pin as f32)];
+            Edit(&mut config).set("layer_height", "0.2").set("initial_layer_print_height", "0.2").set("wall_loops", "2").set("top_shell_layers", "2").set("sparse_infill_density", "100%").set("brim_type", "no_brim").set("seam_position", "back");
+            (parts, Reading::Skew { side_mm: side, pin_mm: pin }, "mm")
         }
 
         // ── Torre de retracción: cambia cada milímetro desde 0,4 mm ──
@@ -775,6 +904,45 @@ mod tests {
         let fine = prepare(CalibTest::FlowFine, &CalibRange::default(), &base).unwrap();
         let Reading::Pieces { pieces } = &fine.reading else { panic!() };
         assert!(pieces.iter().any(|p| p.mark == "-0.5"));
+    }
+
+    #[test]
+    fn patron_de_pa_con_sus_valores() {
+        let t = prepare(CalibTest::PressureAdvancePattern, &CalibRange::default(), &k1()).unwrap();
+        let Reading::Numbers { values } = &t.reading else { panic!() };
+        assert_eq!((values.len(), values[0]), (17, 0.0));
+        assert!((values[16] - 0.08).abs() < 1e-9);
+        assert_eq!(t.calib.mode, "pa_pattern");
+        // Un par velocidad × aceleración (sin pares, Orca no dibuja el patrón)
+        assert_eq!((t.calib.speeds.len(), t.calib.accelerations.len()), (1, 1));
+        assert!(t.calib.speeds[0] >= 20.0 && t.calib.accelerations[0] >= 300.0);
+        // Muchos valores: se pide un paso mayor
+        assert!(prepare(CalibTest::PressureAdvancePattern, &CalibRange { start: Some(0.0), end: Some(0.2), step: Some(0.001), ..Default::default() }, &k1()).is_err());
+        // Con una impresora Marlin clásica no
+        let mut marlin = k1();
+        marlin.insert("gcode_flavor".into(), Value::String("marlin".into()));
+        assert!(prepare(CalibTest::PressureAdvancePattern, &CalibRange::default(), &marlin).is_err());
+    }
+
+    #[test]
+    fn escuadra_de_ejes_como_klipper() {
+        // Un cuadrado perfecto: factor 0
+        let f = skew_factor(141.421356, 141.421356, 100.0).unwrap();
+        assert!(f.abs() < 1e-6, "{f}");
+        // AC más corta que BD: el ángulo en D es menor de 90° (factor negativo); el signo cambia al intercambiarlas
+        let f = skew_factor(141.4, 141.5, 100.0).unwrap();
+        assert!((f + 0.000_707).abs() < 1e-5, "{f}");
+        assert!((skew_factor(141.5, 141.4, 100.0).unwrap() + f).abs() < 1e-9);
+        // Medidas imposibles
+        assert!(skew_factor(0.0, 141.0, 100.0).is_none() && skew_factor(10.0, 10.0, 100.0).is_none());
+        // La placa: cuatro postes de SKEW_PIN_MM en las esquinas, centrada en la cama
+        let t = prepare(CalibTest::Skew, &CalibRange::default(), &k1()).unwrap();
+        let Reading::Skew { side_mm, pin_mm } = t.reading else { panic!() };
+        assert_eq!((side_mm, pin_mm), (120.0, SKEW_PIN_MM));
+        let (lo, hi) = bbox(&t.parts);
+        // Lado entre centros + el poste de cada lado (la cama de la K1 es de 220)
+        assert!(((hi[0] - lo[0]) as f64 - (side_mm + pin_mm)).abs() < 0.2 && ((hi[1] - lo[1]) as f64 - (side_mm + pin_mm)).abs() < 0.2, "{lo:?} {hi:?}");
+        assert!(((lo[0] + hi[0]) * 0.5 - 110.0).abs() < 0.5);
     }
 
     #[test]

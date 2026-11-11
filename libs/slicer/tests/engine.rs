@@ -153,6 +153,9 @@ fn lamina_en_todas_las_impresoras() {
         let job = SliceJob { config, parts: vec![cube(x, y, 20.0)], work_dir: work_dir.clone(), calib: None };
         let summary = run(&job, &engine, |_| {}, &AtomicBool::new(false)).unwrap_or_else(|e| panic!("{}: {e}", p.name));
         let _ = std::fs::remove_dir_all(&work_dir);
-        assert!(summary.layers > 50 && summary.filament_g > 1.0, "{}: {} capas, {} g", p.name, summary.layers, summary.filament_g);
+        // 20 mm de alto con la capa de su calidad por defecto (0,1 mm con boquilla de 0,2; 0,5 con la de 1 mm)
+        let layer: f64 = job.config["layer_height"].as_str().and_then(|v| v.parse().ok()).unwrap_or(0.2);
+        let want = (20.0 / layer).round() as u32;
+        assert!(summary.layers.abs_diff(want) <= 2 && summary.filament_g > 1.0, "{}: {} capas (esperaba ~{want}), {} g", p.name, summary.layers, summary.filament_g);
     }
 }

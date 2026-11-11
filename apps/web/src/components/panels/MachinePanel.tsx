@@ -5,6 +5,7 @@ import * as Icons from "../icons";
 import { fmtNumber, t } from "../../lib/i18n";
 import { CREATOR_1, filamentOf, loadSlicerInfo, machineCards, machineOf, machinesFrom, nozzleLabel, nozzlesOf, withFilament, withMachine, type Machine } from "../../lib/machines";
 import { PrinterPicture } from "./PrinterSection";
+import { netPrinters } from "../../lib/settings";
 import type { MaterialProfile, PrepSettings, PrintPresets, PrinterProfile } from "./PrintPrepPanel";
 
 /** Nombre corto de un perfil: «Flashforge PLA Basic @FF AD5X» → «Flashforge PLA Basic» */
@@ -24,6 +25,8 @@ export const MachinePanel: Component<{
   onCalibrate: () => void;
   /** Asistente «Poner a punto» (con la impresora conectada) */
   onTune?: () => void;
+  /** Lleva a la pestaña «Mis impresoras» (las de la red) */
+  onOpenPrinters?: () => void;
 }> = (props) => {
   const [info] = createResource(loadSlicerInfo);
   const machines = () => machinesFrom(info()?.printers);
@@ -41,6 +44,8 @@ export const MachinePanel: Component<{
   const materialFor = (name: string): MaterialProfile => materials().find((m) => m.name === name) ?? props.material;
 
   const [details, setDetails] = createSignal(false);
+  /** Las impresoras de la red de este modelo */
+  const mine = () => netPrinters().filter((n) => n.model === current()?.model);
   const shrink = (): [number, number, number] => props.material.shrink ?? [0, 0, 0];
   const setShrink = (axis: number, percent: number) => {
     const next = [...shrink()] as [number, number, number];
@@ -51,7 +56,7 @@ export const MachinePanel: Component<{
 
   return (
     <div class="space-y-3">
-      <div class="grid grid-cols-2 gap-1.5">
+      <div class="grid gap-1.5 [grid-template-columns:repeat(auto-fill,minmax(min(100%,170px),1fr))]">
         <For each={machineCards(machines(), current())}>
           {(m) => (
             <button
@@ -64,7 +69,7 @@ export const MachinePanel: Component<{
             >
               <PrinterPicture model={m.model} size={52} />
               <span class="min-w-0">
-                <span class="block text-xs font-semibold text-text truncate">{m.name}</span>
+                <span class="block text-xs font-semibold text-text break-words">{m.name}</span>
                 <span class="block text-[10px] text-text-dim">{m.bed.map((v) => fmtNumber(v)).join(" × ")} mm</span>
                 <Show when={m.tools > 1}>
                   <span class="block text-[10px] text-text-dim">{t("{n} carretes", { n: m.tools })}</span>
@@ -77,6 +82,18 @@ export const MachinePanel: Component<{
           )}
         </For>
       </div>
+
+      <Show when={mine().length > 0}>
+        <p class="text-[11px] text-text-muted">
+          {t("Tus impresoras: {names}", { names: mine().map((n) => n.name).join(", ") })}
+          <Show when={props.onOpenPrinters}>
+            {" "}
+            <button class="text-accent hover:underline" onClick={() => props.onOpenPrinters?.()}>
+              {t("Ver en Mis impresoras")}
+            </button>
+          </Show>
+        </p>
+      </Show>
 
       <Show when={nozzles().length > 1}>
         <Select
@@ -103,35 +120,50 @@ export const MachinePanel: Component<{
       <Show
         when={slicerPrinter()}
         fallback={
-          <Select
-            label={t("Material")}
-            options={(props.presets?.materials ?? []).map((m) => ({ value: m.name, label: m.name }))}
-            value={props.material.name}
-            onChange={(name) => props.onPatch({ material: materialFor(name) })}
-          />
+          <div class="space-y-0.5">
+            <Select
+              label={t("Material")}
+              options={(props.presets?.materials ?? []).map((m) => ({ value: m.name, label: m.name }))}
+              value={props.material.name}
+              onChange={(name) => props.onPatch({ material: materialFor(name) })}
+            />
+            <p class="text-[10px] text-text-dim">{t("Con el material se calculan el peso, los voladizos y las holguras.")}</p>
+          </div>
         }
       >
         {(p) => (
-          <Select
-            label={t("Filamento")}
-            options={p().filaments.map((f) => ({ value: f, label: shortName(f) }))}
-            value={filament()}
-            onChange={setFilament}
-          />
+          <div class="space-y-0.5">
+            <Select
+              label={t("Filamento")}
+              options={p().filaments.map((f) => ({ value: f, label: shortName(f) }))}
+              value={filament()}
+              onChange={setFilament}
+            />
+            <p class="text-[10px] text-text-dim">{t("Es el perfil del laminador; también fija el material para preparar.")}</p>
+          </div>
         )}
       </Show>
+
+      {/* Poner a punto: lo principal; las holguras a mano quedan plegadas */}
+      <div class="space-y-1.5 rounded-md border border-border p-2">
+        <p class="text-xs font-semibold text-text">{t("Holguras y calibración")}</p>
+        <p class="text-[10px] text-text-dim">{t("Se miden con piezas de prueba y quedan guardadas para esta impresora y este filamento.")}</p>
+        <Button onClick={() => (props.onTune ?? props.onCalibrate)()} size="sm" variant="primary" fullWidth icon={<Icons.Ruler size={14} />}>
+          {t("Poner a punto")}
+        </Button>
+      </div>
 
       <button class="flex items-center gap-1 text-[11px] text-text-muted hover:text-text" onClick={() => setDetails(!details())}>
         <Show when={details()} fallback={<Icons.CaretRight size={12} />}>
           <Icons.CaretDown size={12} />
         </Show>
-        {t("Holguras y calibración")}
+        {t("Ajustes a mano")}
       </button>
       <Show when={details()}>
         <div class="space-y-2 pl-3 border-l border-border">
-          <div class="grid grid-cols-2 gap-1.5">
+          <div class="space-y-0.5">
             <NumberInput
-              label={t("Holgura")}
+              label={t("Holgura de encaje")}
               value={props.printer.fit_clearance ?? props.printer.nozzle}
               onChange={(v) => setPrinter({ fit_clearance: Math.max(0, v) })}
               min={0}
@@ -139,8 +171,11 @@ export const MachinePanel: Component<{
               step={0.05}
               suffix="mm"
             />
+            <p class="text-[10px] text-text-dim">{t("Espacio que se deja entre dos piezas que encajan.")}</p>
+          </div>
+          <div class="space-y-0.5">
             <NumberInput
-              label={t("Agujeros")}
+              label={t("Agujeros más anchos")}
               value={props.printer.hole_comp ?? props.printer.nozzle * 0.25}
               onChange={(v) => setPrinter({ hole_comp: Math.max(0, v) })}
               min={0}
@@ -148,6 +183,7 @@ export const MachinePanel: Component<{
               step={0.05}
               suffix="mm"
             />
+            <p class="text-[10px] text-text-dim">{t("Lo que se agrandan los agujeros, porque la impresora los deja más chicos.")}</p>
           </div>
           <div class="grid grid-cols-3 gap-1.5">
             <For each={["X", "Y", "Z"]}>
@@ -155,23 +191,23 @@ export const MachinePanel: Component<{
             </For>
           </div>
           <p class="text-[10px] text-text-dim">{t("Contracción del material por eje (%)")}</p>
-          <NumberInput
-            label={t("Factor de holgura")}
-            value={props.material.clearance_factor ?? 1}
-            onChange={(v) => props.onPatch({ material: { ...props.material, clearance_factor: Math.max(0.1, v) } })}
-            min={0.1}
-            max={4}
-            step={0.05}
-            suffix="×"
-          />
+          <div class="space-y-0.5">
+            <NumberInput
+              label={t("Holgura según el material")}
+              value={props.material.clearance_factor ?? 1}
+              onChange={(v) => props.onPatch({ material: { ...props.material, clearance_factor: Math.max(0.1, v) } })}
+              min={0.1}
+              max={4}
+              step={0.05}
+              suffix="×"
+            />
+            <p class="text-[10px] text-text-dim">{t("Multiplica las holguras: más de 1 si el material se aprieta o se contrae mucho.")}</p>
+          </div>
           <Show when={props.onTune}>
-            <Button onClick={() => props.onTune?.()} size="sm" fullWidth icon={<Icons.Ruler size={14} />}>
-              {t("Poner a punto: calibrar impresora y filamento")}
+            <Button onClick={props.onCalibrate} size="sm" fullWidth variant="ghost" icon={<Icons.Ruler size={14} />}>
+              {t("Solo holguras y medidas (sin impresora conectada)")}
             </Button>
           </Show>
-          <Button onClick={props.onCalibrate} size="sm" fullWidth variant="ghost" icon={<Icons.Ruler size={14} />}>
-            {t("Solo holguras y medidas (sin impresora conectada)")}
-          </Button>
           <Checkbox
             small
             label={t("Compensar los huecos del diseño")}

@@ -22,12 +22,14 @@ const TESTS: &[&str] = &[
     "flow_coarse",
     "flow_fine",
     "pressure_advance",
+    "pressure_advance_pattern",
     "retraction",
     "volumetric_speed",
     "vfa",
     "shaper_frequency",
     "shaper_damping",
     "cornering",
+    "skew",
     "clearance",
     "block",
 ];
@@ -56,12 +58,17 @@ const STEPS: &[Step] = &[
     Step { test: "shaper_damping", title: "Input shaping, damping (Klipper)", keys: &["shaper_damping"], filament: false },
     Step { test: "vfa", title: "VFA (fine wall ripples)", keys: &["vfa_speed"], filament: false },
     Step { test: "cornering", title: "Corners", keys: &["corner_speed"], filament: false },
+    Step { test: "skew", title: "Axis squareness (skew, Klipper)", keys: &["skew_xy"], filament: false },
 ];
+
+/// Pruebas que dan lo mismo que otra y no son un paso aparte (el patrón de pressure advance es otra forma de la torre)
+const ALTERNATES: &[&str] = &["pressure_advance_pattern"];
 
 /// Qué clave se guarda con el resultado de cada prueba
 fn keys_of(test: &str) -> Vec<&'static str> {
     match test {
         "flow_coarse" | "flow_fine" => vec!["flow_ratio"],
+        "pressure_advance_pattern" => vec!["pressure_advance"],
         "shaper_frequency" => vec!["shaper_freq_x", "shaper_freq_y"],
         t => KEYS.iter().filter(|k| k.test == t).map(|k| k.key).collect(),
     }
@@ -79,6 +86,8 @@ struct Who {
     name: String,
     /// Modelo del laminador (`Creality K1`) de la impresora guardada en la app
     model: String,
+    /// Boquilla instalada (mm), si la app la sabe
+    nozzle: Option<f64>,
     /// Sin la app: solo se conoce la dirección
     address_only: bool,
 }
@@ -92,7 +101,7 @@ fn who(ctx: &Ctx, args: &Value) -> Result<Who, Fail> {
     let w = want.to_lowercase();
     if let Some(p) = list.iter().find(|p| p["name"].as_str().is_some_and(|n| n.to_lowercase() == w)).or_else(|| list.iter().find(|p| p["address"].as_str() == Some(want.as_str()))) {
         let name = p["name"].as_str().unwrap_or(&want).to_string();
-        return Ok(Who { id: p["id"].as_str().filter(|i| !i.is_empty()).unwrap_or(&name).to_string(), name, model: p["model"].as_str().unwrap_or("").to_string(), address_only: false });
+        return Ok(Who { id: p["id"].as_str().filter(|i| !i.is_empty()).unwrap_or(&name).to_string(), name, model: p["model"].as_str().unwrap_or("").to_string(), nozzle: p["nozzle"].as_f64(), address_only: false });
     }
     if !want.chars().any(|c| c == '.' || c == ':') {
         let names: Vec<&str> = list.iter().filter_map(|p| p["name"].as_str()).collect();
@@ -102,19 +111,32 @@ fn who(ctx: &Ctx, args: &Value) -> Result<Who, Fail> {
             format!("use one of: {}", names.join(", "))
         }));
     }
-    Ok(Who { id: want.clone(), name: want, model: String::new(), address_only: true })
+    Ok(Who { id: want.clone(), name: want, model: String::new(), nozzle: None, address_only: true })
 }
 
 /// El perfil de máquina del laminador de esa impresora, y una nota si hubo que suponerlo
 fn machine(ctx: &Ctx, who: &Who, args: &Value, remembered: &str, assume: bool) -> Result<(Option<Value>, Option<String>), Fail> {
     let info = ctx.call("slicer_presets", json!({}))?;
     let printers = info["printers"].as_array().cloned().unwrap_or_default();
+    // Cada boquilla tiene su perfil de máquina: la pedida, la instalada que sabe la app o la de 0,4
+    let nozzle = args["nozzle"].as_f64().or(who.nozzle).unwrap_or(0.4);
+    let same_model = |model: &str| -> Option<Value> {
+        let all: Vec<&Value> = printers.iter().filter(|p| !model.is_empty() && p["model"].as_str().is_some_and(|n| key(n) == key(model))).collect();
+        all.iter().find(|p| (p["nozzle"].as_f64().unwrap_or(0.4) - nozzle).abs() < 0.005).or(all.first()).map(|p| (*p).clone())
+    };
     if let Some(m) = arg_str(args, "machine") {
         let p = find_by(&printers, "name", m).or_else(|| find_by(&printers, "model", m)).ok_or_else(|| Fail::new(format!("no filament printer \"{m}\"")).hint(format!("use one of: {}", names(&printers, "name"))))?;
+        // Un modelo («Creality K1») o un perfil con otra boquilla que la pedida: el del mismo modelo con esa boquilla
+        let exact_name = p["name"].as_str().is_some_and(|n| key(n) == key(m));
+        if args["nozzle"].is_number() || !exact_name {
+            if let Some(q) = same_model(p["model"].as_str().unwrap_or("")) {
+                return Ok((Some(q), None));
+            }
+        }
         return Ok((Some(p.clone()), None));
     }
     let exact = |field: &str, want: &str| printers.iter().find(|p| !want.is_empty() && p[field].as_str().is_some_and(|n| key(n) == key(want))).cloned();
-    if let Some(p) = exact("model", &who.model).or_else(|| exact("name", remembered)) {
+    if let Some(p) = same_model(&who.model).or_else(|| exact("name", remembered)) {
         return Ok((Some(p), None));
     }
     if !assume {
@@ -153,11 +175,12 @@ fn filament(args: &Value, who: &Who, machine: Option<&Value>) -> Result<String, 
 }
 
 fn target(who: &Who, machine: Option<&Value>, filament: &str) -> CalTarget {
-    CalTarget { printer_id: who.id.clone(), printer_name: who.name.clone(), machine: machine.and_then(|m| m["name"].as_str()).unwrap_or("").to_string(), filament: filament.to_string() }
+    CalTarget { printer_id: who.id.clone(), printer_name: who.name.clone(), machine: machine.and_then(|m| m["name"].as_str()).unwrap_or("").to_string(), filament: filament.to_string(), nozzle: None }
 }
 
 const PRINTER_HELP_SHORT: &str = "Which physical printer to calibrate (each one has its own calibration)";
 const FILAMENT_HELP: &str = "Filament profile of the slicer for this printer (see `print_machines`), e.g. \"PETG\". Default: the one last calibrated on this printer, else the printer's default";
+const NOZZLE_HELP: &str = "Nozzle diameter in mm (0.2–1.0). Calibrations are kept per nozzle: a value found with 0.4 is not used with 0.8. Default: the nozzle the printer has in the app, else 0.4";
 const MACHINE_HELP: &str = "Only needed when the printer is not saved in the app (you passed an address): the slicer profile, from `print_machines`";
 
 // ─── Estado ─────────────────────────────────────────────────────────────────
@@ -168,7 +191,10 @@ const STATUS: Tool = Tool {
     description: "Shows what has been calibrated on one physical printer with one filament (values, date and the test they came from) \
 and the steps of the tune-up in the recommended order, marking each as done, to repeat (something it depends on changed \
 later) or pending, and which one comes next. Order: bed and first layer, temperature, flow (coarse then fine), pressure \
-advance, retraction, max volumetric speed, dimensions and clearances, input shaping, VFA, corners. Calibrated values are \
+advance, retraction, max volumetric speed, dimensions and clearances, input shaping, VFA, corners, axis squareness (skew). \
+Everything is kept per physical printer AND nozzle diameter (`nozzle`, else the printer's own, else 0.4): a calibration made with \
+a 0.4 nozzle is not used with a 0.8 one. `calibrated` in the data says whether this filament has anything calibrated with \
+this nozzle. Calibrated values are \
 applied by themselves when slicing for that printer with that filament. Start here when the user asks to tune a printer, \
 then run the next step with `calibration_test`.",
     input: || {
@@ -176,6 +202,7 @@ then run the next step with `calibration_test`.",
             ("printer", string(PRINTER_HELP), true),
             ("filament", string(FILAMENT_HELP), false),
             ("machine", string(MACHINE_HELP), false),
+            ("nozzle", number(NOZZLE_HELP), false),
         ])
     },
     effect: Effect::Read,
@@ -219,11 +246,16 @@ fn status(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
     let t = target(&who, machine.as_ref(), &filament);
     let view = calibrations::view(&t)?;
     let mut lines = vec![format!(
-        "{} — {}{}.",
+        "{} — {}, nozzle {} mm{}.",
         who.name,
         if view.machine.is_empty() { "slicer profile unknown".to_string() } else { view.machine.clone() },
+        num(view.nozzle),
         if filament.is_empty() { String::new() } else { format!(", filament {}", short(&filament)) }
     )];
+    lines.push("Calibrations are kept per nozzle: temperature, flow, pressure advance, retraction, max speed, shrink, first layer (Z offset), clearance and hole compensation belong to the nozzle in use; input shaping, VFA, corners and skew belong to the printer.".into());
+    if view.nozzles.iter().any(|n| (n - view.nozzle).abs() > 0.005) {
+        lines.push(format!("Also calibrated on this printer with other nozzles: {} mm.", view.nozzles.iter().filter(|n| (*n - view.nozzle).abs() > 0.005).map(|n| num(*n)).collect::<Vec<_>>().join(", ")));
+    }
     if who.address_only {
         lines.push(format!("Not a saved printer: calibrations are kept under the id \"{}\" (the address). With the app open and the printer saved in it, use its name so they stay together.", who.id));
     }
@@ -241,7 +273,7 @@ fn status(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
         }
     }
     if !view.filaments.is_empty() {
-        lines.push(format!("Filaments with calibrations on this printer: {}.", view.filaments.iter().map(|f| short(f)).collect::<Vec<_>>().join(", ")));
+        lines.push(format!("Filaments calibrated on this printer with this nozzle: {}.", view.filaments.iter().map(|f| short(f)).collect::<Vec<_>>().join(", ")));
     }
     lines.push("Steps in the recommended order:".into());
     let mut next: Option<&str> = None;
@@ -265,7 +297,7 @@ fn status(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
     });
     Ok(Output::new(
         lines.join("\n"),
-        json!({ "printer": { "id": who.id, "name": who.name, "machine": view.machine }, "filament": filament, "values": view.values, "filaments": view.filaments, "steps": steps, "next": next }),
+        json!({ "printer": { "id": who.id, "name": who.name, "machine": view.machine }, "nozzle": view.nozzle, "nozzles": view.nozzles, "calibrated": view.calibrated, "filament": filament, "values": view.values, "filaments": view.filaments, "steps": steps, "next": next }),
     ))
 }
 
@@ -279,8 +311,8 @@ to read the printed result and what value each block or piece means. With `print
 prints it, ONLY if the user asked for it: they approve in the app (or, without the app, you must have asked and pass \
 `user_confirmed: true`); remind them to clear the bed. Without `print` it only slices (the G-code stays as the last \
 slice of the app). Tests: first_layer (live Z offset), temperature, flow_coarse then flow_fine, pressure_advance, retraction, \
-volumetric_speed, vfa, shaper_frequency then shaper_damping (Klipper), cornering, clearance (fit plate) and block (measured \
-block). `start`/`end`/`step` change the range (defaults depend on the filament type); `frequency` is the chosen shaper \
+volumetric_speed, vfa, shaper_frequency then shaper_damping (Klipper), cornering, skew (squareness plate, Klipper), clearance (fit plate) and block (measured \
+block). pressure_advance_pattern is the pattern version of pressure_advance (Klipper or Marlin 2; it may be unavailable in this build, then use the tower). `start`/`end`/`step` change the range (defaults depend on the filament type); `frequency` is the chosen shaper \
 frequency for shaper_damping. After the user reports (or a photo shows) the best block, save it with `calibration_save`.",
     input: || {
         object(&[
@@ -288,6 +320,7 @@ frequency for shaper_damping. After the user reports (or a photo shows) the best
             ("test", one_of("The test to slice", TESTS), true),
             ("filament", string(FILAMENT_HELP), false),
             ("machine", string(MACHINE_HELP), false),
+            ("nozzle", number(NOZZLE_HELP), false),
             ("start", number("First value of the range (default by filament type)"), false),
             ("end", number("Last value of the range"), false),
             ("step", number("Step between values"), false),
@@ -325,6 +358,21 @@ fn reading_text(test: &str, reading: &Value, unit: &str) -> Vec<String> {
             l.push("Pick the piece with the best surface (no gaps or ridges, smooth top); its value is the result.".into());
             l
         }
+        Some("numbers") => {
+            let values: Vec<String> = reading["values"].as_array().into_iter().flatten().filter_map(Value::as_f64).map(num).collect();
+            vec![
+                format!("A pattern of lines with corners, one set per pressure advance value: {}. The printer prints the numbers next to the lines.", values.join(", ")),
+                "Pick the number where the corners are sharpest and the lines stay even (no bulge at the corner, no gap).".into(),
+            ]
+        }
+        Some("skew") => {
+            let (side, pin) = (reading["side_mm"].as_f64().unwrap_or(100.0), reading["pin_mm"].as_f64().unwrap_or(6.0));
+            vec![format!(
+                "A square frame with a round post (Ø{} mm) in each corner, {} mm between post centers. Corners: D = front-left (the origin, 1 dot), A = front-right (2 dots), C = back-left (3 dots), B = back-right (4 dots). With calipers, measure OUTSIDE edge to outside edge of the two posts: AC (diagonal), BD (the other diagonal) and AD (the front side, along X). Save with `calibration_save` key skew_xy passing `skew_ac`, `skew_bd`, `skew_ad` (the three measures: the post diameter is subtracted for you).",
+                num(pin),
+                num(side)
+            )]
+        }
         Some("height") => {
             let (h, a, b) = (reading["height_mm"].as_f64().unwrap_or(1.0), reading["start"].as_f64().unwrap_or(0.0), reading["end"].as_f64().unwrap_or(0.0));
             vec![format!(
@@ -345,6 +393,8 @@ fn reading_text(test: &str, reading: &Value, unit: &str) -> Vec<String> {
             "temperature" => "Look for the block with the cleanest overhangs and bridges, no stringing and good layer bonding.",
             "flow_coarse" | "flow_fine" => "Look at the top surface of each piece: smooth and closed, without gaps (too little) or ridges (too much).",
             "pressure_advance" => "Look at the corners: sharp and even, with no bulge and no gap. Save the value at that block.",
+            "pressure_advance_pattern" => "Look at the pattern: the number where the corners are sharpest and the lines stay even. Save it as pressure_advance.",
+            "skew" => "A perfect square gives skew 0; the app computes the factor like Klipper's SET_SKEW. It is applied in the start G-code and needs a [skew_correction] section in printer.cfg; factory printers (K1 without root, AD5X) cannot apply it.",
             "retraction" => "Look for the block with the fewest strings between the towers.",
             "volumetric_speed" => "Look for where the surface starts to get rough or thin: the value just before that is the limit.",
             "vfa" => "Look for the speed band with the least fine ripples on the wall; the highest speed that is still clean is the result.",
@@ -440,17 +490,23 @@ const SAVE: Tool = Tool {
     title: "Save a calibrated value",
     description: "Saves the value the user (or a photo of the printed test) settled on, for one physical printer (and filament, for the \
 filament-dependent keys). It is kept with the date and the test it came from (previous values stay in the history) and \
-applied by itself the next time something is sliced for that printer with that filament. Keys: z_offset, shaper_freq_x, \
-shaper_freq_y, shaper_damping, vfa_speed, corner_speed, fit_clearance, hole_comp (printer level); temperature, flow_ratio \
-(absolute, e.g. 0.98), pressure_advance, retraction_length, max_volumetric_speed, shrink_x/y/z (need `filament`). Only save \
-what the user confirmed. Does not touch the printer itself.",
+applied by itself the next time something is sliced for that printer with that filament and nozzle. Per nozzle \
+(`nozzle`; a value found with 0.4 is not used with 0.8): z_offset, fit_clearance, hole_comp (printer level) and temperature, \
+flow_ratio (absolute, e.g. 0.98), pressure_advance, retraction_length, max_volumetric_speed, shrink_x/y/z (these need \
+`filament`). Any nozzle: shaper_freq_x, shaper_freq_y, shaper_damping, vfa_speed, corner_speed, skew_xy (squareness factor, or \
+pass skew_ac/skew_bd/skew_ad measured on the skew test and it is computed; applied as SET_SKEW in Klipper's start G-code, needs \
+[skew_correction] in printer.cfg). Only save what the user confirmed. Does not touch the printer itself.",
     input: || {
         object(&[
             ("printer", string(PRINTER_HELP_SHORT), true),
             ("key", one_of("What was calibrated", &key_enum()), true),
-            ("value", number("The value, in the unit of the key (°C, mm, mm/s, Hz, ratio…)"), true),
+            ("value", number("The value, in the unit of the key (°C, mm, mm/s, Hz, ratio…). For skew_xy it can be left out when skew_ac/skew_bd/skew_ad are given"), false),
+            ("skew_ac", number("skew_xy only: measured AC diagonal in mm, outside edge to outside edge of the posts"), false),
+            ("skew_bd", number("skew_xy only: measured BD diagonal in mm"), false),
+            ("skew_ad", number("skew_xy only: measured AD side in mm"), false),
             ("filament", string(FILAMENT_HELP), false),
             ("machine", string(MACHINE_HELP), false),
+            ("nozzle", number(NOZZLE_HELP), false),
             ("test", one_of("The test it came from (default the one of the key; `flow_coarse` for the first flow pass)", TESTS), false),
             ("note", string("A short note (e.g. what the user saw)"), false),
         ])
@@ -461,7 +517,16 @@ what the user confirmed. Does not touch the printer itself.",
 
 fn save(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
     let key_name = arg_str(args, "key").unwrap_or("");
-    let value = args["value"].as_f64().ok_or_else(|| Fail::new("`value` must be a number"))?;
+    let mut skew_note = String::new();
+    let value = if key_name == "skew_xy" && args["value"].is_null() {
+        let m = |k: &str| args[k].as_f64().ok_or_else(|| Fail::new(format!("skew_xy needs `value` (the factor) or all of skew_ac, skew_bd and skew_ad (missing {k})")));
+        let (ac, bd, ad) = (m("skew_ac")?, m("skew_bd")?, m("skew_ad")?);
+        let pin = pinocchio_slicer::calib::SKEW_PIN_MM;
+        skew_note = format!("AC {} / BD {} / AD {} mm (outside edges)", num(ac), num(bd), num(ad));
+        pinocchio_slicer::calib::skew_factor(ac - pin, bd - pin, ad - pin).ok_or_else(|| Fail::new("those measures do not make a square (check AC, BD and AD, in mm)"))?
+    } else {
+        args["value"].as_f64().ok_or_else(|| Fail::new("`value` must be a number"))?
+    };
     let info = calibrations::key_info(key_name).ok_or_else(|| Fail::new(format!("nothing is calibrated as \"{key_name}\"")).hint(format!("use one of: {}", key_enum().join(", "))))?;
     let who = who(ctx, args)?;
     let remembered = calibrations::load()?.printers.iter().find(|p| p.id == who.id).map(|p| p.machine.clone()).unwrap_or_default();
@@ -472,7 +537,8 @@ fn save(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
     }
     let t = target(&who, machine.as_ref(), &filament);
     let test = arg_str(args, "test").unwrap_or(info.test);
-    let view = calibrations::set_value(&t, key_name, value, test, arg_str(args, "note").unwrap_or(""))?;
+    let note = [arg_str(args, "note").unwrap_or("").to_string(), skew_note].into_iter().filter(|n| !n.is_empty()).collect::<Vec<_>>().join("; ");
+    let view = calibrations::set_value(&t, key_name, value, test, &note)?;
     let mut text = format!(
         "Saved {key_name} = {} for {}{} (test {test}). It will be applied when slicing for this printer{}.",
         num(value),
@@ -480,6 +546,10 @@ fn save(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
         if info.printer_level { String::new() } else { format!(" with {}", short(&filament)) },
         if info.printer_level { "" } else { " with that filament" }
     );
+    text += &format!(" Kept for the {} mm nozzle{}.", num(view.nozzle), if info.nozzle_level { " only" } else { " (and any other: it belongs to the printer)" });
+    if key_name == "skew_xy" {
+        text += " It goes in the start G-code as SET_SKEW (Klipper) and needs a [skew_correction] section in the printer's printer.cfg; the printer is not modified by this.";
+    }
     if who.address_only {
         text += &format!(" Kept under the id \"{}\" (the address): the app does not know this printer.", who.id);
     }
@@ -539,6 +609,30 @@ mod tests {
     }
 
     #[test]
+    fn cada_boquilla_con_su_calibracion_y_la_escuadra_por_medidas() {
+        calibrations::tests::with_data_dir(|| {
+            let addr = "192.168.1.51";
+            run(&SAVE, json!({ "printer": addr, "key": "temperature", "value": 225, "filament": "PETG", "machine": "K1", "nozzle": 0.8 })).unwrap_or_else(|e| panic!("{}", e.message));
+            run(&SAVE, json!({ "printer": addr, "key": "shaper_freq_x", "value": 55, "machine": "K1", "nozzle": 0.8 })).unwrap_or_else(|e| panic!("{}", e.message));
+            // Con 0,4 (la de siempre) la temperatura de 0,8 no está; el input shaping, de la impresora, sí
+            let st = run(&STATUS, json!({ "printer": addr, "filament": "PETG", "machine": "K1" })).unwrap_or_else(|e| panic!("{}", e.message));
+            assert_eq!(st.data["nozzle"], 0.4);
+            assert_eq!(st.data["calibrated"], false);
+            assert!(!st.text.contains("- temperature:") && st.text.contains("- shaper_freq_x: 55") && st.text.contains("other nozzles: 0.8"), "{}", st.text);
+            let st = run(&STATUS, json!({ "printer": addr, "filament": "PETG", "machine": "K1", "nozzle": 0.8 })).unwrap_or_else(|e| panic!("{}", e.message));
+            assert_eq!((st.data["nozzle"].clone(), st.data["calibrated"].clone()), (json!(0.8), json!(true)));
+            assert!(st.text.contains("- temperature: 225"), "{}", st.text);
+
+            // Escuadra por medidas: los postes de 6 mm se descuentan y el factor sale como el de Klipper
+            let pin = pinocchio_slicer::calib::SKEW_PIN_MM;
+            let s = run(&SAVE, json!({ "printer": addr, "key": "skew_xy", "skew_ac": 141.5 + pin, "skew_bd": 141.2 + pin, "skew_ad": 100.0 + pin, "machine": "K1" })).unwrap_or_else(|e| panic!("{}", e.message));
+            let f = s.data["value"].as_f64().unwrap();
+            assert!((f - pinocchio_slicer::calib::skew_factor(141.5, 141.2, 100.0).unwrap()).abs() < 1e-9 && s.text.contains("[skew_correction]"), "{}", s.text);
+            assert!(run(&SAVE, json!({ "printer": addr, "key": "skew_xy", "skew_ac": 10.0, "machine": "K1" })).is_err());
+        });
+    }
+
+    #[test]
     fn un_valor_anterior_mas_nuevo_pide_repetir() {
         let v = |value: f64, date: &str, test: &str| CalValue { value, date: date.into(), test: test.into(), note: String::new(), history: Vec::new() };
         let mut values = std::collections::BTreeMap::new();
@@ -552,7 +646,7 @@ mod tests {
 
     #[test]
     fn los_pasos_cubren_todas_las_pruebas_y_claves() {
-        for t in TESTS {
+        for t in TESTS.iter().filter(|t| !ALTERNATES.contains(t)) {
             assert!(STEPS.iter().any(|s| s.test == *t), "falta el paso {t}");
         }
         for k in KEYS {

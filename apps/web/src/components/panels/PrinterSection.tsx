@@ -1,14 +1,17 @@
-import { Component, For, Show, createEffect, createSignal, on, onCleanup } from "solid-js";
+import { Component, For, Show, createEffect, createResource, createSignal, on, onCleanup } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { clsx } from "clsx";
-import { Button, Panel, ProgressBar, Select } from "../ui";
+import { Button, ProgressBar, Select } from "../ui";
 import * as Icons from "../icons";
 import { fmtNumber, t } from "../../lib/i18n";
 import { tBackend } from "../../lib/i18nBackend.ts";
 import { netPrinters, removeNetPrinter, saveNetPrinter, selectNetPrinter, selectedNetPrinter, type NetPrinter, type NetPrinterKind } from "../../lib/settings";
 import { GENERIC_KLIPPER, PRINTER_MODELS, printerImage, shortModel } from "../../lib/printerModels";
 import type { ConfirmRequest } from "../layout/ConfirmDialog";
-import { PrinterControls } from "./PrinterControls";
+import { Fold, PrinterControls } from "./PrinterControls";
+import { PrinterSetup } from "./PrinterSetup";
+import { calSummary, calTarget, getCalibration } from "../../lib/calibration";
+import { loadSlicerInfo, machinesFrom, nozzleLabel } from "../../lib/machines";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TIPOS (espejo de apps/desktop/src/printers.rs, moonraker.rs y flashforge.rs)
@@ -162,6 +165,8 @@ export const SendToPrinter: Component<{
   slicedModel?: string;
   onSent?: () => void;
   onConfigure?: () => void;
+  /** Dentro de «Mis impresoras»: la impresora ya se ve arriba, aquí no se repite */
+  compact?: boolean;
 }> = (props) => {
   const [name, setName] = createSignal(defaultName());
   const [busy, setBusy] = createSignal(false);
@@ -226,23 +231,25 @@ export const SendToPrinter: Component<{
       when={target()}
       fallback={
         <button class="text-[11px] text-text-dim hover:underline text-left" onClick={() => props.onConfigure?.()}>
-          {t("Para mandarlo a una impresora, agrégala en la pestaña Impresora")}
+          {t("Para mandarlo a una impresora, agrégala en la pestaña Mis impresoras")}
         </button>
       }
     >
       {(p) => (
         <div class="space-y-1.5">
-          <div class="flex items-center gap-2 rounded border border-border p-1.5">
-            <PrinterPicture model={p().model} size={48} />
-            <div class="min-w-0 flex-1">
-              <Show when={netPrinters().length > 1} fallback={<p class="text-xs font-semibold text-text truncate">{p().name}</p>}>
-                <Select options={netPrinters().map((x) => ({ value: x.id, label: x.name }))} value={p().id} onChange={(v) => selectNetPrinter(v)} />
-              </Show>
-              <p class="text-[10px] text-text-dim truncate">
-                {modelLabel(p().model)} · {p().address}
-              </p>
+          <Show when={!props.compact}>
+            <div class="flex items-center gap-2 rounded border border-border p-1.5">
+              <PrinterPicture model={p().model} size={48} />
+              <div class="min-w-0 flex-1">
+                <Show when={netPrinters().length > 1} fallback={<p class="text-xs font-semibold text-text truncate">{p().name}</p>}>
+                  <Select options={netPrinters().map((x) => ({ value: x.id, label: x.name }))} value={p().id} onChange={(v) => selectNetPrinter(v)} />
+                </Show>
+                <p class="text-[10px] text-text-dim truncate">
+                  {modelLabel(p().model)} · {p().address}
+                </p>
+              </div>
             </div>
-          </div>
+          </Show>
           <Show when={mismatch()}>
             <p class="text-[11px] text-red">
               {t("Este gcode se laminó para {sliced} y la impresora es {model}: elige esa impresora al laminar.", { sliced: props.slicedModel!, model: p().model })}
@@ -252,8 +259,11 @@ export const SendToPrinter: Component<{
             <p class="text-[10px] text-text-dim">{t("Carrete")}</p>
             <SlotChips slots={slots()} selected={slot()} onSelect={setSlot} />
           </Show>
-          <input class={inputClass} title={t("Nombre del archivo en la impresora")} value={name()} onInput={(e) => setName(e.currentTarget.value)} onKeyDown={(e) => e.stopPropagation()} />
-          <div class="flex gap-1.5">
+          <label class="block space-y-0.5">
+            <span class="text-[11px] text-text-muted">{t("Nombre del archivo en la impresora")}</span>
+            <input class={inputClass} value={name()} onInput={(e) => setName(e.currentTarget.value)} onKeyDown={(e) => e.stopPropagation()} />
+          </label>
+          <div class="flex flex-wrap gap-1.5">
             <Button
               onClick={() => send(true)}
               disabled={busy() || !name().trim() || mismatch() || (needsSlot() && !slot())}
@@ -277,11 +287,19 @@ export const SendToPrinter: Component<{
   );
 };
 
+
 // ═══════════════════════════════════════════════════════════════════════════
-// PESTAÑA «IMPRESORA»: impresoras guardadas, estado y controles
+// PESTAÑA «MIS IMPRESORAS»: la elegida, su estado, enviar, poner a punto, controles y conexión
 // ═══════════════════════════════════════════════════════════════════════════
 
 const KIND_DEFAULT_MODEL: Record<NetPrinterKind, string> = { moonraker: "Creality K1", creality: "Creality K1", flashforge: "Flashforge AD5X" };
+
+/** Los tipos que se pueden agregar, con una frase simple cada uno */
+const KINDS: { kind: NetPrinterKind; label: string; about: string }[] = [
+  { kind: "moonraker", label: "Klipper", about: "Cualquier impresora con Klipper, p. ej. una K1 rooteada o una CR-10 Max con Raspberry." },
+  { kind: "creality", label: "K1 de fábrica", about: "Creality K1, K1C o K1 Max con su firmware de fábrica (sin root)." },
+  { kind: "flashforge", label: "Flashforge AD5X", about: "Flashforge con su firmware de fábrica, como la AD5X." },
+];
 
 /** Modelos que se pueden elegir para un tipo de conexión (las K1 van por Klipper o de fábrica) */
 const modelsFor = (kind: NetPrinterKind) => PRINTER_MODELS.filter((m) => m.kind === kind || (kind === "creality" && m.model.startsWith("Creality K1")));
@@ -313,24 +331,43 @@ function newPrinter(kind: NetPrinterKind): NetPrinter {
   };
 }
 
-export const PrinterTab: Component<{ confirm: (request: ConfirmRequest) => Promise<boolean> }> = (props) => {
+const Title: Component<{ children: any }> = (props) => <h4 class="text-xs font-semibold uppercase tracking-wider text-text-muted">{props.children}</h4>;
+
+export const PrinterTab: Component<{
+  confirm: (request: ConfirmRequest) => Promise<boolean>;
+  /** Abre el asistente «Poner a punto» */
+  onTune?: () => void;
+  /** Lleva a la pestaña «Máquina» (impresora, boquilla y filamento de Fabricar) */
+  onMachine?: () => void;
+  /** Perfil del laminador en uso: de él sale la calibración de la impresora */
+  slicer?: { machine: string; model: string; filament: string };
+  /** El último laminado, si hay: se puede enviar o guardar */
+  sliced?: { model?: string; gcodeMb: number; saved?: string; onSave: () => void };
+}> = (props) => {
+  const [info] = createResource(loadSlicerInfo);
   const [testing, setTesting] = createSignal(false);
-  const [info, setInfo] = createSignal<NetPrinterInfo>();
   const [status, setStatus] = createSignal<PrinterStatus>();
+  const [printerInfo, setInfo] = createSignal<NetPrinterInfo>();
   const [error, setError] = createSignal<string>();
   const [acting, setActing] = createSignal(false);
   const [notice, setNotice] = createSignal<string>();
+  const [choosing, setChoosing] = createSignal(false);
+  const [connOpen, setConnOpen] = createSignal(false);
 
   const current = () => selectedNetPrinter();
   const update = (patch: Partial<NetPrinter>) => {
     const p = current();
     if (p) saveNetPrinter({ ...p, ...patch });
   };
+  /** Boquillas del modelo (las que tienen perfil del laminador) */
+  const nozzleChoices = (model: string) => [...new Set(machinesFrom(info()?.printers).filter((m) => m.model === model && m.kind === "fdm" && m.sliceable).map((m) => m.nozzle))];
 
   const add = (kind: NetPrinterKind) => {
     const p = newPrinter(kind);
     saveNetPrinter(p);
     selectNetPrinter(p.id);
+    setChoosing(false);
+    setConnOpen(true);
   };
 
   const remove = async () => {
@@ -395,6 +432,7 @@ export const PrinterTab: Component<{ confirm: (request: ConfirmRequest) => Promi
     } catch (e) {
       setStatus(undefined);
       setError(errText(e));
+    } finally {
     }
   };
   const loop = async () => {
@@ -410,6 +448,8 @@ export const PrinterTab: Component<{ confirm: (request: ConfirmRequest) => Promi
         setInfo(undefined);
         setStatus(undefined);
         setError(undefined);
+        setNotice(undefined);
+        setConnOpen(!current()?.address.trim() && !!current());
         void loop();
       }
     )
@@ -418,6 +458,11 @@ export const PrinterTab: Component<{ confirm: (request: ConfirmRequest) => Promi
     alive = false;
     clearTimeout(timer);
   });
+  // La conexión se ve sola si no responde o falta la dirección; al conectar se pliega
+  createEffect(() => {
+    if (error() || (current() && !current()!.address.trim())) setConnOpen(true);
+  });
+  createEffect(on(() => !!status(), (up) => up && setConnOpen(false), { defer: true }));
 
   const act = async (action: "pause" | "resume" | "cancel") => {
     const p = current();
@@ -446,217 +491,314 @@ export const PrinterTab: Component<{ confirm: (request: ConfirmRequest) => Promi
   const printing = () => ["printing", "paused"].includes(status()?.state ?? "");
   const temp = (v: [number, number]) =>
     v[1] > 0 ? `${fmtNumber(v[0], { maximumFractionDigits: 0 })} / ${fmtNumber(v[1], { maximumFractionDigits: 0 })} °C` : `${fmtNumber(v[0], { maximumFractionDigits: 0 })} °C`;
+  /** Conectada, conectando o desconectada (el punto de la barra y el texto del estado) */
+  const link = (): "on" | "connecting" | "off" => (status() ? "on" : error() || !current()?.address.trim() ? "off" : "connecting");
+
+  // Calibración de esta impresora con el filamento del laminador (solo si el perfil es de su modelo)
+  const [calibration] = createResource(
+    () => {
+      const p = current();
+      const c = props.slicer;
+      return p && c && c.filament && c.model === p.model ? calTarget(p, c.machine, c.filament) : undefined;
+    },
+    (tgt) => getCalibration(tgt).catch(() => undefined)
+  );
+  const calibrated = () => Object.keys(calibration()?.values ?? {}).length > 0;
+  const sameModel = () => !!current() && !!props.slicer && props.slicer.model === current()!.model;
+
+  /** «Poner a punto»: aviso de calibración, el asistente y la puesta a punto de la máquina */
+  const tune = (p: NetPrinter, withSetup: boolean) => (
+    <section class="space-y-2">
+      <Title>{t("Poner a punto")}</Title>
+      <Show when={sameModel()}>
+        <Show
+          when={calibrated()}
+          fallback={<p class="text-[11px] text-warning">{t("{printer} todavía no está calibrada con este filamento.", { printer: p.name })}</p>}
+        >
+          <p class="text-[11px] text-green">{t("{printer} está calibrada con este filamento.", { printer: p.name })}</p>
+          <p class="text-[10px] text-text-dim leading-snug">{calSummary(calibration()?.values ?? {})}</p>
+        </Show>
+      </Show>
+      <Show when={props.onTune}>
+        <Button onClick={() => props.onTune?.()} size="sm" fullWidth variant={calibrated() ? "default" : "primary"} icon={<Icons.Ruler size={14} />}>
+          {calibrated() ? t("Poner a punto (repetir o seguir calibrando)") : t("Poner a punto: calibrar impresora y filamento")}
+        </Button>
+      </Show>
+      <Show when={withSetup}>
+        <PrinterSetup conn={() => conn(p)} name={p.name} printerKind={p.kind} state={status()?.state ?? ""} confirm={props.confirm} />
+      </Show>
+    </section>
+  );
 
   return (
-    <div class="[column-width:280px] [column-gap:1rem] [&>div>div]:break-inside-avoid [&>div>div]:mb-3">
-      <div>
-        <Panel id="printer.list" dense title={t("Impresoras")} icon={<Icons.Printer size={14} />} defaultOpen>
-          <div class="space-y-1.5 pb-3">
-            <For each={netPrinters()} fallback={<p class="text-[11px] text-text-dim">{t("Todavía no hay impresoras. Agrega una:")}</p>}>
-              {(p) => (
-                <button
-                  type="button"
-                  onClick={() => selectNetPrinter(p.id)}
-                  class={clsx(
-                    "flex w-full items-center gap-2 rounded border p-1.5 text-left transition-colors",
-                    current()?.id === p.id ? "border-accent bg-accent/10" : "border-border hover:border-accent/50"
-                  )}
-                >
-                  <PrinterPicture model={p.model} size={44} />
-                  <span class="min-w-0 flex-1">
-                    <span class="block text-xs font-semibold text-text truncate">{p.name}</span>
-                    <span class="block text-[10px] text-text-dim truncate">{modelLabel(p.model)}</span>
-                    <span class="block text-[10px] text-text-dim font-mono truncate">{p.address || t("sin dirección")}</span>
-                  </span>
-                </button>
-              )}
-            </For>
-            <div class="flex gap-1.5">
-              <Button
-                size="sm"
-                variant="ghost"
-                icon={<Icons.Plus size={12} />}
-                onClick={() => add("moonraker")}
-                class="flex-1"
-                title={t("Cualquier impresora con Klipper y Moonraker: una K1 rooteada, una CR-10 Max con Raspberry u otra. El modelo se elige después.")}
-              >
-                {t("Klipper")}
-              </Button>
-              <Button size="sm" variant="ghost" icon={<Icons.Plus size={12} />} onClick={() => add("creality")} class="flex-1" title={t("Creality K1, K1C o K1 Max con su firmware de fábrica (sin root)")}>
-                {t("K1 de fábrica")}
-              </Button>
-              <Button size="sm" variant="ghost" icon={<Icons.Plus size={12} />} onClick={() => add("flashforge")} class="flex-1" title={t("Flashforge con su firmware de fábrica, como la AD5X")}>
-                {t("Flashforge (AD5X)")}
-              </Button>
+    <div class="space-y-3 max-w-[520px]">
+      {/* ── (a) La impresora elegida y agregar otra ── */}
+      <Show
+        when={current()}
+        fallback={<p class="text-[11px] text-text-dim">{t("Todavía no hay impresoras. ¿De qué tipo es la tuya?")}</p>}
+      >
+        {(p) => (
+          <div class="flex items-center gap-2 rounded border border-border p-1.5">
+            <PrinterPicture model={p().model} size={44} />
+            <div class="min-w-0 flex-1 space-y-0.5">
+              <Show when={netPrinters().length > 1} fallback={<p class="text-xs font-semibold text-text truncate">{p().name}</p>}>
+                <Select options={netPrinters().map((x) => ({ value: x.id, label: x.name }))} value={p().id} onChange={(v) => selectNetPrinter(v)} />
+              </Show>
+              <p class="flex items-center gap-1.5 text-[10px] text-text-dim">
+                <span class={clsx("inline-block h-2 w-2 shrink-0 rounded-full", link() === "on" ? "bg-green" : link() === "off" ? "bg-red" : "bg-text-dim")} />
+                <span class="truncate">{link() === "on" ? t("Conectada") : link() === "off" ? t("Desconectada") : t("Conectando...")}</span>
+              </p>
             </div>
           </div>
-        </Panel>
-      </div>
+        )}
+      </Show>
+      <Show
+        when={choosing() || netPrinters().length === 0}
+        fallback={
+          <Button size="sm" variant="ghost" fullWidth icon={<Icons.Plus size={12} />} onClick={() => setChoosing(true)}>
+            {t("Agregar impresora")}
+          </Button>
+        }
+      >
+        <div class="space-y-1.5">
+          <For each={KINDS}>
+            {(k) => (
+              <button type="button" onClick={() => add(k.kind)} class="block w-full rounded border border-border p-1.5 text-left transition-colors hover:border-accent/60">
+                <span class="block text-xs font-semibold text-text">{t(k.label)}</span>
+                <span class="block text-[10px] text-text-dim">{t(k.about)}</span>
+              </button>
+            )}
+          </For>
+          <Show when={netPrinters().length > 0}>
+            <button class="text-[11px] text-text-dim hover:underline" onClick={() => setChoosing(false)}>
+              {t("Cancelar")}
+            </button>
+          </Show>
+        </div>
+      </Show>
+
       <Show when={current()}>
         {(p) => (
-          <div>
-            <Panel id="printer.connection" dense title={t("Conexión")} defaultOpen>
-              <div class="space-y-2 pb-3">
-                <div class="flex items-center gap-2">
-                  <PrinterPicture model={p().model} size={72} />
-                  <div class="min-w-0 flex-1 space-y-1">
-                    <input class={inputClass} title={t("Nombre")} value={p().name} onChange={(e) => update({ name: e.currentTarget.value.trim() || p().name })} onKeyDown={(e) => e.stopPropagation()} />
-                    <Select
-                      options={modelsFor(p().kind).map((m) => ({ value: m.model, label: modelLabel(m.model) }))}
-                      value={p().model}
-                      onChange={(v) => update(isAutoName(p()) ? { model: v, name: autoName(p().kind, v, p().id) } : { model: v })}
-                    />
-                  </div>
-                </div>
-                <label class="block space-y-0.5">
-                  <span class="text-[11px] text-text-muted">{t("Dirección de la impresora")}</span>
-                  <input
-                    class={inputClass}
-                    placeholder={p().kind === "flashforge" ? "192.168.1.60" : p().kind === "creality" ? t("192.168.1.50 o k1.local") : t("192.168.1.50 o nombre.local")}
-                    value={p().address}
-                    onChange={(e) => update({ address: e.currentTarget.value.trim() })}
-                    onKeyDown={(e) => {
-                      e.stopPropagation();
-                      if (e.key === "Enter") {
-                        update({ address: e.currentTarget.value.trim() });
-                        void test();
-                      }
-                    }}
-                  />
-                </label>
-                <Show when={p().kind === "creality"}>
-                  <p class="text-[10px] text-text-dim">{t("Firmware de Creality sin root: se conecta como Creality Print (puertos 80 y 9999). La dirección la muestra la pantalla de la impresora.")}</p>
-                </Show>
-                <Show
-                  when={p().kind === "flashforge"}
-                  fallback={
-                    <Show when={p().kind === "moonraker"}>
-                      <label class="block space-y-0.5">
-                        <span class="text-[11px] text-text-muted">{t("Clave de API (si la pide)")}</span>
-                        <input type="password" class={inputClass} value={p().apiKey} onChange={(e) => update({ apiKey: e.currentTarget.value.trim() })} onKeyDown={(e) => e.stopPropagation()} />
-                      </label>
-                    </Show>
-                  }
-                >
-                  <label class="block space-y-0.5">
-                    <span class="text-[11px] text-text-muted">{t("Código LAN")}</span>
-                    <input class={inputClass} value={p().checkCode} onChange={(e) => update({ checkCode: e.currentTarget.value.trim() })} onKeyDown={(e) => e.stopPropagation()} />
-                    <span class="block text-[10px] text-text-dim">{t("Lo muestra la pantalla de la impresora en la configuración de red (modo LAN).")}</span>
-                  </label>
-                  <Show when={p().serial}>
-                    <p class="text-[10px] text-text-dim font-mono">{t("N.º de serie: {sn}", { sn: p().serial })}</p>
-                  </Show>
-                </Show>
-                <div class="flex gap-1.5">
-                  <Button onClick={test} disabled={testing() || !p().address.trim()} size="sm" icon={<Icons.ArrowsClockwise size={14} />} class="flex-1">
-                    {testing() ? t("Conectando...") : t("Probar conexión")}
-                  </Button>
-                  <Button onClick={remove} size="sm" variant="ghost" icon={<Icons.Trash size={14} />} title={t("Quitar impresora")} />
-                </div>
-                <Show when={info()}>
-                  {(i) => (
-                    <p class={`text-[11px] ${i().ready ? "text-green" : "text-warning"}`}>
-                      {t("Conectada: {name}", { name: i().name })}
-                      <Show when={i().kind === "moonraker"}> · {t(KLIPPY[i().state] ?? i().state)}</Show>
-                      <Show when={i().firmware}>
-                        <span class="block text-text-dim">{t("Firmware {v}", { v: i().firmware })}</span>
-                      </Show>
-                      <Show when={!i().ready && i().message}>
-                        <span class="block text-text-dim">{i().message}</span>
-                      </Show>
-                    </p>
-                  )}
-                </Show>
-                <Show when={notice()}>
-                  <p class="text-[11px] text-accent">{notice()}</p>
-                </Show>
-                <Show when={error()}>
-                  <p class="text-[11px] text-red">{error()}</p>
-                </Show>
-              </div>
-            </Panel>
-          </div>
-        )}
-      </Show>
-      <Show when={status()}>
-        {(s) => (
-          <div>
-            <Panel id="printer.status" dense title={t("Estado")} defaultOpen>
-              <div class="space-y-1.5 pb-3">
-                <Show
-                  when={s().klippy_state === "ready"}
-                  fallback={
-                    <p class="text-[11px] text-warning">
-                      {t(KLIPPY[s().klippy_state] ?? s().klippy_state)}
-                      <Show when={s().message}>
-                        <span class="block text-text-dim">{s().message}</span>
-                      </Show>
-                    </p>
-                  }
-                >
-                  <Row label={t("Impresora")} value={t(STATES[s().state] ?? s().state)} />
-                  <Show when={s().filename}>
-                    <Row label={t("Archivo")} value={s().filename} />
-                  </Show>
-                  <Show when={printing() || s().state === "complete"}>
-                    <ProgressBar value={100 * s().progress} size="sm" variant={s().state === "paused" ? "warning" : "default"} />
-                    <Row label={t("Progreso")} value={`${fmtNumber(100 * s().progress, { maximumFractionDigits: 0 })} %`} />
-                    <Show when={s().layer != null && s().layers}>
-                      <Row label={t("Capa")} value={`${s().layer} / ${s().layers}`} />
-                    </Show>
-                    <Row label={t("Imprimiendo hace")} value={fmtDuration(s().print_duration)} />
-                    <Show when={printing() && s().remaining != null}>
-                      <Row label={t("Falta")} value={`~${fmtDuration(s().remaining!)}`} />
-                    </Show>
-                  </Show>
-                  <Row label={t("Boquilla")} value={temp(s().extruder)} />
-                  <Row label={t("Cama")} value={temp(s().bed)} />
-                  <Show when={s().slots.length > 0}>
-                    <p class="text-[10px] text-text-dim pt-1">{t("Carretes")}</p>
-                    <SlotChips slots={s().slots} current={s().current_slot} />
-                  </Show>
-                  <Show when={s().message}>
-                    <p class="text-[11px] text-warning">{s().message}</p>
-                  </Show>
-                  <Show when={printing()}>
-                    <div class="flex gap-1.5 pt-1">
-                      <Show
-                        when={s().state === "paused"}
-                        fallback={
-                          <Button onClick={() => act("pause")} disabled={acting()} size="sm" icon={<Icons.Pause size={14} />} class="flex-1">
-                            {t("Pausar")}
-                          </Button>
-                        }
-                      >
-                        <Button onClick={() => act("resume")} disabled={acting()} size="sm" icon={<Icons.Play size={14} />} class="flex-1">
-                          {t("Reanudar")}
+          <>
+            {/* ── (b) Estado ── */}
+            <section class="space-y-1.5">
+              <Title>{t("Estado")}</Title>
+              <Show
+                when={status()}
+                fallback={
+                  <div class="space-y-1">
+                    <p class="text-sm font-semibold text-text">{link() === "connecting" ? t("Conectando...") : t("Desconectada")}</p>
+                    <Show when={link() === "off"}>
+                      <Show when={p().address.trim()} fallback={<p class="text-[11px] text-text-dim">{t("Falta la dirección de la impresora: se pone abajo, en Conexión.")}</p>}>
+                        <p class="text-[11px] text-warning">{t("No responde. Se reintenta en 10 s")}</p>
+                        <Button size="sm" variant="ghost" icon={<Icons.ArrowsClockwise size={12} />} onClick={() => void loop()}>
+                          {t("Reintentar")}
                         </Button>
                       </Show>
-                      <Button onClick={() => act("cancel")} disabled={acting()} size="sm" variant="danger" icon={<Icons.Stop size={14} />} class="flex-1">
-                        {t("Cancelar")}
-                      </Button>
+                    </Show>
+                  </div>
+                }
+              >
+                {(s) => (
+                  <Show
+                    when={s().klippy_state === "ready"}
+                    fallback={
+                      <p class="text-[11px] text-warning">
+                        {t(KLIPPY[s().klippy_state] ?? s().klippy_state)}
+                        <Show when={s().message}>
+                          <span class="block text-text-dim">{s().message}</span>
+                        </Show>
+                      </p>
+                    }
+                  >
+                    <p class="text-base font-semibold text-text">
+                      {t(STATES[s().state] ?? s().state)}
+                      <Show when={printing() || s().state === "complete"}> {fmtNumber(100 * s().progress, { maximumFractionDigits: 0 })} %</Show>
+                    </p>
+                    <Show when={printing() || s().state === "complete"}>
+                      <ProgressBar value={100 * s().progress} size="sm" variant={s().state === "paused" ? "warning" : "default"} />
+                    </Show>
+                    <Show when={s().filename}>
+                      <p class="text-xs text-text truncate font-mono" title={s().filename}>
+                        {s().filename}
+                      </p>
+                    </Show>
+                    <Show when={printing() || s().state === "complete"}>
+                      <p class="text-[11px] text-text-muted">
+                        <Show when={printing() && s().remaining != null}>{t("faltan {left}", { left: fmtDuration(s().remaining!) })} </Show>
+                        {t("(lleva {done})", { done: fmtDuration(s().print_duration) })}
+                        <Show when={s().layer != null && s().layers}> · {t("capa {n} de {total}", { n: s().layer!, total: s().layers! })}</Show>
+                      </p>
+                    </Show>
+                    <div class="flex flex-wrap gap-x-4 gap-y-0.5 text-xs">
+                      <span>
+                        <span class="text-text-muted">{t("Boquilla")} </span>
+                        <span class="font-mono text-text">{temp(s().extruder)}</span>
+                      </span>
+                      <span>
+                        <span class="text-text-muted">{t("Cama")} </span>
+                        <span class="font-mono text-text">{temp(s().bed)}</span>
+                      </span>
                     </div>
+                    {/* Los carretes se eligen al enviar (abajo): aquí solo se muestran si no hay nada que enviar */}
+                    <Show when={s().slots.length > 0 && !props.sliced}>
+                      <p class="text-[10px] text-text-dim pt-1">{t("Carretes")}</p>
+                      <SlotChips slots={s().slots} current={s().current_slot} />
+                    </Show>
+                    <Show when={s().message}>
+                      <p class="text-[11px] text-warning">{s().message}</p>
+                    </Show>
+                    <Show when={printing()}>
+                      <div class="flex flex-wrap gap-1.5 pt-1">
+                        <Show
+                          when={s().state === "paused"}
+                          fallback={
+                            <Button onClick={() => act("pause")} disabled={acting()} size="sm" icon={<Icons.Pause size={14} />} class="flex-1">
+                              {t("Pausar")}
+                            </Button>
+                          }
+                        >
+                          <Button onClick={() => act("resume")} disabled={acting()} size="sm" icon={<Icons.Play size={14} />} class="flex-1">
+                            {t("Reanudar")}
+                          </Button>
+                        </Show>
+                        <Button onClick={() => act("cancel")} disabled={acting()} size="sm" variant="danger" icon={<Icons.Stop size={14} />} class="flex-1">
+                          {t("Cancelar")}
+                        </Button>
+                      </div>
+                    </Show>
                   </Show>
-                </Show>
-                <Show when={lastSent()}>
-                  <p class="text-[10px] text-green">{lastSent()}</p>
-                </Show>
+                )}
+              </Show>
+              <Show when={p().kind === "flashforge"}>
+                <p class="text-[10px] text-text-dim">{t("En esta impresora los controles finos (temperaturas, ejes, ajustes) no están disponibles.")}</p>
+              </Show>
+              <Show when={lastSent()}>
+                <p class="text-[10px] text-green">{lastSent()}</p>
+              </Show>
+            </section>
+
+            {/* ── (c) Enviar a esta impresora ── */}
+            <section class="space-y-1.5">
+              <Title>{t("Enviar a esta impresora")}</Title>
+              <Show when={props.sliced} fallback={<p class="text-[11px] text-text-dim">{t("Primero lamina la placa.")}</p>}>
+                {(sl) => (
+                  <>
+                    <SendToPrinter compact slicedModel={sl().model} />
+                    <Button onClick={sl().onSave} fullWidth size="sm" variant="ghost" icon={<Icons.Download size={14} />} title={t("Cópialo a la tarjeta o pendrive de la impresora")}>
+                      {t("Guardar gcode ({size} MB)", { size: fmtNumber(sl().gcodeMb, { maximumFractionDigits: 1 }) })}
+                    </Button>
+                    <Show when={sl().saved}>
+                      <p class="text-[10px] text-green truncate">{t("Guardado en {path}", { path: sl().saved! })}</p>
+                    </Show>
+                  </>
+                )}
+              </Show>
+            </section>
+
+            {/* ── (d)–(f) Durante la impresión, poner a punto y lo plegado (Klipper y K1 de fábrica) ── */}
+            <Show when={p().kind !== "flashforge" && status()} fallback={tune(p(), false)}>
+              <PrinterControls conn={() => conn(p())} name={p().name} state={status()?.state ?? ""} printerKind={p().kind} confirm={props.confirm}>
+                {tune(p(), true)}
+              </PrinterControls>
+            </Show>
+
+            {/* ── (g) Conexión ── */}
+            <Fold title={t("Conexión")} icon={<Icons.ArrowsLeftRight size={14} />} open={connOpen()} onToggle={setConnOpen}>
+              <div class="flex items-center gap-2">
+                <PrinterPicture model={p().model} size={64} />
+                <div class="min-w-0 flex-1 space-y-1">
+                  <input class={inputClass} title={t("Nombre")} value={p().name} onChange={(e) => update({ name: e.currentTarget.value.trim() || p().name })} onKeyDown={(e) => e.stopPropagation()} />
+                  <Select
+                    options={modelsFor(p().kind).map((m) => ({ value: m.model, label: modelLabel(m.model) }))}
+                    value={p().model}
+                    onChange={(v) => update(isAutoName(p()) ? { model: v, name: autoName(p().kind, v, p().id), nozzle: undefined } : { model: v, nozzle: undefined })}
+                  />
+                </div>
               </div>
-            </Panel>
-          </div>
+              <Show when={nozzleChoices(p().model).length > 1}>
+                <Select
+                  label={t("Boquilla instalada")}
+                  options={nozzleChoices(p().model).map((n) => ({ value: String(n), label: nozzleLabel(n) }))}
+                  value={String(p().nozzle ?? 0.4)}
+                  onChange={(v) => update({ nozzle: Number(v) })}
+                />
+              </Show>
+              <label class="block space-y-0.5">
+                <span class="text-[11px] text-text-muted">{t("Dirección de la impresora")}</span>
+                <input
+                  class={inputClass}
+                  placeholder={p().kind === "flashforge" ? "192.168.1.60" : p().kind === "creality" ? t("192.168.1.50 o k1.local") : t("192.168.1.50 o nombre.local")}
+                  value={p().address}
+                  onChange={(e) => update({ address: e.currentTarget.value.trim() })}
+                  onKeyDown={(e) => {
+                    e.stopPropagation();
+                    if (e.key === "Enter") {
+                      update({ address: e.currentTarget.value.trim() });
+                      void test();
+                    }
+                  }}
+                />
+              </label>
+              <Show when={p().kind === "creality"}>
+                <p class="text-[10px] text-text-dim">{t("Firmware de Creality sin root: se conecta como Creality Print (puertos 80 y 9999). La dirección la muestra la pantalla de la impresora.")}</p>
+              </Show>
+              <Show
+                when={p().kind === "flashforge"}
+                fallback={
+                  <Show when={p().kind === "moonraker"}>
+                    <label class="block space-y-0.5">
+                      <span class="text-[11px] text-text-muted">{t("Clave de acceso (solo si la impresora la pide)")}</span>
+                      <input type="password" class={inputClass} value={p().apiKey} onChange={(e) => update({ apiKey: e.currentTarget.value.trim() })} onKeyDown={(e) => e.stopPropagation()} />
+                    </label>
+                  </Show>
+                }
+              >
+                <label class="block space-y-0.5">
+                  <span class="text-[11px] text-text-muted">{t("Código LAN")}</span>
+                  <input class={inputClass} value={p().checkCode} onChange={(e) => update({ checkCode: e.currentTarget.value.trim() })} onKeyDown={(e) => e.stopPropagation()} />
+                  <span class="block text-[10px] text-text-dim">{t("Lo muestra la pantalla de la impresora en la configuración de red (modo LAN).")}</span>
+                </label>
+                <Show when={p().serial}>
+                  <p class="text-[10px] text-text-dim font-mono">{t("N.º de serie: {sn}", { sn: p().serial })}</p>
+                </Show>
+              </Show>
+              <div class="flex gap-1.5">
+                <Button onClick={test} disabled={testing() || !p().address.trim()} size="sm" icon={<Icons.ArrowsClockwise size={14} />} class="flex-1">
+                  {testing() ? t("Conectando...") : t("Conectar")}
+                </Button>
+                <Button onClick={remove} size="sm" variant="ghost" icon={<Icons.Trash size={14} />} title={t("Quitar impresora")} />
+              </div>
+              <Show when={printerInfo()}>
+                {(i) => (
+                  <p class={`text-[11px] ${i().ready ? "text-green" : "text-warning"}`}>
+                    {t("Conectada: {name}", { name: i().name })}
+                    <Show when={i().kind === "moonraker"}> · {t(KLIPPY[i().state] ?? i().state)}</Show>
+                    <Show when={i().firmware}>
+                      <span class="block text-text-dim">{t("Firmware {v}", { v: i().firmware })}</span>
+                    </Show>
+                    <Show when={!i().ready && i().message}>
+                      <span class="block text-text-dim">{i().message}</span>
+                    </Show>
+                  </p>
+                )}
+              </Show>
+              <Show when={notice()}>
+                <p class="text-[11px] text-accent">{notice()}</p>
+              </Show>
+              <Show when={error()}>
+                <p class="text-[11px] text-red">{error()}</p>
+              </Show>
+            </Fold>
+
+            <Show when={props.onMachine}>
+              <button class="text-[11px] text-accent hover:underline" onClick={() => props.onMachine?.()}>
+                {t("Para cambiar la máquina, la boquilla o el filamento de Fabricar: pestaña Máquina")}
+              </button>
+            </Show>
+          </>
         )}
-      </Show>
-      {/* Ajustes en vivo, mando manual, calibraciones, consola, historial y archivos (Klipper y K1 de fábrica) */}
-      <Show when={current()?.kind !== "flashforge" && status() && current()}>
-        {(p) => <PrinterControls conn={() => conn(p())} name={p().name} state={status()?.state ?? ""} printerKind={p().kind} confirm={props.confirm} />}
       </Show>
     </div>
   );
 };
-
-const Row: Component<{ label: string; value: string }> = (props) => (
-  <div class="flex justify-between text-xs gap-2">
-    <span class="text-text-muted shrink-0">{props.label}</span>
-    <span class="text-text font-mono truncate">{props.value}</span>
-  </div>
-);

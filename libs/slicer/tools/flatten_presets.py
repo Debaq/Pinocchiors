@@ -19,35 +19,46 @@ PRINTERS = [
     ("Creality", "Creality K1 (0.4 nozzle)", 1),
     ("Creality", "Creality K1 (0.6 nozzle)", 1),
     ("Creality", "Creality K1 (0.8 nozzle)", 1),
+    ("Creality", "Creality K1 (1.0 nozzle)", 1),
     ("Creality", "Creality K1C 0.4 nozzle", 1),
     ("Creality", "Creality K1C 0.6 nozzle", 1),
     ("Creality", "Creality K1C 0.8 nozzle", 1),
+    ("Creality", "Creality K1C 1.0 nozzle", 1),
     ("Creality", "Creality K1 Max (0.4 nozzle)", 1),
     ("Creality", "Creality K1 Max (0.6 nozzle)", 1),
     ("Creality", "Creality K1 Max (0.8 nozzle)", 1),
+    ("Creality", "Creality K1 Max (1.0 nozzle)", 1),
     ("Flashforge", "Flashforge AD5X 0.4 nozzle", 4),
     ("Flashforge", "Flashforge AD5X 0.25 nozzle", 4),
     ("Flashforge", "Flashforge AD5X 0.6 nozzle", 4),
     ("Flashforge", "Flashforge AD5X 0.8 nozzle", 4),
+    ("Flashforge", "Flashforge AD5X 1.0 nozzle", 4),
     ("Creality", "Creality CR-10 Max 0.4 nozzle", 1),
     ("Creality", "Creality CR-10 Max 0.2 nozzle", 1),
     ("Creality", "Creality CR-10 Max 0.6 nozzle", 1),
     ("Creality", "Creality CR-10 Max 0.8 nozzle", 1),
+    ("Creality", "Creality CR-10 Max 1.0 nozzle", 1),
 ]
 
-# Boquillas que Orca no trae: se sacan de la de 0.4 de la misma impresora (misma máquina con
-# otro diámetro; sus procesos con alturas de capa y anchos de línea a escala; los mismos
-# filamentos). (fabricante, nueva, la de 0.4, diámetro)
+# Boquillas que Orca no trae: se sacan de la más parecida de la misma impresora (misma
+# máquina con otro diámetro; sus procesos con alturas de capa y anchos de línea a escala; los
+# mismos filamentos). (fabricante, nueva, de cuál sale, diámetro)
 DERIVED = [
     ("Creality", "Creality CR-10 Max 0.2 nozzle", "Creality CR-10 Max 0.4 nozzle", 0.2),
     ("Creality", "Creality CR-10 Max 0.6 nozzle", "Creality CR-10 Max 0.4 nozzle", 0.6),
     ("Creality", "Creality CR-10 Max 0.8 nozzle", "Creality CR-10 Max 0.4 nozzle", 0.8),
+    ("Creality", "Creality CR-10 Max 1.0 nozzle", "Creality CR-10 Max 0.4 nozzle", 1.0),
+    ("Creality", "Creality K1 (1.0 nozzle)", "Creality K1 (0.8 nozzle)", 1.0),
+    ("Creality", "Creality K1C 1.0 nozzle", "Creality K1C 0.8 nozzle", 1.0),
+    ("Creality", "Creality K1 Max (1.0 nozzle)", "Creality K1 Max (0.8 nozzle)", 1.0),
+    ("Flashforge", "Flashforge AD5X 1.0 nozzle", "Flashforge AD5X 0.8 nozzle", 1.0),
 ]
 
 
 def fmt(v):
-    """Número como lo escribe Orca: «0.3», «0.12»."""
-    return f"{round(v, 3):g}"
+    """Número como lo escribe Orca: «0.3», «0.12», «1.0»."""
+    s = f"{round(v, 3):g}"
+    return s if "." in s else s + ".0"
 
 
 def derive(tables, name, base, nozzle):
@@ -186,7 +197,15 @@ def main():
         # la AD5M Pro): si no está entre los compatibles se usa uno que sí.
         default_process = machine.get("default_print_profile", "")
         if default_process not in processes:
-            default_process = next((p for p in processes if "Standard" in p), next((p for p in processes if p.startswith("0.20mm")), processes[0] if processes else ""))
+            # La de capa más cercana a la mitad de la boquilla (0.4 → 0.20 mm); a igual capa, «Standard»
+            nozzle = float(machine.get("nozzle_diameter", ["0.4"])[0])
+
+            def score(name):
+                m = re.match(r"([0-9.]+)mm", name)
+                layer = float(m.group(1)) if m else 99.0
+                return (round(abs(layer - nozzle / 2), 3), "Standard" not in name)
+
+            default_process = min(processes, key=score) if processes else ""
         default_filament = (machine.get("default_filament_profile") or [""])[0]
         if default_filament not in filaments:
             default_filament = next((f for f in filaments if "PLA" in f), filaments[0] if filaments else "")

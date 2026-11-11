@@ -90,6 +90,8 @@ export interface NetPrinter {
   checkCode: string;
   /** Flashforge: número de serie (lo da la impresora al probar la conexión) */
   serial: string;
+  /** Boquilla instalada (mm); sin dato se toma la de 0,4 */
+  nozzle?: number;
 }
 
 /** La K1 que estaba configurada antes de que hubiera varias impresoras */

@@ -7,7 +7,7 @@ import { fmtNumber, t } from "../../lib/i18n";
 import { tBackend } from "../../lib/i18nBackend.ts";
 import { FEATURES, ORCA_ROLE_NAMES, decodePreview, gcodePreview, type GcodeMeta } from "../../lib/gcodePreview";
 import type { ConfirmRequest } from "../layout/ConfirmDialog";
-import { PrinterPicture, PrinterTab, SendToPrinter } from "./PrinterSection";
+import { PrinterPicture, PrinterTab } from "./PrinterSection";
 import { loadSlicerInfo } from "../../lib/machines";
 import { netPrinters, selectNetPrinter, selectedNetPrinter } from "../../lib/settings";
 import { calSummary, calTarget, getCalibration, setUseCalibration, useCalibration } from "../../lib/calibration";
@@ -577,17 +577,7 @@ export const SlicerSection: Component<{
                     )
                   }
                 </For>
-                <div class="pt-1">
-                  <Button onClick={saveGcode} fullWidth size="sm" icon={<Icons.Download size={14} />}>
-                    {t("Guardar gcode")}
-                  </Button>
-                </div>
-                <Show when={saved()}>
-                  <p class="text-[10px] text-green truncate">{t("Guardado en {path}", { path: saved()! })}</p>
-                </Show>
-                <div class="pt-1">
-                  <SendToPrinter slicedModel={slicedModel()} onSent={() => props.onTab("printer")} onConfigure={() => props.onTab("printer")} />
-                </div>
+                <p class="text-[10px] text-text-dim pt-1">{t("Para guardar el gcode o mandarlo a una impresora: botones de abajo.")}</p>
               </div>
             </Panel>
           </div>
@@ -609,35 +599,17 @@ export const SlicerSection: Component<{
         <Show
           when={props.tab !== "printer"}
           fallback={
-            <div class="space-y-4">
-              {/* Guardar el archivo va primero: sirve aunque la impresora no esté en la red (pendrive) */}
-              <section class="space-y-1.5 max-w-[420px]">
-                <h4 class="text-xs font-semibold uppercase tracking-wider text-text-muted">{t("Guardar en un archivo")}</h4>
-                <Show when={result()} fallback={<p class="text-[11px] text-text-dim">{t("Primero lamina la placa.")}</p>}>
-                  {(r) => (
-                    <>
-                      <Button onClick={saveGcode} fullWidth size="sm" variant="primary" icon={<Icons.Download size={14} />}>
-                        {t("Guardar gcode ({size} MB)", { size: fmtNumber(r().gcode_bytes / 1e6, { maximumFractionDigits: 1 }) })}
-                      </Button>
-                      <Show when={saved()}>
-                        <p class="text-[10px] text-green truncate">{t("Guardado en {path}", { path: saved()! })}</p>
-                      </Show>
-                      <p class="text-[10px] text-text-dim">{t("Cópialo a la tarjeta o pendrive de la impresora, o mándalo por la red aquí abajo.")}</p>
-                    </>
-                  )}
-                </Show>
-              </section>
-              <section class="space-y-1.5">
-                <h4 class="text-xs font-semibold uppercase tracking-wider text-text-muted">{t("Mandar por la red")}</h4>
-                {/* Enviar el último laminado a la impresora elegida (sin impresoras, se agregan aquí mismo, abajo) */}
-                <Show when={result() && netPrinters().length > 0}>
-                  <div class="max-w-[420px] pb-1">
-                    <SendToPrinter slicedModel={slicedModel()} />
-                  </div>
-                </Show>
-                <PrinterTab confirm={props.confirm} />
-              </section>
-            </div>
+            <PrinterTab
+              confirm={props.confirm}
+              onTune={props.onTune}
+              onMachine={props.onEditPrinter}
+              slicer={printer() && filament() ? { machine: printer()!.name, model: printer()!.model, filament: filament()! } : undefined}
+              sliced={
+                result()
+                  ? { model: slicedModel(), gcodeMb: result()!.gcode_bytes / 1e6, saved: saved(), onSave: () => void saveGcode() }
+                  : undefined
+              }
+            />
           }
         >
         <Show
@@ -712,12 +684,6 @@ export const SlicerSection: Component<{
             <p class="text-[11px] text-red">{error()}</p>
           </Show>
           <p class="text-[10px] text-text-dim">{t("Motor de OrcaSlicer {v}", { v: info()?.orca_version ?? "" })}</p>
-        </footer>
-      </Show>
-      {/* En la pestaña Impresora, enviar también queda siempre a mano abajo */}
-      <Show when={props.tab === "printer" && result() && netPrinters().length > 0}>
-        <footer class="shrink-0 border-t border-border px-3 py-2">
-          <SendToPrinter slicedModel={slicedModel()} />
         </footer>
       </Show>
     </div>
