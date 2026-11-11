@@ -2,6 +2,17 @@
 // explosión por pasos, y los mensajes nuevos del backend del ensamble
 
 export const en_assembly: Record<string, string> = {
+  "Archivar (ocultar de la barra)": "Archive (hide from the bar)",
+  "Desarchivar «{name}»": "Unarchive “{name}”",
+  "Borrar la pestaña (clic derecho: archivar)": "Delete the tab (right-click: archive)",
+  // Editor del ensamble a la izquierda
+  "Instancias del ensamble: insertar, mover, girar, repetir y lista de materiales": "Assembly instances: insert, move, rotate, repeat and bill of materials",
+  "Uniones entre piezas, acoplamientos y revisión de choques": "Mates between parts, couplings and clash checks",
+  "Grupos, animación y vista explosionada": "Groups, animation and exploded view",
+  "Tornillería del ensamble": "Assembly fasteners",
+  "{n} instancias, {m} relaciones": "{n} instances, {m} relations",
+  "Abrir el editor de ensamble": "Open the assembly editor",
+  "Cerrar el editor de ensamble": "Close the assembly editor",
   // Uniones
   "Centrada entre dos caras": "Centered between two faces",
   "Tangente (cilindro contra plano o cilindro)": "Tangent (cylinder on plane or cylinder)",

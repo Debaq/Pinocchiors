@@ -10,6 +10,7 @@ import type { CadUi } from "../../lib/cadUi";
 import { t } from "../../lib/i18n";
 import { tBackend } from "../../lib/i18nBackend";
 import { dropIndex } from "../../lib/designTabs";
+import { createPersisted } from "../../lib/ui-state";
 import { ContextMenu, type MenuEntry } from "../ui/ContextMenu";
 import type { ConfirmRequest } from "./ConfirmDialog";
 import * as Icons from "../icons";
@@ -46,7 +47,24 @@ export interface DesignTabsProps {
 }
 
 export const DesignTabs = (props: DesignTabsProps) => {
-  const tabs = () => props.store.tabs().tabs;
+  const allTabs = () => props.store.tabs().tabs;
+  // Archivadas: salen de la barra pero siguen en el diseño; se recuperan desde el «+»
+  const [archivedRaw, setArchived] = createPersisted<string[]>("cad.archivedTabs", []);
+  const keyOf = (tab: CadTab) => `${tab.id}:${tab.name}`;
+  const archived = () => (Array.isArray(archivedRaw()) ? archivedRaw() : []);
+  const isArchived = (tab: CadTab) => archived().includes(keyOf(tab));
+  const tabs = () => allTabs().filter((x) => !isArchived(x) || x.id === active());
+  const hidden = () => allTabs().filter((x) => isArchived(x) && x.id !== active());
+  const archive = (tab: CadTab) => {
+    const rest = allTabs().filter((x) => x.id !== tab.id && !isArchived(x));
+    if (!rest.length) return;
+    setArchived([...archived(), keyOf(tab)]);
+    if (tab.id === active()) void run("cad_tab_activate", { id: rest[0].id });
+  };
+  const restore = (tab: CadTab) => {
+    setArchived(archived().filter((k) => k !== keyOf(tab)));
+    void run("cad_tab_activate", { id: tab.id });
+  };
   const active = () => props.store.tabs().active;
   const run = (cmd: TabCommand, args: Record<string, unknown>) => changeDesignTabs(props.store, props.ui, cmd, args);
 
@@ -76,8 +94,9 @@ export const DesignTabs = (props: DesignTabsProps) => {
   const menuItems = (tab: CadTab): MenuEntry[] => [
     { label: t("Renombrar"), onSelect: () => setRenaming(tab.id) },
     { label: t("Duplicar"), onSelect: () => void run("cad_tab_duplicate", { id: tab.id }) },
+    { label: t("Archivar (ocultar de la barra)"), onSelect: () => archive(tab), disabled: allTabs().filter((x) => !isArchived(x)).length < 2 },
     { separator: true },
-    { label: t("Borrar…"), onSelect: () => void remove(tab), disabled: tabs().length < 2 },
+    { label: t("Borrar…"), onSelect: () => void remove(tab), disabled: allTabs().length < 2 },
   ];
 
   // Arrastrar para reordenar (con el puntero: el arrastre de HTML lo toma la ventana para soltar archivos)
@@ -167,6 +186,21 @@ export const DesignTabs = (props: DesignTabsProps) => {
                 onBlur={(e) => renaming() === tab.id && rename(tab, e.currentTarget.value)}
               />
             </Show>
+            <Show when={allTabs().length > 1 && renaming() !== tab.id}>
+              <button
+                data-tab-close
+                class="-mr-1.5 rounded p-0.5 text-text-dim hover:bg-surface hover:text-text"
+                title={t("Borrar la pestaña (clic derecho: archivar)")}
+                aria-label={t("Borrar «{name}»", { name: tBackend(tab.name) })}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void remove(tab);
+                }}
+              >
+                <Icons.X size={11} />
+              </button>
+            </Show>
           </div>
         )}
       </For>
@@ -179,10 +213,11 @@ export const DesignTabs = (props: DesignTabsProps) => {
           const r = e.currentTarget.getBoundingClientRect();
           setMenu({
             x: r.left,
-            y: r.top - 64,
+            y: r.top - 64 - 28 * hidden().length,
             items: [
               { label: t("Nuevo diseño"), onSelect: () => void run("cad_tab_add", { kind: "design", name: null }) },
               { label: t("Nuevo ensamble"), onSelect: () => void run("cad_tab_add", { kind: "assembly", name: null }) },
+              ...(hidden().length ? [{ separator: true } as MenuEntry, ...hidden().map((h): MenuEntry => ({ label: t("Desarchivar «{name}»", { name: tBackend(h.name) }), onSelect: () => restore(h) }))] : []),
             ],
           });
         }}

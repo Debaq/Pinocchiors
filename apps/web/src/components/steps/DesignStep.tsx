@@ -804,7 +804,7 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
           <Switch>
             <Match when={props.section === "design"}>
               <Show when={ui.session()} fallback={
-                <Show when={!ui.assemblyMode()} fallback={<AssemblyPanel store={store} ui={ui} />}>
+                <Show when={!ui.assemblyMode()} fallback={<AssemblySummary store={store} ui={ui} />}>
                   <ParametersSection store={store} />
                   <VariablesSection store={store} />
                   <ConfigurationsSection store={store} />
@@ -8151,7 +8151,10 @@ const ToolChecklist: Component<{ tools: Feature[]; value: number[]; onChange: (i
 const deg = (r: number) => (r * 180) / Math.PI;
 
 /** Instancias de las piezas, relaciones entre ellas, grados libres y choques */
-const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
+export type AssemblyTab = "parts" | "relations" | "motion" | "fasten";
+
+/** Editor del ensamble (va en el panel izquierdo, una pestaña por tanda de secciones) */
+export const AssemblyPanel: Component<{ store: CadStore; ui: CadUi; tab: AssemblyTab }> = (props) => {
   const store = props.store;
   const asm = () => store.doc()?.assembly ?? null;
   const parts = () => store.result()?.parts ?? [];
@@ -8250,6 +8253,7 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
 
   return (
     <div class="space-y-3">
+      <Show when={props.tab === "parts"}>
       <Section title={tl("Instancias")}>
         <div class="flex gap-1.5">
           <div class="flex-1">
@@ -8358,6 +8362,8 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
           }}
         </For>
       </Section>
+      </Show>
+      <Show when={props.tab === "motion"}>
       <Section title={tl("Grupos")}>
         <GroupsSection store={store} ui={props.ui} />
       </Section>
@@ -8367,9 +8373,13 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
       <Section title={tl("Vista explosionada")}>
         <ExplodeSection store={store} ui={props.ui} />
       </Section>
+      </Show>
+      <Show when={props.tab === "fasten"}>
       <Section title={tl("Tornillos")}>
         <FastenSection store={store} ui={props.ui} />
       </Section>
+      </Show>
+      <Show when={props.tab === "relations"}>
       <Section title={tl("Relaciones")}>
         <div class="flex gap-1.5">
           <div class="flex-1">
@@ -8508,7 +8518,8 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
           )}
         </Show>
       </Section>
-      <Show when={(asm()?.instances.length ?? 0) > 0}>
+      </Show>
+      <Show when={props.tab === "parts" && (asm()?.instances.length ?? 0) > 0}>
         <BomSection store={store} />
         {/* En su propia pestaña, el plano del ensamble: las instancias en su lugar, la lista y los globos */}
         <Show when={store.activeTab()?.kind === "assembly"}>
@@ -8517,6 +8528,7 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
           </Button>
         </Show>
       </Show>
+      <Show when={props.tab === "relations"}>
       <Section title={tl("Choques")}>
         <Button size="sm" fullWidth disabled={(asm()?.instances.length ?? 0) < 2} onClick={() => void store.assemblyInterference().then(setHits)}>
           {tl("Revisar choques")}
@@ -8565,6 +8577,38 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
             </For>
           )}
         </Show>
+      </Section>
+      </Show>
+    </div>
+  );
+};
+
+/** Panel derecho del ensamble: resumen y el botón que abre el editor a la izquierda */
+const AssemblySummary: Component<{ store: CadStore; ui: CadUi }> = (props) => {
+  const asm = () => props.store.doc()?.assembly ?? null;
+  const sol = () => props.store.result()?.assembly?.solution;
+  return (
+    <div class="space-y-3">
+      <Section title={tl("Ensamble")}>
+        <p class="text-xs text-text-muted">
+          {tl("{n} instancias, {m} relaciones", { n: asm()?.instances.length ?? 0, m: asm()?.mates.length ?? 0 })}
+        </p>
+        <Show when={sol()}>
+          {(s) => (
+            <p class={clsx("text-[11px]", s().converged ? "text-text-dim" : "text-warning")}>
+              {s().converged
+                ? s().dof === 0
+                  ? tl("Todo definido: no queda nada que se mueva")
+                  : s().dof === 1
+                    ? tl("Queda 1 grado libre")
+                    : tl("Quedan {dof} grados libres", { dof: s().dof })
+                : tl("No se pueden cumplir todas las relaciones (desvío {v1})", { v1: fmt(s().residual, 3) })}
+            </p>
+          )}
+        </Show>
+        <Button size="sm" fullWidth variant={props.ui.asmEditorOpen() ? "ghost" : undefined} onClick={() => props.ui.setAsmEditorOpen(!props.ui.asmEditorOpen())}>
+          {props.ui.asmEditorOpen() ? tl("Cerrar el editor de ensamble") : tl("Abrir el editor de ensamble")}
+        </Button>
       </Section>
     </div>
   );

@@ -525,6 +525,9 @@ export function createCadUi(store: CadStore) {
   const [sketch3dApi, setSketch3dApi] = createSignal<Sketch3dApi>();
   // Panel izquierdo de la biblioteca maker
   const [libraryOpen, setLibraryOpen] = createSignal(false);
+  // Panel izquierdo del ensamble (instancias, relaciones, movimiento, tornillos)
+  const [asmEditorOpen, setAsmEditorOpen] = createSignal(false);
+  const [asmEditorTab, setAsmEditorTab] = createSignal<"parts" | "relations" | "motion" | "fasten">("parts");
   /** Spline con el peine de curvatura a la vista */
   const [combEntity, setCombEntity] = createSignal<number>();
   // Lo copiado con Ctrl+C: sobrevive a cerrar el sketch (para pegar en otro)
@@ -788,6 +791,10 @@ export function createCadUi(store: CadStore) {
     setSketch3dApi,
     libraryOpen,
     setLibraryOpen,
+    asmEditorOpen,
+    setAsmEditorOpen,
+    asmEditorTab,
+    setAsmEditorTab,
     showCenterOfMass,
     setShowCenterOfMass,
     pickFilter,

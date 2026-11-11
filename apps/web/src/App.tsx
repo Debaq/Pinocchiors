@@ -143,6 +143,7 @@ import { formatEta, renderRay, renderRayAnimation, type RayProgress } from "./li
 import { cameraZoom, defaultRenderSettings, renderLayout, renderPixels, type RenderSettings } from "./components/steps/RenderStep";
 import { RenderEditor } from "./components/layout/RenderEditor";
 import { FabricarEditor } from "./components/layout/FabricarEditor";
+import { AssemblyEditor } from "./components/layout/AssemblyEditor";
 import type { FabTab } from "./components/panels/Print3DPanel";
 import type { Print3DStepProps } from "./components/steps";
 import { isResinId, loadSlicerInfo, syncedPrep } from "./lib/machines";
@@ -2526,7 +2527,12 @@ export const App: Component = () => {
 
   // Una pestaña de ensamble se ve y se edita como ensamble; una de diseño, como diseño
   const activeTabKey = createMemo(() => `${cad.tabs().active}:${cad.activeTab()?.kind}`);
-  createEffect(on(activeTabKey, () => cadUi.setAssemblyMode(cad.activeTab()?.kind === "assembly")));
+  createEffect(on(activeTabKey, () => {
+    const asm = cad.activeTab()?.kind === "assembly";
+    cadUi.setAssemblyMode(asm);
+    // Al entrar a un ensamble se abre su editor a la izquierda; al salir, se cierra
+    cadUi.setAsmEditorOpen(asm);
+  }));
   // Al cambiar de pestaña, lo elegido de otra deja de estar elegido (no se ve en esta)
   createEffect(
     on(activeTabKey, () => {
@@ -9657,6 +9663,12 @@ export const App: Component = () => {
           <Show when={inDesign() && cadUi.libraryOpen()}>
             <div class="shrink-0 min-w-0 w-72 border-r border-border">
               <MakerLibraryPanel store={cad} ui={cadUi} actions={designActions} onClose={() => cadUi.setLibraryOpen(false)} />
+            </div>
+          </Show>
+          {/* Editor del ensamble a la izquierda del visor (Diseñar, pestaña de ensamble) */}
+          <Show when={inDesign() && cadUi.assemblyMode() && cadUi.asmEditorOpen()}>
+            <div class="shrink-0 min-w-0 w-80 border-r border-border">
+              <AssemblyEditor store={cad} ui={cadUi} onClose={() => cadUi.setAsmEditorOpen(false)} />
             </div>
           </Show>
           {/* Editor de pose y rig a la izquierda del visor */}

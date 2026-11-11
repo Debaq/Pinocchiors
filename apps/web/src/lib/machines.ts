@@ -57,9 +57,19 @@ export const CREATOR_1: Machine = {
 };
 
 let cached: Promise<SlicerInfo | undefined> | undefined;
-/** Perfiles del laminador (se piden una vez) */
+/** Perfiles del laminador (se piden una vez; si falla, se reintenta y el fallo no queda guardado) */
 export function loadSlicerInfo(): Promise<SlicerInfo | undefined> {
-  cached ??= invoke<SlicerInfo>("slicer_presets").catch(() => undefined);
+  cached ??= (async () => {
+    for (let i = 0; i < 4; i++) {
+      try {
+        return await invoke<SlicerInfo>("slicer_presets");
+      } catch {
+        await new Promise((r) => setTimeout(r, 500 * (i + 1)));
+      }
+    }
+    cached = undefined;
+    return undefined;
+  })();
   return cached;
 }
 
