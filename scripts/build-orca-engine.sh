@@ -184,6 +184,8 @@ if [[ "$OS" == windows ]]; then
 else
   cmake --build build --config Release -j"$JOBS" --target pinocchio-slicer
   EXE="build/src/pinocchio-engine/pinocchio-slicer"
+  # En macOS el CMake de Orca arma todo ejecutable como paquete .app
+  [[ -f "$EXE" ]] || EXE="build/src/pinocchio-engine/pinocchio-slicer.app/Contents/MacOS/pinocchio-slicer"
 fi
 
 if [[ "$OS" == macos ]]; then
