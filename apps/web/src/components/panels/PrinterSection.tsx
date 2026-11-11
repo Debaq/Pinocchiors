@@ -6,7 +6,7 @@ import * as Icons from "../icons";
 import { fmtNumber, t } from "../../lib/i18n";
 import { tBackend } from "../../lib/i18nBackend.ts";
 import { netPrinters, removeNetPrinter, saveNetPrinter, selectNetPrinter, selectedNetPrinter, type NetPrinter, type NetPrinterKind } from "../../lib/settings";
-import { PRINTER_MODELS, printerImage } from "../../lib/printerModels";
+import { GENERIC_KLIPPER, PRINTER_MODELS, printerImage, shortModel } from "../../lib/printerModels";
 import type { ConfirmRequest } from "../layout/ConfirmDialog";
 import { PrinterControls } from "./PrinterControls";
 
@@ -172,7 +172,8 @@ export const SendToPrinter: Component<{
   const target = () => selectedNetPrinter();
   const mismatch = () => {
     const p = target();
-    return !!p && !!props.slicedModel && p.model !== props.slicedModel;
+    // Una «otra con Klipper» no tiene perfil: se le manda lo que se haya laminado
+    return !!p && !!props.slicedModel && p.model !== GENERIC_KLIPPER && p.model !== props.slicedModel;
   };
 
   // Carretes de la AD5X: se preguntan al elegirla; se propone el que está en uso o el primero con filamento
@@ -238,7 +239,7 @@ export const SendToPrinter: Component<{
                 <Select options={netPrinters().map((x) => ({ value: x.id, label: x.name }))} value={p().id} onChange={(v) => selectNetPrinter(v)} />
               </Show>
               <p class="text-[10px] text-text-dim truncate">
-                {p().model} · {p().address}
+                {modelLabel(p().model)} · {p().address}
               </p>
             </div>
           </div>
@@ -285,11 +286,24 @@ const KIND_DEFAULT_MODEL: Record<NetPrinterKind, string> = { moonraker: "Crealit
 /** Modelos que se pueden elegir para un tipo de conexión (las K1 van por Klipper o de fábrica) */
 const modelsFor = (kind: NetPrinterKind) => PRINTER_MODELS.filter((m) => m.kind === kind || (kind === "creality" && m.model.startsWith("Creality K1")));
 
+/** Nombre que se le pone sola: «CR-10 Max 2», «K1 fábrica 1» */
+function autoName(kind: NetPrinterKind, model: string, skipId?: string): string {
+  const base = kind === "creality" ? `${shortModel(model)} ${t("fábrica")}` : shortModel(model);
+  const taken = new Set(netPrinters().filter((p) => p.id !== skipId).map((p) => p.name));
+  let n = 1;
+  while (taken.has(`${base} ${n}`)) n++;
+  return `${base} ${n}`;
+}
+
+/** Si el nombre es el que se le puso solo (entonces se cambia con el modelo) */
+const isAutoName = (p: NetPrinter) => new RegExp(`^${shortModel(p.model).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}( ${t("fábrica")})? \\d+$`).test(p.name);
+
+const modelLabel = (model: string) => (model === GENERIC_KLIPPER ? t("Otra con Klipper") : model);
+
 function newPrinter(kind: NetPrinterKind): NetPrinter {
-  const n = netPrinters().filter((p) => p.kind === kind).length + 1;
   return {
     id: `${kind}-${Date.now().toString(36)}`,
-    name: kind === "flashforge" ? `AD5X ${n}` : kind === "creality" ? `K1 fábrica ${n}` : `K1 ${n}`,
+    name: autoName(kind, KIND_DEFAULT_MODEL[kind]),
     kind,
     model: KIND_DEFAULT_MODEL[kind],
     address: "",
@@ -346,7 +360,7 @@ export const PrinterTab: Component<{ confirm: (request: ConfirmRequest) => Promi
         i = await invoke<NetPrinterInfo>("printer_info", { conn: conn(p) });
       } catch (e) {
         // Una K1 agregada como Klipper que en realidad tiene el firmware de fábrica: se reconoce y se cambia sola
-        if (p.kind !== "moonraker") throw e;
+        if (p.kind !== "moonraker" || !p.model.startsWith("Creality K1")) throw e;
         const asCreality = { ...p, kind: "creality" as const };
         i = await invoke<NetPrinterInfo>("printer_info", { conn: conn(asCreality) }).catch(() => Promise.reject(e));
         update({ kind: "creality", model: p.model.startsWith("Creality K1") ? p.model : "Creality K1" });
@@ -451,15 +465,22 @@ export const PrinterTab: Component<{ confirm: (request: ConfirmRequest) => Promi
                   <PrinterPicture model={p.model} size={44} />
                   <span class="min-w-0 flex-1">
                     <span class="block text-xs font-semibold text-text truncate">{p.name}</span>
-                    <span class="block text-[10px] text-text-dim truncate">{p.model}</span>
+                    <span class="block text-[10px] text-text-dim truncate">{modelLabel(p.model)}</span>
                     <span class="block text-[10px] text-text-dim font-mono truncate">{p.address || t("sin dirección")}</span>
                   </span>
                 </button>
               )}
             </For>
             <div class="flex gap-1.5">
-              <Button size="sm" variant="ghost" icon={<Icons.Plus size={12} />} onClick={() => add("moonraker")} class="flex-1" title={t("Impresoras con Klipper y Moonraker, como una K1 rooteada")}>
-                {t("Klipper (K1)")}
+              <Button
+                size="sm"
+                variant="ghost"
+                icon={<Icons.Plus size={12} />}
+                onClick={() => add("moonraker")}
+                class="flex-1"
+                title={t("Cualquier impresora con Klipper y Moonraker: una K1 rooteada, una CR-10 Max con Raspberry u otra. El modelo se elige después.")}
+              >
+                {t("Klipper")}
               </Button>
               <Button size="sm" variant="ghost" icon={<Icons.Plus size={12} />} onClick={() => add("creality")} class="flex-1" title={t("Creality K1, K1C o K1 Max con su firmware de fábrica (sin root)")}>
                 {t("K1 de fábrica")}
@@ -481,9 +502,9 @@ export const PrinterTab: Component<{ confirm: (request: ConfirmRequest) => Promi
                   <div class="min-w-0 flex-1 space-y-1">
                     <input class={inputClass} title={t("Nombre")} value={p().name} onChange={(e) => update({ name: e.currentTarget.value.trim() || p().name })} onKeyDown={(e) => e.stopPropagation()} />
                     <Select
-                      options={modelsFor(p().kind).map((m) => ({ value: m.model, label: m.model }))}
+                      options={modelsFor(p().kind).map((m) => ({ value: m.model, label: modelLabel(m.model) }))}
                       value={p().model}
-                      onChange={(v) => update({ model: v })}
+                      onChange={(v) => update(isAutoName(p()) ? { model: v, name: autoName(p().kind, v, p().id) } : { model: v })}
                     />
                   </div>
                 </div>
@@ -491,7 +512,7 @@ export const PrinterTab: Component<{ confirm: (request: ConfirmRequest) => Promi
                   <span class="text-[11px] text-text-muted">{t("Dirección de la impresora")}</span>
                   <input
                     class={inputClass}
-                    placeholder={p().kind === "flashforge" ? "192.168.1.60" : t("192.168.1.50 o k1.local")}
+                    placeholder={p().kind === "flashforge" ? "192.168.1.60" : p().kind === "creality" ? t("192.168.1.50 o k1.local") : t("192.168.1.50 o nombre.local")}
                     value={p().address}
                     onChange={(e) => update({ address: e.currentTarget.value.trim() })}
                     onKeyDown={(e) => {

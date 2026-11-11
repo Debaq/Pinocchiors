@@ -1,11 +1,12 @@
 /**
  * Las impresoras del laboratorio, una sola lista para todo Fabricar (preparar, cortar,
  * uniones, placas y laminar). Las de filamento con perfil de OrcaSlicer se laminan con su
- * motor; las de resina con el núcleo SLA propio (PLAN_SLA.md); la Creator original todavía
+ * motor; las de resina con el núcleo SLA propio (PLAN_SLA.md); la Creator Pro todavía
  * no (lee .x3g: se le cambiará el firmware, ver PLAN_IMPRESORAS.md) y sirve para preparar
- * y exportar.
+ * y exportar. Cada boquilla de una impresora es una máquina aparte (su perfil del laminador).
  */
 import { invoke } from "@tauri-apps/api/core";
+import { fmtNumber } from "./i18n";
 import type { SlicerInfo, SlicerPrinter } from "../components/panels/SlicerSection";
 
 export interface Machine {
@@ -35,21 +36,21 @@ export const RESIN_MACHINES: Machine[] = [
 /** Si el id del laminador es de una impresora de resina */
 export const isResinId = (id: string | undefined) => RESIN_MACHINES.some((m) => m.id === id);
 
-/** Perfiles del laminador que se usan en el laboratorio, en este orden */
-const SLICER_MACHINES: Record<string, string> = {
-  "Creality K1 (0.4 nozzle)": "K1",
-  "Flashforge AD5X 0.4 nozzle": "AD5X",
-  "Creality CR-10 Max 0.4 nozzle": "CR-10 Max",
+/** Modelos del laminador que se usan en el laboratorio, en este orden (con todas sus boquillas) */
+const SLICER_MODELS: Record<string, string> = {
+  "Creality K1": "K1",
+  "Flashforge AD5X": "AD5X",
+  "Creality CR-10 Max": "CR-10 Max",
 };
 
-/** La Flashforge Creator original (2013): sin perfil de laminado por ahora */
+/** La Flashforge Creator Pro (dos extrusores, lee .x3g): sin perfil de laminado por ahora */
 export const CREATOR_1: Machine = {
   id: "flashforge-creator-1",
-  name: "Creator",
-  model: "Flashforge Creator",
-  bed: [225, 145, 150],
+  name: "Creator Pro",
+  model: "Flashforge Creator Pro",
+  bed: [227, 148, 150],
   nozzle: 0.4,
-  tools: 1,
+  tools: 2,
   sliceable: false,
   kind: "fdm",
 };
@@ -61,16 +62,39 @@ export function loadSlicerInfo(): Promise<SlicerInfo | undefined> {
   return cached;
 }
 
+/** Todas las máquinas: cada boquilla de cada modelo (la de 0.4 primero), resina y la Creator Pro */
 export function machinesFrom(printers: SlicerPrinter[] | undefined): Machine[] {
   const out: Machine[] = [];
-  for (const [id, name] of Object.entries(SLICER_MACHINES)) {
-    const p = printers?.find((x) => x.name === id);
-    if (!p?.bed) continue;
-    out.push({ id, name, model: p.model, bed: p.bed, nozzle: p.nozzle, tools: p.tools ?? 1, sliceable: true, kind: "fdm" });
+  for (const [model, name] of Object.entries(SLICER_MODELS)) {
+    const variants = (printers ?? []).filter((x) => x.model === model && x.bed);
+    variants.sort((a, b) => Number(a.nozzle !== 0.4) - Number(b.nozzle !== 0.4) || a.nozzle - b.nozzle);
+    for (const p of variants) out.push({ id: p.name, name, model, bed: p.bed!, nozzle: p.nozzle, tools: p.tools ?? 1, sliceable: true, kind: "fdm" });
   }
   out.push(...RESIN_MACHINES, CREATOR_1);
   return out;
 }
+
+/** Las boquillas de la misma impresora que `m` (de menor a mayor) */
+export function nozzlesOf(m: Machine, machines: Machine[]): Machine[] {
+  return machines.filter((x) => x.model === m.model && x.kind === m.kind).sort((a, b) => a.nozzle - b.nozzle);
+}
+
+/**
+ * Una tarjeta por impresora: la elegida tal cual; las demás con la misma boquilla que la
+ * elegida si la tienen, si no la de 0.4.
+ */
+export function machineCards(machines: Machine[], current: Machine | undefined): Machine[] {
+  const out: Machine[] = [];
+  for (const m of machines) {
+    if (out.some((x) => x.model === m.model)) continue;
+    const same = nozzlesOf(m, machines);
+    out.push(same.find((x) => x.id === current?.id) ?? same.find((x) => x.nozzle === current?.nozzle) ?? m);
+  }
+  return out;
+}
+
+/** Nombre de una boquilla: «0,4 mm» */
+export const nozzleLabel = (n: number) => `${fmtNumber(n, { maximumFractionDigits: 2 })} mm`;
 
 /** Material de Fabricar (densidad, voladizos, holguras) según el tipo del filamento */
 export function materialTypeOf(filament: string): "PLA" | "PETG" | "ABS" | "ASA" | "TPU" {
@@ -106,19 +130,23 @@ function materialFor(type: string, current: MaterialProfile | undefined, materia
   return current?.name === base.name ? { ...base, ...current } : base;
 }
 
-/** Elegir máquina: cama y boquilla para preparar, y el perfil del laminador */
+/**
+ * Elegir máquina: cama y boquilla para preparar, y el perfil del laminador. Con otra boquilla
+ * de la misma impresora se conserva el filamento; la calidad vuelve a la del perfil.
+ */
 export function withMachine(prep: PrepSettings, m: Machine): PrepSettings {
-  const same = prep.printer?.name === m.model;
+  const sameModel = prep.printer?.name === m.model;
+  const same = sameModel && prep.printer?.nozzle === m.nozzle;
   const printer: PrinterProfile = {
     name: m.model,
     build_volume: m.bed,
     nozzle: m.nozzle,
-    layer_height: same ? prep.printer?.layer_height || 0.2 : m.kind === "resin" ? 0.05 : 0.2,
+    layer_height: same ? prep.printer?.layer_height || 0.2 : m.kind === "resin" ? 0.05 : Math.round(m.nozzle * 50) / 100,
     fit_clearance: same ? prep.printer?.fit_clearance : undefined,
     hole_comp: same ? prep.printer?.hole_comp : undefined,
   };
   const slicer = { ...(prep.slicer ?? { overrides: {} }), printer: m.id };
-  if (prep.slicer?.printer !== m.id) Object.assign(slicer, { process: undefined, filament: undefined, overrides: {} });
+  if (prep.slicer?.printer !== m.id) Object.assign(slicer, sameModel ? { process: undefined, overrides: {} } : { process: undefined, filament: undefined, overrides: {} });
   return { ...prep, printer, slicer };
 }
 

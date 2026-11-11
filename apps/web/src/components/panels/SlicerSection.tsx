@@ -456,7 +456,15 @@ export const SlicerSection: Component<{
         <div>
           <Panel id="slicer.layers" dense title={t("Capas y paredes")} defaultOpen>
             <div class="space-y-2 pb-3">
-              <NumberInput label={t("Altura de capa")} value={num(value("layer_height"), 0.2)} onChange={(v) => setValue("layer_height", String(v))} min={0.04} max={0.32} step={0.02} suffix="mm" />
+              <NumberInput
+                label={t("Altura de capa")}
+                value={num(value("layer_height"), 0.2)}
+                onChange={(v) => setValue("layer_height", String(v))}
+                min={num(first(base()?.["min_layer_height"]), 0.04)}
+                max={num(first(base()?.["max_layer_height"]), 0.32)}
+                step={0.02}
+                suffix="mm"
+              />
               {int("wall_loops", "Paredes", 2, 1, 10)}
               {int("top_shell_layers", "Capas arriba", 5, 0, 20)}
               {int("bottom_shell_layers", "Capas abajo", 3, 0, 20)}

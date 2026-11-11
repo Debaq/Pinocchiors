@@ -3,7 +3,7 @@ import { clsx } from "clsx";
 import { Button, Checkbox, NumberInput, Select } from "../ui";
 import * as Icons from "../icons";
 import { fmtNumber, t } from "../../lib/i18n";
-import { CREATOR_1, filamentOf, loadSlicerInfo, machineOf, machinesFrom, withFilament, withMachine, type Machine } from "../../lib/machines";
+import { CREATOR_1, filamentOf, loadSlicerInfo, machineCards, machineOf, machinesFrom, nozzleLabel, nozzlesOf, withFilament, withMachine, type Machine } from "../../lib/machines";
 import { PrinterPicture } from "./PrinterSection";
 import type { MaterialProfile, PrepSettings, PrintPresets, PrinterProfile } from "./PrintPrepPanel";
 
@@ -32,6 +32,10 @@ export const MachinePanel: Component<{
   const materials = () => props.presets?.materials ?? [];
   const patchPrep = (next: PrepSettings) => props.onPatch({ printer: next.printer, material: next.material, slicer: next.slicer });
   const choose = (m: Machine) => patchPrep(withMachine(props.prep, m));
+  const nozzles = () => {
+    const m = current();
+    return m && m.kind === "fdm" && m.sliceable ? nozzlesOf(m, machines()) : [];
+  };
   const filament = () => filamentOf(props.prep, slicerPrinter());
   const setFilament = (f: string) => patchPrep(withFilament(props.prep, f, materials()));
   const materialFor = (name: string): MaterialProfile => materials().find((m) => m.name === name) ?? props.material;
@@ -48,14 +52,14 @@ export const MachinePanel: Component<{
   return (
     <div class="space-y-3">
       <div class="grid grid-cols-2 gap-1.5">
-        <For each={machines()}>
+        <For each={machineCards(machines(), current())}>
           {(m) => (
             <button
               type="button"
               onClick={() => choose(m)}
               class={clsx(
                 "flex items-center gap-2 rounded border p-1.5 text-left transition-colors",
-                current()?.id === m.id ? "border-orange bg-orange/10" : "border-border hover:border-orange/50"
+                current()?.model === m.model ? "border-orange bg-orange/10" : "border-border hover:border-orange/50"
               )}
             >
               <PrinterPicture model={m.model} size={52} />
@@ -74,13 +78,25 @@ export const MachinePanel: Component<{
         </For>
       </div>
 
+      <Show when={nozzles().length > 1}>
+        <Select
+          label={t("Boquilla")}
+          options={nozzles().map((m) => ({ value: m.id, label: nozzleLabel(m.nozzle) }))}
+          value={current()?.id}
+          onChange={(id) => {
+            const m = nozzles().find((x) => x.id === id);
+            if (m) choose(m);
+          }}
+        />
+      </Show>
+
       <Show when={current()?.kind === "resin"}>
         <p class="text-[10px] text-text-dim">{t("Impresora de resina: se lamina con el laminador propio de Pinocchio (soportes, venteos y capas) en Imprimir → Laminar.")}</p>
       </Show>
 
       <Show when={current()?.id === CREATOR_1.id}>
         <p class="text-[10px] text-text-dim">
-          {t("La Creator original lee archivos .x3g: se puede preparar y exportar, pero para laminarla hay que cambiarle el firmware.")}
+          {t("La Creator Pro lee archivos .x3g: se puede preparar y exportar, pero para laminarla hay que cambiarle el firmware.")}
         </p>
       </Show>
 

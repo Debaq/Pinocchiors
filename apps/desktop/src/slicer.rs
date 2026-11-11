@@ -493,6 +493,44 @@ mod tests {
         assert!(!preview.layer_z.is_empty());
     }
 
+    /// Cada boquilla de cada impresora (también las sacadas de la de 0,4, como la CR-10 Max
+    /// de 0,6) lamina un cubo con su calidad por defecto, con capas de su altura.
+    #[test]
+    fn todas_las_boquillas_laminan() {
+        let Some(engine) = slicer::find_engine() else { return };
+        for p in &slicer::index().printers {
+            let bed = p.bed.unwrap();
+            let input = PlateInput {
+                printer: PrinterProfile::new(&p.model, bed, p.nozzle, p.nozzle / 2.0),
+                material: MaterialProfile::default(),
+                format: "stl".into(),
+                spacing: 5.0,
+                orient: true,
+                contour: false,
+                hollow_wall: None,
+                drain: None,
+                vent: false,
+                compensate: false,
+                path: String::new(),
+                objects: Vec::new(),
+            };
+            let settings = slicer::SliceSettings { printer: p.name.clone(), process: p.default_process.clone(), filament: p.default_filament.clone(), overrides: Default::default() };
+            let config = slicer::build_config(&settings).unwrap();
+            let layer: f64 = config["layer_height"].as_str().unwrap().parse().unwrap();
+            let plan = slicing_plan(vec![("a".into(), cube(12.0))], &input, &config).unwrap();
+            let job = slicer::SliceJob {
+                config,
+                parts: plate_parts(&plan.plates[0]),
+                work_dir: std::env::temp_dir().join(format!("pinocchio-slicer-boquillas-{}", std::process::id())),
+                calib: None,
+            };
+            let summary = slicer::run(&job, &engine, |_| {}, &AtomicBool::new(false)).unwrap_or_else(|e| panic!("{}: {e}", p.name));
+            let _ = std::fs::remove_dir_all(&job.work_dir);
+            let want = (12.0 / layer).round() as i64;
+            assert!((summary.layers as i64 - want).abs() <= 2, "{}: {} capas, esperaba ~{want}", p.name, summary.layers);
+        }
+    }
+
     /// Una pieza que entra justo en la cama sin margen: se acomoda igual con el
     /// borde libre y queda centrada
     #[test]
