@@ -50,8 +50,13 @@ const [collabColor, setCollabColor] = createPersisted("collab.color", COLORS[Mat
 const [status, setStatus] = createSignal<CollabStatus>({ on: false, host: false, ticket: null, my_id: null });
 const [peers, setPeers] = createSignal<Peer[]>([]);
 const [chat, setChat] = createSignal<ChatLine[]>([]);
+/** Panel izquierdo de colaboración (chat y comentarios) */
+const [collabPanelOpen, setCollabPanelOpen] = createSignal(false);
+const [collabPanelTab, setCollabPanelTab] = createSignal<"chat" | "comments">("chat");
+/** Mensajes de chat sin leer (no cuenta mientras se mira la pestaña Chat) */
+const [chatUnread, setChatUnread] = createSignal(0);
 
-export { chat, collabColor, collabName, COLORS, peers, setCollabColor, setCollabName, status };
+export { chat, chatUnread, collabColor, collabPanelOpen, collabPanelTab, setCollabPanelOpen, setCollabPanelTab, setChatUnread, collabName, COLORS, peers, setCollabColor, setCollabName, status };
 
 /** Escuchadores de datagramas livianos (presencia, en la fase siguiente) */
 type LightHandler = (from: string, bytes: Uint8Array) => void;
@@ -61,12 +66,40 @@ export function onCollabLight(h: LightHandler): () => void {
   return () => lightHandlers.delete(h);
 }
 
+/** Cargas libres (`Message::Data`) por tipo: los comentarios y lo que venga después */
+type DataHandler = (from: string, value: unknown) => void;
+const dataHandlers = new Map<string, Set<DataHandler>>();
+export function onCollabData(kind: string, h: DataHandler): () => void {
+  const set = dataHandlers.get(kind) ?? new Set();
+  set.add(h);
+  dataHandlers.set(kind, set);
+  return () => set.delete(h);
+}
+
+/** Alguien entró (el anfitrión le manda el estado compartido) / la sala cambió */
+const joinHandlers = new Set<(peer: Peer) => void>();
+export function onCollabJoined(h: (peer: Peer) => void): () => void {
+  joinHandlers.add(h);
+  return () => joinHandlers.delete(h);
+}
+const roomHandlers = new Set<(on: boolean, host: boolean) => void>();
+export function onCollabRoom(h: (on: boolean, host: boolean) => void): () => void {
+  roomHandlers.add(h);
+  return () => roomHandlers.delete(h);
+}
+
+/** Carga libre: anfitrión a todos (o a uno / menos uno); invitado al anfitrión */
+export function sendData(kind: string, value: unknown, opts?: { except?: string; only?: string }): Promise<void> {
+  return sendMessage({ t: "data", kind, value }, opts?.except, opts?.only);
+}
+
 const nameOf = (id: string) => peers().find((p) => p.id === id)?.name ?? "";
 
 function handle(e: CollabEvent) {
   switch (e.kind) {
     case "joined":
       setPeers((p) => [...p.filter((x) => x.id !== e.id), { id: e.id, name: e.name, color: e.color }]);
+      for (const h of joinHandlers) h({ id: e.id, name: e.name, color: e.color });
       break;
     case "left":
       setPeers((p) => p.filter((x) => x.id !== e.id));
@@ -78,8 +111,11 @@ function handle(e: CollabEvent) {
         const text = e.msg.text;
         const from = e.from;
         setChat((c) => [...c, { from, name: nameOf(from), text, mine: false }]);
+        if (!(collabPanelOpen() && collabPanelTab() === "chat")) setChatUnread((n) => n + 1);
         // El anfitrión reparte el chat a los demás invitados
         if (status().host) void sendMessage(e.msg, from);
+      } else if (e.msg.t === "data") {
+        for (const h of dataHandlers.get(e.msg.kind) ?? []) h(e.from, e.msg.value);
       } else if (e.msg.t === "ping") {
         void sendMessage({ t: "pong", n: e.msg.n }, undefined, e.from);
       }
@@ -98,6 +134,7 @@ async function ensureListening() {
 function reset() {
   setPeers([]);
   setChat([]);
+  setChatUnread(0);
 }
 
 const me = () => ({ name: collabName().trim() || "Anónimo", color: collabColor() });
@@ -107,6 +144,7 @@ export async function hostCollab(): Promise<void> {
   await ensureListening();
   reset();
   setStatus(await invoke<CollabStatus>("collab_host", me()));
+  for (const h of roomHandlers) h(true, true);
 }
 
 /** Se une a la sala de otra persona con su ticket */
@@ -114,11 +152,13 @@ export async function joinCollab(ticket: string): Promise<void> {
   await ensureListening();
   reset();
   setStatus(await invoke<CollabStatus>("collab_join", { ticket: ticket.trim(), ...me() }));
+  for (const h of roomHandlers) h(true, false);
 }
 
 export async function leaveCollab(): Promise<void> {
   setStatus(await invoke<CollabStatus>("collab_leave"));
   reset();
+  for (const h of roomHandlers) h(false, false);
 }
 
 /** Manda un mensaje fiable. `except`/`only` sirven al anfitrión para repartir. */

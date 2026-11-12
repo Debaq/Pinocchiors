@@ -3,7 +3,6 @@ import { Button } from "../ui";
 import { t } from "../../lib/i18n";
 import { tBackend } from "../../lib/i18nBackend";
 import {
-  chat,
   collabColor,
   collabName,
   COLORS,
@@ -11,7 +10,6 @@ import {
   joinCollab,
   leaveCollab,
   peers,
-  sendChat,
   setCollabColor,
   setCollabName,
   status,
@@ -37,7 +35,6 @@ export const CollabSettings: Component = () => {
   const [ticket, setTicket] = createSignal("");
   const [busy, setBusy] = createSignal(false);
   const [message, setMessage] = createSignal<{ text: string; error?: boolean }>();
-  const [line, setLine] = createSignal("");
 
   const run = async (job: () => Promise<void>) => {
     setBusy(true);
@@ -60,12 +57,6 @@ export const CollabSettings: Component = () => {
     } catch {
       setMessage({ text: t("No se pudo copiar; selecciónalo a mano."), error: true });
     }
-  };
-
-  const send = () => {
-    const text = line();
-    setLine("");
-    void run(() => sendChat(text));
   };
 
   return (
@@ -145,28 +136,6 @@ export const CollabSettings: Component = () => {
           <Button disabled={busy()} onClick={() => void run(leaveCollab)}>
             {status().host ? t("Cerrar la sala") : t("Salir de la sala")}
           </Button>
-        </Section>
-
-        <Section title={t("Chat")}>
-          <div class="max-h-40 overflow-y-auto space-y-1 text-sm">
-            <For each={chat()}>
-              {(c) => (
-                <div class={c.mine ? "text-right text-accent" : "text-text"}>
-                  <span class="text-text-muted text-xs">{c.mine ? "" : `${c.name}: `}</span>
-                  {c.text}
-                </div>
-              )}
-            </For>
-          </div>
-          <input
-            class={inputClass}
-            value={line()}
-            placeholder={t("Escribe y presiona Enter")}
-            onInput={(e) => setLine(e.currentTarget.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") send();
-            }}
-          />
         </Section>
       </Show>
 

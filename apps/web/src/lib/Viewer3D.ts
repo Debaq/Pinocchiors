@@ -4044,6 +4044,15 @@ export class Viewer3D {
       setPose: (p) => this.cameraRig.setPose(p, k()),
       rayPoint: (ndc) => this.cameraRig.rayPoint(ndc, k()),
       toNdc: (pt) => this.cameraRig.toNdc(pt, k()),
+      surface: (ndc) => {
+        this.raycaster.setFromCamera(new THREE.Vector2(ndc[0], ndc[1]), this.camera);
+        const targets = this.meshGroup.children.filter(
+          (o): o is THREE.Mesh => o instanceof THREE.Mesh && o.visible && o !== this.currentWireframe && o !== this.rig?.wireframe,
+        );
+        for (const m of targets) if (m === this.currentMesh || m === this.weightsMesh) ensureBvh(m);
+        const hit = this.withFullMesh(() => this.raycaster.intersectObjects(targets, false)[0]);
+        return hit ? (hit.point.clone().multiplyScalar(k()).toArray() as [number, number, number]) : undefined;
+      },
     };
   }
 

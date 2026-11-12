@@ -34,11 +34,11 @@ Ventaja: no hay conflictos de fusión. Costo: el invitado depende del anfitrión
 
 **C1 HECHO 2026-11-11.** Cursor con nombre y color, onda en cada clic, puntos en la cabecera. El cursor lleva un punto 3D (`CameraRig.rayPoint/toNdc`, registro en `lib/collabViews.ts`, `collabView()` en `CadViewer` y `Viewer3D`): el otro lo proyecta con su propia cámara, así se ve en el mismo lugar del modelo aunque miren distinto. La etiqueta muestra lo que tiene elegido (objeto en el visor 3D, pestaña en Diseñar). «Seguir a…»: clic en el punto de color de la cabecera copia la cámara de esa persona (se manda cada 120 ms si cambia, o cada 1,5 s); tocar el visor o la rueda la suelta. Límites: el punto 3D es a la distancia del objetivo de la cámara (sin lanzar un rayo contra la malla), y la «selección» es el nombre, no un resaltado de caras. Eso último pasa a C3 (bloqueos por pieza). Sin probar con dos instancias reales.
 
-### C2 — Chat y comentarios
-- Chat en panel izquierdo con pestañas (convención de paneles).
-- **Comentarios anclados**: un comentario se pega a una pieza, cara o punto; aparece como pin en el visor; hilo con respuestas y estado abierto/resuelto. Es el «issues» dentro de la app.
-- Se guardan en el `.pinocchio` (`ui.json`, clave `comments`).
-- Un comentario puede mandarse al chat de IA («arregla esto»).
+### C2 — Chat y comentarios (HECHO 2026-11-11)
+- Panel izquierdo `CollabPanel.tsx` con pestañas **Chat** y **Comentarios**; se abre desde la insignia de la cabecera (`CollabBadge`, siempre visible; cuenta sin leer y abiertos). El chat de prueba salió de Configuración.
+- **Comentarios anclados** (`lib/collabComments.ts`): hilo pegado a un punto de la superficie (`CollabViewer.surface`, raycast contra la pieza; si no toca, el punto del rayo), con respuestas, resuelto/reabrir, borrar (ConfirmDialog), «Ir al punto» (traslada la cámara) y «Preguntar a la IA» (abre el chat con el hilo). Pines numerados y de color en el visor que siguen a la cámara; modo «Poner un comentario» (clic en el visor, Esc cancela).
+- Sirven sin sala (anotaciones del proyecto). Con sala: el anfitrión es dueño; el invitado manda `comment_op` y el anfitrión reparte; al entrar un invitado recibe `comments_full` (y recupera los suyos al salir). Se guardan en `ui.json` (`comments`); no entran en el deshacer.
+- Probado en Chromium sin Tauri (panel, pines, guardar y recargar). **Falta:** probar con dos instancias reales; si el anfitrión abre otro proyecto con invitados dentro, no se les reenvía (lo cubre C4); un pin no se oculta si hay pieza delante.
 
 ### C3 — Co-edición (anfitrión autoritativo)
 - Invitado manda `{cmd, args}`; el anfitrión valida, ejecuta con `try_dispatch_with` y difunde el resultado.

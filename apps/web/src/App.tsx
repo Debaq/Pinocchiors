@@ -10,7 +10,10 @@ import { IS_ANDROID } from "./lib/platform";
 import { LiveAiBadge } from "./components/layout/LiveAiBadge";
 import { registerCollabView } from "./lib/collabViews";
 import { setPresenceLabel } from "./lib/collabPresence";
+import { commentsForProject, loadComments } from "./lib/collabComments";
 import { CollabBadge } from "./components/layout/CollabBadge";
+import { CollabPanel } from "./components/layout/CollabPanel";
+import { collabPanelOpen, setCollabPanelOpen } from "./lib/collab";
 import { CollabOverlay } from "./components/layout/CollabOverlay";
 import { AiChatPanel } from "./components/layout/AiChatPanel";
 import { TuneWizard, type ChatPicture } from "./components/layout/TuneWizard";
@@ -8804,6 +8807,7 @@ export const App: Component = () => {
     const { trackpadNavigation: _, ...view } = viewSettings();
     return JSON.stringify({
       version: PROJECT_UI_VERSION,
+      comments: commentsForProject(),
       fileName: fileName(),
       // false: proyecto de solo esqueleto
       model: meshLoaded(),
@@ -8895,6 +8899,7 @@ export const App: Component = () => {
       setTextureEditor(undefined);
       setObjects(Array.isArray(ui.objects) ? ui.objects : []);
       setActiveObjectId(typeof ui.activeObject === "number" ? ui.activeObject : undefined);
+      loadComments(ui.comments);
     }
     setPlacementMode(undefined);
     setBoneEditMode(false);
@@ -9659,6 +9664,12 @@ export const App: Component = () => {
         {/* Main Content */}
         <div class="flex flex-1 min-h-0 overflow-hidden">
           {/* Chat con la IA, acoplado a la izquierda */}
+          <Show when={collabPanelOpen()}>
+            <CollabPanel
+              onClose={() => setCollabPanelOpen(false)}
+              onAskAi={IS_ANDROID ? undefined : (text) => { setChatPrefill({ id: Date.now(), text, images: [] }); setChatOpen(true); }}
+            />
+          </Show>
           <Show when={chatOpen()}>
             <AiChatPanel onClose={() => setChatOpen(false)} prefill={chatPrefill()} />
           </Show>

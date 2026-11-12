@@ -62,6 +62,8 @@ export function setPresenceLabel(view: "viewport" | "design", label: string | un
   else delete labels[view];
 }
 
+export const presenceLabel = (view: string): string | undefined => labels[view];
+
 /** A quién se está siguiendo la cámara (id) */
 const [followId, setFollowId] = createSignal<string>();
 export { followId };

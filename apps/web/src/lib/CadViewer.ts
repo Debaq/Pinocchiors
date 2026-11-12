@@ -458,6 +458,12 @@ export class CadViewer {
       setPose: (p) => this.setCameraPose(p),
       rayPoint: (ndc) => this.rig.rayPoint(ndc, k()),
       toNdc: (pt) => this.rig.toNdc(pt, k()),
+      surface: (ndc) => {
+        if (!this.body) return undefined;
+        this.raycaster.setFromCamera(new THREE.Vector2(ndc[0], ndc[1]), this.camera);
+        const hit = this.kept(this.raycaster.intersectObject(this.body));
+        return hit ? (hit.point.clone().multiplyScalar(k()).toArray() as [number, number, number]) : undefined;
+      },
     };
   }
 

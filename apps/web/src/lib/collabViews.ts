@@ -9,6 +9,8 @@ export interface CollabViewer {
   setPose(pose: CameraPose): void;
   /** Pantalla (-1..1) → punto 3D en metros, a la distancia del objetivo */
   rayPoint(ndc: [number, number]): [number, number, number];
+  /** Pantalla (-1..1) → punto de la superficie bajo el cursor, en metros (nada si no toca la pieza) */
+  surface?(ndc: [number, number]): [number, number, number] | undefined;
   /** Punto 3D en metros → pantalla (-1..1); nada si no se ve */
   toNdc(point: [number, number, number]): [number, number] | undefined;
 }
