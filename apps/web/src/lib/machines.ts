@@ -42,6 +42,7 @@ const SLICER_MODELS: Record<string, string> = {
   "Creality K1": "K1",
   "Flashforge AD5X": "AD5X",
   "Creality CR-10 Max": "CR-10 Max",
+  "Creality CR-10 Max (Klipper)": "CR-10 Max (Klipper)",
 };
 
 /** La Flashforge Creator Pro (dos extrusores, lee .x3g): sin perfil de laminado por ahora */

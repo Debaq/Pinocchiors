@@ -55,6 +55,68 @@ DERIVED = [
 ]
 
 
+# Variante «Creality CR-10 Max (Klipper)»: la CR-10 Max del taller (Klipper + Moonraker, extrusor
+# directo, TMC2208, BLTouch). La «Creality CR-10 Max» de Orca queda tal cual para quien la tenga
+# de fábrica (Marlin, Bowden); esta es una copia aparte con lo medido en la máquina real.
+KLIPPER_MODEL = "Creality CR-10 Max (Klipper)"
+KLIPPER_MACHINE = {
+    "gcode_flavor": "klipper",
+    "printer_model": KLIPPER_MODEL,
+    # Extrusor directo: retracción corta (con 5 mm de Bowden se atasca y raspa el filamento).
+    "retraction_length": ["1"],
+    # Aceleración probada sin perder pasos; los procesos piden menos (ver KLIPPER_PROCESS).
+    "machine_max_acceleration_extruding": ["2000", "2000"],
+    "machine_max_acceleration_travel": ["2000", "2000"],
+    "machine_max_acceleration_x": ["2000", "2000"],
+    "machine_max_acceleration_y": ["2000", "2000"],
+    # La rutina de inicio y fin (home, malla de la cama, calentar, purga) vive en printer.cfg.
+    "machine_start_gcode": "M83 ; extruder relative mode\nSTART_PRINT BED_TEMP=[bed_temperature_initial_layer_single] EXTRUDER_TEMP=[nozzle_temperature_initial_layer]",
+    "machine_end_gcode": "END_PRINT",
+    "machine_pause_gcode": "PAUSE",
+}
+KLIPPER_PROCESS = {
+    "default_acceleration": "1500",
+    "travel_acceleration": "1500",
+    "initial_layer_acceleration": "500",
+}
+
+
+def add_cr10max_klipper(out):
+    """Copia las CR-10 Max ya aplanadas en `out` como «CR-10 Max (Klipper)» y las pone en el índice.
+
+    Se puede correr sola: `python3 -I flatten_presets.py --solo-cr10max-klipper presets`
+    (parte de los perfiles de fábrica ya escritos; no necesita Orca). Es idempotente."""
+    index_path = out / "index.json"
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    originals = [p for p in index["printers"] if p["model"] == "Creality CR-10 Max"]
+    index["printers"] = [p for p in index["printers"] if p["model"] != KLIPPER_MODEL]
+    clones = []
+    for p in originals:
+        nz = fmt(p["nozzle"])
+        new_name = f"Creality CR-10 Max (Klipper) {nz} nozzle"
+        rename = lambda n: n.replace("@Creality CR-10 Max", "@Creality CR-10 Max (Klipper)").replace("@Creality CR10Max", f"@Creality CR-10 Max (Klipper) {nz} nozzle")
+        machine = json.loads((out / "machine" / file_name(p["name"])).read_text(encoding="utf-8"))
+        machine.update(KLIPPER_MACHINE)
+        machine["name"] = new_name
+        machine["default_print_profile"] = rename(machine.get("default_print_profile", ""))
+        (out / "machine" / file_name(new_name)).write_text(json.dumps(machine, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+        processes = []
+        for pn in p["processes"]:
+            proc = json.loads((out / "process" / file_name(pn)).read_text(encoding="utf-8"))
+            proc.update(KLIPPER_PROCESS)
+            proc["name"] = rename(pn)
+            proc["compatible_printers"] = [new_name]
+            (out / "process" / file_name(proc["name"])).write_text(json.dumps(proc, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+            processes.append(proc["name"])
+        clone = dict(p, name=new_name, model=KLIPPER_MODEL, processes=processes,
+                     default_process=rename(p["default_process"]))
+        clones.append(clone)
+    at = max(i for i, q in enumerate(index["printers"]) if q["model"] == "Creality CR-10 Max") + 1
+    index["printers"][at:at] = clones
+    index_path.write_text(json.dumps(index, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    return len(clones)
+
+
 def fmt(v):
     """Número como lo escribe Orca: «0.3», «0.12», «1.0»."""
     s = f"{round(v, 3):g}"
@@ -152,6 +214,9 @@ def file_name(name):
 
 
 def main():
+    if sys.argv[1] == "--solo-cr10max-klipper":
+        print(add_cr10max_klipper(pathlib.Path(sys.argv[2])), "impresoras Klipper")
+        return
     profiles = pathlib.Path(sys.argv[1])
     out = pathlib.Path(sys.argv[2])
     # Filamentos de base comunes (OrcaFilamentLibrary) por si un perfil hereda de ahí.
@@ -222,7 +287,8 @@ def main():
             "filaments": filaments,
         })
     (out / "index.json").write_text(json.dumps(index, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
-    for p in index["printers"]:
+    add_cr10max_klipper(out)
+    for p in json.loads((out / "index.json").read_text(encoding="utf-8"))["printers"]:
         print(f"{p['name']}: {len(p['processes'])} procesos, {len(p['filaments'])} filamentos")
 
 

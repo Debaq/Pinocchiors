@@ -31,6 +31,9 @@ export const PRINTER_MODELS: PrinterModel[] = [
   { model: "Flashforge AD5X", image: ad5x, kind: "flashforge" },
   // Con Marlin no tiene red; con una Raspberry y Klipper + Moonraker queda como la K1
   { model: "Creality CR-10 Max", image: cr10max, kind: "moonraker" },
+  // La de fábrica es Marlin con Bowden; esta es la del taller con Klipper, extrusor directo y
+  // retracción corta (perfiles aparte: la de fábrica queda tal cual para quien no la modificó)
+  { model: "Creality CR-10 Max (Klipper)", image: cr10max, kind: "moonraker" },
   // De fábrica lee .x3g por USB/SD; con Klipper se maneja por red como las demás
   { model: "Flashforge Creator Pro", image: creatorpro, kind: "moonraker" },
   // Cualquier otra con Klipper + Moonraker (sin foto ni perfil del laminador)

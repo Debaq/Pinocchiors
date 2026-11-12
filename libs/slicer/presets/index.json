@@ -927,6 +927,146 @@
     "Creality Generic PLA",
     "Creality Generic PLA-CF"
    ]
+  },
+  {
+   "name": "Creality CR-10 Max (Klipper) 0.4 nozzle",
+   "vendor": "Creality",
+   "tools": 1,
+   "bed": [
+    450.0,
+    450.0,
+    470.0
+   ],
+   "model": "Creality CR-10 Max (Klipper)",
+   "nozzle": 0.4,
+   "default_process": "0.20mm Standard @Creality CR-10 Max (Klipper) 0.4 nozzle",
+   "default_filament": "Creality Generic PLA",
+   "processes": [
+    "0.12mm Fine @Creality CR-10 Max (Klipper) 0.4 nozzle",
+    "0.15mm Optimal @Creality CR-10 Max (Klipper) 0.4 nozzle",
+    "0.20mm Standard @Creality CR-10 Max (Klipper) 0.4 nozzle",
+    "0.24mm Draft @Creality CR-10 Max (Klipper) 0.4 nozzle"
+   ],
+   "filaments": [
+    "Creality Generic ABS",
+    "Creality Generic ASA",
+    "Creality Generic PA-CF",
+    "Creality Generic PETG",
+    "Creality Generic PLA",
+    "Creality Generic PLA-CF"
+   ]
+  },
+  {
+   "name": "Creality CR-10 Max (Klipper) 0.2 nozzle",
+   "vendor": "Creality",
+   "tools": 1,
+   "bed": [
+    450.0,
+    450.0,
+    470.0
+   ],
+   "model": "Creality CR-10 Max (Klipper)",
+   "nozzle": 0.2,
+   "default_process": "0.10mm Standard @Creality CR-10 Max (Klipper) 0.2 nozzle",
+   "default_filament": "Creality Generic PLA",
+   "processes": [
+    "0.06mm Fine @Creality CR-10 Max (Klipper) 0.2 nozzle",
+    "0.07mm Optimal @Creality CR-10 Max (Klipper) 0.2 nozzle",
+    "0.10mm Standard @Creality CR-10 Max (Klipper) 0.2 nozzle",
+    "0.12mm Draft @Creality CR-10 Max (Klipper) 0.2 nozzle"
+   ],
+   "filaments": [
+    "Creality Generic ABS",
+    "Creality Generic ASA",
+    "Creality Generic PA-CF",
+    "Creality Generic PETG",
+    "Creality Generic PLA",
+    "Creality Generic PLA-CF"
+   ]
+  },
+  {
+   "name": "Creality CR-10 Max (Klipper) 0.6 nozzle",
+   "vendor": "Creality",
+   "tools": 1,
+   "bed": [
+    450.0,
+    450.0,
+    470.0
+   ],
+   "model": "Creality CR-10 Max (Klipper)",
+   "nozzle": 0.6,
+   "default_process": "0.30mm Standard @Creality CR-10 Max (Klipper) 0.6 nozzle",
+   "default_filament": "Creality Generic PLA",
+   "processes": [
+    "0.18mm Fine @Creality CR-10 Max (Klipper) 0.6 nozzle",
+    "0.22mm Optimal @Creality CR-10 Max (Klipper) 0.6 nozzle",
+    "0.30mm Standard @Creality CR-10 Max (Klipper) 0.6 nozzle",
+    "0.36mm Draft @Creality CR-10 Max (Klipper) 0.6 nozzle"
+   ],
+   "filaments": [
+    "Creality Generic ABS",
+    "Creality Generic ASA",
+    "Creality Generic PA-CF",
+    "Creality Generic PETG",
+    "Creality Generic PLA",
+    "Creality Generic PLA-CF"
+   ]
+  },
+  {
+   "name": "Creality CR-10 Max (Klipper) 0.8 nozzle",
+   "vendor": "Creality",
+   "tools": 1,
+   "bed": [
+    450.0,
+    450.0,
+    470.0
+   ],
+   "model": "Creality CR-10 Max (Klipper)",
+   "nozzle": 0.8,
+   "default_process": "0.40mm Standard @Creality CR-10 Max (Klipper) 0.8 nozzle",
+   "default_filament": "Creality Generic PLA",
+   "processes": [
+    "0.24mm Fine @Creality CR-10 Max (Klipper) 0.8 nozzle",
+    "0.30mm Optimal @Creality CR-10 Max (Klipper) 0.8 nozzle",
+    "0.40mm Standard @Creality CR-10 Max (Klipper) 0.8 nozzle",
+    "0.48mm Draft @Creality CR-10 Max (Klipper) 0.8 nozzle"
+   ],
+   "filaments": [
+    "Creality Generic ABS",
+    "Creality Generic ASA",
+    "Creality Generic PA-CF",
+    "Creality Generic PETG",
+    "Creality Generic PLA",
+    "Creality Generic PLA-CF"
+   ]
+  },
+  {
+   "name": "Creality CR-10 Max (Klipper) 1.0 nozzle",
+   "vendor": "Creality",
+   "tools": 1,
+   "bed": [
+    450.0,
+    450.0,
+    470.0
+   ],
+   "model": "Creality CR-10 Max (Klipper)",
+   "nozzle": 1.0,
+   "default_process": "0.50mm Standard @Creality CR-10 Max (Klipper) 1.0 nozzle",
+   "default_filament": "Creality Generic PLA",
+   "processes": [
+    "0.30mm Fine @Creality CR-10 Max (Klipper) 1.0 nozzle",
+    "0.38mm Optimal @Creality CR-10 Max (Klipper) 1.0 nozzle",
+    "0.50mm Standard @Creality CR-10 Max (Klipper) 1.0 nozzle",
+    "0.60mm Draft @Creality CR-10 Max (Klipper) 1.0 nozzle"
+   ],
+   "filaments": [
+    "Creality Generic ABS",
+    "Creality Generic ASA",
+    "Creality Generic PA-CF",
+    "Creality Generic PETG",
+    "Creality Generic PLA",
+    "Creality Generic PLA-CF"
+   ]
   }
  ]
 }

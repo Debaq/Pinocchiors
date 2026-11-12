@@ -1,0 +1,162 @@
+{
+ "type": "machine",
+ "name": "Creality CR-10 Max (Klipper) 1.0 nozzle",
+ "from": "system",
+ "printer_technology": "FFF",
+ "deretraction_speed": [
+  "40"
+ ],
+ "extruder_colour": [
+  "#FCE94F"
+ ],
+ "extruder_offset": [
+  "0x0"
+ ],
+ "gcode_flavor": "klipper",
+ "silent_mode": "0",
+ "support_chamber_temp_control": "0",
+ "support_air_filtration": "0",
+ "machine_max_acceleration_e": [
+  "5000",
+  "5000"
+ ],
+ "machine_max_acceleration_extruding": [
+  "2000",
+  "2000"
+ ],
+ "machine_max_acceleration_retracting": [
+  "1000",
+  "1000"
+ ],
+ "machine_max_acceleration_x": [
+  "2000",
+  "2000"
+ ],
+ "machine_max_acceleration_y": [
+  "2000",
+  "2000"
+ ],
+ "machine_max_acceleration_z": [
+  "500",
+  "500"
+ ],
+ "machine_max_speed_e": [
+  "60",
+  "60"
+ ],
+ "machine_max_speed_x": [
+  "500",
+  "500"
+ ],
+ "machine_max_speed_y": [
+  "500",
+  "500"
+ ],
+ "machine_max_speed_z": [
+  "10",
+  "10"
+ ],
+ "machine_max_jerk_e": [
+  "5",
+  "5"
+ ],
+ "machine_max_jerk_x": [
+  "8",
+  "8"
+ ],
+ "machine_max_jerk_y": [
+  "8",
+  "8"
+ ],
+ "machine_max_jerk_z": [
+  "0.4",
+  "0.4"
+ ],
+ "machine_min_extruding_rate": [
+  "0",
+  "0"
+ ],
+ "machine_min_travel_rate": [
+  "0",
+  "0"
+ ],
+ "max_layer_height": [
+  "0.75"
+ ],
+ "min_layer_height": [
+  "0.2"
+ ],
+ "printable_height": "470",
+ "extruder_clearance_radius": "47",
+ "extruder_clearance_height_to_rod": "34",
+ "extruder_clearance_height_to_lid": "34",
+ "nozzle_diameter": [
+  "1.0"
+ ],
+ "printer_settings_id": "",
+ "printer_variant": "1.0",
+ "retraction_minimum_travel": [
+  "2"
+ ],
+ "retract_before_wipe": [
+  "70%"
+ ],
+ "retract_when_changing_layer": [
+  "1"
+ ],
+ "retraction_length": [
+  "1"
+ ],
+ "retract_length_toolchange": [
+  "2"
+ ],
+ "z_hop": [
+  "0.4"
+ ],
+ "retract_restart_extra": [
+  "0"
+ ],
+ "retract_restart_extra_toolchange": [
+  "0"
+ ],
+ "retraction_speed": [
+  "60"
+ ],
+ "single_extruder_multi_material": "1",
+ "change_filament_gcode": "",
+ "wipe": [
+  "1"
+ ],
+ "z_hop_types": "Normal Lift",
+ "before_layer_change_gcode": ";BEFORE_LAYER_CHANGE\n;[layer_z]\nG92 E0\n",
+ "default_print_profile": "0.20mm Standard @Creality CR-10 Max (Klipper) 1.0 nozzle",
+ "machine_start_gcode": "M83 ; extruder relative mode\nSTART_PRINT BED_TEMP=[bed_temperature_initial_layer_single] EXTRUDER_TEMP=[nozzle_temperature_initial_layer]",
+ "machine_end_gcode": "END_PRINT",
+ "machine_max_acceleration_travel": [
+  "2000",
+  "2000"
+ ],
+ "machine_pause_gcode": "PAUSE",
+ "default_filament_profile": [
+  "Creality Generic PLA"
+ ],
+ "bed_exclude_area": [
+  "0x0"
+ ],
+ "layer_change_gcode": "",
+ "scan_first_layer": "0",
+ "nozzle_type": "undefine",
+ "auxiliary_fan": "0",
+ "printer_model": "Creality CR-10 Max (Klipper)",
+ "printer_structure": "i3",
+ "printable_area": [
+  "0x0",
+  "450x0",
+  "450x450",
+  "0x450"
+ ],
+ "machine_max_junction_deviation": [
+  "0.013",
+  "0"
+ ]
+}
