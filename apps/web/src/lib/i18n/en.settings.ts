@@ -333,4 +333,7 @@ Object.assign(en_settings, {
   "Sala": "Room",
   "En sala": "In room",
   "esperando…": "waiting…",
+  "Dejar de seguir a {name}": "Stop following {name}",
+  "Seguir la cámara de {name}": "Follow {name}'s camera",
+  "siguiendo": "following",
 });

@@ -210,6 +210,26 @@ export class CameraRig {
     return { position: m(this.camera.position), target: m(this.controls.target), up: this.camera.up.toArray() as [number, number, number] };
   }
 
+  /**
+   * Para la colaboración: el punto (en metros) que está bajo el cursor
+   * (`ndc` -1..1) a la distancia del objetivo de la cámara. Es lo más parecido
+   * a «dónde apunta» sin lanzar un rayo contra la escena.
+   */
+  rayPoint(ndc: [number, number], metersPerUnit: number): [number, number, number] {
+    this.camera.updateMatrixWorld();
+    const origin = this.camera.position;
+    const dir = new THREE.Vector3(ndc[0], ndc[1], 0.5).unproject(this.camera).sub(origin).normalize();
+    const dist = origin.distanceTo(this.controls.target);
+    return origin.clone().addScaledVector(dir, dist).multiplyScalar(metersPerUnit).toArray() as [number, number, number];
+  }
+
+  /** Lo inverso: un punto en metros a coordenadas de pantalla -1..1 (nada si queda detrás de la cámara) */
+  toNdc(point: [number, number, number], metersPerUnit: number): [number, number] | undefined {
+    this.camera.updateMatrixWorld();
+    const v = new THREE.Vector3().fromArray(point).multiplyScalar(1 / metersPerUnit).project(this.camera);
+    return v.z > 1 || v.z < -1 ? undefined : [v.x, v.y];
+  }
+
   /** Pone la cámara en `pose` (en metros) */
   setPose(pose: CameraPose, metersPerUnit: number) {
     this.stop();

@@ -8,6 +8,8 @@ import { listen } from "@tauri-apps/api/event";
 import { startMcpLive } from "./lib/mcpLive";
 import { IS_ANDROID } from "./lib/platform";
 import { LiveAiBadge } from "./components/layout/LiveAiBadge";
+import { registerCollabView } from "./lib/collabViews";
+import { setPresenceLabel } from "./lib/collabPresence";
 import { CollabBadge } from "./components/layout/CollabBadge";
 import { CollabOverlay } from "./components/layout/CollabOverlay";
 import { AiChatPanel } from "./components/layout/AiChatPanel";
@@ -2941,9 +2943,14 @@ export const App: Component = () => {
   // HANDLERS
   // ═══════════════════════════════════════════════════════════════════════════
 
+  // Lo que tengo elegido, para la etiqueta de mi cursor en la sala de colaboración
+  createEffect(() => setPresenceLabel("viewport", activeObject()?.name));
+  createEffect(() => setPresenceLabel("design", cad.activeTab()?.name));
+
   const handleViewerReady = (v: Viewer3D) => {
     viewerRef = v;
     setViewer(v);
+    registerCollabView("viewport", v.collabView());
     void scanCloud.attach(v);
   };
 

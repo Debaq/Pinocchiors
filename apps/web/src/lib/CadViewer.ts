@@ -13,6 +13,7 @@ import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import { Line2 } from "three/addons/lines/Line2.js";
 import { LineGeometry } from "three/addons/lines/LineGeometry.js";
 import { CameraRig, type CameraPose } from "./cameraRig";
+import type { CollabViewer } from "./collabViews";
 import { buildGridLines } from "./gridLines";
 import { LightRig, configureRenderer, type LightSettings } from "./lightRig";
 import { THEME_EVENT, themeHex } from "./theme";
@@ -447,6 +448,17 @@ export class CadViewer {
   /** Pone la cámara en `pose` (en metros), la del visor principal al entrar */
   setCameraPose(pose: CameraPose) {
     this.rig.setPose(pose, this.mmPerUnit / 1000);
+  }
+
+  /** Lo que usa la colaboración para ver y copiar la cámara (ver `lib/collabViews.ts`) */
+  collabView(): CollabViewer {
+    const k = () => this.mmPerUnit / 1000;
+    return {
+      pose: () => this.cameraPose(),
+      setPose: (p) => this.setCameraPose(p),
+      rayPoint: (ndc) => this.rig.rayPoint(ndc, k()),
+      toNdc: (pt) => this.rig.toNdc(pt, k()),
+    };
   }
 
   /** Modo notebook (Vista): la rueda gira, como en el visor principal */

@@ -32,7 +32,7 @@ Ventaja: no hay conflictos de fusión. Costo: el invitado depende del anfitrión
 - Botón «Seguir a…»: la cámara copia la del otro.
 - Mensajes sin estado, ~20 Hz, se descartan los viejos.
 
-**Estado 2026-11-11 (sin commitear):** hecho el cursor con nombre y color, la onda en cada clic y los puntos de color en la cabecera (`lib/collabPresence.ts`, `CollabOverlay.tsx`, `CollabBadge.tsx`; el anfitrión reparte los datagramas con `send_light_except`). Los visores se marcan con `data-collab-view` ("viewport" y "design"); la posición va relativa al visor. **Falta:** cursor anclado a la superficie 3D (hoy es 2D sobre el visor, solo calza si las dos cámaras miran igual), selección resaltada con el color de cada uno, «Seguir a…» (copiar la cámara con `cameraPose/setCameraPose`) y distinguir la pestaña de diseño de cada uno.
+**C1 HECHO 2026-11-11.** Cursor con nombre y color, onda en cada clic, puntos en la cabecera. El cursor lleva un punto 3D (`CameraRig.rayPoint/toNdc`, registro en `lib/collabViews.ts`, `collabView()` en `CadViewer` y `Viewer3D`): el otro lo proyecta con su propia cámara, así se ve en el mismo lugar del modelo aunque miren distinto. La etiqueta muestra lo que tiene elegido (objeto en el visor 3D, pestaña en Diseñar). «Seguir a…»: clic en el punto de color de la cabecera copia la cámara de esa persona (se manda cada 120 ms si cambia, o cada 1,5 s); tocar el visor o la rueda la suelta. Límites: el punto 3D es a la distancia del objetivo de la cámara (sin lanzar un rayo contra la malla), y la «selección» es el nombre, no un resaltado de caras. Eso último pasa a C3 (bloqueos por pieza). Sin probar con dos instancias reales.
 
 ### C2 — Chat y comentarios
 - Chat en panel izquierdo con pestañas (convención de paneles).

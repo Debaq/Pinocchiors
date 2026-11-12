@@ -1,13 +1,27 @@
 import { Component, For, Show } from "solid-js";
 import { peers } from "../../lib/collab";
-import { cursors, ripples, useCollabPresence } from "../../lib/collabPresence";
+import { collabView } from "../../lib/collabViews";
+import { cursors, ripples, useCollabPresence, type RemoteCursor } from "../../lib/collabPresence";
 
-/** Posición en pantalla de un punto relativo al visor, o nada si ese visor no está a la vista */
-function place(view: string, x: number, y: number): { left: number; top: number } | undefined {
-  const el = document.querySelector(`[data-collab-view="${view}"]`);
+/**
+ * Posición en pantalla de un cursor, o nada si ese visor no está a la vista.
+ * Con punto 3D se proyecta con la cámara propia (se ve en el mismo lugar del
+ * modelo aunque las cámaras difieran); sin él, vale la posición relativa.
+ */
+function place(c: Pick<RemoteCursor, "view" | "x" | "y" | "p">): { left: number; top: number } | undefined {
+  const el = document.querySelector(`[data-collab-view="${c.view}"]`);
   if (!el) return undefined;
   const r = el.getBoundingClientRect();
   if (r.width < 1) return undefined;
+  let x = c.x;
+  let y = c.y;
+  const viewer = c.p ? collabView(c.view) : undefined;
+  if (c.p && viewer) {
+    const ndc = viewer.toNdc(c.p);
+    if (!ndc) return undefined;
+    x = (ndc[0] + 1) / 2;
+    y = (1 - ndc[1]) / 2;
+  }
   return { left: r.left + x * r.width, top: r.top + y * r.height };
 }
 
@@ -24,7 +38,7 @@ export const CollabOverlay: Component = () => {
     <div class="fixed inset-0 z-[9000] pointer-events-none overflow-hidden" aria-hidden="true">
       <For each={Object.values(cursors())}>
         {(c) => (
-          <Show when={place(c.view, c.x, c.y)}>
+          <Show when={place(c)}>
             {(pos) => (
               <div class="absolute" style={{ left: `${pos().left}px`, top: `${pos().top}px`, transition: "left 60ms linear, top 60ms linear" }}>
                 <svg width="18" height="18" viewBox="0 0 24 24" style={{ color: colorOf(c.id), filter: "drop-shadow(0 1px 1px rgba(0,0,0,.5))" }}>
@@ -35,6 +49,7 @@ export const CollabOverlay: Component = () => {
                   style={{ background: colorOf(c.id) }}
                 >
                   {nameOf(c.id)}
+                  <Show when={c.label}>{` · ${c.label}`}</Show>
                 </span>
               </div>
             )}
@@ -43,7 +58,7 @@ export const CollabOverlay: Component = () => {
       </For>
       <For each={ripples()}>
         {(r) => (
-          <Show when={place(r.view, r.x, r.y)}>
+          <Show when={place(r)}>
             {(pos) => (
               <span
                 class="absolute rounded-full border-2 collab-ripple"

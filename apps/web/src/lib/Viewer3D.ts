@@ -11,6 +11,7 @@ import { makeShadowGround, renderFrameRect, renderStillImage, type RenderStillOp
 import { THEME_EVENT, themeHex } from "./theme";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { CameraRig, type CameraPose } from "./cameraRig";
+import type { CollabViewer } from "./collabViews";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
 import { boneWeight, meshNeighbors, paintRow, VertexGrid } from "./weightPaint";
 import { boneHue, estimateInfluence, estimateInfluenceAsync, type Influence } from "./boneInfluence";
@@ -4033,6 +4034,17 @@ export class Viewer3D {
     this.cameraRig.setPose(pose, this.gridUnits.metersPerUnit);
     this.pendingPose = { pose, until: performance.now() + 4000 };
     this.placeLights();
+  }
+
+  /** Lo que usa la colaboración para ver y copiar la cámara (ver `lib/collabViews.ts`) */
+  collabView(): CollabViewer {
+    const k = () => this.gridUnits.metersPerUnit;
+    return {
+      pose: () => this.getCameraPose(),
+      setPose: (p) => this.cameraRig.setPose(p, k()),
+      rayPoint: (ndc) => this.cameraRig.rayPoint(ndc, k()),
+      toNdc: (pt) => this.cameraRig.toNdc(pt, k()),
+    };
   }
 
   setView(name: string): void {

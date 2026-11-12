@@ -48,6 +48,7 @@ import type { Constraint3d } from "../../lib/cad";
 // `t` se usa como nombre de variable en muchos lugares de este archivo: se importa como `tr`
 import { fmtNumber, t as tr, tx } from "../../lib/i18n";
 import { registerSketchKeys, sketchKey } from "../../lib/shortcuts";
+import { registerCollabView } from "../../lib/collabViews";
 
 /** mm³ o cm³ según el tamaño */
 const formatVolume = (v: number) => (v >= 1000 ? `${fmtNumber(v / 1000, { maximumFractionDigits: 2 })} cm³` : `${fmtNumber(v, { maximumFractionDigits: 1 })} mm³`);
@@ -840,6 +841,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       },
     });
     onCleanup(() => ui.registerViewer(undefined));
+    onCleanup(registerCollabView("design", v.collabView()));
     // Para las pruebas en navegador (scratch de desarrollo)
     if (import.meta.env.DEV) Object.assign(window, { __cadViewer: viewer, __cadStore: store, __cadUi: ui });
     try {
