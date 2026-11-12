@@ -1,5 +1,5 @@
 import { Component, For, JSX, Show, createSignal } from "solid-js";
-import { Button } from "../ui";
+import { Button, Checkbox, Select } from "../ui";
 import { t } from "../../lib/i18n";
 import { tBackend } from "../../lib/i18nBackend";
 import {
@@ -13,7 +13,12 @@ import {
   setCollabColor,
   setCollabName,
   status,
+  approvalWanted,
+  defaultRole,
+  setApprovalWanted,
+  setDefaultRole,
 } from "../../lib/collab";
+import { admit, kick, roles, rotateKey, setRole, type Role } from "../../lib/collabRoles";
 import { resync } from "../../lib/collabSync";
 
 const Section = (props: { title: string; children: JSX.Element }) => (
@@ -22,6 +27,12 @@ const Section = (props: { title: string; children: JSX.Element }) => (
     {props.children}
   </section>
 );
+
+const ROLE_OPTIONS = () => [
+  { value: "view", label: t("Solo ver") },
+  { value: "comment", label: t("Comentar") },
+  { value: "edit", label: t("Editar") },
+];
 
 const Hint = (props: { children: JSX.Element }) => <p class="text-xs text-text-muted leading-relaxed">{props.children}</p>;
 
@@ -95,6 +106,13 @@ export const CollabSettings: Component = () => {
                 "Trabaja en el mismo proyecto con otra persona. Una crea la sala y comparte el ticket; la otra lo pega acá. La conexión es directa entre las dos apps y va cifrada.",
               )}
             </Hint>
+            <Checkbox label={t("Pedir mi aprobación a quien entre")} checked={approvalWanted()} onChange={setApprovalWanted} />
+            <Select
+              label={t("Rol al entrar")}
+              options={ROLE_OPTIONS()}
+              value={defaultRole()}
+              onChange={(v) => setDefaultRole(v as Role)}
+            />
             <Button variant="primary" disabled={busy()} onClick={() => void run(hostCollab)}>
               {t("Crear una sala")}
             </Button>
@@ -122,14 +140,41 @@ export const CollabSettings: Component = () => {
               value={status().ticket ?? ""}
               onFocus={(e) => e.currentTarget.select()}
             />
-            <Button onClick={() => void copy()}>{t("Copiar el ticket")}</Button>
+            <div class="flex gap-2">
+              <Button onClick={() => void copy()}>{t("Copiar el ticket")}</Button>
+              <Button disabled={busy()} onClick={() => void run(async () => { await rotateKey(); setMessage({ text: t("Clave cambiada: el ticket anterior ya no sirve. Copia el nuevo.") }); })}>
+                {t("Cambiar la clave")}
+              </Button>
+            </div>
           </Show>
           <ul class="space-y-1">
             <For each={peers()} fallback={<li class="text-xs text-text-muted">{t("Esperando a alguien…")}</li>}>
               {(p) => (
                 <li class="flex items-center gap-2 text-sm text-text">
                   <span class="w-2.5 h-2.5 rounded-full" style={{ background: p.color }} />
-                  {p.name}
+                  <span class="flex-1 truncate">{p.name}</span>
+                  <Show when={status().host}>
+                    <Show
+                      when={roles()[p.id] !== "pending"}
+                      fallback={
+                        <>
+                          <Button variant="primary" onClick={() => admit(p.id)}>
+                            {t("Admitir")}
+                          </Button>
+                          <Button onClick={() => kick(p.id)}>{t("Rechazar")}</Button>
+                        </>
+                      }
+                    >
+                      <select
+                        class="px-1 py-0.5 rounded border border-border bg-surface/40 text-xs text-text"
+                        value={roles()[p.id] ?? "edit"}
+                        onChange={(e) => setRole(p.id, e.currentTarget.value as Role)}
+                      >
+                        <For each={ROLE_OPTIONS()}>{(o) => <option value={o.value}>{o.label}</option>}</For>
+                      </select>
+                      <Button onClick={() => kick(p.id)}>{t("Expulsar")}</Button>
+                    </Show>
+                  </Show>
                 </li>
               )}
             </For>

@@ -45,6 +45,7 @@ type CollabEvent =
   | { kind: "light"; from: string; bytes: number[] }
   | { kind: "project"; from: string; path: string; bytes: number }
   | { kind: "project_error"; from: string; error: string }
+  | { kind: "rejected"; reason: string }
   | { kind: "blob"; from: string; name: string };
 
 const COLORS = ["#ff8800", "#2ec4b6", "#e63946", "#6a4c93", "#3a86ff", "#8ac926"];
@@ -52,6 +53,10 @@ const COLORS = ["#ff8800", "#2ec4b6", "#e63946", "#6a4c93", "#3a86ff", "#8ac926"
 /** Nombre y color que ven los demás (se recuerdan entre sesiones) */
 const [collabName, setCollabName] = createPersisted("collab.name", "");
 const [collabColor, setCollabColor] = createPersisted("collab.color", COLORS[Math.floor(Math.random() * COLORS.length)]);
+/** Pedir mi aprobación a quien entre a mi sala, y con qué rol entra (se recuerdan) */
+const [approvalWanted, setApprovalWanted] = createPersisted("collab.approval", true);
+const [defaultRole, setDefaultRole] = createPersisted<"view" | "comment" | "edit">("collab.role", "edit");
+export { approvalWanted, defaultRole, setApprovalWanted, setDefaultRole };
 const [status, setStatus] = createSignal<CollabStatus>({ on: false, host: false, ticket: null, my_id: null });
 const [peers, setPeers] = createSignal<Peer[]>([]);
 const [chat, setChat] = createSignal<ChatLine[]>([]);
@@ -117,6 +122,25 @@ export function sendData(kind: string, value: unknown, opts?: { except?: string;
   return sendMessage({ t: "data", kind, value }, opts?.except, opts?.only);
 }
 
+/**
+ * El anfitrión filtra lo que llega según el rol de quien lo manda (ver
+ * `collabRoles.ts`): devuelve `false` para descartarlo. `need` es el nivel
+ * que pide el mensaje: 1 ver, 2 comentar, 3 editar.
+ */
+let permit: ((from: string, need: 1 | 2 | 3) => boolean) | undefined;
+export function setCollabPermit(fn: typeof permit) {
+  permit = fn;
+}
+function needOf(msg: CollabMessage): 1 | 2 | 3 {
+  if (msg.t === "chat") return 2;
+  if (msg.t === "data") {
+    if (msg.kind === "comment_op") return 2;
+    if (msg.kind === "resync") return 1;
+    return 3;
+  }
+  return 1;
+}
+
 /** Alguien se fue de la sala */
 const leftHandlers = new Set<(id: string) => void>();
 export function onCollabLeft(h: (id: string) => void): () => void {
@@ -141,9 +165,13 @@ function handle(e: CollabEvent) {
       for (const h of leftHandlers) h(e.id);
       setPeers((p) => p.filter((x) => x.id !== e.id));
       // Si era el anfitrión, la sala terminó para el invitado
-      if (!status().host && peers().length === 0) void leaveCollab();
+      if (!status().host && peers().length === 0) {
+        for (const h of noticeHandlers) h("La sala se cerró o te sacaron de ella");
+        void leaveCollab();
+      }
       break;
     case "message":
+      if (status().host && permit && !permit(e.from, needOf(e.msg))) break;
       if (e.msg.t === "chat") {
         const text = e.msg.text;
         const from = e.from;
@@ -163,7 +191,12 @@ function handle(e: CollabEvent) {
     case "project_error":
       for (const h of noticeHandlers) h(e.error);
       break;
+    case "rejected":
+      for (const h of noticeHandlers) h(`No se pudo entrar a la sala: ${e.reason}`);
+      void leaveCollab();
+      break;
     case "light":
+      if (status().host && permit && !permit(e.from, 1)) break;
       for (const h of lightHandlers) h(e.from, new Uint8Array(e.bytes));
       break;
   }
@@ -186,7 +219,7 @@ const me = () => ({ name: collabName().trim() || "Anónimo", color: collabColor(
 export async function hostCollab(): Promise<void> {
   await ensureListening();
   reset();
-  setStatus(await invoke<CollabStatus>("collab_host", me()));
+  setStatus(await invoke<CollabStatus>("collab_host", { ...me(), approval: approvalWanted() }));
   for (const h of roomHandlers) h(true, true);
 }
 

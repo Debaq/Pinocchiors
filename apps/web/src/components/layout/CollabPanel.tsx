@@ -2,7 +2,7 @@ import { Component, For, Show, createEffect, createMemo, createSignal } from "so
 import { Button } from "../ui";
 import * as Icons from "../icons";
 import { t } from "../../lib/i18n";
-import { chat, collabPanelTab, sendChat, setChatUnread, setCollabPanelTab, status } from "../../lib/collab";
+import { chat, collabPanelTab, peers, sendChat, setChatUnread, setCollabPanelTab, status } from "../../lib/collab";
 import {
   addReply,
   addThread,
@@ -18,6 +18,7 @@ import {
   threads,
   type Thread,
 } from "../../lib/collabComments";
+import { admit, canComment, kick, pendingPeers } from "../../lib/collabRoles";
 import { ConfirmDialog } from "./ConfirmDialog";
 
 const inputClass = "w-full px-2 py-1 rounded border border-border bg-surface/40 text-sm text-text outline-none focus:border-accent";
@@ -62,6 +63,22 @@ export const CollabPanel: Component<{ onClose: () => void; onAskAi?: (text: stri
           <Icons.X size={14} />
         </button>
       </div>
+      <Show when={status().host && pendingPeers(peers()).length > 0}>
+        <div class="p-2 space-y-1 border-b border-border bg-accent/10">
+          <For each={pendingPeers(peers())}>
+            {(p) => (
+              <div class="flex items-center gap-2 text-xs text-text">
+                <span class="w-2.5 h-2.5 rounded-full" style={{ background: p.color }} />
+                <span class="flex-1 truncate">{t("{name} quiere entrar", { name: p.name })}</span>
+                <Button variant="primary" onClick={() => admit(p.id)}>
+                  {t("Admitir")}
+                </Button>
+                <Button onClick={() => kick(p.id)}>{t("Rechazar")}</Button>
+              </div>
+            )}
+          </For>
+        </div>
+      </Show>
       <Show when={tab() === "chat"} fallback={<CommentsTab onAskAi={props.onAskAi} />}>
         <ChatTab />
       </Show>
@@ -109,7 +126,8 @@ const ChatTab: Component = () => {
         <input
           class={inputClass}
           value={line()}
-          placeholder={t("Escribe y presiona Enter")}
+          disabled={!canComment()}
+          placeholder={canComment() ? t("Escribe y presiona Enter") : t("Solo lectura: no puedes escribir")}
           onInput={(e) => setLine(e.currentTarget.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter") send();
@@ -140,6 +158,7 @@ const CommentsTab: Component<{ onAskAi?: (text: string) => void }> = (props) => 
       <div class="p-2 space-y-2 border-b border-border">
         <Button
           variant={placing() ? "primary" : undefined}
+          disabled={!canComment()}
           onClick={() => {
             setDraft(undefined);
             setPlacing(!placing());

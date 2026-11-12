@@ -53,10 +53,14 @@ Cambio de diseño respecto de lo escrito antes: **no hay log de comandos**. El d
 - Pruebas: `libs/collab/tests/sala.rs` (archivo de 3 MB) y `apps/mcp/tests/collab_copy.rs` (exportar y abrir la copia en otro estado, diseño y pestañas iguales). tsc y cargo check OK.
 - **Límites:** pestañas nuevas/borradas y mallas (reparar, rig, animación) no viajan en vivo: el invitado se resincroniza (lo pide solo si llega un diseño de una pestaña que no tiene). Si el anfitrión abre otro proyecto con invitados dentro, hay que resincronizar a mano. Los comentarios sí van en vivo (C2). Deshacer no es por autor todavía (C3). Sin probar con dos instancias reales.
 
-### C5 — Permisos y seguridad
-- Roles por persona: ver / comentar / editar. El anfitrión los cambia en vivo.
-- Clave de sala; expulsar; el relay no ve el contenido (cifrado extremo a extremo con la clave de sala).
-- Regla ya fijada: **nada de tocar impresoras desde un invitado** (ver `no-tocar-impresiones`). Los comandos de impresión no se aceptan de invitados.
+### C5 — Permisos y seguridad (HECHO 2026-11-11)
+- **Clave de sala:** el ticket lleva una clave de 128 bits; el anfitrión rechaza (y cierra) a quien no la trae. «Cambiar la clave» invalida el ticket anterior sin sacar a los que ya están. Sin clave correcta el invitado recibe `Rejected` y sale con aviso.
+- **Aprobación (por defecto activa):** quien entra queda *silenciado en `Room`* (no recibe nada de lo que se reparte —chat, diseño, comentarios, bloqueos— ni se reparte lo suyo) hasta que el anfitrión lo admite («X quiere entrar» en el panel y contador en la cabecera). Recién ahí se le manda el proyecto.
+- **Roles** (ver / comentar / editar, el anfitrión los cambia en vivo en Configuración ▸ Colaborar; el de entrada se elige antes de crear la sala): el anfitrión descarta lo que llega sin permiso (`setCollabPermit`: ver = presencia y resincronizar; comentar = + chat y comentarios; editar = + diseño y bloqueos). El invitado lo sabe (`collab_role`) y su interfaz queda de solo lectura (editar bloqueado, comentar/chat deshabilitados).
+- **Expulsar / rechazar:** `Room::kick`.
+- **Impresoras:** ningún invitado puede tocarlas **por construcción**: el único canal es el de datos de la sala (diseño, comentarios, bloqueos, chat) y el anfitrión nunca ejecuta comandos que mande un invitado.
+- **Cifrado:** QUIC/TLS de iroh ya es de extremo a extremo entre las dos apps (el relay solo ve bytes cifrados); no se agrega otra capa.
+- Pruebas (`libs/collab/tests/sala.rs`): sin clave no se entra, expulsar, rotar clave (el viejo falla, el nuevo entra), con aprobación el pendiente no recibe nada hasta ser admitido.
 
 ### C6 — Pruebas
 - Prueba de unidad del protocolo y del log de comandos.

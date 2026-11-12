@@ -5,7 +5,8 @@
 // mandan operaciones y él las reparte. Se guardan en el proyecto (`ui.json`).
 
 import { createSignal } from "solid-js";
-import { collabColor, collabName, onCollabData, onCollabJoined, onCollabRoom, sendData, status } from "./collab";
+import { collabColor, collabName, onCollabData, onCollabRoom, sendData, status } from "./collab";
+import { canComment, onCollabAdmitted } from "./collabRoles";
 import { collabView } from "./collabViews";
 
 export type CommentView = "viewport" | "design";
@@ -79,7 +80,7 @@ function local(o: Op) {
 
 export function addThread(anchor: Anchor, text: string): string | undefined {
   const t = text.trim();
-  if (!t) return undefined;
+  if (!t || !canComment()) return undefined;
   const n = Math.max(0, ...threads().map((x) => x.n)) + 1;
   const thread: Thread = { id: uid(), anchor, comments: [{ id: uid(), ...me(), text: t, at: Date.now() }], resolved: false, n };
   local({ op: "thread", thread });
@@ -89,14 +90,16 @@ export function addThread(anchor: Anchor, text: string): string | undefined {
 
 export function addReply(thread: string, text: string) {
   const t = text.trim();
-  if (t) local({ op: "reply", thread, comment: { id: uid(), ...me(), text: t, at: Date.now() } });
+  if (t && canComment()) local({ op: "reply", thread, comment: { id: uid(), ...me(), text: t, at: Date.now() } });
 }
 
 export function setResolved(thread: string, resolved: boolean) {
+  if (!canComment()) return;
   local({ op: "resolve", thread, resolved });
 }
 
 export function deleteThread(thread: string) {
+  if (!canComment()) return;
   if (selectedThread() === thread) setSelectedThread(undefined);
   local({ op: "delete", thread });
 }
@@ -163,7 +166,7 @@ onCollabData("comments_full", (_from, value) => {
   setThreads(value as Thread[]);
 });
 
-onCollabJoined((peer) => {
+onCollabAdmitted((peer) => {
   if (status().host) void sendData("comments_full", threads(), { only: peer.id }).catch(() => {});
 });
 

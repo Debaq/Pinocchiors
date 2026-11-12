@@ -13,7 +13,8 @@ import { setPresenceLabel } from "./lib/collabPresence";
 import { commentsForProject, loadComments } from "./lib/collabComments";
 import { CollabBadge } from "./components/layout/CollabBadge";
 import { CollabPanel } from "./components/layout/CollabPanel";
-import { collabPanelOpen, onCollabNotice, peers, setCollabPanelOpen, status } from "./lib/collab";
+import { approvalWanted, collabPanelOpen, onCollabNotice, peers, setCollabPanelOpen, status } from "./lib/collab";
+import { canEdit, installCollabRoles } from "./lib/collabRoles";
 import { installCollabLocks, lockedByOther, setActiveDesignTab, setEditing } from "./lib/collabLocks";
 import { installCollabSync } from "./lib/collabSync";
 import { installCollabDesign } from "./lib/collabDesign";
@@ -628,12 +629,14 @@ export const App: Component = () => {
     const stopDesign = installCollabDesign(cad, (m) => setStatusMessage(m));
     const stopNotice = onCollabNotice((m) => setStatusMessage(m));
     // Bloqueo por pestaña: sketch o diálogo abiertos = la pestaña es mía mientras dure
+    const stopRoles = installCollabRoles(() => approvalWanted());
     const stopLocks = installCollabLocks((_tab, by) => {
       cadUi.cancelSketch(false);
       void cad.cancelDraft();
-      setStatusMessage(t("{name} está editando esta pestaña: solo lectura", { name: by }));
+      setStatusMessage(by ? t("{name} está editando esta pestaña: solo lectura", { name: by }) : t("Solo lectura: el anfitrión no te dio permiso de editar"));
     });
     cad.setCollabGuard((tab) => {
+      if (!canEdit()) return t("Solo lectura: el anfitrión no te dio permiso de editar");
       const l = lockedByOther(tab);
       return l ? t("{name} está editando esta pestaña: solo lectura", { name: l.name }) : undefined;
     });
@@ -642,6 +645,7 @@ export const App: Component = () => {
       stopDesign();
       stopNotice();
       stopLocks();
+      stopRoles();
       cad.setCollabGuard(undefined);
     });
   });

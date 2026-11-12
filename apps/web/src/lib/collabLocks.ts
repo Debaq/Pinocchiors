@@ -5,8 +5,9 @@
 // bloqueos. Si el que la tenía se va de la sala, se libera sola.
 
 import { createSignal } from "solid-js";
-import { nameOf, onCollabData, onCollabJoined, onCollabLeft, onCollabRoom, peers, sendData, status } from "./collab";
+import { nameOf, onCollabData, onCollabLeft, onCollabRoom, peers, sendData, status } from "./collab";
 import { collabName } from "./collab";
+import { canEdit, onCollabAdmitted } from "./collabRoles";
 
 export interface Lock {
   tab: number;
@@ -73,6 +74,12 @@ export function setEditing(tab: number | null) {
     else void sendData("design_lock", { op: "release", tab: before } satisfies LockMsg).catch(() => {});
   }
   if (tab === null) return;
+  // Sin permiso de editar no se toma nada
+  if (!canEdit()) {
+    mine = null;
+    onDenied(tab, "");
+    return;
+  }
   const other = lockedByOther(tab);
   if (other) {
     mine = null;
@@ -109,9 +116,7 @@ export function installCollabLocks(denied: (tab: number, by: string) => void): (
       }
     }),
     // El anfitrión le cuenta el estado al que entra
-    onCollabJoined((peer) => {
-      if (status().host) broadcast(locks(), peer.id);
-    }),
+    onCollabAdmitted((peer) => broadcast(locks(), peer.id)),
     // Si se va quien tenía una pestaña, se libera
     onCollabLeft((id) => {
       if (!status().host) return;

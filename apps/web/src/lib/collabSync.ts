@@ -8,7 +8,8 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { t } from "./i18n";
-import { onCollabData, onCollabJoined, onCollabProject, onCollabRoom, requestResync, status } from "./collab";
+import { onCollabData, onCollabProject, onCollabRoom, requestResync, status } from "./collab";
+import { onCollabAdmitted, roles } from "./collabRoles";
 
 export interface CollabSyncHost {
   /** Lo mismo que lleva «Guardar»: la interfaz como texto y el diseño con el sketch abierto */
@@ -25,9 +26,9 @@ const sending = new Set<string>();
 export function installCollabSync(h: CollabSyncHost): () => void {
   host = h;
   const stops = [
-    onCollabJoined((peer) => void sendProject(peer.id, peer.name)),
+    onCollabAdmitted((peer) => void sendProject(peer.id, peer.name)),
     onCollabData("resync", (from) => {
-      if (status().host) void sendProject(from);
+      if (status().host && roles()[from] !== undefined && roles()[from] !== "pending") void sendProject(from);
     }),
     onCollabProject(async (path) => {
       try {

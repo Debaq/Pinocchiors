@@ -28,7 +28,7 @@ pub struct CollabStatus {
 
 fn status(c: &Collab) -> CollabStatus {
     match &*c.room.lock().unwrap() {
-        Some(r) => CollabStatus { on: true, host: r.is_host(), ticket: Some(r.ticket().to_string()), my_id: Some(r.my_id().to_string()) },
+        Some(r) => CollabStatus { on: true, host: r.is_host(), ticket: Some(r.ticket()), my_id: Some(r.my_id().to_string()) },
         None => CollabStatus { on: false, host: false, ticket: None, my_id: None },
     }
 }
@@ -37,6 +37,7 @@ fn event_json(e: Event) -> Value {
     match e {
         Event::PeerJoined { id, name, color } => json!({ "kind": "joined", "id": id, "name": name, "color": color }),
         Event::PeerLeft { id } => json!({ "kind": "left", "id": id }),
+        Event::Rejected { reason } => json!({ "kind": "rejected", "reason": reason }),
         Event::Message { from, msg } => json!({ "kind": "message", "from": from, "msg": msg }),
         Event::Light { from, bytes } => json!({ "kind": "light", "from": from, "bytes": bytes }),
         // Los archivos no pasan por acá (ver `receive_blob`)
@@ -53,7 +54,9 @@ fn adopt(app: AppHandle, c: &Collab, room: Room) -> CollabStatus {
         while let Some(e) = pump.recv().await {
             // El anfitrión reparte la presencia de cada invitado a los demás
             if let (true, Event::Light { from, bytes }) = (pump.is_host(), &e) {
-                pump.send_light_except(from, bytes).await;
+                if !pump.is_muted(from) {
+                    pump.send_light_except(from, bytes).await;
+                }
             }
             if let Event::Blob { from, name, bytes } = e {
                 receive_blob(&app, &from, &name, bytes);
@@ -77,9 +80,9 @@ fn options(name: String, color: String) -> Options {
 }
 
 #[tauri::command]
-pub async fn collab_host(app: AppHandle, c: State<'_, Collab>, name: String, color: String) -> Result<CollabStatus, String> {
+pub async fn collab_host(app: AppHandle, c: State<'_, Collab>, name: String, color: String, approval: bool) -> Result<CollabStatus, String> {
     close_current(&c).await;
-    let room = Room::host(options(name, color)).await.map_err(|e| e.to_string())?;
+    let room = Room::host(Options { approval, ..options(name, color) }).await.map_err(|e| e.to_string())?;
     Ok(adopt(app, &c, room))
 }
 
@@ -161,4 +164,33 @@ pub async fn collab_send_project(app: AppHandle, c: State<'_, Collab>, to: Strin
     let bytes = std::fs::read(&path).map_err(|e| format!("No se pudo leer el proyecto: {e}"))?;
     room.send_blob(&to, "project", &bytes).await.map_err(|e| e.to_string())?;
     Ok(size)
+}
+
+/// Anfitrión: saca a una persona de la sala
+#[tauri::command]
+pub async fn collab_kick(c: State<'_, Collab>, id: String) -> Result<(), String> {
+    current(&c)?.kick(&id).await;
+    Ok(())
+}
+
+/// Anfitrión: cambia la clave de la sala; el ticket anterior deja de servir
+#[tauri::command]
+pub fn collab_rotate_key(c: State<'_, Collab>) -> Result<CollabStatus, String> {
+    current(&c)?.rotate_key();
+    Ok(status(&c))
+}
+
+/// Anfitrión: silencia (sin admitir) o admite a una persona. Una persona
+/// silenciada no recibe lo que se reparte ni se reparte lo suyo.
+#[tauri::command]
+pub fn collab_set_muted(c: State<'_, Collab>, id: String, muted: bool) -> Result<(), String> {
+    current(&c)?.set_muted(&id, muted);
+    Ok(())
+}
+
+/// Anfitrión: pedir aprobación a quienes entren desde ahora
+#[tauri::command]
+pub fn collab_set_approval(c: State<'_, Collab>, on: bool) -> Result<(), String> {
+    current(&c)?.set_approval(on);
+    Ok(())
 }

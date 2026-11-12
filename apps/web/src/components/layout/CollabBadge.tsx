@@ -3,6 +3,7 @@ import { t } from "../../lib/i18n";
 import { chatUnread, collabPanelOpen, peers, setCollabPanelOpen, status } from "../../lib/collab";
 import { threads } from "../../lib/collabComments";
 import { followId, toggleFollow } from "../../lib/collabPresence";
+import { pendingPeers } from "../../lib/collabRoles";
 
 /**
  * En la cabecera: abre el panel de colaboración (chat y comentarios) y, con
@@ -16,6 +17,11 @@ export const CollabBadge: Component = () => {
     <div class="h-7 flex items-center gap-1.5 px-2 rounded-md border border-border text-xs" classList={{ "bg-accent/15": collabPanelOpen() }}>
       <button class="text-text hover:text-accent" title={t("Chat y comentarios")} aria-pressed={collabPanelOpen()} onClick={() => setCollabPanelOpen(!collabPanelOpen())}>
         {status().on ? (status().host ? t("Sala") : t("En sala")) : t("Comentarios")}
+        <Show when={status().host && pendingPeers(peers()).length > 0}>
+          <span class="ml-1 px-1 rounded-full bg-warning text-white animate-pulse" title={t("Alguien espera tu aprobación")}>
+            {pendingPeers(peers()).length}
+          </span>
+        </Show>
         <Show when={chatUnread() > 0}>
           <span class="ml-1 px-1 rounded-full bg-accent text-white">{chatUnread()}</span>
         </Show>
