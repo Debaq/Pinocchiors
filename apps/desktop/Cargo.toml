@@ -21,6 +21,7 @@ pinocchio-core = { workspace = true }
 pinocchio-mesh = { workspace = true, features = ["converter"] }
 pinocchio-skeleton = { workspace = true, features = ["converter"] }
 pinocchio-math = { workspace = true }
+pinocchio-collab = { path = "../../libs/collab" }
 pinocchio-attachment = { workspace = true }
 pinocchio-embedding = { workspace = true }
 

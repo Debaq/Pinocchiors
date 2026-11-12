@@ -8,6 +8,7 @@ pub mod bvh;
 pub mod hdri;
 pub mod imported_rig;
 pub mod lod;
+pub mod collab;
 pub mod mcp;
 pub mod mesh_slot;
 pub mod peek;
@@ -61,6 +62,7 @@ pub fn run() {
         .setup(|app| {
             // Inicializar estado
             app.manage(AppState::new());
+            app.manage(collab::Collab::default());
             app.manage(textures::TextureWatch::default());
             app.manage(scanner::ScannerHandle::default());
             app.manage(ray_render::RayRender::default());
@@ -127,6 +129,12 @@ pub fn run() {
             commands::apply_rest_pose,
             commands::set_skeleton_bones,
             commands::write_text_file,
+            collab::collab_host,
+            collab::collab_join,
+            collab::collab_leave,
+            collab::collab_status,
+            collab::collab_send,
+            collab::collab_send_light,
             mcp::clients::mcp_status,
             mcp::clients::mcp_connect,
             mcp::clients::mcp_skill,

@@ -30,6 +30,7 @@ import {
 } from "../../lib/settings";
 import { MOUSE_HINTS, type ShortcutHint } from "./ContextPanel";
 import { AiConnectorSettings } from "./AiConnectorSettings";
+import { CollabSettings } from "./CollabSettings";
 import { IS_ANDROID } from "../../lib/platform";
 import { gpuStatus, usingGpuRenderer } from "../../lib/gpuRenderer";
 import { getVersion } from "@tauri-apps/api/app";
@@ -93,7 +94,7 @@ const EXPORT_FORMAT_OPTIONS = [
 ];
 const SCALE_OPTIONS = UI_SCALES.map((s) => ({ value: String(s), label: `${Math.round(s * 100)} %` }));
 
-type TabId = "general" | "viewer" | "shortcuts" | "files" | "ai" | "about";
+type TabId = "general" | "viewer" | "shortcuts" | "files" | "ai" | "collab" | "about";
 type Tab = { id: TabId; label: () => string; icon: Component<{ size?: number }> };
 const TABS: Tab[] = ([
   { id: "general", label: () => t("General"), icon: Icons.Gear },
@@ -101,6 +102,7 @@ const TABS: Tab[] = ([
   { id: "shortcuts", label: () => t("Atajos de teclado"), icon: Icons.Lightning },
   { id: "files", label: () => t("Archivos y exportación"), icon: Icons.Folder },
   { id: "ai", label: () => t("Conector para IA"), icon: Icons.MagicWand },
+  { id: "collab", label: () => t("Colaborar"), icon: Icons.Person },
   { id: "about", label: () => t("Acerca de"), icon: Icons.Info },
   // En Android no hay conector MCP ni chat
 ] satisfies Tab[]).filter((tab) => !(IS_ANDROID && tab.id === "ai"));
@@ -584,6 +586,10 @@ export const SettingsDialog: Component<SettingsDialogProps> = (props) => {
 
             <Show when={tab() === "ai"}>
               <AiConnectorSettings />
+            </Show>
+
+            <Show when={tab() === "collab"}>
+              <CollabSettings />
             </Show>
 
             <Show when={tab() === "about"}>
