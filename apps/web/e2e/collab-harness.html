@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Arnés de colaboración</title>
+    <script>
+      // Reemplazo de Tauri para el e2e de colaboración (e2e/collab.mjs):
+      //  - los comandos CAD y de proyecto van al backend real por el puente HTTP
+      //    (?bridge=PUERTO),
+      //  - los `collab_*` van a un relé en Node (?relay=PUERTO) que hace de sala
+      //    entre las dos páginas (la red P2P se prueba aparte, en Rust),
+      //  - los eventos `collab://event` llegan por long-polling al relé.
+      const params = new URLSearchParams(location.search);
+      const BRIDGE = `http://127.0.0.1:${params.get("bridge") ?? "8766"}/invoke/`;
+      const RELAY = `http://127.0.0.1:${params.get("relay")}`;
+      const ME = params.get("peer");
+      let cb = 1;
+      const callbacks = new Map();
+      const listeners = {};
+      window.__invokeLog = [];
+      window.__TAURI_INTERNALS__ = {
+        metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main", windowLabel: "main" }, windows: [], webviews: [] },
+        transformCallback: (f) => {
+          const id = cb++;
+          callbacks.set(id, f);
+          return id;
+        },
+        unregisterCallback: (id) => callbacks.delete(id),
+        convertFileSrc: (p) => p,
+        invoke: async (cmd, args) => {
+          if (cmd === "plugin:event|listen") {
+            listeners[args.event] = args.handler;
+            return 1;
+          }
+          if (cmd === "plugin:event|unlisten") return;
+          if (cmd === "plugin:dialog|open" || cmd === "plugin:dialog|save") {
+            const p = window.__nextPath ?? null;
+            window.__nextPath = null;
+            return p;
+          }
+          if (cmd === "list_skeleton_presets") return [];
+          // Sin conector MCP en el navegador: el estado del modo en vivo no puede ser null
+          if (cmd === "mcp_live_status") return { on: false, paused: false, port: null };
+          if (cmd.startsWith("collab_")) {
+            const r = await fetch(`${RELAY}/cmd/${ME}/${cmd}`, { method: "POST", body: JSON.stringify(args ?? {}) });
+            const data = await r.json();
+            if (!r.ok) throw data;
+            return data;
+          }
+          const body = JSON.stringify(args ?? {}, (k, v) => (v && typeof v === "object" && v.constructor?.name === "Channel" ? null : v));
+          const r = await fetch(BRIDGE + cmd, { method: "POST", body });
+          window.__invokeLog.push(cmd);
+          const type = r.headers.get("content-type") || "";
+          const data = type.includes("octet-stream") ? await r.arrayBuffer() : await r.json();
+          if (!r.ok) throw data;
+          return data;
+        },
+      };
+      window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
+      // Eventos de la sala
+      (async function poll() {
+        for (;;) {
+          try {
+            const events = await (await fetch(`${RELAY}/poll/${ME}`)).json();
+            for (const payload of events) {
+              const h = listeners["collab://event"];
+              if (h && callbacks.has(h)) callbacks.get(h)({ event: "collab://event", id: 0, payload });
+            }
+          } catch {
+            await new Promise((r) => setTimeout(r, 300));
+          }
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/index.tsx"></script>
+  </body>
+</html>

@@ -22,6 +22,8 @@
             return p;
           }
           if (cmd === "list_skeleton_presets") return [];
+          // Sin conector MCP en el navegador: el estado del modo en vivo no puede ser null
+          if (cmd === "mcp_live_status") return { on: false, paused: false, port: null };
           const body = JSON.stringify(args ?? {}, (k, v) => (v && typeof v === "object" && v.constructor?.name === "Channel" ? null : v));
           const r = await fetch(BRIDGE + cmd, { method: "POST", body });
           window.__invokeLog.push(cmd);

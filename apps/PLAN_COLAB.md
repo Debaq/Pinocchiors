@@ -62,10 +62,11 @@ Cambio de diseño respecto de lo escrito antes: **no hay log de comandos**. El d
 - **Cifrado:** QUIC/TLS de iroh ya es de extremo a extremo entre las dos apps (el relay solo ve bytes cifrados); no se agrega otra capa.
 - Pruebas (`libs/collab/tests/sala.rs`): sin clave no se entra, expulsar, rotar clave (el viejo falla, el nuevo entra), con aprobación el pendiente no recibe nada hasta ser admitido.
 
-### C6 — Pruebas
-- Prueba de unidad del protocolo y del log de comandos.
-- e2e con dos instancias (anfitrión + invitado) por CDP: ver el cursor, un comentario, una extrusión hecha por el invitado.
-- Probar con red real entre dos PCs antes de dar por cerrado.
+### C6 — Pruebas (HECHO 2026-11-11)
+- **Transporte real (Rust):** `libs/collab/tests/sala.rs` (5 pruebas, dos salas P2P en la misma máquina, sin internet): hola, ping/pong, chat, datagramas, archivo de 3 MB, salida, clave incorrecta, expulsar, cambiar la clave, aprobación. `apps/mcp/tests/collab_copy.rs`: la copia del proyecto del anfitrión se abre igual en otro estado.
+- **e2e de dos ventanas (`node apps/web/e2e/collab.mjs`):** dos Chromium con la app real, cada uno con su backend CAD real (`cad_http` en 8766 y 8767) y un relé en Node (`e2e/collab-rele.mjs`) que imita la sala; arnés `e2e/collab-harness.html`. 16 pasos, todos pasan: clave mala rechazada, entrada pendiente, sin admitir no llega ni el chat ni el proyecto, admitir manda el proyecto (el backend del invitado lo abre), cambio del anfitrión recalculado en el invitado y al revés, aviso de autor en el chat, choque de dos ediciones (gana el anfitrión), bloqueo por pestaña, comentarios en los dos sentidos, cursor remoto, rol «solo ver», expulsar y cambiar la clave. Capturas en `$E2E_OUT` (`collab-cursor.png`, `collab-bloqueo.png`).
+- Se corrigió de paso `e2e/cad-harness.html`: `mcp_live_status` devolvía `null` por el puente y la app mostraba «La interfaz tuvo un error» (la insignia de IA); ahora responde un estado apagado. Ojo: dentro del menú «Sólidos» está «Caja» (otros escenarios de e2e/cad que llaman `clickText("Caja")` directo pueden estar desactualizados).
+- **Falta (lo único que no se puede hacer desde acá):** probar entre **dos PCs por internet** (hole punching y relays de iroh) y con la app Tauri real (WebKitGTK), no solo Chromium.
 
 ## Orden recomendado
 C0 → C1 → C2 (ya es útil: se ven y conversan) → C4 → C3 → C5 → C6.
