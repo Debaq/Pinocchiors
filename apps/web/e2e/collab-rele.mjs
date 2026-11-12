@@ -6,29 +6,32 @@
 import { createServer } from "node:http";
 
 export function crearRele({ bridge, exportDir }) {
-  /** páginas: "host" | "guest" → cola de eventos y quién espera */
-  const pages = { host: { queue: [], waiter: null, held: false }, guest: { queue: [], waiter: null, held: false } };
-  const room = { open: false, ticket: "", approval: true, host: null, guest: null };
+  /** Páginas: "host" y los invitados ("guest", "guest2"…); cada una con su cola de eventos */
+  const pages = {};
+  const page = (name) => (pages[name] ??= { queue: [], waiter: null, held: false });
+  /** Id de cada página en la sala (como el id de iroh) */
+  const ID = { host: "A", guest: "B", guest2: "C", guest3: "D" };
+  const room = { open: false, ticket: "", approval: true, host: null, guests: new Map() };
   const log = [];
 
   const flush = (name) => {
-    const p = pages[name];
+    const p = page(name);
     if (p.waiter && p.queue.length && !p.held) {
       const w = p.waiter;
       p.waiter = null;
-      const out = p.queue.splice(0);
-      w(out);
+      w(p.queue.splice(0));
     }
   };
   const push = (name, ev) => {
-    pages[name].queue.push(ev);
+    page(name).queue.push(ev);
     flush(name);
   };
+  const guestById = (id) => [...room.guests.entries()].find(([, g]) => g.id === id);
   const status = (name) =>
     name === "host" && room.open
       ? { on: true, host: true, ticket: room.ticket, my_id: "A" }
-      : name === "guest" && room.guest
-        ? { on: true, host: false, ticket: room.ticket, my_id: "B" }
+      : room.guests.has(name)
+        ? { on: true, host: false, ticket: room.ticket, my_id: ID[name] }
         : { on: false, host: false, ticket: null, my_id: null };
 
   const callBridge = async (name, cmd, args) => {
@@ -37,7 +40,7 @@ export function crearRele({ bridge, exportDir }) {
   };
 
   async function command(name, cmd, a) {
-    log.push(`${name} ${cmd}`);
+    log.push(`${name} ${cmd}${a?.msg?.t === "data" ? " " + a.msg.kind : ""}${a?.only ? " →" + a.only : ""}`);
     const host = name === "host";
     switch (cmd) {
       case "collab_host":
@@ -45,70 +48,83 @@ export function crearRele({ bridge, exportDir }) {
         room.ticket = "CLAVE-1";
         room.approval = !!a.approval;
         room.host = { name: a.name, color: a.color };
-        room.guest = null;
+        room.guests.clear();
         return status("host");
       case "collab_status":
         return status(name);
       case "collab_join": {
         if (!room.open || a.ticket !== room.ticket) {
-          push("guest", { kind: "rejected", reason: "clave incorrecta" });
-          return { on: true, host: false, ticket: a.ticket, my_id: "B" };
+          push(name, { kind: "rejected", reason: "clave incorrecta" });
+          return { on: true, host: false, ticket: a.ticket, my_id: ID[name] };
         }
-        room.guest = { name: a.name, color: a.color, muted: room.approval };
-        push("host", { kind: "joined", id: "B", name: a.name, color: a.color });
-        push("guest", { kind: "joined", id: "A", name: room.host.name, color: room.host.color });
-        return status("guest");
+        const id = ID[name];
+        room.guests.set(name, { id, name: a.name, color: a.color, muted: room.approval });
+        push("host", { kind: "joined", id, name: a.name, color: a.color });
+        push(name, { kind: "joined", id: "A", name: room.host.name, color: room.host.color });
+        return status(name);
       }
       case "collab_leave":
         if (host && room.open) {
-          if (room.guest) push("guest", { kind: "left", id: "A" });
+          for (const g of room.guests.keys()) push(g, { kind: "left", id: "A" });
           room.open = false;
-          room.guest = null;
-        } else if (!host && room.guest) {
-          room.guest = null;
-          push("host", { kind: "left", id: "B" });
+          room.guests.clear();
+        } else if (!host && room.guests.has(name)) {
+          const { id } = room.guests.get(name);
+          room.guests.delete(name);
+          push("host", { kind: "left", id });
         }
         return status(name);
       case "collab_send": {
         if (host) {
-          const g = room.guest;
-          if (!g || g.muted) return null;
-          if (a.only && a.only !== "B") return null;
-          if (a.except === "B") return null;
-          push("guest", { kind: "message", from: "A", msg: a.msg });
-        } else {
-          push("host", { kind: "message", from: "B", msg: a.msg });
+          for (const [g, info] of room.guests) {
+            // Como `Room`: a uno solo pasa aunque esté silenciado; a todos, solo a los admitidos
+            if (a.only) {
+              if (a.only === info.id) push(g, { kind: "message", from: "A", msg: a.msg });
+            } else if (!info.muted && a.except !== info.id) push(g, { kind: "message", from: "A", msg: a.msg });
+          }
+        } else if (room.guests.has(name)) {
+          push("host", { kind: "message", from: ID[name], msg: a.msg });
         }
         return null;
       }
-      case "collab_send_light":
+      case "collab_send_light": {
         if (host) {
-          if (room.guest && !room.guest.muted) push("guest", { kind: "light", from: "A", bytes: a.bytes });
-        } else {
-          push("host", { kind: "light", from: "B", bytes: a.bytes });
+          for (const [g, info] of room.guests) if (!info.muted) push(g, { kind: "light", from: "A", bytes: a.bytes });
+        } else if (room.guests.has(name)) {
+          const me = room.guests.get(name);
+          push("host", { kind: "light", from: me.id, bytes: a.bytes });
+          // El anfitrión reparte la presencia de un invitado admitido a los demás
+          if (!me.muted) for (const [g, info] of room.guests) if (g !== name && !info.muted) push(g, { kind: "light", from: "A", bytes: a.bytes });
         }
         return null;
-      case "collab_set_muted":
-        if (room.guest && a.id === "B") room.guest.muted = !!a.muted;
+      }
+      case "collab_set_muted": {
+        const g = guestById(a.id);
+        if (g) g[1].muted = !!a.muted;
         return null;
+      }
       case "collab_set_approval":
         room.approval = !!a.on;
         return null;
-      case "collab_kick":
-        if (room.guest && a.id === "B") {
-          room.guest = null;
-          push("host", { kind: "left", id: "B" });
-          push("guest", { kind: "left", id: "A" });
+      case "collab_kick": {
+        const g = guestById(a.id);
+        if (g) {
+          room.guests.delete(g[0]);
+          push("host", { kind: "left", id: a.id });
+          push(g[0], { kind: "left", id: "A" });
         }
         return null;
+      }
       case "collab_rotate_key":
         room.ticket = "CLAVE-" + (Number(room.ticket.split("-")[1]) + 1);
         return status("host");
       case "collab_send_project": {
         // La copia real: el backend del anfitrión escribe el proyecto y el del invitado lo abre
-        const path = `${exportDir}/incoming.pinocchio`;
+        const g = guestById(a.to);
+        if (!g) return 0;
+        const path = `${exportDir}/incoming-${g[0]}.pinocchio`;
         await callBridge("host", "save_project", { path, ui: a.ui, onlyIfChanged: false, design: a.design });
-        push("guest", { kind: "project", from: "A", path, bytes: 1 });
+        push(g[0], { kind: "project", from: "A", path, bytes: 1 });
         return 1;
       }
       default:
@@ -125,7 +141,7 @@ export function crearRele({ bridge, exportDir }) {
     const json = (code, v) => res.writeHead(code, { "content-type": "application/json" }).end(JSON.stringify(v));
     try {
       if (parts[0] === "poll") {
-        const p = pages[parts[1]];
+        const p = page(parts[1]);
         const out = await new Promise((resolve) => {
           p.waiter = resolve;
           flush(parts[1]);
@@ -145,7 +161,7 @@ export function crearRele({ bridge, exportDir }) {
       }
       if (parts[0] === "hold") {
         // Retiene (o suelta) lo que llega a una página: para provocar un choque de ediciones
-        const p = pages[parts[1]];
+        const p = page(parts[1]);
         p.held = parts[2] === "on";
         flush(parts[1]);
         return json(200, null);

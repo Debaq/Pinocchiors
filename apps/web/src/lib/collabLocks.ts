@@ -6,7 +6,7 @@
 
 import { createSignal } from "solid-js";
 import { nameOf, onCollabData, onCollabLeft, onCollabRoom, peers, sendData, status } from "./collab";
-import { collabName } from "./collab";
+import { collabColor, collabName } from "./collab";
 import { canEdit, onCollabAdmitted } from "./collabRoles";
 
 export interface Lock {
@@ -87,7 +87,7 @@ export function setEditing(tab: number | null) {
     return;
   }
   if (status().host) {
-    const held = grant(tab, myId(), collabName().trim() || "Anónimo", colorOf(myId()) ?? "#888");
+    const held = grant(tab, myId(), collabName().trim() || "Anónimo", collabColor());
     if (held) {
       mine = null;
       onDenied(tab, held.name);

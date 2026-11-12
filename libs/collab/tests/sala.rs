@@ -44,9 +44,9 @@ async fn anfitrion_e_invitado_se_hablan() {
     }
 
     // Anfitrión a todos
-    host.send(Message::Chat { text: "hola".into() }).await.unwrap();
+    host.send(Message::Chat { text: "hola".into(), from: None }).await.unwrap();
     match next(&guest).await {
-        Event::Message { msg: Message::Chat { text }, .. } => assert_eq!(text, "hola"),
+        Event::Message { msg: Message::Chat { text, .. }, .. } => assert_eq!(text, "hola"),
         e => panic!("{e:?}"),
     }
 
@@ -144,13 +144,31 @@ async fn con_aprobacion_el_invitado_no_recibe_hasta_ser_admitido() {
     };
     let _ = next(&guest).await;
     // Sin admitir: lo que el anfitrión reparte no le llega
-    host.send(Message::Chat { text: "secreto".into() }).await.unwrap();
+    host.send(Message::Chat { text: "secreto".into(), from: None }).await.unwrap();
     assert!(timeout(Duration::from_millis(400), guest.recv()).await.is_err());
     // Admitido: ahora sí
     host.set_muted(&id, false);
-    host.send(Message::Chat { text: "ya puedes".into() }).await.unwrap();
+    host.send(Message::Chat { text: "ya puedes".into(), from: None }).await.unwrap();
     match next(&guest).await {
-        Event::Message { msg: Message::Chat { text }, .. } => assert_eq!(text, "ya puedes"),
+        Event::Message { msg: Message::Chat { text, .. }, .. } => assert_eq!(text, "ya puedes"),
         e => panic!("{e:?}"),
+    }
+}
+
+#[tokio::test]
+async fn un_invitado_no_puede_mandarle_archivos_al_anfitrion() {
+    let host = Room::host(local("Ana")).await.unwrap();
+    let guest = Room::join(&host.ticket(), local("Beto")).await.unwrap();
+    let _ = next(&host).await;
+    let host_id = match next(&guest).await {
+        Event::PeerJoined { id, .. } => id,
+        e => panic!("{e:?}"),
+    };
+    // El invitado intenta mandarle un «proyecto»: el anfitrión no lo recibe
+    let _ = timeout(Duration::from_secs(2), guest.send_blob(&host_id, "project", b"no soy un proyecto")).await;
+    match timeout(Duration::from_millis(800), host.recv()).await {
+        Err(_) => {}
+        Ok(Some(Event::Blob { .. })) => panic!("el anfitrión aceptó un archivo de un invitado"),
+        Ok(other) => panic!("{other:?}"),
     }
 }

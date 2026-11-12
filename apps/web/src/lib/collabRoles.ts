@@ -10,7 +10,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { createSignal } from "solid-js";
-import { defaultRole, onCollabData, onCollabJoined, onCollabLeft, onCollabRoom, sendData, setCollabPermit, status, type Peer } from "./collab";
+import { applyRoster, collabColor, collabName, defaultRole, onCollabData, onCollabJoined, onCollabLeft, onCollabRoom, sendData, setCollabPermit, status, type Peer } from "./collab";
 
 export type Role = "view" | "comment" | "edit";
 /** `pending`: entró pero el anfitrión todavía no lo admite */
@@ -41,11 +41,20 @@ export function onCollabAdmitted(h: (peer: Peer) => void): () => void {
 
 const known = new Map<string, Peer>();
 
+/** Anfitrión: manda a cada admitido quiénes están (él incluido), uno por uno (nunca a un pendiente) */
+function sendRoster() {
+  const admittedPeers = [...known.values()].filter((p) => roles()[p.id] !== undefined && roles()[p.id] !== "pending");
+  const me: Peer = { id: status().my_id ?? "", name: collabName().trim() || "Anónimo", color: collabColor() };
+  const list = [me, ...admittedPeers];
+  for (const p of admittedPeers) void sendData("roster", list, { only: p.id }).catch(() => {});
+}
+
 function admitted(peer: Peer, role: Role) {
   setRoles({ ...roles(), [peer.id]: role });
   void invoke("collab_set_muted", { id: peer.id, muted: false }).catch(() => {});
   void sendData("collab_role", { role } satisfies RoleMsg, { only: peer.id }).catch(() => {});
   for (const h of admitHandlers) h(peer);
+  sendRoster();
 }
 
 /** Anfitrión: admite a alguien que esperaba (con el rol por defecto) */
@@ -82,9 +91,14 @@ export function installCollabRoles(approval: () => boolean): () => void {
       else admitted(peer, defaultRole());
     }),
     onCollabLeft((id) => {
+      if (!status().host) return;
       known.delete(id);
       const { [id]: _gone, ...rest } = roles();
       setRoles(rest);
+      sendRoster();
+    }),
+    onCollabData("roster", (_from, value) => {
+      if (Array.isArray(value)) applyRoster(value as Peer[]);
     }),
     onCollabData("collab_role", (_from, value) => {
       const m = value as RoleMsg;

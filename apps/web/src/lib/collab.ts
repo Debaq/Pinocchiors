@@ -35,7 +35,7 @@ export type CollabMessage =
   | { t: "hello"; name: string; color: string }
   | { t: "ping"; n: number }
   | { t: "pong"; n: number }
-  | { t: "chat"; text: string }
+  | { t: "chat"; text: string; from?: string }
   | { t: "data"; kind: string; value: unknown };
 
 type CollabEvent =
@@ -153,11 +153,27 @@ export function addSystemLine(text: string) {
   setChat((c) => [...c, { from: "", name: "", text, mine: false, system: true }]);
 }
 
+/**
+ * Invitado: la lista de la sala que manda el anfitrión (cada invitado solo
+ * está conectado al anfitrión; así se conocen entre ellos). Los que ya no
+ * están pasan por los avisos de «se fue».
+ */
+export function applyRoster(list: Peer[]) {
+  if (status().host) return;
+  const me = status().my_id;
+  const next = list.filter((p) => p && typeof p.id === "string" && p.id !== me);
+  const gone = peers().filter((p) => !next.some((n) => n.id === p.id));
+  for (const g of gone) for (const h of leftHandlers) h(g.id);
+  setPeers(next);
+}
+
 export const nameOf = (id: string) => peers().find((p) => p.id === id)?.name ?? "";
 
 function handle(e: CollabEvent) {
   switch (e.kind) {
     case "joined":
+      // El invitado solo ve entrar al anfitrión (a los demás los conoce por la lista)
+      if (!status().host && hostId === undefined) hostId = e.id;
       setPeers((p) => [...p.filter((x) => x.id !== e.id), { id: e.id, name: e.name, color: e.color }]);
       for (const h of joinHandlers) h({ id: e.id, name: e.name, color: e.color });
       break;
@@ -165,7 +181,7 @@ function handle(e: CollabEvent) {
       for (const h of leftHandlers) h(e.id);
       setPeers((p) => p.filter((x) => x.id !== e.id));
       // Si era el anfitrión, la sala terminó para el invitado
-      if (!status().host && peers().length === 0) {
+      if (!status().host && e.id === hostId) {
         for (const h of noticeHandlers) h("La sala se cerró o te sacaron de ella");
         void leaveCollab();
       }
@@ -174,11 +190,12 @@ function handle(e: CollabEvent) {
       if (status().host && permit && !permit(e.from, needOf(e.msg))) break;
       if (e.msg.t === "chat") {
         const text = e.msg.text;
-        const from = e.from;
+        // Lo que reparte el anfitrión trae quién lo escribió de verdad
+        const from = (!status().host && e.msg.from) || e.from;
         setChat((c) => [...c, { from, name: nameOf(from), text, mine: false }]);
         if (!(collabPanelOpen() && collabPanelTab() === "chat")) setChatUnread((n) => n + 1);
-        // El anfitrión reparte el chat a los demás invitados
-        if (status().host) void sendMessage(e.msg, from);
+        // El anfitrión reparte el chat a los demás invitados, con el autor
+        if (status().host) void sendMessage({ t: "chat", text, from }, from);
       } else if (e.msg.t === "data") {
         for (const h of dataHandlers.get(e.msg.kind) ?? []) h(e.from, e.msg.value);
       } else if (e.msg.t === "ping") {
@@ -186,6 +203,8 @@ function handle(e: CollabEvent) {
       }
       break;
     case "project":
+      // Solo el invitado abre un proyecto de la sala (el del anfitrión)
+      if (status().host) break;
       for (const h of projectHandlers) void h(e.path);
       break;
     case "project_error":
@@ -207,7 +226,11 @@ async function ensureListening() {
   if (!unlisten) unlisten = await listen<CollabEvent>("collab://event", (ev) => handle(ev.payload));
 }
 
+/** Invitado: id del anfitrión de la sala en la que estoy */
+let hostId: string | undefined;
+
 function reset() {
+  hostId = undefined;
   setPeers([]);
   setChat([]);
   setChatUnread(0);

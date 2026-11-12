@@ -17,7 +17,7 @@ import { accept, begin, call } from "./cad/_comun.mjs";
 import { crearRele } from "./collab-rele.mjs";
 
 const WEB = Number(process.env.E2E_WEB_PORT ?? 5173);
-const PORTS = { host: 8766, guest: 8767 };
+const PORTS = { host: 8766, guest: 8767, guest2: 8768 };
 const OUT = process.env.E2E_OUT ?? "/tmp/pinocchio-e2e";
 mkdirSync(OUT, { recursive: true });
 const spawned = [];
@@ -70,7 +70,13 @@ async function main() {
   const url = (peer) => `http://localhost:${WEB}/e2e/collab-harness.html?bridge=${PORTS[peer]}&relay=${rele.port}&peer=${peer}`;
   const host = await launch(url("host"), { width: 1400, height: 900 });
   const guest = await launch(url("guest"), { width: 1400, height: 900 });
-  const both = [host, guest];
+  const guest2 = await launch(url("guest2"), { width: 1400, height: 900 });
+  const both = [host, guest, guest2];
+  // Nombres y colores de cada uno (se recuerdan en la página)
+  const named = (b, name, color) => b.eval(`(async () => { const c = await ${M("collab")}; c.setCollabName(${JSON.stringify(name)}); c.setCollabColor(${JSON.stringify(color)}); })()`);
+  await named(host, "Ana", "#ff8800");
+  await named(guest, "Beto", "#2ec4b6");
+  await named(guest2, "Carla", "#6a4c93");
   const status = (b) => b.eval(`(async () => (await ${M("collab")}).status())()`);
   const msg = (b) => b.eval(`document.body.innerText`);
 
@@ -200,6 +206,60 @@ async function main() {
       await waitFor("vuelve a poder", () => guest.eval(`(async () => (await ${M("collabRoles")}).canEdit())()`));
     });
 
+    await step("el anfitrión edita mientras un segundo invitado espera aprobación", async () => {
+      await guest2.eval(`(async () => (await ${M("collab")}).joinCollab("CLAVE-1"))()`);
+      await waitFor("el anfitrión ve a Carla", () => host.eval(`(async () => (await ${M("collab")}).peers().length === 2)()`));
+      await setDx(host, 44);
+      await waitFor("Beto recibe 44", async () => (await dx(guest)) === 44);
+      await host.eval(`(async () => (await ${M("collabRoles")}).admit("C"))()`);
+      await waitFor("Carla abre el proyecto", () => guest2.eval(`!!window.__cadStore?.doc()`), 60_000);
+      await waitFor("Carla tiene 44", async () => (await dx(guest2)) === 44, 30_000);
+    });
+
+    await step("el primer cambio del que recién entró no rebota", async () => {
+      await setDx(guest2, 55);
+      await waitFor("el anfitrión acepta 55", async () => (await dx(host)) === 55);
+      await waitFor("Beto también ve 55", async () => (await dx(guest)) === 55);
+      if ((await dx(guest2)) !== 55) throw new Error("a Carla le rebotó su cambio");
+    });
+
+    await step("los invitados se conocen entre ellos (nombre y color)", async () => {
+      const ve = (b) => b.eval(`(async () => (await ${M("collab")}).peers().map((p) => p.name + " " + p.color).sort().join(", "))()`);
+      await waitFor("Beto ve a Ana y a Carla", async () => (await ve(guest)) === "Ana #ff8800, Carla #6a4c93");
+      await waitFor("Carla ve a Ana y a Beto", async () => (await ve(guest2)) === "Ana #ff8800, Beto #2ec4b6");
+    });
+
+    await step("el chat de un invitado llega a otro con el nombre de quien lo escribió", async () => {
+      await guest2.eval(`(async () => (await ${M("collab")}).sendChat("hola de Carla"))()`);
+      await waitFor("Beto lo ve firmado por Carla", () =>
+        guest.eval(`(async () => (await ${M("collab")}).chat().some((c) => c.text === "hola de Carla" && c.name === "Carla"))()`),
+      );
+    });
+
+    await step("el cursor de un invitado se ve en otro, con su nombre", async () => {
+      const r = await guest2.eval(`(() => { const e = document.querySelector('[data-collab-view]'); const b = e.getBoundingClientRect(); return [b.x + b.width / 3, b.y + b.height / 3]; })()`);
+      for (let i = 0; i < 6; i++) {
+        await guest2.mouse("mouseMoved", r[0] + i * 7, r[1] + i * 4, { buttons: 0 });
+        await sleep(80);
+      }
+      await waitFor("Beto ve el cursor de Carla", () => guest.eval(`(async () => "C" in (await ${M("collabPresence")}).cursors())()`), 8000);
+      await waitFor("con su nombre en pantalla", async () => (await guest.eval(`document.body.innerText`)).includes("Carla"));
+      await guest.shot("collab-dos-invitados");
+    });
+
+    await step("el bloqueo del anfitrión se ve con su color", async () => {
+      const tab = await host.eval(`window.__cadStore.tabs().active`);
+      await host.eval(`(async () => (await ${M("collabLocks")}).setEditing(${tab}))()`);
+      await waitFor("Beto ve el color de Ana", () => guest.eval(`(async () => (await ${M("collabLocks")}).lockedByOther(${tab})?.color === "#ff8800")()`));
+      await host.eval(`(async () => (await ${M("collabLocks")}).setEditing(null))()`);
+    });
+
+    await step("al irse Carla, Beto deja de verla y sigue en la sala", async () => {
+      await guest2.eval(`(async () => (await ${M("collab")}).leaveCollab())()`);
+      await waitFor("Beto ya no la ve", () => guest.eval(`(async () => (await ${M("collab")}).peers().every((p) => p.name !== "Carla"))()`));
+      if (!(await status(guest)).on) throw new Error("Beto salió de la sala");
+    });
+
     await step("expulsar: el invitado queda fuera", async () => {
       await host.eval(`(async () => (await ${M("collabRoles")}).kick("B"))()`);
       await waitFor("el invitado salió", async () => !(await status(guest)).on);
@@ -216,6 +276,15 @@ async function main() {
 
     const errs = [...host.logs, ...guest.logs].filter((l) => l.startsWith("EXCEPTION"));
     if (errs.length) throw new Error("excepciones en la página:\n" + errs.join("\n"));
+  } catch (e) {
+    // Qué tenía cada ventana en pantalla y sus errores, para saber por qué falló
+    for (const [n, b] of [["anfitrión", host], ["invitado", guest], ["invitado 2", guest2]]) {
+      const text = await b.eval(`document.body.innerText.slice(0, 300)`).catch(() => "?");
+      const cadErr = await b.eval(`JSON.stringify({ err: window.__cadStore?.error?.() ?? null, dx: window.__cadStore?.doc()?.features.find((f) => f.kind.type === "primitive")?.kind.shape.dx, peers: (window.__collabPeers ?? null) })`).catch(() => null);
+      console.error(`\n--- ${n}: ${JSON.stringify(text.slice(0, 80))} · error del diseño: ${cadErr}\n${b.logs.filter((l) => /^(error|EXCEPTION)/.test(l) && !l.includes("Template shapes")).slice(-4).join("\n")}`);
+    }
+    console.error("\n--- relé (últimos):\n" + rele.log.filter((l) => !l.endsWith("light")).slice(-20).join("\n"));
+    throw e;
   } finally {
     await host.shot("collab-host").catch(() => {});
     await guest.shot("collab-guest").catch(() => {});

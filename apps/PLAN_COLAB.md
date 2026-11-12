@@ -68,6 +68,13 @@ Cambio de diseño respecto de lo escrito antes: **no hay log de comandos**. El d
 - Se corrigió de paso `e2e/cad-harness.html`: `mcp_live_status` devolvía `null` por el puente y la app mostraba «La interfaz tuvo un error» (la insignia de IA); ahora responde un estado apagado. Ojo: dentro del menú «Sólidos» está «Caja» (otros escenarios de e2e/cad que llaman `clickText("Caja")` directo pueden estar desactualizados).
 - **Falta (lo único que no se puede hacer desde acá):** probar entre **dos PCs por internet** (hole punching y relays de iroh) y con la app Tauri real (WebKitGTK), no solo Chromium.
 
+## Revisión 2026-11-12 (arreglado)
+- **Grave:** el anfitrión aceptaba archivos de los invitados y abría como «proyecto de la sala» lo que le mandaran (incluso sin admitir). Ahora solo el invitado recibe archivos (en `Room`, en `collab.rs` y en la ventana). Prueba: `un_invitado_no_puede_mandarle_archivos_al_anfitrion` (falla sin el arreglo).
+- **Varios invitados:** cada uno solo conocía al anfitrión. Ahora el anfitrión reparte la lista (`roster`, uno por uno y nunca a un pendiente) y el chat repartido lleva su autor (`Message::Chat.from`). El invitado sale de la sala cuando se va el anfitrión (no cuando la lista queda vacía).
+- **Diseño:** el primer cambio de quien recién entró ya no rebota (sin base se acepta); un cambio de otra persona ya no se aplica dos veces y no pisa lo recién editado (un solo repaso a la vez, y sale de la lista antes de aplicarse). Este fallo hacía al e2e pasar o fallar a ratos.
+- **Menores:** la sala anterior ya no le habla a la ventana (sus «se fue» tardíos sacaban de la sala nueva); los comentarios del invitado ya no se mezclan con el proyecto del anfitrión al salir; el bloqueo del anfitrión lleva su color; el saludo inicial tiene 15 s de límite.
+- e2e con un segundo invitado: 23 pasos, 3 corridas seguidas sin fallar.
+
 ## Orden recomendado
 C0 → C1 → C2 (ya es útil: se ven y conversan) → C4 → C3 → C5 → C6.
 

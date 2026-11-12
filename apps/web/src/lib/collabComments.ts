@@ -149,9 +149,6 @@ export function loadComments(list: unknown) {
 
 // ── Sincronización por la sala ───────────────────────────────────────────────
 
-/** Lo que había antes de unirme a una sala ajena (se recupera al salir) */
-let stashed: Thread[] | undefined;
-
 onCollabData("comment_op", (from, value) => {
   const o = value as Op;
   if (!o || typeof o.op !== "string") return;
@@ -160,9 +157,10 @@ onCollabData("comment_op", (from, value) => {
   if (status().host) void sendData("comment_op", o, { except: from }).catch(() => {});
 });
 
+// Los del anfitrión reemplazan a los míos: al entrar se abre su proyecto (que
+// ya los trae) y al salir sigo con ese proyecto, así que no se recupera nada
 onCollabData("comments_full", (_from, value) => {
-  if (!Array.isArray(value)) return;
-  if (!stashed) stashed = threads();
+  if (!Array.isArray(value) || status().host) return;
   setThreads(value as Thread[]);
 });
 
@@ -170,14 +168,9 @@ onCollabAdmitted((peer) => {
   if (status().host) void sendData("comments_full", threads(), { only: peer.id }).catch(() => {});
 });
 
-onCollabRoom((on, host) => {
-  if (!on && stashed) {
-    setThreads(stashed);
-    stashed = undefined;
-  }
+onCollabRoom((on) => {
   if (!on) {
     setSelectedThread(undefined);
     setDraft(undefined);
   }
-  if (on && host) stashed = undefined;
 });

@@ -53,7 +53,12 @@ pub enum Message {
     },
     Ping { n: u64 },
     Pong { n: u64 },
-    Chat { text: String },
+    Chat {
+        text: String,
+        /// Quién lo escribió, cuando el anfitrión reparte el mensaje de un invitado
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from: Option<String>,
+    },
     /// Carga libre para las fases siguientes (comandos, comentarios…)
     Data { kind: String, value: serde_json::Value },
 }
@@ -71,6 +76,9 @@ pub enum Event {
     /// Archivo grande completo (el proyecto al entrar a la sala)
     Blob { from: String, name: String, bytes: Vec<u8> },
 }
+
+/// Cuánto se espera el saludo de quien se conecta (después se corta)
+pub const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// Tope de un archivo por la sala
 pub const MAX_BLOB: usize = 1 << 30;
@@ -395,6 +403,15 @@ async fn serve(
             _ => Err(Error::Protocol("se esperaba hola".into())),
         }
     };
+    let handshake = async {
+        match tokio::time::timeout(HANDSHAKE_TIMEOUT, handshake).await {
+            Ok(r) => r,
+            Err(_) => {
+                conn.close(3u32.into(), "sin saludo".as_bytes());
+                Err(Error::Protocol("no saludó a tiempo".into()))
+            }
+        }
+    };
     let (mut send, mut recv, name, color) = match handshake.await {
         Ok(v) => v,
         Err(e) => {
@@ -434,9 +451,13 @@ async fn serve(
             let _ = e2.send(Event::Light { from: id2.clone(), bytes: d.to_vec() });
         }
     });
-    // Archivos grandes
+    // Archivos grandes: solo los recibe el invitado, del anfitrión. El anfitrión
+    // no acepta archivos de nadie (si no, un invitado podría mandarle un proyecto)
     let (c3, e3, id3) = (conn.clone(), events.clone(), id.clone());
     let blobs = tokio::spawn(async move {
+        if host {
+            return;
+        }
         while let Ok(mut r) = c3.accept_uni().await {
             let (e, id) = (e3.clone(), id3.clone());
             tokio::spawn(async move {

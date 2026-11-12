@@ -9,7 +9,7 @@
 // pendiente y se aplica cuando se puede. Pestañas nuevas, borradas o
 // reordenadas no se sincronizan por acá: «Resincronizar».
 
-import { addSystemLine, nameOf, onCollabData, onCollabJoined, onCollabProject, onCollabRoom, peers, sendData, status } from "./collab";
+import { addSystemLine, nameOf, onCollabData, onCollabProject, onCollabRoom, peers, sendData, status } from "./collab";
 import type { CadDocument, CadStore } from "./cad";
 import { t } from "./i18n";
 import { resync } from "./collabSync";
@@ -61,14 +61,26 @@ export function installCollabDesign(cad: CadStore, notify: (message: string) => 
 
   const active = () => cad.tabs().active;
 
-  const tryApply = async (tab: number, doc: CadDocument): Promise<boolean> => {
-    if (active() !== tab) return false;
-    return cad.applyRemote(doc);
-  };
-
+  /**
+   * Aplica lo pendiente de la pestaña activa. Un solo repaso a la vez, y cada
+   * documento sale de la lista *antes* de aplicarse: si no, un segundo repaso
+   * lo volvía a aplicar mientras el primero esperaba al backend y pisaba lo que
+   * la persona acababa de editar.
+   */
+  let flushing = false;
   const flush = async () => {
-    for (const [tab, doc] of [...pending]) {
-      if (await tryApply(tab, doc)) pending.delete(tab);
+    if (flushing) return;
+    flushing = true;
+    try {
+      const tab = active();
+      const doc = tab === null ? undefined : pending.get(tab);
+      if (tab === null || !doc) return;
+      pending.delete(tab);
+      const applied = await cad.applyRemote(doc);
+      // No se pudo ahora (diálogo abierto, IA trabajando): vuelve a la lista si no llegó otro
+      if (!applied && !pending.has(tab)) pending.set(tab, doc);
+    } finally {
+      flushing = false;
     }
   };
 
@@ -100,9 +112,10 @@ export function installCollabDesign(cad: CadStore, notify: (message: string) => 
       return;
     }
     if (status().host) {
-      // Un invitado propone un cambio: vale si parte de la versión que tengo
+      // Un invitado propone un cambio: vale si parte de la versión que tengo.
+      // Sin base (recién entró o recién se resincronizó: no conoce versiones) se acepta.
       const cur = latest.get(m.tab);
-      if (cur !== undefined && m.base !== cur.h) {
+      if (cur !== undefined && m.base !== null && m.base !== cur.h) {
         notify(t("Un cambio de otra persona chocó con el tuyo; se mantuvo el tuyo."));
         void sendData("design_doc", { tab: m.tab, base: null, doc: cur.doc, forced: true } satisfies DocMsg, { only: from }).catch(() => {});
         return;
@@ -128,14 +141,14 @@ export function installCollabDesign(cad: CadStore, notify: (message: string) => 
 
   // Lo pendiente se aplica en cuanto se puede (se abrió esa pestaña, se cerró un diálogo)
   const timer = setInterval(() => void flush(), 500);
-  // Sala nueva, alguien entró o llegó una copia del proyecto: las versiones conocidas
-  // dejan de valer (la copia ya trae el diseño tal como está)
+  // Sala nueva o llegó una copia del proyecto: las versiones conocidas dejan de
+  // valer (la copia ya trae el diseño tal como está). Que entre alguien no las
+  // borra: el que entra manda su primer cambio sin base y se acepta.
   const reset = () => {
     latest.clear();
     pending.clear();
   };
   const stopRoom = onCollabRoom(reset);
-  const stopJoin = onCollabJoined(reset);
   const stopProject = onCollabProject(reset);
 
   return () => {
@@ -143,7 +156,6 @@ export function installCollabDesign(cad: CadStore, notify: (message: string) => 
     clearInterval(timer);
     stopData();
     stopRoom();
-    stopJoin();
     stopProject();
   };
 }

@@ -52,6 +52,12 @@ fn adopt(app: AppHandle, c: &Collab, room: Room) -> CollabStatus {
     let pump = room.clone();
     tauri::async_runtime::spawn(async move {
         while let Some(e) = pump.recv().await {
+            // Una sala vieja (se salió o se entró a otra) ya no le habla a la ventana:
+            // sus «se fue» tardíos sacarían a la persona de la sala nueva
+            let current = app.state::<Collab>().room.lock().unwrap().as_ref().is_some_and(|r| Arc::ptr_eq(r, &pump));
+            if !current {
+                break;
+            }
             // El anfitrión reparte la presencia de cada invitado a los demás
             if let (true, Event::Light { from, bytes }) = (pump.is_host(), &e) {
                 if !pump.is_muted(from) {
@@ -59,7 +65,10 @@ fn adopt(app: AppHandle, c: &Collab, room: Room) -> CollabStatus {
                 }
             }
             if let Event::Blob { from, name, bytes } = e {
-                receive_blob(&app, &from, &name, bytes);
+                // Solo el invitado recibe el proyecto (del anfitrión)
+                if !pump.is_host() {
+                    receive_blob(&app, &from, &name, bytes);
+                }
                 continue;
             }
             let _ = app.emit(EV_EVENT, event_json(e));
