@@ -4,6 +4,8 @@
 // duplica o borra. Ver libs/cad/PLAN_PESTANAS.md.
 
 import { locks } from "../../lib/collabLocks";
+import { peersAt } from "../../lib/collabWhere";
+import { PresenceLines } from "./PresenceLines";
 import { For, Show, createSignal, onCleanup } from "solid-js";
 import { clsx } from "clsx";
 import type { CadStore, CadTab } from "../../lib/cad";
@@ -155,7 +157,7 @@ export const DesignTabs = (props: DesignTabsProps) => {
             aria-selected={tab.id === active()}
             title={tBackend(tab.name)}
             class={clsx(
-              "flex shrink-0 cursor-pointer select-none items-center gap-1.5 border-t-2 px-3",
+              "relative flex shrink-0 cursor-pointer select-none items-center gap-1.5 border-t-2 px-3",
               tab.id === active() ? "border-accent bg-bg-lighter text-text" : "border-transparent text-text-muted hover:bg-bg-lighter/60 hover:text-text",
               drag()?.id === tab.id && drag()?.moved && "opacity-50",
             )}
@@ -205,6 +207,7 @@ export const DesignTabs = (props: DesignTabsProps) => {
                 <Icons.X size={11} />
               </button>
             </Show>
+            <PresenceLines peers={peersAt("design", tab.id)} />
           </div>
         )}
       </For>

@@ -1,7 +1,8 @@
 import { Component, For, Show } from "solid-js";
 import { t } from "../../lib/i18n";
 import { chatUnread, collabPanelOpen, peers, setCollabPanelOpen, status } from "../../lib/collab";
-import { threads } from "../../lib/collabComments";
+import { pinsHidden, setPinsHidden, threads } from "../../lib/collabComments";
+import * as Icons from "../icons";
 import { followId, toggleFollow } from "../../lib/collabPresence";
 import { pendingPeers } from "../../lib/collabRoles";
 
@@ -29,6 +30,16 @@ export const CollabBadge: Component = () => {
           <span class="ml-1 text-text-muted">{open()}</span>
         </Show>
       </button>
+      <Show when={threads().length > 0}>
+        <button
+          class="text-text-muted hover:text-text"
+          title={pinsHidden() ? t("Mostrar los comentarios en el visor") : t("Esconder los comentarios del visor")}
+          aria-pressed={pinsHidden()}
+          onClick={() => setPinsHidden(!pinsHidden())}
+        >
+          {pinsHidden() ? <Icons.EyeSlash size={13} /> : <Icons.Eye size={13} />}
+        </button>
+      </Show>
       <Show when={status().on}>
         <For each={peers()} fallback={<span class="text-text-muted">{t("esperando…")}</span>}>
           {(p) => (

@@ -5056,6 +5056,8 @@ export function createCadStore() {
   };
   /** Colaboración: avisa de cada cambio confirmado del diseño (ver `lib/collabDesign.ts`) */
   let collabHook: ((tab: number, doc: CadDocument) => void) | undefined;
+  /** Colaboración: la barra de pestañas cambió por algo propio (agregar, borrar, renombrar, mover) */
+  let tabsHook: ((before: CadTabs, after: CadTabs) => void) | undefined;
   /** Colaboración: por qué no se puede editar esta pestaña ahora (otra persona la está editando) */
   let collabGuard: ((tab: number) => string | undefined) | undefined;
   const sendNow = async (next: CadDocument | null, preview: boolean) => {
@@ -5117,6 +5119,25 @@ export function createCadStore() {
     }
     setDoc(next);
     return send(next);
+  };
+
+  /**
+   * Colaboración: el backend ya tiene la barra nueva (y el contenido de
+   * `replaced` cambió entero). Si cambió la pestaña abierta se relee; el
+   * deshacer de las reemplazadas ya no vale.
+   */
+  const afterTabsReplaced = async (before: number | null, next: CadTabs, replaced: number[]) => {
+    swapTabHistory(tabHistory, undoStack, redoStack, before, next);
+    for (const id of replaced) tabHistory.delete(id);
+    setTabs(next);
+    const reread = next.active !== before || (next.active !== null && replaced.includes(next.active));
+    if (!reread) return;
+    if (next.active !== null && replaced.includes(next.active)) {
+      undoStack.length = 0;
+      redoStack.length = 0;
+    }
+    setHistoryVersion((v) => v + 1);
+    await loadActive();
   };
 
   /** Trae el documento de la pestaña activa y su recálculo (sin tocar el deshacer) */
@@ -5332,10 +5353,12 @@ export function createCadStore() {
       }
       if (draft()) await acceptDraft();
       await lastSend;
-      const before = tabs().active;
+      const old = tabs();
+      const before = old.active;
       const next = await invoke<CadTabs>(cmd, args);
       swapTabHistory(tabHistory, undoStack, redoStack, before, next);
       setTabs(next);
+      if (cmd !== "cad_tab_activate") tabsHook?.(old, next);
       if (next.active === before) return;
       setHistoryVersion((v) => v + 1);
       await loadActive();
@@ -5583,6 +5606,36 @@ export function createCadStore() {
     /** Colaboración: quien escucha los cambios confirmados del diseño (`undefined`: nadie) */
     setCollabHook(fn: ((tab: number, doc: CadDocument) => void) | undefined) {
       collabHook = fn;
+    },
+
+    setTabsHook(fn: ((before: CadTabs, after: CadTabs) => void) | undefined) {
+      tabsHook = fn;
+    },
+
+    /**
+     * Colaboración: deja la barra como la de otra persona (las nuevas con su
+     * contenido). La pestaña abierta sigue, salvo que la hayan borrado.
+     * Devuelve las que quedaron vacías porque no vino su contenido.
+     */
+    async syncTabsRemote(layout: { id: number; name: string; design: boolean }[], full: unknown[], replace: { id: number }[] = []): Promise<number[]> {
+      if (draft() && !layout.some((x) => x.id === tabs().active)) await acceptDraft();
+      const before = tabs().active;
+      const r = await invoke<{ tabs: CadTabs; missing: number[] }>("cad_tabs_sync", { layout, full, replace });
+      await afterTabsReplaced(before, r.tabs, replace.map((x) => x.id));
+      return r.missing;
+    },
+
+    /**
+     * Colaboración: junta mi copia del proyecto con la de la sala (`replace`
+     * cambia el contenido de pestañas que ya están; `add` agrega pestañas con
+     * id nuevo). Devuelve la barra y los ids de las agregadas.
+     */
+    async mergeTabs(replace: unknown[], add: unknown[]): Promise<{ tabs: CadTabs; added: number[] }> {
+      if (draft()) await acceptDraft();
+      const before = tabs().active;
+      const r = await invoke<{ tabs: CadTabs; replaced: number[]; added: number[] }>("cad_tabs_merge", { replace, add });
+      await afterTabsReplaced(before, r.tabs, r.replaced);
+      return { tabs: r.tabs, added: r.added };
     },
 
     /** Colaboración: quién bloquea una pestaña (`undefined`: nadie) */

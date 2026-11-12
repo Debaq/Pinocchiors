@@ -6,7 +6,10 @@
 
 import { createSignal } from "solid-js";
 import { collabColor, collabName, onCollabData, onCollabRoom, sendData, status } from "./collab";
+import { activeDesignTab } from "./collabLocks";
+import { presenceLabel } from "./collabPresence";
 import { canComment, onCollabAdmitted } from "./collabRoles";
+import { createPersisted } from "./ui-state";
 import { collabView } from "./collabViews";
 
 export type CommentView = "viewport" | "design";
@@ -20,6 +23,8 @@ export interface Anchor {
   p?: [number, number, number];
   /** Qué tenía elegido el autor (objeto o pestaña de diseño) */
   target?: string;
+  /** Pestaña de diseño o ensamble donde se puso (solo en Diseñar): el pin se ve solo ahí */
+  tab?: number;
 }
 
 export interface Comment {
@@ -52,7 +57,31 @@ const [selectedThread, setSelectedThread] = createSignal<string>();
 const [placing, setPlacing] = createSignal(false);
 /** Punto elegido, esperando el texto del primer comentario */
 const [draft, setDraft] = createSignal<Anchor>();
-export { draft, placing, selectedThread, setDraft, setPlacing, setSelectedThread, threads };
+/** Hilo bajo el mouse en la lista: si está resuelto, su pin se ve mientras tanto */
+const [hoveredThread, setHoveredThread] = createSignal<string>();
+/** Esconder los pines del visor (molestan para diseñar); se recuerda */
+const [pinsHidden, setPinsHidden] = createPersisted("collab.pinsHidden", false);
+export { draft, hoveredThread, pinsHidden, placing, selectedThread, setDraft, setHoveredThread, setPinsHidden, setPlacing, setSelectedThread, threads };
+
+/** El hilo es de la pestaña de diseño que tengo abierta (los del visor principal no tienen pestaña) */
+export function onThisTab(a: Anchor): boolean {
+  if (a.view !== "design") return true;
+  if (a.tab !== undefined) return a.tab === activeDesignTab();
+  // Hilos de antes: se reconocen por el nombre de la pestaña
+  return !a.target || a.target === presenceLabel("design");
+}
+
+/**
+ * Si su pin se dibuja: tiene que ser de esta pestaña y, si está resuelto o los
+ * pines están escondidos, solo mientras se lo mira en la lista (elegido o con
+ * el mouse encima).
+ */
+export function pinShown(th: Thread): boolean {
+  if (!onThisTab(th.anchor)) return false;
+  const looking = selectedThread() === th.id || hoveredThread() === th.id;
+  if (th.resolved || pinsHidden()) return looking;
+  return true;
+}
 
 const uid = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 const me = () => ({ author: collabName().trim() || "Anónimo", color: collabColor() });
@@ -107,6 +136,7 @@ export function deleteThread(thread: string) {
 /** Punto de un clic en un visor: de la superficie si toca la pieza, si no el del rayo */
 export function anchorAt(view: CommentView, x: number, y: number, target?: string): Anchor {
   const anchor: Anchor = { view, x, y, target };
+  if (view === "design") anchor.tab = activeDesignTab() ?? undefined;
   const v = collabView(view);
   if (v) {
     const ndc: [number, number] = [x * 2 - 1, 1 - y * 2];

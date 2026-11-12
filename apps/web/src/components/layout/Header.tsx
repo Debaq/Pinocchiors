@@ -6,6 +6,8 @@ import { IconButton, Tooltip } from "../ui";
 import * as Icons from "../icons";
 import { ContextMenu, type MenuEntry } from "../ui/ContextMenu";
 import { t } from "../../lib/i18n";
+import { peersAt } from "../../lib/collabWhere";
+import { PresenceLines } from "./PresenceLines";
 import { IS_ANDROID } from "../../lib/platform";
 import { watchWindow, windowMaximized } from "../../lib/windowState";
 import appIcon from "../../../../desktop/icons/icon-small.svg";
@@ -115,16 +117,18 @@ export const Header: Component<HeaderProps> = (props) => {
             {(ws) => (
               <button
                 class={clsx(
-                  "h-7 px-3 rounded-md text-xs transition-colors",
+                  "relative h-7 px-3 rounded-md text-xs transition-colors",
                   "disabled:opacity-40 disabled:pointer-events-none",
                   props.workspace === ws.id
                     ? "bg-accent/20 text-accent font-medium"
                     : "text-text-muted hover:text-text hover:bg-surface/40"
                 )}
+                data-ws={ws.id}
                 disabled={!props.hasModel && !ws.withoutModel}
                 onClick={() => props.onWorkspace?.(ws.id)}
               >
                 {t(ws.label)}
+                <PresenceLines peers={peersAt(ws.id)} />
               </button>
             )}
           </For>

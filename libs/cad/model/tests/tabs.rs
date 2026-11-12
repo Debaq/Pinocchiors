@@ -457,3 +457,85 @@ fn contexto_de_ensamble_solo_de_referencia() {
     let (_, hi) = ev.parts[0].shape.bounds().unwrap();
     assert!((hi[0] - 80.0).abs() < 1e-6, "{hi:?}");
 }
+
+/// Colaboración: la barra queda igual a la del otro (nuevas con su contenido, borradas, renombradas, en orden)
+#[test]
+fn sync_layout_copies_the_other_bar() {
+    let mut host = Tabs::from_legacy(Some(box_doc(10.0)));
+    let mut guest = host.clone();
+    let second = host.add_design(Some("Tapa".into()));
+    *host.design_mut(second).unwrap() = box_doc(5.0);
+    let asm = host.add_assembly(None);
+    host.rename(0, "Base").unwrap();
+    host.move_to(asm, 0).unwrap();
+
+    let layout: Vec<(TabId, String, bool)> = host.tabs.iter().map(|t| (t.id, t.name.clone(), t.kind.is_design())).collect();
+    let full = vec![host.get(second).unwrap().clone()];
+    let missing = guest.sync_layout(&layout, full);
+
+    assert_eq!(missing, vec![asm], "el ensamble no vino con contenido");
+    assert_eq!(guest.tabs.iter().map(|t| t.id).collect::<Vec<_>>(), vec![asm, 0, second]);
+    assert_eq!(guest.get(0).unwrap().name, "Base");
+    assert_eq!(guest.design(second), host.design(second));
+    assert_eq!(guest.active, 0, "la activa del invitado no cambia");
+    assert!(guest.next_id > second && guest.next_id > asm);
+
+    // Borrar la activa: pasa a la primera
+    let layout: Vec<(TabId, String, bool)> = vec![(second, "Tapa".into(), true)];
+    guest.sync_layout(&layout, Vec::new());
+    assert_eq!(guest.tabs.len(), 1);
+    assert_eq!(guest.active, second);
+}
+
+/// Juntar otra copia del proyecto: cambia el contenido de una y agrega otra con id nuevo, sin cambiar la activa
+#[test]
+fn merge_replaces_and_adds_copies() {
+    let mut room = Tabs::from_legacy(Some(box_doc(10.0)));
+    let mut mine = room.clone();
+    *mine.design_mut(0).unwrap() = box_doc(7.0);
+    let extra = mine.add_design(Some("Tapa".into()));
+    let other = room.add_design(Some("Tapa".into()));
+    room.activate(0).unwrap();
+    assert_eq!(extra, other, "los dos crearon la misma id por separado");
+
+    let replaced = room.replace_contents(vec![mine.get(0).unwrap().clone()]);
+    let added = room.add_copies(vec![mine.get(extra).unwrap().clone()]);
+
+    assert_eq!(replaced, vec![0]);
+    assert_eq!(room.design(0), mine.design(0));
+    assert_eq!(added.len(), 1);
+    assert_ne!(added[0], other);
+    assert_eq!(room.get(added[0]).unwrap().name, "Tapa 1");
+    assert_eq!(room.active, 0);
+}
+
+/// Al juntar copias, lo que apuntaba a una pestaña agregada (ensamble, pieza traída) sigue apuntando a ella con su id nuevo
+#[test]
+fn merge_keeps_links_to_added_tabs() {
+    let mut room = Tabs::from_legacy(Some(box_doc(10.0)));
+    let mut mine = room.clone();
+    room.add_design(Some("Otra".into()));
+    let piece = mine.add_design(Some("Pieza".into()));
+    *mine.design_mut(piece).unwrap() = box_doc(4.0);
+    let part = PartId { feature: mine.design(piece).unwrap().features[0].id, index: 0 };
+    let asm = mine.add_assembly(None);
+    if let TabKind::Assembly { assembly, .. } = &mut mine.get_mut(asm).unwrap().kind {
+        assembly.instances.push(Instance { id: 1, studio: piece, part, name: "Pieza".into(), ..Default::default() });
+    }
+    // El diseño 0 trae piezas de «Pieza»
+    mine.design_mut(0).unwrap().add(FeatureKind::Derived(Derived { studio: piece, parts: Vec::new(), configuration: None, op: BodyOp::New, placement: None, context: None, source: Default::default() }));
+
+    let add = vec![mine.get(piece).unwrap().clone(), mine.get(asm).unwrap().clone()];
+    let (replaced, added) = room.merge_copies(vec![mine.get(0).unwrap().clone()], add);
+
+    assert_eq!(replaced, vec![0]);
+    let new_piece = added[0];
+    assert_ne!(new_piece, piece, "la sala ya usaba ese id");
+    let TabKind::Assembly { assembly, .. } = &room.get(added[1]).unwrap().kind else { panic!("no es ensamble") };
+    assert_eq!(assembly.instances[0].studio, new_piece);
+    let derived = room.design(0).unwrap().features.iter().find_map(|f| match &f.kind {
+        FeatureKind::Derived(d) => Some(d.studio),
+        _ => None,
+    });
+    assert_eq!(derived, Some(new_piece));
+}

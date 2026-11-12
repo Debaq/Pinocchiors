@@ -1229,6 +1229,88 @@ pub fn cad_tab_move(state: tauri::State<'_, AppState>, id: TabId, to: usize) -> 
     change_tabs(&state, |t| t.move_to(id, to))
 }
 
+/// Una pestaña entera, con su contenido tal como se guarda (para mandarla a la sala)
+#[tauri::command]
+pub fn cad_tab_raw(state: tauri::State<'_, AppState>, id: TabId) -> Option<cad_model::Tab> {
+    state.cad_tabs.lock().unwrap().get(id).cloned()
+}
+
+/// Una pestaña de la barra de otra persona: id, nombre y si es diseño
+#[derive(Deserialize)]
+pub struct LayoutTab {
+    pub id: TabId,
+    pub name: String,
+    pub design: bool,
+}
+
+#[derive(Serialize)]
+pub struct TabsSynced {
+    pub tabs: TabsView,
+    /// Las que quedaron vacías porque no vino su contenido
+    pub missing: Vec<TabId>,
+}
+
+/// Colaboración: deja la barra igual a la de otra persona de la sala (las
+/// nuevas con el contenido de `full`). `replace`: pestañas que ya están pero
+/// cuyo contenido cambió entero (lo que trajo un invitado de su copia del proyecto).
+#[tauri::command]
+pub fn cad_tabs_sync(state: tauri::State<'_, AppState>, layout: Vec<LayoutTab>, full: Vec<cad_model::Tab>, replace: Option<Vec<cad_model::Tab>>) -> Result<TabsSynced, String> {
+    tabs_sync_impl(&state, layout, full, replace.unwrap_or_default())
+}
+
+fn tabs_sync_impl(state: &AppState, layout: Vec<LayoutTab>, full: Vec<cad_model::Tab>, replace: Vec<cad_model::Tab>) -> Result<TabsSynced, String> {
+    let layout: Vec<(TabId, String, bool)> = layout.into_iter().map(|t| (t.id, t.name, t.design)).collect();
+    let mut missing = Vec::new();
+    let mut replaced = Vec::new();
+    let tabs = change_tabs(state, |t| {
+        missing = t.sync_layout(&layout, full);
+        replaced = t.replace_contents(replace);
+        Ok(())
+    })?;
+    forget_tab_caches(state, &replaced);
+    Ok(TabsSynced { tabs, missing })
+}
+
+/// El recálculo guardado de esas pestañas ya no vale (cambió su contenido entero)
+fn forget_tab_caches(state: &AppState, ids: &[TabId]) {
+    if ids.is_empty() {
+        return;
+    }
+    state.cad_tab_caches.lock().unwrap().retain(|id, _| !ids.contains(id));
+    let active = state.cad_tabs.lock().unwrap().active;
+    if ids.contains(&active) {
+        *state.cad_cache.lock().unwrap() = None;
+        *state.cad_preview.lock().unwrap() = None;
+    }
+}
+
+#[derive(Serialize)]
+pub struct TabsMerged {
+    pub tabs: TabsView,
+    /// Las que cambiaron de contenido
+    pub replaced: Vec<TabId>,
+    /// Ids nuevos de las agregadas, en el orden de `add`
+    pub added: Vec<TabId>,
+}
+
+/// Junta otra copia del mismo proyecto: `replace` cambia el contenido de
+/// pestañas que ya están y `add` agrega pestañas nuevas (con id nuevo)
+#[tauri::command]
+pub fn cad_tabs_merge(state: tauri::State<'_, AppState>, replace: Vec<cad_model::Tab>, add: Vec<cad_model::Tab>) -> Result<TabsMerged, String> {
+    tabs_merge_impl(&state, replace, add)
+}
+
+fn tabs_merge_impl(state: &AppState, replace: Vec<cad_model::Tab>, add: Vec<cad_model::Tab>) -> Result<TabsMerged, String> {
+    let mut replaced = Vec::new();
+    let mut added = Vec::new();
+    let tabs = change_tabs(state, |t| {
+        (replaced, added) = t.merge_copies(replace, add);
+        Ok(())
+    })?;
+    forget_tab_caches(state, &replaced);
+    Ok(TabsMerged { tabs, replaced, added })
+}
+
 #[tauri::command]
 pub fn cad_tab_activate(state: tauri::State<'_, AppState>, id: TabId) -> Result<TabsView, String> {
     change_tabs(&state, |t| t.activate(id))
@@ -4747,6 +4829,15 @@ pub mod bridge {
                 let id: TabId = arg(args, "id")?;
                 ok(state.cad_tabs.lock().unwrap().design(id).cloned())
             }
+            "cad_tab_raw" => {
+                let id: TabId = arg(args, "id")?;
+                ok(state.cad_tabs.lock().unwrap().get(id).cloned())
+            }
+            "cad_tabs_sync" => {
+                let replace: Option<Vec<cad_model::Tab>> = arg(args, "replace")?;
+                ok(tabs_sync_impl(state, arg(args, "layout")?, arg(args, "full")?, replace.unwrap_or_default())?)
+            }
+            "cad_tabs_merge" => ok(tabs_merge_impl(state, arg(args, "replace")?, arg(args, "add")?)?),
             "cad_tab_parts" => ok(tab_parts_impl(state, arg(args, "id")?)?),
             "cad_tab_add" => ok(tab_add_impl(state, arg(args, "kind")?, arg(args, "name")?)?),
             "cad_tab_rename" => {

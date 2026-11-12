@@ -6,11 +6,13 @@
 // su versión.
 //
 // Lo que no se puede aplicar ahora (un diálogo abierto, otra pestaña) queda
-// pendiente y se aplica cuando se puede. Pestañas nuevas, borradas o
-// reordenadas no se sincronizan por acá: «Resincronizar».
+// pendiente y se aplica cuando se puede. La barra de pestañas (nuevas,
+// duplicadas, borradas, renombradas, movidas) también va en vivo: se manda la
+// barra entera y, de las pestañas nuevas, su contenido.
 
+import { invoke } from "@tauri-apps/api/core";
 import { addSystemLine, nameOf, onCollabData, onCollabProject, onCollabRoom, peers, sendData, status } from "./collab";
-import type { CadDocument, CadStore } from "./cad";
+import type { CadDocument, CadStore, CadTabs } from "./cad";
 import { t } from "./i18n";
 import { resync } from "./collabSync";
 
@@ -25,8 +27,18 @@ interface DocMsg {
   by?: string;
 }
 
+export interface TabsMsg {
+  layout: { id: number; name: string; design: boolean }[];
+  /** Las pestañas nuevas, enteras (como las guarda el backend) */
+  full: unknown[];
+  /** Pestañas que ya están pero con otro contenido (lo que trajo un invitado de su copia) */
+  replace?: { id: number }[];
+}
+
+export const layoutOf = (tabs: CadTabs) => tabs.tabs.map((x) => ({ id: x.id, name: x.name, design: x.kind === "design" }));
+
 /** JSON con las llaves ordenadas: el mismo documento da el mismo hash en las dos apps */
-function canon(x: unknown): string {
+export function canon(x: unknown): string {
   if (Array.isArray(x)) return `[${x.map(canon).join(",")}]`;
   if (x && typeof x === "object") {
     const o = x as Record<string, unknown>;
@@ -40,7 +52,7 @@ function canon(x: unknown): string {
 }
 
 /** FNV-1a de 32 bits (basta para detectar versiones distintas) */
-function hash(doc: unknown): string {
+export function hash(doc: unknown): string {
   const s = canon(doc);
   let h = 0x811c9dc5;
   for (let i = 0; i < s.length; i++) {
@@ -84,6 +96,53 @@ export function installCollabDesign(cad: CadStore, notify: (message: string) => 
     }
   };
 
+  /** Pide el proyecto entero (invitado, como mucho cada 10 s) */
+  const askResync = () => {
+    if (status().host || Date.now() - asked < 10_000) return;
+    asked = Date.now();
+    notify(t("Hay pestañas nuevas del anfitrión: resincronizando…"));
+    void resync().catch(() => {});
+  };
+
+  /**
+   * Lo que se manda va en orden: la barra nueva (que espera el contenido de las
+   * pestañas nuevas) sale antes que el primer cambio hecho en ellas.
+   */
+  let outbox: Promise<unknown> = Promise.resolve();
+  const enqueue = (send: () => Promise<unknown>) => {
+    outbox = outbox.then(send).catch(() => {});
+  };
+
+  /** La barra cambió por algo propio: se manda entera, con el contenido de las nuevas */
+  cad.setTabsHook((before, after) => {
+    if (!status().on || peers().length === 0) return;
+    const fresh = after.tabs.filter((x) => !before.tabs.some((b) => b.id === x.id)).map((x) => x.id);
+    enqueue(async () => {
+      const full = (await Promise.all(fresh.map((id) => invoke<unknown>("cad_tab_raw", { id }).catch(() => null)))).filter((x) => x);
+      await sendData("design_tabs", { layout: layoutOf(after), full } satisfies TabsMsg);
+    });
+  });
+
+  const stopTabs = onCollabData("design_tabs", async (from, value) => {
+    const m = value as TabsMsg;
+    if (!m || !Array.isArray(m.layout) || !m.layout.length || !Array.isArray(m.full)) return;
+    const replace = Array.isArray(m.replace) ? m.replace.filter((x) => x && typeof x.id === "number") : [];
+    // Las reemplazadas empiezan de nuevo: sus versiones conocidas ya no valen
+    for (const x of replace) {
+      latest.delete(x.id);
+      pending.delete(x.id);
+    }
+    // El anfitrión reparte a los demás lo que cambió un invitado
+    if (status().host) void sendData("design_tabs", m, { except: from }).catch(() => {});
+    try {
+      const missing = await cad.syncTabsRemote(m.layout, m.full, replace);
+      if (missing.length) askResync();
+    } catch (e) {
+      notify(String(e));
+      askResync();
+    }
+  });
+
   /** Cambio propio confirmado: se comparte (el anfitrión a todos; el invitado al anfitrión) */
   cad.setCollabHook((tab, doc) => {
     if (!status().on || peers().length === 0) return;
@@ -95,21 +154,18 @@ export function installCollabDesign(cad: CadStore, notify: (message: string) => 
     // Lo que había llegado de afuera para esta pestaña ya quedó viejo
     pending.delete(tab);
     const msg: DocMsg = { tab, base: before ?? null, doc, by: status().my_id ?? undefined };
-    void sendData("design_doc", msg).catch(() => {});
+    enqueue(() => sendData("design_doc", msg));
   });
 
   const stopData = onCollabData("design_doc", async (from, value) => {
     const m = value as DocMsg;
     if (!m || typeof m.tab !== "number" || !m.doc) return;
-    const known = cad.tabs().tabs.some((t) => t.id === m.tab);
-    if (!known) {
-      // Una pestaña que no tengo: pido el proyecto de nuevo (como mucho cada 10 s)
-      if (!status().host && Date.now() - asked > 10_000) {
-        asked = Date.now();
-        notify(t("Hay pestañas nuevas del anfitrión: resincronizando…"));
-        void resync().catch(() => {});
-      }
-      return;
+    // Una pestaña que todavía no tengo: su barra viene en camino. Queda
+    // pendiente como cualquier otra; si en unos segundos no llegó, pido el proyecto.
+    if (!cad.tabs().tabs.some((t) => t.id === m.tab)) {
+      setTimeout(() => {
+        if (!cad.tabs().tabs.some((t) => t.id === m.tab)) askResync();
+      }, 4000);
     }
     if (status().host) {
       // Un invitado propone un cambio: vale si parte de la versión que tengo.
@@ -153,8 +209,10 @@ export function installCollabDesign(cad: CadStore, notify: (message: string) => 
 
   return () => {
     cad.setCollabHook(undefined);
+    cad.setTabsHook(undefined);
     clearInterval(timer);
     stopData();
+    stopTabs();
     stopRoom();
     stopProject();
   };

@@ -250,6 +250,89 @@ impl Tabs {
         Ok(())
     }
 
+    /// Deja la barra como la de otra persona de la sala (colaboración): mismas
+    /// pestañas, nombres y orden. Las que faltan se crean con el contenido que
+    /// viene en `full` (o vacías), las que sobran se borran y la activa se
+    /// conserva si sigue. Devuelve las que quedaron vacías por no venir en
+    /// `full` (hay que pedir el proyecto entero).
+    pub fn sync_layout(&mut self, layout: &[(TabId, String, bool)], full: Vec<Tab>) -> Vec<TabId> {
+        if layout.is_empty() {
+            return Vec::new();
+        }
+        let mut missing = Vec::new();
+        self.tabs.retain(|t| layout.iter().any(|(id, ..)| *id == t.id));
+        for (id, name, design) in layout {
+            let same_kind = self.get(*id).is_some_and(|t| t.kind.is_design() == *design);
+            if !same_kind {
+                self.tabs.retain(|t| t.id != *id);
+                let kind = match full.iter().find(|t| t.id == *id && t.kind.is_design() == *design) {
+                    Some(t) => t.kind.clone(),
+                    None => {
+                        missing.push(*id);
+                        if *design {
+                            TabKind::Design { document: Box::default() }
+                        } else {
+                            TabKind::Assembly { assembly: Assembly::default(), drawing: None }
+                        }
+                    }
+                };
+                self.tabs.push(Tab { id: *id, name: name.clone(), kind });
+            } else if let Some(t) = self.get_mut(*id) {
+                t.name = name.clone();
+            }
+        }
+        self.tabs.sort_by_key(|t| layout.iter().position(|(id, ..)| *id == t.id));
+        self.next_id = self.next_id.max(self.tabs.iter().map(|t| t.id + 1).max().unwrap_or(0));
+        if self.get(self.active).is_none() {
+            self.active = self.tabs[0].id;
+        }
+        missing
+    }
+
+    /// Pone el contenido de otra copia del proyecto en pestañas que ya están
+    /// (mismo id; el nombre de acá queda). Devuelve las que cambió.
+    pub fn replace_contents(&mut self, tabs: Vec<Tab>) -> Vec<TabId> {
+        let mut done = Vec::new();
+        for tab in tabs {
+            if let Some(cur) = self.get_mut(tab.id) {
+                cur.kind = tab.kind;
+                done.push(tab.id);
+            }
+        }
+        done
+    }
+
+    /// Agrega al final pestañas que vienen de otra copia del proyecto, con id
+    /// nuevo (y el nombre numerado si ya está). La activa no cambia.
+    pub fn add_copies(&mut self, tabs: Vec<Tab>) -> Vec<TabId> {
+        let active = self.active;
+        let ids = tabs.into_iter().map(|t| self.add(t.kind, Some(t.name))).collect();
+        if self.get(active).is_some() {
+            self.active = active;
+        }
+        ids
+    }
+
+    /// Junta pestañas de otra copia del proyecto: `add` entra con id nuevo y
+    /// `replace` cambia el contenido de las que ya están. Lo que en esas
+    /// pestañas apuntaba a una agregada (piezas traídas de otro diseño, piezas
+    /// de un ensamble) pasa a apuntar a su id nuevo. Devuelve las reemplazadas
+    /// y los ids nuevos de las agregadas (en el orden de `add`).
+    pub fn merge_copies(&mut self, mut replace: Vec<Tab>, add: Vec<Tab>) -> (Vec<TabId>, Vec<TabId>) {
+        let old: Vec<TabId> = add.iter().map(|t| t.id).collect();
+        let added = self.add_copies(add);
+        let map: Vec<(TabId, TabId)> = old.into_iter().zip(added.iter().copied()).collect();
+        for id in &added {
+            if let Some(t) = self.get_mut(*id) {
+                remap_tab_refs(&mut t.kind, &map);
+            }
+        }
+        for t in &mut replace {
+            remap_tab_refs(&mut t.kind, &map);
+        }
+        (self.replace_contents(replace), added)
+    }
+
     pub fn activate(&mut self, id: TabId) -> Result<(), String> {
         self.get(id).ok_or("Esa pestaña ya no está")?;
         self.active = id;
@@ -724,5 +807,27 @@ impl Tabs {
             }
         }
         (props, fabrication)
+    }
+}
+
+/// Cambia a qué pestañas apunta el contenido de una (`map`: id viejo → nuevo)
+fn remap_tab_refs(kind: &mut TabKind, map: &[(TabId, TabId)]) {
+    let to = |id: TabId| map.iter().find(|(from, _)| *from == id).map_or(id, |(_, new)| *new);
+    match kind {
+        TabKind::Design { document } => {
+            for f in &mut document.features {
+                if let FeatureKind::Derived(d) = &mut f.kind {
+                    d.studio = to(d.studio);
+                    if let Some(c) = &mut d.context {
+                        c.assembly = to(c.assembly);
+                    }
+                }
+            }
+        }
+        TabKind::Assembly { assembly, .. } => {
+            for inst in &mut assembly.instances {
+                inst.studio = to(inst.studio);
+            }
+        }
     }
 }

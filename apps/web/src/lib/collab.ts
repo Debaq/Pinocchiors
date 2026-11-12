@@ -135,7 +135,7 @@ function needOf(msg: CollabMessage): 1 | 2 | 3 {
   if (msg.t === "chat") return 2;
   if (msg.t === "data") {
     if (msg.kind === "comment_op") return 2;
-    if (msg.kind === "resync") return 1;
+    if (msg.kind === "resync" || msg.kind === "where") return 1;
     return 3;
   }
   return 1;
@@ -246,8 +246,18 @@ export async function hostCollab(): Promise<void> {
   for (const h of roomHandlers) h(true, true);
 }
 
+/**
+ * Antes de entrar a una sala (la interfaz pregunta si hay cambios sin guardar):
+ * adentro, el proyecto de la sala reemplaza al propio sin preguntar.
+ */
+let beforeJoin: () => Promise<boolean> = async () => true;
+export function setBeforeJoin(fn: () => Promise<boolean>) {
+  beforeJoin = fn;
+}
+
 /** Se une a la sala de otra persona con su ticket */
 export async function joinCollab(ticket: string): Promise<void> {
+  if (!(await beforeJoin())) return;
   await ensureListening();
   reset();
   setStatus(await invoke<CollabStatus>("collab_join", { ticket: ticket.trim(), ...me() }));

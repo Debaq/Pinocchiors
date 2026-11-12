@@ -13,11 +13,13 @@ import { setPresenceLabel } from "./lib/collabPresence";
 import { commentsForProject, loadComments } from "./lib/collabComments";
 import { CollabBadge } from "./components/layout/CollabBadge";
 import { CollabPanel } from "./components/layout/CollabPanel";
-import { approvalWanted, collabPanelOpen, onCollabNotice, peers, setCollabPanelOpen, status } from "./lib/collab";
+import { approvalWanted, collabPanelOpen, onCollabNotice, onCollabRoom, peers, setBeforeJoin, setCollabPanelOpen, status } from "./lib/collab";
 import { canEdit, installCollabRoles } from "./lib/collabRoles";
 import { installCollabLocks, lockedByOther, setActiveDesignTab, setEditing } from "./lib/collabLocks";
+import { setMyWhere } from "./lib/collabWhere";
 import { installCollabSync } from "./lib/collabSync";
 import { installCollabDesign } from "./lib/collabDesign";
+import { adoptFromRegistry, afterSharedOpen, captureIfInRoom, collabProjectUi, installCollabMerge, loadCollabProject, registerPath, rememberMine } from "./lib/collabMerge";
 import { CollabOverlay } from "./components/layout/CollabOverlay";
 import { AiChatPanel } from "./components/layout/AiChatPanel";
 import { TuneWizard, type ChatPicture } from "./components/layout/TuneWizard";
@@ -623,10 +625,20 @@ export const App: Component = () => {
   onMount(() => {
     const stopSync = installCollabSync({
       snapshot: () => ({ ui: projectUi(), design: cadUi.documentWithSketch() ?? null }),
-      openShared: (path) => handleOpenProject(path, true, true),
+      openShared: async (path) => {
+        await handleOpenProject(path, true, true);
+        // La primera vez en la sala, lo que avancé solo en mi copia se suma
+        await afterSharedOpen((m) => setStatusMessage(m));
+      },
       notify: (m) => setStatusMessage(m),
     });
     const stopDesign = installCollabDesign(cad, (m) => setStatusMessage(m));
+    const stopMerge = installCollabMerge(cad, () => projectPath());
+    setBeforeJoin(async () => {
+      if (!(await confirmDiscard(t("Entrar a la sala"), t("El proyecto de la sala reemplaza al que tienes abierto. Si es una copia del mismo proyecto, lo que avanzaste en los diseños se suma a la sala."), t("Entrar a la sala")))) return false;
+      await rememberMine();
+      return true;
+    });
     const stopNotice = onCollabNotice((m) => setStatusMessage(m));
     // Bloqueo por pestaña: sketch o diálogo abiertos = la pestaña es mía mientras dure
     const stopRoles = installCollabRoles(() => approvalWanted());
@@ -643,12 +655,15 @@ export const App: Component = () => {
     onCleanup(() => {
       stopSync();
       stopDesign();
+      stopMerge();
       stopNotice();
       stopLocks();
       stopRoles();
       cad.setCollabGuard(undefined);
     });
   });
+  // Dónde estoy (área y pestaña de diseño): los demás lo ven como una línea en esa pestaña
+  createEffect(() => setMyWhere({ ws: pipeline.workspace()?.id, tab: cad.tabs().active }));
   createEffect(() => {
     setActiveDesignTab(cad.tabs().active);
     // Con sala nueva o gente nueva se vuelve a pedir el bloqueo de lo que tengo abierto
@@ -8849,6 +8864,8 @@ export const App: Component = () => {
     return JSON.stringify({
       version: PROJECT_UI_VERSION,
       comments: commentsForProject(),
+      // Número del proyecto y cómo estaba cada pestaña en la última sala (para juntar copias)
+      collab: collabProjectUi(),
       fileName: fileName(),
       // false: proyecto de solo esqueleto
       model: meshLoaded(),
@@ -8941,6 +8958,7 @@ export const App: Component = () => {
       setObjects(Array.isArray(ui.objects) ? ui.objects : []);
       setActiveObjectId(typeof ui.activeObject === "number" ? ui.activeObject : undefined);
       loadComments(ui.comments);
+      loadCollabProject(ui.collab);
     }
     setPlacementMode(undefined);
     setBoneEditMode(false);
@@ -9057,6 +9075,15 @@ export const App: Component = () => {
     return saved && cad.doc() ? "design" : step;
   };
 
+  /**
+   * Invitado: dónde guardó su copia mientras está en esta sala. El proyecto
+   * que llega de la sala vive en un archivo interno de la app (se reemplaza
+   * con cada envío), así que el primer Guardar pregunta dónde y los envíos
+   * siguientes del anfitrión siguen guardándose ahí.
+   */
+  let roomSavePath: string | undefined;
+  onCleanup(onCollabRoom(() => (roomSavePath = undefined)));
+
   /** Guarda en el archivo del proyecto; sin archivo (o con `as`) lo pregunta */
   const handleSaveProject = async (as = false) => {
     if (!hasProjectWork()) {
@@ -9065,7 +9092,7 @@ export const App: Component = () => {
     }
     let path = as ? undefined : projectPath();
     if (!path) {
-      const stem = (fileName() ?? "proyecto").replace(/\.[^.]+$/, "");
+      const stem = (fileName() ?? (status().on && !status().host ? t("proyecto de la sala") : "proyecto")).replace(/\.[^.]+$/, "");
       const chosen = await save({
         title: t("Guardar proyecto"),
         defaultPath: projectPath() ?? `${stem}.pinocchio`,
@@ -9075,11 +9102,15 @@ export const App: Component = () => {
       path = chosen.endsWith(".pinocchio") ? chosen : `${chosen}.pinocchio`;
     }
     try {
+      // En una sala, lo guardado queda como «lo último que se vio en la sala»
+      await captureIfInRoom();
       const saved = await busy(t("Guardando proyecto..."), () =>
         // El sketch abierto va con lo guardado (sigue abierto)
         invoke<ProjectSaved>("save_project", { path, ui: projectUi(), onlyIfChanged: false, design: cadUi.documentWithSketch() ?? null })
       );
       setProjectPath(path);
+      registerPath();
+      if (status().on && !status().host) roomSavePath = path;
       rememberRecent(path!);
       scheduleUnsavedCheck(0);
       setStatusMessage(t("Proyecto guardado: {name} ({mb} MB)", { name: baseName(path!), mb: (saved.bytes / 1e6).toFixed(1) }));
@@ -9094,7 +9125,8 @@ export const App: Component = () => {
   /** Abre un proyecto (`path`) o pregunta cuál; `recovered` = viene del archivo de recuperación */
   const handleOpenProject = async (path?: string, recovered = false, shared = false) => {
     if (blockedByTask()) return;
-    if (!(await confirmDiscard(shared ? t("Proyecto de la sala") : t("Abrir proyecto"), shared ? t("El anfitrión te manda su proyecto y reemplaza al que tienes abierto.") : t("Se cierra el trabajo actual."), shared ? t("Abrir el de la sala") : t("Abrir otro proyecto")))) return;
+    // En una sala manda siempre el proyecto de la sala (se preguntó al entrar)
+    if (!shared && !(await confirmDiscard(t("Abrir proyecto"), t("Se cierra el trabajo actual."), t("Abrir otro proyecto")))) return;
     if (!path) {
       const chosen = await open({
         title: t("Abrir proyecto"),
@@ -9121,14 +9153,18 @@ export const App: Component = () => {
       untrack(syncDesignObjects);
       // Proyecto de antes de los objetos: su modelo pasa a ser uno
       await adoptCurrentModel();
-      // La recuperación no es el archivo del usuario: el próximo Guardar pregunta dónde
-      setProjectPath(recovered ? undefined : path);
-      if (!recovered) {
+      // La recuperación y la copia de la sala no son archivos del usuario: el
+      // próximo Guardar pregunta dónde (en la sala, el que ya eligió ahí)
+      setProjectPath(shared ? roomSavePath : recovered ? undefined : path);
+      if (!recovered && !shared) {
+        adoptFromRegistry(path);
         rememberRecent(path);
         // Recién abierto no hay cambios, aunque la interfaz rearmada no sea letra por letra la del archivo
         await invoke("project_mark_saved", { ui: projectUi() }).catch(() => {});
         scheduleUnsavedCheck(0);
       }
+      // La copia de la sala queda sin guardar: cerrar o salir avisa
+      if (shared) scheduleUnsavedCheck(0);
       setRecovery(undefined);
       setStatusMessage(shared ? t("Proyecto de la sala abierto") : recovered ? t("Sesión recuperada") : t("Proyecto abierto: {name}", { name: baseName(path) }));
     } catch (e) {

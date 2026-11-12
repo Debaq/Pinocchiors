@@ -652,3 +652,10 @@ html, body {
 .collab-ripple {
   animation: collab-ripple 0.7s ease-out forwards;
 }
+@keyframes collab-bubble {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+.collab-bubble {
+  animation: collab-bubble 0.18s ease-out;
+}

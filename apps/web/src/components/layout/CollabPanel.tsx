@@ -1,4 +1,4 @@
-import { Component, For, Show, createEffect, createMemo, createSignal } from "solid-js";
+import { Component, For, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 import { Button } from "../ui";
 import * as Icons from "../icons";
 import { t } from "../../lib/i18n";
@@ -9,9 +9,13 @@ import {
   deleteThread,
   draft,
   goToThread,
+  hoveredThread,
+  pinsHidden,
   placing,
   selectedThread,
   setDraft,
+  setHoveredThread,
+  setPinsHidden,
   setPlacing,
   setResolved,
   setSelectedThread,
@@ -170,6 +174,10 @@ const CommentsTab: Component<{ onAskAi?: (text: string) => void }> = (props) => 
           <input type="checkbox" checked={showResolved()} onChange={(e) => setShowResolved(e.currentTarget.checked)} />
           {t("Mostrar resueltos")}
         </label>
+        <label class="flex items-center gap-2 text-xs text-text-muted">
+          <input type="checkbox" checked={pinsHidden()} onChange={(e) => setPinsHidden(e.currentTarget.checked)} />
+          {t("Esconder los comentarios del visor")}
+        </label>
       </div>
 
       <Show when={draft()}>
@@ -227,6 +235,8 @@ const ThreadCard: Component<{ thread: Thread; onDelete: () => void; onAskAi?: (t
   const open = () => selectedThread() === props.thread.id;
   const [reply, setReply] = createSignal("");
   const first = () => props.thread.comments[0];
+  // Al pasar el mouse se ve su pin aunque esté resuelto o escondido
+  onCleanup(() => hoveredThread() === props.thread.id && setHoveredThread(undefined));
   const send = () => {
     addReply(props.thread.id, reply());
     setReply("");
@@ -238,7 +248,12 @@ const ThreadCard: Component<{ thread: Thread; onDelete: () => void; onAskAi?: (t
     props.onAskAi?.(t("Comentario #{n}{where}:", { n: th.n, where }) + "\n" + body);
   };
   return (
-    <div class="border-b border-border" classList={{ "bg-accent/10": open(), "opacity-60": props.thread.resolved }}>
+    <div
+      class="border-b border-border"
+      classList={{ "bg-accent/10": open(), "opacity-60": props.thread.resolved }}
+      onMouseEnter={() => setHoveredThread(props.thread.id)}
+      onMouseLeave={() => hoveredThread() === props.thread.id && setHoveredThread(undefined)}
+    >
       <button
         class="w-full text-left px-3 py-2 flex gap-2 items-start"
         onClick={() => {
