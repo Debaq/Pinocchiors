@@ -335,7 +335,7 @@ export const Viewport: Component<ViewportProps> = (props) => {
   return (
     <main class="flex flex-col w-full h-full bg-bg overflow-hidden">
       {props.header}
-      <div class="relative flex-1 min-h-0">
+      <div class="relative flex-1 min-h-0" data-collab-view="viewport">
       {/* Canvas */}
       <canvas
         ref={canvasRef}

@@ -32,6 +32,8 @@ Ventaja: no hay conflictos de fusión. Costo: el invitado depende del anfitrión
 - Botón «Seguir a…»: la cámara copia la del otro.
 - Mensajes sin estado, ~20 Hz, se descartan los viejos.
 
+**Estado 2026-11-11 (sin commitear):** hecho el cursor con nombre y color, la onda en cada clic y los puntos de color en la cabecera (`lib/collabPresence.ts`, `CollabOverlay.tsx`, `CollabBadge.tsx`; el anfitrión reparte los datagramas con `send_light_except`). Los visores se marcan con `data-collab-view` ("viewport" y "design"); la posición va relativa al visor. **Falta:** cursor anclado a la superficie 3D (hoy es 2D sobre el visor, solo calza si las dos cámaras miran igual), selección resaltada con el color de cada uno, «Seguir a…» (copiar la cámara con `cameraPose/setCameraPose`) y distinguir la pestaña de diseño de cada uno.
+
 ### C2 — Chat y comentarios
 - Chat en panel izquierdo con pestañas (convención de paneles).
 - **Comentarios anclados**: un comentario se pega a una pieza, cara o punto; aparece como pin en el visor; hilo con respuestas y estado abierto/resuelto. Es el «issues» dentro de la app.

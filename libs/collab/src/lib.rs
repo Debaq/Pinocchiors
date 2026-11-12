@@ -189,6 +189,15 @@ impl Room {
         }
     }
 
+    /// Datagrama a todos menos a uno (el anfitrión reparte la presencia de un invitado)
+    pub async fn send_light_except(&self, except: &str, bytes: &[u8]) {
+        for (id, conn) in self.conns.lock().await.iter() {
+            if id != except {
+                let _ = conn.send_datagram(bytes::Bytes::copy_from_slice(bytes));
+            }
+        }
+    }
+
     pub async fn close(&self) {
         self.endpoint.close().await;
     }

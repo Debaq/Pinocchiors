@@ -643,3 +643,12 @@
 html, body {
   touch-action: pan-x pan-y;
 }
+
+/* Colaboración: onda donde otra persona hizo clic */
+@keyframes collab-ripple {
+  from { width: 6px; height: 6px; margin: -3px 0 0 -3px; opacity: 0.9; }
+  to { width: 44px; height: 44px; margin: -22px 0 0 -22px; opacity: 0; }
+}
+.collab-ripple {
+  animation: collab-ripple 0.7s ease-out forwards;
+}

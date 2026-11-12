@@ -49,6 +49,10 @@ fn adopt(app: AppHandle, c: &Collab, room: Room) -> CollabStatus {
     let pump = room.clone();
     tauri::async_runtime::spawn(async move {
         while let Some(e) = pump.recv().await {
+            // El anfitrión reparte la presencia de cada invitado a los demás
+            if let (true, Event::Light { from, bytes }) = (pump.is_host(), &e) {
+                pump.send_light_except(from, bytes).await;
+            }
             let _ = app.emit(EV_EVENT, event_json(e));
         }
     });

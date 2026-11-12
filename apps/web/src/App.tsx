@@ -8,6 +8,8 @@ import { listen } from "@tauri-apps/api/event";
 import { startMcpLive } from "./lib/mcpLive";
 import { IS_ANDROID } from "./lib/platform";
 import { LiveAiBadge } from "./components/layout/LiveAiBadge";
+import { CollabBadge } from "./components/layout/CollabBadge";
+import { CollabOverlay } from "./components/layout/CollabOverlay";
 import { AiChatPanel } from "./components/layout/AiChatPanel";
 import { TuneWizard, type ChatPicture } from "./components/layout/TuneWizard";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -9615,6 +9617,7 @@ export const App: Component = () => {
 
   return (
     <div class="flex flex-col h-full w-full overflow-hidden bg-bg-darker">
+      <CollabOverlay />
       {/* Sin marco alrededor: maximizada o en pantalla completa ni el borde (es pantalla perdida) */}
       <div class="flex flex-col flex-1 min-h-0 overflow-hidden bg-bg" classList={{ "border border-border": !windowMaximized() && !windowFullscreen() }}>
         {/* Header */}
@@ -9622,7 +9625,12 @@ export const App: Component = () => {
           title="Pinocchio"
           onToggleChat={IS_ANDROID ? undefined : () => setChatOpen(!chatOpen())}
           chatOpen={chatOpen()}
-          aiStatus={<LiveAiBadge cad={cad} />}
+          aiStatus={
+            <>
+              <CollabBadge />
+              <LiveAiBadge cad={cad} />
+            </>
+          }
           fps={showFps() ? fps() : undefined}
           fileName={projectPath() ? baseName(projectPath()!) : fileName()}
           unsaved={unsaved()}

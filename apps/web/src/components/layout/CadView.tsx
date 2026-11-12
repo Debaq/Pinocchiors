@@ -4438,7 +4438,7 @@ export const CadView: Component<CadViewProps> = (props) => {
   };
 
   return (
-    <div class="absolute inset-0 z-[5] bg-viewport">
+    <div class="absolute inset-0 z-[5] bg-viewport" data-collab-view="design">
       <div
         ref={container}
         class={clsx(

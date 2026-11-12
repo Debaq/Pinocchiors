@@ -329,4 +329,8 @@ Object.assign(en_settings, {
   "Cerrar la sala": "Close the room",
   "Salir de la sala": "Leave the room",
   "Escribe y presiona Enter": "Type and press Enter",
+  "Sala de colaboración": "Collaboration room",
+  "Sala": "Room",
+  "En sala": "In room",
+  "esperando…": "waiting…",
 });
