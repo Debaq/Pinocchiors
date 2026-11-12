@@ -1,6 +1,8 @@
 import { Component, For, Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
 import { peers } from "../../lib/collab";
 import { collabView } from "../../lib/collabViews";
+import { t } from "../../lib/i18n";
+import { activeDesignTab, lockedByOther } from "../../lib/collabLocks";
 import { setCollabPanelOpen, setCollabPanelTab } from "../../lib/collab";
 import { anchorAt, draft, placing, selectedThread, setDraft, setPlacing, setSelectedThread, threads, type CommentView } from "../../lib/collabComments";
 import { presenceLabel } from "../../lib/collabPresence";
@@ -99,6 +101,18 @@ export const CollabOverlay: Component = () => {
 
   return (
     <div class="fixed inset-0 z-[9000] pointer-events-none overflow-hidden">
+      {/* Pestaña tomada por otra persona: solo lectura */}
+      <Show when={lockedByOther(activeDesignTab())}>
+        {(l) => (
+          <div
+            class="absolute top-12 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full text-xs text-white shadow"
+            style={{ background: l().color }}
+            role="status"
+          >
+            {t("{name} está editando esta pestaña: solo lectura", { name: l().name })}
+          </div>
+        )}
+      </Show>
       {/* Pines de los comentarios */}
       <For each={threads()}>
         {(th) => (

@@ -89,6 +89,10 @@ const ChatTab: Component = () => {
       <div ref={list} class="flex-1 min-h-0 overflow-y-auto p-3 space-y-2 text-sm">
         <For each={chat()} fallback={<p class="text-xs text-text-muted">{t("Nadie ha escrito todavía.")}</p>}>
           {(c) => (
+            <Show
+              when={!c.system}
+              fallback={<div class="text-center text-[11px] text-text-muted">{c.text}</div>}
+            >
             <div classList={{ "text-right": c.mine }}>
               <Show when={!c.mine}>
                 <div class="text-[10px] text-text-muted">{c.name}</div>
@@ -97,6 +101,7 @@ const ChatTab: Component = () => {
                 {c.text}
               </span>
             </div>
+            </Show>
           )}
         </For>
       </div>

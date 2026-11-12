@@ -372,4 +372,8 @@ Object.assign(en_settings, {
   "Mandando el proyecto…": "Sending the project…",
   "Proyecto enviado ({mb} MB)": "Project sent ({mb} MB)",
   "No se pudo mandar el proyecto: {e}": "Could not send the project: {e}",
+  "{who} cambió el diseño de «{tab}»": "{who} changed the design of «{tab}»",
+  "Alguien": "Someone",
+  "{name} la está editando": "{name} is editing it",
+  "{name} está editando esta pestaña: solo lectura": "{name} is editing this tab: read-only",
 });

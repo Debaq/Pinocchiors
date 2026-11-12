@@ -13,7 +13,8 @@ import { setPresenceLabel } from "./lib/collabPresence";
 import { commentsForProject, loadComments } from "./lib/collabComments";
 import { CollabBadge } from "./components/layout/CollabBadge";
 import { CollabPanel } from "./components/layout/CollabPanel";
-import { collabPanelOpen, onCollabNotice, setCollabPanelOpen } from "./lib/collab";
+import { collabPanelOpen, onCollabNotice, peers, setCollabPanelOpen, status } from "./lib/collab";
+import { installCollabLocks, lockedByOther, setActiveDesignTab, setEditing } from "./lib/collabLocks";
 import { installCollabSync } from "./lib/collabSync";
 import { installCollabDesign } from "./lib/collabDesign";
 import { CollabOverlay } from "./components/layout/CollabOverlay";
@@ -626,11 +627,30 @@ export const App: Component = () => {
     });
     const stopDesign = installCollabDesign(cad, (m) => setStatusMessage(m));
     const stopNotice = onCollabNotice((m) => setStatusMessage(m));
+    // Bloqueo por pestaña: sketch o diálogo abiertos = la pestaña es mía mientras dure
+    const stopLocks = installCollabLocks((_tab, by) => {
+      cadUi.cancelSketch(false);
+      void cad.cancelDraft();
+      setStatusMessage(t("{name} está editando esta pestaña: solo lectura", { name: by }));
+    });
+    cad.setCollabGuard((tab) => {
+      const l = lockedByOther(tab);
+      return l ? t("{name} está editando esta pestaña: solo lectura", { name: l.name }) : undefined;
+    });
     onCleanup(() => {
       stopSync();
       stopDesign();
       stopNotice();
+      stopLocks();
+      cad.setCollabGuard(undefined);
     });
+  });
+  createEffect(() => {
+    setActiveDesignTab(cad.tabs().active);
+    // Con sala nueva o gente nueva se vuelve a pedir el bloqueo de lo que tengo abierto
+    void status().on;
+    void peers().length;
+    setEditing(cadUi.session() !== undefined || cad.draft() !== undefined ? cad.tabs().active : null);
   });
   /** Chat con la IA (Claude Code instalado, en modo en vivo) */
   const [chatOpen, setChatOpen] = createSignal(false);

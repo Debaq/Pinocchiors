@@ -3,6 +3,7 @@
 // Clic cambia, doble clic renombra, arrastrar reordena y el clic derecho
 // duplica o borra. Ver libs/cad/PLAN_PESTANAS.md.
 
+import { locks } from "../../lib/collabLocks";
 import { For, Show, createSignal, onCleanup } from "solid-js";
 import { clsx } from "clsx";
 import type { CadStore, CadTab } from "../../lib/cad";
@@ -172,6 +173,9 @@ export const DesignTabs = (props: DesignTabsProps) => {
             }}
           >
             {tab.kind === "assembly" ? <DesignIcons.Assembly size={13} /> : <Icons.Cube size={13} />}
+            <Show when={locks().find((l) => l.tab === tab.id)}>
+              {(l) => <span class="w-2 h-2 rounded-full shrink-0" style={{ background: l().color }} title={t("{name} la está editando", { name: l().name })} />}
+            </Show>
             <Show when={renaming() === tab.id} fallback={<span class="max-w-40 truncate">{tBackend(tab.name)}</span>}>
               <input
                 data-tab-rename

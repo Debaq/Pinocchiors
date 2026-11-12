@@ -9,7 +9,7 @@
 // pendiente y se aplica cuando se puede. Pestañas nuevas, borradas o
 // reordenadas no se sincronizan por acá: «Resincronizar».
 
-import { onCollabData, onCollabJoined, onCollabProject, onCollabRoom, peers, sendData, status } from "./collab";
+import { addSystemLine, nameOf, onCollabData, onCollabJoined, onCollabProject, onCollabRoom, peers, sendData, status } from "./collab";
 import type { CadDocument, CadStore } from "./cad";
 import { t } from "./i18n";
 import { resync } from "./collabSync";
@@ -21,6 +21,8 @@ interface DocMsg {
   doc: CadDocument;
   /** El anfitrión impone su versión (respuesta a un choque) */
   forced?: boolean;
+  /** Quién hizo el cambio (id), para el aviso del chat */
+  by?: string;
 }
 
 /** JSON con las llaves ordenadas: el mismo documento da el mismo hash en las dos apps */
@@ -54,6 +56,8 @@ export function installCollabDesign(cad: CadStore, notify: (message: string) => 
   /** Lo que llegó y todavía no se pudo aplicar */
   const pending = new Map<number, CadDocument>();
   let asked = 0;
+  /** Último aviso al chat por pestaña */
+  const told = new Map<number, number>();
 
   const active = () => cad.tabs().active;
 
@@ -78,7 +82,7 @@ export function installCollabDesign(cad: CadStore, notify: (message: string) => 
     latest.set(tab, { h, doc });
     // Lo que había llegado de afuera para esta pestaña ya quedó viejo
     pending.delete(tab);
-    const msg: DocMsg = { tab, base: before ?? null, doc };
+    const msg: DocMsg = { tab, base: before ?? null, doc, by: status().my_id ?? undefined };
     void sendData("design_doc", msg).catch(() => {});
   });
 
@@ -110,6 +114,15 @@ export function installCollabDesign(cad: CadStore, notify: (message: string) => 
       latest.set(m.tab, { h: hash(m.doc), doc: m.doc });
     }
     pending.set(m.tab, m.doc);
+    // Quién cambió qué, en el chat (como mucho un aviso por pestaña cada 30 s)
+    if (!m.forced) {
+      const now = Date.now();
+      if (now - (told.get(m.tab) ?? 0) > 30_000) {
+        told.set(m.tab, now);
+        const tabName = cad.tabs().tabs.find((t) => t.id === m.tab)?.name ?? "";
+        addSystemLine(t("{who} cambió el diseño de «{tab}»", { who: (m.by && nameOf(m.by)) || t("Alguien"), tab: tabName }));
+      }
+    }
     await flush();
   });
 

@@ -26,6 +26,8 @@ export interface ChatLine {
   name: string;
   text: string;
   mine: boolean;
+  /** Aviso de la sala («Ana cambió el diseño…»), no es un mensaje de nadie */
+  system?: boolean;
 }
 
 /** Mensajes fiables (`pinocchio_collab::Message`) */
@@ -115,7 +117,19 @@ export function sendData(kind: string, value: unknown, opts?: { except?: string;
   return sendMessage({ t: "data", kind, value }, opts?.except, opts?.only);
 }
 
-const nameOf = (id: string) => peers().find((p) => p.id === id)?.name ?? "";
+/** Alguien se fue de la sala */
+const leftHandlers = new Set<(id: string) => void>();
+export function onCollabLeft(h: (id: string) => void): () => void {
+  leftHandlers.add(h);
+  return () => leftHandlers.delete(h);
+}
+
+/** Una línea de aviso en el chat de la sala */
+export function addSystemLine(text: string) {
+  setChat((c) => [...c, { from: "", name: "", text, mine: false, system: true }]);
+}
+
+export const nameOf = (id: string) => peers().find((p) => p.id === id)?.name ?? "";
 
 function handle(e: CollabEvent) {
   switch (e.kind) {
@@ -124,6 +138,7 @@ function handle(e: CollabEvent) {
       for (const h of joinHandlers) h({ id: e.id, name: e.name, color: e.color });
       break;
     case "left":
+      for (const h of leftHandlers) h(e.id);
       setPeers((p) => p.filter((x) => x.id !== e.id));
       // Si era el anfitrión, la sala terminó para el invitado
       if (!status().host && peers().length === 0) void leaveCollab();

@@ -5056,6 +5056,8 @@ export function createCadStore() {
   };
   /** Colaboración: avisa de cada cambio confirmado del diseño (ver `lib/collabDesign.ts`) */
   let collabHook: ((tab: number, doc: CadDocument) => void) | undefined;
+  /** Colaboración: por qué no se puede editar esta pestaña ahora (otra persona la está editando) */
+  let collabGuard: ((tab: number) => string | undefined) | undefined;
   const sendNow = async (next: CadDocument | null, preview: boolean) => {
     const seq = ++sendSeq;
     setBusy(true);
@@ -5080,6 +5082,11 @@ export function createCadStore() {
 
   /** Cambia el documento (deshacible) y recalcula; con un diálogo abierto, cambia el borrador */
   const commit = (mutate: (d: CadDocument) => void, join = false) => {
+    const lockedBy = tabs().active !== null ? collabGuard?.(tabs().active!) : undefined;
+    if (lockedBy) {
+      setError(lockedBy);
+      return lastSend;
+    }
     if (aiTurn() !== undefined) {
       setError(tr("La IA está trabajando en el diseño: espera un momento"));
       return lastSend;
@@ -5578,6 +5585,11 @@ export function createCadStore() {
       collabHook = fn;
     },
 
+    /** Colaboración: quién bloquea una pestaña (`undefined`: nadie) */
+    setCollabGuard(fn: ((tab: number) => string | undefined) | undefined) {
+      collabGuard = fn;
+    },
+
     /**
      * Colaboración: pone el documento que llegó de otra persona en la pestaña
      * activa y lo recalcula. No toca el deshacer. `false` si ahora no se puede
@@ -5587,6 +5599,11 @@ export function createCadStore() {
       if (draft() || aiTurn() !== undefined || viewing() !== undefined) return false;
       setComparison(null);
       setDoc(doc);
+      // Mis pasos de antes parten de otra versión: deshacerlos pisaría lo que llegó.
+      // Deshacer vuelve a valer desde acá.
+      undoStack.length = 0;
+      redoStack.length = 0;
+      setHistoryVersion((v) => v + 1);
       await send(doc);
       return true;
     },

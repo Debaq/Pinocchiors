@@ -40,10 +40,11 @@ Ventaja: no hay conflictos de fusión. Costo: el invitado depende del anfitrión
 - Sirven sin sala (anotaciones del proyecto). Con sala: el anfitrión es dueño; el invitado manda `comment_op` y el anfitrión reparte; al entrar un invitado recibe `comments_full` (y recupera los suyos al salir). Se guardan en `ui.json` (`comments`); no entran en el deshacer.
 - Probado en Chromium sin Tauri (panel, pines, guardar y recargar). **Falta:** probar con dos instancias reales; si el anfitrión abre otro proyecto con invitados dentro, no se les reenvía (lo cubre C4); un pin no se oculta si hay pieza delante.
 
-### C3 — Co-edición (anfitrión autoritativo)
-- Invitado manda `{cmd, args}`; el anfitrión valida, ejecuta con `try_dispatch_with` y difunde el resultado.
-- **Bloqueo por pestaña/objeto**: mientras alguien edita un sketch, ese sketch queda con su color y los demás lo ven en solo lectura (evita pisarse).
-- Deshacer: cada persona deshace **sus** pasos; el historial muestra el autor.
+### C3 — Co-edición (HECHO 2026-11-11)
+- **Bloqueo por pestaña de diseño** (`lib/collabLocks.ts`): quien abre un sketch o un diálogo de operación toma la pestaña mientras dure. Los demás la ven con un punto del color de quien la edita (`DesignTabs`) y un aviso «X está editando esta pestaña: solo lectura»; sus cambios quedan bloqueados (`CadStore.setCollabGuard`) y un sketch o diálogo que intenten abrir ahí se cierra con aviso. El anfitrión decide (`acquire` / `release` / `state` / `denied`); si se va quien la tenía, se libera sola. Granularidad: la pestaña (no objeto ni sketch suelto).
+- **Deshacer:** al llegar un cambio de otra persona, tus pasos de deshacer de esa pestaña se vacían (partían de otra versión; deshacerlos pisaría lo que llegó). Deshacer vuelve a valer desde ahí y solo toca tus pasos nuevos. No es un deshacer selectivo por autor sobre el árbol de operaciones.
+- **Autor:** el chat muestra «X cambió el diseño de «Soporte»» (como mucho cada 30 s por pestaña). El panel Historial de las operaciones de malla no lleva autor.
+- Probado en Chromium sin Tauri con una sala simulada (pedir, negar, no quitar, liberar al irse). tsc OK. **Falta:** probar con dos instancias reales y la parte visual del punto/aviso.
 
 ### C4 — Sincronizar el estado (HECHO 2026-11-11)
 Cambio de diseño respecto de lo escrito antes: **no hay log de comandos**. El diseño CAD es un documento (`cad_model::Document`) que la ventana empuja al backend con `cad_set_document`; compartir ese documento es más simple y más robusto que repetir comandos.
