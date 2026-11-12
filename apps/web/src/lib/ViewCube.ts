@@ -156,9 +156,10 @@ export class ViewCube {
     this.camera.quaternion.copy(camera.quaternion);
     this.camera.updateMatrixWorld();
 
-    // Viewport y tijera usan origen abajo a la izquierda
+    // WebGL: viewport y tijera con origen abajo a la izquierda. El dibujador nuevo (WebGPU) los mide desde arriba
     const x = width - SIZE - MARGIN;
-    const y = height - SIZE - MARGIN;
+    const fromTop = (renderer as { isWebGPURenderer?: boolean }).isWebGPURenderer === true;
+    const y = fromTop ? MARGIN : height - SIZE - MARGIN;
     const autoClear = renderer.autoClear;
     renderer.autoClear = false;
     renderer.clearDepth();
