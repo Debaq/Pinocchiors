@@ -9,14 +9,23 @@
 //! - **fiable**: un stream bidireccional con mensajes JSON con prefijo de
 //!   largo (`Message`): hola, chat, comandos…
 //! - **liviano**: datagramas sin garantía (cursores, clics); se pueden perder.
+//!
+//! Reemplazo del anfitrión: un invitado puede quedar de **reemplazo**
+//! (`standby`): su propio endpoint empieza a aceptar conexiones (retenidas
+//! hasta `promote`) con una clave aparte, solo para la lista de miembros que le
+//! pasa el anfitrión. Si el anfitrión se va o se cae, el reemplazo se vuelve
+//! anfitrión y los demás se conectan a él con el ticket de reemplazo. Con
+//! `Options::secret` cada persona conserva su id al reconectarse.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// Identidad de una persona (ver `Options::secret`)
+pub use iroh::SecretKey;
 use iroh::endpoint::{presets, Connection};
 use iroh::{Endpoint, EndpointAddr, RelayMode};
 use serde::{Deserialize, Serialize};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, watch, Mutex};
 
 /// Identifica el protocolo; subir el sufijo si cambia de forma incompatible.
 pub const ALPN: &[u8] = b"pinocchio/collab/0";
@@ -93,19 +102,32 @@ pub struct Options {
     /// Anfitrión: quien entra queda silenciado (no recibe ni reparte nada)
     /// hasta que se lo admite con `set_muted(id, false)`
     pub approval: bool,
+    /// Identidad fija (el mismo id en cada sala); `None`: una nueva cada vez
+    pub secret: Option<iroh::SecretKey>,
 }
 
 impl Options {
     pub fn new(name: &str, color: &str) -> Self {
-        Self { name: name.into(), color: color.into(), internet: true, approval: false }
+        Self { name: name.into(), color: color.into(), internet: true, approval: false, secret: None }
     }
 }
+
+type Set = Arc<std::sync::Mutex<std::collections::HashSet<String>>>;
 
 /// Lo que el anfitrión comparte con `serve` para dejar entrar silenciados
 #[derive(Clone)]
 struct Gate {
-    muted: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    muted: Set,
     approval: Arc<std::sync::atomic::AtomicBool>,
+    /// Miembros que pueden volver con la clave de reemplazo (y entran sin aprobación)
+    allow: Set,
+    standby_key: Arc<std::sync::Mutex<Option<String>>>,
+}
+
+impl Gate {
+    fn allowed(&self, id: &str) -> bool {
+        self.allow.lock().unwrap().contains(id)
+    }
 }
 
 type Peers = Arc<Mutex<HashMap<String, mpsc::UnboundedSender<Message>>>>;
@@ -116,15 +138,61 @@ pub struct Room {
     ticket: String,
     /// Clave de la sala (la del anfitrión se puede rotar)
     key: Arc<std::sync::Mutex<String>>,
-    host: bool,
-    /// Anfitrión: sin admitir (no reciben lo que se reparte, no se reparte lo suyo)
-    muted: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
-    approval: Arc<std::sync::atomic::AtomicBool>,
+    /// Cambia a `true` cuando un reemplazo pasa a ser anfitrión
+    host: std::sync::atomic::AtomicBool,
+    gate: Gate,
     my_id: String,
     peers: Peers,
     /// Conexiones vivas, para los datagramas
     conns: Arc<Mutex<HashMap<String, Connection>>>,
     events: Mutex<mpsc::UnboundedReceiver<Event>>,
+    /// Para atender conexiones nuevas como reemplazo
+    events_tx: mpsc::UnboundedSender<Event>,
+    opts: Options,
+    /// Reemplazo: las conexiones esperan a que pase a ser anfitrión
+    promoted: watch::Sender<bool>,
+    standby_started: std::sync::atomic::AtomicBool,
+}
+
+/// Acepta conexiones en `endpoint` como anfitrión. Con `wait`, cada una
+/// espera a que se vuelva `true` (reemplazo todavía sin promover).
+#[allow(clippy::too_many_arguments)]
+fn spawn_accept(
+    endpoint: Endpoint,
+    key: Arc<std::sync::Mutex<String>>,
+    gate: Gate,
+    opts: Options,
+    peers: Peers,
+    conns: Arc<Mutex<HashMap<String, Connection>>>,
+    tx: mpsc::UnboundedSender<Event>,
+    wait: Option<watch::Receiver<bool>>,
+) {
+    tokio::spawn(async move {
+        while let Some(incoming) = endpoint.accept().await {
+            let (p, c, tx, o, k, g, w) = (peers.clone(), conns.clone(), tx.clone(), opts.clone(), key.clone(), gate.clone(), wait.clone());
+            tokio::spawn(async move {
+                if let Some(mut w) = w {
+                    while !*w.borrow() {
+                        if w.changed().await.is_err() {
+                            return;
+                        }
+                    }
+                }
+                if let Ok(conn) = incoming.await {
+                    let _ = serve(conn, Some(k), Some(g), String::new(), o, p, c, tx).await;
+                }
+            });
+        }
+    });
+}
+
+fn new_gate(approval: bool) -> Gate {
+    Gate {
+        muted: Default::default(),
+        approval: Arc::new(std::sync::atomic::AtomicBool::new(approval)),
+        allow: Default::default(),
+        standby_key: Default::default(),
+    }
 }
 
 impl Room {
@@ -139,21 +207,23 @@ impl Room {
         let (tx, events) = mpsc::unbounded_channel();
         let peers: Peers = Default::default();
         let conns: Arc<Mutex<HashMap<String, Connection>>> = Default::default();
-        let muted: Arc<std::sync::Mutex<std::collections::HashSet<String>>> = Default::default();
-        let approval = Arc::new(std::sync::atomic::AtomicBool::new(opts.approval));
-        let gate = Gate { muted: muted.clone(), approval: approval.clone() };
-        let (ep, p, c, o, k) = (endpoint.clone(), peers.clone(), conns.clone(), opts.clone(), key.clone());
-        tokio::spawn(async move {
-            while let Some(incoming) = ep.accept().await {
-                let (p, c, tx, o, k, g) = (p.clone(), c.clone(), tx.clone(), o.clone(), k.clone(), gate.clone());
-                tokio::spawn(async move {
-                    if let Ok(conn) = incoming.await {
-                        let _ = serve(conn, Some(k), Some(g), String::new(), o, p, c, tx).await;
-                    }
-                });
-            }
-        });
-        Ok(Room { my_id: endpoint.id().to_string(), endpoint, ticket, key, host: true, muted, approval, peers, conns, events: Mutex::new(events) })
+        let gate = new_gate(opts.approval);
+        spawn_accept(endpoint.clone(), key.clone(), gate.clone(), opts.clone(), peers.clone(), conns.clone(), tx.clone(), None);
+        Ok(Room {
+            my_id: endpoint.id().to_string(),
+            endpoint,
+            ticket,
+            key,
+            host: true.into(),
+            gate,
+            peers,
+            conns,
+            events: Mutex::new(events),
+            events_tx: tx,
+            opts,
+            promoted: watch::channel(true).0,
+            standby_started: false.into(),
+        })
     }
 
     /// Se une a la sala de un anfitrión
@@ -164,27 +234,30 @@ impl Room {
         let (tx, events) = mpsc::unbounded_channel();
         let peers: Peers = Default::default();
         let conns: Arc<Mutex<HashMap<String, Connection>>> = Default::default();
-        let (p, c, o) = (peers.clone(), conns.clone(), opts.clone());
+        let (p, c, o, t) = (peers.clone(), conns.clone(), opts.clone(), tx.clone());
         tokio::spawn(async move {
-            let _ = serve(conn, None, None, key, o, p, c, tx).await;
+            let _ = serve(conn, None, None, key, o, p, c, t).await;
         });
         Ok(Room {
             my_id: endpoint.id().to_string(),
             endpoint,
             ticket: ticket.to_string(),
             key: Default::default(),
-            host: false,
-            muted: Default::default(),
-            approval: Default::default(),
+            host: false.into(),
+            gate: new_gate(false),
             peers,
             conns,
             events: Mutex::new(events),
+            events_tx: tx,
+            opts,
+            promoted: watch::channel(false).0,
+            standby_started: false.into(),
         })
     }
 
     /// El ticket para compartir (el del anfitrión refleja la clave actual)
     pub fn ticket(&self) -> String {
-        if self.host {
+        if self.is_host() {
             encode_ticket(&self.endpoint.addr(), &self.key.lock().unwrap()).unwrap_or_else(|_| self.ticket.clone())
         } else {
             self.ticket.clone()
@@ -200,12 +273,54 @@ impl Room {
 
     /// Anfitrión: pedir aprobación a los que entren desde ahora
     pub fn set_approval(&self, on: bool) {
-        self.approval.store(on, std::sync::atomic::Ordering::SeqCst);
+        self.gate.approval.store(on, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Invitado: queda de reemplazo del anfitrión. Su endpoint empieza a
+    /// aceptar conexiones (que esperan a `promote`) de los miembros de
+    /// `allow` con una clave propia; devuelve el ticket para volver a entrar.
+    /// Llamarlo otra vez solo cambia la lista (el ticket es el mismo).
+    pub async fn standby(&self, allow: Vec<String>) -> Result<String, Error> {
+        if self.is_host() {
+            return Err(Error::Protocol("ya es el anfitrión".into()));
+        }
+        *self.gate.allow.lock().unwrap() = allow.into_iter().collect();
+        let key = self.gate.standby_key.lock().unwrap().get_or_insert_with(new_key).clone();
+        if !self.standby_started.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            if self.opts.internet {
+                self.endpoint.online().await;
+            }
+            spawn_accept(
+                self.endpoint.clone(),
+                self.key.clone(),
+                self.gate.clone(),
+                Options { approval: false, ..self.opts.clone() },
+                self.peers.clone(),
+                self.conns.clone(),
+                self.events_tx.clone(),
+                Some(self.promoted.subscribe()),
+            );
+        }
+        encode_ticket(&self.endpoint.addr(), &key)
+    }
+
+    /// Reemplazo: pasa a ser el anfitrión (se fue el anterior). Los miembros
+    /// vuelven con el ticket de reemplazo; para invitar a otros vale el ticket
+    /// nuevo (`ticket()`), con una clave nueva.
+    pub fn promote(&self) {
+        *self.key.lock().unwrap() = new_key();
+        self.host.store(true, std::sync::atomic::Ordering::SeqCst);
+        let _ = self.promoted.send(true);
+    }
+
+    /// Anfitrión: quiénes pueden volver con la clave de reemplazo
+    pub fn set_allowed(&self, ids: Vec<String>) {
+        *self.gate.allow.lock().unwrap() = ids.into_iter().collect();
     }
 
     /// Anfitrión: silencia (o admite) a una persona
     pub fn set_muted(&self, id: &str, muted: bool) {
-        let mut set = self.muted.lock().unwrap();
+        let mut set = self.gate.muted.lock().unwrap();
         if muted {
             set.insert(id.to_string());
         } else {
@@ -214,17 +329,18 @@ impl Room {
     }
 
     pub fn is_muted(&self, id: &str) -> bool {
-        self.muted.lock().unwrap().contains(id)
+        self.gate.muted.lock().unwrap().contains(id)
     }
 
-    /// Anfitrión: saca a una persona de la sala
+    /// Anfitrión: saca a una persona de la sala (y no puede volver con la clave de reemplazo)
     pub async fn kick(&self, id: &str) {
+        self.gate.allow.lock().unwrap().remove(id);
         if let Some(conn) = self.conns.lock().await.get(id) {
             conn.close(2u32.into(), "expulsado".as_bytes());
         }
     }
     pub fn is_host(&self) -> bool {
-        self.host
+        self.host.load(std::sync::atomic::Ordering::SeqCst)
     }
     pub fn my_id(&self) -> &str {
         &self.my_id
@@ -312,6 +428,10 @@ async fn bind(opts: &Options) -> Result<Endpoint, Error> {
     } else {
         Endpoint::builder(presets::Minimal).relay_mode(RelayMode::Disabled)
     };
+    let b = match &opts.secret {
+        Some(sk) => b.secret_key(sk.clone()),
+        None => b,
+    };
     b.alpns(vec![ALPN.to_vec()]).bind().await.map_err(net)
 }
 
@@ -393,7 +513,9 @@ async fn serve(
         match read_msg(&mut recv).await? {
             Message::Hello { name, color, key } => {
                 if let Some(k) = &room_key {
-                    if key != *k.lock().unwrap() {
+                    // La clave de la sala, o la de reemplazo si es un miembro que vuelve
+                    let back = gate.as_ref().is_some_and(|g| g.allowed(&id) && g.standby_key.lock().unwrap().as_deref() == Some(key.as_str()));
+                    if key != *k.lock().unwrap() && !back {
                         conn.close(1u32.into(), "clave incorrecta".as_bytes());
                         return Err(Error::Protocol("clave incorrecta".into()));
                     }
@@ -427,7 +549,8 @@ async fn serve(
     };
     // Con aprobación, entra silenciado hasta que el anfitrión lo admita
     if let Some(g) = &gate {
-        if g.approval.load(std::sync::atomic::Ordering::SeqCst) {
+        // Un miembro que vuelve (reemplazo del anfitrión) no espera aprobación
+        if g.approval.load(std::sync::atomic::Ordering::SeqCst) && !g.allowed(&id) {
             g.muted.lock().unwrap().insert(id.clone());
         }
     }
@@ -482,6 +605,10 @@ async fn serve(
     // Lector (termina cuando se cae la conexión)
     while let Ok(msg) = read_msg(&mut recv).await {
         let _ = events.send(Event::Message { from: id.clone(), msg });
+    }
+    // Invitado expulsado: no es que el anfitrión se haya ido (no hay que pasar al reemplazo)
+    if !host && conn.close_reason().is_some_and(|r| r.to_string().contains("expulsado")) {
+        let _ = events.send(Event::Rejected { reason: "te sacaron de la sala".into() });
     }
     writer.abort();
     light.abort();

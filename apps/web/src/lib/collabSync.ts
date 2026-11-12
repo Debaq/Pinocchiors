@@ -26,7 +26,10 @@ const sending = new Set<string>();
 export function installCollabSync(h: CollabSyncHost): () => void {
   host = h;
   const stops = [
-    onCollabAdmitted((peer) => void sendProject(peer.id, peer.name)),
+    // Quien vuelve después de un cambio de anfitrión ya tiene el proyecto
+    onCollabAdmitted((peer, back) => {
+      if (!back) void sendProject(peer.id, peer.name);
+    }),
     onCollabData("resync", (from) => {
       if (status().host && roles()[from] !== undefined && roles()[from] !== "pending") void sendProject(from);
     }),

@@ -10,7 +10,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { createSignal } from "solid-js";
-import { applyRoster, collabColor, collabName, defaultRole, onCollabData, onCollabJoined, onCollabLeft, onCollabRoom, sendData, setCollabPermit, status, type Peer } from "./collab";
+import { applyRoster, collabColor, collabName, defaultRole, onCollabData, onCollabHandoff, onCollabJoined, onCollabLeft, onCollabRoom, sendData, setCollabPermit, status, type Peer } from "./collab";
 
 export type Role = "view" | "comment" | "edit";
 /** `pending`: entró pero el anfitrión todavía no lo admite */
@@ -32,9 +32,13 @@ export const pendingPeers = (peers: Peer[]) => peers.filter((p) => roles()[p.id]
 
 type RoleMsg = { role: Role };
 
-const admitHandlers = new Set<(peer: Peer) => void>();
-/** Una persona quedó admitida (anfitrión): ahí se le manda el proyecto y el estado compartido */
-export function onCollabAdmitted(h: (peer: Peer) => void): () => void {
+const admitHandlers = new Set<(peer: Peer, back: boolean) => void>();
+/**
+ * Una persona quedó admitida (anfitrión): ahí se le manda el proyecto y el
+ * estado compartido. `back`: vuelve después de un cambio de anfitrión (ya
+ * tiene el proyecto).
+ */
+export function onCollabAdmitted(h: (peer: Peer, back: boolean) => void): () => void {
   admitHandlers.add(h);
   return () => admitHandlers.delete(h);
 }
@@ -49,11 +53,14 @@ function sendRoster() {
   for (const p of admittedPeers) void sendData("roster", list, { only: p.id }).catch(() => {});
 }
 
-function admitted(peer: Peer, role: Role) {
+/** Reemplazo que tomó la sala: el rol que cada miembro tenía con el anfitrión anterior */
+let inherited: Record<string, Role> = {};
+
+function admitted(peer: Peer, role: Role, back = false) {
   setRoles({ ...roles(), [peer.id]: role });
   void invoke("collab_set_muted", { id: peer.id, muted: false }).catch(() => {});
   void sendData("collab_role", { role } satisfies RoleMsg, { only: peer.id }).catch(() => {});
-  for (const h of admitHandlers) h(peer);
+  for (const h of admitHandlers) h(peer, back);
   sendRoster();
 }
 
@@ -87,7 +94,10 @@ export function installCollabRoles(approval: () => boolean): () => void {
     onCollabJoined((peer) => {
       if (!status().host) return;
       known.set(peer.id, peer);
-      if (approval()) setRoles({ ...roles(), [peer.id]: "pending" });
+      // Un miembro que vuelve después de un cambio de anfitrión sigue con su rol
+      const before = inherited[peer.id];
+      if (before) admitted(peer, before, true);
+      else if (approval()) setRoles({ ...roles(), [peer.id]: "pending" });
       else admitted(peer, defaultRole());
     }),
     onCollabLeft((id) => {
@@ -104,10 +114,17 @@ export function installCollabRoles(approval: () => boolean): () => void {
       const m = value as RoleMsg;
       if (!status().host && m && (m.role === "view" || m.role === "comment" || m.role === "edit")) setMyRole(m.role);
     }),
-    onCollabRoom(() => {
+    onCollabRoom((on) => {
       setRoles({});
       known.clear();
       setMyRole("edit");
+      if (!on) inherited = {};
+    }),
+    onCollabHandoff((promoted, list) => {
+      inherited = promoted ? { ...list } : {};
+      // El rol que tenía yo vale hasta que el nuevo anfitrión lo confirme
+      const mine = list[status().my_id ?? ""];
+      if (!promoted && mine) setMyRole(mine);
     }),
   ];
   return () => {

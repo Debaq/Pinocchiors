@@ -140,6 +140,8 @@ pub fn run() {
             collab::collab_rotate_key,
             collab::collab_set_muted,
             collab::collab_set_approval,
+            collab::collab_standby,
+            collab::collab_promote,
             mcp::clients::mcp_status,
             mcp::clients::mcp_connect,
             mcp::clients::mcp_skill,

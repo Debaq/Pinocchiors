@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use pinocchio_collab::{Event, Message, Options, Room};
+use pinocchio_collab::{Event, Message, Options, Room, SecretKey};
 use serde::Serialize;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -13,9 +13,17 @@ use crate::sync::Mutex;
 
 pub const EV_EVENT: &str = "collab://event";
 
-#[derive(Default)]
 pub struct Collab {
     room: Mutex<Option<Arc<Room>>>,
+    /// Identidad mientras la app está abierta: el mismo id en cada sala, así
+    /// al pasar al reemplazo del anfitrión cada uno conserva su lugar y su rol
+    secret: SecretKey,
+}
+
+impl Default for Collab {
+    fn default() -> Self {
+        Self { room: Default::default(), secret: SecretKey::generate() }
+    }
 }
 
 #[derive(Serialize)]
@@ -84,21 +92,21 @@ async fn close_current(c: &Collab) {
     }
 }
 
-fn options(name: String, color: String) -> Options {
-    Options::new(name.trim(), &color)
+fn options(c: &Collab, name: String, color: String) -> Options {
+    Options { secret: Some(c.secret.clone()), ..Options::new(name.trim(), &color) }
 }
 
 #[tauri::command]
 pub async fn collab_host(app: AppHandle, c: State<'_, Collab>, name: String, color: String, approval: bool) -> Result<CollabStatus, String> {
     close_current(&c).await;
-    let room = Room::host(Options { approval, ..options(name, color) }).await.map_err(|e| e.to_string())?;
+    let room = Room::host(Options { approval, ..options(&c, name, color) }).await.map_err(|e| e.to_string())?;
     Ok(adopt(app, &c, room))
 }
 
 #[tauri::command]
 pub async fn collab_join(app: AppHandle, c: State<'_, Collab>, ticket: String, name: String, color: String) -> Result<CollabStatus, String> {
     close_current(&c).await;
-    let room = Room::join(&ticket, options(name, color)).await.map_err(|e| e.to_string())?;
+    let room = Room::join(&ticket, options(&c, name, color)).await.map_err(|e| e.to_string())?;
     Ok(adopt(app, &c, room))
 }
 
@@ -195,6 +203,20 @@ pub fn collab_rotate_key(c: State<'_, Collab>) -> Result<CollabStatus, String> {
 pub fn collab_set_muted(c: State<'_, Collab>, id: String, muted: bool) -> Result<(), String> {
     current(&c)?.set_muted(&id, muted);
     Ok(())
+}
+
+/// Invitado: queda de reemplazo del anfitrión; devuelve el ticket para que
+/// los miembros de `allow` vuelvan a él si el anfitrión se va
+#[tauri::command]
+pub async fn collab_standby(c: State<'_, Collab>, allow: Vec<String>) -> Result<String, String> {
+    current(&c)?.standby(allow).await.map_err(|e| e.to_string())
+}
+
+/// Reemplazo: se fue el anfitrión, ahora lo es esta persona
+#[tauri::command]
+pub fn collab_promote(c: State<'_, Collab>) -> Result<CollabStatus, String> {
+    current(&c)?.promote();
+    Ok(status(&c))
 }
 
 /// Anfitrión: pedir aprobación a quienes entren desde ahora

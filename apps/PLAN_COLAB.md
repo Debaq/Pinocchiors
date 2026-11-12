@@ -75,6 +75,47 @@ Cambio de diseño respecto de lo escrito antes: **no hay log de comandos**. El d
 - **Menores:** la sala anterior ya no le habla a la ventana (sus «se fue» tardíos sacaban de la sala nueva); los comentarios del invitado ya no se mezclan con el proyecto del anfitrión al salir; el bloqueo del anfitrión lleva su color; el saludo inicial tiene 15 s de límite.
 - e2e con un segundo invitado: 23 pasos, 3 corridas seguidas sin fallar.
 
+## Hecho 2026-11-12 (segunda tanda)
+- **Dónde está cada uno** (`collabWhere.ts`): línea del color de cada persona bajo la pestaña de área y de diseño/ensamble (`PresenceLines`); cursor y clics de otro solo en el mismo diseño. Mensajes del chat como globos junto a la persona o su pestaña.
+- **Comentarios**: solo en su pestaña de diseño; resueltos sin número (aparece al pasar el mouse en la lista); esconder pines del visor.
+- **Pestañas en vivo**: la barra entera (con el contenido de las nuevas) va por `design_tabs` / `cad_tabs_sync`.
+- **Proyecto de la sala**: se abre sin preguntar (la pregunta pasa a «Unirse»); la copia del invitado se guarda donde él elija.
+- **Juntar copias** (`collabMerge.ts`, `cad_tabs_merge`): número de proyecto (también anotado por ruta) y base por pestaña; lo cambiado solo por uno reemplaza, lo cambiado por los dos entra como «Nombre (de Ana)»; las referencias entre pestañas agregadas se corrigen.
+- **Reemplazo del anfitrión** (`collabHandoff.ts`, `Room::standby/promote`): identidad fija por sesión; un invitado queda de reemplazo con su sala lista; si el anfitrión se va o se cae, toma la sala y los demás se pasan solos con su rol, sin aprobación ni proyecto nuevo. Prueba: `el_reemplazo_toma_la_sala_si_se_va_el_anfitrion`.
+- **Falta**: probar con tres personas en la app real.
+
+## C7 — Futuro: mallas, rig y animación en vivo y al juntar copias (SOLO PLAN)
+
+Hoy diseños y ensambles van en vivo y se juntan al volver a una sala; las
+mallas, el rig y la animación solo viajan con el proyecto entero (al entrar o
+con «Resincronizar») y al juntar copias se toma siempre lo del anfitrión.
+
+**Idea**: la misma receta que con las pestañas, pero por **objeto de la escena**.
+
+1. **C7.1 Identidad por objeto.** Cada objeto (malla, esqueleto, animación,
+   material) tiene un id estable que viaja en el proyecto; hash por objeto
+   (geometría por su hash de vértices/caras, no por los bytes enteros).
+2. **C7.2 En vivo, por comando.** Las ediciones de malla ya son operaciones del
+   backend (reparar, remallar, booleanas, pincel de pesos, keys de
+   animación…): se manda el comando y sus parámetros, el anfitrión lo ejecuta y
+   reparte el comando (no la malla). Lo que no sea determinista (vóxeles con
+   azar, Instant Meshes) se manda como resultado: la malla comprimida (Draco)
+   por `send_blob`.
+3. **C7.3 Bloqueo por objeto** (como C3 por pestaña): quien edita una malla o
+   un rig lo toma; los demás lo ven con su color y en solo lectura.
+4. **C7.4 Rig y animación como datos chicos.** Huesos, restricciones, keys y
+   curvas son livianos: van en vivo como documento (como el diseño), con el
+   mismo control de choques por hash.
+5. **C7.5 Juntar copias por objeto.** Base por objeto; lo cambiado solo por
+   uno reemplaza (mandando la malla por blob), lo cambiado por los dos entra
+   como objeto aparte «Nombre (de Ana)». Pesos de piel ligados a una malla
+   cambiada: si cambió la topología, se marcan para rehacer.
+6. **C7.6 Pruebas**: e2e de dos ventanas editando mallas y keys a la vez;
+   prueba de juntar copias con una malla cambiada por cada lado.
+
+**Riesgos**: mallas de millones de caras (mandar comando, no resultado);
+operaciones no deterministas; pesos/UV que dependen de la topología.
+
 ## Orden recomendado
 C0 → C1 → C2 (ya es útil: se ven y conversan) → C4 → C3 → C5 → C6.
 

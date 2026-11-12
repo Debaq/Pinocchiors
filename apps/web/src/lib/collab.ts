@@ -6,6 +6,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { createSignal } from "solid-js";
+import { t } from "./i18n";
 import { createPersisted } from "./ui-state";
 
 export interface CollabStatus {
@@ -135,10 +136,86 @@ function needOf(msg: CollabMessage): 1 | 2 | 3 {
   if (msg.t === "chat") return 2;
   if (msg.t === "data") {
     if (msg.kind === "comment_op") return 2;
-    if (msg.kind === "resync" || msg.kind === "where") return 1;
+    if (msg.kind === "resync" || msg.kind === "where" || msg.kind === "standby_ready") return 1;
     return 3;
   }
   return 1;
+}
+
+/**
+ * Reemplazo del anfitrión (lo manda el anfitrión a cada invitado): quién es,
+ * el ticket de su sala de reemplazo y el rol de cada miembro. Si el anfitrión
+ * se va o se cae, el reemplazo pasa a ser anfitrión y los demás se pasan solos.
+ */
+export interface Successor {
+  id: string;
+  ticket: string;
+  roles: Record<string, "view" | "comment" | "edit">;
+}
+let successor: Successor | undefined;
+export function setSuccessor(s: Successor | undefined) {
+  successor = s;
+}
+/** Me sacaron o no me dejaron entrar: no hay que pasar al reemplazo */
+let ending = false;
+
+/** Se cambió de anfitrión: `promoted` = ahora lo soy yo */
+const handoffHandlers = new Set<(promoted: boolean, roles: Successor["roles"]) => void>();
+export function onCollabHandoff(h: (promoted: boolean, roles: Successor["roles"]) => void): () => void {
+  handoffHandlers.add(h);
+  return () => handoffHandlers.delete(h);
+}
+
+/** Mientras se cambia de anfitrión, lo que llega espera (si no, un «entró» se tomaría como el anfitrión viejo) */
+let held: CollabEvent[] | null = null;
+
+/**
+ * Se fue el anfitrión y hay reemplazo: si soy yo, tomo la sala; si no, me
+ * conecto a la del reemplazo (con mi mismo id, sin aprobación ni proyecto
+ * nuevo: ya tengo el mismo). El chat y lo demás siguen.
+ */
+async function takeOver(old: string, s: Successor) {
+  held = [];
+  const oldName = nameOf(old) || t("El anfitrión");
+  const newName = nameOf(s.id) || t("otra persona");
+  successor = undefined;
+  hostId = undefined;
+  // Los demás vuelven a aparecer a medida que se reconectan
+  setPeers([]);
+  try {
+    if (s.id === status().my_id) {
+      setStatus(await invoke<CollabStatus>("collab_promote"));
+      await invoke("collab_set_approval", { on: approvalWanted() }).catch(() => {});
+      for (const h of roomHandlers) h(true, true);
+      for (const h of handoffHandlers) h(true, s.roles);
+      addSystemLine(t("{old} salió: ahora llevas tú la sala", { old: oldName }));
+    } else {
+      let next: CollabStatus | undefined;
+      let lastError: unknown;
+      // El reemplazo puede tardar un momento en tomar la sala
+      for (let i = 0; i < 6 && !next; i++) {
+        try {
+          next = await invoke<CollabStatus>("collab_join", { ticket: s.ticket, ...me() });
+        } catch (e) {
+          lastError = e;
+          await new Promise((r) => setTimeout(r, 1500));
+        }
+      }
+      if (!next) throw lastError;
+      setStatus(next);
+      for (const h of roomHandlers) h(true, false);
+      for (const h of handoffHandlers) h(false, s.roles);
+      addSystemLine(t("{old} salió: ahora la sala la lleva {name}", { old: oldName, name: newName }));
+    }
+  } catch (e) {
+    for (const h of noticeHandlers) h(t("No se pudo pasar a la sala de {name}: {e}", { name: newName, e: String(e) }));
+    held = null;
+    void leaveCollab();
+    return;
+  }
+  const queued = held ?? [];
+  held = null;
+  for (const e of queued) handle(e);
 }
 
 /** Alguien se fue de la sala */
@@ -178,6 +255,11 @@ function handle(e: CollabEvent) {
       for (const h of joinHandlers) h({ id: e.id, name: e.name, color: e.color });
       break;
     case "left":
+      // Se fue el anfitrión y hay reemplazo: la sala sigue con él
+      if (!status().host && e.id === hostId && successor && !ending) {
+        void takeOver(e.id, successor);
+        break;
+      }
       for (const h of leftHandlers) h(e.id);
       setPeers((p) => p.filter((x) => x.id !== e.id));
       // Si era el anfitrión, la sala terminó para el invitado
@@ -211,6 +293,7 @@ function handle(e: CollabEvent) {
       for (const h of noticeHandlers) h(e.error);
       break;
     case "rejected":
+      ending = true;
       for (const h of noticeHandlers) h(`No se pudo entrar a la sala: ${e.reason}`);
       void leaveCollab();
       break;
@@ -223,7 +306,11 @@ function handle(e: CollabEvent) {
 
 let unlisten: UnlistenFn | undefined;
 async function ensureListening() {
-  if (!unlisten) unlisten = await listen<CollabEvent>("collab://event", (ev) => handle(ev.payload));
+  if (!unlisten)
+    unlisten = await listen<CollabEvent>("collab://event", (ev) => {
+      if (held) held.push(ev.payload);
+      else handle(ev.payload);
+    });
 }
 
 /** Invitado: id del anfitrión de la sala en la que estoy */
@@ -231,6 +318,8 @@ let hostId: string | undefined;
 
 function reset() {
   hostId = undefined;
+  successor = undefined;
+  ending = false;
   setPeers([]);
   setChat([]);
   setChatUnread(0);

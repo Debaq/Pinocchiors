@@ -19,6 +19,7 @@ import { installCollabLocks, lockedByOther, setActiveDesignTab, setEditing } fro
 import { setMyWhere } from "./lib/collabWhere";
 import { installCollabSync } from "./lib/collabSync";
 import { installCollabDesign } from "./lib/collabDesign";
+import { installCollabHandoff } from "./lib/collabHandoff";
 import { adoptFromRegistry, afterSharedOpen, captureIfInRoom, collabProjectUi, installCollabMerge, loadCollabProject, registerPath, rememberMine } from "./lib/collabMerge";
 import { CollabOverlay } from "./components/layout/CollabOverlay";
 import { AiChatPanel } from "./components/layout/AiChatPanel";
@@ -634,6 +635,7 @@ export const App: Component = () => {
     });
     const stopDesign = installCollabDesign(cad, (m) => setStatusMessage(m));
     const stopMerge = installCollabMerge(cad, () => projectPath());
+    const stopHandoff = installCollabHandoff();
     setBeforeJoin(async () => {
       if (!(await confirmDiscard(t("Entrar a la sala"), t("El proyecto de la sala reemplaza al que tienes abierto. Si es una copia del mismo proyecto, lo que avanzaste en los diseños se suma a la sala."), t("Entrar a la sala")))) return false;
       await rememberMine();
@@ -656,6 +658,7 @@ export const App: Component = () => {
       stopSync();
       stopDesign();
       stopMerge();
+      stopHandoff();
       stopNotice();
       stopLocks();
       stopRoles();

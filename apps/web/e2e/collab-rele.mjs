@@ -111,6 +111,8 @@ export function crearRele({ bridge, exportDir }) {
         if (g) {
           room.guests.delete(g[0]);
           push("host", { kind: "left", id: a.id });
+          // Como `serve`: el expulsado sabe que lo sacaron (no se pasa al reemplazo)
+          push(g[0], { kind: "rejected", reason: "te sacaron de la sala" });
           push(g[0], { kind: "left", id: "A" });
         }
         return null;

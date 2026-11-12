@@ -113,6 +113,11 @@ async fn expulsar_y_cambiar_la_clave() {
         Event::PeerLeft { .. } => {}
         e => panic!("{e:?}"),
     }
+    // El expulsado sabe que lo sacaron (no es que el anfitrión se fue)
+    match next(&guest).await {
+        Event::Rejected { reason } => assert!(reason.contains("sacaron"), "{reason}"),
+        e => panic!("{e:?}"),
+    }
     match next(&guest).await {
         Event::PeerLeft { .. } => {}
         e => panic!("{e:?}"),
@@ -170,5 +175,65 @@ async fn un_invitado_no_puede_mandarle_archivos_al_anfitrion() {
         Err(_) => {}
         Ok(Some(Event::Blob { .. })) => panic!("el anfitrión aceptó un archivo de un invitado"),
         Ok(other) => panic!("{other:?}"),
+    }
+}
+
+fn with_id(name: &str, secret: &iroh::SecretKey) -> Options {
+    Options { secret: Some(secret.clone()), ..local(name) }
+}
+
+/// Se va el anfitrión: el reemplazo pasa a ser anfitrión y los miembros vuelven
+/// a él con su mismo id y sin aprobación; alguien de afuera no entra con ese ticket
+#[tokio::test]
+async fn el_reemplazo_toma_la_sala_si_se_va_el_anfitrion() {
+    let (ka, kb) = (iroh::SecretKey::generate(), iroh::SecretKey::generate());
+    let host = Room::host(Options { approval: true, ..local("Ana") }).await.unwrap();
+    let a = Room::join(&host.ticket(), with_id("Beto", &ka)).await.unwrap();
+    let b = Room::join(&host.ticket(), with_id("Carla", &kb)).await.unwrap();
+    let _ = next(&host).await;
+    let _ = next(&host).await;
+    let _ = next(&a).await;
+    let _ = next(&b).await;
+
+    // Beto queda de reemplazo; Carla puede volver
+    let backup = a.standby(vec![b.my_id().to_string()]).await.unwrap();
+    let b_id = b.my_id().to_string();
+
+    host.close().await;
+    match next(&a).await {
+        Event::PeerLeft { .. } => {}
+        e => panic!("{e:?}"),
+    }
+    match next(&b).await {
+        Event::PeerLeft { .. } => {}
+        e => panic!("{e:?}"),
+    }
+    a.promote();
+    assert!(a.is_host());
+
+    // Carla vuelve con su mismo id, sin esperar aprobación
+    b.close().await;
+    let b2 = Room::join(&backup, with_id("Carla", &kb)).await.unwrap();
+    assert_eq!(b2.my_id(), b_id);
+    match next(&a).await {
+        Event::PeerJoined { id, name, .. } => {
+            assert_eq!(id, b_id);
+            assert_eq!(name, "Carla");
+            assert!(!a.is_muted(&id));
+        }
+        e => panic!("{e:?}"),
+    }
+    let _ = next(&b2).await; // su PeerJoined (Beto)
+    a.send(Message::Chat { text: "sigo yo".into(), from: None }).await.unwrap();
+    match next(&b2).await {
+        Event::Message { msg: Message::Chat { text, .. }, .. } => assert_eq!(text, "sigo yo"),
+        e => panic!("{e:?}"),
+    }
+
+    // Alguien que no era miembro no entra con el ticket de reemplazo
+    let afuera = Room::join(&backup, local("Diego")).await.unwrap();
+    match next(&afuera).await {
+        Event::Rejected { .. } => {}
+        e => panic!("{e:?}"),
     }
 }
