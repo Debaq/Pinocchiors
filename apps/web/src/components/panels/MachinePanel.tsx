@@ -1,4 +1,4 @@
-import { Component, For, Show, createResource, createSignal } from "solid-js";
+import { Component, For, Show, createMemo, createResource, createSignal } from "solid-js";
 import { clsx } from "clsx";
 import { Button, Checkbox, NumberInput, Select } from "../ui";
 import * as Icons from "../icons";
@@ -29,7 +29,9 @@ export const MachinePanel: Component<{
   onOpenPrinters?: () => void;
 }> = (props) => {
   const [info] = createResource(loadSlicerInfo);
-  const machines = () => machinesFrom(info()?.printers);
+  // Memo: las máquinas se arman de nuevo solo si cambian los perfiles. Sin esto, cada lectura daba
+  // objetos nuevos, <For> rehacía las tarjetas de filamento a cada cuadro y el clic se perdía
+  const machines = createMemo(() => machinesFrom(info()?.printers));
   const current = (): Machine | undefined => machineOf(props.prep, machines());
   const slicerPrinter = () => info()?.printers.find((p) => p.name === current()?.id);
   const materials = () => props.presets?.materials ?? [];
