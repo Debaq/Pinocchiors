@@ -17,10 +17,13 @@ async fn anfitrion_e_invitado_se_hablan() {
     let guest = Room::join(host.ticket(), local("Beto")).await.unwrap();
 
     // Se ven mutuamente
-    match next(&host).await {
-        Event::PeerJoined { name, .. } => assert_eq!(name, "Beto"),
+    let peer_of_guest = match next(&host).await {
+        Event::PeerJoined { name, id, .. } => {
+            assert_eq!(name, "Beto");
+            id
+        }
         e => panic!("{e:?}"),
-    }
+    };
     match next(&guest).await {
         Event::PeerJoined { name, .. } => assert_eq!(name, "Ana"),
         e => panic!("{e:?}"),
@@ -51,6 +54,17 @@ async fn anfitrion_e_invitado_se_hablan() {
     guest.send_light(b"cursor:1,2,3").await;
     match next(&host).await {
         Event::Light { bytes, .. } => assert_eq!(bytes, b"cursor:1,2,3"),
+        e => panic!("{e:?}"),
+    }
+
+    // Archivo grande (3 MB) del anfitrión al invitado
+    let big: Vec<u8> = (0..3_000_000u32).map(|i| (i % 251) as u8).collect();
+    host.send_blob(&peer_of_guest, "project", &big).await.unwrap();
+    match next(&guest).await {
+        Event::Blob { name, bytes, .. } => {
+            assert_eq!(name, "project");
+            assert_eq!(bytes, big);
+        }
         e => panic!("{e:?}"),
     }
 

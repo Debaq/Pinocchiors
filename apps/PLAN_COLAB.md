@@ -45,11 +45,12 @@ Ventaja: no hay conflictos de fusión. Costo: el invitado depende del anfitrión
 - **Bloqueo por pestaña/objeto**: mientras alguien edita un sketch, ese sketch queda con su color y los demás lo ven en solo lectura (evita pisarse).
 - Deshacer: cada persona deshace **sus** pasos; el historial muestra el autor.
 
-### C4 — Sincronizar el estado
-- Al entrar: el anfitrión manda un snapshot (el `.pinocchio` zip) por trozos.
-- Después: difusión del **log de comandos** (no de la malla). El invitado reaplica el comando localmente cuando es determinista; si no, pide los datos resultantes.
-- Detección de desfase (hash de estado cada N comandos) y re-sincronizar entero si no cuadra.
-- Reconexión: pide solo lo que le falta desde su último número de secuencia.
+### C4 — Sincronizar el estado (HECHO 2026-11-11)
+Cambio de diseño respecto de lo escrito antes: **no hay log de comandos**. El diseño CAD es un documento (`cad_model::Document`) que la ventana empuja al backend con `cad_set_document`; compartir ese documento es más simple y más robusto que repetir comandos.
+- **Proyecto entero al entrar:** el anfitrión exporta una copia (`project::export_copy_impl`, no marca su proyecto como guardado) y la manda por un stream QUIC propio (`Room::send_blob`, sin trocear; probado con 3 MB). El invitado la recibe en disco (`app_data/collab/incoming.pinocchio`), pregunta si hay trabajo sin guardar y la abre con el flujo normal (`handleOpenProject(path, recovered, shared)`). «Resincronizar con el anfitrión» (Configuración ▸ Colaborar) la pide otra vez.
+- **Diseño en vivo (`lib/collabDesign.ts`):** cada cambio confirmado de la pestaña activa (gancho en `CadStore.sendNow`, sin previews) se manda; el otro lo aplica (`CadStore.applyRemote`) y lo recalcula con su motor. Detección de choques: cada cambio lleva el hash canónico del documento anterior; el anfitrión rechaza el que no coincide y devuelve su versión (`forced`). Lo que no se puede aplicar ahora (diálogo abierto, otra pestaña, IA trabajando) queda pendiente y se aplica solo.
+- Pruebas: `libs/collab/tests/sala.rs` (archivo de 3 MB) y `apps/mcp/tests/collab_copy.rs` (exportar y abrir la copia en otro estado, diseño y pestañas iguales). tsc y cargo check OK.
+- **Límites:** pestañas nuevas/borradas y mallas (reparar, rig, animación) no viajan en vivo: el invitado se resincroniza (lo pide solo si llega un diseño de una pestaña que no tiene). Si el anfitrión abre otro proyecto con invitados dentro, hay que resincronizar a mano. Los comentarios sí van en vivo (C2). Deshacer no es por autor todavía (C3). Sin probar con dos instancias reales.
 
 ### C5 — Permisos y seguridad
 - Roles por persona: ver / comentar / editar. El anfitrión los cambia en vivo.

@@ -14,6 +14,7 @@ import {
   setCollabName,
   status,
 } from "../../lib/collab";
+import { resync } from "../../lib/collabSync";
 
 const Section = (props: { title: string; children: JSX.Element }) => (
   <section class="space-y-3 pb-4 mb-4 border-b border-border last:border-0 last:mb-0 last:pb-0">
@@ -133,6 +134,12 @@ export const CollabSettings: Component = () => {
               )}
             </For>
           </ul>
+          <Show when={!status().host}>
+            <Hint>{t("Si ves algo distinto al anfitrión (pestañas nuevas, mallas), pide su proyecto otra vez.")}</Hint>
+            <Button disabled={busy()} onClick={() => void run(resync)}>
+              {t("Resincronizar con el anfitrión")}
+            </Button>
+          </Show>
           <Button disabled={busy()} onClick={() => void run(leaveCollab)}>
             {status().host ? t("Cerrar la sala") : t("Salir de la sala")}
           </Button>

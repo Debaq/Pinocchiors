@@ -871,6 +871,25 @@ pub fn save_project_impl(
     Ok(ProjectSaved { written: true, bytes: std::fs::metadata(path).map_or(0, |m| m.len()) })
 }
 
+/// Copia del proyecto actual en `path` (para mandarla a la sala de colaboración).
+/// No toca el estado de «guardado»: el proyecto del anfitrión sigue como estaba.
+pub fn export_copy_impl(state: &AppState, path: &str, ui: &str, design: Option<cad_model::Document>) -> Result<u64, String> {
+    let _io = state.project_io();
+    let project = capture_with(state, design);
+    let source_name = project.original.as_ref().map(|o| o.name.clone());
+    let state_bytes = rmp_serde::to_vec_named(&project).map_err(|e| format!("No se pudo serializar: {e}"))?;
+    let manifest = Manifest {
+        format: FORMAT.into(),
+        version: FORMAT_VERSION,
+        app_version: env!("CARGO_PKG_VERSION").into(),
+        saved_at: now_secs(),
+        source_name,
+    };
+    let path = Path::new(path);
+    write_project(path, &manifest, &state_bytes, ui)?;
+    Ok(std::fs::metadata(path).map_or(0, |m| m.len()))
+}
+
 /// Hay cambios desde el último guardado o apertura del proyecto (`ui` es el
 /// estado de la interfaz y `design` el diseño con el sketch abierto, como en
 /// `save_project`)

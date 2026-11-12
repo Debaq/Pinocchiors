@@ -135,6 +135,7 @@ pub fn run() {
             collab::collab_status,
             collab::collab_send,
             collab::collab_send_light,
+            collab::collab_send_project,
             mcp::clients::mcp_status,
             mcp::clients::mcp_connect,
             mcp::clients::mcp_skill,

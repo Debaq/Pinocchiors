@@ -60,7 +60,12 @@ pub enum Event {
     Message { from: String, msg: Message },
     /// Datagrama sin garantía (presencia)
     Light { from: String, bytes: Vec<u8> },
+    /// Archivo grande completo (el proyecto al entrar a la sala)
+    Blob { from: String, name: String, bytes: Vec<u8> },
 }
+
+/// Tope de un archivo por la sala
+pub const MAX_BLOB: usize = 1 << 30;
 
 #[derive(Debug, Clone)]
 pub struct Options {
@@ -189,6 +194,24 @@ impl Room {
         }
     }
 
+    /// Manda un archivo a una persona por su propio stream (QUIC lo reparte
+    /// sin trocearlo a mano y sin frenar al chat). Llega como `Event::Blob`.
+    pub async fn send_blob(&self, to: &str, name: &str, bytes: &[u8]) -> Result<(), Error> {
+        if bytes.len() > MAX_BLOB {
+            return Err(Error::Protocol("archivo demasiado grande".into()));
+        }
+        let conn = self.conns.lock().await.get(to).cloned().ok_or(Error::Closed)?;
+        let mut w = conn.open_uni().await.map_err(net)?;
+        let name = name.as_bytes();
+        w.write_all(&(name.len() as u32).to_be_bytes()).await.map_err(net)?;
+        w.write_all(name).await.map_err(net)?;
+        w.write_all(bytes).await.map_err(net)?;
+        w.finish().map_err(net)?;
+        // Esperar a que lo reciban antes de soltar la conexión
+        let _ = w.stopped().await;
+        Ok(())
+    }
+
     /// Datagrama a todos menos a uno (el anfitrión reparte la presencia de un invitado)
     pub async fn send_light_except(&self, except: &str, bytes: &[u8]) {
         for (id, conn) in self.conns.lock().await.iter() {
@@ -294,12 +317,37 @@ async fn serve(
             let _ = e2.send(Event::Light { from: id2.clone(), bytes: d.to_vec() });
         }
     });
+    // Archivos grandes
+    let (c3, e3, id3) = (conn.clone(), events.clone(), id.clone());
+    let blobs = tokio::spawn(async move {
+        while let Ok(mut r) = c3.accept_uni().await {
+            let (e, id) = (e3.clone(), id3.clone());
+            tokio::spawn(async move {
+                let mut len = [0u8; 4];
+                if r.read_exact(&mut len).await.is_err() {
+                    return;
+                }
+                let len = u32::from_be_bytes(len) as usize;
+                if len > 1024 {
+                    return;
+                }
+                let mut name = vec![0u8; len];
+                if r.read_exact(&mut name).await.is_err() {
+                    return;
+                }
+                if let Ok(bytes) = r.read_to_end(MAX_BLOB).await {
+                    let _ = e.send(Event::Blob { from: id, name: String::from_utf8_lossy(&name).into_owned(), bytes });
+                }
+            });
+        }
+    });
     // Lector (termina cuando se cae la conexión)
     while let Ok(msg) = read_msg(&mut recv).await {
         let _ = events.send(Event::Message { from: id.clone(), msg });
     }
     writer.abort();
     light.abort();
+    blobs.abort();
     peers.lock().await.remove(&id);
     conns.lock().await.remove(&id);
     let _ = events.send(Event::PeerLeft { id });

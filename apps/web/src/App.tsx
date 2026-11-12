@@ -13,7 +13,9 @@ import { setPresenceLabel } from "./lib/collabPresence";
 import { commentsForProject, loadComments } from "./lib/collabComments";
 import { CollabBadge } from "./components/layout/CollabBadge";
 import { CollabPanel } from "./components/layout/CollabPanel";
-import { collabPanelOpen, setCollabPanelOpen } from "./lib/collab";
+import { collabPanelOpen, onCollabNotice, setCollabPanelOpen } from "./lib/collab";
+import { installCollabSync } from "./lib/collabSync";
+import { installCollabDesign } from "./lib/collabDesign";
 import { CollabOverlay } from "./components/layout/CollabOverlay";
 import { AiChatPanel } from "./components/layout/AiChatPanel";
 import { TuneWizard, type ChatPicture } from "./components/layout/TuneWizard";
@@ -615,6 +617,21 @@ export const App: Component = () => {
       })
     )
   );
+  // Colaboración: el proyecto va y viene por la sala y el diseño se comparte en vivo
+  onMount(() => {
+    const stopSync = installCollabSync({
+      snapshot: () => ({ ui: projectUi(), design: cadUi.documentWithSketch() ?? null }),
+      openShared: (path) => handleOpenProject(path, true, true),
+      notify: (m) => setStatusMessage(m),
+    });
+    const stopDesign = installCollabDesign(cad, (m) => setStatusMessage(m));
+    const stopNotice = onCollabNotice((m) => setStatusMessage(m));
+    onCleanup(() => {
+      stopSync();
+      stopDesign();
+      stopNotice();
+    });
+  });
   /** Chat con la IA (Claude Code instalado, en modo en vivo) */
   const [chatOpen, setChatOpen] = createSignal(false);
   /** Mensaje que otra parte de la app deja listo en el chat de IA */
@@ -9051,9 +9068,9 @@ export const App: Component = () => {
   };
 
   /** Abre un proyecto (`path`) o pregunta cuál; `recovered` = viene del archivo de recuperación */
-  const handleOpenProject = async (path?: string, recovered = false) => {
+  const handleOpenProject = async (path?: string, recovered = false, shared = false) => {
     if (blockedByTask()) return;
-    if (!(await confirmDiscard(t("Abrir proyecto"), t("Se cierra el trabajo actual."), t("Abrir otro proyecto")))) return;
+    if (!(await confirmDiscard(shared ? t("Proyecto de la sala") : t("Abrir proyecto"), shared ? t("El anfitrión te manda su proyecto y reemplaza al que tienes abierto.") : t("Se cierra el trabajo actual."), shared ? t("Abrir el de la sala") : t("Abrir otro proyecto")))) return;
     if (!path) {
       const chosen = await open({
         title: t("Abrir proyecto"),
@@ -9089,7 +9106,7 @@ export const App: Component = () => {
         scheduleUnsavedCheck(0);
       }
       setRecovery(undefined);
-      setStatusMessage(recovered ? t("Sesión recuperada") : t("Proyecto abierto: {name}", { name: baseName(path) }));
+      setStatusMessage(shared ? t("Proyecto de la sala abierto") : recovered ? t("Sesión recuperada") : t("Proyecto abierto: {name}", { name: baseName(path) }));
     } catch (e) {
       console.error("Open project error:", e);
       if (opened) {

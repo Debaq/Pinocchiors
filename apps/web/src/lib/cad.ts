@@ -5054,6 +5054,8 @@ export function createCadStore() {
     pumping ??= pump();
     return (lastSend = pumping);
   };
+  /** Colaboración: avisa de cada cambio confirmado del diseño (ver `lib/collabDesign.ts`) */
+  let collabHook: ((tab: number, doc: CadDocument) => void) | undefined;
   const sendNow = async (next: CadDocument | null, preview: boolean) => {
     const seq = ++sendSeq;
     setBusy(true);
@@ -5063,6 +5065,8 @@ export function createCadStore() {
         : await invoke<CadResult>("cad_set_document", { document: next });
       if (seq === sendSeq) {
         setError(undefined);
+        // Colaboración: un cambio confirmado del diseño de la pestaña activa
+        if (!preview && next && tabs().active !== null) collabHook?.(tabs().active!, next);
         // La malla y la herramienta a la vez: las dos usan el mismo recálculo,
         // que el backend ya dejó en su caché (PLAN_RENDIMIENTO R3)
         await Promise.all([apply(r), refreshTool(seq)]);
@@ -5568,6 +5572,27 @@ export function createCadStore() {
       setHistoryVersion((v) => v + 1);
       await loadActive();
     },
+
+    /** Colaboración: quien escucha los cambios confirmados del diseño (`undefined`: nadie) */
+    setCollabHook(fn: ((tab: number, doc: CadDocument) => void) | undefined) {
+      collabHook = fn;
+    },
+
+    /**
+     * Colaboración: pone el documento que llegó de otra persona en la pestaña
+     * activa y lo recalcula. No toca el deshacer. `false` si ahora no se puede
+     * (un diálogo abierto, la IA trabajando, viendo una versión).
+     */
+    async applyRemote(doc: CadDocument): Promise<boolean> {
+      if (draft() || aiTurn() !== undefined || viewing() !== undefined) return false;
+      setComparison(null);
+      setDoc(doc);
+      await send(doc);
+      return true;
+    },
+
+    /** El documento confirmado de la pestaña activa */
+    committedDocument: () => committed(),
 
     /** Modo en vivo: la IA deshace (o rehace) su último paso en la pestaña activa; `false` si el último no es suyo */
     async aiUndo(back: boolean) {

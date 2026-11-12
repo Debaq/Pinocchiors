@@ -40,7 +40,10 @@ type CollabEvent =
   | { kind: "joined"; id: string; name: string; color: string }
   | { kind: "left"; id: string }
   | { kind: "message"; from: string; msg: CollabMessage }
-  | { kind: "light"; from: string; bytes: number[] };
+  | { kind: "light"; from: string; bytes: number[] }
+  | { kind: "project"; from: string; path: string; bytes: number }
+  | { kind: "project_error"; from: string; error: string }
+  | { kind: "blob"; from: string; name: string };
 
 const COLORS = ["#ff8800", "#2ec4b6", "#e63946", "#6a4c93", "#3a86ff", "#8ac926"];
 
@@ -74,6 +77,25 @@ export function onCollabData(kind: string, h: DataHandler): () => void {
   set.add(h);
   dataHandlers.set(kind, set);
   return () => set.delete(h);
+}
+
+/** Llegó el proyecto del anfitrión (ruta del archivo en disco) */
+type ProjectHandler = (path: string) => void | Promise<void>;
+const projectHandlers = new Set<ProjectHandler>();
+export function onCollabProject(h: ProjectHandler): () => void {
+  projectHandlers.add(h);
+  return () => projectHandlers.delete(h);
+}
+/** Avisos de la colaboración (errores de transporte, etc.) para mostrarlos al usuario */
+const noticeHandlers = new Set<(text: string) => void>();
+export function onCollabNotice(h: (text: string) => void): () => void {
+  noticeHandlers.add(h);
+  return () => noticeHandlers.delete(h);
+}
+
+/** Invitado: pide al anfitrión que le mande el proyecto otra vez */
+export function requestResync(): Promise<void> {
+  return sendData("resync", null);
 }
 
 /** Alguien entró (el anfitrión le manda el estado compartido) / la sala cambió */
@@ -119,6 +141,12 @@ function handle(e: CollabEvent) {
       } else if (e.msg.t === "ping") {
         void sendMessage({ t: "pong", n: e.msg.n }, undefined, e.from);
       }
+      break;
+    case "project":
+      for (const h of projectHandlers) void h(e.path);
+      break;
+    case "project_error":
+      for (const h of noticeHandlers) h(e.error);
       break;
     case "light":
       for (const h of lightHandlers) h(e.from, new Uint8Array(e.bytes));
