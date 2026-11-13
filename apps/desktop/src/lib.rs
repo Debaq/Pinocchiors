@@ -1,5 +1,6 @@
 //! Pinocchio App - Aplicación Tauri para auto-rigging
 
+pub mod android_files;
 pub mod animation;
 pub mod body_parts;
 pub mod cad;
@@ -58,6 +59,9 @@ pub fn run() {
     let builder = builder
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init());
+    // En Android, los archivos del teléfono llegan como content:// (android_files.rs)
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(tauri_plugin_fs::init()).plugin(tauri_plugin_pinocchio_android::init());
     builder
         .setup(|app| {
             // Inicializar estado
@@ -171,6 +175,15 @@ pub fn run() {
             project::open_project,
             project::revert_to_original,
             project::recovery_project_path,
+            // Android: traer y sacar archivos del teléfono, proyectos dentro de la app
+            android_files::android_import_uri,
+            android_files::android_export_begin,
+            android_files::android_copy_to_uri,
+            android_files::android_output_dir,
+            android_files::android_projects_list,
+            android_files::android_project_path,
+            android_files::android_project_delete,
+            android_files::android_share,
             project::recovery_info,
             project::project_changed,
             project::project_mark_saved,

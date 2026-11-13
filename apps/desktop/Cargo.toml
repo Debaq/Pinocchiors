@@ -94,6 +94,12 @@ rayon = { workspace = true }
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 
+# Android: leer y escribir los `content://` del selector de archivos (android_files.rs)
+[target.'cfg(target_os = "android")'.dependencies]
+tauri-plugin-fs = "2"
+# Compartir con el menú de Android (Kotlin + FileProvider en su manifiesto)
+tauri-plugin-pinocchio-android = { path = "android-plugin" }
+
 # Cámara en el webview de Linux (captura de movimiento en vivo)
 [target.'cfg(target_os = "linux")'.dependencies]
 webkit2gtk = { version = "2.0", features = ["v2_4"] }

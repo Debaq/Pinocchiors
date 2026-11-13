@@ -1,6 +1,6 @@
 import { Component, For, Match, Show, Switch, createEffect, createMemo, createResource, createSignal, on, onCleanup, onMount } from "solid-js";
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { save } from "@tauri-apps/plugin-dialog";
+import { save } from "../../lib/files";
 import { clsx } from "clsx";
 import { Button, NumberInput, Select } from "../ui";
 import * as Icons from "../icons";

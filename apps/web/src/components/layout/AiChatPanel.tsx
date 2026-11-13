@@ -2,7 +2,7 @@ import { Component, For, Match, Show, Switch, createEffect, createSignal, on, on
 import { invoke } from "@tauri-apps/api/core";
 import { base64Bytes, writeBytes } from "../../lib/writeBytes";
 import { listen } from "@tauri-apps/api/event";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { open, save } from "../../lib/files";
 import * as Icons from "../icons";
 import { IconButton, Select } from "../ui";
 import { t } from "../../lib/i18n";

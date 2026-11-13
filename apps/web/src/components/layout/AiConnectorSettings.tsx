@@ -1,6 +1,6 @@
 import { Component, For, JSX, Show, createSignal, onMount } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
-import { save } from "@tauri-apps/plugin-dialog";
+import { save } from "../../lib/files";
 import { Button, Checkbox } from "../ui";
 import * as Icons from "../icons";
 import { t } from "../../lib/i18n";

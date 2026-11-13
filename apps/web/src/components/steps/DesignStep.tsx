@@ -1,7 +1,7 @@
 import { matchesOutliner, outlinerQuery } from "../../lib/outlinerFilter";
 import { Component, For, Index, Match, Show, Switch, createEffect, createMemo, createResource, createSignal, on, onCleanup, untrack, type JSX } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
-import { save } from "@tauri-apps/plugin-dialog";
+import { save } from "../../lib/files";
 import { clsx } from "clsx";
 import {
   BASE_PLANES,

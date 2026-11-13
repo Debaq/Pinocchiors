@@ -1,5 +1,5 @@
 import { Component, For, Show, createEffect, onCleanup, onMount } from "solid-js";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open } from "../../lib/files";
 import { Button, Checkbox, IconButton, NumberInput, ProgressBar, Select, Slider, Tooltip, Hint } from "../ui";
 import * as Icons from "../icons";
 import { t } from "../../lib/i18n";

@@ -1,6 +1,6 @@
 import { Component, For, Match, Show, Switch, createEffect, createSignal, onCleanup, onMount, type JSX } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { open, save } from "../../lib/files";
 import { clsx } from "clsx";
 import { Panel, Slider, Checkbox, Button, IconButton, NumberInput, Tooltip } from "../ui";
 import { createPersisted } from "../../lib/ui-state";

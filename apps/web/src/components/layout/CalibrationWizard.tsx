@@ -1,6 +1,6 @@
 import { Component, For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
-import { save } from "@tauri-apps/plugin-dialog";
+import { save } from "../../lib/files";
 import { Button, Checkbox, NumberInput, Select } from "../ui";
 import * as Icons from "../icons";
 import { fmtNumber, t, tx } from "../../lib/i18n";

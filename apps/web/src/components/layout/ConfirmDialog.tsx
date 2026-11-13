@@ -16,6 +16,8 @@ export interface ConfirmRequest {
   altLabel?: string;
   /** Casillas para elegir qué hacer (se devuelven al confirmar) */
   choices?: ConfirmChoice[];
+  /** Campo de texto (p. ej. el nombre de un proyecto): se devuelve al confirmar */
+  input?: { value: string; placeholder?: string };
 }
 
 /** Una casilla del diálogo */
@@ -27,8 +29,8 @@ export interface ConfirmChoice {
 }
 
 export interface ConfirmDialogProps extends ConfirmRequest {
-  /** Con casillas, el estado de cada una por `id` */
-  onConfirm: (choices: Record<string, boolean>) => void;
+  /** Con casillas, el estado de cada una por `id`; con campo, su texto */
+  onConfirm: (choices: Record<string, boolean>, text?: string) => void;
   onCancel: () => void;
 }
 
@@ -38,13 +40,22 @@ export const ConfirmDialog: Component<ConfirmDialogProps> = (props) => {
   const [checked, setChecked] = createSignal<Record<string, boolean>>(
     Object.fromEntries((props.choices ?? []).map((c) => [c.id, c.checked]))
   );
-  const confirm = () => props.onConfirm(checked());
-  const confirmAlt = () => props.onConfirm({ ...checked(), __alt: true });
+  const [text, setText] = createSignal(props.input?.value ?? "");
+  // Con campo, no se confirma vacío
+  const confirm = () => {
+    if (props.input && !text().trim()) return;
+    props.onConfirm(checked(), props.input ? text().trim() : undefined);
+  };
+  const confirmAlt = () => props.onConfirm({ ...checked(), __alt: true }, props.input ? text().trim() : undefined);
   // Con salida alternativa, Enter la elige (la que no pierde nada)
   const enter = () => (props.altLabel ? confirmAlt() : confirm());
 
   onMount(() => {
-    box?.querySelector<HTMLButtonElement>("[data-confirm]")?.focus();
+    const field = box?.querySelector<HTMLInputElement>("[data-confirm-input]");
+    if (field) {
+      field.focus();
+      field.select();
+    } else box?.querySelector<HTMLButtonElement>("[data-confirm]")?.focus();
     // En captura: que Esc y Enter no lleguen a los atajos del visor
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -83,6 +94,18 @@ export const ConfirmDialog: Component<ConfirmDialogProps> = (props) => {
           </button>
         </div>
         <p class="p-4 text-xs text-text-muted leading-relaxed whitespace-pre-line">{props.message}</p>
+        <Show when={props.input}>
+          <div class="px-4 pb-4">
+            <input
+              data-confirm-input
+              type="text"
+              class="w-full h-8 px-2 rounded border border-border bg-bg-darker text-sm text-text focus:outline-none focus:border-accent"
+              value={text()}
+              placeholder={props.input?.placeholder}
+              onInput={(e) => setText(e.currentTarget.value)}
+            />
+          </div>
+        </Show>
         <Show when={props.choices?.length}>
           <div data-confirm-choices class="px-4 pb-4 space-y-3">
             <For each={props.choices}>

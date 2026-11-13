@@ -4,7 +4,7 @@
 import { createSignal } from "solid-js";
 import { t as tr } from "./i18n.ts";
 import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open } from "./files";
 import {
   METRIC_HOLES,
   boltLengthFor,

@@ -4,7 +4,7 @@
 
 import { Component, For, Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 import { clsx } from "clsx";
-import { save } from "@tauri-apps/plugin-dialog";
+import { save } from "../../lib/files";
 import { Button, Checkbox, IconButton, Select, Slider, Tooltip } from "../ui";
 import * as Icons from "../icons";
 import { t as tl } from "../../lib/i18n";

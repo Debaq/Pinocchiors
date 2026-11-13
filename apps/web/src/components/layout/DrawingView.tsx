@@ -1,7 +1,7 @@
 import { Component, For, Match, Show, Switch, createEffect, createMemo, createResource, createSignal, on, onCleanup, onMount, untrack, type JSX } from "solid-js";
 import { clsx } from "clsx";
 import { invoke } from "@tauri-apps/api/core";
-import { save } from "@tauri-apps/plugin-dialog";
+import { save } from "../../lib/files";
 import { partMaterial, type CadStore, type GearPart } from "../../lib/cad";
 import { gearMarks, gearTable } from "../../lib/gearSheet";
 import { bomRows, bomTable, placeBalloons } from "../../lib/drawingBom";

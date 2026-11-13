@@ -26,7 +26,8 @@ import { AiChatPanel } from "./components/layout/AiChatPanel";
 import { TuneWizard, type ChatPicture } from "./components/layout/TuneWizard";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { open, save, setFileNotifier, setExportChooser, onAndroidExport, saveCopyToPhone, shareFromApp, appProjectPath } from "./lib/files";
+import { AppProjectsDialog } from "./components/layout/AppProjectsDialog";
 import { Header, StatusBar, Viewport, ViewportHeader, Toolbar, ProgressOverlay, Timeline, type TimelineRow } from "./components/layout";
 import type { OnionSettings, TimelineMode, TimelineTool } from "./components/layout/Timeline";
 import type { CurveChannelRow } from "./components/layout/CurveEditor";
@@ -8746,11 +8747,11 @@ export const App: Component = () => {
 
   const PROJECT_UI_VERSION = 1;
   const [projectPath, setProjectPath] = createSignal<string | undefined>();
-  const [autosave, setAutosave] = createPersisted<AutosaveSettings>("settings.autosave", { enabled: false, minutes: 5 });
+  const [autosave, setAutosave] = createPersisted<AutosaveSettings>("settings.autosave", { enabled: IS_ANDROID, minutes: IS_ANDROID ? 2 : 5 });
   const [settingsOpen, setSettingsOpen] = createSignal(false);
   /** Pregunta pendiente del diálogo de confirmación */
   const [confirmation, setConfirmation] = createSignal<
-    (ConfirmRequest & { resolve: (answer: Record<string, boolean> | null) => void }) | undefined
+    (ConfirmRequest & { resolve: (answer: Record<string, boolean> | null, text?: string) => void }) | undefined
   >();
   /** Pregunta con el diálogo de la app; con casillas, su estado por `id`
    * (`null` si se cancela) */
@@ -8762,11 +8763,17 @@ export const App: Component = () => {
     });
   /** Pregunta con el diálogo de la app; `true` si se confirma */
   const confirmAction = async (request: ConfirmRequest) => (await confirmChoices(request)) !== null;
-  const answerConfirmation = (answer: Record<string, boolean> | null) => {
+  const answerConfirmation = (answer: Record<string, boolean> | null, text?: string) => {
     const pending = confirmation();
     setConfirmation(undefined);
-    pending?.resolve(answer);
+    pending?.resolve(answer, text);
   };
+  /** Pide un texto con el diálogo de la app (p. ej. un nombre); `null` si se cancela */
+  const askText = (request: ConfirmRequest & { input: NonNullable<ConfirmRequest["input"]> }) =>
+    new Promise<string | null>((resolve) => {
+      confirmation()?.resolve(null);
+      setConfirmation({ ...request, resolve: (answer, text) => resolve(answer === null ? null : (text ?? null)) });
+    });
 
   /** Hay trabajo que se perdería: sin archivo propio, o con cambios desde que se guardó o abrió */
   const hasUnsavedWork = async () => {
@@ -9087,6 +9094,29 @@ export const App: Component = () => {
   let roomSavePath: string | undefined;
   onCleanup(onCollabRoom(() => (roomSavePath = undefined)));
 
+  /** Android: el proyecto está guardado dentro de la app (carpeta Proyectos) */
+  const isAppProject = (path: string) => /[\\/]Proyectos[\\/][^\\/]+\.pinocchio$/i.test(path);
+  /** Android: ventana «Mis proyectos»; devuelve el elegido (o el traído del teléfono) */
+  const [appProjectsChooser, setAppProjectsChooser] = createSignal<((path: string | undefined) => void) | undefined>();
+  const chooseAppProject = () =>
+    new Promise<string | undefined>((resolve) => {
+      appProjectsChooser()?.(undefined);
+      setAppProjectsChooser(() => resolve);
+    });
+  const answerAppProjects = (path: string | undefined) => {
+    const pending = appProjectsChooser();
+    setAppProjectsChooser(undefined);
+    pending?.(path);
+  };
+  /** Android: guarda (si hace falta) y saca una copia del proyecto al teléfono o la comparte */
+  const saveProjectCopyToPhone = async (share = false) => {
+    if (!projectPath() || !isAppProject(projectPath()!) || (await hasUnsavedWork())) await handleSaveProject();
+    const path = projectPath();
+    if (!path || !isAppProject(path)) return;
+    if (share) await shareFromApp(path, t("Compartir proyecto"));
+    else await saveCopyToPhone(path, t("Guardar una copia en el teléfono"));
+  };
+
   /** Guarda en el archivo del proyecto; sin archivo (o con `as`) lo pregunta */
   const handleSaveProject = async (as = false) => {
     if (!hasProjectWork()) {
@@ -9094,6 +9124,19 @@ export const App: Component = () => {
       return;
     }
     let path = as ? undefined : projectPath();
+    // En Android, un proyecto guardado afuera de la app (o la recuperación) no se puede volver a escribir ahí
+    if (IS_ANDROID && path && !isAppProject(path)) path = undefined;
+    if (!path && IS_ANDROID) {
+      const stem = (fileName() ?? (projectPath() ? baseName(projectPath()!) : t("Proyecto"))).replace(/\.[^.]+$/, "");
+      const name = await askText({
+        title: as ? t("Guardar como") : t("Guardar proyecto"),
+        message: t("Nombre del proyecto (queda guardado en la app; para sacarlo, «Guardar una copia en el teléfono»)."),
+        confirmLabel: t("Guardar"),
+        input: { value: stem },
+      });
+      if (!name) return;
+      path = await appProjectPath(name);
+    }
     if (!path) {
       const stem = (fileName() ?? (status().on && !status().host ? t("proyecto de la sala") : "proyecto")).replace(/\.[^.]+$/, "");
       const chosen = await save({
@@ -9130,6 +9173,10 @@ export const App: Component = () => {
     if (blockedByTask()) return;
     // En una sala manda siempre el proyecto de la sala (se preguntó al entrar)
     if (!shared && !(await confirmDiscard(t("Abrir proyecto"), t("Se cierra el trabajo actual."), t("Abrir otro proyecto")))) return;
+    if (!path && IS_ANDROID) {
+      path = await chooseAppProject();
+      if (!path) return;
+    }
     if (!path) {
       const chosen = await open({
         title: t("Abrir proyecto"),
@@ -9436,6 +9483,12 @@ export const App: Component = () => {
     ...recentMenuItems(),
     { label: t("Guardar"), shortcut: "Ctrl+S", disabled: !hasProjectWork(), onSelect: () => handleSaveProject() },
     { label: t("Guardar como…"), shortcut: "Ctrl+Shift+S", disabled: !hasProjectWork(), onSelect: () => handleSaveProject(true) },
+    ...(IS_ANDROID
+      ? [
+          { label: t("Guardar una copia en el teléfono…"), disabled: !hasProjectWork(), onSelect: () => void saveProjectCopyToPhone() },
+          { label: t("Compartir proyecto…"), disabled: !hasProjectWork(), onSelect: () => void saveProjectCopyToPhone(true) },
+        ]
+      : []),
     { separator: true },
     { label: t("Importar modelo…"), shortcut: "Ctrl+I", onSelect: () => handleLoad() },
     { label: t("Importar animación (BVH)…"), disabled: !skeletonData(), onSelect: () => void handleImportBvh() },
@@ -9509,15 +9562,17 @@ export const App: Component = () => {
   const RECOVERY_MINUTES = 5;
   let lastAutosave = Date.now();
   let autosaving = false;
-  const autosaveTimer = setInterval(async () => {
+  /** `now`: sin esperar los minutos (Android al pasar a segundo plano) */
+  const runAutosave = async (now = false) => {
     const settings = autosave();
     if (autosaving || !hasProjectWork() || isProcessing() || progress() || switching()) return;
     const minutes = settings.enabled ? settings.minutes : RECOVERY_MINUTES;
-    if (Date.now() - lastAutosave < minutes * 60_000) return;
+    if (!now && Date.now() - lastAutosave < minutes * 60_000) return;
     autosaving = true;
     lastAutosave = Date.now();
     try {
-      const toProject = settings.enabled && projectPath();
+      // En Android solo se reescribe un proyecto de la app (no la copia de un archivo traído)
+      const toProject = settings.enabled && projectPath() && (!IS_ANDROID || isAppProject(projectPath()!));
       const path = toProject ? projectPath()! : await invoke<string>("recovery_project_path");
       const saved = await invoke<ProjectSaved>("save_project", { path, ui: projectUi(), onlyIfChanged: true, design: cadUi.documentWithSketch() ?? null });
       if (saved.written && settings.enabled) {
@@ -9529,8 +9584,27 @@ export const App: Component = () => {
     } finally {
       autosaving = false;
     }
-  }, 15_000);
+  };
+  const autosaveTimer = setInterval(() => void runAutosave(), 15_000);
   onCleanup(() => clearInterval(autosaveTimer));
+  // Android puede cerrar la app sin avisar cuando pasa a segundo plano: se guarda ahí mismo
+  if (IS_ANDROID) {
+    const onHidden = () => document.visibilityState === "hidden" && void runAutosave(true);
+    document.addEventListener("visibilitychange", onHidden);
+    onCleanup(() => document.removeEventListener("visibilitychange", onHidden));
+    setFileNotifier(setStatusMessage);
+    setExportChooser(async (name) => {
+      const answer = await confirmChoices({
+        title: t("Exportar {name}", { name }),
+        message: t("Guardarlo en una carpeta del teléfono (Descargas, Drive…) o mandarlo a otra app (WhatsApp, correo…)."),
+        confirmLabel: t("Compartir"),
+        altLabel: t("Guardar en el teléfono…"),
+      });
+      return answer === null ? null : answer.__alt ? "save" : "share";
+    });
+    const stopExports = onAndroidExport();
+    onCleanup(() => void stopExports.then((stop) => stop()));
+  }
 
   // Cerrar la ventana con cambios sin guardar pregunta antes. Sin nada
   // pendiente, la recuperación ya no hace falta
@@ -10100,7 +10174,7 @@ export const App: Component = () => {
             {/* Welcome Screen overlay */}
             <Show when={!hasWork() && !opening() && pipeline.activeStep() !== "scan" && pipeline.workspace()?.id !== "rig" && !showCad()}>
               <WelcomeScreen
-                onOpen={() => handleLoad({ projects: true })}
+                onOpen={() => (IS_ANDROID ? void handleOpenProject() : handleLoad({ projects: true }))}
                 onScan={IS_ANDROID ? undefined : () => openScanEditor("capture")}
                 onAnimate={() => pipeline.openWorkspace("rig")}
                 onDesign={() => pipeline.openWorkspace("design")}
@@ -10600,12 +10674,31 @@ export const App: Component = () => {
           onClose={() => setTuneOpen(false)}
         />
       </Show>
+      <Show when={appProjectsChooser()}>
+        <AppProjectsDialog
+          onOpen={(path) => answerAppProjects(path)}
+          onFromPhone={() => {
+            answerAppProjects(undefined);
+            // Un proyecto traído del teléfono queda en Mis proyectos; un modelo se importa
+            void handleLoad({ projects: true });
+          }}
+          onClose={() => answerAppProjects(undefined)}
+          confirmDelete={(name) =>
+            confirmAction({
+              title: t("Borrar proyecto"),
+              message: t("Se borra «{name}» de la app. No se puede deshacer.", { name }),
+              confirmLabel: t("Borrar"),
+              danger: true,
+            })
+          }
+        />
+      </Show>
       {/* Con clave: cada pregunta nueva arma el diálogo de cero (sus casillas) */}
       <Show when={confirmation()} keyed>
         {(request) => (
           <ConfirmDialog
             {...request}
-            onConfirm={(choices) => answerConfirmation(choices)}
+            onConfirm={(choices, text) => answerConfirmation(choices, text)}
             onCancel={() => answerConfirmation(null)}
           />
         )}

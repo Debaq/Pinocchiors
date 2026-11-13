@@ -1,0 +1,3 @@
+# Copia de la API de Tauri para Android que arma el build.rs
+/android/.tauri
+/android/build

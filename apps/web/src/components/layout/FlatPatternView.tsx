@@ -1,6 +1,6 @@
 import { Component, Show, createEffect, createMemo, createSignal, on } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
-import { save } from "@tauri-apps/plugin-dialog";
+import { save } from "../../lib/files";
 import type { CadStore, FlatPattern, PartId } from "../../lib/cad";
 import type { CadUi } from "../../lib/cadUi";
 import { dimText } from "../../lib/drawing";
