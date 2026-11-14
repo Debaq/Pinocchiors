@@ -303,6 +303,7 @@ jobs:
           name: cli-${{ matrix.target }}
           path: dist/*
           if-no-files-found: error
+          retention-days: 1
 
   # ───────────────────────────────────────────────────────────────────────────
   wasm:
@@ -347,6 +348,7 @@ jobs:
           name: wasm
           path: dist/*
           if-no-files-found: error
+          retention-days: 1
 
   # ───────────────────────────────────────────────────────────────────────────
   # Publicación en cadena: Linux → Windows → Android → macOS. Cada una espera a

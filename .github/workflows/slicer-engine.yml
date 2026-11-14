@@ -175,3 +175,4 @@ jobs:
           name: slicer-engine-${{ matrix.platform }}
           path: libs/slicer/bin/
           if-no-files-found: error
+          retention-days: 1

@@ -180,3 +180,4 @@ jobs:
           name: desktop-${{ inputs.platform }}
           path: dist/*
           if-no-files-found: error
+          retention-days: 1
