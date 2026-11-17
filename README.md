@@ -1,11 +1,11 @@
 # Pinocchiors
 
-Suite de procesamiento 3D en **Rust**: auto-rigging, pose y animación, retopología a quads, remallado, mapas UV con horneado de texturas, reparación de mallas, preparación para impresión 3D, CAD paramétrico (con OpenCASCADE), render por trazado de rayos, captura con escáneres y conversión entre formatos (glTF/GLB, OBJ, STL, PLY, 3MF, USDA/USDZ).
+Suite de procesamiento 3D en **Rust**: auto-rigging, pose y animación, retopología a quads, remallado, mapas UV con horneado de texturas, reparación de mallas, preparación para impresión 3D, laminado para filamento y resina con envío a las impresoras, CAD paramétrico (con OpenCASCADE), render por trazado de rayos, captura con escáneres y conversión entre formatos (glTF/GLB, OBJ, STL, PLY, 3MF, USDA/USDZ).
 
-Incluye una app de escritorio (Tauri + SolidJS + Three.js), una CLI de conversión y bindings WASM.
+Incluye una app de escritorio (Tauri + SolidJS + Three.js) con actualización automática, un APK para Android, colaboración en vivo entre varias personas, un conector MCP para que cualquier IA maneje la app, una CLI de conversión y bindings WASM.
 
 ```
-Import → Reparación → Retopología → UV / Piel → Rigging → Pesos → Animación → Impresión 3D → Export
+Import → Reparación → Retopología → UV / Piel → Rigging → Pesos → Animación → Impresión 3D → Laminar → Imprimir / Export
 ```
 
 El CAD paramétrico, el escaneo y el render son módulos aparte dentro de la misma app (ver [Características](#características)).
@@ -73,15 +73,23 @@ La "piel" de la malla: coordenadas UV, materiales y texturas.
 - Uniones entre piezas: dowel, dovetail (también deslizante), puzzle, terraza, pirámide y cierre de cuarto de vuelta, con tolerancias FDM predefinidas.
 - Cortes óptimos (pocas piezas, por los cuellos) y a mano con planos en el visor; orientación que cabe en la impresora, soporte estimado y marcas de pared fina.
 - Vaciado con cáscara por vóxeles, drenaje y venteo; distribución de piezas en placas (nesting) y preparar todo para imprimir en un paso.
-- Impresoras y materiales propios (holgura y contracción por eje), modelos de calibración y pieles imprimibles (mapas de altura por zonas con UV).
+- Impresoras y materiales propios (holgura y contracción por eje), modelos de calibración y pieles imprimibles (mapas de altura por zonas con UV, con pernos y roscas).
+
+### Laminador y resina (`pinocchio-slicer`)
+- **Filamento**: motor de OrcaSlicer v2.4.2 como proceso aparte (`pinocchio-slicer`, se compila con `scripts/build-orca-engine.sh`), perfiles propios aplanados, varias piezas en la misma cama, vista previa del gcode y miniaturas. Máquinas incluidas: Creality K1, Flashforge AD5X, CR-10 Max (de fábrica o con Klipper) y Flashforge Creator Pro, con cada boquilla como máquina aparte.
+- **Resina**: laminado propio con antialiasing y compensaciones, revisión de islas y ventosas, soportes (punta según la cara, refuerzos, ramas, balsa con chaflán, pincel de zonas), orientación automática, vaciado con relleno, drenajes y tapones, operaciones sobre capas y nombre en la balsa. Escribe `.ctb` (v2 y v3, LD-002H) y `.cxdlp` (Halot-Sky).
+- **Impresoras**: envío y control por Moonraker/Klipper, por el protocolo de Creality (K1 de fábrica) y por el de Flashforge; estado, cámara y puesta a punto de la máquina. Las órdenes que mueven, calientan o imprimen siempre piden confirmación.
+- **Poner a punto**: asistente de calibración por impresora física, boquilla y filamento (temperatura, flujo, retracción, velocidad, holguras, escuadra, input shaping…), con ayuda de la IA y fotos de la cámara.
 
 ### CAD paramétrico (`libs/cad`)
-Modelador paramétrico con historial de operaciones sobre **OpenCASCADE** (`cad-occt`, puente C++; sin OCCT se compila un stub y el resto del workspace sigue funcionando).
+Modelador paramétrico con historial de operaciones sobre **OpenCASCADE 8.0.1** (`cad-occt`, puente C++; sin OCCT se compila un stub y el resto del workspace sigue funcionando).
 
 - Sketch con restricciones y cotas (`cad-solver`), operaciones (extrusión, revolución, barrido, recubrimiento, redondeos, vaciado, agujeros, roscas, patrones), chapa metálica con desarrollo y dobladillo, y STEP de entrada/salida (`cad-model`).
-- Ensambles con relaciones (fija, bisagra, deslizante, cilíndrica, plana, rótula, paralela, pasador en ranura), vista explosionada y GLB animado de una unión.
+- Sketch 3D que se pega a las superficies, anclajes, guías de inferencia y restricciones con curvas libres.
+- Ensambles con relaciones (fija, bisagra, deslizante, cilíndrica, plana, rótula, paralela, pasador en ranura), arrastre con el solver, choques, patrones, subensambles flexibles, diseñar en contexto, STEP de ensamble con árbol, vista explosionada y GLB animado de una unión. Plan cerrado en `libs/cad/PLAN_ENSAMBLE.md`.
+- Biblioteca maker: motores, servos, perfiles de aluminio, placas, imanes, tornillería, movimiento y módulos, con agujeros y soportes automáticos; las piezas compradas van a su propia lista.
 - Engranes (rectos, helicoidales, cónicos, sin fin, planetarios, poleas y piñones de cadena) con cálculo de resistencia, y planos 2D a PDF.
-- Escaneo → CAD (`cad-scan`): ajustar primitivas, curvas, moldes y superficies libres sobre un escaneo. Ver `libs/cad/ROADMAP.md`.
+- Escaneo → CAD (`cad-scan`): ajustar primitivas, curvas, moldes y superficies libres sobre un escaneo. Las booleanas sobre mallas grandes usan `manifold-rust` (un grabado sobre un escaneo de 163 k triángulos pasó de 29 min a segundos). Ver `libs/cad/ROADMAP.md`.
 
 ### Render (`geppettoray`)
 Motor propio de trazado de rayos en Rust: BSDF glTF, luces y HDRI (seis entornos incluidos, ver `apps/desktop/assets/hdri/`), vidrio, cámara real, denoise espacial, animación y suelo con sombra. Plan en `libs/PLAN_RENDER.md`.
@@ -104,6 +112,21 @@ Conversor inspirado en `usd_from_gltf` de Google, sin FFI ni dependencias C/C++.
 
 Todos los formatos pasan por una representación intermedia común (`converter-scene`).
 
+### Colaboración en vivo (`pinocchio-collab`)
+Varias personas en el mismo proyecto, de PC a PC con [iroh](https://iroh.computer) (sin servidor propio). El anfitrión ejecuta todo y los invitados mandan sus cambios.
+
+- Sala con ticket y clave, aprobación de quien entra, roles, expulsar y cambiar la clave.
+- Cursores y clics de cada uno (también anclados en 3D), en qué pestaña está, y seguir la cámara de otro.
+- Chat y comentarios anclados al modelo.
+- Proyecto compartido al entrar, diseño CAD en vivo con detección de choques, bloqueo por pestaña y juntar copias del proyecto.
+- Si el anfitrión se va, otro toma su lugar solo. Los invitados no pueden tocar las impresoras.
+
+### Conector para IA (`pinocchio-mcp`)
+La app instalada es también un servidor MCP (`Pinocchio --mcp`): Claude Code, Claude Desktop, Cursor, Gemini CLI, Codex y otros pueden abrir proyectos, diseñar, laminar y consultar impresoras. Se conecta con un botón en **Configuración ▸ Conector para IA**. En modo en vivo la IA trabaja en la ventana abierta, por turnos y con cada cambio deshacible; también hay un chat propio dentro de la app. Detalle en [`apps/mcp/README.md`](apps/mcp/README.md).
+
+### Android
+APK arm64 con el CAD real (`.github/workflows/android.yml`, se lanza a mano). Abre, guarda, exporta y comparte archivos del teléfono. Plan en `apps/PLAN_ANDROID.md`.
+
 ---
 
 ## Estructura del repositorio
@@ -111,6 +134,8 @@ Todos los formatos pasan por una representación intermedia común (`converter-s
 ```
 Pinocchiors/
 ├── libs/
+│   ├── collab/             # Colaboración en vivo P2P (iroh)
+│   ├── slicer/             # Laminado FDM (motor Orca) y resina (CTB, CXDLP)
 │   ├── pinocchio/          # Auto-rigging + reparación + impresión 3D
 │   │   ├── math/           # Vectores, matrices, transforms (nalgebra)
 │   │   ├── sparse/         # Matrices dispersas y solvers (sprs)
@@ -148,10 +173,11 @@ Pinocchiors/
 └── apps/
     ├── desktop/            # Backend Tauri 2 (Rust); example `cad_http` (puente HTTP para e2e del CAD)
     ├── web/                # Frontend SolidJS + Three.js + Tailwind (e2e en e2e/)
+    ├── mcp/                # Conector MCP (binario suelto y pruebas)
     └── converter/          # CLI de conversión (clap)
 ```
 
-Además: `scripts/` (compilar OpenCASCADE estático, iconos, release) y `pinocchio.sh` (dev, build y ejecución).
+Además: `scripts/` (compilar OpenCASCADE estático y el motor de laminado, iconos, release) y `pinocchio.sh` (dev, build y ejecución).
 
 ### Dependencias entre módulos
 
@@ -169,7 +195,7 @@ Además: `scripts/` (compilar OpenCASCADE estático, iconos, release) y `pinocch
           pinocchio-mesh ◀── feature "converter" ─────────┘
 ```
 
-`apps/desktop` también usa `cad-*` (CAD y escaneo→CAD), `geppettoray` (render) y `orizon3d-core` (escáneres).
+`apps/desktop` también usa `cad-*` (CAD y escaneo→CAD), `geppettoray` (render), `orizon3d-core` (escáneres), `pinocchio-slicer` (laminado) y `pinocchio-collab` (colaboración).
 
 ---
 
@@ -180,7 +206,8 @@ Además: `scripts/` (compilar OpenCASCADE estático, iconos, release) y `pinocch
   - **Node.js** ≥ 18 y npm
   - [Dependencias del sistema para Tauri 2](https://v2.tauri.app/start/prerequisites/) (en Linux: `webkit2gtk-4.1`, `libappindicator`, etc.)
 - Para WASM: [`wasm-pack`](https://rustwasm.github.io/wasm-pack/)
-- Para el CAD con geometría real: OpenCASCADE 7.9 (`scripts/build-occt.sh` lo compila estático; `OCCT_INCLUDE_DIR`/`OCCT_LIB_DIR`, `OCCT_STATIC=1`, `CAD_REQUIRE_OCCT=1`). Sin OCCT todo compila con un stub y el CAD responde «OpenCASCADE no disponible».
+- Para el CAD con geometría real: OpenCASCADE 8.0.1 (`scripts/build-occt.sh` lo compila estático; `OCCT_INCLUDE_DIR`/`OCCT_LIB_DIR`, `OCCT_STATIC=1`, `CAD_REQUIRE_OCCT=1`). Sin OCCT todo compila con un stub y el CAD responde «OpenCASCADE no disponible».
+- Para laminar filamento: el motor `pinocchio-slicer` (`scripts/build-orca-engine.sh`, en un contenedor Ubuntu 24.04). Sin él, las pruebas del motor se saltan; las releases lo traen incluido.
 
 ---
 
@@ -205,7 +232,7 @@ El perfil `release` usa `lto = true` y `codegen-units = 1`.
 
 ## App de escritorio
 
-Interfaz gráfica completa para el pipeline 3D: visor Three.js, outliner de escena, edición del esqueleto, undo/redo y atajos de teclado.
+Interfaz gráfica completa para el pipeline 3D: visor Three.js (con WebGPU opcional), outliner de escena, edición del esqueleto, undo/redo, atajos reasignables, siete temas, español e inglés, y actualización automática firmada desde las releases de GitHub.
 
 Al importar, el paso **Estructura** muestra lo que trae el archivo: nodos, mallas y primitivas (atributos, material), materiales con miniaturas de sus texturas, texturas, esqueletos y animaciones. El visor muestra el modelo con sus materiales PBR y texturas originales (se pueden apagar en Visualización) y tiene luces ajustables: dirección, altura, intensidad y color de la principal, relleno, ambiente, reflejos de entorno y luz desde la cámara; mantener **L** y arrastrar gira la luz principal alrededor del modelo.
 
@@ -215,7 +242,7 @@ El visor usa los gestos de Blender:
 |-------|--------|
 | Botón central / Alt + izquierdo | Orbitar |
 | Shift + central / Shift + Alt + izquierdo | Desplazar |
-| Rueda / Ctrl + central / Ctrl + Alt + izquierdo | Zoom |
+| Rueda / Ctrl + central / Ctrl + Alt + izquierdo | Zoom hacia el cursor |
 | Clic izquierdo | Seleccionar articulación (en vacío, deselecciona) |
 | G | Mover la articulación con el mouse (X/Y/Z limita al eje; clic o Enter confirma, clic derecho o Esc cancela; se deshace con Ctrl+Z) |
 | R | Rotar la articulación como pose de prueba (necesita pesos) |
@@ -239,7 +266,7 @@ npx tauri build --config ../desktop/tauri.conf.json
 
 ### Comandos Tauri disponibles
 
-La app expone unos 220 comandos (`apps/desktop/src/`, registrados en `lib.rs`). Estos son los grupos principales con ejemplos; la lista completa está en el código.
+La app expone unos 340 comandos (`apps/desktop/src/`, registrados en `lib.rs`). Estos son los grupos principales con ejemplos; la lista completa está en el código.
 
 | Grupo | Comandos |
 |-------|----------|
@@ -257,6 +284,12 @@ La app expone unos 220 comandos (`apps/desktop/src/`, registrados en `lib.rs`). 
 | Escaneo → CAD | `cad_scan_use`, `cad_scan_detect`, `cad_scan_slice`, `cad_scan_mold`, `cad_scan_skin`, `cad_scan_propose`, `cad_scan_apply` |
 | Escáneres | `scanner_connect`, `scanner_preview`, `scanner_scan`, `scan_cloud_add`, `scan_cloud_fuse`, `scan_cloud_create_model` |
 | Render | `ray_render_start`, `ray_render_animation_start`, `ray_render_status`, `ray_render_image`, `ray_render_cancel` |
+| Laminador | `slicer_presets`, `slicer_config`, `slice_plate`, `slicer_preview`, `save_gcode`, `slice_calibration`, `calibration_save` |
+| Resina | `resin_presets`, `resin_validate`, `resin_slice`, `resin_layer`, `resin_view`, `save_resin`, `resin_calibration` |
+| Impresoras | `printer_status`, `printer_send`, `printer_control`, `printer_cameras`, `printer_snapshot`, `printer_setup_action` |
+| Colaboración | `collab_host`, `collab_join`, `collab_send`, `collab_send_project`, `collab_kick`, `collab_rotate_key`, `collab_promote` |
+| Conector IA | `mcp_status`, `mcp_connect`, `mcp_live_set`, `ai_chat_send`, `ai_provider_save` |
+| Android | `android_import_uri`, `android_export_begin`, `android_projects_list`, `android_share` |
 
 ---
 
@@ -448,7 +481,7 @@ cargo test -p converter-gltf-io
 
 Incluye tests end-to-end del autorig sobre humanoides sintéticos (`libs/pinocchio/core/tests/autorig_e2e.rs`): posiciones de articulaciones, pesos por región del cuerpo, pose T, malla decimada y malla sin soldar.
 
-Pruebas del frontend (`apps/web`): `npm run e2e:unit` (`node --test`) y `npm run e2e:cad` (arnés CDP contra `cad_http`, con `vite`). El único workflow es `.github/workflows/release.yml` (tests + binarios con CAD) y solo se lanza a mano o con un tag `pre.*`.
+Pruebas del frontend (`apps/web`): `npm run e2e:unit` (`node --test`) y `npm run e2e:cad` (arnés CDP contra `cad_http`, con `vite`). Ningún workflow corre al hacer push. `.github/workflows/release.yml` (tests + app con CAD y motor de laminado, por plataforma) se lanza a mano o con un tag `pre.*`; `android.yml` solo a mano; `desktop-build.yml`, `release-publish.yml` y `slicer-engine.yml` son piezas que usan los otros dos.
 
 Los tests de la app de escritorio necesitan las dependencias de sistema de Tauri:
 
@@ -460,7 +493,7 @@ cargo test -p pinocchio-app
 
 ## Pendientes y planes
 
-Lo que falta, verificado contra el código, está en [`PENDIENTES.md`](PENDIENTES.md). Planes vivos: `libs/cad/ROADMAP.md` (y sus `PLAN_*.md`), `libs/pinocchio/print3d/PLAN_PRINT3D.md`, `PLAN_SLICER.md`, `PLAN_SLA.md`, `PLAN_IMPRESORAS.md` y `PLAN_MULTICOLOR.md` (en la misma carpeta), `libs/PLAN_RENDER.md`, `libs/orizon3d/ROADMAP.md`, `apps/PLAN_MCP.md` y `apps/PLAN_ANDROID.md`.
+Lo que falta, verificado contra el código, está en [`PENDIENTES.md`](PENDIENTES.md). Planes vivos: `libs/cad/ROADMAP.md` (y sus `PLAN_*.md`, entre ellos `PLAN_ROBUSTEZ.md`), `libs/pinocchio/print3d/PLAN_PRINT3D.md`, `PLAN_SLICER.md`, `PLAN_SLA.md`, `PLAN_IMPRESORAS.md`, `PLAN_CALIBRACION.md` y `PLAN_MULTICOLOR.md` (en la misma carpeta), `libs/PLAN_RENDER.md`, `libs/orizon3d/ROADMAP.md`, `apps/PLAN_MCP.md`, `apps/PLAN_ANDROID.md`, `apps/PLAN_COLAB.md` y `apps/PLAN_RENDIMIENTO.md`.
 
 ---
 
