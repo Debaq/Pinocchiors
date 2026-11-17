@@ -56,7 +56,7 @@ on:
       plataformas:
         description: "Plataformas a compilar"
         type: choice
-        options: [linux, windows, macos, android, linux-windows, linux-macos, windows-macos, todas]
+        options: [linux, windows, macos, android, linux-windows, linux-macos, windows-macos, linux-android, linux-windows-android, todas]
         default: linux
       cli:
         description: "También la CLI y el paquete WASM (quedan como artefactos del workflow, no en la release)"
