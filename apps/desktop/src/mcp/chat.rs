@@ -77,6 +77,8 @@ pub struct Chat {
     stopped: AtomicBool,
     /// Tokens que ocupa la conversación (los del último paso del modelo)
     context: AtomicU64,
+    /// Este turno es de quien revisa o planifica: solo las herramientas que miran
+    read_only: AtomicBool,
 }
 
 /// Dónde está `claude` (los programas de escritorio no siempre heredan el PATH de la terminal)
@@ -193,8 +195,11 @@ impl Chat {
     /// Manda un mensaje (texto e imágenes); la respuesta llega por `emit` a
     /// medida que sale. `model` y `effort`: los de Claude Code (`None` = los suyos).
     /// `compact_at`: si la conversación ya ocupa más tokens, antes se resume (`/compact`)
-    pub fn send(self: &Arc<Self>, message: &str, images: &[Image], model: Option<&str>, effort: Option<&str>, compact_at: Option<u64>, emit: impl Fn(Value) + Send + 'static) -> Result<(), String> {
+    /// `read_only`: el turno de quien revisa o planifica (solo herramientas que miran)
+    #[allow(clippy::too_many_arguments)]
+    pub fn send(self: &Arc<Self>, message: &str, images: &[Image], model: Option<&str>, effort: Option<&str>, compact_at: Option<u64>, read_only: bool, emit: impl Fn(Value) + Send + 'static) -> Result<(), String> {
         let (claude, dir) = self.begin()?;
+        self.read_only.store(read_only, Ordering::SeqCst);
         let mut content = vec![json!({ "type": "text", "text": message })];
         content.extend(images.iter().map(|i| json!({ "type": "image", "source": { "type": "base64", "media_type": i.mime, "data": i.data } })));
         let (model, effort) = (model.map(str::to_string), effort.map(str::to_string));
@@ -222,6 +227,7 @@ impl Chat {
             return Err("Todavía no hay conversación que resumir".into());
         }
         let (claude, dir) = self.begin()?;
+        self.read_only.store(false, Ordering::SeqCst);
         let (model, effort) = (model.map(str::to_string), effort.map(str::to_string));
         let chat = self.clone();
         std::thread::spawn(move || {
@@ -252,10 +258,21 @@ impl Chat {
             .arg("-p")
             .args(["--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--strict-mcp-config", "--setting-sources", "project"])
             .arg("--mcp-config")
-            .arg(dir.join("mcp.json"))
-            .args(["--allowedTools", "mcp__pinocchio"])
-            // Su lista de tareas propia no la ve el usuario: el plan es el de Pinocchio (`plan`)
-            .args(["--disallowedTools", "TodoWrite,TaskCreate,TaskUpdate,TaskList,TaskGet,Task"])
+            .arg(dir.join("mcp.json"));
+        // Quien revisa o planifica solo mira: las demás herramientas ni se le ofrecen
+        let read_only = self.read_only.load(Ordering::SeqCst);
+        let mut disallowed = String::from("TodoWrite,TaskCreate,TaskUpdate,TaskList,TaskGet,Task");
+        if read_only {
+            let allowed = super::tools::read_only();
+            cmd.args(["--allowedTools", &allowed.iter().map(|n| format!("{PREFIX}{n}")).collect::<Vec<_>>().join(",")]);
+            for t in super::tools::all().into_iter().filter(|t| !allowed.contains(&t.name)) {
+                disallowed.push_str(&format!(",{PREFIX}{}", t.name));
+            }
+        } else {
+            cmd.args(["--allowedTools", "mcp__pinocchio"]);
+        }
+        // Su lista de tareas propia no la ve el usuario: el plan es el de Pinocchio (`plan`)
+        cmd.args(["--disallowedTools", &disallowed])
             .args(["--append-system-prompt", PROMPT])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -387,7 +404,9 @@ pub fn ai_chat_send(
     effort: Option<String>,
     session: Option<String>,
     compact_at: Option<u64>,
+    read_only: Option<bool>,
 ) -> Result<(), String> {
+    let read_only = read_only.unwrap_or(false);
     let images = images.unwrap_or_default();
     if images.iter().any(|i| !IMAGE_TYPES.iter().any(|t| t.1 == i.mime)) {
         return Err("Solo imágenes PNG, JPG, WebP o GIF".into());
@@ -396,17 +415,16 @@ pub fn ai_chat_send(
     // Un proveedor con API (DeepSeek, OpenAI…): el agente de la app
     if let Some(id) = engine.filter(|e| e != "claude") {
         let handle = app.clone();
-        return agent.send(&id, model.as_deref(), &message, &images, compact_at, move |msg| {
+        return agent.send(&id, model.as_deref(), read_only, &message, &images, compact_at, move |msg| {
             use tauri::Emitter;
             let _ = handle.emit(EV_CHAT, msg);
         });
     }
-    // La ventana guarda la conversación: tras reiniciar la app sigue la misma sesión
-    if let Some(s) = session.filter(|s| s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')) {
-        chat.session.lock().unwrap().get_or_insert(s);
-    }
+    // La ventana guarda la conversación de cada rol (planifica, construye, revisa): se sigue
+    // la que manda; sin ninguna, empieza una nueva
+    *chat.session.lock().unwrap() = session.filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'));
     let handle = app.clone();
-    chat.send(&message, &images, model.as_deref(), effort.as_deref(), compact_at, move |msg| {
+    chat.send(&message, &images, model.as_deref(), effort.as_deref(), compact_at, read_only, move |msg| {
         use tauri::Emitter;
         let _ = handle.emit(EV_CHAT, msg);
     })
@@ -431,9 +449,8 @@ pub fn ai_chat_compact(
     if let Some(id) = engine.filter(|e| e != "claude") {
         return agent.compact_now(&id, model.as_deref(), emit);
     }
-    if let Some(s) = session.filter(|s| s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')) {
-        chat.session.lock().unwrap().get_or_insert(s);
-    }
+    // Se resume la conversación que manda la ventana (la del rol que construye)
+    *chat.session.lock().unwrap() = session.filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'));
     chat.compact_now(model.as_deref(), effort.as_deref(), emit)
 }
 

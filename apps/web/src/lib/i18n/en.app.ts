@@ -913,4 +913,10 @@ export const en_app: Catalog = {
   "La IA hace un paso, lo revisa y se detiene: tú miras el resultado y pulsas Continuar": "The AI does one step, checks it and stops: you look at the result and press Continue",
   "Paso a paso": "Step by step",
   "Poniendo al día el plan…": "Bringing the plan up to date…",
+  "Planifica": "Plans",
+  "Construye": "Builds",
+  "Revisa": "Reviews",
+  "Haz el paso {n}: {text}": "Do step {n}: {text}",
+  "El revisor sigue pidiendo correcciones después de {n}. Míralo tú y dime cómo seguir.": "The reviewer still asks for fixes after {n}. Take a look and tell me how to go on.",
+  "El revisor encontró problemas. Míralo tú y dime cómo seguir.": "The reviewer found problems. Take a look and tell me how to go on.",
 };

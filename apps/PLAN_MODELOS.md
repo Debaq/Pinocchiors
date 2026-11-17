@@ -47,3 +47,10 @@ OpenAI). La lista de modelos se le pide a cada API (`GET {base}/models`).
   «Usar» en el chat. El agente por API acepta el modelo del rol (`Agent::begin`). Por ahora el
   chat usa solo «Construye»: Planifica y Revisa entran en M3. «Paso a paso» quedó en el chat
   (no en la combinación).
+- 2026-11-17: M3 hecho (sin commitear): el ciclo vive en `AiChatPanel.tsx` (`startRole`,
+  `startBuild`, efecto de `turnEnded`): Planifica → Construye un paso → Revisa → APROBADO
+  (se marca el paso; con paso a paso se detiene, si no sigue) o CORREGIR (vuelve a Construye
+  hasta `maxFixes`, después avisa). Quien planifica o revisa solo mira: `tools::read_only()`
+  (Claude Code con `--allowedTools`/`--disallowedTools`, el agente filtra y rechaza). Una
+  conversación de Claude Code por rol (`roleSessions`, guardadas en el proyecto); la ventana
+  manda la sesión exacta. Probado en Chromium con un Claude Code falso; falta con modelos reales.

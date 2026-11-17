@@ -99,6 +99,11 @@ pub fn all() -> Vec<&'static Tool> {
     list
 }
 
+/// Las herramientas que solo miran (con ellas trabaja el que revisa: no cambia nada)
+pub fn read_only() -> Vec<&'static str> {
+    all().into_iter().filter(|t| t.effect == Effect::Read).map(|t| t.name).collect()
+}
+
 pub fn find(name: &str) -> Option<&'static Tool> {
     all().into_iter().find(|t| t.name == name)
 }

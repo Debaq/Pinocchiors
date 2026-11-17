@@ -221,10 +221,12 @@ pub fn test(id: &str) -> Result<String, String> {
     Ok(format!("{} contestó con {}: «{}»", p.name, v["model"].as_str().unwrap_or(&p.model), said.chars().take(40).collect::<String>()))
 }
 
-/// Las herramientas del conector como funciones de la API
-fn functions() -> Vec<Value> {
+/// Las herramientas del conector como funciones de la API (solo las que miran, si `read_only`)
+fn functions(read_only: bool) -> Vec<Value> {
+    let allowed = super::tools::read_only();
     super::tools::all()
         .into_iter()
+        .filter(|t| !read_only || allowed.contains(&t.name))
         .map(|t| json!({ "type": "function", "function": { "name": t.name, "description": t.description, "parameters": (t.input)() } }))
         .collect()
 }
@@ -239,6 +241,8 @@ pub struct Agent {
     server: Mutex<Option<Arc<super::server::Server>>>,
     /// Tokens del último pedido (lo que ocupa la conversación, con las herramientas)
     context: AtomicU64,
+    /// Este turno es de quien revisa o planifica: solo las herramientas que miran
+    read_only: AtomicBool,
 }
 
 impl Agent {
@@ -331,8 +335,11 @@ impl Agent {
     /// Manda un mensaje; las partes de la respuesta salen por `emit` como las de Claude Code.
     /// `compact_at`: si la conversación ya ocupa más tokens, antes se resume sola
     /// `model`: uno de los modelos de la empresa (el del rol); sin él, el de siempre
-    pub fn send(self: &Arc<Self>, provider_id: &str, model: Option<&str>, message: &str, images: &[Image], compact_at: Option<u64>, emit: impl Fn(Value) + Send + 'static) -> Result<(), String> {
+    /// `read_only`: el turno de quien revisa o planifica (solo herramientas que miran)
+    #[allow(clippy::too_many_arguments)]
+    pub fn send(self: &Arc<Self>, provider_id: &str, model: Option<&str>, read_only: bool, message: &str, images: &[Image], compact_at: Option<u64>, emit: impl Fn(Value) + Send + 'static) -> Result<(), String> {
         let p = self.begin(provider_id, model)?;
+        self.read_only.store(read_only, Ordering::SeqCst);
         // El mensaje del usuario, con sus imágenes si el modelo las ve
         let user = if images.is_empty() {
             json!({ "role": "user", "content": message })
@@ -364,7 +371,9 @@ impl Agent {
         use super::{backend::Auto, protocol, server::Server, session::Session};
         // Las herramientas corren con el conector (en vivo: por turnos y con el deshacer de la ventana)
         let server = self.server.lock().unwrap().get_or_insert_with(|| Arc::new(Server::new(Session::new(Box::new(Auto::new()))).with_error_log(super::errors::file()))).clone();
-        let tools = functions();
+        let read_only = self.read_only.load(Ordering::SeqCst);
+        let allowed = super::tools::read_only();
+        let tools = functions(read_only);
         emit(json!({ "kind": "start", "model": p.model }));
         let (mut tokens_in, mut tokens_cache, mut tokens_out) = (0u64, 0u64, 0u64);
         for _ in 0..MAX_STEPS {
@@ -418,6 +427,13 @@ impl Agent {
                 let name = call["function"]["name"].as_str().unwrap_or("").to_string();
                 let args: Value = serde_json::from_str(call["function"]["arguments"].as_str().unwrap_or("{}")).unwrap_or(json!({}));
                 emit(json!({ "kind": "tool", "id": id, "name": name, "input": args }));
+                // Quien revisa o planifica no cambia el trabajo: se le dice y sigue
+                if read_only && !allowed.contains(&name.as_str()) {
+                    let text = format!("`{name}` is not available in your role: you can only look (view, measure, cad_design, cad_geometry, asm_check…) and use `plan` / `ask_user`. Describe what must change instead of changing it.");
+                    emit(json!({ "kind": "result", "id": id, "error": true, "text": text }));
+                    self.history.lock().unwrap().push(json!({ "role": "tool", "tool_call_id": id, "content": text }));
+                    continue;
+                }
                 // Por el servidor MCP, como cualquier cliente
                 let out = std::sync::Mutex::new(None);
                 let line = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": name, "arguments": args } }).to_string();
@@ -671,7 +687,7 @@ mod tests {
 
         let agent = Arc::new(Agent::default());
         let (tx, rx) = std::sync::mpsc::channel();
-        agent.send(&id, None, "haz una caja", &[], None, move |m| tx.send(m).unwrap()).unwrap();
+        agent.send(&id, None, false, "haz una caja", &[], None, move |m| tx.send(m).unwrap()).unwrap();
         let mut events = Vec::new();
         while let Ok(m) = rx.recv_timeout(Duration::from_secs(60)) {
             let done = m["kind"] == "done";
@@ -795,10 +811,22 @@ mod tests {
 
     #[test]
     fn every_tool_is_a_valid_function() {
-        for f in functions() {
+        for f in functions(false) {
             let name = f["function"]["name"].as_str().unwrap();
             assert!(name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') && name.len() <= 64, "{name}");
             assert_eq!(f["function"]["parameters"]["type"], "object", "{name}");
         }
+    }
+
+    #[test]
+    fn quien_revisa_solo_ve_las_que_miran() {
+        let names: Vec<String> = functions(true).iter().map(|f| f["function"]["name"].as_str().unwrap().to_string()).collect();
+        for n in ["view", "measure", "cad_design", "asm_check", "plan", "ask_user"] {
+            assert!(names.iter().any(|x| x == n), "falta {n}");
+        }
+        for n in ["cad_extrude", "cad_fillet", "mesh_repair", "printer_control", "project_save"] {
+            assert!(!names.iter().any(|x| x == n), "{n} cambia el trabajo");
+        }
+        assert!(names.len() < functions(false).len());
     }
 }

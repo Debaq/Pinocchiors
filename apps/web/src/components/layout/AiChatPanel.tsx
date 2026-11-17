@@ -13,7 +13,7 @@ import type { ProviderView } from "./AiProviders";
 import { Markdown } from "./Markdown";
 import { PlanCard, SurveyCard } from "./AiPlanSurvey";
 import { activeTeam, chatChoice, chatChoices, refLabel, setChatChoice, setCompanies } from "../../lib/aiTeams";
-import { onSurveyDone, plan, planSummary, survey } from "../../lib/aiAssistant";
+import { applyPlanChange, onSurveyDone, plan, planSummary, survey } from "../../lib/aiAssistant";
 
 /** Imagen adjunta o vista (base64) */
 interface Picture {
@@ -59,6 +59,8 @@ interface Saved {
   totals: Totals;
   /** Tokens que ocupa la conversación (los del último paso del modelo) */
   context?: number;
+  /** Conversaciones de Claude Code de quien planifica y quien revisa */
+  roleSessions?: { plan: string | null; review: string | null };
 }
 // Antes la conversación era una sola para toda la app, guardada en el navegador
 try {
@@ -93,7 +95,7 @@ export function chatForProject(): Saved | undefined {
     .filter((e) => e.kind !== "image")
     .map((e) => (e.kind === "user" && e.images ? { kind: "user" as const, text: e.text + (e.images.length ? ` [${e.images.length} 🖼]` : "") } : e))
     .slice(-300);
-  return { entries: kept, session: session(), totals: totals(), context: context() };
+  return { entries: kept, session: session(), totals: totals(), context: context(), roleSessions: roleSessions() };
 }
 
 /**
@@ -110,6 +112,11 @@ export function restoreChat(raw: unknown) {
   setSession(typeof s.session === "string" ? s.session : null);
   setTotals(s.totals && typeof s.totals === "object" ? { ...NO_TOTALS, ...s.totals } : NO_TOTALS);
   setContext(typeof s.context === "number" ? s.context : 0);
+  setRoleSessions({
+    plan: typeof s.roleSessions?.plan === "string" ? s.roleSessions.plan : null,
+    review: typeof s.roleSessions?.review === "string" ? s.roleSessions.review : null,
+  });
+  pipeline = null;
   setBusy(false);
   // La IA no recuerda esta conversación (salvo Claude Code con su sesión): se le cuenta con el próximo mensaje
   needsContext = entries().length > 0;
@@ -299,6 +306,26 @@ let checkingPlan = false;
 /** Sube cuando la IA cambió el trabajo sin tocar el plan: el panel le pide ponerlo al día */
 const [planCheckDue, setPlanCheckDue] = createSignal(0);
 
+/** Los roles de una combinación (apps/PLAN_MODELOS.md) */
+type Role = "plan" | "build" | "review";
+const ROLE_LABEL = (): Record<Role, string> => ({ plan: t("Planifica"), build: t("Construye"), review: t("Revisa") });
+/** Quién está respondiendo ahora */
+let currentRole: Role = "build";
+/** Conversación de Claude Code de quien planifica y de quien revisa (la de quien construye es `session`) */
+const [roleSessions, setRoleSessions] = createSignal<{ plan: string | null; review: string | null }>({ plan: null, review: null });
+/** Los textos de la IA en este turno (el veredicto del revisor, el informe del constructor) */
+let turnTexts: string[] = [];
+const turnText = () => turnTexts.join("\n\n");
+/** El ciclo en curso: en qué rol va, cuántas correcciones lleva y qué paso se revisa */
+let pipeline: { role: Role; fixes: number; step?: { n: number; text: string }; report?: string } | null = null;
+/** Terminó un turno del ciclo (`ok`): el panel decide el siguiente rol */
+const [turnEnded, setTurnEnded] = createSignal<{ n: number; ok: boolean }>({ n: 0, ok: true });
+/** Guarda la sesión de Claude Code del rol que respondió */
+const keepSession = (s: string) => {
+  if (currentRole === "build") setSession(s);
+  else setRoleSessions((r) => ({ ...r, [currentRole]: s }));
+};
+
 /** Mensajes de Claude Code (`mcp::chat::translate`) → entradas del chat */
 function onEvent(m: { kind: string; [k: string]: unknown }) {
   const add = (e: Entry) => setEntries((list) => [...list, e]);
@@ -326,9 +353,10 @@ function onEvent(m: { kind: string; [k: string]: unknown }) {
     }
     case "start":
       answering = typeof m.model === "string" ? m.model : "";
-      if (typeof m.session === "string") setSession(m.session);
+      if (typeof m.session === "string") keepSession(m.session);
       return;
     case "text":
+      turnTexts.push(String(m.text));
       return add({ kind: "text", text: String(m.text) });
     case "tool":
       turnTools.push(bareTool(String(m.name)));
@@ -344,7 +372,7 @@ function onEvent(m: { kind: string; [k: string]: unknown }) {
       // Lo que quedó «en curso» terminó con el turno
       setEntries((list) => list.map((e) => (e.kind === "tool" && e.state === "running" ? { ...e, state: m.ok ? "ok" : "error" } : e)));
       if (!m.ok && m.error) add({ kind: "error", text: tBackend(String(m.error)) });
-      if (typeof m.session === "string") setSession(m.session);
+      if (typeof m.session === "string") keepSession(m.session);
       // Fin de «Resumir»: ya se avisó con `compacted`
       if (m.quiet) return void persist();
       {
@@ -353,7 +381,10 @@ function onEvent(m: { kind: string; [k: string]: unknown }) {
         const parts = [answering, used ? t("{n} de entrada · {m} de salida", { n: kTokens(used), m: kTokens(tk.output ?? 0) }) : "", cost ? `USD ${cost.toFixed(3)}` : ""].filter(Boolean);
         if (parts.length) add({ kind: "info", text: parts.join(" · ") });
       }
-      {
+      if (pipeline) {
+        // En un ciclo con roles: el panel sigue con el próximo rol (o se detiene)
+        setTurnEnded((x) => ({ n: x.n + 1, ok: !!m.ok }));
+      } else {
         // Cambió el trabajo y no tocó el plan (con pasos pendientes): se le pide ponerlo al día, una vez
         const changed = turnTools.some((n) => !READ_ONLY_TOOLS.has(n));
         if (m.ok && !checkingPlan && changed && !turnTools.includes("plan") && plan().steps.some((s) => !s.done)) setPlanCheckDue((n) => n + 1);
@@ -453,7 +484,7 @@ export const AiChatPanel: Component<{
     }
   };
 
-  /** Manda lo escrito (o `typed`, el texto del botón Continuar) */
+  /** Manda lo escrito (o `typed`, el texto del botón Continuar: ese no vuelve a planificar) */
   const send = async (typed?: string) => {
     const text = typed ?? (draft().trim() || (attached().length ? t("Mira la imagen.") : ""));
     if (!text || busy()) return;
@@ -475,44 +506,165 @@ export const AiChatPanel: Component<{
     setNote(undefined);
     setEntries((l) => [...l, { kind: "user", text, images }]);
     persist();
+    const team = activeTeam();
+    // Con roles: planifica primero (salvo Continuar); si no, construye
+    if (team.plan || team.review) {
+      if (team.plan && typed === undefined) return void startRole("plan", planMessage(text), images, { role: "plan", fixes: 0, report: text });
+      return void startBuild(text, images);
+    }
+    pipeline = null;
+    await startRole("build", buildMessage(text, false), images);
+  };
+
+  /** Lo que se le manda a quien construye: el pedido, la conversación si no la vio, el plan y cómo trabajar */
+  const buildMessage = (text: string, reviewed: boolean) => {
+    const planText = planSummary();
+    // Proyecto reabierto u otro motor: la conversación que se ve, para que la IA siga desde ahí
+    // (Claude Code con su sesión ya la tiene)
+    const before = needsContext && (engine() !== "claude" || !session()) ? earlierConversation() : "";
+    needsContext = false;
+    let message = text;
+    if (before) message = `[Earlier conversation in this project, which you do not remember — continue from it]\n${before}\n\n[New message]\n${message}`;
+    if (planText)
+      message += reviewed
+        ? `\n\n[Project plan — the user's visible checklist. Do NOT mark steps done: a reviewer checks your work and marks them. If this message changes what the user wants, edit/add/remove steps first]\n${planText}`
+        : `\n\n[Project plan — the user's visible checklist. Keep it true: mark steps done with \`plan\` as you finish them, and if this message changes what the user wants, edit/add/remove steps first]\n${planText}`;
+    if (reviewed)
+      message +=
+        "\n\n[You are the builder: do only the next pending step of the plan, check it with `view` or `asm_check`, then STOP and report in two or three lines exactly what you did (values, faces, names). A reviewer will check it.]";
+    // Paso a paso: un paso, revisarlo y detenerse para que el usuario lo vea y pulse Continuar
+    else if (stepMode())
+      message +=
+        "\n\n[Step by step: do only the next pending step of the plan (or, without a plan, the next small part of the job), check it with `view` or `asm_check`, mark it done with `plan`, then STOP and say in two or three lines what you did and what the next step is. The user reviews it and presses Continue.]";
+    return message;
+  };
+
+  /** Lo que se le manda a quien planifica: solo arma el plan y pregunta, no construye */
+  const planMessage = (text: string) => {
+    const planText = planSummary();
+    return `[You are the planner: you can only look and plan; you cannot change the work. Another model builds each step and another reviews it.]\n\n[The user's message]\n${text}\n\n${
+      planText ? `[Current project plan]\n${planText}\n\n` : ""
+    }[Your job] Look at the current state if needed (status, cad_design, view). Then set or update the project plan with \`plan\`: a one-line goal and short concrete steps a builder can do one at a time (sizes, materials, which tab). If the user's message changes the job, edit, add or remove steps. If you need decisions or data, ask them all at once with \`ask_user\` before writing the steps. Finish with one or two lines saying what the plan is.`;
+  };
+
+  /** Empieza a construir el próximo paso (o corrige lo que pidió el revisor) */
+  const startBuild = (text: string, images: Picture[] = [], fixes = 0) => {
+    const team = activeTeam();
+    const reviewed = !!team.review;
+    pipeline = { role: "build", fixes, step: nextStep() };
+    return startRole("build", buildMessage(text, reviewed), images, pipeline);
+  };
+
+  /** Lo que se le manda a quien revisa: qué paso, qué dijo el constructor, y cómo contestar */
+  const reviewMessage = (step: { n: number; text: string } | undefined, report: string) =>
+    `[You are the reviewer: you can only look (view, measure, cad_design, cad_geometry, asm_check, mesh_info, print_check); you cannot change anything.]\n\n${
+      step ? `[Step under review] ${step.n}. ${step.text}` : "[Under review] the builder's last change"
+    }\n\n[What the builder reported]\n${report.slice(0, 1500) || "(nothing)"}\n\n[Project plan]\n${planSummary() || "(no plan)"}\n\n[Your job] Check the real result in the app, not the report: sizes, positions, collisions, that it matches the goal. If it is right, ${
+      step ? `mark step ${step.n} done with \`plan\` and ` : ""
+    }reply starting with "APROBADO" and one line. If something is wrong or missing, reply starting with "CORREGIR:" and list concrete fixes (what, where, which value). Do not suggest optional improvements.`;
+
+  /** Un turno de un rol: con su modelo, su conversación y sus herramientas (quien planifica o revisa solo mira) */
+  const startRole = async (role: Role, message: string, images: Picture[], stage?: typeof pipeline) => {
+    const team = activeTeam();
+    const ref = (role === "plan" ? team.plan : role === "review" ? team.review : null) ?? team.build;
+    pipeline = stage ?? null;
+    currentRole = role;
+    turnTexts = [];
+    turnTools = [];
+    // Quién habla (con una combinación)
+    if (team.plan || team.review) setEntries((l) => [...l, { kind: "info", text: `▸ ${ROLE_LABEL()[role]} · ${refLabel(ref)}` }]);
     setBusy(true);
     scroll();
-    turnTools = [];
     try {
-      // El plan va con cada mensaje (la IA lo tiene presente aunque se resuma la conversación)
-      const planText = planSummary();
-      // Proyecto reabierto u otro motor: la conversación que se ve, para que la IA siga desde ahí
-      // (Claude Code con su sesión ya la tiene)
-      const before = needsContext && (engine() !== "claude" || !session()) ? earlierConversation() : "";
-      needsContext = false;
-      let message = text;
-      if (before) message = `[Earlier conversation in this project, which you do not remember — continue from it]\n${before}\n\n[New message]\n${message}`;
-      if (planText)
-        message += `\n\n[Project plan — the user's visible checklist. Keep it true: mark steps done with \`plan\` as you finish them, and if this message changes what the user wants, edit/add/remove steps first]\n${planText}`;
-      // Paso a paso: un paso, revisarlo y detenerse para que el usuario lo vea y pulse Continuar
-      if (stepMode())
-        message +=
-          "\n\n[Step by step: do only the next pending step of the plan (or, without a plan, the next small part of the job), check it with `view` or `asm_check`, mark it done with `plan`, then STOP and say in two or three lines what you did and what the next step is. The user reviews it and presses Continue.]";
-      await dispatch(message, images);
+      const roleSession = role === "build" ? session() : roleSessions()[role];
+      await invoke("ai_chat_send", {
+        message,
+        images,
+        engine: ref.company,
+        model: ref.model || null,
+        effort: effort() || null,
+        session: ref.company === "claude" ? roleSession : null,
+        compactAt: Number(compactAt()) || null,
+        readOnly: role !== "build",
+      });
+      void refreshLive();
     } catch (e) {
+      pipeline = null;
       setBusy(false);
       setEntries((l) => [...l, { kind: "error", text: tBackend(String(e)) }]);
     }
   };
 
-  /** Manda un mensaje ya armado a la IA que esté elegida */
-  const dispatch = async (message: string, images: Picture[]) => {
-    await invoke("ai_chat_send", {
-      message,
-      images,
-      engine: engine(),
-      model: model() || null,
-      effort: effort() || null,
-      session: engine() === "claude" ? session() : null,
-      compactAt: Number(compactAt()) || null,
-    });
-    void refreshLive();
-  };
+  /** Manda un mensaje ya armado a quien construye (la revisión automática del plan) */
+  const dispatch = (message: string, images: Picture[]) => startRole("build", message, images);
+
+  /** Terminó un turno del ciclo: sigue con el próximo rol, corrige o se detiene */
+  createEffect(
+    on(
+      turnEnded,
+      ({ ok }) => {
+        const stage = pipeline;
+        if (!stage) return;
+        const team = activeTeam();
+        if (!ok) {
+          pipeline = null;
+          return;
+        }
+        if (stage.role === "plan") {
+          // Con el plan listo: el primer paso pendiente
+          const step = nextStep();
+          if (!step) {
+            pipeline = null;
+            return;
+          }
+          void startBuild(t("Haz el paso {n}: {text}", { n: step.n, text: step.text }));
+          return;
+        }
+        if (stage.role === "build") {
+          if (!team.review) {
+            pipeline = null;
+            return;
+          }
+          void startRole("review", reviewMessage(stage.step, turnText()), [], { ...stage, role: "review", report: turnText() });
+          return;
+        }
+        // Veredicto del revisor: el último de sus textos que empieza con APROBADO o CORREGIR
+        const clean = (x: string) => x.trim().replace(/^[*_#>\s]+/, "");
+        const verdict = [...turnTexts].reverse().map(clean).find((x) => /^(APROBAD[OA]|CORREGIR)/i.test(x)) ?? clean(turnText());
+        if (/^APROBAD[OA]/i.test(verdict)) {
+          pipeline = null;
+          // Si el revisor no marcó el paso, se marca (si no, el constructor lo haría de nuevo)
+          const reviewed = stage.step;
+          if (reviewed) {
+            const steps = plan().steps;
+            const i = steps[reviewed.n - 1]?.text === reviewed.text ? reviewed.n - 1 : steps.findIndex((x) => x.text === reviewed.text);
+            if (i >= 0 && !steps[i].done) applyPlanChange({ done: [i + 1] });
+          }
+          // Sin paso a paso: sigue solo con el próximo paso pendiente
+          const step = nextStep();
+          if (!stepMode() && step) void startBuild(t("Haz el paso {n}: {text}", { n: step.n, text: step.text }));
+          return;
+        }
+        if (stage.fixes < team.maxFixes) {
+          void startBuild(`[Reviewer's corrections${stage.step ? ` for step ${stage.step.n}` : ""} — fix exactly these, then stop and report]\n${verdict}`, [], stage.fixes + 1);
+          return;
+        }
+        pipeline = null;
+        setEntries((l) => [
+          ...l,
+          {
+            kind: "error",
+            text:
+              team.maxFixes > 0
+                ? t("El revisor sigue pidiendo correcciones después de {n}. Míralo tú y dime cómo seguir.", { n: team.maxFixes })
+                : t("El revisor encontró problemas. Míralo tú y dime cómo seguir."),
+          },
+        ]);
+        persist();
+      },
+      { defer: true },
+    ),
+  );
 
   /** La IA cambió el trabajo sin tocar el plan: un turno corto solo para ponerlo al día */
   createEffect(
@@ -541,6 +693,7 @@ export const AiChatPanel: Component<{
     if (busy() || entries().length === 0) return;
     setBusy(true);
     scroll();
+    currentRole = "build";
     try {
       await invoke("ai_chat_compact", { engine: engine(), model: model() || null, effort: effort() || null, session: engine() === "claude" ? session() : null });
     } catch (e) {
@@ -563,8 +716,10 @@ export const AiChatPanel: Component<{
 
   const reset = () => {
     void invoke("ai_chat_reset");
+    pipeline = null;
     setEntries([]);
     setSession(null);
+    setRoleSessions({ plan: null, review: null });
     setContext(0);
     setTotals(NO_TOTALS);
     setBusy(false);
