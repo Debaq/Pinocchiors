@@ -138,4 +138,10 @@ export const en_printers: Catalog = {
   "Para cambiar la máquina, la boquilla o el filamento de Fabricar: pestaña Máquina": "To change the machine, nozzle or filament used by Fabricate: Machine tab",
   "Para mandarlo a una impresora, agrégala en la pestaña Mis impresoras": "To send it to a printer, add it in the My printers tab",
   "Para guardar el gcode o mandarlo a una impresora: botones de abajo.": "To save the gcode or send it to a printer: buttons below.",
+  "¿Qué impresora es?": "Which printer is it?",
+  "¿Cómo está tu {model}?": "How is your {model} set up?",
+  "Tal como viene de Creality, sin root. Lo más común.": "As it comes from Creality, not rooted. The most common.",
+  "Rooteada, con Klipper": "Rooted, with Klipper",
+  "Si le instalaste root y se maneja con Mainsail o Fluidd.": "If you rooted it and it is managed with Mainsail or Fluidd.",
+  "Quitar {name} de la lista": "Remove {name} from the list",
 };
