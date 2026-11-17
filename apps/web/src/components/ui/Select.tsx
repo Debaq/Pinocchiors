@@ -20,12 +20,23 @@ export interface SelectProps {
   label?: string;
 }
 
+const sameOptions = (a: SelectOption[], b: SelectOption[]) =>
+  a === b ||
+  (a.length === b.length &&
+    a.every((o, i) => {
+      const p = b[i];
+      return o.value === p.value && o.label === p.label && o.description === p.description && o.disabled === p.disabled;
+    }));
+
 export const Select = (props: SelectProps) => {
   // Kobalte compara la opción elegida por referencia: si `options` llega como
   // un arreglo nuevo en cada lectura, el valor no está en la lista, Kobalte lo
   // toma como un cambio y avisa con onChange, que vuelve a pedir el valor… en
-  // bucle. Se lee una vez por cambio y solo se avisa si el valor cambió
-  const options = createMemo(() => props.options);
+  // bucle. Se lee una vez por cambio y solo se avisa si el valor cambió.
+  // Además, una lista con el mismo contenido se toma como la misma: si el padre
+  // la rearma (p. ej. props que se vuelven a leer en cada cambio de Fabricar),
+  // Kobalte recibía una lista nueva y cerraba el desplegable recién abierto
+  const options = createMemo(() => props.options, undefined, { equals: sameOptions });
   const selected = createMemo(() => options().find((o) => o.value === props.value));
 
   return (
