@@ -12,7 +12,7 @@ import { createPersisted, startDrag } from "../../lib/ui-state";
 import type { ProviderView } from "./AiProviders";
 import { Markdown } from "./Markdown";
 import { PlanCard, SurveyCard } from "./AiPlanSurvey";
-import { planSummary } from "../../lib/aiAssistant";
+import { onSurveyDone, planSummary } from "../../lib/aiAssistant";
 
 /** Imagen adjunta o vista (base64) */
 interface Picture {
@@ -28,7 +28,9 @@ type Entry =
   | { kind: "image"; data: string; mime: string }
   | { kind: "error"; text: string }
   /** Con qué modelo respondió y cuánto costó (lo que informa Claude Code) */
-  | { kind: "info"; text: string };
+  | { kind: "info"; text: string }
+  /** Una encuesta de la IA con lo que contestó el usuario (o que la cerró sin contestar) */
+  | { kind: "answers"; title?: string; items: { question: string; answer: string }[]; skipped?: boolean };
 
 interface ChatStatus {
   claude: string | null;
@@ -73,6 +75,16 @@ const [chatRevision, setChatRevision] = createSignal(0);
 export { chatRevision };
 const persist = () => setChatRevision((n) => n + 1);
 
+// Cada encuesta queda escrita en el chat: qué se preguntó y qué se contestó
+onSurveyDone((s, r) => {
+  const items = s.questions.map((q, i) => {
+    const a = "answers" in r ? r.answers[i]?.answer : undefined;
+    return { question: q.question, answer: Array.isArray(a) ? a.join("; ") : (a ?? "") };
+  });
+  setEntries((list) => [...list, { kind: "answers", title: s.title, items, skipped: "skipped" in r || undefined }]);
+  persist();
+});
+
 /** La conversación para el proyecto (sin las imágenes, que pesan; quedan las últimas 300 entradas) */
 export function chatForProject(): Saved | undefined {
   if (entries().length === 0 && !session()) return undefined;
@@ -98,6 +110,34 @@ export function restoreChat(raw: unknown) {
   setTotals(s.totals && typeof s.totals === "object" ? { ...NO_TOTALS, ...s.totals } : NO_TOTALS);
   setContext(typeof s.context === "number" ? s.context : 0);
   setBusy(false);
+  // La IA no recuerda esta conversación (salvo Claude Code con su sesión): se le cuenta con el próximo mensaje
+  needsContext = entries().length > 0;
+}
+
+/** La IA que va a responder no conoce la conversación que se ve (proyecto reabierto u otro motor) */
+let needsContext = false;
+
+/**
+ * La conversación de antes en texto, para que una IA que no la vio siga desde
+ * ahí: lo dicho por el usuario y la IA y las encuestas, lo más nuevo entero
+ */
+function earlierConversation(): string {
+  const lines: string[] = [];
+  for (const e of entries()) {
+    if (e.kind === "user") lines.push(`User: ${e.text}`);
+    else if (e.kind === "text") lines.push(`Assistant: ${e.text}`);
+    else if (e.kind === "answers" && !e.skipped) lines.push(`Survey${e.title ? ` "${e.title}"` : ""}: ${e.items.map((x) => `${x.question} → ${x.answer}`).join(" | ")}`);
+  }
+  const short = lines.map((l) => (l.length > 600 ? `${l.slice(0, 600)}…` : l));
+  // Hasta unos 12 000 caracteres, de lo más nuevo hacia atrás
+  const kept: string[] = [];
+  let size = 0;
+  for (let i = short.length - 1; i >= 0 && size + short[i].length < 12_000; i--) {
+    kept.unshift(short[i]);
+    size += short[i].length + 1;
+  }
+  if (kept.length < short.length) kept.unshift("(older messages left out)");
+  return kept.join("\n");
 }
 /** Modelo y esfuerzo de Claude Code ("" = los suyos por defecto); se recuerdan */
 const [model, setModel] = createPersisted("chat.model", "");
@@ -111,7 +151,12 @@ const COMPACT_OPTIONS = () => [
   { value: "0", label: t("Nunca (solo con el botón)") },
 ];
 /** Quién responde: "claude" (Claude Code) o el id de un proveedor con API */
-const [engine, setEngine] = createPersisted("chat.engine", "claude");
+const [engine, setEngineValue] = createPersisted("chat.engine", "claude");
+/** Otro motor no vio la conversación: se le cuenta con el próximo mensaje */
+const setEngine = (value: string) => {
+  if (value !== engine() && entries().length) needsContext = true;
+  setEngineValue(value);
+};
 const [providers, setProviders] = createSignal<ProviderView[]>([]);
 const provider = () => providers().find((p) => p.id === engine());
 /** Ancho del panel (se arrastra su borde derecho) */
@@ -144,6 +189,8 @@ function entryText(e: Entry): string {
       return `${aiLabel(e.name)} (${e.name})${e.detail ? `\n${e.detail}` : ""}`;
     case "image":
       return "";
+    case "answers":
+      return [e.title ?? "", ...e.items.map((x) => `${x.question} → ${e.skipped ? "—" : x.answer}`)].filter(Boolean).join("\n");
     default:
       return e.text;
   }
@@ -181,6 +228,11 @@ async function saveConversation() {
     else if (e.kind === "image") await picture(e);
     else if (e.kind === "error") lines.push(`> ⚠ ${e.text}`, "");
     else if (e.kind === "info") lines.push(`_${e.text}_`, "");
+    else if (e.kind === "answers") {
+      lines.push(`**${e.title || t("Preguntas de la IA")}**${e.skipped ? ` _(${t("cerrada sin responder")})_` : ""}`, "");
+      for (const x of e.items) lines.push(`- ${x.question} → ${e.skipped ? "—" : x.answer}`);
+      lines.push("");
+    }
   }
   const tt = totals();
   lines.push("", `_${t("Conversación")}: ≈ ${kTokens(tt.input + tt.cacheRead + tt.cacheWrite)} ${t("de entrada")} · ${kTokens(tt.output)} ${t("de salida")}${tt.cost ? ` · USD ${tt.cost.toFixed(2)}` : ""}_`);
@@ -387,8 +439,15 @@ export const AiChatPanel: Component<{
     try {
       // El plan va con cada mensaje (la IA lo tiene presente aunque se resuma la conversación)
       const planText = planSummary();
+      // Proyecto reabierto u otro motor: la conversación que se ve, para que la IA siga desde ahí
+      // (Claude Code con su sesión ya la tiene)
+      const before = needsContext && (engine() !== "claude" || !session()) ? earlierConversation() : "";
+      needsContext = false;
+      let message = text;
+      if (before) message = `[Earlier conversation in this project, which you do not remember — continue from it]\n${before}\n\n[New message]\n${message}`;
+      if (planText) message += `\n\n[Project plan — the user sees and edits it; update it with the \`plan\` tool]\n${planText}`;
       await invoke("ai_chat_send", {
-        message: planText ? `${text}\n\n[Project plan — the user sees and edits it; update it with the \`plan\` tool]\n${planText}` : text,
+        message,
         images,
         engine: engine(),
         model: model() || null,
@@ -570,6 +629,26 @@ export const AiChatPanel: Component<{
                 </Match>
                 <Match when={e.kind === "info" && e}>
                   {(info) => <div class="pr-6 text-[11px] text-text-dim">{info().text}</div>}
+                </Match>
+                <Match when={e.kind === "answers" && e}>
+                  {(a) => (
+                    <div class="ml-8 rounded-lg bg-accent/10 border border-accent/30 px-3 py-2 text-xs space-y-1.5">
+                      <div class="font-semibold text-text">
+                        {a().title || t("Preguntas de la IA")}
+                        <Show when={a().skipped}>
+                          <span class="ml-1 font-normal text-text-dim">({t("cerrada sin responder")})</span>
+                        </Show>
+                      </div>
+                      <For each={a().items}>
+                        {(x) => (
+                          <div>
+                            <div class="text-text-muted">{x.question}</div>
+                            <div class="text-text whitespace-pre-wrap">{a().skipped ? "—" : x.answer}</div>
+                          </div>
+                        )}
+                      </For>
+                    </div>
+                  )}
                 </Match>
               </Switch>
               {/* Copiar (las imágenes: descargar), al pasar el mouse */}

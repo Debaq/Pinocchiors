@@ -9,7 +9,7 @@ use serde_json::{json, Map, Value};
 use super::{arg_bool, arg_str, Ctx, Effect, Fail, Output, Tool};
 use crate::mcp::schema::{any_object, array, boolean, find_id_or_name, id_or_name, integer, object, one_of, string, Prop};
 
-pub const TOOLS: &[Tool] = &[TAB_CREATE, TAB_RENAME, TAB_DELETE, DESIGN, GEOMETRY, ADD_FEATURE, EDIT_FEATURE, DELETE_FEATURE, PARAMETERS, EXPORT];
+pub const TOOLS: &[Tool] = &[TAB_CREATE, TAB_RENAME, TAB_DELETE, DESIGN, GEOMETRY, ADD_FEATURE, EDIT_FEATURE, DELETE_FEATURE, PARAMETERS, EXPORT, PART_LOOK];
 
 // ─── Ayudantes compartidos ──────────────────────────────────────────────────
 
@@ -880,4 +880,97 @@ fn export(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
         format!("Exported tab \"{}\" to {} ({format}, {} bytes).", d.tab_name, path.display(), bytes),
         json!({ "path": path, "format": format, "bytes": bytes }),
     ))
+}
+
+// ─── Aspecto de una pieza ───────────────────────────────────────────────────
+
+const PART_LOOK: Tool = Tool {
+    name: "cad_part",
+    title: "Name, color and transparency of a part",
+    description: "Changes how a part of a design looks and is called: `name`, `color` (\"#rrggbb\"; null = the \
+automatic one), `opacity` from 0.05 to 1 (below 1 it is see-through like acrylic or glass, still pickable, and renders \
+as glass; null = opaque) and `hidden`. `part` is \"feature:index\" or the part name from `cad_design` (default: the \
+only part). In an assembly use `asm_instance` with `color` / `opacity` instead (they apply to that instance only). \
+Example — a clear acrylic lid: {\"part\": \"Tapa\", \"color\": \"#dceeff\", \"opacity\": 0.25}.",
+    input: || {
+        object(&[
+            tab_prop(),
+            ("part", string("Part: \"feature:index\" (e.g. \"2:0\") or its name; default: the only part"), false),
+            ("name", string("New name"), false),
+            ("color", json!({ "type": ["string", "null"], "description": "Color \"#rrggbb\"; null = the automatic one" }), false),
+            ("opacity", json!({ "type": ["number", "null"], "minimum": 0.05, "maximum": 1, "description": "0.05–1; below 1 it is see-through (acrylic, glass); null = opaque" }), false),
+            ("hidden", boolean("Hide it in the viewer (it is also left out of exports)"), false),
+        ])
+    },
+    effect: Effect::Change,
+    run: part_look,
+};
+
+/// "#rrggbb" válido (en minúsculas)
+fn hex_color(s: &str) -> Option<String> {
+    let h = s.trim().strip_prefix('#')?;
+    (h.len() == 6 && h.chars().all(|c| c.is_ascii_hexdigit())).then(|| format!("#{}", h.to_ascii_lowercase()))
+}
+
+fn part_look(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
+    let mut d = open_design(ctx, args)?;
+    let parts = ctx.call("cad_evaluate", json!({}))?["parts"].clone();
+    let id = match arg_str(args, "part") {
+        Some(want) => find_part(&parts, want)?,
+        None => match parts.as_array().map(Vec::as_slice) {
+            Some([only]) => only["id"].clone(),
+            Some([]) | None => return Err(Fail::new("the design has no parts yet")),
+            Some(list) => {
+                let names: Vec<String> = list.iter().map(|p| format!("{}:{} \"{}\"", p["id"]["feature"], p["id"]["index"], p["name"].as_str().unwrap_or(""))).collect();
+                return Err(Fail::new("the design has several parts").hint(format!("pass `part`: {}", names.join(", "))));
+            }
+        },
+    };
+    let part: cad_model::PartId = serde_json::from_value(id.clone()).map_err(|e| Fail::new(e.to_string()))?;
+    let i = match d.doc.parts.iter().position(|p| p.part == part) {
+        Some(i) => i,
+        None => {
+            d.doc.parts.push(cad_model::PartProps { part, name: None, color: None, opacity: None, hidden: false, material: None, purchased: None });
+            d.doc.parts.len() - 1
+        }
+    };
+    let props = &mut d.doc.parts[i];
+    let mut done = Vec::new();
+    if let Some(n) = arg_str(args, "name") {
+        props.name = Some(n.trim().to_string()).filter(|n| !n.is_empty());
+        done.push(format!("renamed \"{}\"", n.trim()));
+    }
+    match args.get("color") {
+        Some(Value::Null) => {
+            props.color = None;
+            done.push("automatic color".into());
+        }
+        Some(Value::String(c)) => {
+            let c = hex_color(c).ok_or_else(|| Fail::new(format!("\"{c}\" is not a color")).hint("write it as \"#rrggbb\", e.g. \"#2f7fe0\""))?;
+            done.push(format!("color {c}"));
+            props.color = Some(c);
+        }
+        _ => {}
+    }
+    match args.get("opacity") {
+        Some(Value::Null) => {
+            props.opacity = None;
+            done.push("opaque".into());
+        }
+        Some(v) => {
+            let o = v.as_f64().unwrap_or(1.0).clamp(0.05, 1.0) as f32;
+            props.opacity = (o < 0.999).then_some(o);
+            done.push(if o < 0.999 { format!("opacity {} %", (o * 100.0).round()) } else { "opaque".into() });
+        }
+        None => {}
+    }
+    if let Some(h) = arg_bool(args, "hidden") {
+        props.hidden = h;
+        done.push(if h { "hidden".into() } else { "shown".into() });
+    }
+    if done.is_empty() {
+        return Err(Fail::new("nothing to change").hint("pass `name`, `color`, `opacity` or `hidden`"));
+    }
+    apply(ctx, &d)?;
+    Ok(Output::new(format!("Part {}:{} in \"{}\": {}.", id["feature"], id["index"], d.tab_name, done.join(", ")), json!({ "tab": d.tab, "part": id })))
 }

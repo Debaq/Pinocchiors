@@ -88,6 +88,9 @@ export type SurveyResult = { answers: { question: string; answer: string | strin
 const [survey, setSurvey] = createSignal<Survey>();
 export { survey };
 let resolveSurvey: ((r: SurveyResult) => void) | undefined;
+/** Quien quiere enterarse de cada encuesta terminada (el chat la deja escrita) */
+const surveyListeners = new Set<(s: Survey, r: SurveyResult) => void>();
+export const onSurveyDone = (listener: (s: Survey, r: SurveyResult) => void) => surveyListeners.add(listener);
 
 /** Muestra la encuesta en el panel de chat y espera las respuestas (una a la vez: la anterior queda sin contestar) */
 export function askSurvey(raw: unknown): Promise<SurveyResult> {
@@ -112,7 +115,9 @@ export function askSurvey(raw: unknown): Promise<SurveyResult> {
 /** El usuario contestó (o cerró la encuesta) */
 export function finishSurvey(result: SurveyResult) {
   const done = resolveSurvey;
+  const asked = survey();
   resolveSurvey = undefined;
   setSurvey(undefined);
+  if (asked) for (const l of surveyListeners) l(asked, result);
   done?.(result);
 }

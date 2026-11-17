@@ -436,7 +436,9 @@ const INSTANCE: Tool = Tool {
     title: "Move, fix, rename or remove an instance",
     description: "Changes one instance of an assembly: `at` [x, y, z] mm and/or `rotate` {\"axis\": [x, y, z], \
 \"angle\": degrees} set its placement (mates still apply to instances that are not fixed), `fixed`, `name`, \
-`configuration`, or `remove: true` (its mates go too). Example: {\"instance\": \"Shaft 1\", \"at\": [0, 0, 25]}.",
+`configuration`, `color` (\"#rrggbb\") and `opacity` (0.05–1: see-through like acrylic or glass) in this assembly, \
+or `remove: true` (its mates go too). Example: {\"instance\": \"Shaft 1\", \"at\": [0, 0, 25]}; a clear acrylic \
+cover: {\"instance\": \"Tapa\", \"color\": \"#dceeff\", \"opacity\": 0.25}.",
     input: || {
         object(&[
             asm_tab_prop(),
@@ -446,6 +448,8 @@ const INSTANCE: Tool = Tool {
             ("fixed", boolean("Anchor it (true) or let mates move it (false)"), false),
             ("name", string("New name"), false),
             ("configuration", string("Configuration (variant) of its design; \"\" = the base one"), false),
+            ("color", json!({ "type": ["string", "null"], "description": "Color in this assembly \"#rrggbb\"; null = its part's color" }), false),
+            ("opacity", json!({ "type": ["number", "null"], "minimum": 0.05, "maximum": 1, "description": "0.05–1; below 1 it is see-through like acrylic or glass (still pickable); null = its part's" }), false),
             ("remove", boolean("Delete the instance and its mates"), false),
         ])
     },
@@ -487,9 +491,36 @@ fn instance(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
             inst.configuration = (!c.trim().is_empty()).then(|| c.trim().to_string());
             done.push(format!("configuration {}", if c.trim().is_empty() { "base" } else { c.trim() }));
         }
+        match args.get("color") {
+            Some(Value::Null) => {
+                inst.color = None;
+                done.push("its part's color".into());
+            }
+            Some(Value::String(c)) => {
+                let h = c.trim().strip_prefix('#').filter(|h| h.len() == 6 && h.chars().all(|x| x.is_ascii_hexdigit()));
+                let Some(h) = h else {
+                    return Err(Fail::new(format!("\"{c}\" is not a color")).hint("write it as \"#rrggbb\", e.g. \"#2f7fe0\""));
+                };
+                inst.color = Some(format!("#{}", h.to_ascii_lowercase()));
+                done.push(format!("color #{h}"));
+            }
+            _ => {}
+        }
+        match args.get("opacity") {
+            Some(Value::Null) => {
+                inst.opacity = None;
+                done.push("its part's opacity".into());
+            }
+            Some(v) => {
+                let o = v.as_f64().unwrap_or(1.0).clamp(0.05, 1.0) as f32;
+                inst.opacity = Some(o);
+                done.push(format!("opacity {} %", (o * 100.0).round()));
+            }
+            None => {}
+        }
     }
     if done.is_empty() {
-        return Err(Fail::new("nothing to change").hint("pass `at`, `rotate`, `fixed`, `name`, `configuration` or `remove`"));
+        return Err(Fail::new("nothing to change").hint("pass `at`, `rotate`, `fixed`, `name`, `configuration`, `color`, `opacity` or `remove`"));
     }
     let result = apply(ctx, &a)?;
     let (text, _) = solution_text(&result);

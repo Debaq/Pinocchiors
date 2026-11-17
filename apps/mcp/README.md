@@ -57,6 +57,8 @@ args = ["--mcp"]
 | `status` | Modo, proyecto, pestañas CAD, malla, esqueleto e historial |
 | `help` | Guía por tema (`overview`, `conventions`, `cad`, `assembly`, `sketch`, `features`, `mesh`, `print`, `projects`) |
 | `undo` / `redo` | Deshacer y rehacer los últimos 20 cambios |
+| `plan` | Plan del proyecto (objetivo y pasos) que el usuario ve arriba del chat; solo con la app abierta |
+| `ask_user` | Encuesta en el chat: el usuario contesta cada pregunta antes de enviar; solo con la app abierta |
 | `project_new` / `project_open` / `project_save` | Proyectos `.pinocchio` |
 | `cad_tab_create` / `cad_tab_rename` / `cad_tab_delete` | Pestañas de diseño y ensamble |
 | `view` | Imagen PNG del diseño con los números de caras o aristas, resaltados y ejes; o de la malla y las piezas del corte |
@@ -68,6 +70,7 @@ args = ["--mcp"]
 | `cad_fillet` / `cad_chamfer` / `cad_shell` | Redondeo, chaflán, vaciado |
 | `cad_add_feature` / `cad_edit_feature` / `cad_delete_feature` | Cualquier operación en JSON |
 | `cad_parameters` | Parámetros y fórmulas |
+| `cad_part` | Nombre, color, transparencia (acrílico, vidrio) u ocultar una pieza |
 | `cad_versions` / `cad_version` | Versiones del diseño (ramas): listar y comparar; guardar, volver, borrar |
 | `cad_export` | STEP, STL, 3MF, OBJ, PLY, GLB |
 | `asm_insert` / `asm_mate` / `asm_instance` / `asm_mate_edit` | Ensambles: poner piezas, unirlas, moverlas |

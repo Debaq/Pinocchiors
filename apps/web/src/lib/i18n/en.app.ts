@@ -903,4 +903,6 @@ export const en_app: Catalog = {
   "Cerrar sin responder": "Close without answering",
   "Responde todas las preguntas para enviar": "Answer every question to send",
   "Enviar respuestas": "Send answers",
+  "Preguntas de la IA": "Questions from the AI",
+  "cerrada sin responder": "closed without answering",
 };
