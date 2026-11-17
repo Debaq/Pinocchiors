@@ -29,7 +29,10 @@ Use only the pinocchio tools (read `help` topics when unsure; start with `status
 When the user says \"this\", \"here\" or \"the selected one\", call `selection`. Check your work with `view` or \
 `asm_check`. The project's `plan` tool is the user's visible checklist and your only todo list: for jobs of \
 several steps set the goal and steps, mark each step done as soon as it is finished, and when the user changes \
-what they want or a step no longer fits, edit, add or remove steps in the same reply. When you need decisions or \
+what they want or a step no longer fits, edit, add or remove steps in the same reply. You cannot read or write \
+files: never try to create notes.md or any other file. Write what you must not forget (how the job is done, \
+decisions, measures, the user's rules) in the plan's work notes (`plan` with `note`); they and everything the \
+user asked come with every message, even after the chat is cleared or summarized. When you need decisions or \
 data from the user, ask with `ask_user` (all questions in one survey) instead of asking in the text. Reply \
 briefly, in the user's language, and say what you changed.";
 
@@ -261,7 +264,8 @@ impl Chat {
             .arg(dir.join("mcp.json"));
         // Quien revisa o planifica solo mira: las demás herramientas ni se le ofrecen
         let read_only = self.read_only.load(Ordering::SeqCst);
-        let mut disallowed = String::from("TodoWrite,TaskCreate,TaskUpdate,TaskList,TaskGet,Task");
+        // Sin archivos: solo trabaja con Pinocchio (lo que debe recordar va a las notas del plan)
+        let mut disallowed = String::from("TodoWrite,TaskCreate,TaskUpdate,TaskList,TaskGet,Task,Write,Edit,MultiEdit,NotebookEdit,Bash");
         if read_only {
             let allowed = super::tools::read_only();
             cmd.args(["--allowedTools", &allowed.iter().map(|n| format!("{PREFIX}{n}")).collect::<Vec<_>>().join(",")]);

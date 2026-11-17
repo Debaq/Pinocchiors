@@ -9,11 +9,11 @@ import * as Icons from "../icons";
 import { Button, Checkbox, IconButton } from "../ui";
 import { t } from "../../lib/i18n";
 import { createPersisted } from "../../lib/ui-state";
-import { finishSurvey, plan, planIsEmpty, setPlan, survey, type AiPlan, type Survey } from "../../lib/aiAssistant";
+import { copyPlan, finishSurvey, plan, planIsEmpty, setPlan, survey, type AiPlan, type Survey } from "../../lib/aiAssistant";
 
 /** Cambia el plan sobre una copia */
 const editPlan = (change: (p: AiPlan) => void) => {
-  const next: AiPlan = { goal: plan().goal, steps: plan().steps.map((s) => ({ ...s })) };
+  const next: AiPlan = copyPlan();
   change(next);
   setPlan(next);
 };
@@ -23,6 +23,7 @@ export const PlanCard: Component = () => {
   const [open, setOpen] = createPersisted("chat.planOpen", true);
   const [editingGoal, setEditingGoal] = createSignal(false);
   const [editingStep, setEditingStep] = createSignal<number>();
+  const [editingNotes, setEditingNotes] = createSignal(false);
   const [newStep, setNewStep] = createSignal("");
   const done = () => plan().steps.filter((s) => s.done).length;
   const addStep = () => {
@@ -60,7 +61,7 @@ export const PlanCard: Component = () => {
         </Show>
       </button>
       <Show when={open()}>
-        <div class="px-3 pb-2 space-y-1.5 max-h-56 overflow-y-auto">
+        <div class="px-3 pb-2 space-y-1.5 max-h-72 overflow-y-auto">
           {/* Objetivo */}
           <Show
             when={editingGoal()}
@@ -140,11 +141,69 @@ export const PlanCard: Component = () => {
               onKeyDown={(e) => keys(e, addStep, () => setNewStep(""))}
             />
             <Show when={!planIsEmpty()}>
-              <IconButton variant="ghost" size="sm" aria-label={t("Borrar el plan")} title={t("Borrar el plan")} onClick={() => setPlan({ goal: "", steps: [] })}>
+              <IconButton variant="ghost" size="sm" aria-label={t("Borrar el plan")} title={t("Borrar el plan, las notas y lo que pediste")} onClick={() => setPlan({ goal: "", steps: [] })}>
                 <Icons.Trash size={11} />
               </IconButton>
             </Show>
           </div>
+          {/* Cómo se hace: la libreta de la IA (y del usuario). Va con cada mensaje */}
+          <div class="pt-1 space-y-0.5">
+            <p class="text-[10px] font-semibold uppercase tracking-wide text-text-muted">{t("Cómo se hace")}</p>
+            <Show
+              when={editingNotes()}
+              fallback={
+                <p
+                  class={clsx("whitespace-pre-wrap leading-snug cursor-text rounded px-1 -mx-1 hover:bg-surface/40", plan().notes?.trim() ? "text-text" : "text-text-dim italic")}
+                  title={t("Clic para editar")}
+                  onClick={() => setEditingNotes(true)}
+                >
+                  {plan().notes?.trim() || t("Decisiones, medidas y reglas del trabajo. La IA las anota aquí y las recuerda aunque limpies o resumas el chat")}
+                </p>
+              }
+            >
+              <textarea
+                rows={4}
+                class="w-full resize-y rounded border border-accent bg-surface/40 px-1.5 py-1 text-xs text-text outline-none"
+                value={plan().notes ?? ""}
+                ref={(el) => queueMicrotask(() => el.focus())}
+                onKeyDown={(e) => {
+                  e.stopPropagation();
+                  if (e.key === "Escape") setEditingNotes(false);
+                }}
+                onBlur={(e) => {
+                  const notes = e.currentTarget.value.trim();
+                  if (notes !== (plan().notes ?? "")) editPlan((p) => (p.notes = notes));
+                  setEditingNotes(false);
+                }}
+              />
+            </Show>
+          </div>
+          {/* Lo que pidió el usuario: se anota solo y va con cada mensaje */}
+          <Show when={plan().asks?.length}>
+            <div class="pt-1 space-y-0.5">
+              <p class="text-[10px] font-semibold uppercase tracking-wide text-text-muted">{t("Lo que pediste (la IA lo recuerda siempre)")}</p>
+              <Index each={plan().asks}>
+                {(ask, i) => (
+                  <div class="group flex items-start gap-1">
+                    <span class="flex-1 leading-snug text-text-muted line-clamp-3" title={ask()}>
+                      <span class="text-text-dim font-mono mr-1">{i + 1}.</span>
+                      {ask()}
+                    </span>
+                    <IconButton
+                      variant="ghost"
+                      size="sm"
+                      class="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                      aria-label={t("Olvidar este pedido")}
+                      title={t("Olvidar este pedido")}
+                      onClick={() => editPlan((p) => p.asks?.splice(i, 1))}
+                    >
+                      <Icons.X size={10} />
+                    </IconButton>
+                  </div>
+                )}
+              </Index>
+            </div>
+          </Show>
         </div>
       </Show>
     </div>

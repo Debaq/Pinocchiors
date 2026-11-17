@@ -920,4 +920,9 @@ export const en_app: Catalog = {
   "El revisor sigue pidiendo correcciones después de {n}. Míralo tú y dime cómo seguir.": "The reviewer still asks for fixes after {n}. Take a look and tell me how to go on.",
   "El revisor encontró problemas. Míralo tú y dime cómo seguir.": "The reviewer found problems. Take a look and tell me how to go on.",
   "Lo gastado por cada rol (con una API, según el precio anotado del modelo)": "What each role spent (with an API, by the model's noted price)",
+  "Cómo se hace": "How it's done",
+  "Decisiones, medidas y reglas del trabajo. La IA las anota aquí y las recuerda aunque limpies o resumas el chat": "Decisions, measurements and rules for the job. The AI writes them here and remembers them even if you clear or summarize the chat",
+  "Lo que pediste (la IA lo recuerda siempre)": "What you asked for (the AI always remembers it)",
+  "Olvidar este pedido": "Forget this request",
+  "Borrar el plan, las notas y lo que pediste": "Delete the plan, the notes and what you asked for",
 };

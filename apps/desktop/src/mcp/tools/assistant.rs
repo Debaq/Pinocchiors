@@ -23,12 +23,18 @@ arguments) when you come back to a project — the user may have changed it. Ste
 `steps` replaces the whole list (all pending); `edit` rewrites steps ({\"3\": \"new text\"}); `insert` puts \
 steps after a number ({\"after\": 2, \"steps\": [...]}, after 0 = at the start); `add` appends; `done` / `undone` / \
 `remove` take step numbers; `clear: true` empties the plan. Keep it true to the job: when the user changes what they \
-want, fix the steps right away. Several fields can go in one call; they apply in this order (numbers refer to the \
-plan before the call): clear, goal, steps, edit, done, undone, remove, insert, add. Example: {\"goal\": \"Arduino box with a clear acrylic lid\", \"steps\": [\"Base 80×50×30 mm\", \
+want, fix the steps right away. The plan also has work `notes`, your notepad for HOW the job is done: decisions, \
+measures, materials, the user's rules and preferences. There are no note files (do not try to write notes.md or any \
+file): write them here with `note` (adds a line) or `notes` (rewrites them all). Notes and everything the user asked \
+are saved in the project and sent with every message, so they survive clearing and summarizing the chat. Several \
+fields can go in one call; they apply in this order (numbers refer to the plan before the call): clear, goal, notes, \
+note, steps, edit, done, undone, remove, insert, add. Example: {\"goal\": \"Arduino box with a clear acrylic lid\", \"steps\": [\"Base 80×50×30 mm\", \
 \"Lid 3 mm acrylic\", \"Holes for USB and screws\", \"2D drawing\"]}; later {\"done\": [1]}.",
     input: || {
         object(&[
             ("goal", string("What the user wants to achieve, in one or two lines"), false),
+            ("notes", string("Rewrite all the work notes (how the job is done: decisions, measures, the user's rules)"), false),
+            ("note", string("Add one line to the work notes"), false),
             ("steps", array("Replace the steps with these (all pending)", string("A step")), false),
             ("edit", json!({ "type": "object", "description": "Rewrite steps: {\"<number>\": \"new text\"}", "additionalProperties": { "type": "string" } }), false),
             ("insert", object(&[("after", integer("Insert after this step number (0 = at the start)", 0), true), ("steps", array("The new steps", string("A step")), true)]), false),
@@ -36,7 +42,7 @@ plan before the call): clear, goal, steps, edit, done, undone, remove, insert, a
             ("done", array("Step numbers (from 1) to mark done", integer("Step number", 1)), false),
             ("undone", array("Step numbers (from 1) to mark pending again", integer("Step number", 1)), false),
             ("remove", array("Step numbers (from 1) to delete", integer("Step number", 1)), false),
-            ("clear", boolean("Empty the plan (goal and steps) before anything else"), false),
+            ("clear", boolean("Empty the plan (goal, steps and notes) before anything else"), false),
         ])
     },
     effect: Effect::Read,
@@ -61,6 +67,13 @@ fn plan(ctx: &Ctx, args: &Value) -> Result<Output, Fail> {
     let pending = steps.iter().filter(|s| s["done"] != true).count();
     if !steps.is_empty() {
         lines.push(if pending == 0 { "Every step is done.".into() } else { format!("{pending} step(s) pending.") });
+    }
+    let notes = plan["notes"].as_str().unwrap_or("").trim();
+    lines.push(if notes.is_empty() { "Work notes: (none yet)".to_string() } else { format!("Work notes:\n{notes}") });
+    let asks: Vec<&str> = plan["asks"].as_array().map(|a| a.iter().filter_map(|x| x.as_str()).collect()).unwrap_or_default();
+    if !asks.is_empty() {
+        lines.push("What the user asked, in order:".into());
+        lines.extend(asks.iter().enumerate().map(|(i, a)| format!("{}. {a}", i + 1)));
     }
     Ok(Output::new(lines.join("\n"), plan))
 }

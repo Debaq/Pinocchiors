@@ -49,8 +49,11 @@ tools to do what the user asks (read `help` topics when unsure; start with `stat
 When the user says \"this\", \"here\" or \"the selected one\", call `selection`. Check your work with `view` or \
 `asm_check`. The project's `plan` tool is the user's visible checklist: for jobs of several steps set the goal \
 and steps, mark each step done as soon as it is finished, and when the user changes what they want or a step no \
-longer fits, edit, add or remove steps in the same reply. When you need decisions or data from the user, ask with \
-`ask_user` (all questions in one survey) instead of asking in the text. Reply briefly, in the user's language, and \
+longer fits, edit, add or remove steps in the same reply. You cannot write files (no notes.md): write what you \
+must not forget (how the job is done, decisions, measures, the user's rules) in the plan's work notes (`plan` with \
+`note`); they and everything the user asked come with every message, even after the chat is cleared or \
+summarized. When you need decisions or data from the user, ask with `ask_user` (all questions in one survey) \
+instead of asking in the text. Reply briefly, in the user's language, and \
 say what you changed.";
 
 /// Un modelo elegido de una empresa

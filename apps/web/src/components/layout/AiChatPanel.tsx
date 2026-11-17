@@ -14,7 +14,7 @@ import type { ProviderView } from "./AiProviders";
 import { Markdown } from "./Markdown";
 import { PlanCard, SurveyCard } from "./AiPlanSurvey";
 import { activeTeam, chatChoice, chatChoices, refLabel, refPrice, setChatChoice, setCompanies, type ModelRef } from "../../lib/aiTeams";
-import { applyPlanChange, onSurveyDone, plan, planSummary, survey } from "../../lib/aiAssistant";
+import { addAsk, applyPlanChange, onSurveyDone, plan, planSummary, survey, workContext } from "../../lib/aiAssistant";
 
 /** Imagen adjunta o vista (base64) */
 interface Picture {
@@ -528,6 +528,8 @@ export const AiChatPanel: Component<{
     }
     setNote(undefined);
     setEntries((l) => [...l, { kind: "user", text, images }]);
+    // Lo que pide el usuario queda anotado en el proyecto y va con cada mensaje: limpiar o resumir no lo borra
+    if (typed === undefined) addAsk(text);
     persist();
     const team = activeTeam();
     // Con roles: planifica primero (salvo Continuar); si no, construye
@@ -548,6 +550,8 @@ export const AiChatPanel: Component<{
     needsContext = false;
     let message = text;
     if (before) message = `[Earlier conversation in this project, which you do not remember — continue from it]\n${before}\n\n[New message]\n${message}`;
+    const work = workContext();
+    if (work) message += `\n\n${work}`;
     if (planText)
       message += reviewed
         ? `\n\n[Project plan — the user's visible checklist. Do NOT mark steps done: a reviewer checks your work and marks them. If this message changes what the user wants, edit/add/remove steps first]\n${planText}`
@@ -565,9 +569,10 @@ export const AiChatPanel: Component<{
   /** Lo que se le manda a quien planifica: solo arma el plan y pregunta, no construye */
   const planMessage = (text: string) => {
     const planText = planSummary();
-    return `[You are the planner: you can only look and plan; you cannot change the work. Another model builds each step and another reviews it.]\n\n[The user's message]\n${text}\n\n${
+    const work = workContext();
+    return `[You are the planner: you can only look and plan; you cannot change the work. Another model builds each step and another reviews it.]\n\n[The user's message]\n${text}\n\n${work ? `${work}\n\n` : ""}${
       planText ? `[Current project plan]\n${planText}\n\n` : ""
-    }[Your job] Look at the current state if needed (status, cad_design, view). Then set or update the project plan with \`plan\`: a one-line goal and short concrete steps a builder can do one at a time (sizes, materials, which tab). If the user's message changes the job, edit, add or remove steps. If you need decisions or data, ask them all at once with \`ask_user\` before writing the steps. Finish with one or two lines saying what the plan is.`;
+    }[Your job] Look at the current state if needed (status, cad_design, view). Then set or update the project plan with \`plan\`: a one-line goal and short concrete steps a builder can do one at a time (sizes, materials, which tab), and write in \`notes\` how the job is done (decisions, measures, the user's rules) so nobody forgets it. If the user's message changes the job, edit, add or remove steps. If you need decisions or data, ask them all at once with \`ask_user\` before writing the steps. Finish with one or two lines saying what the plan is.`;
   };
 
   /** Empieza a construir el próximo paso (o corrige lo que pidió el revisor) */
@@ -582,7 +587,7 @@ export const AiChatPanel: Component<{
   const reviewMessage = (step: { n: number; text: string } | undefined, report: string) =>
     `[You are the reviewer: you can only look (view, measure, cad_design, cad_geometry, asm_check, mesh_info, print_check); you cannot change anything.]\n\n${
       step ? `[Step under review] ${step.n}. ${step.text}` : "[Under review] the builder's last change"
-    }\n\n[What the builder reported]\n${report.slice(0, 1500) || "(nothing)"}\n\n[Project plan]\n${planSummary() || "(no plan)"}\n\n[Your job] Check the real result in the app, not the report: sizes, positions, collisions, that it matches the goal. If it is right, ${
+    }\n\n[What the builder reported]\n${report.slice(0, 1500) || "(nothing)"}\n\n${workContext() || ""}\n\n[Project plan]\n${planSummary() || "(no plan)"}\n\n[Your job] Check the real result in the app, not the report: sizes, positions, collisions, that it matches the goal. If it is right, ${
       step ? `mark step ${step.n} done with \`plan\` and ` : ""
     }reply starting with "APROBADO" and one line. If something is wrong or missing, reply starting with "CORREGIR:" and list concrete fixes (what, where, which value). Do not suggest optional improvements.`;
 
