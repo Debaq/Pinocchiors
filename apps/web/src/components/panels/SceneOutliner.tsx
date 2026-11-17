@@ -21,6 +21,8 @@ export interface SceneOutlinerProps {
   onFabricateNode?: (nodeId: string) => void;
   /** Botón de translúcida de una pieza del ensamble (`ghost` definido) */
   onToggleGhost?: (nodeId: string) => void;
+  /** Muestra de color de una pieza (`colorEditable`): un clic abre el selector */
+  onColorNode?: (nodeId: string, color: string) => void;
 }
 
 const nodeIcon = (type: SceneNode["type"]) => {
@@ -64,6 +66,7 @@ const OutlinerNode: Component<{
   onAddNode?: (groupId: string) => void;
   onFabricateNode?: (nodeId: string) => void;
   onToggleGhost?: (nodeId: string) => void;
+  onColorNode?: (nodeId: string, color: string) => void;
   isExpanded: (node: SceneNode) => boolean;
   onToggleExpanded: (node: SceneNode) => void;
 }> = (props) => {
@@ -127,7 +130,26 @@ const OutlinerNode: Component<{
             )} />
           }
         >
-          <span class="w-3 h-3 shrink-0 rounded-sm border border-border" style={{ background: props.node.color }} />
+          <Show
+            when={props.node.colorEditable && props.onColorNode}
+            fallback={<span class="w-3 h-3 shrink-0 rounded-sm border border-border" style={{ background: props.node.color }} />}
+          >
+            {/* Un clic en la muestra cambia el color de la pieza */}
+            <label
+              class="relative w-3 h-3 shrink-0 rounded-sm border border-border cursor-pointer hover:ring-1 hover:ring-accent"
+              style={{ background: props.node.color }}
+              title={t("Cambiar el color")}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <input
+                type="color"
+                class="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
+                aria-label={t("Color de {name}", { name: props.node.label })}
+                value={props.node.color}
+                onChange={(e) => props.onColorNode?.(props.node.id, e.currentTarget.value)}
+              />
+            </label>
+          </Show>
         </Show>
 
         {/* Label */}
@@ -244,6 +266,7 @@ const OutlinerNode: Component<{
               onAddNode={props.onAddNode}
               onFabricateNode={props.onFabricateNode}
               onToggleGhost={props.onToggleGhost}
+              onColorNode={props.onColorNode}
               isExpanded={props.isExpanded}
               onToggleExpanded={props.onToggleExpanded}
             />
@@ -324,6 +347,7 @@ export const SceneOutliner: Component<SceneOutlinerProps> = (props) => {
             onAddNode={props.onAddNode}
             onFabricateNode={props.onFabricateNode}
             onToggleGhost={props.onToggleGhost}
+            onColorNode={props.onColorNode}
             isExpanded={expandedNow}
             onToggleExpanded={onToggleExpanded}
           />

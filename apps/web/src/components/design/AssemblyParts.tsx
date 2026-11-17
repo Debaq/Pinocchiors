@@ -12,6 +12,7 @@ import { tBackend } from "../../lib/i18nBackend";
 import type { CadUi } from "../../lib/cadUi";
 import { MATE_LABELS, resolvedAssembly, samePart, type AsmInstance, type Assembly, type CadStore, type Connector, type Mate, type MateKind, type MotionStep, type P3, type PartView } from "../../lib/cad";
 import { adjustConnector, freshId, patternCopies, rotateInstance } from "../../lib/assemblyTools";
+import { PartLook } from "./PartLook";
 
 // ─── Controles chicos ─────────────────────────────────────────────────────
 
@@ -462,6 +463,17 @@ export const InstanceExtras: Component<{ store: CadStore; ui: CadUi; inst: AsmIn
           {open() ? tl("Menos") : tl("Más…")}
         </Button>
       </div>
+      {/* Opacidad y tonos de acrílico (solo en este ensamble) */}
+      <PartLook
+        opacity={props.inst.opacity ?? 1}
+        onOpacity={(o) => edit((i) => (i.opacity = o))}
+        onPreset={(color, opacity) =>
+          edit((i) => {
+            if (color) i.color = color;
+            i.opacity = opacity;
+          })
+        }
+      />
       <Show when={copyOf()}>
         <p class="text-[11px] text-text-dim">{tl("Copia de un patrón: sigue a su original")}</p>
       </Show>

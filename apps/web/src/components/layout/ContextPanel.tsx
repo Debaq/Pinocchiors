@@ -86,6 +86,8 @@ export interface ContextPanelProps {
   onFabricateNode?: (nodeId: string) => void;
   /** Botón de translúcida de las piezas del ensamble */
   onToggleGhost?: (nodeId: string) => void;
+  /** Muestra de color de una pieza en el Outliner: color nuevo */
+  onColorNode?: (nodeId: string, color: string) => void;
 
   // Pestaña de información
   stats?: SceneStats;
@@ -267,6 +269,7 @@ export const ContextPanel: Component<ContextPanelProps> = (props) => {
                 onAddNode={props.onAddNode}
                 onFabricateNode={props.onFabricateNode}
                 onToggleGhost={props.onToggleGhost}
+                onColorNode={props.onColorNode}
               />
             </Show>
           </div>

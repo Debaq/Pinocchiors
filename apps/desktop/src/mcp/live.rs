@@ -41,6 +41,9 @@ pub const EV_PROGRESS: &str = "mcp-live://progress";
 const ANSWER: Duration = Duration::from_secs(15);
 /// Lo que espera a que la ventana importe un modelo (los grandes tardan)
 const IMPORT: Duration = Duration::from_secs(600);
+/// Lo que espera a que el usuario conteste (aprobar una orden a una impresora, una encuesta):
+/// puede estar haciendo otra cosa; un poco menos que lo que espera el conector
+const USER: Duration = Duration::from_secs(1780);
 
 /// Dónde la app deja el puerto y la clave para el conector
 pub fn live_file() -> Option<PathBuf> {
@@ -313,13 +316,21 @@ impl Bridge {
             // rehacer, importar un modelo o un escaneo (como objeto nuevo) o traer la malla
             // de una pieza del diseño: los hace la ventana, como el usuario
             // `viewer`: diagnóstico, captura y mediciones del visor (herramienta `viewer`)
-            "selection" | "undo" | "redo" | "import" | "scan" | "use_part" | "viewer" => {
+            // `printers`: las impresoras guardadas; `confirm`: el usuario aprueba una orden a una
+            // impresora; `plan`: el plan del proyecto (panel de chat); `ask_user`: una encuesta
+            "selection" | "undo" | "redo" | "import" | "scan" | "use_part" | "viewer" | "printers" | "confirm" | "plan" | "ask_user" => {
                 let model = matches!(req["op"].as_str(), Some("import" | "scan" | "use_part"));
                 if model && !holds() {
                     return Err("no turn: call begin first".into());
                 }
-                // Las mediciones del visor pueden tardar (una malla grande en TS)
-                let wait = if model || req["op"] == "viewer" { IMPORT } else { ANSWER };
+                // Las mediciones del visor pueden tardar (una malla grande en TS); el usuario, más
+                let wait = if matches!(req["op"].as_str(), Some("confirm" | "ask_user")) {
+                    USER
+                } else if model || req["op"] == "viewer" {
+                    IMPORT
+                } else {
+                    ANSWER
+                };
                 let a = self.ask_for(host, EV_ASK, json!({ "what": req["op"], "args": req["args"] }), wait)?;
                 match a["error"].as_str() {
                     Some(e) => Err(e.to_string()),
@@ -372,7 +383,8 @@ impl Client {
     pub fn connect() -> Option<Client> {
         let info: LiveInfo = serde_json::from_str(&std::fs::read_to_string(live_file()?).ok()?).ok()?;
         let stream = TcpStream::connect_timeout(&([127, 0, 0, 1], info.port).into(), Duration::from_millis(300)).ok()?;
-        let _ = stream.set_read_timeout(Some(Duration::from_secs(600)));
+        // Una encuesta o una aprobación esperan al usuario hasta casi media hora (`USER`)
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(1800)));
         let client = Client { io: Mutex::new((BufReader::new(stream.try_clone().ok()?), stream)), info };
         client.request(json!({ "op": "ping" })).ok()?;
         Some(client)

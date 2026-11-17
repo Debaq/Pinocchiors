@@ -475,6 +475,8 @@ export function createCadUi(store: CadStore) {
   const [showPlanes, setShowPlanes] = createSignal(true);
   // Planos base ocultos uno por uno (desde el Outliner)
   const [hiddenPlanes, setHiddenPlanes] = createSignal<BasePlane[]>([]);
+  // Modelo de referencia (escaneo o STL a calcar) a la vista: el botón del visor y el ojo del Outliner
+  const [scanVisible, setScanVisible] = createSignal(true);
   // Pieza abierta en la lista de piezas ("<operación>:<n>"), también desde el Outliner
   const [openPart, setOpenPart] = createSignal<string>();
   // Recalcular cambia los índices de caras, aristas y regiones: la selección vieja ya no vale
@@ -874,6 +876,8 @@ export function createCadUi(store: CadStore) {
     showPlanes,
     setShowPlanes,
     hiddenPlanes,
+    scanVisible,
+    setScanVisible,
     openPart,
     setOpenPart,
     /** Muestra u oculta un plano base; con todos ocultos se apaga el botón de planos */

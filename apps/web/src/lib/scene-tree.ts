@@ -21,6 +21,8 @@ export interface SceneNode {
   deletable?: boolean;
   /** Sin botón de visibilidad (nodos del archivo: la malla se une al importar) */
   readonly?: boolean;
+  /** La muestra de color (`color`) se puede cambiar con un clic */
+  colorEditable?: boolean;
   /** Texto al pasar el mouse */
   hint?: string;
   /** Atenuado (operación suprimida o después de la barra de retroceso) */
@@ -93,6 +95,11 @@ export interface SceneTreeState {
   cad?: CadOutline;
   /** Objetos en orden de creación (sin objetos, el modelo va suelto) */
   objects?: ObjectRow[];
+  /**
+   * El visor es el de Diseñar: la malla del activo, su retopología, esqueleto
+   * y pesos no se dibujan ahí, así que sus filas van sin ojo
+   */
+  designView?: boolean;
   /** Planos 2D del diseño con sus elementos (con diseño, aunque no haya ninguno: el grupo tiene «+») */
   drawings?: SceneNode[];
 }
@@ -261,6 +268,8 @@ export function buildSceneTree(state: SceneTreeState): SceneNode {
         type: "bone" as const,
         label: bone.name,
         visible: state.showSkeleton,
+        // Los huesos se ven todos juntos: el ojo es el del esqueleto
+        readonly: true,
         expanded: false,
         selected: state.selectedBone === i,
         children: [],
@@ -279,6 +288,10 @@ export function buildSceneTree(state: SceneTreeState): SceneNode {
       selected: false,
       children: [],
     });
+  }
+  if (state.designView) {
+    const lock = (n: SceneNode): SceneNode => ({ ...n, readonly: true, children: n.children.map(lock) });
+    model.splice(0, model.length, ...model.map(lock));
   }
   // ── Objetos ──
   const rows = state.objects ?? [];

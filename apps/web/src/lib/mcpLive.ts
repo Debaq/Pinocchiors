@@ -8,6 +8,7 @@
 // la que tenía el usuario, si él no se movió ni tocó nada (fuera del chat)
 // después del último paso.
 
+import { applyPlanChange, askSurvey } from "./aiAssistant";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { createSignal } from "solid-js";
@@ -206,6 +207,10 @@ export function startMcpLive(cad: CadStore, ui: CadUi, notify: (message: string)
           return answer(id, { error: String(err instanceof Error ? err.message : err) });
         }
       }
+      // El plan del proyecto (panel de chat): leerlo o cambiarlo
+      if (what === "plan") return answer(id, { value: applyPlanChange(args) });
+      // Una encuesta: se contesta en el panel de chat (puede tardar)
+      if (what === "ask_user") return answer(id, { value: await askSurvey(args) });
       // Las impresoras guardadas en la app (para que la IA las nombre)
       if (what === "printers") {
         return answer(id, { value: netPrinters() });

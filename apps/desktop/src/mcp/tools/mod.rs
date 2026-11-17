@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 use crate::mcp::session::Session;
 
 mod assembly;
+mod assistant;
 mod basics;
 mod calibration;
 mod cad;
@@ -78,6 +79,7 @@ impl Tool {
 pub fn all() -> Vec<&'static Tool> {
     let mut list: Vec<&'static Tool> = Vec::new();
     list.extend(basics::TOOLS);
+    list.extend(assistant::TOOLS);
     list.extend(project::TOOLS);
     list.extend(view::TOOLS);
     list.extend(cad::TOOLS[..5].iter());

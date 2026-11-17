@@ -1539,6 +1539,8 @@ export interface AsmInstance {
   suppressed?: boolean;
   /** Color propio en el ensamble ("#rrggbb") */
   color?: string | null;
+  /** Opacidad propia en el ensamble, 0–1 (acrílico, vidrio); sin ella, la de su pieza. Se sigue eligiendo */
+  opacity?: number | null;
   /** Reflejada en el plano por su origen con esta normal (coordenadas de la pieza) */
   mirror?: P3 | null;
   /** Subensamble flexible: sus uniones entran al solver de arriba */
@@ -1691,6 +1693,8 @@ export interface PartProps {
   name?: string;
   /** "#rrggbb" */
   color?: string;
+  /** Opacidad 0–1 (acrílico, vidrio); sin ella, opaca */
+  opacity?: number | null;
   hidden?: boolean;
   /** Material propio (si no, el del diseño) */
   material?: Material | null;
@@ -1741,6 +1745,13 @@ export function partColor(doc: CadDocument | null | undefined, p: PartView, i: n
   // Las de contexto de un ensamble, en gris claro: son solo de referencia
   if (p.context) return "#c3c9d4";
   return partEntry(doc, p)?.color ?? PART_COLORS[i % PART_COLORS.length];
+}
+
+/** Opacidad de la pieza, 0–1 (1 = opaca) */
+export function partOpacity(doc: CadDocument | null | undefined, p: PartView): number {
+  if (p.context) return 1;
+  const o = partEntry(doc, p)?.opacity;
+  return typeof o === "number" ? Math.min(1, Math.max(0, o)) : 1;
 }
 
 /** Material de la pieza: el propio o el del diseño */

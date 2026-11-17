@@ -22,7 +22,8 @@ import { installCollabDesign } from "./lib/collabDesign";
 import { installCollabHandoff } from "./lib/collabHandoff";
 import { adoptFromRegistry, afterSharedOpen, captureIfInRoom, collabProjectUi, installCollabMerge, loadCollabProject, registerPath, rememberMine } from "./lib/collabMerge";
 import { CollabOverlay } from "./components/layout/CollabOverlay";
-import { AiChatPanel } from "./components/layout/AiChatPanel";
+import { AiChatPanel, chatForProject, chatRevision, restoreChat } from "./components/layout/AiChatPanel";
+import { finishSurvey, planForProject, planRevision, restorePlan, survey } from "./lib/aiAssistant";
 import { TuneWizard, type ChatPicture } from "./components/layout/TuneWizard";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -677,6 +678,12 @@ export const App: Component = () => {
   });
   /** Chat con la IA (Claude Code instalado, en modo en vivo) */
   const [chatOpen, setChatOpen] = createSignal(false);
+  // La IA manda una encuesta: se abre el chat para contestarla (en Android no hay chat)
+  createEffect(() => {
+    if (!survey()) return;
+    if (IS_ANDROID) finishSurvey({ skipped: true });
+    else setChatOpen(true);
+  });
   /** Mensaje que otra parte de la app deja listo en el chat de IA */
   const [chatPrefill, setChatPrefill] = createSignal<{ id: number; text: string; images: ChatPicture[] }>();
   /** Asistente «Poner a punto» abierto */
@@ -2061,6 +2068,15 @@ export const App: Component = () => {
   /** La pieza del objeto en el recálculo que se ve (no está si es de otra pestaña o ya no existe) */
   const partView = (o: SceneObject | undefined) =>
     isCadObject(o) && studioOf(o) === cad.resultTab() ? cad.result()?.parts.find((p) => partKey(p.id) === partKey(o.source.part)) : undefined;
+  /**
+   * Pieza oculta con el ojo (en Diseñar, en el Outliner o en el ensamble): es
+   * una sola marca guardada en el diseño, así que queda oculta en todos los
+   * espacios, no solo en el que se ocultó
+   */
+  const partObjectHidden = (o: SceneObject | undefined) => {
+    const view = partView(o);
+    return !!view && partHidden(cad.committed(), view);
+  };
   /** La pestaña de la pieza, si es otra que la que se ve y todavía existe */
   const otherTab = (o: CadObject) => (studioOf(o) === cad.resultTab() ? undefined : cad.tabs().tabs.find((x) => x.id === studioOf(o)));
   /**
@@ -2176,18 +2192,22 @@ export const App: Component = () => {
           modifications,
           meshLabel: t("Malla generada"),
           selected: isActive || extraObjects().includes(o.id) || (!!view && pickedParts().has(partKey(view.id))),
-          visible: inDesign() ? !view || !partHidden(doc, view) : isActive ? viewSettings().showMesh : !hiddenGhosts().includes(o.id),
+          visible: inDesign() ? !view || !partHidden(doc, view) : !partObjectHidden(o) && (isActive ? viewSettings().showMesh : !hiddenGhosts().includes(o.id)),
           readonly: inDesign() ? !view : !isActive && !o.ui,
           deletable: true,
           // En Diseñar: botón de imprimir que la lleva a Fabricar
           fabricable: inDesign() && !!view,
           color: view ? partColor(doc, view, i) : undefined,
+          colorEditable: !!view,
           muted: !view,
           hint: view
             ? t("Pieza del diseño · {vol} cm³", { vol: (view.volume / 1000).toLocaleString(locale(), { maximumFractionDigits: 2 }) })
             : t("Ya no está en el diseño: queda la última malla"),
         }];
       }
+      // En Diseñar un modelo importado se ve como modelo de referencia (uno a la vez):
+      // su ojo es el del botón del visor; el de otro lo pone como referencia
+      const reference = inDesign() && o.id === scanObjectId();
       return [{
         id: `obj-${o.id}`,
         type: "mesh",
@@ -2195,10 +2215,18 @@ export const App: Component = () => {
         active: isActive,
         modifications,
         selected: isActive || extraObjects().includes(o.id),
-        visible: isActive ? viewSettings().showMesh : !hiddenGhosts().includes(o.id),
-        readonly: !isActive && !o.ui,
+        visible: inDesign() ? reference && cadUi.scanVisible() : isActive ? viewSettings().showMesh : !hiddenGhosts().includes(o.id),
+        readonly: inDesign() ? !cad.doc() || !materialized(o, active) : !isActive && !o.ui,
         deletable: true,
-        hint: isActive ? undefined : t("Clic para trabajar con este objeto"),
+        hint: inDesign()
+          ? reference
+            ? t("Modelo de referencia del diseño")
+            : t("Ojo: verlo como modelo de referencia")
+          : isActive
+            ? undefined
+            : o.ui
+              ? t("Clic para trabajar con este objeto")
+              : t("Sin malla todavía: clic para trabajar con este objeto"),
       }];
     });
   };
@@ -2229,6 +2257,7 @@ export const App: Component = () => {
         deletable: true,
         muted: !!inst.suppressed,
         color: inst.color ?? (view ? partColor(doc, view, i) : undefined),
+        colorEditable: true,
         hint: inst.suppressed ? t("Suprimida") : view?.purchased ? t("Pieza comprada: no se fabrica") : undefined,
       };
     });
@@ -2468,6 +2497,10 @@ export const App: Component = () => {
 
   // Los demás objetos se ven en gris en el visor (los que ya tienen malla y no se ocultaron)
   const [hiddenGhosts, setHiddenGhosts] = createSignal<number[]>([]);
+  /** El activo es una pieza oculta con el ojo: no se dibuja (salvo en las vistas de placas y piezas, que muestran la cama) */
+  const activeHiddenPart = createMemo(
+    () => plateViewIndex() === null && !piecesViewOn() && partObjectHidden(objects().find((o) => o.id === activeObjectId())),
+  );
   const ghostCache = new Map<string, MeshData>();
   let ghostRequest = 0;
 
@@ -2566,7 +2599,7 @@ export const App: Component = () => {
     const extra = extraObjects();
     // `"model":false` en su interfaz: todavía no tiene malla
     // Solo los de la pestaña abierta: lo de otras no se ve
-    const list = objects().filter((o) => o.id !== active && ownedByTab(o) && o.ui && !o.ui.includes('"model":false') && !hidden.includes(o.id));
+    const list = objects().filter((o) => o.id !== active && ownedByTab(o) && o.ui && !o.ui.includes('"model":false') && !hidden.includes(o.id) && !partObjectHidden(o));
     const request = ++ghostRequest;
     void (async () => {
       await switchingObject;
@@ -2681,6 +2714,8 @@ export const App: Component = () => {
     selectedNode: selectedFileNode(),
     quadObjects: quadObjectRows(),
     cad: cadOutline(),
+    // En Diseñar la malla, la retopología, el esqueleto y los pesos del activo no se dibujan
+    designView: inDesign(),
     objects: [...objectRows(), ...instanceRows()],
     drawings: cad.doc() ? drawingTree(drawingSheets(cad.doc()), cadUi.drawingOpen() ? cadUi.activeDrawing() : undefined, cadUi.drawingSel()) : undefined,
   });
@@ -8559,6 +8594,19 @@ export const App: Component = () => {
   // ═══════════════════════════════════════════════════════════════════════════
 
   /** Pieza del ensamble translúcida o sólida (se guarda con el ensamble; deshacible) */
+  /** Muestra de color en el Outliner: la instancia del ensamble o la pieza del diseño */
+  const handleColorNode = (nodeId: string, color: string) => {
+    const instance = instanceOfNode(nodeId);
+    if (instance !== undefined) {
+      void cad.editAssembly((a) => {
+        const inst = a.instances.find((i) => i.id === instance);
+        if (inst) inst.color = color;
+      });
+      return;
+    }
+    const view = partView(objectOfNode(nodeId));
+    if (view) void cad.setPartProps(view.id, { color });
+  };
   const handleToggleGhost = (nodeId: string) => {
     const instance = instanceOfNode(nodeId);
     if (instance === undefined) return;
@@ -8594,10 +8642,32 @@ export const App: Component = () => {
     }
     const object = objectOfNode(nodeId);
     if (object) {
+      // Modelo importado en Diseñar: el ojo del modelo de referencia; otro modelo pasa a serlo
+      if (inDesign() && !isCadObject(object)) {
+        if (object.id === scanObjectId()) cadUi.setScanVisible(!cadUi.scanVisible());
+        else if (cad.doc()) {
+          void cad.commit((d) => { d.scan_object = object.id; });
+          cadUi.setScanVisible(true);
+        }
+        return;
+      }
       const view = partView(object);
-      // En Diseñar el ojo es el de la pieza en el diseño; fuera, el del objeto en el visor
-      if (view && inDesign()) void cad.setPartProps(view.id, { hidden: !partHidden(cad.doc(), view) });
-      else if (object.id === activeObjectId()) setViewSettings((prev) => ({ ...prev, showMesh: !prev.showMesh }));
+      // Pieza del diseño: el ojo es la marca de la pieza (la misma en todos los espacios)
+      if (view) {
+        const hidden = partObjectHidden(object);
+        const active = object.id === activeObjectId();
+        const shownHere = active ? viewSettings().showMesh : !hiddenGhosts().includes(object.id);
+        // Fuera de Diseñar, al mostrarla se quita también lo oculto solo en este visor
+        const unhideHere = () => {
+          if (active) setViewSettings((prev) => ({ ...prev, showMesh: true }));
+          else setHiddenGhosts((list) => list.filter((x) => x !== object.id));
+        };
+        if (!inDesign() && !hidden && !shownHere) return unhideHere();
+        void cad.setPartProps(view.id, { hidden: !hidden });
+        if (hidden && !inDesign()) unhideHere();
+        return;
+      }
+      if (object.id === activeObjectId()) setViewSettings((prev) => ({ ...prev, showMesh: !prev.showMesh }));
       else setHiddenGhosts((list) => (list.includes(object.id) ? list.filter((x) => x !== object.id) : [...list, object.id]));
       return;
     }
@@ -8805,7 +8875,7 @@ export const App: Component = () => {
     if (unsavedTimer !== undefined) clearTimeout(unsavedTimer);
     unsavedTimer = window.setTimeout(checkUnsaved, delay);
   };
-  createEffect(on([history.current, history.nodes, projectPath, hasWork, isProcessing, cadUi.sketchHistory], () => scheduleUnsavedCheck()));
+  createEffect(on([history.current, history.nodes, projectPath, hasWork, isProcessing, cadUi.sketchHistory, chatRevision, planRevision], () => scheduleUnsavedCheck()));
   const unsavedInterval = setInterval(() => unsavedTimer === undefined && checkUnsaved(), 60_000);
   onCleanup(() => {
     clearInterval(unsavedInterval);
@@ -8913,6 +8983,10 @@ export const App: Component = () => {
       poseLibrary: poseLibrary(),
       mixer: mixer(),
       history: withHistory ? packHistory(history.save()) : undefined,
+      // La conversación con la IA es de este proyecto (no va en las copias de deshacer)
+      chat: withHistory ? chatForProject() : undefined,
+      // El plan de la IA (objetivo y pasos) también es de este proyecto
+      aiPlan: withHistory ? planForProject() : undefined,
       // Los objetos van solo al proyecto (no a las copias de deshacer ni al casillero de cada uno)
       objects: withHistory ? objects() : undefined,
       activeObject: withHistory ? activeObjectId() : undefined,
@@ -8957,6 +9031,9 @@ export const App: Component = () => {
       // no se guardan en el proyecto: esos pasos quedan como hitos
       snapshotUi.clear();
       history.load(ui.history, ["snapshot", "sceneEdit"]);
+      // Otro proyecto (o uno nuevo): su conversación con la IA, o ninguna
+      restoreChat(ui.chat);
+      restorePlan(ui.aiPlan);
       // Otro proyecto: las mallas en gris y lo elegido eran del anterior (los
       // números de objeto se repiten entre proyectos)
       ghostCache.clear();
@@ -10101,7 +10178,7 @@ export const App: Component = () => {
               textures={viewerTextures()}
               skeletonData={skeletonData()}
               weightsData={weightsData()}
-              settings={viewSettings()}
+              settings={activeHiddenPart() ? { ...viewSettings(), showMesh: false } : viewSettings()}
               vertices={
                 showsPreview()
                   ? remeshStats()?.stats.after.vertices
@@ -10579,6 +10656,7 @@ export const App: Component = () => {
             onAddNode={handleAddNode}
             onFabricateNode={(id) => void handleFabricateNode(id)}
             onToggleGhost={handleToggleGhost}
+            onColorNode={handleColorNode}
             history={history}
             stats={{
               fileName: fileName(),

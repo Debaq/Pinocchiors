@@ -123,6 +123,9 @@ pub struct PartProps {
     /// Color como "#rrggbb".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
+    /// Opacidad de 0 a 1 (acrílico, vidrio); sin ella, opaca.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opacity: Option<f32>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hidden: bool,
     /// Material propio (si no, el del diseño).

@@ -27,7 +27,9 @@ const PROMPT: &str = "You are the assistant of the chat panel inside the Pinocch
 open Pinocchio window: every change you make with the pinocchio tools appears there live and can be undone with Ctrl+Z. \
 Use only the pinocchio tools (read `help` topics when unsure; start with `status` if you do not know what is loaded). \
 When the user says \"this\", \"here\" or \"the selected one\", call `selection`. Check your work with `view` or \
-`asm_check`. Reply briefly, in the user's language, and say what you changed.";
+`asm_check`. For jobs of several steps keep the project's `plan` (goal and steps) up to date. When you need \
+decisions or data from the user, ask with `ask_user` (all questions in one survey) instead of asking in the text. \
+Reply briefly, in the user's language, and say what you changed.";
 
 /// Alias de modelo que entiende Claude Code (también acepta el nombre completo `claude-…`)
 pub const MODELS: &[&str] = &["fable", "opus", "sonnet", "haiku"];

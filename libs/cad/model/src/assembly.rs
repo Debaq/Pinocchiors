@@ -180,6 +180,10 @@ pub struct Instance {
     /// Color propio en el ensamble ("#rrggbb"); sin él, el de su pieza.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
+    /// Opacidad propia en el ensamble, de 0 a 1 (acrílico, vidrio); sin ella, la de su pieza.
+    /// A diferencia de `ghost`, se sigue eligiendo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opacity: Option<f32>,
     /// Espejo: la pieza reflejada en el plano por su origen con esta normal (en coordenadas de la pieza).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mirror: Option<P3>,

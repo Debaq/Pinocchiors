@@ -143,4 +143,13 @@ export const en_assembly: Record<string, string> = {
   "{n} piezas de subensambles flexibles se mueven aquí (se editan en su pestaña)": "{n} parts of flexible subassemblies move here (edit them in their tab)",
   "Volver a verla sólida": "Show it solid again",
   "Verla translúcida (se ve y se toca lo de atrás)": "See it translucent (you can see and pick what's behind)",
+  "Opaca": "Opaque",
+  "Acrílico transparente": "Clear acrylic",
+  "Acrílico humo": "Smoked acrylic",
+  "Acrílico azul": "Blue acrylic",
+  "Acrílico rojo": "Red acrylic",
+  "Acrílico verde": "Green acrylic",
+  "Acrílico ámbar": "Amber acrylic",
+  "Menos de 100 %: se ve a través, como un acrílico o un vidrio (se sigue eligiendo)": "Below 100 %: you see through it, like acrylic or glass (it can still be picked)",
+  "Cambiar el color": "Change the color",
 };

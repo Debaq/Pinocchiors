@@ -1094,7 +1094,7 @@ pub(crate) fn library_purchased_impl(state: &AppState, part: cad_model::library:
                 f.name = name.clone();
             }
             let pid = cad_model::PartId { feature: id, index: 0 };
-            doc.parts.push(cad_model::PartProps { part: pid, name: None, color: Some(item.color.to_string()), hidden: false, material: None, purchased: None });
+            doc.parts.push(cad_model::PartProps { part: pid, name: None, color: Some(item.color.to_string()), opacity: None, hidden: false, material: None, purchased: None });
             id
         }
     };
@@ -2068,7 +2068,7 @@ fn add_purchased_shape(tabs: &mut Tabs, shape: cad_model::PrimitiveShape, name: 
                 f.name = name.to_string();
             }
             let pid = cad_model::PartId { feature: id, index: 0 };
-            doc.parts.push(cad_model::PartProps { part: pid, name: None, color: Some(color.to_string()), hidden: false, material: None, purchased: Some(true) });
+            doc.parts.push(cad_model::PartProps { part: pid, name: None, color: Some(color.to_string()), opacity: None, hidden: false, material: None, purchased: Some(true) });
             id
         }
     };
@@ -3536,7 +3536,7 @@ fn parts_scene_of(doc: &Document, eval: &cad_model::Evaluation, name: &str, only
         return Err("El diseño todavía no tiene un sólido".into());
     }
     let several = eval.parts.len() > 1;
-    let items: Vec<(&cad_model::Shape, String, Option<&cad_model::mesh_bool::MeshData>)> = eval
+    let chosen: Vec<(usize, &cad_model::Part)> = eval
         .parts
         .iter()
         .enumerate()
@@ -3545,13 +3545,52 @@ fn parts_scene_of(doc: &Document, eval: &cad_model::Evaluation, name: &str, only
             Some(o) => o == p.id,
             None => !doc.is_purchased(p.id) && !eval.context.contains(&p.id) && !part_hidden(doc, p.id),
         })
+        .collect();
+    let items: Vec<(&cad_model::Shape, String, Option<&cad_model::mesh_bool::MeshData>)> = chosen
+        .iter()
         // Una pieza sola conserva el nombre del diseño
         .map(|(i, p)| (&p.shape, if several || only.is_some() { part_name(doc, p.id, i + 1) } else { name.to_string() }, p.mesh.as_ref()))
         .collect();
     if items.is_empty() {
         return Err(if only.is_some() { "Esa pieza ya no existe" } else { "Solo hay piezas compradas: no hay nada que fabricar" }.into());
     }
-    shapes_scene_with(&items)
+    let mut scene = shapes_scene_with(&items)?;
+    // Color y transparencia propios de la pieza: van al render (vidrio, acrílico) y a los formatos con color
+    for (k, (_, p)) in chosen.iter().enumerate() {
+        let Some(material) = part_look(doc, p.id) else { continue };
+        let index = scene.materials.len();
+        scene.materials.push(material);
+        if let Some(prim) = scene.meshes.get_mut(k).and_then(|m| m.primitives.first_mut()) {
+            prim.material = Some(index);
+        }
+    }
+    Ok(scene)
+}
+
+/// Material con el color y la opacidad que el usuario le dio a la pieza (ninguno si no le dio)
+fn part_look(doc: &Document, part: cad_model::PartId) -> Option<converter_scene::Material> {
+    let props = doc.parts.iter().find(|q| q.part == part)?;
+    let color = props.color.as_deref().and_then(hex_rgb);
+    let opacity = props.opacity.map(|o| o.clamp(0.0, 1.0)).filter(|o| *o < 0.999);
+    if color.is_none() && opacity.is_none() {
+        return None;
+    }
+    let [r, g, b] = color.unwrap_or([0.8, 0.8, 0.8]);
+    let mut m = converter_scene::Material {
+        name: props.name.clone().unwrap_or_else(|| "Pieza".into()),
+        base_color_factor: [r as f32, g as f32, b as f32, 1.0],
+        metallic_factor: 0.0,
+        roughness_factor: 0.5,
+        ..Default::default()
+    };
+    if let Some(o) = opacity {
+        // Transparente como un acrílico: liso, deja pasar la luz y se ve de los dos lados
+        m.transmission_factor = 1.0 - o;
+        m.roughness_factor = 0.05;
+        m.ior = 1.49;
+        m.double_sided = true;
+    }
+    Some(m)
 }
 
 /// Escena con una malla por forma, con su nombre (milímetros, Y arriba).
@@ -5942,7 +5981,7 @@ mod library_tests {
         assert_eq!(only.meshes.len(), 1);
         assert!(!doc.is_purchased(cad_model::PartId { feature: caja, index: 0 }));
         // Marcada a mano como fabricada, sale
-        doc.parts.push(cad_model::PartProps { part: cad_model::PartId { feature: placa, index: 0 }, name: None, color: None, hidden: false, material: None, purchased: Some(false) });
+        doc.parts.push(cad_model::PartProps { part: cad_model::PartId { feature: placa, index: 0 }, name: None, color: None, opacity: None, hidden: false, material: None, purchased: Some(false) });
         assert_eq!(parts_scene_of(&doc, &eval, "x", None).unwrap().meshes.len(), 2);
         // Oculta con el ojo: no sale, salvo que se pida esa pieza
         doc.parts.last_mut().unwrap().hidden = true;

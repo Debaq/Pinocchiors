@@ -23,6 +23,9 @@ import type { MeshData } from "./Viewer3D";
 export type BasePlane = "xy" | "xz" | "yz";
 
 /** Color (0xrrggbb) y visibilidad de una pieza: sus caras y aristas [desde, hasta) del cuerpo */
+/** Los materiales de una malla o de unas líneas (uno, o uno por grupo) */
+const materialsOf = (o: THREE.Mesh | THREE.LineSegments): THREE.Material[] => (Array.isArray(o.material) ? o.material : [o.material]);
+
 export interface PartStyle {
   faces: [number, number];
   edges: [number, number];
@@ -32,6 +35,8 @@ export interface PartStyle {
   ghost?: boolean;
   /** Superficie sin espesor: se ve de los dos lados */
   surface?: boolean;
+  /** Opacidad 0–1 (acrílico, vidrio): se ve a través, con sus aristas, y se sigue eligiendo */
+  opacity?: number;
 }
 
 export type CadPick =
@@ -696,7 +701,7 @@ export class CadViewer {
     if (this.body) {
       this.scene.remove(this.body);
       this.body.geometry.dispose();
-      (this.body.material as THREE.Material).dispose();
+      for (const m of materialsOf(this.body)) m.dispose();
       this.body = undefined;
     }
     if (this.bodyGhost) {
@@ -725,16 +730,41 @@ export class CadViewer {
       }
       for (let e = p.edges[0]; e < p.edges[1]; e++) hiddenEdges.add(e);
     }
+    // Transparentes (acrílico, vidrio): cara → opacidad; se dibujan después de las opacas
+    const clearFaces = new Map<number, number>();
+    for (const p of this.partStyles) {
+      if (p.hidden || p.ghost || p.opacity === undefined || p.opacity >= 0.999) continue;
+      const o = Math.round(Math.max(0.05, p.opacity) * 100) / 100;
+      for (let f = p.faces[0]; f < p.faces[1]; f++) clearFaces.set(f, o);
+    }
     if (data) {
       // Triángulos de las caras visibles (y de qué cara es cada uno, para elegir)
       const idx: number[] = [];
       const triFace: number[] = [];
       const ghostIdx: number[] = [];
+      // Las transparentes, por opacidad: cada grupo con su material, pero en la misma malla (se eligen igual)
+      const clear = new Map<number, { idx: number[]; face: number[] }>();
       for (let t = 0; t < data.triangleFace.length; t++) {
-        if (ghostFaces.has(data.triangleFace[t])) ghostIdx.push(data.indices[t * 3], data.indices[t * 3 + 1], data.indices[t * 3 + 2]);
-        if (this.hiddenFaces.has(data.triangleFace[t])) continue;
+        const face = data.triangleFace[t];
+        if (ghostFaces.has(face)) ghostIdx.push(data.indices[t * 3], data.indices[t * 3 + 1], data.indices[t * 3 + 2]);
+        if (this.hiddenFaces.has(face)) continue;
+        const o = clearFaces.get(face);
+        if (o !== undefined) {
+          let bucket = clear.get(o);
+          if (!bucket) clear.set(o, (bucket = { idx: [], face: [] }));
+          bucket.idx.push(data.indices[t * 3], data.indices[t * 3 + 1], data.indices[t * 3 + 2]);
+          bucket.face.push(face);
+          continue;
+        }
         idx.push(data.indices[t * 3], data.indices[t * 3 + 1], data.indices[t * 3 + 2]);
-        triFace.push(data.triangleFace[t]);
+        triFace.push(face);
+      }
+      const opaqueCount = idx.length;
+      // De la más opaca a la más clara
+      const buckets = [...clear.entries()].sort((a, b) => b[0] - a[0]);
+      for (const [, b] of buckets) {
+        for (const i of b.idx) idx.push(i);
+        for (const f of b.face) triFace.push(f);
       }
       this.visibleTriFace = Uint32Array.from(triFace);
       const g = new THREE.BufferGeometry();
@@ -753,7 +783,25 @@ export class CadViewer {
         polygonOffsetFactor: 1,
         polygonOffsetUnits: 1,
       });
-      this.body = new THREE.Mesh(g, m);
+      if (buckets.length) {
+        g.addGroup(0, opaqueCount, 0);
+        let start = opaqueCount;
+        buckets.forEach(([, b], k) => {
+          g.addGroup(start, b.idx.length, k + 1);
+          start += b.idx.length;
+        });
+      }
+      const clearMaterials = buckets.map(([o]) => {
+        const c = m.clone();
+        c.transparent = true;
+        c.opacity = o;
+        // Como un acrílico: se ve lo de adentro y lo de atrás, y las caras de los dos lados
+        c.depthWrite = false;
+        c.side = THREE.DoubleSide;
+        c.roughness = 0.15;
+        return c;
+      });
+      this.body = new THREE.Mesh(g, clearMaterials.length ? [m, ...clearMaterials] : m);
       this.body.renderOrder = 1;
       this.scene.add(this.body);
       if (ghostIdx.length) {
@@ -2153,7 +2201,7 @@ export class CadViewer {
 
   private applySection() {
     const planes = this.section ? [this.section] : [];
-    for (const o of [this.body, this.bodyGhost, this.bodyEdges]) if (o) (o.material as THREE.Material).clippingPlanes = planes;
+    for (const o of [this.body, this.bodyGhost, this.bodyEdges]) if (o) for (const m of materialsOf(o)) m.clippingPlanes = planes;
     for (const group of [this.tool, this.compare])
       group?.traverse((o) => {
         if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments) (o.material as THREE.Material).clippingPlanes = planes;

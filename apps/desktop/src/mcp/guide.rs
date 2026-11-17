@@ -9,6 +9,8 @@ remesh, UV-unwrap, prepare for 3D printing (check, orient, cut into pieces, pegs
 and rebuild scans. (Rigging and animation tools are not available through this connector yet.)
 Start with `status` to see what is loaded and which mode you are in. Call `help` with a topic for workflows.
 Use `view` to look at your work: it returns an image with the numbers of faces or edges you can pick.
+With the app open: keep a `plan` (goal and steps, saved in the project) for jobs of several steps, and ask the user \
+with `ask_user` (a survey: every question gets an answer) when you need decisions, instead of asking in plain text.
 Conventions: lengths in millimetres, angles in degrees, Z is up. Every change can be reverted with `undo`; \
 a tool that fails changes nothing. Nothing is written to disk unless you call a save/export tool with a path.";
 
@@ -41,7 +43,11 @@ a few seconds and try again; do not loop quickly.
   clicked, with the numbers other tools use.
 - Each of your changes is one undo step in the app; `undo` only reverts your own last step.
 - Files are the user's: `project_new`, `project_open` and `project_save` are disabled (exports still work).
-- The user may change things between your calls: read the state again (`cad_design`, `cad_geometry`) before picking.",
+- The user may change things between your calls: read the state again (`cad_design`, `cad_geometry`) before picking.
+- The project has a plan the user sees at the top of the chat: read it with `plan` when you start, set a goal and \
+steps for longer jobs and mark them done as you go.
+- When you need decisions (sizes, materials, which option), call `ask_user` with all your questions at once: the \
+user answers each one in a survey and you get the answers back.",
     ),
     (
         "conventions",

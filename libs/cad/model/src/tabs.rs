@@ -803,7 +803,7 @@ impl Tabs {
             match props.iter_mut().find(|p| p.part == *id) {
                 Some(p) if p.name.is_none() => p.name = Some(name),
                 Some(_) => {}
-                None => props.push(PartProps { part: *id, name: Some(name), color: None, hidden: false, material: None, purchased: purchased(*id).then_some(true) }),
+                None => props.push(PartProps { part: *id, name: Some(name), color: None, opacity: None, hidden: false, material: None, purchased: purchased(*id).then_some(true) }),
             }
         }
         (props, fabrication)

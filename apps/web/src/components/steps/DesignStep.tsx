@@ -15,6 +15,7 @@ import {
   type BoltHead,
   designMass,
   partColor,
+  partOpacity,
   partHidden,
   partMass,
   partMaterial,
@@ -144,6 +145,7 @@ import { addShapes, parseCoordinates, parseDxf, parseSvg, sketchToDxf, sketchToS
 import { addLayer, createBlock, explodeBlock, refreshBlock, removeLayer, setLayer } from "../../lib/sketchBlocks";
 import { partKey } from "../../lib/objects";
 import { axisToVertical, faceToFloor, faceToFront, pointToOrigin, scaleAbout, type Mat4 } from "../../lib/scanAlign";
+import { PartLook } from "../design/PartLook";
 import { Button, Checkbox, IconButton, NumberInput, Select, Slider, Tooltip } from "../ui";
 import * as Icons from "../icons";
 import { t as tl, locale, tn } from "../../lib/i18n";
@@ -2004,7 +2006,10 @@ export const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) =>
                             variant="ghost"
                             onClick={(e: MouseEvent) => void toggleEye(e.shiftKey)}
                           >
-                            {f().suppressed || opHidden() ? <Icons.EyeSlash size={12} /> : <Icons.Eye size={12} />}
+                            {/* Sin piezas propias (un redondeo, un vaciado) no hay qué ocultar: el botón suprime */}
+                            <Show when={ownParts().length || f().suppressed} fallback={<Icons.Prohibit size={12} />}>
+                              {f().suppressed || opHidden() ? <Icons.EyeSlash size={12} /> : <Icons.Eye size={12} />}
+                            </Show>
                           </IconButton>
                         }
                       >
@@ -9043,6 +9048,13 @@ const PartsSection: Component<{ store: CadStore; ui: CadUi }> = (props) => {
             return (
               <div class="space-y-1.5 rounded border border-border p-2 text-xs" aria-label={tl("Datos de {name}", { name: p().name })}>
                 <MaterialPicker value={own()} none={tl("El del diseño")} onChange={(m) => void props.store.setPartProps(p().id, { material: m })} />
+                <PartLook
+                  opacity={partOpacity(props.store.doc(), p())}
+                  onOpacity={(opacity) => void props.store.setPartProps(p().id, { opacity })}
+                  onPreset={(color, opacity) =>
+                    void props.store.setPartProps(p().id, color ? { color, opacity } : { opacity })
+                  }
+                />
                 <Show when={!p().surface} fallback={<Line label={tl("Tipo")}>{tl("Superficie (sin espesor)")}</Line>}>
                   <Line label={tl("Volumen")}>{fmt(p().volume / 1000)} cm³</Line>
                 </Show>

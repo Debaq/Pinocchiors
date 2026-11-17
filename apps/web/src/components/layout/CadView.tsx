@@ -11,7 +11,7 @@ import { parse as parseFont, type Font } from "opentype.js";
 import { layoutText, type Contour } from "../../lib/sketchText";
 import { dragJointOf, dragPlane, mateAxis, measuredAngle, measuredDistance, nextAngle, nextDistance, turned } from "../../lib/assemblyDrag";
 import { connectorWorld, explodeOffsets, moveAssemblyMesh, poseDeltas, poseOf, solutionPoses, type Pose3 } from "../../lib/assemblyTools";
-import { fitReport, CONSTRAINT_LABELS, editsAsSketch, geometryPoints, type Report3d, type Sketch3d, type Plane, addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, curvePolyline, constraintValue, hasDiameterTwin, swapDiameter, isReference, isLoosePoint, isSolidPoint, removeLoosePoint, freeCurveLine, leavingDirection, placeSnap, tangentArc, type CadStore, designMass, dragByHandle, flipByHandle, handleField, handleValue, partColor, partHidden, samePart, hasScanPiece, explodeAssemblyMesh, resolvedAssembly, type AssemblyRange, type CadMesh, type FeatureHandle, type FeatureKind, type MeasureItem, type Measurement, type P2, type P3, type ScanOutline, type Sketch, type SketchConstraint } from "../../lib/cad";
+import { fitReport, CONSTRAINT_LABELS, editsAsSketch, geometryPoints, type Report3d, type Sketch3d, type Plane, addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, curvePolyline, constraintValue, hasDiameterTwin, swapDiameter, isReference, isLoosePoint, isSolidPoint, removeLoosePoint, freeCurveLine, leavingDirection, placeSnap, tangentArc, type CadStore, designMass, dragByHandle, flipByHandle, handleField, handleValue, partColor, partHidden, partOpacity, samePart, hasScanPiece, explodeAssemblyMesh, resolvedAssembly, type AssemblyRange, type CadMesh, type FeatureHandle, type FeatureKind, type MeasureItem, type Measurement, type P2, type P3, type ScanOutline, type Sketch, type SketchConstraint } from "../../lib/cad";
 import { infer, solidRefs, SNAP_GLYPHS, type AnchorSrc, type AwakePoint, type Snap, type SnapKind } from "../../lib/sketchSnap";
 import { angleView, applyFrame, clipCenter, invertFrame, measureConstraint, rotation, scaling, selectedEntities, splitEntityAt, transformSelection, translation, type Frame, type Xform } from "../../lib/sketchTransform";
 import { mergeDuplicate, rejoinSplit, sameEntities, trimByStroke, trimRemoved } from "../../lib/sketchEdit";
@@ -565,7 +565,8 @@ export const CadView: Component<CadViewProps> = (props) => {
   };
   const [textSize, setTextSize] = createSignal(10);
   const [fontName, setFontName] = createSignal("Liberation Sans");
-  const [scanVisible, setScanVisible] = createSignal(true);
+  const scanVisible = props.ui.scanVisible;
+  const setScanVisible = props.ui.setScanVisible;
   // Se recuerda entre sesiones (antes volvía a 35 % cada vez)
   const [scanOpacity, setScanOpacity] = createPersisted("cad.scanOpacity", 0.35);
   // Con la pieza escaneada (PLAN_ESCANEO N1) el STL ya se ve como pieza, opaca:
@@ -982,7 +983,8 @@ export const CadView: Component<CadViewProps> = (props) => {
           const k = parts.findIndex((p) => inst && samePart(p.id, inst.part));
           const own = inst?.color ?? (k >= 0 ? partColor(doc, parts[k], k) : "#9aa4b8");
           const color = red.has(id) ? themeHex("error") : failing.has(id) ? themeHex("warning") : parseInt(own.slice(1), 16);
-          return { faces: [a, b] as [number, number], edges: [e0 ?? 0, e1 ?? 0] as [number, number], color, hidden: !!inst?.hidden, ghost: !!inst?.ghost };
+          const opacity = inst?.opacity ?? (k >= 0 ? partOpacity(doc, parts[k]) : 1);
+          return { faces: [a, b] as [number, number], edges: [e0 ?? 0, e1 ?? 0] as [number, number], color, hidden: !!inst?.hidden, ghost: !!inst?.ghost, opacity };
         }),
       );
     }),
@@ -1129,6 +1131,7 @@ export const CadView: Component<CadViewProps> = (props) => {
         edges: p.edges,
         color: parseInt(partColor(doc, p, i).slice(1), 16),
         hidden: partHidden(doc, p),
+        opacity: partOpacity(doc, p),
         surface: p.surface,
       })),
     );

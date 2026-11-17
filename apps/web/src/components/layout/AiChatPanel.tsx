@@ -11,6 +11,8 @@ import { aiLabel, refreshLive } from "../../lib/mcpLive";
 import { createPersisted, startDrag } from "../../lib/ui-state";
 import type { ProviderView } from "./AiProviders";
 import { Markdown } from "./Markdown";
+import { PlanCard, SurveyCard } from "./AiPlanSurvey";
+import { planSummary } from "../../lib/aiAssistant";
 
 /** Imagen adjunta o vista (base64) */
 interface Picture {
@@ -44,7 +46,10 @@ interface Totals {
 }
 const NO_TOTALS: Totals = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, cost: 0 };
 
-/** La conversación guardada: sigue tras cerrar el panel y tras reiniciar la app */
+/**
+ * La conversación es de cada proyecto: va en su ui.json (`chatForProject`) y
+ * vuelve al abrirlo (`restoreChat`); un proyecto nuevo empieza sin chat
+ */
 interface Saved {
   entries: Entry[];
   session: string | null;
@@ -52,34 +57,48 @@ interface Saved {
   /** Tokens que ocupa la conversación (los del último paso del modelo) */
   context?: number;
 }
-const SAVED_KEY = "pinocchio.ui.chat.conversation";
-const loadSaved = (): Saved => {
-  try {
-    const raw = localStorage.getItem(SAVED_KEY);
-    if (raw) return { entries: [], session: null, totals: NO_TOTALS, ...JSON.parse(raw) };
-  } catch {
-    // Sin almacenamiento: conversación nueva
-  }
-  return { entries: [], session: null, totals: NO_TOTALS };
-};
-const saved = loadSaved();
-const [entries, setEntries] = createSignal<Entry[]>(saved.entries);
-const [session, setSession] = createSignal<string | null>(saved.session);
-const [totals, setTotals] = createSignal<Totals>(saved.totals);
-const [context, setContext] = createSignal(saved.context ?? 0);
+// Antes la conversación era una sola para toda la app, guardada en el navegador
+try {
+  localStorage.removeItem("pinocchio.ui.chat.conversation");
+} catch {
+  // Sin almacenamiento: nada que limpiar
+}
+const [entries, setEntries] = createSignal<Entry[]>([]);
+const [session, setSession] = createSignal<string | null>(null);
+const [totals, setTotals] = createSignal<Totals>(NO_TOTALS);
+const [context, setContext] = createSignal(0);
 const [busy, setBusy] = createSignal(false);
-/** Guarda la conversación (sin las imágenes, que pesan; quedan las últimas 300 entradas) */
-const persist = () => {
-  try {
-    const kept = entries()
-      .filter((e) => e.kind !== "image")
-      .map((e) => (e.kind === "user" && e.images ? { kind: "user" as const, text: e.text + (e.images.length ? ` [${e.images.length} 🖼]` : "") } : e))
-      .slice(-300);
-    localStorage.setItem(SAVED_KEY, JSON.stringify({ entries: kept, session: session(), totals: totals(), context: context() }));
-  } catch {
-    // Sin almacenamiento: se pierde al cerrar
-  }
-};
+/** Sube con cada cambio de la conversación (el proyecto queda con cambios sin guardar) */
+const [chatRevision, setChatRevision] = createSignal(0);
+export { chatRevision };
+const persist = () => setChatRevision((n) => n + 1);
+
+/** La conversación para el proyecto (sin las imágenes, que pesan; quedan las últimas 300 entradas) */
+export function chatForProject(): Saved | undefined {
+  if (entries().length === 0 && !session()) return undefined;
+  const kept = entries()
+    .filter((e) => e.kind !== "image")
+    .map((e) => (e.kind === "user" && e.images ? { kind: "user" as const, text: e.text + (e.images.length ? ` [${e.images.length} 🖼]` : "") } : e))
+    .slice(-300);
+  return { entries: kept, session: session(), totals: totals(), context: context() };
+}
+
+/**
+ * Pone la conversación de otro proyecto (sin nada, una vacía). La IA olvida
+ * la anterior: con Claude Code sigue la sesión guardada en el proyecto; con un
+ * proveedor con API empieza de nuevo (el chat se ve igual)
+ */
+export function restoreChat(raw: unknown) {
+  if (busy()) void invoke("ai_chat_stop").catch(() => {});
+  void invoke("ai_chat_reset").catch(() => {});
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const s: any = raw && typeof raw === "object" ? raw : {};
+  setEntries(Array.isArray(s.entries) ? s.entries.filter((e: unknown) => e && typeof e === "object" && typeof (e as Entry).kind === "string") : []);
+  setSession(typeof s.session === "string" ? s.session : null);
+  setTotals(s.totals && typeof s.totals === "object" ? { ...NO_TOTALS, ...s.totals } : NO_TOTALS);
+  setContext(typeof s.context === "number" ? s.context : 0);
+  setBusy(false);
+}
 /** Modelo y esfuerzo de Claude Code ("" = los suyos por defecto); se recuerdan */
 const [model, setModel] = createPersisted("chat.model", "");
 const [effort, setEffort] = createPersisted("chat.effort", "");
@@ -243,7 +262,7 @@ function onEvent(m: { kind: string; [k: string]: unknown }) {
       if (!m.ok && m.error) add({ kind: "error", text: tBackend(String(m.error)) });
       if (typeof m.session === "string") setSession(m.session);
       // Fin de «Resumir»: ya se avisó con `compacted`
-      if (m.quiet) return persist();
+      if (m.quiet) return void persist();
       {
         const { tk, cost } = addTotals(m.tokens, m.cost);
         const used = (tk.input ?? 0) + (tk.cache_read ?? 0) + (tk.cache_write ?? 0);
@@ -366,8 +385,10 @@ export const AiChatPanel: Component<{
     setBusy(true);
     scroll();
     try {
+      // El plan va con cada mensaje (la IA lo tiene presente aunque se resuma la conversación)
+      const planText = planSummary();
       await invoke("ai_chat_send", {
-        message: text,
+        message: planText ? `${text}\n\n[Project plan — the user sees and edits it; update it with the \`plan\` tool]\n${planText}` : text,
         images,
         engine: engine(),
         model: model() || null,
@@ -492,6 +513,9 @@ export const AiChatPanel: Component<{
         </div>
       </Show>
 
+      {/* El plan del proyecto (objetivo y pasos) */}
+      <PlanCard />
+
       <div ref={list} class="flex-1 overflow-y-auto px-3 py-3 space-y-2 text-sm select-text">
         <Show when={status() && !status()!.claude && engine() === "claude"}>
           <p class="text-xs text-warning leading-relaxed">
@@ -569,6 +593,9 @@ export const AiChatPanel: Component<{
           </div>
         </Show>
       </div>
+
+      {/* Preguntas de la IA: se contestan todas antes de enviar */}
+      <SurveyCard />
 
       <Show when={totals().input + totals().cacheRead + totals().output > 0 || context() > 0}>
         <div
