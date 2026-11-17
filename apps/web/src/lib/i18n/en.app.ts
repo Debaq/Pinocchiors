@@ -919,4 +919,5 @@ export const en_app: Catalog = {
   "Haz el paso {n}: {text}": "Do step {n}: {text}",
   "El revisor sigue pidiendo correcciones después de {n}. Míralo tú y dime cómo seguir.": "The reviewer still asks for fixes after {n}. Take a look and tell me how to go on.",
   "El revisor encontró problemas. Míralo tú y dime cómo seguir.": "The reviewer found problems. Take a look and tell me how to go on.",
+  "Lo gastado por cada rol (con una API, según el precio anotado del modelo)": "What each role spent (with an API, by the model's noted price)",
 };

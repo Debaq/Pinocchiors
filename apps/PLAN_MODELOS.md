@@ -54,3 +54,7 @@ OpenAI). La lista de modelos se le pide a cada API (`GET {base}/models`).
   (Claude Code con `--allowedTools`/`--disallowedTools`, el agente filtra y rechaza). Una
   conversación de Claude Code por rol (`roleSessions`, guardadas en el proyecto); la ventana
   manda la sesión exacta. Probado en Chromium con un Claude Code falso; falta con modelos reales.
+- 2026-11-17: M4 hecho (sin commitear): entrada `role` en el chat (etiqueta de color por rol con
+  el modelo), costo por rol (`roleTotals`, guardado en el proyecto) en la barra de abajo; con
+  una API el costo se calcula con el precio anotado del modelo (`refPrice`). Plan terminado;
+  falta probarlo con modelos reales.

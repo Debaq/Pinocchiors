@@ -1,3 +1,4 @@
+import { clsx } from "clsx";
 import { Component, For, Match, Show, Switch, createEffect, createSignal, on, onCleanup, onMount } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { base64Bytes, writeBytes } from "../../lib/writeBytes";
@@ -12,7 +13,7 @@ import { createPersisted, startDrag } from "../../lib/ui-state";
 import type { ProviderView } from "./AiProviders";
 import { Markdown } from "./Markdown";
 import { PlanCard, SurveyCard } from "./AiPlanSurvey";
-import { activeTeam, chatChoice, chatChoices, refLabel, setChatChoice, setCompanies } from "../../lib/aiTeams";
+import { activeTeam, chatChoice, chatChoices, refLabel, refPrice, setChatChoice, setCompanies, type ModelRef } from "../../lib/aiTeams";
 import { applyPlanChange, onSurveyDone, plan, planSummary, survey } from "../../lib/aiAssistant";
 
 /** Imagen adjunta o vista (base64) */
@@ -31,7 +32,9 @@ type Entry =
   /** Con qué modelo respondió y cuánto costó (lo que informa Claude Code) */
   | { kind: "info"; text: string }
   /** Una encuesta de la IA con lo que contestó el usuario (o que la cerró sin contestar) */
-  | { kind: "answers"; title?: string; items: { question: string; answer: string }[]; skipped?: boolean };
+  | { kind: "answers"; title?: string; items: { question: string; answer: string }[]; skipped?: boolean }
+  /** Empieza el turno de un rol de la combinación: quién habla desde acá */
+  | { kind: "role"; role: "plan" | "build" | "review"; who: string };
 
 interface ChatStatus {
   claude: string | null;
@@ -61,6 +64,8 @@ interface Saved {
   context?: number;
   /** Conversaciones de Claude Code de quien planifica y quien revisa */
   roleSessions?: { plan: string | null; review: string | null };
+  /** Lo gastado por cada rol */
+  roleTotals?: Partial<Record<"plan" | "build" | "review", Totals>>;
 }
 // Antes la conversación era una sola para toda la app, guardada en el navegador
 try {
@@ -95,7 +100,7 @@ export function chatForProject(): Saved | undefined {
     .filter((e) => e.kind !== "image")
     .map((e) => (e.kind === "user" && e.images ? { kind: "user" as const, text: e.text + (e.images.length ? ` [${e.images.length} 🖼]` : "") } : e))
     .slice(-300);
-  return { entries: kept, session: session(), totals: totals(), context: context(), roleSessions: roleSessions() };
+  return { entries: kept, session: session(), totals: totals(), context: context(), roleSessions: roleSessions(), roleTotals: roleTotals() };
 }
 
 /**
@@ -116,6 +121,7 @@ export function restoreChat(raw: unknown) {
     plan: typeof s.roleSessions?.plan === "string" ? s.roleSessions.plan : null,
     review: typeof s.roleSessions?.review === "string" ? s.roleSessions.review : null,
   });
+  setRoleTotals(s.roleTotals && typeof s.roleTotals === "object" ? s.roleTotals : {});
   pipeline = null;
   setBusy(false);
   // La IA no recuerda esta conversación (salvo Claude Code con su sesión): se le cuenta con el próximo mensaje
@@ -213,6 +219,8 @@ function entryText(e: Entry): string {
       return `${aiLabel(e.name)} (${e.name})${e.detail ? `\n${e.detail}` : ""}`;
     case "image":
       return "";
+    case "role":
+      return `${ROLE_LABEL()[e.role]} · ${e.who}`;
     case "answers":
       return [e.title ?? "", ...e.items.map((x) => `${x.question} → ${e.skipped ? "—" : x.answer}`)].filter(Boolean).join("\n");
     default:
@@ -252,6 +260,7 @@ async function saveConversation() {
     else if (e.kind === "image") await picture(e);
     else if (e.kind === "error") lines.push(`> ⚠ ${e.text}`, "");
     else if (e.kind === "info") lines.push(`_${e.text}_`, "");
+    else if (e.kind === "role") lines.push(`**▸ ${ROLE_LABEL()[e.role]} · ${e.who}**`, "");
     else if (e.kind === "answers") {
       lines.push(`**${e.title || t("Preguntas de la IA")}**${e.skipped ? ` _(${t("cerrada sin responder")})_` : ""}`, "");
       for (const x of e.items) lines.push(`- ${x.question} → ${e.skipped ? "—" : x.answer}`);
@@ -282,14 +291,19 @@ const choiceLabel = () => {
 /** Suma a los totales lo que costó un paso (tokens y dinero) */
 function addTotals(tokens: unknown, costValue: unknown) {
   const tk = (tokens ?? {}) as Partial<Record<"input" | "cache_read" | "cache_write" | "output", number>>;
-  const cost = typeof costValue === "number" ? costValue : 0;
-  setTotals((s) => ({
+  // Claude Code dice cuánto costó; con una API se calcula con el precio anotado del modelo (si lo hay)
+  const price = currentRef ? refPrice(currentRef) : undefined;
+  const estimated = price ? (((tk.input ?? 0) + (tk.cache_read ?? 0) + (tk.cache_write ?? 0)) * price.in + (tk.output ?? 0) * price.out) / 1e6 : 0;
+  const cost = typeof costValue === "number" ? costValue : estimated;
+  const add = (s: Totals): Totals => ({
     input: s.input + (tk.input ?? 0),
     cacheRead: s.cacheRead + (tk.cache_read ?? 0),
     cacheWrite: s.cacheWrite + (tk.cache_write ?? 0),
     output: s.output + (tk.output ?? 0),
     cost: s.cost + cost,
-  }));
+  });
+  setTotals(add);
+  setRoleTotals((r) => ({ ...r, [currentRole]: add(r[currentRole] ?? NO_TOTALS) }));
   return { tk, cost };
 }
 
@@ -309,8 +323,17 @@ const [planCheckDue, setPlanCheckDue] = createSignal(0);
 /** Los roles de una combinación (apps/PLAN_MODELOS.md) */
 type Role = "plan" | "build" | "review";
 const ROLE_LABEL = (): Record<Role, string> => ({ plan: t("Planifica"), build: t("Construye"), review: t("Revisa") });
-/** Quién está respondiendo ahora */
+/** Color de cada rol en el chat */
+const ROLE_STYLE: Record<Role, string> = {
+  plan: "text-accent border-accent/50",
+  build: "text-green border-green/50",
+  review: "text-warning border-warning/50",
+};
+/** Quién está respondiendo ahora, y con qué modelo (para el precio) */
 let currentRole: Role = "build";
+let currentRef: ModelRef | null = null;
+/** Lo gastado por cada rol en esta conversación */
+const [roleTotals, setRoleTotals] = createSignal<Partial<Record<Role, Totals>>>({});
 /** Conversación de Claude Code de quien planifica y de quien revisa (la de quien construye es `session`) */
 const [roleSessions, setRoleSessions] = createSignal<{ plan: string | null; review: string | null }>({ plan: null, review: null });
 /** Los textos de la IA en este turno (el veredicto del revisor, el informe del constructor) */
@@ -569,10 +592,11 @@ export const AiChatPanel: Component<{
     const ref = (role === "plan" ? team.plan : role === "review" ? team.review : null) ?? team.build;
     pipeline = stage ?? null;
     currentRole = role;
+    currentRef = ref;
     turnTexts = [];
     turnTools = [];
     // Quién habla (con una combinación)
-    if (team.plan || team.review) setEntries((l) => [...l, { kind: "info", text: `▸ ${ROLE_LABEL()[role]} · ${refLabel(ref)}` }]);
+    if (team.plan || team.review) setEntries((l) => [...l, { kind: "role", role, who: refLabel(ref) }]);
     setBusy(true);
     scroll();
     try {
@@ -694,6 +718,7 @@ export const AiChatPanel: Component<{
     setBusy(true);
     scroll();
     currentRole = "build";
+    currentRef = activeTeam().build;
     try {
       await invoke("ai_chat_compact", { engine: engine(), model: model() || null, effort: effort() || null, session: engine() === "claude" ? session() : null });
     } catch (e) {
@@ -720,6 +745,7 @@ export const AiChatPanel: Component<{
     setEntries([]);
     setSession(null);
     setRoleSessions({ plan: null, review: null });
+    setRoleTotals({});
     setContext(0);
     setTotals(NO_TOTALS);
     setBusy(false);
@@ -873,6 +899,15 @@ export const AiChatPanel: Component<{
                 <Match when={e.kind === "info" && e}>
                   {(info) => <div class="pr-6 text-[11px] text-text-dim">{info().text}</div>}
                 </Match>
+                <Match when={e.kind === "role" && e}>
+                  {(r) => (
+                    <div class="flex items-center gap-1.5 pt-1 text-[10.5px]">
+                      <span class={clsx("rounded-full border px-1.5 py-px font-semibold uppercase tracking-wide", ROLE_STYLE[r().role])}>{ROLE_LABEL()[r().role]}</span>
+                      <span class="text-text-dim truncate">{r().who}</span>
+                      <span class="flex-1 border-t border-border/50" />
+                    </div>
+                  )}
+                </Match>
                 <Match when={e.kind === "answers" && e}>
                   {(a) => (
                     <div class="ml-8 rounded-lg bg-accent/10 border border-accent/30 px-3 py-2 text-xs space-y-1.5">
@@ -942,6 +977,21 @@ export const AiChatPanel: Component<{
           <span>· {kTokens(totals().output)} {t("de salida")}</span>
           <Show when={totals().cost > 0}>
             <span>· USD {totals().cost.toFixed(2)}</span>
+          </Show>
+          {/* Con una combinación: lo de cada rol */}
+          <Show when={Object.keys(roleTotals()).length > 1}>
+            <span class="w-full flex gap-2 flex-wrap" title={t("Lo gastado por cada rol (con una API, según el precio anotado del modelo)")}>
+              <For each={(["plan", "build", "review"] as const).filter((r) => roleTotals()[r])}>
+                {(r) => (
+                  <span>
+                    <span class={ROLE_STYLE[r].split(" ")[0]}>{ROLE_LABEL()[r]}</span>{" "}
+                    {roleTotals()[r]!.cost > 0
+                      ? `USD ${roleTotals()[r]!.cost.toFixed(2)}`
+                      : `≈ ${kTokens(roleTotals()[r]!.input + roleTotals()[r]!.cacheRead + roleTotals()[r]!.cacheWrite + roleTotals()[r]!.output)}`}
+                  </span>
+                )}
+              </For>
+            </span>
           </Show>
         </div>
       </Show>
