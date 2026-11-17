@@ -41,24 +41,36 @@ export function restorePlan(raw: unknown) {
 
 /**
  * Lo que pide la IA con `plan` (ver `mcp/tools/assistant.rs`), en este orden:
- * clear, goal, steps, remove, add, done, undone. Los pasos se numeran desde 1.
+ * clear, goal, steps, edit, done, undone, remove, insert, add. Los números
+ * son los del plan antes del pedido (desde 1).
  */
 export function applyPlanChange(args: unknown): AiPlan {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const a: any = args && typeof args === "object" ? args : {};
   const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string").map((x) => x.trim()).filter(Boolean) : []);
   const numbers = (v: unknown): Set<number> => new Set(Array.isArray(v) ? v.filter((x): x is number => Number.isInteger(x)).map((x) => x - 1) : []);
-  const changes = ["clear", "goal", "steps", "remove", "add", "done", "undone"].some((k) => a[k] !== undefined && a[k] !== false);
+  const changes = ["clear", "goal", "steps", "edit", "done", "undone", "remove", "insert", "add"].some((k) => a[k] !== undefined && a[k] !== false);
   if (!changes) return plan();
-  let next: AiPlan = a.clear === true ? { goal: "", steps: [] } : { goal: plan().goal, steps: plan().steps.map((s) => ({ ...s })) };
-  if (typeof a.goal === "string") next.goal = a.goal.trim();
-  if (Array.isArray(a.steps)) next.steps = strings(a.steps).map((text) => ({ text, done: false }));
-  const remove = numbers(a.remove);
-  if (remove.size) next = { ...next, steps: next.steps.filter((_, i) => !remove.has(i)) };
-  for (const text of strings(a.add)) next.steps.push({ text, done: false });
-  for (const i of numbers(a.done)) if (next.steps[i]) next.steps[i].done = true;
-  for (const i of numbers(a.undone)) if (next.steps[i]) next.steps[i].done = false;
-  setPlan(next);
+  const base: AiPlan = a.clear === true ? { goal: "", steps: [] } : { goal: plan().goal, steps: plan().steps.map((s) => ({ ...s })) };
+  const goal = typeof a.goal === "string" ? a.goal.trim() : base.goal;
+  // Cada paso con su número de antes: quitar e insertar no corren los demás números
+  const items: { step: PlanStep; removed?: boolean }[] = (Array.isArray(a.steps) ? strings(a.steps).map((text) => ({ text, done: false })) : base.steps).map((step) => ({ step }));
+  if (a.edit && typeof a.edit === "object" && !Array.isArray(a.edit)) {
+    for (const [k, v] of Object.entries(a.edit)) {
+      const i = Number(k) - 1;
+      if (Number.isInteger(i) && items[i] && typeof v === "string" && v.trim()) items[i].step.text = v.trim();
+    }
+  }
+  for (const i of numbers(a.done)) if (items[i]) items[i].step.done = true;
+  for (const i of numbers(a.undone)) if (items[i]) items[i].step.done = false;
+  for (const i of numbers(a.remove)) if (items[i]) items[i].removed = true;
+  if (a.insert && typeof a.insert === "object" && Number.isInteger(a.insert.after)) {
+    const at = Math.max(0, Math.min(items.length, a.insert.after));
+    items.splice(at, 0, ...strings(a.insert.steps).map((text) => ({ step: { text, done: false } })));
+  }
+  const steps = items.filter((x) => !x.removed).map((x) => x.step);
+  for (const text of strings(a.add)) steps.push({ text, done: false });
+  setPlan({ goal, steps });
   return plan();
 }
 

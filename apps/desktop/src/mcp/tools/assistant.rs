@@ -20,14 +20,18 @@ const PLAN: Tool = Tool {
 top of the chat panel, where they can edit it too. Use it for any job of more than a couple of steps: set the `goal` \
 and the `steps` when you start, mark steps `done` as you finish them, `add` steps you discover, and read it (no \
 arguments) when you come back to a project — the user may have changed it. Steps are numbered from 1. \
-`steps` replaces the whole list (all pending); `add` appends; `done` / `undone` / `remove` take step numbers; \
-`clear: true` empties the plan. Several fields can go in one call; they apply in this order: clear, goal, steps, \
-remove, add, done, undone. Example: {\"goal\": \"Arduino box with a clear acrylic lid\", \"steps\": [\"Base 80×50×30 mm\", \
+`steps` replaces the whole list (all pending); `edit` rewrites steps ({\"3\": \"new text\"}); `insert` puts \
+steps after a number ({\"after\": 2, \"steps\": [...]}, after 0 = at the start); `add` appends; `done` / `undone` / \
+`remove` take step numbers; `clear: true` empties the plan. Keep it true to the job: when the user changes what they \
+want, fix the steps right away. Several fields can go in one call; they apply in this order (numbers refer to the \
+plan before the call): clear, goal, steps, edit, done, undone, remove, insert, add. Example: {\"goal\": \"Arduino box with a clear acrylic lid\", \"steps\": [\"Base 80×50×30 mm\", \
 \"Lid 3 mm acrylic\", \"Holes for USB and screws\", \"2D drawing\"]}; later {\"done\": [1]}.",
     input: || {
         object(&[
             ("goal", string("What the user wants to achieve, in one or two lines"), false),
             ("steps", array("Replace the steps with these (all pending)", string("A step")), false),
+            ("edit", json!({ "type": "object", "description": "Rewrite steps: {\"<number>\": \"new text\"}", "additionalProperties": { "type": "string" } }), false),
+            ("insert", object(&[("after", integer("Insert after this step number (0 = at the start)", 0), true), ("steps", array("The new steps", string("A step")), true)]), false),
             ("add", array("Steps to append at the end", string("A step")), false),
             ("done", array("Step numbers (from 1) to mark done", integer("Step number", 1)), false),
             ("undone", array("Step numbers (from 1) to mark pending again", integer("Step number", 1)), false),

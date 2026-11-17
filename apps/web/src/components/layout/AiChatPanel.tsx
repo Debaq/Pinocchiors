@@ -4,7 +4,7 @@ import { base64Bytes, writeBytes } from "../../lib/writeBytes";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "../../lib/files";
 import * as Icons from "../icons";
-import { IconButton, Select } from "../ui";
+import { Button, IconButton, Select } from "../ui";
 import { t } from "../../lib/i18n";
 import { tBackend } from "../../lib/i18nBackend";
 import { aiLabel, refreshLive } from "../../lib/mcpLive";
@@ -12,7 +12,7 @@ import { createPersisted, startDrag } from "../../lib/ui-state";
 import type { ProviderView } from "./AiProviders";
 import { Markdown } from "./Markdown";
 import { PlanCard, SurveyCard } from "./AiPlanSurvey";
-import { onSurveyDone, planSummary } from "../../lib/aiAssistant";
+import { onSurveyDone, plan, planSummary, survey } from "../../lib/aiAssistant";
 
 /** Imagen adjunta o vista (base64) */
 interface Picture {
@@ -142,6 +142,8 @@ function earlierConversation(): string {
 /** Modelo y esfuerzo de Claude Code ("" = los suyos por defecto); se recuerdan */
 const [model, setModel] = createPersisted("chat.model", "");
 const [effort, setEffort] = createPersisted("chat.effort", "");
+/** Paso a paso: la IA hace un paso y se detiene; el usuario revisa y pulsa Continuar */
+const [stepMode, setStepMode] = createPersisted("chat.stepMode", true);
 /** Con más tokens que esto la conversación se resume sola antes del próximo mensaje ("0" = nunca) */
 const [compactAt, setCompactAt] = createPersisted("chat.compactAt", "100000");
 const COMPACT_OPTIONS = () => [
@@ -268,6 +270,19 @@ function addTotals(tokens: unknown, costValue: unknown) {
   return { tk, cost };
 }
 
+/** Herramientas que solo miran: con ellas el trabajo no cambió y el plan no tiene por qué cambiar */
+const READ_ONLY_TOOLS = new Set([
+  "status", "help", "selection", "view", "measure", "viewer", "cad_design", "cad_geometry", "cad_versions", "asm_check",
+  "mesh_info", "print_check", "print_machines", "resin_tilts", "printer_list", "printer_status", "calibration_status", "plan", "ask_user",
+]);
+const bareTool = (name: string) => name.replace(/^mcp__pinocchio__/, "");
+/** Herramientas que usó la IA en este turno */
+let turnTools: string[] = [];
+/** Este turno es la revisión automática del plan (no se encadena otra) */
+let checkingPlan = false;
+/** Sube cuando la IA cambió el trabajo sin tocar el plan: el panel le pide ponerlo al día */
+const [planCheckDue, setPlanCheckDue] = createSignal(0);
+
 /** Mensajes de Claude Code (`mcp::chat::translate`) → entradas del chat */
 function onEvent(m: { kind: string; [k: string]: unknown }) {
   const add = (e: Entry) => setEntries((list) => [...list, e]);
@@ -300,6 +315,7 @@ function onEvent(m: { kind: string; [k: string]: unknown }) {
     case "text":
       return add({ kind: "text", text: String(m.text) });
     case "tool":
+      turnTools.push(bareTool(String(m.name)));
       return add({ kind: "tool", id: String(m.id), name: String(m.name), state: "running" });
     case "result":
       return setEntries((list) =>
@@ -320,6 +336,12 @@ function onEvent(m: { kind: string; [k: string]: unknown }) {
         const used = (tk.input ?? 0) + (tk.cache_read ?? 0) + (tk.cache_write ?? 0);
         const parts = [answering, used ? t("{n} de entrada · {m} de salida", { n: kTokens(used), m: kTokens(tk.output ?? 0) }) : "", cost ? `USD ${cost.toFixed(3)}` : ""].filter(Boolean);
         if (parts.length) add({ kind: "info", text: parts.join(" · ") });
+      }
+      {
+        // Cambió el trabajo y no tocó el plan (con pasos pendientes): se le pide ponerlo al día, una vez
+        const changed = turnTools.some((n) => !READ_ONLY_TOOLS.has(n));
+        if (m.ok && !checkingPlan && changed && !turnTools.includes("plan") && plan().steps.some((s) => !s.done)) setPlanCheckDue((n) => n + 1);
+        checkingPlan = false;
       }
       persist();
       return;
@@ -415,8 +437,9 @@ export const AiChatPanel: Component<{
     }
   };
 
-  const send = async () => {
-    const text = draft().trim() || (attached().length ? t("Mira la imagen.") : "");
+  /** Manda lo escrito (o `typed`, el texto del botón Continuar) */
+  const send = async (typed?: string) => {
+    const text = typed ?? (draft().trim() || (attached().length ? t("Mira la imagen.") : ""));
     if (!text || busy()) return;
     // Como en las terminales de IA: /clear (o /limpiar) empieza de cero
     if (/^\/(clear|limpiar)$/i.test(text)) {
@@ -428,14 +451,17 @@ export const AiChatPanel: Component<{
       setDraft("");
       return compact();
     }
-    const images = attached();
-    setDraft("");
-    setAttached([]);
+    const images = typed === undefined ? attached() : [];
+    if (typed === undefined) {
+      setDraft("");
+      setAttached([]);
+    }
     setNote(undefined);
     setEntries((l) => [...l, { kind: "user", text, images }]);
     persist();
     setBusy(true);
     scroll();
+    turnTools = [];
     try {
       // El plan va con cada mensaje (la IA lo tiene presente aunque se resuma la conversación)
       const planText = planSummary();
@@ -445,22 +471,54 @@ export const AiChatPanel: Component<{
       needsContext = false;
       let message = text;
       if (before) message = `[Earlier conversation in this project, which you do not remember — continue from it]\n${before}\n\n[New message]\n${message}`;
-      if (planText) message += `\n\n[Project plan — the user sees and edits it; update it with the \`plan\` tool]\n${planText}`;
-      await invoke("ai_chat_send", {
-        message,
-        images,
-        engine: engine(),
-        model: model() || null,
-        effort: effort() || null,
-        session: engine() === "claude" ? session() : null,
-        compactAt: Number(compactAt()) || null,
-      });
-      void refreshLive();
+      if (planText)
+        message += `\n\n[Project plan — the user's visible checklist. Keep it true: mark steps done with \`plan\` as you finish them, and if this message changes what the user wants, edit/add/remove steps first]\n${planText}`;
+      // Paso a paso: un paso, revisarlo y detenerse para que el usuario lo vea y pulse Continuar
+      if (stepMode())
+        message +=
+          "\n\n[Step by step: do only the next pending step of the plan (or, without a plan, the next small part of the job), check it with `view` or `asm_check`, mark it done with `plan`, then STOP and say in two or three lines what you did and what the next step is. The user reviews it and presses Continue.]";
+      await dispatch(message, images);
     } catch (e) {
       setBusy(false);
       setEntries((l) => [...l, { kind: "error", text: tBackend(String(e)) }]);
     }
   };
+
+  /** Manda un mensaje ya armado a la IA que esté elegida */
+  const dispatch = async (message: string, images: Picture[]) => {
+    await invoke("ai_chat_send", {
+      message,
+      images,
+      engine: engine(),
+      model: model() || null,
+      effort: effort() || null,
+      session: engine() === "claude" ? session() : null,
+      compactAt: Number(compactAt()) || null,
+    });
+    void refreshLive();
+  };
+
+  /** La IA cambió el trabajo sin tocar el plan: un turno corto solo para ponerlo al día */
+  createEffect(
+    on(
+      planCheckDue,
+      () => {
+        if (busy()) return;
+        checkingPlan = true;
+        turnTools = [];
+        setEntries((l) => [...l, { kind: "info", text: t("Poniendo al día el plan…") }]);
+        setBusy(true);
+        scroll();
+        const message = `[Automatic check, not from the user] In your last reply you changed the work but did not touch the project plan. Update it now with the \`plan\` tool only: mark done the steps you finished and edit/add/remove steps if the job changed. Do nothing else and answer in one short line.\n\n[Project plan]\n${planSummary()}`;
+        void dispatch(message, []).catch((e) => {
+          checkingPlan = false;
+          setBusy(false);
+          setEntries((l) => [...l, { kind: "error", text: tBackend(String(e)) }]);
+        });
+      },
+      { defer: true },
+    ),
+  );
 
   /** Resume la conversación ahora: la IA sigue desde el resumen y cada mensaje cuesta menos */
   const compact = async () => {
@@ -473,6 +531,18 @@ export const AiChatPanel: Component<{
       setBusy(false);
       setEntries((l) => [...l, { kind: "error", text: tBackend(String(e)) }]);
     }
+  };
+
+  /** El primer paso del plan sin hacer (número desde 1) */
+  const nextStep = () => {
+    const i = plan().steps.findIndex((s) => !s.done);
+    return i < 0 ? undefined : { n: i + 1, text: plan().steps[i].text };
+  };
+  /** La IA terminó de responder (y no espera una encuesta): se puede decirle que siga */
+  const canContinue = () => {
+    if (busy() || survey() || entries().length === 0) return false;
+    if (entries()[entries().length - 1].kind === "user") return false;
+    return engine() === "claude" ? !!status()?.claude : !!provider();
   };
 
   const reset = () => {
@@ -729,7 +799,28 @@ export const AiChatPanel: Component<{
         </div>
       </Show>
 
-      <div class="border-t border-border p-2 flex items-end gap-2">
+      {/* Continuar: la IA terminó su paso; se revisa y se le dice que siga (o se escribe otra cosa) */}
+      <div class="border-t border-border px-2 pt-2 flex items-center gap-2 text-xs">
+        <Show when={canContinue()}>
+          <Button
+            size="sm"
+            variant="primary"
+            data-ai-continue
+            class="min-w-0"
+            title={nextStep() ? t("Sigue con el paso {n}: {text}", { n: nextStep()!.n, text: nextStep()!.text }) : t("Que la IA siga con lo que viene")}
+            onClick={() => void send(nextStep() ? t("Continúa con el paso {n}: {text}", { n: nextStep()!.n, text: nextStep()!.text }) : t("Continúa."))}
+          >
+            <Icons.Play size={12} class="shrink-0" />
+            <span class="truncate">{nextStep() ? t("Continuar: paso {n}", { n: nextStep()!.n }) : t("Continuar")}</span>
+          </Button>
+        </Show>
+        <span class="flex-1" />
+        <label class="flex items-center gap-1.5 cursor-pointer text-text-muted" title={t("La IA hace un paso, lo revisa y se detiene: tú miras el resultado y pulsas Continuar")}>
+          <input type="checkbox" class="accent-[var(--color-accent)]" checked={stepMode()} onChange={(e) => setStepMode(e.currentTarget.checked)} />
+          {t("Paso a paso")}
+        </label>
+      </div>
+      <div class="p-2 flex items-end gap-2">
         <IconButton variant="ghost" size="sm" aria-label={t("Adjuntar una imagen")} title={t("Adjuntar una imagen (también puedes pegarla con Ctrl+V)")} disabled={(engine() === "claude" && !status()?.claude) || busy()} onClick={() => void attachFiles()}>
           <Icons.Paperclip size={14} />
         </IconButton>

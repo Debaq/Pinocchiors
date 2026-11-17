@@ -905,4 +905,12 @@ export const en_app: Catalog = {
   "Enviar respuestas": "Send answers",
   "Preguntas de la IA": "Questions from the AI",
   "cerrada sin responder": "closed without answering",
+  "Sigue con el paso {n}: {text}": "Go on with step {n}: {text}",
+  "Que la IA siga con lo que viene": "Let the AI go on with what comes next",
+  "Continúa con el paso {n}: {text}": "Continue with step {n}: {text}",
+  "Continúa.": "Continue.",
+  "Continuar: paso {n}": "Continue: step {n}",
+  "La IA hace un paso, lo revisa y se detiene: tú miras el resultado y pulsas Continuar": "The AI does one step, checks it and stops: you look at the result and press Continue",
+  "Paso a paso": "Step by step",
+  "Poniendo al día el plan…": "Bringing the plan up to date…",
 };
