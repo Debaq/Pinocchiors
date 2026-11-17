@@ -7,6 +7,7 @@ import { t } from "../../lib/i18n";
 import { tBackend } from "../../lib/i18nBackend";
 import { live, liveWanted, setLiveMode, setLivePaused } from "../../lib/mcpLive";
 import { AiProviders } from "./AiProviders";
+import { AiTeams } from "./AiTeams";
 
 /** Un cliente de IA y si tiene el conector (`mcp::clients::ClientStatus`) */
 interface ClientStatus {
@@ -139,8 +140,12 @@ export const AiConnectorSettings: Component = () => {
         </Show>
       </Section>
 
-      <Section title={t("Proveedores para el chat")}>
+      <Section title={t("Modelos de IA por empresa")}>
         <AiProviders />
+      </Section>
+
+      <Section title={t("Combinaciones de modelos")}>
+        <AiTeams />
       </Section>
 
       <Section title={t("Conectar con una IA")}>

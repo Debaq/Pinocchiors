@@ -396,7 +396,7 @@ pub fn ai_chat_send(
     // Un proveedor con API (DeepSeek, OpenAI…): el agente de la app
     if let Some(id) = engine.filter(|e| e != "claude") {
         let handle = app.clone();
-        return agent.send(&id, &message, &images, compact_at, move |msg| {
+        return agent.send(&id, model.as_deref(), &message, &images, compact_at, move |msg| {
             use tauri::Emitter;
             let _ = handle.emit(EV_CHAT, msg);
         });
@@ -429,7 +429,7 @@ pub fn ai_chat_compact(
         let _ = handle.emit(EV_CHAT, msg);
     };
     if let Some(id) = engine.filter(|e| e != "claude") {
-        return agent.compact_now(&id, emit);
+        return agent.compact_now(&id, model.as_deref(), emit);
     }
     if let Some(s) = session.filter(|s| s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')) {
         chat.session.lock().unwrap().get_or_insert(s);

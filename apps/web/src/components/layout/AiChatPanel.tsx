@@ -12,6 +12,7 @@ import { createPersisted, startDrag } from "../../lib/ui-state";
 import type { ProviderView } from "./AiProviders";
 import { Markdown } from "./Markdown";
 import { PlanCard, SurveyCard } from "./AiPlanSurvey";
+import { activeTeam, chatChoice, chatChoices, refLabel, setChatChoice, setCompanies } from "../../lib/aiTeams";
 import { onSurveyDone, plan, planSummary, survey } from "../../lib/aiAssistant";
 
 /** Imagen adjunta o vista (base64) */
@@ -139,9 +140,18 @@ function earlierConversation(): string {
   if (kept.length < short.length) kept.unshift("(older messages left out)");
   return kept.join("\n");
 }
-/** Modelo y esfuerzo de Claude Code ("" = los suyos por defecto); se recuerdan */
-const [model, setModel] = createPersisted("chat.model", "");
+/** Esfuerzo de Claude Code ("" = el suyo por defecto); se recuerda */
 const [effort, setEffort] = createPersisted("chat.effort", "");
+// Lo elegido antes de las combinaciones (motor y modelo sueltos) pasa a «Usar»
+if (!chatChoice()) {
+  try {
+    const old = (k: string) => JSON.parse(localStorage.getItem(`pinocchio.ui.${k}`) ?? "null") as string | null;
+    const engineBefore = old("chat.engine") ?? "claude";
+    setChatChoice(`model:${engineBefore}|${engineBefore === "claude" ? (old("chat.model") ?? "") : ""}`);
+  } catch {
+    setChatChoice("model:claude|");
+  }
+}
 /** Paso a paso: la IA hace un paso y se detiene; el usuario revisa y pulsa Continuar */
 const [stepMode, setStepMode] = createPersisted("chat.stepMode", true);
 /** Con más tokens que esto la conversación se resume sola antes del próximo mensaje ("0" = nunca) */
@@ -152,14 +162,19 @@ const COMPACT_OPTIONS = () => [
   { value: "200000", label: t("Al pasar de 200 mil tokens") },
   { value: "0", label: t("Nunca (solo con el botón)") },
 ];
-/** Quién responde: "claude" (Claude Code) o el id de un proveedor con API */
-const [engine, setEngineValue] = createPersisted("chat.engine", "claude");
-/** Otro motor no vio la conversación: se le cuenta con el próximo mensaje */
-const setEngine = (value: string) => {
-  if (value !== engine() && entries().length) needsContext = true;
-  setEngineValue(value);
+/** Quién construye (responde): "claude" (Claude Code) o el id de un proveedor con API, y su modelo */
+const engine = () => activeTeam().build.company;
+const model = () => activeTeam().build.model;
+/** Otra combinación o modelo: no vio la conversación, se le cuenta con el próximo mensaje */
+const choose = (value: string) => {
+  if (value !== chatChoice() && entries().length) needsContext = true;
+  setChatChoice(value);
 };
-const [providers, setProviders] = createSignal<ProviderView[]>([]);
+const [providers, setProvidersValue] = createSignal<ProviderView[]>([]);
+const setProviders = (list: ProviderView[]) => {
+  setProvidersValue(list);
+  setCompanies(list);
+};
 const provider = () => providers().find((p) => p.id === engine());
 /** Ancho del panel (se arrastra su borde derecho) */
 const [width, setWidth] = createPersisted("chat.width", 360);
@@ -246,10 +261,11 @@ function kTokens(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(n >= 100_000 ? 0 : 1)}k` : String(n);
 }
 
-/** Lo que se va a usar, para la etiqueta de la cabecera: «Sonnet · Medio» */
+/** Lo que se va a usar, para la etiqueta de la cabecera: «Calidad», «Sonnet · Medio», «DeepSeek · deepseek-chat» */
 const choiceLabel = () => {
-  const p = provider();
-  if (engine() !== "claude") return p ? `${p.name} · ${p.model}` : t("Proveedor borrado");
+  const team = activeTeam();
+  if (team.id) return team.name;
+  if (engine() !== "claude") return provider() ? `${provider()!.name} · ${model() || provider()!.model}` : t("Proveedor borrado");
   const m = MODEL_OPTIONS().find((o) => o.value === model());
   const e = EFFORT_OPTIONS().find((o) => o.value === effort());
   if (!model() && !effort()) return "Claude Code";
@@ -603,16 +619,19 @@ export const AiChatPanel: Component<{
       <Show when={options()}>
         <div class="grid grid-cols-2 gap-2 px-3 py-2 border-b border-border">
           <div class="col-span-2">
-            <Select
-              label={t("Motor")}
-              options={[{ value: "claude", label: "Claude Code" }, ...providers().map((p) => ({ value: p.id, label: `${p.name} · ${p.model}` }))]}
-              value={engine()}
-              onChange={(v) => {
-                // Otro motor: otra conversación (cada uno tiene su historia)
-                if (v !== engine() && entries().length) reset();
-                setEngine(v);
-              }}
-            />
+            <Select label={t("Usar")} options={chatChoices()} value={chatChoice()} onChange={choose} />
+            <p class="mt-1 text-[11px] text-text-muted leading-relaxed">
+              <Show
+                when={activeTeam().id}
+                fallback={t("Un solo modelo hace todo. Las combinaciones (uno planifica, otro construye, otro revisa) se arman en Configuración ▸ Conector para IA.")}
+              >
+                {t("Planifica: {p} · Construye: {b} · Revisa: {r}", {
+                  p: activeTeam().plan ? refLabel(activeTeam().plan) : t("quien construye"),
+                  b: refLabel(activeTeam().build),
+                  r: refLabel(activeTeam().review),
+                })}
+              </Show>
+            </p>
           </div>
           <Show
             when={engine() === "claude"}
@@ -622,8 +641,7 @@ export const AiChatPanel: Component<{
               </p>
             }
           >
-            <Select label={t("Modelo")} options={MODEL_OPTIONS()} value={model()} onChange={setModel} />
-            <Select label={t("Esfuerzo")} options={EFFORT_OPTIONS()} value={effort()} onChange={setEffort} />
+            <Select class="col-span-2" label={t("Esfuerzo")} options={EFFORT_OPTIONS()} value={effort()} onChange={setEffort} />
             <p class="col-span-2 text-[11px] text-text-muted leading-relaxed">
               {t("Más esfuerzo piensa más antes de actuar: mejor para piezas complejas, más lento y gasta más de tu cuota. Vale desde el próximo mensaje.")}
             </p>

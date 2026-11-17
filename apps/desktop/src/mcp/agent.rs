@@ -53,7 +53,22 @@ longer fits, edit, add or remove steps in the same reply. When you need decision
 `ask_user` (all questions in one survey) instead of asking in the text. Reply briefly, in the user's language, and \
 say what you changed.";
 
-/// Un proveedor guardado
+/// Un modelo elegido de una empresa
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ModelEntry {
+    pub id: String,
+    /// Entiende imágenes
+    #[serde(default)]
+    pub vision: bool,
+    /// Dólares por millón de tokens de entrada (lo anota el usuario; OpenRouter lo trae)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price_in: Option<f64>,
+    /// Dólares por millón de tokens de salida
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price_out: Option<f64>,
+}
+
+/// Un proveedor guardado: una empresa (dirección y clave) con sus modelos elegidos
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Provider {
     pub id: String,
@@ -66,6 +81,9 @@ pub struct Provider {
     /// El modelo entiende imágenes (las de `view` y las adjuntas)
     #[serde(default)]
     pub vision: bool,
+    /// Los modelos de esta empresa que el usuario eligió (los roles usan estos)
+    #[serde(default)]
+    pub models: Vec<ModelEntry>,
 }
 
 /// Lo que ve la ventana de un proveedor (sin la clave)
@@ -77,11 +95,20 @@ pub struct ProviderView {
     pub model: String,
     pub vision: bool,
     pub has_key: bool,
+    pub models: Vec<ModelEntry>,
 }
 
 impl From<&Provider> for ProviderView {
     fn from(p: &Provider) -> Self {
-        Self { id: p.id.clone(), name: p.name.clone(), base_url: p.base_url.clone(), model: p.model.clone(), vision: p.vision, has_key: !p.api_key.is_empty() }
+        Self {
+            id: p.id.clone(),
+            name: p.name.clone(),
+            base_url: p.base_url.clone(),
+            model: p.model.clone(),
+            vision: p.vision,
+            has_key: !p.api_key.is_empty(),
+            models: p.models.clone(),
+        }
     }
 }
 
@@ -119,6 +146,9 @@ pub struct ProviderInput {
     pub model: String,
     #[serde(default)]
     pub vision: bool,
+    /// Los modelos elegidos (sin esto quedan los que tenía)
+    #[serde(default)]
+    pub models: Option<Vec<ModelEntry>>,
 }
 
 pub fn upsert(input: ProviderInput) -> Result<Vec<Provider>, String> {
@@ -132,6 +162,7 @@ pub fn upsert(input: ProviderInput) -> Result<Vec<Provider>, String> {
     let mut list = load();
     let id = input.id.filter(|i| !i.is_empty()).unwrap_or_else(|| format!("p{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis())));
     let old_key = list.iter().find(|p| p.id == id).map(|p| p.api_key.clone()).unwrap_or_default();
+    let old_models = list.iter().find(|p| p.id == id).map(|p| p.models.clone()).unwrap_or_default();
     let p = Provider {
         id: id.clone(),
         name: if input.name.trim().is_empty() { base.clone() } else { input.name.trim().to_string() },
@@ -139,6 +170,7 @@ pub fn upsert(input: ProviderInput) -> Result<Vec<Provider>, String> {
         api_key: input.api_key.map(|k| k.trim().to_string()).unwrap_or(old_key),
         model: input.model.trim().to_string(),
         vision: input.vision,
+        models: input.models.unwrap_or(old_models).into_iter().filter(|m| !m.id.trim().is_empty()).collect(),
     };
     match list.iter_mut().find(|x| x.id == id) {
         Some(x) => *x = p,
@@ -226,21 +258,26 @@ impl Agent {
     }
 
     /// Empieza un turno con el proveedor `provider_id` (falla si hay otro en curso)
-    fn begin(&self, provider_id: &str) -> Result<Provider, String> {
+    /// La empresa con el modelo pedido (uno de sus modelos elegidos; sin pedido, el de siempre)
+    fn begin(&self, provider_id: &str, model: Option<&str>) -> Result<Provider, String> {
         if self.busy.swap(true, Ordering::SeqCst) {
             return Err("Todavía está respondiendo el mensaje anterior".into());
         }
-        let Some(p) = load().into_iter().find(|p| p.id == provider_id) else {
+        let Some(mut p) = load().into_iter().find(|p| p.id == provider_id) else {
             self.busy.store(false, Ordering::SeqCst);
             return Err("Ese proveedor ya no está: elígelo de nuevo en el chat".into());
         };
+        if let Some(m) = model.map(str::trim).filter(|m| !m.is_empty() && *m != p.model) {
+            p.vision = p.models.iter().find(|x| x.id == m).is_some_and(|x| x.vision);
+            p.model = m.to_string();
+        }
         self.stop.store(false, Ordering::SeqCst);
         Ok(p)
     }
 
     /// Resume la conversación ahora (botón «Resumir» o `/resumir`)
-    pub fn compact_now(self: &Arc<Self>, provider_id: &str, emit: impl Fn(Value) + Send + 'static) -> Result<(), String> {
-        let p = self.begin(provider_id)?;
+    pub fn compact_now(self: &Arc<Self>, provider_id: &str, model: Option<&str>, emit: impl Fn(Value) + Send + 'static) -> Result<(), String> {
+        let p = self.begin(provider_id, model)?;
         let agent = self.clone();
         std::thread::spawn(move || {
             emit(json!({ "kind": "start", "model": p.model }));
@@ -293,8 +330,9 @@ impl Agent {
 
     /// Manda un mensaje; las partes de la respuesta salen por `emit` como las de Claude Code.
     /// `compact_at`: si la conversación ya ocupa más tokens, antes se resume sola
-    pub fn send(self: &Arc<Self>, provider_id: &str, message: &str, images: &[Image], compact_at: Option<u64>, emit: impl Fn(Value) + Send + 'static) -> Result<(), String> {
-        let p = self.begin(provider_id)?;
+    /// `model`: uno de los modelos de la empresa (el del rol); sin él, el de siempre
+    pub fn send(self: &Arc<Self>, provider_id: &str, model: Option<&str>, message: &str, images: &[Image], compact_at: Option<u64>, emit: impl Fn(Value) + Send + 'static) -> Result<(), String> {
+        let p = self.begin(provider_id, model)?;
         // El mensaje del usuario, con sus imágenes si el modelo las ve
         let user = if images.is_empty() {
             json!({ "role": "user", "content": message })
@@ -496,10 +534,84 @@ pub fn ai_provider_delete(id: String) -> Result<Vec<ProviderView>, String> {
     Ok(remove(&id)?.iter().map(ProviderView::from).collect())
 }
 
+/// Los modelos que ofrece una API (`GET {base}/models`, el formato de OpenAI). OpenRouter
+/// trae además el precio (por token) y si el modelo ve imágenes
+pub fn fetch_models(base_url: &str, api_key: &str) -> Result<Vec<ModelEntry>, String> {
+    let base = base_url.trim().trim_end_matches('/');
+    if base.is_empty() {
+        return Err("Falta la dirección de la API".into());
+    }
+    let mut req = client()?.get(format!("{base}/models")).timeout(Duration::from_secs(30));
+    if !api_key.is_empty() {
+        req = req.bearer_auth(api_key);
+    }
+    let res = req.send().map_err(|e| format!("No se pudo conectar con {base}: {e}"))?;
+    let status = res.status();
+    let text = res.text().map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+        let why = v["error"]["message"].as_str().or(v["error"].as_str()).or(v["message"].as_str()).map(str::to_string).unwrap_or_else(|| text.chars().take(200).collect());
+        return Err(format!("La API respondió {}: {why}", status.as_u16()));
+    }
+    let v: Value = serde_json::from_str(&text).map_err(|_| "La API no devolvió una lista de modelos".to_string())?;
+    Ok(parse_models(&v))
+}
+
+/// `{"data": [{"id", "pricing"?, "architecture"?}]}` → modelos (también una lista suelta)
+fn parse_models(v: &Value) -> Vec<ModelEntry> {
+    let list = v["data"].as_array().or(v["models"].as_array()).or(v.as_array()).cloned().unwrap_or_default();
+    // Precio por token (texto o número) → por millón de tokens
+    let per_million = |x: &Value| x.as_str().and_then(|s| s.parse::<f64>().ok()).or(x.as_f64()).filter(|p| *p >= 0.0).map(|p| (p * 1e6 * 1e4).round() / 1e4);
+    let mut out: Vec<ModelEntry> = list
+        .iter()
+        .filter_map(|m| {
+            let id = m["id"].as_str().or(m["name"].as_str()).or(m["model"].as_str())?.trim().to_string();
+            let vision = m["architecture"]["input_modalities"].as_array().is_some_and(|a| a.iter().any(|x| x == "image"));
+            Some(ModelEntry { id, vision, price_in: per_million(&m["pricing"]["prompt"]), price_out: per_million(&m["pricing"]["completion"]) })
+        })
+        .filter(|m| !m.id.is_empty())
+        .collect();
+    out.sort_by(|a, b| a.id.cmp(&b.id));
+    out.dedup_by(|a, b| a.id == b.id);
+    out
+}
+
+/// Los modelos de una empresa: la guardada (`id`, con su clave) o la del formulario
+/// (`base_url` y `api_key`; sin clave nueva se usa la guardada de `id`)
+#[tauri::command]
+pub async fn ai_provider_models(id: Option<String>, base_url: Option<String>, api_key: Option<String>) -> Result<Vec<ModelEntry>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let saved = id.as_deref().and_then(|id| load().into_iter().find(|p| p.id == id));
+        let base = base_url.filter(|b| !b.trim().is_empty()).or_else(|| saved.as_ref().map(|p| p.base_url.clone())).ok_or("Falta la dirección de la API")?;
+        let key = api_key.filter(|k| !k.trim().is_empty()).or_else(|| saved.map(|p| p.api_key)).unwrap_or_default();
+        fetch_models(&base, key.trim())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Un mensaje mínimo para ver que la dirección, la clave y el modelo andan
 #[tauri::command]
 pub async fn ai_provider_test(id: String) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || test(&id)).await.map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod models_tests {
+    use super::*;
+
+    #[test]
+    fn lista_de_modelos_openai_y_openrouter() {
+        let openai = json!({ "object": "list", "data": [{ "id": "gpt-b" }, { "id": "gpt-a" }, { "id": "gpt-a" }] });
+        let ids: Vec<String> = parse_models(&openai).into_iter().map(|m| m.id).collect();
+        assert_eq!(ids, ["gpt-a", "gpt-b"]);
+        let router = json!({ "data": [{ "id": "anthropic/claude-opus", "pricing": { "prompt": "0.000015", "completion": "0.000075" },
+            "architecture": { "input_modalities": ["text", "image"] } }] });
+        let m = &parse_models(&router)[0];
+        assert!(m.vision);
+        assert_eq!(m.price_in, Some(15.0));
+        assert_eq!(m.price_out, Some(75.0));
+    }
 }
 
 #[cfg(test)]
@@ -552,14 +664,14 @@ mod tests {
         // SAFETY: esta prueba es la única del binario que usa la variable
         unsafe { std::env::set_var("PINOCCHIO_MCP_LIVE_FILE", dir.path().join("mcp-live.json")) };
         let (url, seen) = fake_api();
-        let list = upsert(ProviderInput { id: None, name: "Falso".into(), base_url: url, api_key: Some("sk-x".into()), model: "falso-1".into(), vision: false }).unwrap();
+        let list = upsert(ProviderInput { id: None, name: "Falso".into(), base_url: url, api_key: Some("sk-x".into()), model: "falso-1".into(), vision: false, models: None }).unwrap();
         let id = list[0].id.clone();
         assert!(load()[0].api_key == "sk-x", "la clave queda guardada");
         assert_eq!(ProviderView::from(&load()[0]).has_key, true);
 
         let agent = Arc::new(Agent::default());
         let (tx, rx) = std::sync::mpsc::channel();
-        agent.send(&id, "haz una caja", &[], None, move |m| tx.send(m).unwrap()).unwrap();
+        agent.send(&id, None, "haz una caja", &[], None, move |m| tx.send(m).unwrap()).unwrap();
         let mut events = Vec::new();
         while let Ok(m) = rx.recv_timeout(Duration::from_secs(60)) {
             let done = m["kind"] == "done";
@@ -591,7 +703,7 @@ mod tests {
     #[test]
     #[ignore]
     fn tls_reaches_a_real_api() {
-        let p = Provider { id: "x".into(), name: "DeepSeek".into(), base_url: "https://api.deepseek.com".into(), api_key: "sk-falsa".into(), model: "deepseek-chat".into(), vision: false };
+        let p = Provider { id: "x".into(), name: "DeepSeek".into(), base_url: "https://api.deepseek.com".into(), api_key: "sk-falsa".into(), model: "deepseek-chat".into(), vision: false, models: Vec::new() };
         let e = post(&p, &json!({ "model": p.model, "messages": [{ "role": "user", "content": "hi" }] })).unwrap_err();
         assert!(e.contains("401"), "{e}");
     }
@@ -653,7 +765,7 @@ mod tests {
     #[test]
     fn compacting_replaces_the_history_with_a_summary() {
         let (url, seen) = fixed_api(json!({ "choices": [{ "message": { "role": "assistant", "content": "- Caja de 10×20×30 en la pestaña «Diseño 1»" } }], "usage": { "prompt_tokens": 900, "completion_tokens": 30 } }));
-        let p = Provider { id: "f".into(), name: "Falso".into(), base_url: url, api_key: String::new(), model: "falso-1".into(), vision: false };
+        let p = Provider { id: "f".into(), name: "Falso".into(), base_url: url, api_key: String::new(), model: "falso-1".into(), vision: false, models: Vec::new() };
         let agent = Agent::default();
         agent.context.store(50_000, Ordering::SeqCst);
         *agent.history.lock().unwrap() = vec![
