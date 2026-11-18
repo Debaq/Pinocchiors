@@ -45,21 +45,37 @@ export const materialized = (o: SceneObject, active: number | undefined) =>
 
 export const nextObjectId = (list: SceneObject[]) => list.reduce((m, o) => Math.max(m, o.id), 0) + 1;
 
+/** Tiene algo que perder si se borra: es el activo, tiene malla o historial guardado */
+const keepsWork = (o: SceneObject, active: number | undefined) => o.id === active || materialized(o, active) || !!o.history;
+
 /**
  * Agrega un objeto por cada pieza de la pestaña `studio` que todavía no tiene
  * y renombra los de las piezas que cambiaron de nombre. Los de piezas que ya
- * no están se quedan (si tenían malla, es trabajo hecho; si no, el Outliner
- * los esconde). Los de otras pestañas no se tocan.
+ * no están se quedan si tienen trabajo hecho (malla, historial) o si su pieza
+ * sigue nombrada en `keep` (compradas, tachadas por un corte o una unión); los
+ * demás se borran: cada cambio del diseño puede dar números de pieza nuevos y,
+ * sin borrar, se juntaban cientos de objetos vacíos que hacían lenta la app.
+ * Los de otras pestañas no se tocan.
  */
-export function syncCadObjects(list: SceneObject[], parts: { id: PartId; name: string }[], studio: number): SceneObject[] {
+export function syncCadObjects(
+  list: SceneObject[],
+  parts: { id: PartId; name: string }[],
+  studio: number,
+  keep?: { parts: Set<string>; active: number | undefined },
+): SceneObject[] {
   let changed = false;
   let next = nextObjectId(list);
-  const out = list.map((o) => {
-    if (!isCadObject(o) || studioOf(o) !== studio) return o;
+  const out = list.flatMap((o) => {
+    if (!isCadObject(o) || studioOf(o) !== studio) return [o];
     const p = parts.find((x) => isPartObject(o, studio, x.id));
-    if (!p || p.name === o.name) return o;
+    if (!p) {
+      if (!keep || keep.parts.has(partKey(o.source.part)) || keepsWork(o, keep.active)) return [o];
+      changed = true;
+      return [];
+    }
+    if (p.name === o.name) return [o];
     changed = true;
-    return { ...o, name: p.name };
+    return [{ ...o, name: p.name }];
   });
   for (const p of parts) {
     if (out.some((o) => isPartObject(o, studio, p.id))) continue;
@@ -67,6 +83,13 @@ export function syncCadObjects(list: SceneObject[], parts: { id: PartId; name: s
     changed = true;
   }
   return changed ? out : list;
+}
+
+/** Sin los objetos vacíos de pestañas que ya no existen (los que tienen trabajo hecho se quedan) */
+export function dropOrphanTabObjects(list: SceneObject[], tabs: number[], active: number | undefined): SceneObject[] {
+  if (tabs.length === 0) return list;
+  const out = list.filter((o) => !isCadObject(o) || tabs.includes(studioOf(o)) || keepsWork(o, active));
+  return out.length === list.length ? list : out;
 }
 
 /** Pasos hechos de un historial guardado (de la raíz, sin ella, al actual) */

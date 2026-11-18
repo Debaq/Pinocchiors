@@ -115,7 +115,7 @@ const WORKSPACE_KEYS: Record<WorkspaceId, string> = { prepare: "1", rig: "2", pr
 import { VIEW_AXES, fromView, toView, viewSize, type Axis } from "./lib/axes";
 import { buildSceneTree, type QuadObjectRow, type CadOutline, type CadOutlineItem, type ObjectRow, type SceneNode } from "./lib/scene-tree";
 import { addDrawing, drawingSheets, drawingTree, parseElementNode, removeDrawing, removeElement, toggleElement, updateDrawing } from "./lib/drawingDoc";
-import { isCadObject, isGeometryStep, isPartObject, materialized, nextObjectId, partKey, savedTrail, studioOf, syncCadObjects, type CadObject, type SceneObject } from "./lib/objects";
+import { dropOrphanTabObjects, isCadObject, isGeometryStep, isPartObject, materialized, nextObjectId, partKey, savedTrail, studioOf, syncCadObjects, type CadObject, type SceneObject } from "./lib/objects";
 import { TOOLSETS, toolContext, type ToolId } from "./lib/tools";
 import { createHistoryStore, type SavedHistory } from "./lib/history";
 import { bindingOf, createShortcutManager, formatBinding, type ShortcutDef } from "./lib/shortcuts";
@@ -2650,7 +2650,14 @@ export const App: Component = () => {
     const r = cad.result();
     if (!r || cad.draft() || cad.tabs().tabs.find((x) => x.id === cad.resultTab())?.kind === "assembly") return;
     // Las compradas (motores, placas, imanes de la biblioteca) no se fabrican: no son objetos
-    setObjects((list) => syncCadObjects(list, r.parts.filter((p) => !p.purchased && !p.context).map((p) => ({ id: p.id, name: p.name })), cad.resultTab()));
+    const made = r.parts.filter((p) => !p.purchased && !p.context).map((p) => ({ id: p.id, name: p.name }));
+    // Los vacíos de piezas que ya no están se borran, salvo los que el Outliner muestra tachados
+    const keep = new Set([...r.parts.map((p) => partKey(p.id)), ...(r.replaced ?? []).flatMap((x) => x.from.map((f) => partKey(f.id)))]);
+    const tabs = cad.tabs().tabs.map((x) => x.id);
+    untrack(() => {
+      const active = activeObjectId();
+      setObjects((list) => dropOrphanTabObjects(syncCadObjects(list, made, cad.resultTab(), { parts: keep, active }), tabs, active));
+    });
   };
   createEffect(syncDesignObjects);
 
