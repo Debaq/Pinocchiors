@@ -19,6 +19,7 @@ import { LightRig, configureRenderer, type LightSettings } from "./lightRig";
 import { THEME_EVENT, themeHex } from "./theme";
 import { FIT_COLORS, fitClass, deviationColor, type FitRange, ellipsePolyline, curvePolyline, splineOf, type BodyOp, type ScanDeviation, type CadMesh, type P2, type P3, type Plane, type RefView, type Region, type Sketch, type Sketch3d, type SketchImage } from "./cad";
 import type { MeshData } from "./Viewer3D";
+import { ensureBvh } from "./meshBvh";
 
 export type BasePlane = "xy" | "xz" | "yz";
 
@@ -37,6 +38,47 @@ export interface PartStyle {
   surface?: boolean;
   /** Opacidad 0–1 (acrílico, vidrio): se ve a través, con sus aristas, y se sigue eligiendo */
   opacity?: number;
+}
+
+/** Mismos estilos de piezas (para no rearmar el cuerpo de balde) */
+function samePartStyles(a: PartStyle[], b: PartStyle[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const p = a[i], q = b[i];
+    if (
+      p.faces[0] !== q.faces[0] || p.faces[1] !== q.faces[1] || p.edges[0] !== q.edges[0] || p.edges[1] !== q.edges[1] ||
+      p.color !== q.color || p.hidden !== q.hidden || !!p.ghost !== !!q.ghost || !!p.surface !== !!q.surface || (p.opacity ?? 1) !== (q.opacity ?? 1)
+    )
+      return false;
+  }
+  return true;
+}
+
+/**
+ * Las polilíneas de aristas (`ends[e]` = fin de la arista e) como segmentos
+ * sueltos en un arreglo ya del tamaño justo; `segEdge` recibe la arista de
+ * cada segmento. (`push(...slice)` por segmento era lo más lento posible.)
+ */
+function edgeSegments(points: Float32Array, ends: ArrayLike<number>, keep: (e: number) => boolean = () => true, segEdge?: number[]): Float32Array {
+  let count = 0;
+  let start = 0;
+  for (let e = 0; e < ends.length; e++) {
+    if (keep(e) && ends[e] - 1 > start) count += ends[e] - 1 - start;
+    start = ends[e];
+  }
+  const out = new Float32Array(count * 6);
+  let s = 0;
+  start = 0;
+  for (let e = 0; e < ends.length; e++) {
+    if (keep(e)) {
+      for (let i = start; i < ends[e] - 1; i++, s++) {
+        out.set(points.subarray(i * 3, i * 3 + 6), s * 6);
+        segEdge?.push(e);
+      }
+    }
+    start = ends[e];
+  }
+  return out;
 }
 
 export type CadPick =
@@ -466,7 +508,7 @@ export class CadViewer {
       surface: (ndc) => {
         if (!this.body) return undefined;
         this.raycaster.setFromCamera(new THREE.Vector2(ndc[0], ndc[1]), this.camera);
-        const hit = this.kept(this.raycaster.intersectObject(this.body));
+        const hit = this.kept(this.hitBody(this.raycaster));
         return hit ? (hit.point.clone().multiplyScalar(k()).toArray() as [number, number, number]) : undefined;
       },
     };
@@ -692,8 +734,18 @@ export class CadViewer {
    * Las ocultas no se dibujan ni se pueden elegir.
    */
   setParts(styles: PartStyle[]) {
+    // Mismos colores y visibilidad: no rearmar el cuerpo (el efecto que llama
+    // corre con cualquier cambio del documento, aunque no toque las piezas)
+    if (samePartStyles(this.partStyles, styles)) return;
     this.partStyles = styles;
     this.buildBody();
+  }
+
+  /** Impactos del rayo con el sólido (con BVH en mallas grandes: se arma al primer uso) */
+  private hitBody(ray: THREE.Raycaster): THREE.Intersection[] {
+    if (!this.body) return [];
+    ensureBvh(this.body);
+    return ray.intersectObject(this.body);
   }
 
   /** Arma la malla y las aristas del cuerpo con las piezas visibles */
@@ -818,14 +870,20 @@ export class CadViewer {
         this.scene.add(this.bodyGhost);
       }
 
-      // Vértices: extremos de las aristas visibles, sin repetir
+      // Vértices: extremos de las aristas visibles, sin repetir (por posición
+      // redondeada a 1e-6: compararlos todos contra todos era O(V²))
       const ends: THREE.Vector3[] = [];
+      const seen = new Set<string>();
+      const pts = data.edgePoints;
       let first = 0;
       data.edgeEnds.forEach((end, e) => {
         if (end > first && !hiddenEdges.has(e)) {
           for (const i of [first, end - 1]) {
-            const v = new THREE.Vector3(data.edgePoints[i * 3], data.edgePoints[i * 3 + 1], data.edgePoints[i * 3 + 2]);
-            if (!ends.some((w) => w.distanceToSquared(v) < 1e-12)) ends.push(v);
+            const x = pts[i * 3], y = pts[i * 3 + 1], z = pts[i * 3 + 2];
+            const key = `${Math.round(x * 1e6)},${Math.round(y * 1e6)},${Math.round(z * 1e6)}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            ends.push(new THREE.Vector3(x, y, z));
           }
         }
         first = end;
@@ -833,20 +891,10 @@ export class CadViewer {
       this.bodyVertices = ends;
 
       // Aristas: cada polilínea en segmentos, con el índice de arista por segmento
-      const segs: number[] = [];
       const segEdge: number[] = [];
-      let start = 0;
-      data.edgeEnds.forEach((end, e) => {
-        if (!hiddenEdges.has(e)) {
-          for (let i = start; i < end - 1; i++) {
-            segs.push(...data.edgePoints.slice(i * 3, i * 3 + 6));
-            segEdge.push(e);
-          }
-        }
-        start = end;
-      });
+      const segs = edgeSegments(pts, data.edgeEnds, (e) => !hiddenEdges.has(e), segEdge);
       const eg = new THREE.BufferGeometry();
-      eg.setAttribute("position", new THREE.BufferAttribute(new Float32Array(segs), 3));
+      eg.setAttribute("position", new THREE.BufferAttribute(segs, 3));
       eg.setAttribute("color", new THREE.BufferAttribute(new Float32Array(segs.length), 3));
       eg.userData.segEdge = segEdge;
       this.bodyEdges = new THREE.LineSegments(eg, new THREE.LineBasicMaterial({ vertexColors: true }));
@@ -1065,14 +1113,8 @@ export class CadViewer {
       }),
     );
     mesh.renderOrder = 4;
-    const segs: number[] = [];
-    let start = 0;
-    for (const end of data.edgeEnds) {
-      for (let i = start; i < end - 1; i++) segs.push(...data.edgePoints.slice(i * 3, i * 3 + 6));
-      start = end;
-    }
     const eg = new THREE.BufferGeometry();
-    eg.setAttribute("position", new THREE.BufferAttribute(new Float32Array(segs), 3));
+    eg.setAttribute("position", new THREE.BufferAttribute(edgeSegments(data.edgePoints, data.edgeEnds), 3));
     const lines = new THREE.LineSegments(eg, new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.9, depthTest: false }));
     lines.renderOrder = 4;
     const group = new THREE.Group();
@@ -1301,14 +1343,32 @@ export class CadViewer {
       // Preselección: el color de la cara, mezclado con ámbar
       const preFace = this.preselect?.kind === "face" ? this.preselect.face : -1;
       const pre = new THREE.Color(themeHex("preselect"));
-      const partColors = this.partStyles.map((p) => ({ faces: p.faces, color: new THREE.Color(p.color) }));
-      const faceColor = (f: number) => partColors.find((p) => p.faces[0] <= f && f < p.faces[1])?.color ?? base;
+      // Color de cada cara de una vez (buscar la pieza por triángulo era
+      // triángulos × piezas en cada cambio de preselección)
+      const tf = this.bodyData.triangleFace;
+      let faceCount = 0;
+      for (let t = 0; t < tf.length; t++) if (tf[t] >= faceCount) faceCount = tf[t] + 1;
+      const faceColors: THREE.Color[] = new Array(faceCount).fill(base);
+      const painted = new Uint8Array(faceCount);
+      for (const p of this.partStyles) {
+        const color = new THREE.Color(p.color);
+        for (let f = Math.max(0, p.faces[0]); f < Math.min(faceCount, p.faces[1]); f++) {
+          if (painted[f]) continue;
+          painted[f] = 1;
+          faceColors[f] = color;
+        }
+      }
+      const mixed = new Map<THREE.Color, THREE.Color>();
       const colors = this.body.geometry.getAttribute("color") as THREE.BufferAttribute;
       const idx = this.bodyData.indices;
-      for (let t = 0; t < this.bodyData.triangleFace.length; t++) {
-        const f = this.bodyData.triangleFace[t];
-        let c = this.highlightedFaces.has(f) ? hi : faceColor(f);
-        if (f === preFace || this.hoverFaces.has(f)) c = c.clone().lerp(pre, 0.6);
+      for (let t = 0; t < tf.length; t++) {
+        const f = tf[t];
+        let c = this.highlightedFaces.has(f) ? hi : faceColors[f];
+        if (f === preFace || this.hoverFaces.has(f)) {
+          let m = mixed.get(c);
+          if (!m) mixed.set(c, (m = c.clone().lerp(pre, 0.6)));
+          c = m;
+        }
         for (let k = 0; k < 3; k++) colors.setXYZ(idx[t * 3 + k], c.r, c.g, c.b);
       }
       colors.needsUpdate = true;
@@ -2071,7 +2131,7 @@ export class CadViewer {
       ray.set(cam, p.clone().sub(cam).normalize());
       ray.far = dist * 1.01;
       if (this.section && this.section.distanceToPoint(p) < 0) return false;
-      const hit = this.kept(ray.intersectObject(this.body));
+      const hit = this.kept(this.hitBody(ray));
       return !hit || hit.distance >= dist - dist * 2e-3;
     };
     const vec = (arr: ArrayLike<number>, i: number) => new THREE.Vector3(arr[i * 3], arr[i * 3 + 1], arr[i * 3 + 2]);
@@ -2354,7 +2414,7 @@ export class CadViewer {
     const dist = this.camera.position.distanceTo(this.controls.target);
     if (want.vertices && this.bodyVertices.length) {
       const rect = this.renderer.domElement.getBoundingClientRect();
-      const front = this.body ? this.kept(this.raycaster.intersectObject(this.body))?.distance : undefined;
+      const front = this.body ? this.kept(this.hitBody(this.raycaster))?.distance : undefined;
       let best: { d: number; v: THREE.Vector3 } | undefined;
       for (const v of this.bodyVertices) {
         const s = v.clone().project(this.camera);
@@ -2390,7 +2450,7 @@ export class CadViewer {
       }
     }
     if (want.faces && this.body) {
-      const hit = this.kept(this.raycaster.intersectObject(this.body));
+      const hit = this.kept(this.hitBody(this.raycaster));
       if (hit && hit.faceIndex != null && this.bodyData) {
         candidates.push({ d: hit.distance, rank: 1, pick: { kind: "face", face: this.visibleTriFace[hit.faceIndex], point: hit.point } });
       }
@@ -2429,7 +2489,7 @@ export class CadViewer {
     this.setRay(clientX, clientY);
     const hit = this.raycaster.intersectObject(this.scan)[0];
     if (!hit || hit.faceIndex == null) return null;
-    const front = this.body ? this.raycaster.intersectObject(this.body)[0] : undefined;
+    const front = this.body ? this.hitBody(this.raycaster)[0] : undefined;
     const radius = this.scan.geometry.boundingSphere?.radius ?? 1;
     if (front && front.distance < hit.distance - radius * 0.004) return null;
     return { triangle: hit.faceIndex, point: hit.point };
@@ -2441,7 +2501,7 @@ export class CadViewer {
    */
   pickSurface(clientX: number, clientY: number): { kind: "face" | "scan"; at: P3 } | null {
     this.setRay(clientX, clientY);
-    const face = this.body ? this.kept(this.raycaster.intersectObject(this.body)) : undefined;
+    const face = this.body ? this.kept(this.hitBody(this.raycaster)) : undefined;
     const scanOn = this.scan && (this.scan.visible || this.scanPickHidden);
     const skin = scanOn ? this.kept(this.raycaster.intersectObject(this.scan!)) : undefined;
     // A la par (la pieza base coincide con el escaneo) cuenta como la piel

@@ -344,13 +344,15 @@ struct CacheEntry {
 pub struct EvalCache {
     entries: HashMap<u64, CacheEntry>,
     clock: u64,
-    /// Máximo de estados guardados.
+    /// Reloj al empezar el recálculo en curso: lo usado desde ahí se bota al final.
+    epoch: u64,
+    /// Máximo de estados guardados (entre todas las pestañas).
     pub capacity: usize,
 }
 
 impl Default for EvalCache {
     fn default() -> Self {
-        Self { entries: HashMap::new(), clock: 0, capacity: 128 }
+        Self { entries: HashMap::new(), clock: 0, epoch: 0, capacity: 512 }
     }
 }
 
@@ -380,10 +382,13 @@ impl EvalCache {
         e.used = self.clock;
         self.entries.insert(key, e);
         if self.entries.len() > self.capacity {
-            // Fuera la cuarta parte menos usada
-            let mut by_use: Vec<(u64, u64)> = self.entries.iter().map(|(k, e)| (e.used, *k)).collect();
+            // Fuera la cuarta parte menos usada, primero lo que no tocó el
+            // recálculo en curso: botar el comienzo de la cadena que se está
+            // recorriendo obligaba a rehacerlo en el cambio siguiente
+            let epoch = self.epoch;
+            let mut by_use: Vec<(bool, u64, u64)> = self.entries.iter().map(|(k, e)| (e.used >= epoch, e.used, *k)).collect();
             by_use.sort_unstable();
-            for (_, k) in by_use.iter().take(self.entries.len() / 4) {
+            for (_, _, k) in by_use.iter().take(self.entries.len() / 4) {
                 self.entries.remove(k);
             }
         }
@@ -678,7 +683,7 @@ fn occt_err(e: String) -> cad_occt::Error {
 /// los pedazos que arrancan en la tapa.
 fn until_sheet(prism: &Shape, sheet: &Shape, start: P3, cap: P3) -> R<Shape> {
     let pieces = prism.split_by(std::slice::from_ref(sheet)).map_err(err)?.solids().map_err(err)?;
-    let size = prism.mass().map(|m| norm(sub(m.bbox_max, m.bbox_min))).unwrap_or(1.0).max(1.0);
+    let size = prism.bbox().map(|m| norm(sub(m.bbox_max, m.bbox_min))).unwrap_or(1.0).max(1.0);
     let starts = |s: &Shape| {
         (0..s.face_count()).any(|i| {
             s.face_info(i).is_ok_and(|f| f.surface == SurfaceKind::Plane && dot(f.normal, cap).abs() > 0.999 && dot(sub(f.point, start), cap).abs() < size * 1e-6)
@@ -788,13 +793,13 @@ fn mesh_until_scan(prism: &Shape, scan: &crate::mesh_bool::MeshData, origin: P3,
 
 /// `cap`: la normal de la tapa donde arranca (la de `n` salvo con dirección propia).
 fn until_scan(prism: &Shape, scan: &Shape, origin: P3, n: P3, cap: P3) -> R<Shape> {
-    let reach = prism.mass().map_err(err)?;
+    let reach = prism.bbox().map_err(err)?;
     let far = (0..8)
         .map(|k| [0, 1, 2].map(|a| if k >> a & 1 == 0 { reach.bbox_min[a] } else { reach.bbox_max[a] }))
         .map(|c| dot(sub(c, origin), n))
         .fold(0.0, f64::max);
     let rest = prism.cut(scan).map_err(err)?;
-    let size = rest.mass().map(|m| norm(sub(m.bbox_max, m.bbox_min))).unwrap_or(1.0).max(1.0);
+    let size = rest.bbox().map(|m| norm(sub(m.bbox_max, m.bbox_min))).unwrap_or(1.0).max(1.0);
     let starts = |s: &Shape| {
         (0..s.face_count()).any(|i| {
             s.face_info(i).is_ok_and(|f| {
@@ -804,7 +809,7 @@ fn until_scan(prism: &Shape, scan: &Shape, origin: P3, n: P3, cap: P3) -> R<Shap
     };
     let kept: Vec<Shape> = rest.solids().map_err(err)?.into_iter().filter(starts).collect();
     // Lo que no encuentra el escaneo sigue hasta el final del prisma
-    let tip = |s: &Shape| s.mass().map(|m| (0..8).map(|k| [0, 1, 2].map(|a| if k >> a & 1 == 0 { m.bbox_min[a] } else { m.bbox_max[a] })).map(|c| dot(sub(c, origin), n)).fold(0.0, f64::max));
+    let tip = |s: &Shape| s.bbox().map(|m| (0..8).map(|k| [0, 1, 2].map(|a| if k >> a & 1 == 0 { m.bbox_min[a] } else { m.bbox_max[a] })).map(|c| dot(sub(c, origin), n)).fold(0.0, f64::max));
     if kept.iter().any(|s| tip(s).is_ok_and(|t| t > far - far.abs() * 1e-6 - 1e-6)) {
         return Err("parte del perfil no queda frente al escaneo: no tiene hasta dónde llegar".into());
     }
@@ -908,6 +913,7 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
         measures: RefCell::default(),
     };
     let limit = doc.rollback.unwrap_or(usize::MAX);
+    cache.epoch = cache.clock + 1;
     // Las holguras de la impresora cambian la geometría de varias operaciones: entran en la clave
     let mut key = fabrication_key(doc);
     for (i, f) in doc.features.iter().enumerate() {
@@ -1972,7 +1978,7 @@ impl Ctx<'_> {
             HoleDepth::Blind { depth } if depth > 0.0 => depth,
             HoleDepth::Blind { .. } => return Err("la profundidad tiene que ser mayor que cero".into()),
             HoleDepth::ThroughAll => {
-                let center = self.body().ok().and_then(|b| b.mass().ok()).map_or(s.plane.origin, |m| scale(add(m.bbox_min, m.bbox_max), 0.5));
+                let center = self.body().ok().and_then(|b| b.bbox().ok()).map_or(s.plane.origin, |m| scale(add(m.bbox_min, m.bbox_max), 0.5));
                 self.diag() * 2.0 + 2.0 * norm(sub(center, s.plane.origin))
             }
         };
@@ -2025,7 +2031,7 @@ impl Ctx<'_> {
                 self.warn(format!("{} de {} agujeros no cortan nada", centers.len() - n, centers.len()));
             }
         }
-        let bbox = self.body().ok().and_then(|b| b.mass().ok()).map(|m| (m.bbox_min, m.bbox_max));
+        let bbox = self.body().ok().and_then(|b| b.bbox().ok()).map(|m| (m.bbox_min, m.bbox_max));
         // La flecha, desde el primer centro hasta el fondo (o hasta donde termina el sólido)
         let c0 = centers[0];
         let (length, kind) = match (&h.depth, bbox) {
@@ -2422,7 +2428,7 @@ impl Ctx<'_> {
         let (faces, _, samples) = self.profile(r.sketch, &r.regions)?;
         let plane = self.ev.sketches.get(&r.sketch).ok_or("el sketch no está calculado")?.plane;
         let n = normalize(plane.normal);
-        let m = skin.shape.mass().map_err(err)?;
+        let m = skin.shape.bbox().map_err(err)?;
         let corners = (0..8).map(|k| [0, 1, 2].map(|a| if k >> a & 1 == 0 { m.bbox_min[a] } else { m.bbox_max[a] }));
         let reach = corners.map(|c| dot(sub(c, plane.origin), n).abs()).fold(0.0, f64::max) * 1.1 + 1.0;
         let prisms = faces
@@ -2563,7 +2569,7 @@ impl Ctx<'_> {
         let (bmin, bmax) = match (&scan_mesh, &skin) {
             (Some(mm), _) => mesh_bounds(&mm.0),
             (None, Some(sk)) => {
-                let m = sk.mass().map_err(err)?;
+                let m = sk.bbox().map_err(err)?;
                 (m.bbox_min, m.bbox_max)
             }
             (None, None) => return Err("no hay escaneo ni sólido sobre el que poner el relieve".into()),
@@ -3431,8 +3437,8 @@ impl Ctx<'_> {
             FeatureKind::Pattern { features, pattern, skip, vary } => {
                 // Dónde está lo que se copia: el centro de la primera operación (o del sólido)
                 let seed = match features.first() {
-                    Some(id) => self.tool(*id)?.0.shape.mass().map_err(err)?,
-                    None => self.body()?.mass().map_err(err)?,
+                    Some(id) => self.tool(*id)?.0.shape.bbox().map_err(err)?,
+                    None => self.body()?.bbox().map_err(err)?,
                 };
                 let seed = scale(add(seed.bbox_min, seed.bbox_max), 0.5);
                 // Flechas de la separación del patrón lineal (y de la segunda
@@ -3807,7 +3813,7 @@ impl Ctx<'_> {
                 let mid = scale(add(a.point, b.point), 0.5);
                 let c0 = add(m.point, scale(na, dot(sub(mid, m.point), na)));
                 let c = sub(c0, scale(nm, r));
-                let fmm = fm.mass().map_err(err)?;
+                let fmm = fm.bbox().map_err(err)?;
                 let along = (0..8).map(|k| [0, 1, 2].map(|q| if k >> q & 1 == 0 { fmm.bbox_min[q] } else { fmm.bbox_max[q] })).map(|v| dot(sub(v, c), dir));
                 let (lo, hi) = along.fold((f64::INFINITY, f64::NEG_INFINITY), |(l, h), x| (l.min(x), h.max(x)));
                 let cyl = Shape::cylinder(Frame { origin: add(c, scale(dir, lo)), z: dir, x: nm }, r, hi - lo).map_err(err)?;
@@ -3983,7 +3989,7 @@ impl Ctx<'_> {
                 // Centro de lo que se mueve (antes de moverlo)
                 let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
                 for &i in &which {
-                    if let Ok(m) = self.ev.parts[i].shape.mass() {
+                    if let Ok(m) = self.ev.parts[i].shape.bbox() {
                         for k in 0..3 {
                             lo[k] = lo[k].min(m.bbox_min[k]);
                             hi[k] = hi[k].max(m.bbox_max[k]);
@@ -4166,7 +4172,7 @@ impl Ctx<'_> {
                 let scan = scan_solid(mesh.as_ref())?;
                 let idx = self.faces("faces", faces)?;
                 let body = self.body()?.clone();
-                let far = self.diag() * 4.0 + scan.mass().map(|m| norm(sub(m.bbox_max, m.bbox_min))).unwrap_or(0.0) * 2.0;
+                let far = self.diag() * 4.0 + scan.bbox().map(|m| norm(sub(m.bbox_max, m.bbox_min))).unwrap_or(0.0) * 2.0;
                 let mut jobs = Vec::new();
                 for &i in &idx {
                     let info = body.face_info(i).map_err(err)?;
@@ -4649,7 +4655,7 @@ impl Ctx<'_> {
                 let (tool_shape, tool_index) = match tool {
                     SplitTool::Plane { plane } => {
                         let p = self.plane("plane", plane)?;
-                        let m = self.body()?.mass().map_err(err)?;
+                        let m = self.body()?.bbox().map_err(err)?;
                         let c = scale(add(m.bbox_min, m.bbox_max), 0.5);
                         let size = 2.0 * norm(sub(m.bbox_max, m.bbox_min)) + 1.0;
                         let n = normalize(p.normal);
@@ -4852,7 +4858,7 @@ impl Ctx<'_> {
                         return Err("la transición delgada todavía no va con secciones con huecos".into());
                     }
                 }
-                let center = |f: &Shape| f.mass().map(|m| scale(add(m.bbox_min, m.bbox_max), 0.5)).map_err(err);
+                let center = |f: &Shape| f.bbox().map(|m| scale(add(m.bbox_min, m.bbox_max), 0.5)).map_err(err);
                 let shape = match l.thin {
                     _ if holed => {
                         let outers: Vec<Shape> = loops.iter().map(|v| v[0].0.clone()).collect();
@@ -5796,7 +5802,7 @@ impl Ctx<'_> {
             Extent::TwoSides { distance, second } => vec![(-second, distance + second)],
             Extent::ThroughAll => {
                 let body = self.body()?;
-                let m = body.mass().map_err(err)?;
+                let m = body.bbox().map_err(err)?;
                 let center = scale(add(m.bbox_min, m.bbox_max), 0.5);
                 vec![(0.0, self.diag() * 2.0 + 2.0 * norm(sub(center, plane.origin)))]
             }
@@ -5826,11 +5832,11 @@ impl Ctx<'_> {
                     if dot(sub(info.point, plane.origin), n) < 0.0 {
                         n = scale(n, -1.0);
                     }
-                    let fm = body.face_shape(i).and_then(|s| s.mass()).map_err(err)?;
+                    let fm = body.face_shape(i).and_then(|s| s.bbox()).map_err(err)?;
                     let corners = (0..8).map(|k| [0, 1, 2].map(|a| if k >> a & 1 == 0 { fm.bbox_min[a] } else { fm.bbox_max[a] }));
                     let mut reach = corners.map(|c| dot(sub(c, plane.origin), n)).fold(0.0, f64::max);
                     // El perfil entero: hasta dónde lo alcanza el plano extendido
-                    let boxes: Vec<_> = faces.iter().filter_map(|f| f.mass().ok()).collect();
+                    let boxes: Vec<_> = faces.iter().filter_map(|f| f.bbox().ok()).collect();
                     let mut size = 0.0f64;
                     if !boxes.is_empty() {
                         let lo = boxes.iter().fold([f64::INFINITY; 3], |a, m| [0, 1, 2].map(|k| a[k].min(m.bbox_min[k])));
@@ -5885,7 +5891,7 @@ impl Ctx<'_> {
                 } else {
                     ahead
                 };
-                let m = solid.mass().map_err(err)?;
+                let m = solid.bbox().map_err(err)?;
                 let corners = (0..8).map(|k| [0, 1, 2].map(|a| if k >> a & 1 == 0 { m.bbox_min[a] } else { m.bbox_max[a] }));
                 let reach = corners.map(|c| dot(sub(c, add(plane.origin, shift)), n)).fold(0.0, f64::max);
                 // El choque, medido desde el plano del sketch
@@ -5923,7 +5929,7 @@ impl Ctx<'_> {
             return Err("distancia cero".into());
         }
         // La flecha, desde el centro del perfil (de la caja que lo envuelve)
-        let boxes: Vec<_> = faces.iter().filter_map(|f| f.mass().ok()).collect();
+        let boxes: Vec<_> = faces.iter().filter_map(|f| f.bbox().ok()).collect();
         let origin = if boxes.is_empty() {
             plane.origin
         } else {
@@ -6446,7 +6452,7 @@ fn solid_offset(shape: &Shape, d: f64) -> R<Shape> {
         return Ok(o);
     }
     let faces: Vec<Shape> = (0..o.face_count()).filter_map(|i| o.face_shape(i).ok()).collect();
-    let size = o.mass().map(|m| norm(sub(m.bbox_max, m.bbox_min))).unwrap_or(1.0).max(1.0);
+    let size = o.bbox().map(|m| norm(sub(m.bbox_max, m.bbox_min))).unwrap_or(1.0).max(1.0);
     Shape::sew(&faces, size * 1e-5, true).map_err(err)
 }
 
@@ -6471,7 +6477,7 @@ impl MeshRay {
 
     /// El teselado de un sólido (fino según su tamaño)
     fn of_shape(shape: &Shape) -> R<Self> {
-        let size = shape.mass().map(|m| norm(sub(m.bbox_max, m.bbox_min))).unwrap_or(1.0).max(1.0);
+        let size = shape.bbox().map(|m| norm(sub(m.bbox_max, m.bbox_min))).unwrap_or(1.0).max(1.0);
         let t = shape.tessellate(size * 2e-4, 0.1).map_err(err)?;
         Ok(MeshRay::new(&t.positions, &t.triangles))
     }
@@ -6546,7 +6552,7 @@ fn keep_seen(cut: Shape, from: &[P3], dir: P3) -> R<Shape> {
 
 /// Los pedazos de `cut` que tienen una cara plana en el plano (`origin`, normal `n`).
 fn keep_starting(cut: Shape, origin: P3, n: P3) -> R<Shape> {
-    let size = cut.mass().map(|m| norm(sub(m.bbox_max, m.bbox_min))).unwrap_or(1.0).max(1.0);
+    let size = cut.bbox().map(|m| norm(sub(m.bbox_max, m.bbox_min))).unwrap_or(1.0).max(1.0);
     let kept: Vec<Shape> = cut
         .solids()
         .map_err(err)?
@@ -6566,7 +6572,7 @@ fn keep_starting(cut: Shape, origin: P3, n: P3) -> R<Shape> {
 
 /// Agrega `t` a la cara de `shape` que pasa por `p` (si alguna pasa).
 fn mark(shape: &Shape, tags: &mut [Vec<FaceTag>], p: P3, t: FaceTag) {
-    if let Some(m) = shape.mass().ok()
+    if let Some(m) = shape.bbox().ok()
         && let Some((f, d)) = shape.closest_face(p, None, 0.0)
         && d <= norm(sub(m.bbox_max, m.bbox_min)).max(1.0) * 1e-6
         && let Some(slot) = tags.get_mut(f)
@@ -7079,7 +7085,7 @@ impl Ctx<'_> {
                     return Err("las curvas del sketch tienen que formar una sola cadena".into());
                 }
                 let skin = scan_solid(mesh.as_ref())?;
-                let m = skin.mass().map_err(err)?;
+                let m = skin.bbox().map_err(err)?;
                 let n = if *flip { scale(normalize(plane.normal), -1.0) } else { normalize(plane.normal) };
                 let corners = (0..8).map(|k| [0, 1, 2].map(|a| if k >> a & 1 == 0 { m.bbox_min[a] } else { m.bbox_max[a] }));
                 let reach = corners.map(|c| dot(sub(c, plane.origin), n).abs()).fold(0.0, f64::max) * 1.1 + 1.0;

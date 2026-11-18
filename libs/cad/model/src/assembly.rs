@@ -1449,7 +1449,7 @@ pub fn instance_shapes(ev: &Evaluation, asm: &Assembly, sol: &AssemblySolution) 
 /// Volumen en común entre cada par de instancias que chocan (mm³).
 pub fn interferences(shapes: &[(u32, Shape)]) -> Vec<(u32, u32, f64)> {
     let mut out = Vec::new();
-    let boxes: Vec<_> = shapes.iter().map(|(_, s)| s.mass().ok().map(|m| (m.bbox_min, m.bbox_max))).collect();
+    let boxes: Vec<_> = shapes.iter().map(|(_, s)| s.bbox().ok().map(|m| (m.bbox_min, m.bbox_max))).collect();
     for i in 0..shapes.len() {
         for j in i + 1..shapes.len() {
             let (Some((a0, a1)), Some((b0, b1))) = (boxes[i], boxes[j]) else { continue };
@@ -1477,7 +1477,7 @@ pub fn tight_gaps(ev: &Evaluation, asm: &Assembly, shapes: &[(u32, Shape)], min_
         let l = |x, y| ev.gears.iter().any(|g| g.feature == x && g.part.link.is_some_and(|l| l.feature == y));
         l(fa, fb) || l(fb, fa)
     };
-    let boxes: Vec<_> = shapes.iter().map(|(_, s)| s.mass().ok().map(|m| (m.bbox_min, m.bbox_max))).collect();
+    let boxes: Vec<_> = shapes.iter().map(|(_, s)| s.bbox().ok().map(|m| (m.bbox_min, m.bbox_max))).collect();
     let mut out = Vec::new();
     for i in 0..shapes.len() {
         for j in i + 1..shapes.len() {

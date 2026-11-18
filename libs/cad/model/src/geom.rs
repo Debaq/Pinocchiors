@@ -5,6 +5,24 @@ use serde::{Deserialize, Serialize};
 pub type P2 = [f64; 2];
 pub use cad_occt::P3;
 
+/// Caja que envuelve una forma, con los nombres de `MassInfo`.
+pub struct BBox {
+    pub bbox_min: P3,
+    pub bbox_max: P3,
+}
+
+/// `bbox()` en vez de `mass()` cuando solo hace falta la caja: `mass()`
+/// integra volumen, área e inercia (segundos en superficies libres).
+pub trait BoxOf {
+    fn bbox(&self) -> cad_occt::Result<BBox>;
+}
+
+impl BoxOf for cad_occt::Shape {
+    fn bbox(&self) -> cad_occt::Result<BBox> {
+        self.bounds().map(|(bbox_min, bbox_max)| BBox { bbox_min, bbox_max })
+    }
+}
+
 pub fn add(a: P3, b: P3) -> P3 {
     [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
 }

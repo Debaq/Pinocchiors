@@ -1172,9 +1172,11 @@ pub fn cad_tabs(state: tauri::State<'_, AppState>) -> TabsView {
 }
 
 /// El documento de una pestaña de diseño cualquiera (sin activarla)
+// Los comandos de pestañas van fuera del hilo de la ventana: cambiar la activa
+// espera a que termine el recálculo en curso (toma `cad_cache`) y eso congelaba la ventana
 #[tauri::command]
-pub fn cad_tab_document(state: tauri::State<'_, AppState>, id: TabId) -> Option<Document> {
-    state.cad_tabs.lock().unwrap().design(id).cloned()
+pub async fn cad_tab_document(app: AppHandle, id: TabId) -> Result<Option<Document>, String> {
+    in_background(app, move |state| Ok(state.cad_tabs.lock().unwrap().design(id).cloned())).await
 }
 
 /// Las piezas de una pestaña de diseño con el nombre que tienen en ella (para traerlas a otra)
@@ -1194,8 +1196,8 @@ fn tab_parts_impl(state: &AppState, id: TabId) -> Result<Vec<PartLabel>, String>
 
 /// Pestaña nueva al final; queda activa.
 #[tauri::command]
-pub fn cad_tab_add(state: tauri::State<'_, AppState>, kind: NewTab, name: Option<String>) -> Result<TabsView, String> {
-    tab_add_impl(&state, kind, name)
+pub async fn cad_tab_add(app: AppHandle, kind: NewTab, name: Option<String>) -> Result<TabsView, String> {
+    in_background(app, move |state| tab_add_impl(state, kind, name)).await
 }
 
 fn tab_add_impl(state: &AppState, kind: NewTab, name: Option<String>) -> Result<TabsView, String> {
@@ -1209,30 +1211,30 @@ fn tab_add_impl(state: &AppState, kind: NewTab, name: Option<String>) -> Result<
 }
 
 #[tauri::command]
-pub fn cad_tab_rename(state: tauri::State<'_, AppState>, id: TabId, name: String) -> Result<TabsView, String> {
-    change_tabs(&state, |t| t.rename(id, &name))
+pub async fn cad_tab_rename(app: AppHandle, id: TabId, name: String) -> Result<TabsView, String> {
+    in_background(app, move |state| change_tabs(state, |t| t.rename(id, &name))).await
 }
 
 /// Copia al lado de la original; queda activa.
 #[tauri::command]
-pub fn cad_tab_duplicate(state: tauri::State<'_, AppState>, id: TabId) -> Result<TabsView, String> {
-    change_tabs(&state, |t| t.duplicate(id).map(|_| ()))
+pub async fn cad_tab_duplicate(app: AppHandle, id: TabId) -> Result<TabsView, String> {
+    in_background(app, move |state| change_tabs(state, |t| t.duplicate(id).map(|_| ()))).await
 }
 
 #[tauri::command]
-pub fn cad_tab_delete(state: tauri::State<'_, AppState>, id: TabId) -> Result<TabsView, String> {
-    change_tabs(&state, |t| t.remove(id).map(|_| ()))
+pub async fn cad_tab_delete(app: AppHandle, id: TabId) -> Result<TabsView, String> {
+    in_background(app, move |state| change_tabs(state, |t| t.remove(id).map(|_| ()))).await
 }
 
 #[tauri::command]
-pub fn cad_tab_move(state: tauri::State<'_, AppState>, id: TabId, to: usize) -> Result<TabsView, String> {
-    change_tabs(&state, |t| t.move_to(id, to))
+pub async fn cad_tab_move(app: AppHandle, id: TabId, to: usize) -> Result<TabsView, String> {
+    in_background(app, move |state| change_tabs(state, |t| t.move_to(id, to))).await
 }
 
 /// Una pestaña entera, con su contenido tal como se guarda (para mandarla a la sala)
 #[tauri::command]
-pub fn cad_tab_raw(state: tauri::State<'_, AppState>, id: TabId) -> Option<cad_model::Tab> {
-    state.cad_tabs.lock().unwrap().get(id).cloned()
+pub async fn cad_tab_raw(app: AppHandle, id: TabId) -> Result<Option<cad_model::Tab>, String> {
+    in_background(app, move |state| Ok(state.cad_tabs.lock().unwrap().get(id).cloned())).await
 }
 
 /// Una pestaña de la barra de otra persona: id, nombre y si es diseño
@@ -1254,8 +1256,8 @@ pub struct TabsSynced {
 /// nuevas con el contenido de `full`). `replace`: pestañas que ya están pero
 /// cuyo contenido cambió entero (lo que trajo un invitado de su copia del proyecto).
 #[tauri::command]
-pub fn cad_tabs_sync(state: tauri::State<'_, AppState>, layout: Vec<LayoutTab>, full: Vec<cad_model::Tab>, replace: Option<Vec<cad_model::Tab>>) -> Result<TabsSynced, String> {
-    tabs_sync_impl(&state, layout, full, replace.unwrap_or_default())
+pub async fn cad_tabs_sync(app: AppHandle, layout: Vec<LayoutTab>, full: Vec<cad_model::Tab>, replace: Option<Vec<cad_model::Tab>>) -> Result<TabsSynced, String> {
+    in_background(app, move |state| tabs_sync_impl(state, layout, full, replace.unwrap_or_default())).await
 }
 
 fn tabs_sync_impl(state: &AppState, layout: Vec<LayoutTab>, full: Vec<cad_model::Tab>, replace: Vec<cad_model::Tab>) -> Result<TabsSynced, String> {
@@ -1296,8 +1298,8 @@ pub struct TabsMerged {
 /// Junta otra copia del mismo proyecto: `replace` cambia el contenido de
 /// pestañas que ya están y `add` agrega pestañas nuevas (con id nuevo)
 #[tauri::command]
-pub fn cad_tabs_merge(state: tauri::State<'_, AppState>, replace: Vec<cad_model::Tab>, add: Vec<cad_model::Tab>) -> Result<TabsMerged, String> {
-    tabs_merge_impl(&state, replace, add)
+pub async fn cad_tabs_merge(app: AppHandle, replace: Vec<cad_model::Tab>, add: Vec<cad_model::Tab>) -> Result<TabsMerged, String> {
+    in_background(app, move |state| tabs_merge_impl(state, replace, add)).await
 }
 
 fn tabs_merge_impl(state: &AppState, replace: Vec<cad_model::Tab>, add: Vec<cad_model::Tab>) -> Result<TabsMerged, String> {
@@ -1312,8 +1314,8 @@ fn tabs_merge_impl(state: &AppState, replace: Vec<cad_model::Tab>, add: Vec<cad_
 }
 
 #[tauri::command]
-pub fn cad_tab_activate(state: tauri::State<'_, AppState>, id: TabId) -> Result<TabsView, String> {
-    change_tabs(&state, |t| t.activate(id))
+pub async fn cad_tab_activate(app: AppHandle, id: TabId) -> Result<TabsView, String> {
+    in_background(app, move |state| change_tabs(state, |t| t.activate(id))).await
 }
 
 /// Estado del recálculo actual (sin cambiar nada).

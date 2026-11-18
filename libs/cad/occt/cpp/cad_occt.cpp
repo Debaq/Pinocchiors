@@ -215,8 +215,10 @@ R guard(const char* what, R fallback, F f) {
 
 // Para operaciones que OCCT puede "completar" con una forma rota (redondeos
 // imposibles, booleanas degeneradas): mejor un error claro que un sólido inválido.
+// La revisión va en paralelo (por caras y aristas): en cuerpos grandes pesaba
+// tanto como la operación.
 CadShape* wrap_checked(const TopoDS_Shape& s, const char* what) {
-    if (!s.IsNull() && !BRepCheck_Analyzer(s).IsValid())
+    if (!s.IsNull() && !BRepCheck_Analyzer(s, Standard_True, Standard_True).IsValid())
         throw Standard_Failure((std::string(what) + ": el resultado no es un sólido válido").c_str());
     return s.IsNull() ? nullptr : new CadShape{s};
 }
@@ -543,7 +545,7 @@ CadShape* cad_shape_deep_copy(const CadShape* s) {
 }
 
 int32_t cad_shape_is_valid(const CadShape* s) {
-    return guard("validar", 0, [&] { return BRepCheck_Analyzer(s->s).IsValid() ? 1 : 0; });
+    return guard("validar", 0, [&] { return BRepCheck_Analyzer(s->s, Standard_True, Standard_True).IsValid() ? 1 : 0; });
 }
 
 // --- Perfiles ---------------------------------------------------------------
@@ -3108,7 +3110,7 @@ CadShape* cad_grid_face(const double* grid, int32_t rows, int32_t cols, double t
         ShapeFix_Shape all(fix.Face());
         all.Perform();
         TopoDS_Shape r = all.Shape();
-        if (!BRepCheck_Analyzer(r).IsValid()) throw Standard_Failure("la superficie recortada no es válida");
+        if (!BRepCheck_Analyzer(r, Standard_True, Standard_True).IsValid()) throw Standard_Failure("la superficie recortada no es válida");
         return wrap(r);
     });
 }

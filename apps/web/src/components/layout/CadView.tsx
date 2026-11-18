@@ -1107,10 +1107,12 @@ export const CadView: Component<CadViewProps> = (props) => {
   });
   createEffect(() => {
     store.mesh();
+    // Apagado no se calcula (corría con cada cambio del documento)
+    if (!ui.showCenterOfMass()) return viewer?.setCenterOfMass(null);
     const body = store.result()?.body;
     // Con materiales por pieza, el centro ponderado por la masa de cada una
     const c = designMass(store.doc(), store.result()).center ?? body?.center;
-    viewer?.setCenterOfMass(ui.showCenterOfMass() && c ? c : null);
+    viewer?.setCenterOfMass(c ?? null);
   });
   // Planos, ejes y puntos de referencia (el ojo del árbol los oculta)
   createEffect(() => {
@@ -2786,6 +2788,9 @@ export const CadView: Component<CadViewProps> = (props) => {
       if (planar === undefined) {
         viewer.setPreselect(null);
         const faces = planarFaces;
+        // Mientras llega la respuesta, como no plana: un solo pedido por cara
+        // (antes salía otro en cada cuadro con el mouse encima)
+        faces.set(hit.face, false);
         void invoke<{ surface: string }>("cad_face_info", { face: hit.face }).then(
           (info) => {
             faces.set(hit.face, info.surface === "plane");

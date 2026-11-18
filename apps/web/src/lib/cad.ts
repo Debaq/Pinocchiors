@@ -4939,7 +4939,10 @@ export interface Draft {
 
 /** Lo que se evalúa para la vista previa: hasta la operación en edición, como Onshape */
 export function previewDocument(d: Draft): CadDocument {
-  const doc = clone(d.doc);
+  // Sin las versiones guardadas (documentos enteros que no cambian el
+  // cálculo): copiarlas y mandarlas en cada paso de la vista previa pesaba
+  const { versions: _versions, ...rest } = d.doc;
+  const doc = clone(rest as CadDocument);
   const i = doc.features.findIndex((f) => f.id === d.feature);
   const end = d.selecting ? i : i + 1;
   doc.rollback = i < 0 || end >= doc.features.length ? null : end;
