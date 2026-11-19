@@ -886,6 +886,28 @@ impl Shape {
         (d >= 0.0).then_some(d)
     }
 
+    /// [`face_distance`](Self::face_distance) de varias caras (el mapa de caras se arma una vez).
+    pub fn face_distances(&self, indices: &[usize], point: P3) -> Vec<Option<f64>> {
+        self.sub_distances(0, indices, point)
+    }
+
+    /// [`edge_distance`](Self::edge_distance) de varias aristas.
+    pub fn edge_distances(&self, indices: &[usize], point: P3) -> Vec<Option<f64>> {
+        self.sub_distances(1, indices, point)
+    }
+
+    fn sub_distances(&self, kind: i32, indices: &[usize], point: P3) -> Vec<Option<f64>> {
+        if indices.is_empty() {
+            return Vec::new();
+        }
+        let idx: Vec<i32> = indices.iter().map(|&i| i as i32).collect();
+        let mut out = vec![-1.0f64; idx.len()];
+        if unsafe { ffi::cad_sub_distances(self.ptr(), kind, idx.as_ptr(), idx.len() as i32, point.as_ptr(), out.as_mut_ptr()) } == 0 {
+            return vec![None; indices.len()];
+        }
+        out.into_iter().map(|d| (d >= 0.0).then_some(d)).collect()
+    }
+
     /// Distancia exacta de `point` a la arista `index`.
     pub fn edge_distance(&self, index: usize, point: P3) -> Option<f64> {
         let d = unsafe { ffi::cad_edge_distance(self.ptr(), index as i32, point.as_ptr()) };

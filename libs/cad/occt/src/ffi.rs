@@ -172,6 +172,7 @@ unsafe extern "C" {
     pub fn cad_closest_edge(s: *const CadShape, point: *const f64, dir: *const f64, min_cos: f64, dist: *mut f64) -> i32;
     pub fn cad_face_distance(s: *const CadShape, index: i32, point: *const f64) -> f64;
     pub fn cad_edge_distance(s: *const CadShape, index: i32, point: *const f64) -> f64;
+    pub fn cad_sub_distances(s: *const CadShape, kind: i32, idx: *const i32, n: i32, point: *const f64, out: *mut f64) -> i32;
     pub fn cad_edge_face_pairs(s: *const CadShape, out: *mut i32) -> i32;
     pub fn cad_sub_shape(s: *const CadShape, kind: i32, index: i32) -> *mut CadShape;
     pub fn cad_count_vertices(s: *const CadShape) -> i32;

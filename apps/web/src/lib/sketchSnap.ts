@@ -411,6 +411,24 @@ export function straightEdge(poly: P2[]): [P2, P2] | undefined {
   return poly.every((p) => curveDist(p, { id: 0, kind: "line", a, b }) <= tol) ? [a, b] : undefined;
 }
 
+/** Caja de una polilínea (se guarda por polilínea: las del sólido y las curvas se reusan entre movimientos) */
+const polyBoxes = new WeakMap<P2[], [number, number, number, number]>();
+/** ¿La polilínea queda a más de `tol` del punto? (por su caja: descarta las lejanas sin recorrerlas) */
+function farFromPoly(poly: P2[], p: P2, tol: number): boolean {
+  let b = polyBoxes.get(poly);
+  if (!b) {
+    b = [Infinity, Infinity, -Infinity, -Infinity];
+    for (const q of poly) {
+      if (q[0] < b[0]) b[0] = q[0];
+      if (q[1] < b[1]) b[1] = q[1];
+      if (q[0] > b[2]) b[2] = q[0];
+      if (q[1] > b[3]) b[3] = q[1];
+    }
+    polyBoxes.set(poly, b);
+  }
+  return p[0] < b[0] - tol || p[0] > b[2] + tol || p[1] < b[1] - tol || p[1] > b[3] + tol;
+}
+
 /** Punto más cercano de una polilínea */
 function nearestOnPolyline(poly: P2[], p: P2): P2 {
   let best: P2 = poly[0];
@@ -687,7 +705,7 @@ export function infer(s: Sketch, cursor: P2, tol: number, opts: InferOptions = {
       }
     }
   }
-  for (const c of opts.curves ?? []) if (c.poly.length >= 2) offer({ p: nearestOnPolyline(c.poly, cursor), kind: "on_curve", entity: c.id });
+  for (const c of opts.curves ?? []) if (c.poly.length >= 2 && !farFromPoly(c.poly, cursor, tol)) offer({ p: nearestOnPolyline(c.poly, cursor), kind: "on_curve", entity: c.id });
   if (opts.solid) {
     const src = opts.solid.src;
     const from = (x: AnchorSrc | undefined) => (x ? { src: x } : {});
@@ -695,6 +713,7 @@ export function infer(s: Sketch, cursor: P2, tol: number, opts: InferOptions = {
     opts.solid.centers.forEach((p, i) => offer({ p, kind: "solid_center", ...from(src?.centers[i]) }));
     opts.solid.midpoints.forEach((p, i) => offer({ p, kind: "solid_midpoint", ...from(src?.midpoints[i]) }));
     opts.solid.edges.forEach((poly, i) => {
+      if (farFromPoly(poly, cursor, tol)) return;
       const line = straightEdge(poly);
       offer({ p: nearestOnPolyline(poly, cursor), kind: "on_edge", ...(line ? { edgeLine: line } : {}), ...from(src?.edges[i]) });
     });
@@ -710,7 +729,7 @@ export function infer(s: Sketch, cursor: P2, tol: number, opts: InferOptions = {
     }
   }
   // Cruces con splines y elipses: por sus polilíneas (el solver los deja justo encima)
-  const polys = (opts.curves ?? []).filter((c) => c.poly.length >= 2 && dist(cursor, nearestOnPolyline(c.poly, cursor)) <= tol);
+  const polys = (opts.curves ?? []).filter((c) => c.poly.length >= 2 && !farFromPoly(c.poly, cursor, tol) && dist(cursor, nearestOnPolyline(c.poly, cursor)) <= tol);
   if (polys.length) {
     const all = [...near.map((k) => ({ id: k.id, poly: curvePoly(k) })), ...polys];
     for (let i = 0; i < all.length; i++) {
@@ -744,7 +763,7 @@ export function infer(s: Sketch, cursor: P2, tol: number, opts: InferOptions = {
       for (const p of crossings(gl, k)) if (onGuide(g, p)) cross([g], p, e.id);
     }
     for (const c of opts.curves ?? []) {
-      if (c.poly.length < 2 || dist(cursor, nearestOnPolyline(c.poly, cursor)) > tol) continue;
+      if (c.poly.length < 2 || farFromPoly(c.poly, cursor, tol) || dist(cursor, nearestOnPolyline(c.poly, cursor)) > tol) continue;
       for (const p of polyCrossings(guidePoly(g), c.poly)) cross([g], p, c.id);
     }
   }

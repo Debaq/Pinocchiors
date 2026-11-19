@@ -2759,6 +2759,25 @@ double cad_edge_distance(const CadShape* s, int32_t index, const double* point) 
     });
 }
 
+// Por lote: el mapa de caras/aristas se arma una vez (por llamada era O(caras)
+// cada vez, y resolver una referencia prueba muchas candidatas). `out[i]` = −1 si falla.
+int32_t cad_sub_distances(const CadShape* s, int32_t kind, const int32_t* idx, int32_t n, const double* point, double* out) {
+    return guard("distancia", 0, [&] {
+        auto m = map_of(s->s, kind == 0 ? TopAbs_FACE : TopAbs_EDGE);
+        TopoDS_Vertex v = BRepBuilderAPI_MakeVertex(pnt(point)).Vertex();
+        for (int32_t i = 0; i < n; i++) {
+            out[i] = -1.0;
+            if (idx[i] < 0 || idx[i] >= m.Extent()) continue;
+            try {
+                BRepExtrema_DistShapeShape ext(v, m(idx[i] + 1));
+                if (ext.IsDone() && ext.NbSolution() > 0) out[i] = ext.Value();
+            } catch (const Standard_Failure&) {
+            }
+        }
+        return 1;
+    });
+}
+
 CadShape* cad_sub_shape(const CadShape* s, int32_t kind, int32_t index) {
     return guard("elemento", (CadShape*)nullptr, [&] {
         TopAbs_ShapeEnum t = kind == 0 ? TopAbs_FACE : kind == 1 ? TopAbs_EDGE : kind == 2 ? TopAbs_VERTEX : TopAbs_SOLID;

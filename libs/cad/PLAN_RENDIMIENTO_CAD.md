@@ -78,3 +78,22 @@ booleanas en paralelo, teselado en paralelo, arrastre de puntos con deltas.
     backend guarda lo que llega: quitarlas ahí las perdería).
   - F1.8 `planarFaces` marca la cara en vuelo.
   - Centro de gravedad: no se calcula con la opción apagada.
+- 2026-11-18 Fase 2 (parte escrita):
+  - Sketch en la interfaz: `setSketchHighlight` (hover/selección rehacen solo
+    líneas y puntos, no regiones/calcos/rejilla; curvas por sketch en
+    `shapeOf`); el efecto base de `CadView` lee lo resaltado con `untrack`.
+    Imán una vez por cuadro (`sketchMove` con rAF; `flushSketchMove` en
+    pointerdown/up). `farFromPoly` descarta polilíneas lejanas por su caja.
+    `hitAll` con caché por sketch (WeakMap). Pick de vértices sin clones.
+    `dropGroup` libera cualquier objeto.
+  - Motor: `fingerprint` sin texto JSON (`HashSink`); `resolve()` copia sin
+    `versions` (`without_versions`); `Shape::face_distances`/`edge_distances`
+    por lote (`cad_sub_distances`, el mapa una vez) en `resolve_face` y
+    `resolve_edge`; `Evaluation::edge_refs` por lote (usado en
+    `cad_edge_refs` y proyectar cara).
+  - `Sketch::solve_quick` (sin diagnóstico si se cumple) en el arrastre de
+    una entidad entera; `solve_drag` igual que antes.
+  - Pendiente de la fase 2: caché de sketches iguales, contador de versión /
+    `design_tabs` sin clonar, recálculo sin bloquear y cancelable, `diag()`
+    recordado (falta una identidad de forma barata en `cad_occt`).
+

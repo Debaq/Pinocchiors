@@ -356,6 +356,7 @@ export class CadViewer {
   private visibleTriFace = new Uint32Array();
   /** Vértices del sólido (extremos de aristas), en coordenadas del visor */
   private bodyVertices: THREE.Vector3[] = [];
+  private tmpVertex = new THREE.Vector3();
   /** Vértices elegidos y la línea de la distancia medida */
   private marks = new THREE.Group();
   /** Ensamble: conectores (ejes chicos) y recorridos de la explosión */
@@ -1084,9 +1085,11 @@ export class CadViewer {
   private dropGroup(group: THREE.Group) {
     this.scene.remove(group);
     group.traverse((o) => {
-      if (o instanceof THREE.Mesh || o instanceof THREE.Line) {
-        o.geometry.dispose();
-        (o.material as THREE.Material).dispose();
+      // Mallas, líneas (también las gruesas), puntos y sprites: geometría y material(es)
+      const x = o as THREE.Object3D & { geometry?: THREE.BufferGeometry; material?: THREE.Material | THREE.Material[] };
+      x.geometry?.dispose();
+      for (const m of [x.material ?? []].flat()) {
+        m.dispose();
       }
     });
   }
@@ -1507,6 +1510,7 @@ export class CadViewer {
       this.sketchGroup.remove(child);
       this.retired.push(child as THREE.Mesh);
     }
+    this.sketchOverlay = overlay ?? undefined;
     // Sobre la hoja del plano: el fondo de alrededor como en el plano y los colores de la paleta clara (papel blanco)
     const paper = !!overlay?.paper;
     if (paper !== this.paper) {
@@ -1514,12 +1518,9 @@ export class CadViewer {
       this.scene.background = new THREE.Color(themeHex(paper ? "bg-darker" : "viewport"));
     }
     if (!overlay) return this.requestRender();
-    const { plane, sketch } = overlay;
+    const { plane } = overlay;
     const hex = (name: string) => themeHex(name, paper);
     const w = (p: P2) => this.toView(planeToWorld(plane, p));
-    const point = new Map(sketch.points.map((p) => [p.id, [p.x, p.y] as P2]));
-    const selected = new Set(overlay.selected ?? []);
-    const hover = new Set(overlay.hover ?? []);
 
     // Regiones cerradas, rellenas apenas (eligiendo: todas, las elegidas fuerte)
     const choosing = overlay.chosen !== undefined;
@@ -1544,6 +1545,7 @@ export class CadViewer {
       });
       const mesh = new THREE.Mesh(g, m);
       mesh.renderOrder = 6;
+      mesh.userData.sketchStatic = true;
       this.sketchGroup.add(mesh);
     }
 
@@ -1561,6 +1563,7 @@ export class CadViewer {
       const mesh = new THREE.Mesh(g, m);
       mesh.renderOrder = 4;
       mesh.userData.sketchImage = im.id;
+      mesh.userData.sketchStatic = true;
       this.sketchGroup.add(mesh);
     }
     // Texturas de calcos que ya no están (cada imagen nueva quedaba cargada hasta cerrar)
@@ -1580,10 +1583,46 @@ export class CadViewer {
         const l = new THREE.LineSegments(g, m);
         l.renderOrder = 5;
         l.userData.sketchGrid = true;
+        l.userData.sketchStatic = true;
         this.sketchGroup.add(l);
       }
     }
+    this.buildSketchLines(overlay);
+  }
 
+  /** Lo que se ve en el sketch cuando solo cambia lo resaltado (mouse encima, selección) */
+  private sketchOverlay?: SketchOverlay;
+  /** Formas de las entidades del último sketch (se rehacen solo si cambia el sketch) */
+  private sketchShapes?: { sketch: Sketch; reach: number; map: Map<number, { pts: P2[]; extra: (P2 | undefined)[][] }> };
+
+  /**
+   * Cambia solo el resaltado (hover, selección, cajas de texto) sin rehacer
+   * regiones, calcos ni rejilla, ni recalcular las curvas de las entidades.
+   */
+  setSketchHighlight(p: Pick<SketchOverlay, "hover" | "selected" | "textBoxes">) {
+    const o = this.sketchOverlay;
+    if (!o) return;
+    const same = (a?: unknown[], b?: unknown[]) => (a?.length ?? 0) === (b?.length ?? 0) && (a ?? []).every((x, i) => x === b![i]);
+    const boxes = (b?: SketchOverlay["textBoxes"]) => (b ?? []).map((x) => `${x.min}|${x.max}|${x.selected}`);
+    if (same(o.hover, p.hover) && same(o.selected, p.selected) && same(boxes(o.textBoxes), boxes(p.textBoxes))) return;
+    this.sketchOverlay = { ...o, ...p };
+    for (const child of [...this.sketchGroup.children]) {
+      if (child.userData.sketchStatic) continue;
+      this.sketchGroup.remove(child);
+      this.retired.push(child as THREE.Mesh);
+    }
+    this.buildSketchLines(this.sketchOverlay);
+  }
+
+  /** Líneas, puntos, marcas y latido del sketch (la parte que cambia con el resaltado) */
+  private buildSketchLines(overlay: SketchOverlay) {
+    const paper = !!overlay.paper;
+    const { plane, sketch } = overlay;
+    const hex = (name: string) => themeHex(name, paper);
+    const w = (p: P2) => this.toView(planeToWorld(plane, p));
+    const point = new Map(sketch.points.map((p) => [p.id, [p.x, p.y] as P2]));
+    const selected = new Set(overlay.selected ?? []);
+    const hover = new Set(overlay.hover ?? []);
     const halos = hex("viewport");
     // Las líneas van en lotes (un objeto por grosor, trazo y orden, con el color
     // en cada vértice): un objeto por entidad eran miles de dibujos por cuadro
@@ -1664,11 +1703,14 @@ export class CadViewer {
     // Las líneas infinitas llegan bien lejos del dibujo
     let reach = 1000;
     for (const p of sketch.points) reach = Math.max(reach, 20 * Math.abs(p.x), 20 * Math.abs(p.y));
-    for (const e of sketch.entities) {
+    // Las curvas (círculos, arcos, splines, elipses) se calculan una vez por sketch
+    if (this.sketchShapes?.sketch !== sketch || this.sketchShapes.reach !== reach) this.sketchShapes = { sketch, reach, map: new Map() };
+    const shapes = this.sketchShapes.map;
+    const shapeOf = (e: (typeof sketch.entities)[number]) => {
+      let c = shapes.get(e.id);
+      if (c) return c;
       const g = e.geometry;
-      if (overlay.hideConstruction && e.construction && !selected.has(e.id) && !hover.has(e.id)) continue;
-      // La línea central se distingue (es el eje que se toma sin elegirlo)
-      const color = e.axis && !selected.has(e.id) && !hover.has(e.id) ? hex("accent") : entityColor(e.id, !!e.construction);
+      const extra: (P2 | undefined)[][] = [];
       let pts: P2[] = [];
       if (g.type === "line" && e.infinite) {
         const [a, b] = [point.get(g.start)!, point.get(g.end)!];
@@ -1702,15 +1744,26 @@ export class CadViewer {
           [g.points[0], g.start_handle],
           [g.points[g.points.length - 1], g.end_handle],
         ] as const) {
-          if (h !== undefined) lines([point.get(end), point.get(h)], construction, true);
+          if (h !== undefined) extra.push([point.get(end), point.get(h)]);
         }
-        for (const [i, h] of g.handles ?? []) lines([point.get(g.points[i]), point.get(h)], construction, true);
+        for (const [i, h] of g.handles ?? []) extra.push([point.get(g.points[i]), point.get(h)]);
       } else if (g.type === "bspline") {
         pts = entityPolyline(g, point) ?? [];
         // Polígono de control punteado
         const poly = g.poles.map((id) => point.get(id));
-        lines(g.closed ? [...poly, poly[0]] : poly, construction, true);
+        extra.push(g.closed ? [...poly, poly[0]] : poly);
       } else if (g.type === "ellipse" || g.type === "ellipse_arc") pts = entityPolyline(g, point) ?? [];
+      c = { pts, extra };
+      shapes.set(e.id, c);
+      return c;
+    };
+    for (const e of sketch.entities) {
+      if (overlay.hideConstruction && e.construction && !selected.has(e.id) && !hover.has(e.id)) continue;
+      // La línea central se distingue (es el eje que se toma sin elegirlo)
+      const color = e.axis && !selected.has(e.id) && !hover.has(e.id) ? hex("accent") : entityColor(e.id, !!e.construction);
+      const shape = shapeOf(e);
+      let pts = shape.pts;
+      for (const x of shape.extra) lines(x, construction, true);
       // Vista separada: corrida a su costado, en su color
       const sp = spread.get(e.id);
       if (sp && pts.every(Boolean)) pts = pts.map((p) => [p[0] + sp.offset[0], p[1] + sp.offset[1]]);
@@ -2416,8 +2469,9 @@ export class CadViewer {
       const rect = this.renderer.domElement.getBoundingClientRect();
       const front = this.body ? this.kept(this.hitBody(this.raycaster))?.distance : undefined;
       let best: { d: number; v: THREE.Vector3 } | undefined;
+      const s = this.tmpVertex;
       for (const v of this.bodyVertices) {
-        const s = v.clone().project(this.camera);
+        s.copy(v).project(this.camera);
         if (s.z > 1) continue;
         const px = Math.hypot(rect.left + ((s.x + 1) / 2) * rect.width - clientX, rect.top + ((1 - s.y) / 2) * rect.height - clientY);
         if (px > 8 || (best && px >= best.d)) continue;

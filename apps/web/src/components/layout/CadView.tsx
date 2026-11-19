@@ -374,10 +374,15 @@ function hitTest(s: Sketch, p: P2, tol: number, withPoints = true): { point?: nu
   return hitAll(s, p, tol, withPoints)[0] ?? {};
 }
 
+const hitCache = new WeakMap<Sketch, { pt: Map<number, P2>; polys: Map<number, P2[]> }>();
+
 /** Todo lo que hay bajo `p` (a menos de `tol`): primero los puntos, después las curvas, cada grupo del más cercano al más lejano */
 function hitAll(s: Sketch, p: P2, tol: number, withPoints = true): { point?: number; entity?: number }[] {
+  // Puntos y polilíneas de curvas por sketch (cada pasada del mouse los rehacía)
+  let cache = hitCache.get(s);
+  if (!cache) hitCache.set(s, (cache = { pt: new Map(s.points.map((q) => [q.id, [q.x, q.y] as P2])), polys: new Map() }));
+  const { pt, polys } = cache;
   s = withoutLayers(s, true);
-  const pt = new Map(s.points.map((q) => [q.id, [q.x, q.y] as P2]));
   const points: { id: number; d: number }[] = [];
   for (const q of withPoints ? s.points : []) {
     const d = dist(p, [q.x, q.y]);
@@ -396,11 +401,13 @@ function hitAll(s: Sketch, p: P2, tol: number, withPoints = true): { point?: num
     else if (g.type === "arc") d = Math.abs(dist(p, pt.get(g.center)!) - dist(pt.get(g.start)!, pt.get(g.center)!));
     else if (g.type === "point") d = dist(p, pt.get(g.point)!);
     else if (g.type === "ellipse") {
-      const pts = ellipsePolyline(pt.get(g.center)!, pt.get(g.major)!, pt.get(g.minor)!);
+      let pts = polys.get(e.id);
+      if (!pts) polys.set(e.id, (pts = ellipsePolyline(pt.get(g.center)!, pt.get(g.major)!, pt.get(g.minor)!)));
       for (let i = 0; i + 1 < pts.length; i++) d = Math.min(d, segDist(p, pts[i], pts[i + 1]));
     }
     else {
-      const pts = (g.type === "spline" ? splineOf(g, (x) => pt.get(x)) : curvePolyline(g, (x) => pt.get(x))) ?? [];
+      let pts = polys.get(e.id);
+      if (!pts) polys.set(e.id, (pts = (g.type === "spline" ? splineOf(g, (x) => pt.get(x)) : curvePolyline(g, (x) => pt.get(x))) ?? []));
       for (let i = 0; i + 1 < pts.length; i++) d = Math.min(d, segDist(p, pts[i], pts[i + 1]));
     }
     if (d <= tol) curves.push({ id: e.id, d });
@@ -1527,6 +1534,28 @@ export const CadView: Component<CadViewProps> = (props) => {
     });
   });
 
+  // Lo que cambia con el mouse y la selección: colores y grosores, no la geometría
+  const highlightOf = () => {
+    const s = ui.session();
+    if (!s) return { selected: [], hover: [], textBoxes: [] };
+    const sel = ui.selection();
+    return {
+      // Un texto elegido (su ancla) se resalta entero
+      selected: [...sel, ...(s.sketch.texts ?? []).flatMap((t) => (sel.includes(t.anchor) ? t.entities : []))],
+      textBoxes: (s.sketch.texts ?? []).flatMap((t) => {
+        const b = t.block == null ? textBox(s.sketch, t) : undefined;
+        return b ? [{ ...b, selected: sel.includes(t.anchor) }] : [];
+      }),
+      hover: [
+        ...ui.hoverIds(),
+        ...snapRefs(),
+        ...tanPicks().map((x) => x.entity),
+        ...(preHover() !== undefined ? [preHover()!] : []),
+        // Lo que atan las restricciones elegidas
+        ...ui.selectedConstraints().flatMap((i) => (s.sketch.constraints[i] ? constraintIds(s.sketch.constraints[i]) : [])),
+      ],
+    };
+  };
   // Dibujo del sketch (la vista previa de la herramienta va aparte, abajo:
   // así lo que sigue al mouse no rehace el sketch entero)
   createEffect(() => {
@@ -1564,20 +1593,10 @@ export const CadView: Component<CadViewProps> = (props) => {
         ? [{ id: -1, name: "Hoja", data: s.sheet.backdrop, at: [0, 0], width: s.sheet.width, height: s.sheet.height, opacity: 1 }, ...(s.sketch.images ?? [])]
         : s.sketch.images,
       // Un texto elegido (su ancla) se resalta entero
-      selected: [...ui.selection(), ...(s.sketch.texts ?? []).flatMap((t) => (ui.selection().includes(t.anchor) ? t.entities : []))],
       hiddenPoints: (s.sketch.texts ?? []).flatMap((t) => t.points.filter((p) => p !== t.anchor)),
-      textBoxes: (s.sketch.texts ?? []).flatMap((t) => {
-        const b = t.block == null ? textBox(s.sketch, t) : undefined;
-        return b ? [{ ...b, selected: ui.selection().includes(t.anchor) }] : [];
-      }),
-      hover: [
-        ...ui.hoverIds(),
-        ...snapRefs(),
-        ...tanPicks().map((x) => x.entity),
-        ...(preHover() !== undefined ? [preHover()!] : []),
-        // Lo que atan las restricciones elegidas
-        ...ui.selectedConstraints().flatMap((i) => (s.sketch.constraints[i] ? constraintIds(s.sketch.constraints[i]) : [])),
-      ],
+      // Lo resaltado (elegido, bajo el mouse, cajas de texto) se lee sin suscribirse:
+      // sus cambios van por `setSketchHighlight` y no rehacen el sketch
+      ...untrack(highlightOf),
       freePoints: s.report?.free_points,
       freeEntities: s.report?.free_entities,
       // Flechas de lo que se mueve (los puntos de un texto van con su ancla)
@@ -1626,6 +1645,12 @@ export const CadView: Component<CadViewProps> = (props) => {
         return c ? constraintIds(c).filter((id) => s.sketch.entities.some((e) => e.id === id)) : [];
       }),
     });
+  });
+
+  // Va después del dibujo: si cambia el sketch ya llega con lo resaltado y esto no rehace nada
+  createEffect(() => {
+    if (!viewer || !ui.session()) return;
+    viewer.setSketchHighlight(highlightOf());
   });
 
   // Sobre la hoja del plano: las líneas de las vistas (mm de hoja) son los
@@ -3129,6 +3154,7 @@ export const CadView: Component<CadViewProps> = (props) => {
   };
 
   const onPointerDown = (e: PointerEvent) => {
+    flushSketchMove();
     if (e.button === 2) rightDown = { x: e.clientX, y: e.clientY };
     if (e.button !== 0 || e.altKey) return;
     if (viewer?.cubeDown(e.clientX, e.clientY)) return;
@@ -3202,6 +3228,24 @@ export const CadView: Component<CadViewProps> = (props) => {
     }
   };
   onCleanup(() => cancelAnimationFrame(sketchHoverFrame));
+  // Último movimiento del sketch sin procesar (ver onPointerMove)
+  let sketchMoveEvt: PointerEvent | undefined;
+  let sketchMoveFrame = 0;
+  /** Procesa ya el movimiento pendiente (los clics usan la posición fresca) */
+  const flushSketchMove = () => {
+    if (sketchMoveFrame) cancelAnimationFrame(sketchMoveFrame);
+    sketchMoveFrame = 0;
+    const ev = sketchMoveEvt;
+    sketchMoveEvt = undefined;
+    if (ev) sketchMove(ev);
+  };
+  /** Descarta el movimiento pendiente (el mouse salió o se abortó el gesto) */
+  const dropSketchMove = () => {
+    if (sketchMoveFrame) cancelAnimationFrame(sketchMoveFrame);
+    sketchMoveFrame = 0;
+    sketchMoveEvt = undefined;
+  };
+  onCleanup(dropSketchMove);
   const onPointerMove = (e: PointerEvent) => {
     if (brush) return (e.buttons & 1) === 1 ? brushAt(e) : undefined;
     if (partDrag) return movePartDrag(e);
@@ -3281,6 +3325,16 @@ export const CadView: Component<CadViewProps> = (props) => {
       const r = container.getBoundingClientRect();
       setBox({ x0: boxStart.x - r.left, y0: boxStart.y - r.top, x1: e.clientX - r.left, y1: e.clientY - r.top });
     }
+    if (!ui.session()) return;
+    // El anclaje (recorre todo el sketch) se calcula una vez por cuadro, con el último movimiento
+    sketchMoveEvt = e;
+    if (!sketchMoveFrame)
+      sketchMoveFrame = requestAnimationFrame(() => {
+        sketchMoveFrame = 0;
+        flushSketchMove();
+      });
+  };
+  const sketchMove = (e: PointerEvent) => {
     const s = ui.session();
     if (!s) return;
     const hit = snapped(e);
@@ -3530,6 +3584,7 @@ export const CadView: Component<CadViewProps> = (props) => {
    * caja del sketch devuelve lo que estaba elegido. True si había algo.
    */
   const abortGesture = () => {
+    dropSketchMove();
     let had = false;
     if (boxStart || box()) {
       if (boxStart && ui.session() && ui.tool() !== "stretch") ui.setSelection(sketchBoxBefore);
@@ -3567,6 +3622,7 @@ export const CadView: Component<CadViewProps> = (props) => {
   let rightDown: { x: number; y: number } | undefined;
   const [menu, setMenu] = createSignal<{ x: number; y: number; items: MenuEntry[] }>();
   const onPointerUp = (e: PointerEvent) => {
+    flushSketchMove();
     if (brush) {
       const done = brush;
       brush = undefined;
@@ -4462,6 +4518,7 @@ export const CadView: Component<CadViewProps> = (props) => {
         onPointerCancel={() => abortGesture()}
         onLostPointerCapture={() => abortGesture()}
         onPointerLeave={() => {
+          dropSketchMove();
           setSnapView(undefined);
           clearPreselect();
           sketchHoverAt = undefined;

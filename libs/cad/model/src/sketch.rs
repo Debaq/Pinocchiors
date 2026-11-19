@@ -899,19 +899,27 @@ impl Sketch {
 
     /// Ajusta los puntos para cumplir las restricciones.
     pub fn solve(&mut self) -> Result<SolveReport, SketchError> {
-        self.run_solver(None)
+        self.run_solver(None, false)
+    }
+
+    /// Como [`solve`](Self::solve) pero, si se cumple, sin el diagnóstico de lo
+    /// libre (SVD densos): para cada paso de arrastrar una entidad entera. El
+    /// informe sale con `quick` y la interfaz resuelve completo al soltar.
+    pub fn solve_quick(&mut self) -> Result<SolveReport, SketchError> {
+        self.run_solver(None, true)
     }
 
     /// Resuelve con `point` arrastrado hacia `target` (lo más cerca posible
     /// si las restricciones no lo dejan llegar).
     pub fn solve_drag(&mut self, point: u32, target: P2) -> Result<SolveReport, SketchError> {
         self.point(point)?;
-        self.run_solver(Some((point, target)))
+        self.run_solver(Some((point, target)), true)
     }
 
-    fn run_solver(&mut self, drag: Option<(u32, P2)>) -> Result<SolveReport, SketchError> {
+    /// `quick`: si se cumple, sin el diagnóstico (ver [`solve_quick`](Self::solve_quick)).
+    fn run_solver(&mut self, drag: Option<(u32, P2)>, quick: bool) -> Result<SolveReport, SketchError> {
         if self.texts.is_empty() {
-            return self.solve_system(drag);
+            return self.solve_system(drag, quick);
         }
         // Los puntos de los textos que no toca nada más no entran al solver (un
         // texto tiene cientos y haría lento cada arrastre): se mueven con su ancla
@@ -923,7 +931,7 @@ impl Sketch {
             None => (p, t),
         });
         // Un pánico en medio no puede dejar el sketch sin esos puntos
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.solve_system(drag)));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.solve_system(drag, quick)));
         // Todos vuelven aunque algo fallara (el ancla siempre queda en el sketch)
         for &(id, a, d) in &held {
             let at = self.point(a).unwrap_or([0.0, 0.0]);
@@ -1179,7 +1187,7 @@ impl Sketch {
         if lo[0] > hi[0] { 0.0 } else { (hi[0] - lo[0]).max(hi[1] - lo[1]) }
     }
 
-    fn solve_system(&mut self, drag: Option<(u32, P2)>) -> Result<SolveReport, SketchError> {
+    fn solve_system(&mut self, drag: Option<(u32, P2)>, quick: bool) -> Result<SolveReport, SketchError> {
         if drag.is_none() {
             self.ease_large_changes();
             self.turn_angles();
@@ -1207,7 +1215,7 @@ impl Sketch {
         // sketches grandes tardan segundos por cuadro); la interfaz conserva
         // lo libre del último y lo rehace al soltar
         // (sin definir del todo también: el solver lo da `UnderConstrained`)
-        if drag.is_some() && !failed && invalid.is_empty() && matches!(status, SolveStatus::Converged | SolveStatus::UnderConstrained) && residual <= 1e-6 {
+        if quick && !failed && invalid.is_empty() && matches!(status, SolveStatus::Converged | SolveStatus::UnderConstrained) && residual <= 1e-6 {
             self.measure_references();
             let status = if dof > 0 { SketchStatus::UnderConstrained } else { SketchStatus::WellConstrained };
             return Ok(SolveReport {

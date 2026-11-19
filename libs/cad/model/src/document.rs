@@ -428,7 +428,7 @@ impl Document {
     pub fn resolve(&self) -> Resolution {
         // Con una configuración activa se calcula la variante
         if let Some(cfg) = self.active_configuration.and_then(|i| self.configurations.get(i)) {
-            let mut d = self.clone();
+            let mut d = self.without_versions();
             for p in &mut d.parameters {
                 if let Some(e) = cfg.values.get(&p.name) {
                     p.expr = e.clone();
@@ -444,10 +444,11 @@ impl Document {
         }
         let (values, parameters) = self.parameter_values();
         if self.bindings.is_empty() {
-            return Resolution { document: self.clone(), parameters, bindings: vec![] };
+            return Resolution { document: self.without_versions(), parameters, bindings: vec![] };
         }
-        let Ok(mut json) = serde_json::to_value(self) else {
-            return Resolution { document: self.clone(), parameters, bindings: vec![] };
+        let lean = self.without_versions();
+        let Ok(mut json) = serde_json::to_value(&lean) else {
+            return Resolution { document: lean, parameters, bindings: vec![] };
         };
         let mut bindings = Vec::new();
         for (path, expr) in &self.bindings {
@@ -460,8 +461,47 @@ impl Document {
                 for b in &mut bindings {
                     b.error.get_or_insert_with(|| format!("valor no aceptado: {e}"));
                 }
-                Resolution { document: self.clone(), parameters, bindings }
+                Resolution { document: lean, parameters, bindings }
             }
+        }
+    }
+
+    /// Copia para calcular: sin las versiones guardadas (documentos enteros
+    /// que no cambian el cálculo y se copiaban en cada recálculo)
+    pub(crate) fn without_versions(&self) -> Document {
+        let Document {
+            features,
+            rollback,
+            next_id,
+            parameters,
+            bindings,
+            material,
+            fabrication,
+            folders,
+            parts,
+            assembly,
+            drawing,
+            configurations,
+            active_configuration,
+            versions: _,
+            scan_object,
+        } = self;
+        Document {
+            features: features.clone(),
+            rollback: *rollback,
+            next_id: *next_id,
+            parameters: parameters.clone(),
+            bindings: bindings.clone(),
+            material: material.clone(),
+            fabrication: fabrication.clone(),
+            folders: folders.clone(),
+            parts: parts.clone(),
+            assembly: assembly.clone(),
+            drawing: drawing.clone(),
+            configurations: configurations.clone(),
+            active_configuration: *active_configuration,
+            versions: Vec::new(),
+            scan_object: *scan_object,
         }
     }
 }

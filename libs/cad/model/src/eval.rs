@@ -346,13 +346,17 @@ pub struct EvalCache {
     clock: u64,
     /// Reloj al empezar el recálculo en curso: lo usado desde ahí se bota al final.
     epoch: u64,
+    /// Sketches ya resueltos por su contenido (con lo proyectado del cuerpo):
+    /// cambiar una operación de antes invalida la cadena, pero un sketch igual
+    /// no se vuelve a resolver ni a buscar sus regiones.
+    sketches: SketchMemo,
     /// Máximo de estados guardados (entre todas las pestañas).
     pub capacity: usize,
 }
 
 impl Default for EvalCache {
     fn default() -> Self {
-        Self { entries: HashMap::new(), clock: 0, epoch: 0, capacity: 512 }
+        Self { entries: HashMap::new(), clock: 0, epoch: 0, sketches: HashMap::new(), capacity: 512 }
     }
 }
 
@@ -367,6 +371,7 @@ impl EvalCache {
 
     pub fn clear(&mut self) {
         self.entries.clear();
+        self.sketches.clear();
     }
 
     fn get(&mut self, key: u64) -> Option<&CacheEntry> {
@@ -412,6 +417,25 @@ fn fabrication_key(doc: &Document) -> u64 {
     h.finish() | 1
 }
 
+/// Sketch resuelto, su informe y sus regiones, por la huella del sketch a resolver
+type SketchMemo = HashMap<u64, (Sketch, SolveReport, Vec<Region>)>;
+
+/// Hasta cuántos sketches resueltos se guardan (lleno, se empieza de nuevo)
+const SKETCH_MEMO_MAX: usize = 256;
+
+/// Lleva lo que escribe serde directo al hasher (sin armar el texto JSON)
+struct HashSink<'a>(&'a mut std::collections::hash_map::DefaultHasher);
+
+impl std::io::Write for HashSink<'_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        std::hash::Hasher::write(self.0, bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 fn fingerprint(prev: u64, f: &Feature, rolled_back: bool) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -419,8 +443,10 @@ fn fingerprint(prev: u64, f: &Feature, rolled_back: bool) -> u64 {
     f.id.hash(&mut h);
     f.suppressed.hash(&mut h);
     rolled_back.hash(&mut h);
-    serde_json::to_string(&f.kind).unwrap_or_default().hash(&mut h);
-    serde_json::to_string(&f.scope).unwrap_or_default().hash(&mut h);
+    // Separador entre los dos: que no se confundan los límites
+    let _ = serde_json::to_writer(HashSink(&mut h), &f.kind);
+    0xffu8.hash(&mut h);
+    let _ = serde_json::to_writer(HashSink(&mut h), &f.scope);
     f.keep_tool.hash(&mut h);
     f.tool_offset.to_bits().hash(&mut h);
     // Lo traído de otra pestaña no se guarda: cuenta su huella
@@ -527,13 +553,26 @@ impl Evaluation {
 
     /// Referencia estable a una arista del cuerpo actual.
     pub fn edge_ref(&self, edge: usize) -> Option<EdgeRef> {
-        let body = self.body.as_ref()?;
-        let info = body.edge_info(edge).ok()?;
-        let pair = body.edge_face_pairs().ok()?.get(edge).copied()?;
+        self.edge_refs(&[edge]).pop().flatten()
+    }
+
+    /// [`edge_ref`](Self::edge_ref) de varias aristas: las caras de cada lado
+    /// se leen una vez (por arista era recorrer todo el cuerpo cada vez).
+    pub fn edge_refs(&self, edges: &[usize]) -> Vec<Option<EdgeRef>> {
+        let (Some(body), Ok(pairs)) = (self.body.as_ref(), self.body.as_ref().map_or(Ok(Vec::new()), |b| b.edge_face_pairs())) else {
+            return vec![None; edges.len()];
+        };
         let side = |f: Option<usize>| f.and_then(|f| self.face_tags.get(f).cloned()).unwrap_or_default();
-        let sides = vec![side(pair[0]), side(pair[1])];
-        let sides = if sides.iter().all(|s| !s.is_empty()) { sides } else { vec![] };
-        Some(EdgeRef { point: info.mid, direction: info.tangent, sides })
+        edges
+            .iter()
+            .map(|&edge| {
+                let info = body.edge_info(edge).ok()?;
+                let pair = pairs.get(edge).copied()?;
+                let sides = vec![side(pair[0]), side(pair[1])];
+                let sides = if sides.iter().all(|s| !s.is_empty()) { sides } else { vec![] };
+                Some(EdgeRef { point: info.mid, direction: info.tangent, sides })
+            })
+            .collect()
     }
 
     fn diag(&self) -> f64 {
@@ -549,9 +588,11 @@ impl Evaluation {
             let candidates: Vec<usize> = (0..self.face_tags.len())
                 .filter(|&f| self.face_tags[f].iter().any(|t| wanted.contains(t)))
                 .collect();
+            let dist = body.face_distances(&candidates, r.point);
             if let Some(best) = candidates
                 .iter()
-                .map(|&f| (f, body.face_distance(f, r.point).unwrap_or(f64::MAX)))
+                .zip(dist)
+                .map(|(&f, d)| (f, d.unwrap_or(f64::MAX)))
                 .min_by(|a, b| a.1.total_cmp(&b.1))
             {
                 return Ok(best.0);
@@ -575,14 +616,16 @@ impl Evaluation {
                 f.and_then(|f| self.face_tags.get(f)).is_some_and(|ts| ts.iter().any(|t| side.contains(t)))
             };
             let pairs = body.edge_face_pairs().map_err(err)?;
-            let best = pairs
+            let candidates: Vec<usize> = pairs
                 .iter()
                 .enumerate()
                 .filter(|(_, [a, b])| {
                     (has(*a, &r.sides[0]) && has(*b, &r.sides[1])) || (has(*a, &r.sides[1]) && has(*b, &r.sides[0]))
                 })
-                .map(|(e, _)| (e, body.edge_distance(e, r.point).unwrap_or(f64::MAX)))
-                .min_by(|a, b| a.1.total_cmp(&b.1));
+                .map(|(e, _)| e)
+                .collect();
+            let dist = body.edge_distances(&candidates, r.point);
+            let best = candidates.iter().zip(dist).map(|(&e, d)| (e, d.unwrap_or(f64::MAX))).min_by(|a, b| a.1.total_cmp(&b.1));
             if let Some((e, _)) = best {
                 return Ok(e);
             }
@@ -872,6 +915,8 @@ struct Ctx<'a> {
     mesh_distance: std::cell::Cell<f64>,
     /// Medidas que muestra el diálogo (relieve: en el plano y sobre la piel).
     measures: RefCell<HashMap<FeatureId, String>>,
+    /// Sketches resueltos (sale de la caché y vuelve al terminar).
+    sketch_memo: RefCell<SketchMemo>,
 }
 
 pub fn evaluate(doc: &Document) -> Evaluation {
@@ -886,7 +931,7 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
     let doc = if published.is_empty() {
         doc
     } else {
-        let mut d = doc.clone();
+        let mut d = doc.without_versions();
         for p in published {
             match d.parameters.iter_mut().find(|q| q.name == p.name) {
                 Some(q) => q.expr = p.expr,
@@ -911,6 +956,7 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
         handles: RefCell::default(),
         mesh_distance: Default::default(),
         measures: RefCell::default(),
+        sketch_memo: RefCell::new(std::mem::take(&mut cache.sketches)),
     };
     let limit = doc.rollback.unwrap_or(usize::MAX);
     cache.epoch = cache.clock + 1;
@@ -1001,6 +1047,7 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
         );
         ctx.ev.status.push(FeatureStatus { id: f.id, state, ms, auto_scope: std::mem::take(&mut ctx.auto_scope), handles: ctx.handles.take(), note });
     }
+    cache.sketches = ctx.sketch_memo.take();
     ctx.ev
 }
 
@@ -3050,8 +3097,28 @@ impl Ctx<'_> {
                     self.project_uses(&plane, &mut solved);
                 }
                 self.pierce(&plane, &mut solved);
-                let report = solved.solve().map_err(err)?;
-                let regions = find_regions(&solved).map_err(err)?;
+                // Resolver y buscar regiones solo lee el sketch (ya con lo proyectado)
+                let key = {
+                    use std::hash::Hasher;
+                    let mut h = std::collections::hash_map::DefaultHasher::new();
+                    serde_json::to_writer(HashSink(&mut h), &solved).ok().map(|_| h.finish())
+                };
+                let memo = key.and_then(|k| self.sketch_memo.borrow().get(&k).cloned());
+                let (solved, report, regions) = match memo {
+                    Some(hit) => hit,
+                    None => {
+                        let report = solved.solve().map_err(err)?;
+                        let regions = find_regions(&solved).map_err(err)?;
+                        if let Some(k) = key {
+                            let mut memo = self.sketch_memo.borrow_mut();
+                            if memo.len() >= SKETCH_MEMO_MAX {
+                                memo.clear();
+                            }
+                            memo.insert(k, (solved.clone(), report.clone(), regions.clone()));
+                        }
+                        (solved, report, regions)
+                    }
+                };
                 self.ev.sketches.insert(f.id, SketchResult { plane, base: Some(base), sketch: solved, report, regions });
                 Ok(())
             }

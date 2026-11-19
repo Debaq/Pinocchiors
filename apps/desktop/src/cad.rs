@@ -1485,7 +1485,8 @@ pub fn sketch_drag_impl(token: u64, sketch: Option<Sketch>, op: DragOp) -> Resul
                     next.set_point(id, [p[0] + delta[0], p[1] + delta[1]]).map_err(|e| e.to_string())?;
                 }
             }
-            next.solve()
+            // Cada paso sin el diagnóstico (como arrastrar un punto); al soltar se resuelve completo
+            next.solve_quick()
         }
     }
     .map_err(|e| e.to_string())?;
@@ -2552,7 +2553,10 @@ pub async fn cad_edge_refs(app: AppHandle, edges: Vec<usize>) -> Result<Vec<Opti
     in_background(app, move |state| {
         ensure_evaluated(state)?;
         let cache = state.cad_cache.lock().unwrap();
-        Ok(edges.iter().map(|&e| cache.as_ref().and_then(|c| c.eval.edge_ref(e))).collect())
+        Ok(match cache.as_ref() {
+            Some(c) => c.eval.edge_refs(&edges),
+            None => vec![None; edges.len()],
+        })
     })
     .await
 }
@@ -2683,12 +2687,11 @@ fn project_face_impl(state: &AppState, face: usize, plane: &cad_model::Plane) ->
     let eval = &cache.as_ref().ok_or("No hay sólido")?.eval;
     let body = eval.body.as_ref().ok_or("No hay sólido")?;
     let pairs = body.edge_face_pairs().map_err(|e| e.to_string())?;
+    let mine: Vec<usize> = pairs.iter().enumerate().filter(|(_, f)| f.contains(&Some(face))).map(|(i, _)| i).collect();
+    let refs = eval.edge_refs(&mine);
     let mut out = Vec::new();
-    for (i, f) in pairs.iter().enumerate() {
-        if !f.contains(&Some(face)) {
-            continue;
-        }
-        let (Some(edge_ref), Ok(curve)) = (eval.edge_ref(i), cad_model::project::edge(body, i, plane)) else { continue };
+    for (i, edge_ref) in mine.into_iter().zip(refs) {
+        let (Some(edge_ref), Ok(curve)) = (edge_ref, cad_model::project::edge(body, i, plane)) else { continue };
         if !matches!(curve, cad_model::project::Projected::Point { .. }) {
             out.push(ProjectedEdge { curve, edge_ref });
         }
