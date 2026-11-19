@@ -93,7 +93,23 @@ booleanas en paralelo, teselado en paralelo, arrastre de puntos con deltas.
     `cad_edge_refs` y proyectar cara).
   - `Sketch::solve_quick` (sin diagnóstico si se cumple) en el arrastre de
     una entidad entera; `solve_drag` igual que antes.
-  - Pendiente de la fase 2: caché de sketches iguales, contador de versión /
-    `design_tabs` sin clonar, recálculo sin bloquear y cancelable, `diag()`
-    recordado (falta una identidad de forma barata en `cad_occt`).
+  - Caché de sketches iguales (`EvalCache::sketches`, clave = el sketch ya
+    con lo proyectado; 256 como mucho).
+- 2026-11-18 Fase 2 (cierre):
+  - Ensambles: `quick_designs_hash` arma la huella desde las pestañas sin
+    copiar ni preparar los diseños (si ninguno usa el escaneo ni trae de
+    otra pestaña); es la clave siempre que existe. `ensure_evaluated`,
+    `ensure_committed` y `assembly_view` no copian los diseños si acierta
+    (`refresh_cache_with(.., false)`).
+  - `diag()` recordada en `Evaluation::diag_memo` mientras el cuerpo sea el
+    mismo (`Shape::is_same` → `cad_is_same`, `TopoDS_Shape::IsSame`).
+  - Recálculo cancelable: `cad_cancel` sube `CAD_GENERATION`; el recálculo
+    de un diseño (no de un ensamble) que empezó antes para antes de su
+    próxima operación sin caché (`EvalCache::cancel`, `Evaluation::cancelled`),
+    lo hecho queda en la caché y la caché de la vista vuelve a la anterior.
+    La interfaz lo pide cuando llega un cambio del mismo tipo (vista previa o
+    guardado) mientras otro se calcula, y no muestra el error del corte.
+  - No hecho: soltar `cad_cache` durante el teselado (habría que copiar la
+    forma, porque teselar escribe en ella; poca ganancia: casi nada consulta
+    antes de que llegue la malla).
 

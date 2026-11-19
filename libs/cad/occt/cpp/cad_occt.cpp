@@ -2759,6 +2759,11 @@ double cad_edge_distance(const CadShape* s, int32_t index, const double* point) 
     });
 }
 
+// Misma forma (la misma topología en el mismo lugar; la orientación no cuenta)
+int32_t cad_is_same(const CadShape* a, const CadShape* b) {
+    return a->s.IsSame(b->s) ? 1 : 0;
+}
+
 // Por lote: el mapa de caras/aristas se arma una vez (por llamada era O(caras)
 // cada vez, y resolver una referencia prueba muchas candidatas). `out[i]` = −1 si falla.
 int32_t cad_sub_distances(const CadShape* s, int32_t kind, const int32_t* idx, int32_t n, const double* point, double* out) {

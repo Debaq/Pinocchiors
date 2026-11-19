@@ -212,6 +212,8 @@ pub struct Evaluation {
     /// Todas las piezas juntas (la pieza misma si hay una sola): sus caras y
     /// aristas son las de cada pieza, en el orden de `parts`.
     pub body: Option<Shape>,
+    /// Diagonal de la caja del cuerpo, con el cuerpo de cuando se midió.
+    diag_memo: std::sync::Mutex<Option<(Shape, f64)>>,
     /// Orígenes de cada cara del cuerpo (mismo orden que sus índices).
     pub face_tags: Vec<Vec<FaceTag>>,
     /// Piezas, en el orden en que se crearon.
@@ -234,6 +236,8 @@ pub struct Evaluation {
     pub bindings: Vec<ResolvedValue>,
     /// Cuántas operaciones se calcularon (las demás salieron de la caché).
     pub recomputed: usize,
+    /// Se cortó a medias (ver `EvalCache::cancel`): no es el resultado del documento.
+    pub cancelled: bool,
     /// Roscas (agujeros roscados, roscas, tornillos y tuercas), en orden.
     pub threads: Vec<ThreadAxis>,
     /// Engranes, en orden (para engranar otros con ellos).
@@ -352,11 +356,15 @@ pub struct EvalCache {
     sketches: SketchMemo,
     /// Máximo de estados guardados (entre todas las pestañas).
     pub capacity: usize,
+    /// Cancelar: si el contador ya no vale lo que tenía al empezar, el
+    /// recálculo para antes de la próxima operación sin caché (lo hecho queda
+    /// guardado) y sale con `cancelled`.
+    pub cancel: Option<(&'static std::sync::atomic::AtomicU64, u64)>,
 }
 
 impl Default for EvalCache {
     fn default() -> Self {
-        Self { entries: HashMap::new(), clock: 0, epoch: 0, sketches: HashMap::new(), capacity: 512 }
+        Self { entries: HashMap::new(), clock: 0, epoch: 0, sketches: HashMap::new(), capacity: 512, cancel: None }
     }
 }
 
@@ -576,7 +584,18 @@ impl Evaluation {
     }
 
     fn diag(&self) -> f64 {
-        self.body.as_ref().and_then(|b| b.bounds().ok()).map_or(1.0, |(lo, hi)| norm(sub(hi, lo)).max(1.0))
+        let Some(body) = self.body.as_ref() else { return 1.0 };
+        // Recordada mientras el cuerpo sea el mismo (la caja exacta se pedía
+        // decenas de veces por operación)
+        let mut memo = self.diag_memo.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((shape, d)) = memo.as_ref()
+            && shape.is_same(body)
+        {
+            return *d;
+        }
+        let d = body.bounds().ok().map_or(1.0, |(lo, hi)| norm(sub(hi, lo)).max(1.0));
+        *memo = Some((body.clone(), d));
+        d
     }
 
     /// Índice de la cara del cuerpo que corresponde a la referencia.
@@ -995,6 +1014,10 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
             }
             ctx.ev.status.push(FeatureStatus { id: f.id, state: e.state.clone(), ms: e.ms, auto_scope: e.auto_scope.clone(), handles: e.handles.clone(), note: e.note.clone() });
             continue;
+        }
+        if cache.cancel.is_some_and(|(now, mine)| now.load(std::sync::atomic::Ordering::Relaxed) != mine) {
+            ctx.ev.cancelled = true;
+            break;
         }
         let start = std::time::Instant::now();
         ctx.auto_scope.clear();

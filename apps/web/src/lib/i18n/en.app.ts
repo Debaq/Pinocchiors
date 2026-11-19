@@ -592,6 +592,7 @@ export const en_app: Catalog = {
   "Error exportando PLY: {e}": "Error exporting PLY: {e}",
   "Error exportando STL: {e:?}": "Error exporting STL: {e:?}",
   "Esa arista no existe": "That edge does not exist",
+  "Recálculo reemplazado por uno más nuevo": "Recalculation replaced by a newer one",
   "Esa arista se ve de punta desde el plano: queda como un punto (usar su vértice)": "That edge is seen end-on from the plane: it becomes a point (use its vertex)",
   "Esa cara no es de ninguna instancia": "That face does not belong to any instance",
   "Esa cara no existe": "That face does not exist",

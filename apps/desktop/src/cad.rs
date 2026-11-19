@@ -716,6 +716,25 @@ fn design_tabs(state: &AppState, asm: TabId) -> Vec<(TabId, Document)> {
     out
 }
 
+/// Huella de los diseños del ensamble `asm` sin copiarlos ni prepararlos
+/// (cada consulta copiaba todos los documentos): solo cuando `prepared` no
+/// depende de nada fuera de las pestañas (ningún diseño usa el escaneo ni trae
+/// de otra pestaña). Las variables y las variantes entran en la huella.
+fn quick_designs_hash(tabs: &Tabs, asm: TabId) -> Option<u64> {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for t in &tabs.tabs {
+        if let cad_model::TabKind::Design { document } = &t.kind {
+            if Tabs::has_derived(document) || document.features.iter().any(|f| uses_scan(&f.kind)) {
+                return None;
+            }
+            (t.id, document.geometry_hash()).hash(&mut h);
+        }
+    }
+    tabs.variants(asm).hash(&mut h);
+    serde_json::to_string(&tabs.variables).unwrap_or_default().hash(&mut h);
+    Some(h.finish())
+}
+
 /// Huella de todos los diseños (lo que cambia el recálculo de un ensamble)
 fn designs_hash(designs: &[(TabId, Document)]) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -807,19 +826,63 @@ struct Refreshed {
 /// caras, medir, la malla) llama a esto y no arma el [`CadResult`] entero
 /// (PLAN_RENDIMIENTO R2: 27 comandos lo armaban y lo botaban).
 fn refresh_cache<'a>(state: &'a AppState, doc: &Document) -> Result<(Refreshed, std::sync::MutexGuard<'a, Option<CadCache>>), String> {
+    refresh_cache_with(state, doc, true)
+}
+
+/// [`refresh_cache`]; sin `need_designs` (solo la caché al día), un ensamble
+/// cuya huella sale sin copiar los diseños no los copia si la caché acierta.
+fn refresh_cache_with<'a>(state: &'a AppState, doc: &Document, need_designs: bool) -> Result<(Refreshed, std::sync::MutexGuard<'a, Option<CadCache>>), String> {
+    // Antes de esperar cerrojos: un `cad_cancel` que llegue mientras tanto también lo corta
+    let generation = CAD_GENERATION.load(std::sync::atomic::Ordering::Relaxed);
     // Pestaña de ensamble: el recálculo es el de todos los diseños juntos
     let active = state.cad_tabs.lock().unwrap().active;
-    let designs = state.cad_in_assembly().then(|| design_tabs(state, active));
+    let in_assembly = state.cad_in_assembly();
+    // La huella rápida, cuando la hay, es la clave siempre (también al recalcular)
+    let quick = in_assembly
+        .then(|| {
+            let tabs = state.cad_tabs.lock().unwrap();
+            quick_designs_hash(&tabs, active).map(|d| {
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                (1u8, d).hash(&mut h);
+                subassemblies_hash(&tabs, active, &mut h, 0);
+                h.finish()
+            })
+        })
+        .flatten();
+    if let Some(q) = quick
+        && !need_designs
+    {
+        let mut cache = state.cad_cache.lock().unwrap();
+        let hit = match cache.take() {
+            Some(c) if c.doc_hash == q => {
+                *cache = Some(c);
+                true
+            }
+            Some(CadCache { doc_hash, eval, previous: Some((h, prev)), measures }) if h == q => {
+                *cache = Some(CadCache { doc_hash: h, eval: prev, previous: Some((doc_hash, eval)), measures });
+                true
+            }
+            other => {
+                *cache = other;
+                false
+            }
+        };
+        if hit {
+            return Ok((Refreshed { hash: q, designs: None, fitted: None }, cache));
+        }
+    }
+    let designs = in_assembly.then(|| design_tabs(state, active));
     let fitted = designs.is_none().then(|| prepared(state, None, doc)).flatten();
     let doc = fitted.as_ref().unwrap_or(doc);
-    let hash = match &designs {
-        Some(d) => {
+    let hash = match (&designs, quick) {
+        (Some(_), Some(q)) => q,
+        (Some(d), None) => {
             let mut h = std::collections::hash_map::DefaultHasher::new();
             designs_hash(d).hash(&mut h);
             subassemblies_hash(&state.cad_tabs.lock().unwrap(), active, &mut h, 0);
             h.finish()
         }
-        None => doc_hash(doc),
+        (None, _) => doc_hash(doc),
     };
     let mut cache = state.cad_cache.lock().unwrap();
     match cache.take() {
@@ -828,8 +891,6 @@ fn refresh_cache<'a>(state: &'a AppState, doc: &Document) -> Result<(Refreshed, 
             *cache = Some(CadCache { doc_hash: h, eval: prev, previous: Some((doc_hash, eval)), measures });
         }
         old => {
-            let measures = old.as_ref().map(|c| c.measures.clone()).unwrap_or_default();
-            let previous = old.map(|c| (c.doc_hash, c.eval));
             let eval = match &designs {
                 Some(designs) => {
                     let mut merged = {
@@ -840,12 +901,38 @@ fn refresh_cache<'a>(state: &'a AppState, doc: &Document) -> Result<(Refreshed, 
                     add_subassemblies(state, active, &mut merged, 0);
                     merged
                 }
-                None => doc.evaluate_with(&mut state.cad_ops.lock().unwrap()),
+                None => {
+                    // Un diseño se corta si llega otro cambio (`cad_cancel`) antes de terminar
+                    let mut ops = state.cad_ops.lock().unwrap();
+                    ops.cancel = Some((&CAD_GENERATION, generation));
+                    let eval = doc.evaluate_with(&mut ops);
+                    ops.cancel = None;
+                    eval
+                }
             };
+            if eval.cancelled {
+                *cache = old;
+                return Err(CANCELLED.into());
+            }
+            let measures = old.as_ref().map(|c| c.measures.clone()).unwrap_or_default();
+            let previous = old.map(|c| (c.doc_hash, c.eval));
             *cache = Some(CadCache { doc_hash: hash, eval, previous, measures });
         }
     }
     Ok((Refreshed { hash, designs, fitted }, cache))
+}
+
+/// Sube con cada `cad_cancel`: el recálculo de un diseño que empezó antes se corta
+static CAD_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Error de un recálculo cortado por otro cambio (la interfaz no lo muestra)
+pub const CANCELLED: &str = "Recálculo reemplazado por uno más nuevo";
+
+/// Llegó otro cambio del diseño: el recálculo en curso ya no sirve y para
+/// antes de su próxima operación (lo calculado queda en la caché)
+#[tauri::command]
+pub fn cad_cancel() {
+    CAD_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// [`evaluate`] sin armar el resultado: la caché al día con lo que muestra el visor.
@@ -855,13 +942,13 @@ fn ensure_evaluated(state: &AppState) -> Result<(), String> {
         Some(d) => d,
         None => state.cad_doc().ok_or("No hay un diseño abierto")?,
     };
-    refresh_cache(state, &doc).map(|_| ())
+    refresh_cache_with(state, &doc, false).map(|_| ())
 }
 
 /// [`evaluate_committed`] sin armar el resultado.
 fn ensure_committed(state: &AppState) -> Result<(), String> {
     let doc = state.cad_doc().ok_or("No hay un diseño abierto")?;
-    refresh_cache(state, &doc).map(|_| ())
+    refresh_cache_with(state, &doc, false).map(|_| ())
 }
 
 fn evaluate_doc(state: &AppState, doc: &Document) -> Result<CadResult, String> {
@@ -1668,7 +1755,7 @@ fn assembly_view(state: &AppState) -> Result<AssemblyMeshView, String> {
     let mut saved = ASSEMBLY_VIEW.lock().unwrap();
     let doc = state.cad_doc().ok_or("No hay un diseño abierto")?;
     let asm = doc.assembly.as_ref().ok_or("El diseño no tiene ensamble")?;
-    let design = refresh_cache(state, &doc)?.0.hash;
+    let design = refresh_cache_with(state, &doc, false)?.0.hash;
     let mut h = std::collections::hash_map::DefaultHasher::new();
     serde_json::to_string(asm).unwrap_or_default().hash(&mut h);
     let scale = 1.0 / mm_per_unit(state);

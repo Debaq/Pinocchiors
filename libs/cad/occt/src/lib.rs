@@ -886,6 +886,11 @@ impl Shape {
         (d >= 0.0).then_some(d)
     }
 
+    /// La misma forma que `other` (misma topología y lugar; sin copiarla ni recorrerla).
+    pub fn is_same(&self, other: &Shape) -> bool {
+        unsafe { ffi::cad_is_same(self.ptr(), other.ptr()) != 0 }
+    }
+
     /// [`face_distance`](Self::face_distance) de varias caras (el mapa de caras se arma una vez).
     pub fn face_distances(&self, indices: &[usize], point: P3) -> Vec<Option<f64>> {
         self.sub_distances(0, indices, point)

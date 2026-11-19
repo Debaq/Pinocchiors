@@ -4938,6 +4938,9 @@ export interface Draft {
 }
 
 /** Lo que se evalúa para la vista previa: hasta la operación en edición, como Onshape */
+/** Mensaje del backend para un recálculo cortado por otro cambio (ver `cad_cancel`) */
+const RECALC_REPLACED = "Recálculo reemplazado por uno más nuevo";
+
 export function previewDocument(d: Draft): CadDocument {
   // Sin las versiones guardadas (documentos enteros que no cambian el
   // cálculo): copiarlas y mandarlas en cada paso de la vista previa pesaba
@@ -5050,10 +5053,14 @@ export function createCadStore() {
   let pumping: Promise<void> | null = null;
   /** Cuántos envíos se saltearon por llegar otro detrás (para las pruebas) */
   let skipped = 0;
+  /** Tipo del envío que el backend está calculando (`undefined` = ninguno) */
+  let inflightPreview: boolean | undefined;
   const pump = async () => {
     while (queue.length) {
       const q = queue.shift()!;
+      inflightPreview = q.preview;
       await sendNow(q.next, q.preview);
+      inflightPreview = undefined;
     }
     pumping = null;
   };
@@ -5065,6 +5072,9 @@ export function createCadStore() {
       last.next = next;
       skipped++;
     } else queue.push({ next, preview });
+    // Uno del mismo tipo calculándose: ya no sirve, que pare y siga con este
+    // (arrastrar una cota en un diseño pesado no espera el recálculo viejo entero)
+    if (inflightPreview === preview) void invoke("cad_cancel").catch(() => {});
     pumping ??= pump();
     return (lastSend = pumping);
   };
@@ -5090,7 +5100,8 @@ export function createCadStore() {
         await Promise.all([apply(r), refreshTool(seq)]);
       }
     } catch (e) {
-      if (seq === sendSeq) setError(String(e));
+      // Cortado por un cambio más nuevo (`cad_cancel`): no es un error
+      if (seq === sendSeq && !String(e).includes(RECALC_REPLACED)) setError(String(e));
     } finally {
       if (seq === sendSeq) setBusy(false);
     }

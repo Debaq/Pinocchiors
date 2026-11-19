@@ -204,6 +204,8 @@ int32_t cad_closest_edge(const CadShape* s, const double* point, const double* d
 // Distancia de un punto a una cara / arista concreta (−1 si falla).
 double cad_face_distance(const CadShape* s, int32_t index, const double* point);
 double cad_edge_distance(const CadShape* s, int32_t index, const double* point);
+// 1 si `a` y `b` son la misma forma (TopoDS_Shape::IsSame).
+int32_t cad_is_same(const CadShape* a, const CadShape* b);
 // Las dos de arriba por lote (`kind` 0 caras, 1 aristas): out[i] = −1 si falla.
 int32_t cad_sub_distances(const CadShape* s, int32_t kind, const int32_t* idx, int32_t n, const double* point, double* out);
 

@@ -352,6 +352,7 @@ pub fn run() {
             cad::cad_get_document,
             cad::cad_tabs,
             cad::cad_tab_document,
+            cad::cad_cancel,
             cad::cad_tab_raw,
             cad::cad_tabs_sync,
             cad::cad_tabs_merge,
