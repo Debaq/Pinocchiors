@@ -128,7 +128,9 @@ booleanas en paralelo, teselado en paralelo, arrastre de puntos con deltas.
     al mover una vista las otras pueden reacomodarse (escala automática y
     lugar libre), tendría que rehacerse igual.
   - Solver: `SolverParams::skip_dof` en `solve_drag` (sin SVD por paso; la
-    interfaz ya usaba los grados del último completo).
+    interfaz ya usaba los grados del último completo). Los grados salen de
+    variables − ecuaciones (`quick_dof`), así el arrastre sigue diciendo
+    «sin definir» cuando algo queda libre.
   - No hecho: piezas repetidas que comparten forma (instancias y patrones
     con `copy=false`: las etiquetas de los patrones dependen de la
     historia de la copia, hay que revisarlo con pruebas propias); arrastre

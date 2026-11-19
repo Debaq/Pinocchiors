@@ -26,7 +26,8 @@ pub struct SolverParams {
     pub line_search_beta: f64,
     /// Sin contar los grados de libertad al converger (SVD denso del
     /// jacobiano): el arrastre no los usa y con sketches grandes pesaba en
-    /// cada paso. Converge como `Converged` con `dof` 0.
+    /// cada paso. Usa variables − ecuaciones (`quick_dof`): da «sin definir»
+    /// cuando sobran variables, pero no ve ecuaciones repetidas.
     pub skip_dof: bool,
 }
 
@@ -218,7 +219,7 @@ fn newton_raphson(system: &mut ConstraintSystem, params: &SolverParams) -> Resul
         }
 
         if residual_norm < params.tolerance {
-            let dof = if params.skip_dof { 0 } else { compute_dof(system) };
+            let dof = if params.skip_dof { quick_dof(system) } else { compute_dof(system) };
             let status = if dof == 0 {
                 SolveStatus::Converged
             } else if dof > 0 {
@@ -376,7 +377,7 @@ fn levenberg_marquardt(
         }
 
         if residual_norm < params.tolerance {
-            let dof = if params.skip_dof { 0 } else { compute_dof(system) };
+            let dof = if params.skip_dof { quick_dof(system) } else { compute_dof(system) };
             let status = if dof == 0 {
                 SolveStatus::Converged
             } else if dof > 0 {
@@ -450,6 +451,14 @@ fn levenberg_marquardt(
         max_iter: params.max_iterations,
         residual,
     })
+}
+
+/// Grados de libertad sin SVD (arrastre): variables − ecuaciones, que nunca
+/// pasa a los reales (el rango no supera las ecuaciones). Si sobra alguna
+/// variable seguro queda libre; si no, se da por definido (sin negativos:
+/// sin SVD no se sabe si sobra una ecuación).
+fn quick_dof(system: &ConstraintSystem) -> i32 {
+    (system.num_variables() as i32 - system.num_equations() as i32).max(0)
 }
 
 /// Calcular grados de libertad: num_variables - rank(J)
