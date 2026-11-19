@@ -2398,7 +2398,8 @@ fn mesh_impl(state: &AppState) -> Result<Vec<u8>, String> {
     }
     let eval = &c.eval;
     let bytes = match eval.body.as_ref() {
-        Some(_) if eval.parts.iter().any(|p| p.mesh.is_some()) => encode_tessellation(&parts_tessellation(eval)?, scale),
+        // Por pieza (las que no cambiaron salen de lo ya teselado)
+        Some(_) if !eval.parts.is_empty() => encode_tessellation(&parts_tessellation(eval)?, scale),
         Some(body) => encode_view_mesh(body, scale)?,
         None => return Ok(vec![0; 16]),
     };
@@ -2440,29 +2441,54 @@ fn parts_tessellation(eval: &cad_model::Evaluation) -> Result<cad_model::occt::T
         match mesh.filter(|m| m.1.len() == faces && cad_model::mesh_bool::components(m) == 1) {
             Some(m) => Ok((mesh_tessellation(m), true)),
             None => {
-                let mut t = shape.tessellate(VIEW_DEFLECTION, VIEW_ANGLE).map_err(|e| e.to_string())?;
+                let mut t = shape.tessellate(view_deflection(shape), VIEW_ANGLE).map_err(|e| e.to_string())?;
                 hide_facet_edges(shape, &mut t);
                 Ok((t, false))
             }
         }
     };
+    // Las piezas que no cambiaron (la misma forma) salen de lo ya teselado:
+    // cambiar una pieza no vuelve a teselar todas
+    let mut saved = PART_MESHES.lock().unwrap();
+    let mut done: Vec<Option<(cad_model::occt::Tessellation, bool)>> = eval
+        .parts
+        .iter()
+        .map(|p| if p.mesh.is_some() { None } else { saved.iter().find(|(s, _)| s.is_same(&p.shape)).map(|(_, t)| (t.clone(), false)) })
+        .collect();
+    let missing: Vec<usize> = (0..eval.parts.len()).filter(|&i| done[i].is_none()).collect();
     // Con OCCT 8 en paralelo, cada pieza con su copia (teselar escribe en la
     // forma y dos piezas pueden compartir caras, p. ej. las de un patrón)
-    let done: Vec<(cad_model::occt::Tessellation, bool)> = if eval.parts.len() > 1 && occt_parallel() {
-        let jobs = eval
-            .parts
+    let fresh: Vec<(cad_model::occt::Tessellation, bool)> = if missing.len() > 1 && occt_parallel() {
+        let jobs = missing
             .iter()
-            .map(|p| Ok((if p.mesh.is_some() { p.shape.clone() } else { p.shape.deep_copy()? }, p.mesh.clone())))
+            .map(|&i| {
+                let p = &eval.parts[i];
+                Ok((if p.mesh.is_some() { p.shape.clone() } else { p.shape.deep_copy()? }, p.mesh.clone()))
+            })
             .collect::<Result<Vec<_>, cad_model::occt::Error>>()
             .map_err(|e| e.to_string())?;
         jobs.into_par_iter().map(|(shape, mesh)| one(&shape, mesh.as_ref())).collect::<Result<_, _>>()?
     } else {
-        eval.parts.iter().map(|p| one(&p.shape, p.mesh.as_ref())).collect::<Result<_, _>>()?
+        missing.iter().map(|&i| one(&eval.parts[i].shape, eval.parts[i].mesh.as_ref())).collect::<Result<_, _>>()?
     };
+    for (&i, t) in missing.iter().zip(fresh) {
+        if !t.1 {
+            saved.retain(|(s, _)| !s.is_same(&eval.parts[i].shape));
+            saved.push((eval.parts[i].shape.clone(), t.0.clone()));
+        }
+        done[i] = Some(t);
+    }
+    // Lo de este cuerpo y lo más nuevo de antes (la vista previa y el documento se alternan)
+    let keep = (2 * eval.parts.len()).max(PART_MESHES_MIN);
+    if saved.len() > keep {
+        let extra = saved.len() - keep;
+        saved.drain(..extra);
+    }
+    drop(saved);
     // Unidas en orden: mismos números de cara y arista que el cuerpo entero
     let mut out = cad_model::occt::Tessellation::default();
     let mut face_offset = 0u32;
-    for (p, (t, own)) in eval.parts.iter().zip(done) {
+    for (p, (t, own)) in eval.parts.iter().zip(done.into_iter().map(|d| d.expect("teselado de cada pieza"))) {
         let base = out.positions.len() as u32;
         out.positions.extend(t.positions);
         out.normals.extend(t.normals);
@@ -2477,6 +2503,20 @@ fn parts_tessellation(eval: &cad_model::Evaluation) -> Result<cad_model::occt::T
         face_offset += p.shape.face_count() as u32;
     }
     Ok(out)
+}
+
+/// Teselados de las últimas piezas por su forma (ver [`parts_tessellation`])
+static PART_MESHES: Mutex<Vec<(cad_model::Shape, cad_model::occt::Tessellation)>> = Mutex::new(Vec::new());
+
+/// Cuántas piezas teseladas se guardan como mínimo
+const PART_MESHES_MIN: usize = 32;
+
+/// Error de cuerda para el visor según el tamaño: 0,05 mm, más grueso en
+/// piezas grandes (una de 2 m a 0,05 mm daba millones de triángulos sin que
+/// se viera mejor); nunca más fino que antes
+fn view_deflection(shape: &cad_model::Shape) -> f64 {
+    let size = shape.bounds().map(|(lo, hi)| ((hi[0] - lo[0]).powi(2) + (hi[1] - lo[1]).powi(2) + (hi[2] - lo[2]).powi(2)).sqrt()).unwrap_or(0.0);
+    VIEW_DEFLECTION.max(size * 2e-4)
 }
 
 /// Herramienta de una operación (vista previa: verde si suma, roja si resta),

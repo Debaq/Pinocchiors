@@ -24,6 +24,10 @@ pub struct SolverParams {
     pub lm_lambda_factor: f64,
     pub line_search_alpha: f64,
     pub line_search_beta: f64,
+    /// Sin contar los grados de libertad al converger (SVD denso del
+    /// jacobiano): el arrastre no los usa y con sketches grandes pesaba en
+    /// cada paso. Converge como `Converged` con `dof` 0.
+    pub skip_dof: bool,
 }
 
 impl Default for SolverParams {
@@ -35,6 +39,7 @@ impl Default for SolverParams {
             lm_lambda_factor: 10.0,
             line_search_alpha: 1e-4,
             line_search_beta: 0.5,
+            skip_dof: false,
         }
     }
 }
@@ -60,6 +65,8 @@ pub fn solve_drag(
     let params = SolverParams {
         max_iterations: 30,
         tolerance: 1e-6,
+        // Con el punto fijo los grados salen mal igual: la interfaz usa los del último completo
+        skip_dof: true,
         ..SolverParams::default()
     };
     let result = solve(system, &params);
@@ -211,7 +218,7 @@ fn newton_raphson(system: &mut ConstraintSystem, params: &SolverParams) -> Resul
         }
 
         if residual_norm < params.tolerance {
-            let dof = compute_dof(system);
+            let dof = if params.skip_dof { 0 } else { compute_dof(system) };
             let status = if dof == 0 {
                 SolveStatus::Converged
             } else if dof > 0 {
@@ -369,7 +376,7 @@ fn levenberg_marquardt(
         }
 
         if residual_norm < params.tolerance {
-            let dof = compute_dof(system);
+            let dof = if params.skip_dof { 0 } else { compute_dof(system) };
             let status = if dof == 0 {
                 SolveStatus::Converged
             } else if dof > 0 {

@@ -113,3 +113,25 @@ booleanas en paralelo, teselado en paralelo, arrastre de puntos con deltas.
     forma, porque teselar escribe en ella; poca ganancia: casi nada consulta
     antes de que llegue la malla).
 
+- 2026-11-18 Fase 3 escrita:
+  - Malla por pieza: `cad_mesh` siempre por `parts_tessellation` (con más de
+    0 piezas); `PART_MESHES` guarda el teselado de cada pieza con su forma y
+    lo reutiliza si la pieza es la misma (`Shape::is_same`): cambiar una
+    pieza no tesela las demás. `view_deflection`: 0,05 mm o 2e-4 del tamaño
+    de la pieza, lo mayor (nunca más fino que antes).
+  - Colaboración: `collabDesign` manda el primer cambio ya y junta los que
+    siguen en 300 ms (el último, con la versión de la que partió el gesto,
+    así el anfitrión sigue viendo los choques); se manda lo pendiente al
+    salir y se descarta al cambiar de sala o proyecto.
+  - Planos: mover o girar una vista aplica una posición por cuadro
+    (`scheduleMove`; `flushMove` al soltar). Separar la hoja por vista no:
+    al mover una vista las otras pueden reacomodarse (escala automática y
+    lugar libre), tendría que rehacerse igual.
+  - Solver: `SolverParams::skip_dof` en `solve_drag` (sin SVD por paso; la
+    interfaz ya usaba los grados del último completo).
+  - No hecho: piezas repetidas que comparten forma (instancias y patrones
+    con `copy=false`: las etiquetas de los patrones dependen de la
+    historia de la copia, hay que revisarlo con pruebas propias); arrastre
+    con malla gruesa (con la malla por pieza y el recálculo cancelable
+    ganaría poco); autosave sin capturar si nada cambió (habría que marcar
+    cada cambio de toda la app: si se escapa uno se pierden cambios).

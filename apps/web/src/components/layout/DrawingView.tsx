@@ -657,12 +657,36 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
     dragged = false;
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   };
+  // Mover o girar una vista rehace la hoja entera (y puede reacomodar las
+  // otras): una vez por cuadro, con la última posición, y no en cada evento
+  let moveFrame = 0;
+  let pendingMove: (() => void) | undefined;
+  const scheduleMove = (apply: () => void) => {
+    pendingMove = apply;
+    if (!moveFrame) moveFrame = requestAnimationFrame(flushMove);
+  };
+  /** Aplica ya el movimiento pendiente (al soltar) */
+  const flushMove = () => {
+    if (moveFrame) cancelAnimationFrame(moveFrame);
+    moveFrame = 0;
+    const apply = pendingMove;
+    pendingMove = undefined;
+    apply?.();
+  };
+  /** Descarta el movimiento pendiente (se canceló el gesto) */
+  const dropMove = () => {
+    if (moveFrame) cancelAnimationFrame(moveFrame);
+    moveFrame = 0;
+    pendingMove = undefined;
+  };
+  onCleanup(dropMove);
   const onSheetMove = (e: PointerEvent) => {
     if (orbit) {
       if (!dragged && Math.hypot(e.clientX - orbit.x0, e.clientY - orbit.y0) < 4) return;
       dragged = true;
       // Medio grado por píxel: a la derecha gira la pieza a la derecha, hacia abajo la inclina hacia quien mira
-      setOrbitDir({ name: orbit.name, dir: rotateViewDir(orbit.dir, (e.clientX - orbit.x0) * 0.5, (e.clientY - orbit.y0) * 0.5) });
+      const o = { name: orbit.name, dir: rotateViewDir(orbit.dir, (e.clientX - orbit.x0) * 0.5, (e.clientY - orbit.y0) * 0.5) };
+      scheduleMove(() => setOrbitDir(o));
       return;
     }
     if (!drag) return;
@@ -670,9 +694,11 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
     if (!dragged && Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) < 4) return;
     dragged = true;
     const free = e.shiftKey || e.altKey || drag.axis === "free";
-    setDragAt({ view: drag.view, at: [drag.at[0] + (free || drag.axis === "x" ? dx : 0), drag.at[1] + (free || drag.axis === "y" ? dy : 0)] });
+    const g = { view: drag.view, at: [drag.at[0] + (free || drag.axis === "x" ? dx : 0), drag.at[1] + (free || drag.axis === "y" ? dy : 0)] as P2 };
+    scheduleMove(() => setDragAt(g));
   };
   const onSheetUp = () => {
+    flushMove();
     if (orbit) {
       const o = orbitDir();
       const name = orbit.name;
@@ -982,6 +1008,7 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
           onPointerMove={onSheetMove}
           onPointerUp={onSheetUp}
           onPointerCancel={() => {
+            dropMove();
             drag = undefined;
             orbit = undefined;
             setDragAt(undefined);

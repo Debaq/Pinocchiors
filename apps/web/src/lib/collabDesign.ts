@@ -143,18 +143,50 @@ export function installCollabDesign(cad: CadStore, notify: (message: string) => 
     }
   });
 
+  // Envío con pausa por pestaña: el primer cambio sale ya y los que siguen
+  // dentro de SEND_PAUSE (los pasos de un arrastre) se juntan en uno solo, el
+  // último. Antes cada paso calculaba el hash del documento entero y lo mandaba.
+  const SEND_PAUSE = 300;
+  const outgoing = new Map<number, { timer: ReturnType<typeof setTimeout>; next?: { base: string | null; doc: CadDocument } }>();
+  const share = (tab: number, base: string | null, doc: CadDocument) => {
+    const h = hash(doc);
+    // Es el eco de lo que acabo de recibir: ya se conoce
+    if (latest.get(tab)?.h === h) return;
+    latest.set(tab, { h, doc });
+    const msg: DocMsg = { tab, base, doc, by: status().my_id ?? undefined };
+    enqueue(() => sendData("design_doc", msg));
+  };
+  const cooldown = (tab: number) =>
+    setTimeout(() => {
+      const o = outgoing.get(tab);
+      outgoing.delete(tab);
+      if (!o?.next || !status().on || peers().length === 0) return;
+      share(tab, o.next.base, o.next.doc);
+      outgoing.set(tab, { timer: cooldown(tab) });
+    }, SEND_PAUSE);
+  /** Manda ya lo que quedó esperando la pausa (al salir de la sala) */
+  const flushOutgoing = () => {
+    for (const [tab, o] of outgoing) {
+      clearTimeout(o.timer);
+      if (o.next && status().on && peers().length > 0) share(tab, o.next.base, o.next.doc);
+    }
+    outgoing.clear();
+  };
+
   /** Cambio propio confirmado: se comparte (el anfitrión a todos; el invitado al anfitrión) */
   cad.setCollabHook((tab, doc) => {
     if (!status().on || peers().length === 0) return;
-    const h = hash(doc);
-    const before = latest.get(tab)?.h;
-    // Es el eco de lo que acabo de recibir: ya se conoce
-    if (before === h) return;
-    latest.set(tab, { h, doc });
     // Lo que había llegado de afuera para esta pestaña ya quedó viejo
     pending.delete(tab);
-    const msg: DocMsg = { tab, base: before ?? null, doc, by: status().my_id ?? undefined };
-    enqueue(() => sendData("design_doc", msg));
+    const o = outgoing.get(tab);
+    if (o) {
+      // En la pausa: queda el último, con la versión de la que partió el gesto
+      // (si en el medio llegó otra, el anfitrión ve el choque como siempre)
+      o.next = { base: o.next?.base ?? latest.get(tab)?.h ?? null, doc };
+      return;
+    }
+    share(tab, latest.get(tab)?.h ?? null, doc);
+    outgoing.set(tab, { timer: cooldown(tab) });
   });
 
   const stopData = onCollabData("design_doc", async (from, value) => {
@@ -203,11 +235,16 @@ export function installCollabDesign(cad: CadStore, notify: (message: string) => 
   const reset = () => {
     latest.clear();
     pending.clear();
+    // Otra sala u otro proyecto: lo que esperaba la pausa ya no corresponde
+    for (const o of outgoing.values()) clearTimeout(o.timer);
+    outgoing.clear();
   };
   const stopRoom = onCollabRoom(reset);
   const stopProject = onCollabProject(reset);
 
   return () => {
+    // Lo último de un arrastre no se pierde al salir
+    flushOutgoing();
     cad.setCollabHook(undefined);
     cad.setTabsHook(undefined);
     clearInterval(timer);
