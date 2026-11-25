@@ -62,6 +62,7 @@ const STEPS: &[Step] = &[
 ];
 
 /// Pruebas que dan lo mismo que otra y no son un paso aparte (el patrón de pressure advance es otra forma de la torre)
+#[cfg(test)]
 const ALTERNATES: &[&str] = &["pressure_advance_pattern"];
 
 /// Qué clave se guarda con el resultado de cada prueba

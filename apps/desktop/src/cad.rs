@@ -689,12 +689,6 @@ fn exact_scan_mesh(scan: &ScanCache) -> cad_model::ScanBodyMesh {
     }
 }
 
-/// Recalcula el documento guardado, sin el borrador (exportar, pasar a modelo).
-fn evaluate_committed(state: &AppState) -> Result<CadResult, String> {
-    let doc = state.cad_doc().ok_or("No hay un diseño abierto")?;
-    evaluate_doc(state, &doc)
-}
-
 /// Las pestañas de diseño y las variantes del ensamble `asm` (un diseño en
 /// otra configuración, con su número de `VARIANT_BASE` en adelante), con las
 /// referencias del escaneo al día, para un ensamble
@@ -945,7 +939,8 @@ fn ensure_evaluated(state: &AppState) -> Result<(), String> {
     refresh_cache_with(state, &doc, false).map(|_| ())
 }
 
-/// [`evaluate_committed`] sin armar el resultado.
+/// Recalcula el documento guardado, sin el borrador (exportar, pasar a modelo),
+/// sin armar el resultado.
 fn ensure_committed(state: &AppState) -> Result<(), String> {
     let doc = state.cad_doc().ok_or("No hay un diseño abierto")?;
     refresh_cache_with(state, &doc, false).map(|_| ())
