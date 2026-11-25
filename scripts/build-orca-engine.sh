@@ -73,6 +73,18 @@ cp -r "$ROOT/libs/slicer/engine" "$SRC/src/pinocchio-engine"
 if ! grep -q pinocchio-engine "$SRC/src/CMakeLists.txt"; then
   echo 'add_subdirectory(pinocchio-engine)' >> "$SRC/src/CMakeLists.txt"
 fi
+# 3. Boost 1.84 con CMake nuevo (el de Homebrew en macOS, el de VS 2026 en Windows):
+#    un source_group de Boost.Locale corta la configuración ("is not a prefix of
+#    file"). Solo ordena carpetas en los IDE, así que se quita en el paso de parche.
+if ! grep -q pinocchio-boost-locale "$SRC/deps/Boost/Boost.cmake"; then
+  cat > "$SRC/deps/Boost/pinocchio-boost-locale.cmake" <<'EOF'
+file(READ libs/locale/CMakeLists.txt _c)
+string(REGEX REPLACE "source_group\\([^)]*\\)" "" _c "${_c}")
+file(WRITE libs/locale/CMakeLists.txt "${_c}")
+EOF
+  perl -pi -e 's{^(\s*)LIST_SEPARATOR \|$}{$1PATCH_COMMAND \${CMAKE_COMMAND} -P \${CMAKE_CURRENT_LIST_DIR}/pinocchio-boost-locale.cmake\n$1LIST_SEPARATOR |}' "$SRC/deps/Boost/Boost.cmake"
+  grep -q pinocchio-boost-locale "$SRC/deps/Boost/Boost.cmake" || { echo "No se pudo parchear Boost.cmake" >&2; exit 1; }
+fi
 
 PREFIX_REL="deps/build/OrcaSlicer_dep"
 
