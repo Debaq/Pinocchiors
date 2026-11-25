@@ -63,9 +63,9 @@ on:
         type: boolean
         default: false
       tests:
-        description: "Correr los tests del workspace antes (~30 min)"
+        description: "Correr los tests del workspace (~30 min; apagado: se revisa en local antes)"
         type: boolean
-        default: true
+        default: false
 
 permissions:
   contents: write
@@ -137,8 +137,8 @@ jobs:
   # paralelo: informa, pero no frena la compilación ni la publicación.
   test:
     name: Tests (con CAD)
-    # A mano se pueden saltar (input `tests`); con tag van siempre
-    if: github.event_name != 'workflow_dispatch' || inputs.tests
+    # Solo si se piden a mano (input `tests`); con tag no corren
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.tests }}
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v5
