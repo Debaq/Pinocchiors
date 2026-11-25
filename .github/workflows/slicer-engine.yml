@@ -51,8 +51,10 @@ jobs:
         run: |
           [[ "$PLATAFORMAS" == todas ]] && PLATAFORMAS=linux-windows-macos
           inc=()
+          # Windows fijo en 2022 (VS 2022): con windows-latest (VS 2026) el Boost de
+          # las dependencias de Orca 2.4.2 no configura (source_group en libs/locale).
           [[ "$PLATAFORMAS" == *linux* ]] && inc+=('{"platform":"linux","os":"ubuntu-24.04","jobs":"4"}')
-          [[ "$PLATAFORMAS" == *windows* ]] && inc+=('{"platform":"windows","os":"windows-latest","jobs":"4"}')
+          [[ "$PLATAFORMAS" == *windows* ]] && inc+=('{"platform":"windows","os":"windows-2022","jobs":"4"}')
           [[ "$PLATAFORMAS" == *macos* ]] && inc+=('{"platform":"macos","os":"macos-latest","jobs":"2"}')
           IFS=,; echo "include=[${inc[*]}]" >> "$GITHUB_OUTPUT"
 
