@@ -7,6 +7,7 @@ pub mod cad;
 pub mod calibrations;
 pub mod bvh;
 pub mod hdri;
+pub mod http;
 pub mod imported_rig;
 pub mod lod;
 pub mod collab;
@@ -64,6 +65,20 @@ pub fn run() {
     let builder = builder.plugin(tauri_plugin_fs::init()).plugin(tauri_plugin_pinocchio_android::init());
     builder
         .setup(|app| {
+            // Android no define HOME: los datos que se buscan por el entorno
+            // (calibraciones, conector, proveedores de IA del chat) van a la carpeta de la app
+            #[cfg(target_os = "android")]
+            if let Ok(dir) = app.path().app_data_dir() {
+                // SAFETY: al arrancar, antes de que algo más lea el entorno
+                unsafe {
+                    if std::env::var_os("PINOCCHIO_DATA_DIR").is_none() {
+                        std::env::set_var("PINOCCHIO_DATA_DIR", &dir);
+                    }
+                    if std::env::var_os("PINOCCHIO_MCP_LIVE_FILE").is_none() {
+                        std::env::set_var("PINOCCHIO_MCP_LIVE_FILE", dir.join("pinocchio").join("mcp-live.json"));
+                    }
+                }
+            }
             // Inicializar estado
             app.manage(AppState::new());
             app.manage(collab::Collab::default());
@@ -185,6 +200,7 @@ pub fn run() {
             android_files::android_project_path,
             android_files::android_project_delete,
             android_files::android_share,
+            android_files::android_take_opened,
             project::recovery_info,
             project::project_changed,
             project::project_mark_saved,

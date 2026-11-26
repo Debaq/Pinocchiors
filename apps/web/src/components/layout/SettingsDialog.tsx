@@ -104,8 +104,8 @@ const TABS: Tab[] = ([
   { id: "ai", label: () => t("Conector para IA"), icon: Icons.MagicWand },
   { id: "collab", label: () => t("Colaborar"), icon: Icons.Person },
   { id: "about", label: () => t("Acerca de"), icon: Icons.Info },
-  // En Android no hay conector MCP ni chat
-] satisfies Tab[]).filter((tab) => !(IS_ANDROID && tab.id === "ai"));
+  // En Android la pestaña de IA muestra solo los proveedores para el chat (AiConnectorSettings)
+] satisfies Tab[]);
 
 const Section = (props: { title?: string; children: JSX.Element }) => (
   <section class="space-y-3 pb-4 mb-4 border-b border-border last:border-0 last:mb-0 last:pb-0">

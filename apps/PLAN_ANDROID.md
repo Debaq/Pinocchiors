@@ -11,6 +11,18 @@ afuera en dos puntos: **traer** un archivo (importar) y **sacar** uno (exportar 
 Escritorio no cambia: todo lo de este plan va detrás de `IS_ANDROID`
 (`apps/web/src/lib/platform.ts`) o de `#[cfg(target_os = "android")]`.
 
+## Estado al 2026-11-25
+
+- Hecho y publicado: APK base (A0), clave fija (A1), abrir/guardar/exportar/compartir
+  archivos del teléfono y «Mis proyectos» simple (A2–A6 cortos). Último APK publicado:
+  `pre.2026.11.25.27bfce3` (la release normal también arma Android).
+- Hecho en código, falta APK nuevo: «Abrir con Pinocchio» (A7), chat con IA (HTTPS con los
+  certificados del teléfono, solo proveedores con API) y pantalla siempre horizontal.
+- Emulador en el PC para probar: AVD `pinocchio` (Android 14 x86_64, horizontal); corre el
+  APK arm64 traduciéndolo.
+- Falta: probar todo en un teléfono real, completar Mis proyectos (miniaturas, renombrar,
+  duplicar, barra de progreso), uso táctil (A8) y laminador (A9).
+
 ## Cómo queda para el usuario
 
 1. Abre la app → **Mis proyectos**: tarjetas con miniatura, nombre y fecha. «Nuevo
@@ -55,7 +67,7 @@ Escritorio no cambia: todo lo de este plan va detrás de `IS_ANDROID`
 ### A0 — APK base ✅ 2026-10-29
 - `.github/workflows/android.yml` (manual): OpenCASCADE con el NDK, APK arm64 firmado,
   pre-release propia `android.<fecha>.<sha>` que no toca la última del escritorio.
-- `IS_ANDROID` oculta lo que no funciona: actualización, conector MCP y chat, GIMP,
+- `IS_ANDROID` oculta lo que no funciona: actualización, conector MCP y chat (el chat volvió el 2026-11-25), GIMP,
   controles de ventana, cámara en vivo, Orizon3D (espacio y botón de la bienvenida).
 
 ### A1 — Clave fija para firmar ✅ 2026-11-12 (falta comprobar con dos APK seguidos)
@@ -147,10 +159,30 @@ corta de A2, A3, A4, A5 y A6 (sin Compartir, miniaturas ni renombrar/duplicar):
   que aquí se versiona `gen/android`.
 - Lista de lo exportado en la tarjeta del proyecto, para volver a compartirlo.
 
-### A7 — «Abrir con Pinocchio» ❌
-- Filtros `VIEW` y `SEND` para `.pinocchio`, `.stl`, `.step`/`.stp`, `.obj`, `.3mf`,
-  `.ply`, `.glb`: el archivo llega como `content://`, se copia (A5) y se ofrece abrir
-  como proyecto nuevo o importarlo en el abierto.
+### A7 — «Abrir con Pinocchio» 🟡 2026-11-25 (en código; falta APK nuevo y probarlo)
+- Filtros `VIEW`, `SEND` y `SEND_MULTIPLE` en el manifiesto del plugin propio
+  (`apps/desktop/android-plugin`), sumados a `com.pinocchio.desktop.MainActivity` de la
+  plantilla de Tauri: STL, STEP, OBJ, 3MF, PLY, glTF/GLB y `application/octet-stream`
+  (así llegan STL, STEP y `.pinocchio` desde muchas apps). Sin versionar `gen/android`.
+- Kotlin (`PinocchioPlugin`): guarda los `content://` que llegan al arrancar (`load`) o con
+  la app abierta (`onNewIntent`); `takeOpened` los entrega una vez.
+- `android_take_opened` (Rust) → `takeOpenedFiles` (`lib/files.ts`) los copia con
+  `android_import_uri`; `App.tsx` los abre con `handleLoad({ projects: true, files })` al
+  arrancar y cada vez que la app vuelve al frente: un `.pinocchio` se abre como proyecto,
+  un modelo se importa.
+- Emulador para probar: AVD `pinocchio` (Android 14 x86_64, traduce el APK arm64).
+
+### Chat con IA en Android 🟡 2026-11-25 (en código; falta APK nuevo y probarlo)
+- HTTPS: `apps/desktop/src/http.rs` (`blocking_builder`, lo usan el chat y las impresoras).
+  En Android no se usa `rustls-platform-verifier` (pide iniciarse por JNI y sus clases Kotlin
+  en el APK): se confía en los certificados del teléfono (`/apex/com.android.conscrypt/cacerts`,
+  si no `/system/etc/security/cacerts`). Probado en el PC con los certificados copiados del
+  emulador contra api.deepseek.com (`cargo test -p pinocchio-app --lib http:: -- --include-ignored`
+  con `PINOCCHIO_TEST_CACERTS`).
+- Android no define HOME: al arrancar se fijan `PINOCCHIO_DATA_DIR` y
+  `PINOCCHIO_MCP_LIVE_FILE` en la carpeta de la app (calibraciones, modo en vivo, proveedores).
+- Interfaz: vuelven el chat y «Preguntar a la IA»; sin Claude Code ni combinaciones (vienen con
+  Claude Code); Configuración ▸ Conector para IA muestra solo los proveedores con API.
 
 ### A9 — Laminador en Android ❌ (el usuario lo quiere; después de abrir/guardar)
 - Compilar el motor `pinocchio-slicer` (libslic3r de Orca 2.4.2) con el NDK: Boost,
@@ -162,6 +194,8 @@ corta de A2, A3, A4, A5 y A6 (sin Compartir, miniaturas ni renombrar/duplicar):
 - Riesgo: memoria en teléfonos modestos con piezas grandes.
 
 ### A8 — Uso táctil ❌ (después de probarlo en el teléfono)
+- Hecho 2026-11-25: la app va siempre horizontal (`sensorLandscape` en el manifiesto del plugin
+  y `requestedOrientation` en `PinocchioPlugin.load`); en vertical la interfaz queda apretada.
 - No se planifica a ciegas: se hace una lista probando el APK (selección de caras y
   aristas, cotas, menús que dependen de pasar el mouse, paneles angostos, teclado en
   pantalla en los campos numéricos).

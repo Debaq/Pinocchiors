@@ -8,6 +8,7 @@ import { tBackend } from "../../lib/i18nBackend";
 import { live, liveWanted, setLiveMode, setLivePaused } from "../../lib/mcpLive";
 import { AiProviders } from "./AiProviders";
 import { AiTeams } from "./AiTeams";
+import { IS_ANDROID } from "../../lib/platform";
 
 /** Un cliente de IA y si tiene el conector (`mcp::clients::ClientStatus`) */
 interface ClientStatus {
@@ -43,7 +44,20 @@ const Hint = (props: { children: JSX.Element }) => <p class="text-xs text-text-m
  * Configuración ▸ Conector para IA: la app como servidor MCP (`--mcp`) para
  * Claude, Cursor, Gemini o Codex, y lo que el agente necesita para usarla.
  */
+/** En el teléfono no hay conector MCP ni Claude Code: solo los proveedores con API para el chat */
+const AndroidAiSettings: Component = () => (
+  <Section title={t("Modelos de IA por empresa")}>
+    <Hint>
+      {t(
+        "En el teléfono el chat usa la API de una empresa con tu clave (DeepSeek, OpenAI, OpenRouter…) o Ollama / LM Studio de un PC en la misma red wifi. Claude Code no funciona en el teléfono."
+      )}
+    </Hint>
+    <AiProviders />
+  </Section>
+);
+
 export const AiConnectorSettings: Component = () => {
+  if (IS_ANDROID) return <AndroidAiSettings />;
   const [status, setStatus] = createSignal<McpStatus>();
   const [busy, setBusy] = createSignal<string>();
   const [message, setMessage] = createSignal<{ text: string; error?: boolean }>();

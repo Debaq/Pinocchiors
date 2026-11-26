@@ -41,8 +41,7 @@ impl Creality {
 
     fn http(&self) -> Result<reqwest::blocking::Client, String> {
         // rustls con `ring` (como Moonraker y Flashforge): hace falta aunque sea http
-        let _ = rustls::crypto::ring::default_provider().install_default();
-        reqwest::blocking::Client::builder().timeout(self.timeout).connect_timeout(Duration::from_secs(5)).build().map_err(|e| format!("Error interno: {e}"))
+        crate::http::blocking_builder().timeout(self.timeout).connect_timeout(Duration::from_secs(5)).build().map_err(|e| format!("Error interno: {e}"))
     }
 
     fn unreachable(&self, e: impl std::fmt::Display) -> String {

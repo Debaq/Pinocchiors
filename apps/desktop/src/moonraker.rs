@@ -65,8 +65,7 @@ impl Printer {
     pub(crate) fn new(address: &str, api_key: Option<String>, timeout: Duration) -> Result<Self, String> {
         let base = normalize_address(address)?;
         // rustls con `ring` (como el chat del conector): hace falta aunque casi siempre sea http
-        let _ = rustls::crypto::ring::default_provider().install_default();
-        let client = reqwest::blocking::Client::builder()
+        let client = crate::http::blocking_builder()
             .connect_timeout(Duration::from_secs(5))
             .timeout(timeout)
             .build()

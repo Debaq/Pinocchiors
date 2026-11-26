@@ -124,8 +124,7 @@ impl Flashforge {
     }
 
     fn client(&self) -> Result<reqwest::blocking::Client, String> {
-        let _ = rustls::crypto::ring::default_provider().install_default();
-        reqwest::blocking::Client::builder()
+        crate::http::blocking_builder()
             .connect_timeout(Duration::from_secs(5))
             .timeout(self.timeout)
             .build()

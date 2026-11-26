@@ -428,8 +428,7 @@ pub(crate) fn fetch_snapshot(host: &str, url: &str) -> Result<Vec<u8>, String> {
     if host_of(url) != host {
         return Err("La foto no es de esta impresora".into());
     }
-    let _ = rustls::crypto::ring::default_provider().install_default();
-    let client = reqwest::blocking::Client::builder()
+    let client = crate::http::blocking_builder()
         .timeout(Duration::from_secs(10))
         .connect_timeout(Duration::from_secs(5))
         .build()

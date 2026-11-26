@@ -427,6 +427,7 @@ Object.assign(en_settings, {
   "Construye (cada paso)": "Builds (each step)",
   "combinación": "combination",
   "Modelos de IA por empresa": "AI models by company",
+  "En el teléfono el chat usa la API de una empresa con tu clave (DeepSeek, OpenAI, OpenRouter…) o Ollama / LM Studio de un PC en la misma red wifi. Claude Code no funciona en el teléfono.": "On the phone the chat uses a company's API with your key (DeepSeek, OpenAI, OpenRouter…) or Ollama / LM Studio on a computer on the same Wi-Fi network. Claude Code does not work on the phone.",
   "Planifica: {p} · Construye: {b} · Revisa: {r}": "Plans: {p} · Builds: {b} · Reviews: {r}",
   "Si después de esas correcciones sigue mal, se detiene y te pregunta.": "If it is still wrong after those fixes, it stops and asks you.",
   "quien construye": "the builder",

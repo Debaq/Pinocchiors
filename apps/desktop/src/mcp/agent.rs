@@ -192,8 +192,7 @@ pub fn remove(id: &str) -> Result<Vec<Provider>, String> {
 
 /// HTTPS con rustls y `ring` (se instala una vez)
 fn client() -> Result<reqwest::blocking::Client, String> {
-    let _ = rustls::crypto::ring::default_provider().install_default();
-    reqwest::blocking::Client::builder()
+    crate::http::blocking_builder()
         .timeout(Duration::from_secs(300))
         .connect_timeout(Duration::from_secs(15))
         .build()

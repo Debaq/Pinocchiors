@@ -6,6 +6,7 @@
 import { createSignal } from "solid-js";
 import { createPersisted } from "./ui-state";
 import { t } from "./i18n";
+import { IS_ANDROID } from "./platform";
 
 /** Un modelo de una empresa: `company` = "claude" (Claude Code) o el id de un proveedor; `model` "" = el de siempre */
 export interface ModelRef {
@@ -63,7 +64,10 @@ export function refLabel(r: ModelRef | null | undefined): string {
 
 /** Todos los modelos que se pueden elegir para un rol, por empresa */
 export function modelChoices(): { value: string; label: string }[] {
-  const out = [{ value: "claude|", label: `Claude Code · ${t("el de siempre")}` }, ...CLAUDE_MODELS.map((m) => ({ value: `claude|${m}`, label: `Claude Code · ${capital(m)}` }))];
+  // Claude Code es un programa del PC: en el teléfono solo hay modelos con API
+  const out = IS_ANDROID
+    ? []
+    : [{ value: "claude|", label: `Claude Code · ${t("el de siempre")}` }, ...CLAUDE_MODELS.map((m) => ({ value: `claude|${m}`, label: `Claude Code · ${capital(m)}` }))];
   for (const c of companies()) {
     const ids = c.models.length ? c.models.map((m) => m.id) : [c.model];
     for (const id of ids) if (id) out.push({ value: `${c.id}|${id}`, label: `${c.name} · ${id}` });
@@ -72,7 +76,7 @@ export function modelChoices(): { value: string; label: string }[] {
 }
 
 /** El modelo existe todavía (la empresa no se borró) */
-export const refAvailable = (r: ModelRef) => r.company === "claude" || companies().some((c) => c.id === r.company);
+export const refAvailable = (r: ModelRef) => (r.company === "claude" && !IS_ANDROID) || companies().some((c) => c.id === r.company);
 
 /** Precio por millón de tokens (entrada, salida) de un modelo con API, si se anotó */
 export function refPrice(r: ModelRef): { in: number; out: number } | undefined {
@@ -96,13 +100,17 @@ export function activeTeam(): AiTeam {
   const c = chatChoice();
   if (c.startsWith("team:")) {
     const team = teams().find((x) => x.id === c.slice(5));
-    if (team) return team;
+    if (team && !IS_ANDROID) return team;
   }
-  const ref = c.startsWith("model:") ? parseRef(c.slice(6)) : { company: "claude", model: "" };
+  let ref = c.startsWith("model:") ? parseRef(c.slice(6)) : { company: "claude", model: "" };
+  // En el teléfono no hay Claude Code: el primer proveedor con API
+  if (IS_ANDROID && !refAvailable(ref)) ref = { company: companies()[0]?.id ?? "", model: "" };
   return { id: "", name: refLabel(ref), plan: null, build: ref, review: null, maxFixes: 0 };
 }
 
 /** Lo que se puede elegir en el chat: las combinaciones y cada modelo suelto */
 export function chatChoices(): { value: string; label: string }[] {
-  return [...teams().map((x) => ({ value: `team:${x.id}`, label: `${x.name} (${t("combinación")})` })), ...modelChoices().map((o) => ({ value: `model:${o.value}`, label: o.label }))];
+  // Las combinaciones vienen con Claude Code: en el teléfono, solo modelos sueltos
+  const combos = IS_ANDROID ? [] : teams().map((x) => ({ value: `team:${x.id}`, label: `${x.name} (${t("combinación")})` }));
+  return [...combos, ...modelChoices().map((o) => ({ value: `model:${o.value}`, label: o.label }))];
 }
