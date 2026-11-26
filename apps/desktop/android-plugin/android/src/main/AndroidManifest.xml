@@ -1,6 +1,62 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application>
+        <!-- «Abrir con Pinocchio» y «Compartir» hacia Pinocchio desde otra app: se suman a la
+             actividad principal de la plantilla de Tauri (com.pinocchio.desktop.MainActivity, la
+             del identificador de tauri.conf.json). STL, STEP, OBJ y .pinocchio no tienen un tipo
+             fijo: muchas apps los mandan como application/octet-stream. El archivo lo recibe
+             PinocchioPlugin y la app lo importa (android_files.rs, lib/files.ts) -->
+        <!-- Siempre horizontal (girando con el sensor entre los dos lados): la interfaz es de
+             escritorio y en vertical queda apretada. PinocchioPlugin.load lo pide también al
+             arrancar, por si la plantilla de Tauri trae otra orientación -->
+        <activity
+            android:name="com.pinocchio.desktop.MainActivity"
+            android:exported="true"
+            android:screenOrientation="sensorLandscape">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="model/stl" />
+                <data android:mimeType="application/sla" />
+                <data android:mimeType="application/vnd.ms-pki.stl" />
+                <data android:mimeType="model/x.stl-binary" />
+                <data android:mimeType="model/x.stl-ascii" />
+                <data android:mimeType="model/step" />
+                <data android:mimeType="application/step" />
+                <data android:mimeType="application/stp" />
+                <data android:mimeType="model/obj" />
+                <data android:mimeType="model/3mf" />
+                <data android:mimeType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml" />
+                <data android:mimeType="model/gltf-binary" />
+                <data android:mimeType="model/gltf+json" />
+                <data android:mimeType="model/ply" />
+                <data android:mimeType="application/ply" />
+                <data android:mimeType="application/octet-stream" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="model/stl" />
+                <data android:mimeType="application/sla" />
+                <data android:mimeType="application/vnd.ms-pki.stl" />
+                <data android:mimeType="model/x.stl-binary" />
+                <data android:mimeType="model/x.stl-ascii" />
+                <data android:mimeType="model/step" />
+                <data android:mimeType="application/step" />
+                <data android:mimeType="application/stp" />
+                <data android:mimeType="model/obj" />
+                <data android:mimeType="model/3mf" />
+                <data android:mimeType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml" />
+                <data android:mimeType="model/gltf-binary" />
+                <data android:mimeType="model/gltf+json" />
+                <data android:mimeType="model/ply" />
+                <data android:mimeType="application/ply" />
+                <data android:mimeType="application/octet-stream" />
+            </intent-filter>
+        </activity>
         <!-- Compartir archivos de la app (solo su carpeta de caché) con otras apps; clase propia: la
              plantilla de Tauri ya declara androidx.core.content.FileProvider -->
         <provider

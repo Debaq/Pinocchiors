@@ -75,6 +75,36 @@ export async function open<T extends OpenDialogOptions>(options?: T): Promise<Op
   }
 }
 
+/**
+ * «Abrir con Pinocchio»: trae los archivos que otra app mandó a abrir (o
+ * compartió con Pinocchio) desde la última vez y devuelve sus rutas locales.
+ * Fuera de Android, o sin nada nuevo, devuelve una lista vacía.
+ */
+export async function takeOpenedFiles(allowed: string[]): Promise<string[]> {
+  if (!IS_ANDROID) return [];
+  let uris: string[];
+  try {
+    uris = await invoke<string[]>("android_take_opened");
+  } catch (e) {
+    notify(t("No se pudo abrir el archivo: {e}", { e: tBackend(String(e)) }));
+    return [];
+  }
+  if (uris.length === 0) return [];
+  const batch = `${Date.now()}-${batches++}`;
+  const lower = [...new Set(allowed.map((e) => e.toLowerCase()))];
+  const paths: string[] = [];
+  for (const uri of uris) {
+    try {
+      if (uri.startsWith("content://")) paths.push(await invoke<string>("android_import_uri", { uri, batch, allowed: lower }));
+      else if (uri.startsWith("file://")) paths.push(decodeURIComponent(uri.slice("file://".length)));
+      else paths.push(uri);
+    } catch (e) {
+      notify(t("No se pudo abrir el archivo: {e}", { e: tBackend(String(e)) }));
+    }
+  }
+  return paths;
+}
+
 /** Nombre para «Guardar en…»: el sugerido, con la extensión del primer filtro si le falta */
 export function exportName(options?: SaveDialogOptions): string {
   const base = (options?.defaultPath ?? "").split(/[\\/]/).pop() ?? "";

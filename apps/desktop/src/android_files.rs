@@ -9,6 +9,8 @@
 //! - **sacar** (`android_export_begin`): el destino elegido con «Guardar en…» se
 //!   recuerda, la app escribe en una ruta local de paso y, cuando el archivo
 //!   termina de escribirse, se copia al destino (o se abre el menú de compartir).
+//! - **«Abrir con Pinocchio»** (`android_take_opened`): lo que otra app mandó a
+//!   abrir llega como `content://` y se trae igual que lo elegido en el selector.
 //!
 //! La parte que no depende de Android (nombres, tipo por el contenido, esperar a
 //! que un archivo termine de escribirse) se prueba en escritorio.
@@ -352,6 +354,23 @@ fn open_share_menu(app: &AppHandle, path: &Path, title: &str) -> Result<(), Stri
 fn open_share_menu(_app: &AppHandle, _path: &Path, _title: &str) -> Result<(), String> {
     let _ = mime_of;
     Err("Compartir solo está en Android".into())
+}
+
+/// Los archivos que otra app mandó a abrir con Pinocchio («Abrir con» o
+/// «Compartir»), como `content://` o `file://`; la app los trae con
+/// `android_import_uri`. Cada uno se entrega una sola vez.
+#[tauri::command]
+pub fn android_take_opened(app: AppHandle) -> Result<Vec<String>, String> {
+    #[cfg(target_os = "android")]
+    {
+        use tauri_plugin_pinocchio_android::PinocchioAndroidExt;
+        app.pinocchio_android().take_opened()
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Ok(Vec::new())
+    }
 }
 
 /// Exportar en el teléfono: devuelve una ruta local de paso donde la app

@@ -3,6 +3,9 @@
 //! - Compartir un archivo con el menú de Android (WhatsApp, correo, Drive, el
 //!   laminador…), con un `FileProvider` declarado en el manifiesto de este plugin
 //!   (se une al de la app al compilar: no hace falta versionar `gen/android`).
+//! - «Abrir con Pinocchio»: los filtros del manifiesto suman la app al menú de
+//!   abrir y de compartir de otras apps; el lado Kotlin guarda los `content://`
+//!   que llegan hasta que la app los pide (`take_opened`).
 //!
 //! En escritorio el plugin no hace nada.
 
@@ -41,6 +44,28 @@ impl<R: Runtime> PinocchioAndroid<R> {
         }
         #[cfg(not(target_os = "android"))]
         Err("Compartir solo está en Android".into())
+    }
+}
+
+#[cfg(target_os = "android")]
+#[derive(serde::Deserialize)]
+struct Opened {
+    uris: Vec<String>,
+}
+
+impl<R: Runtime> PinocchioAndroid<R> {
+    /// Los archivos que otra app mandó a abrir desde la última vez (y los olvida)
+    pub fn take_opened(&self) -> Result<Vec<String>, String> {
+        #[cfg(target_os = "android")]
+        {
+            let handle = self.0.as_ref().ok_or("Abrir con Pinocchio no está disponible")?;
+            handle
+                .run_mobile_plugin::<Opened>("takeOpened", ())
+                .map(|o| o.uris)
+                .map_err(|e| format!("No se pudieron leer los archivos recibidos: {e}"))
+        }
+        #[cfg(not(target_os = "android"))]
+        Ok(Vec::new())
     }
 }
 

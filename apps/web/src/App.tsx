@@ -27,7 +27,7 @@ import { finishSurvey, planForProject, planRevision, restorePlan, survey } from 
 import { TuneWizard, type ChatPicture } from "./components/layout/TuneWizard";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { open, save, setFileNotifier, setExportChooser, onAndroidExport, saveCopyToPhone, shareFromApp, appProjectPath } from "./lib/files";
+import { open, save, setFileNotifier, setExportChooser, onAndroidExport, saveCopyToPhone, shareFromApp, appProjectPath, takeOpenedFiles } from "./lib/files";
 import { AppProjectsDialog } from "./components/layout/AppProjectsDialog";
 import { Header, StatusBar, Viewport, ViewportHeader, Toolbar, ProgressOverlay, Timeline, type TimelineRow } from "./components/layout";
 import type { OnionSettings, TimelineMode, TimelineTool } from "./components/layout/Timeline";
@@ -9688,6 +9688,26 @@ export const App: Component = () => {
     });
     const stopExports = onAndroidExport();
     onCleanup(() => void stopExports.then((stop) => stop()));
+    // «Abrir con Pinocchio» desde otra app (Descargas, WhatsApp, Drive…): al
+    // arrancar y cada vez que la app vuelve al frente. Si hay una tarea en
+    // curso, el archivo espera en el lado de Android hasta la próxima vez
+    let receiving = false;
+    const receiveOpened = async () => {
+      const formats = supportedFormats();
+      if (!formats || receiving || blockedByTask()) return;
+      receiving = true;
+      try {
+        const allowed = ["pinocchio", ...formats.import.flatMap((f) => f.extensions), ...TEXTURE_FILE_EXTENSIONS];
+        const files = await takeOpenedFiles(allowed);
+        if (files.length > 0) await handleLoad({ projects: true, files });
+      } finally {
+        receiving = false;
+      }
+    };
+    createEffect(on(supportedFormats, (formats) => formats && void receiveOpened()));
+    const onVisible = () => document.visibilityState === "visible" && void receiveOpened();
+    document.addEventListener("visibilitychange", onVisible);
+    onCleanup(() => document.removeEventListener("visibilitychange", onVisible));
   }
 
   // Cerrar la ventana con cambios sin guardar pregunta antes. Sin nada
@@ -9873,7 +9893,7 @@ export const App: Component = () => {
         {/* Header */}
         <Header
           title="Pinocchio"
-          onToggleChat={IS_ANDROID ? undefined : () => setChatOpen(!chatOpen())}
+          onToggleChat={() => setChatOpen(!chatOpen())}
           chatOpen={chatOpen()}
           aiStatus={
             <>
@@ -9905,7 +9925,7 @@ export const App: Component = () => {
           <Show when={collabPanelOpen()}>
             <CollabPanel
               onClose={() => setCollabPanelOpen(false)}
-              onAskAi={IS_ANDROID ? undefined : (text) => { setChatPrefill({ id: Date.now(), text, images: [] }); setChatOpen(true); }}
+              onAskAi={(text) => { setChatPrefill({ id: Date.now(), text, images: [] }); setChatOpen(true); }}
             />
           </Show>
           <Show when={chatOpen()}>
@@ -10730,14 +10750,11 @@ export const App: Component = () => {
           machine={printPrep().slicer?.printer}
           filament={printPrep().slicer?.filament}
           confirm={confirmAction}
-          onAskAi={
-            IS_ANDROID
-              ? undefined
-              : (text, images) => {
-                  setChatPrefill({ id: Date.now(), text, images });
-                  setChatOpen(true);
-                  setTuneOpen(false);
-                }
+          onAskAi={(text, images) => {
+            setChatPrefill({ id: Date.now(), text, images });
+            setChatOpen(true);
+            setTuneOpen(false);
+          }
           }
           onApplyProfiles={(r) => {
             // Lo medido también va a los perfiles de Fabricar (holguras de uniones y compensación al exportar)

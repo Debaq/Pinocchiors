@@ -884,6 +884,8 @@ export const en_app: Catalog = {
   "No se pudo preparar {name} para compartir: {e}": "Could not prepare {name} for sharing: {e}",
   "Compartir solo está en Android": "Sharing is only on Android",
   "Compartir no está disponible": "Sharing is not available",
+  "Abrir con Pinocchio no está disponible": "Open with Pinocchio is not available",
+  "No se pudieron leer los archivos recibidos: {e}": "Could not read the received files: {e}",
   "Archivo sin nombre": "File without a name",
   "Modelo de referencia del diseño": "Reference model of the design",
   "Ojo: verlo como modelo de referencia": "Eye: show it as the reference model",
